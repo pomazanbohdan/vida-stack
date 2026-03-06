@@ -131,6 +131,8 @@ Priority work:
 5. harden fallback ordering and arbitration behavior
 6. prevent unsupported provider paths from breaking ensemble execution
 7. introduce explicit task, block, and mutation-scope ownership where parallel work is allowed
+8. separate orchestrator-entry from worker-entry semantics in subagent execution
+9. improve runtime phase visibility and useful-progress tracking during fanout, fallback, merge, and arbitration
 
 Exit criteria:
 
@@ -139,6 +141,7 @@ Exit criteria:
 3. arbitration is bounded and observable
 4. provider runs produce enough artifacts for synthesis and evaluation
 5. bounded parallel execution has explicit ownership rules that reduce integration conflicts
+6. dispatch runtime exposes enough phase and progress state to debug non-trivial orchestration behavior
 
 Why this comes second:
 
@@ -200,6 +203,7 @@ Priority work:
 3. surface degraded providers or repeated failure modes
 4. create better route hints from observed performance
 5. build the base for future anomaly and drift detection
+6. expose progress-aware orchestration signals that improve review and routing decisions
 
 Exit criteria:
 
@@ -235,6 +239,7 @@ Priority work:
 4. start introducing smaller machine-visible artifacts from runtime rules
 5. reduce repeated heavy rereads where stable packets can replace markdown
 6. define document-state progression, stale-reference checks, and re-verification expectations for canonical docs
+7. keep agent-system templates and overlay examples aligned with the real routing model, runtime budget fields, and dispatch environment settings
 
 Exit criteria:
 

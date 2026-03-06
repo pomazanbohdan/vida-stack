@@ -264,6 +264,8 @@ Release 1 should provide:
     - risk class
     - review state
 11. graceful degradation instead of runtime crashes on unsupported paths
+12. explicit separation between orchestrator-entry and worker-entry prompt contracts
+13. progress-aware dispatch state such as useful-progress tracking and visible run phases during fanout, fallback, merge, and arbitration
 
 ### 7. Review and Verification Fabric
 
@@ -405,7 +407,8 @@ Release 1 should provide:
 7. merge-readiness visibility
 8. review-state visibility
 9. risk-state visibility
-10. a baseline for future drift detection
+10. progress visibility across dispatch phases
+11. a baseline for future drift detection
 
 ### 13.1 Drift Detection
 
@@ -484,6 +487,7 @@ Release 1 should provide:
 3. provider and route configuration in project-owned overlay
 4. portable framework defaults when overlay is missing
 5. project bootstrap contract for seeding required project artifacts
+6. provider-level runtime budget and dispatch environment settings where orchestration realism requires them
 
 ### 17. Cost and Efficiency Model
 

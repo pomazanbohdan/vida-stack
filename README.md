@@ -87,6 +87,8 @@ Right now, the framework is implemented through a practical stack of:
 - `br` plus TODO telemetry for execution state
 - external-first subagent routing with verification and fallback logic
 
+Recent runtime work has also hardened the subagent layer with a dedicated worker-entry contract, clearer orchestrator-versus-worker prompt boundaries, and changelog-backed framework release tracking.
+
 This phase matters because the objective is to finish the mechanics end-to-end before extracting and replatforming the system.
 
 Recent framework-level changes are tracked in [_vida/CHANGELOG.md](_vida/CHANGELOG.md).
@@ -159,6 +161,8 @@ That ownership model is meant to reduce duplicate work, write conflicts, and noi
 <br>
 
 Optimized for real engineering throughput through model routing by task type, prompt and artifact reuse, context pruning, compact hydration, and external-first cheap read-only fanout. The goal is lower token burn, less protocol/runtime drift, and stronger machine-checkable runtime artifacts over time.
+
+This now also includes more explicit agent-system configuration surfaces such as fanout metadata, runtime budget fields, and provider-level dispatch environment settings.
 </details>
 
 <details>
@@ -247,9 +251,11 @@ Key runtime areas:
 - [_vida/commands](_vida/commands)
 - [_vida/commands.md](_vida/commands.md)
 - [_vida/docs/protocol-index.md](_vida/docs/protocol-index.md)
+- [_vida/docs/SUBAGENT-ENTRY.MD](_vida/docs/SUBAGENT-ENTRY.MD)
 - [_vida/docs](_vida/docs)
 - [_vida/scripts](_vida/scripts)
 - [_vida/templates](_vida/templates)
+- [_vida/CHANGELOG.md](_vida/CHANGELOG.md)
 
 ---
 
