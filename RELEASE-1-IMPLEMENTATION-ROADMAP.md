@@ -328,9 +328,7 @@ The following should wait until the earlier phases are stronger:
 
 These are important, but they should not displace the core Release 1 mechanical finish.
 
-## Relationship To VS Architecture
-
-`VS_ARCHITECTURE_PLAN.md` describes the target system shape.
+## Relationship To The Target Architecture
 
 This roadmap intentionally narrows that vision into a practical Release 1 sequence:
 

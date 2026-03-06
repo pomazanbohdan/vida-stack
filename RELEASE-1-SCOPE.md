@@ -3,7 +3,7 @@
 Purpose: define the fullest currently known functional scope for `Vida Stack` Release 1 as a framework product target.
 
 This document is not a current-state snapshot.
-It defines the maximum intended Release 1 capability envelope that is already justified by the framework direction, active protocols, and `VS_ARCHITECTURE_PLAN.md`.
+It defines the maximum intended Release 1 capability envelope that is already justified by the framework direction and active protocols.
 
 Rule:
 
