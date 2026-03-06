@@ -43,7 +43,7 @@ That means:
 
 1. do not prioritize memory richness before runtime integrity,
 2. do not prioritize swarm complexity before lease and review discipline,
-3. do not prioritize daemon/cloud aspirations before stable local control-plane behavior,
+3. do not prioritize daemonized expansion before stable local control-plane behavior,
 4. do not prioritize Rust migration before current logic is fully validated in the live framework.
 
 ## Critical Path
@@ -120,6 +120,7 @@ Scope:
 5. bounded arbitration
 6. provider timeouts and merge-readiness
 7. graceful degradation
+8. lease and ownership discipline for bounded parallel work
 
 Priority work:
 
@@ -129,6 +130,7 @@ Priority work:
 4. ensure provider exhaustion degrades cleanly instead of crashing
 5. harden fallback ordering and arbitration behavior
 6. prevent unsupported provider paths from breaking ensemble execution
+7. introduce explicit task, block, and mutation-scope ownership where parallel work is allowed
 
 Exit criteria:
 
@@ -136,6 +138,7 @@ Exit criteria:
 2. fallback chain respects policy order
 3. arbitration is bounded and observable
 4. provider runs produce enough artifacts for synthesis and evaluation
+5. bounded parallel execution has explicit ownership rules that reduce integration conflicts
 
 Why this comes second:
 
@@ -222,6 +225,7 @@ Scope:
 3. release-target documentation
 4. protocol/runtime consistency
 5. early machine-visible policy artifacts
+6. document lifecycle and freshness rules
 
 Priority work:
 
@@ -230,6 +234,7 @@ Priority work:
 3. keep `protocol-index.md` synchronized
 4. start introducing smaller machine-visible artifacts from runtime rules
 5. reduce repeated heavy rereads where stable packets can replace markdown
+6. define document-state progression, stale-reference checks, and re-verification expectations for canonical docs
 
 Exit criteria:
 
@@ -237,6 +242,7 @@ Exit criteria:
 2. key runtime contracts are discoverable and consistent
 3. the framework has a clear public-facing explanation and internal release target
 4. protocol/runtime drift is reduced materially
+5. canonical docs have explicit lifecycle and freshness expectations
 
 Why this comes fifth:
 
@@ -318,8 +324,7 @@ The following should wait until the earlier phases are stronger:
 3. full DocSync bot automation
 4. large-scale protocol compiler work
 5. broad swarm execution
-6. SaaS/cloud packaging
-7. Rust migration execution
+6. Rust migration execution
 
 These are important, but they should not displace the core Release 1 mechanical finish.
 

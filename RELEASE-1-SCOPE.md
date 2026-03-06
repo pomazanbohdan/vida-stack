@@ -235,6 +235,13 @@ Role split should be reflected in:
 3. integration ownership
 4. escalation behavior
 
+Release 1 should also provide explicit ownership mechanics for bounded parallel work:
+
+1. task lease or block lease for active agent runs
+2. optional file or worktree scope for mutation-heavy execution
+3. ownership release or expiration rules
+4. reduced write-conflict risk through scope isolation
+
 ### 6. Subagent Dispatch
 
 Release 1 should provide:
@@ -378,6 +385,13 @@ Release 1 should provide framework-level support for:
    - decision docs
    - generated references
 
+Release 1 should also define the baseline document-governance model:
+
+1. a document state progression for proposed-to-current updates
+2. verifier rules for current-vs-target separation
+3. stale-reference detection for superseded docs
+4. freshness binding between runtime/policy changes and document re-verification
+
 ### 13. Telemetry and Evaluation
 
 Release 1 should provide:
@@ -484,6 +498,15 @@ Required efficiency capabilities:
 5. context pruning
 6. lower-reread runtime artifacts as a path toward compiled policy
 
+### 17.1 Compiled Policy Direction
+
+Release 1 should establish the first practical step toward compiled protocol/runtime artifacts:
+
+1. machine-readable policy packets where stable rules justify them
+2. compact boot or handoff payloads
+3. evidence schemas that can be checked by runtime gates
+4. derived manifests that reduce markdown-only enforcement
+
 ### 18. Execution Surface
 
 Release 1 should provide a compact but complete execution surface:
@@ -554,7 +577,7 @@ The following are not required to be complete in Release 1:
 
 1. full Rust reimplementation
 2. full SurrealDB-native control plane
-3. full daemon/cloud/SaaS runtime
+3. full daemonized standalone runtime
 4. complete memory graph subsystem
 5. complete DocSync daemon automation
 6. complete protocol compiler with all rules machine-compiled

@@ -26,7 +26,7 @@ Vida Stack exists to solve those problems with a framework that is:
 
 ## Project Goal
 
-The long-term target is an optimized agentic product-engineering system aligned with the architecture direction described in `VS_ARCHITECTURE_PLAN.md`.
+The long-term target is an optimized agentic product-engineering system with a clear control-plane architecture for autonomous product delivery.
 
 That target shape includes:
 
@@ -40,6 +40,20 @@ That target shape includes:
 - efficient context handling with lower token burn
 
 In simpler terms: Vida Stack is being evolved toward a super-autonomous orchestrator for product development, continuously updated against real AI and software-engineering practice.
+
+## Target System Shape
+
+The target architecture is organized around a small set of core subsystems:
+
+- `VS-Control` for orchestration, decomposition, routing, and escalation
+- `VS-State` for authoritative workflow state, execution history, capsules, and health
+- `VS-Memory` for durable operational memory and distilled lessons
+- `VS-Verify` for review, policy, test, and approval gates
+- `VS-Observe` for telemetry, scorecards, and drift visibility
+- `VS-Learn` for reflection, evaluation, and improvement loops
+- `VS-DocSync` for documentation actualization and canonical-document promotion
+
+These subsystems are meant to work as one control plane rather than as disconnected scripts, prompts, and docs.
 
 ## Current Stage
 
@@ -136,6 +150,13 @@ The target runtime model includes:
 7. a memory layer that preserves useful operational knowledge
 8. a telemetry and evaluation layer for continuous improvement
 
+The longer-term runtime direction also includes:
+
+1. an event-oriented workflow kernel with deterministic recovery after interruption or compaction
+2. clear separation between workflow state, memory, documentation state, and telemetry
+3. protocol rules that exist as docs, machine-readable policy artifacts, and runtime enforcement
+4. compact context packets that reduce repeated rereads of large markdown surfaces
+
 ## Multi-Agent Model
 
 Vida Stack is being developed toward a role-based multi-agent architecture.
@@ -150,6 +171,14 @@ Core roles include:
 6. supervisor
 
 This role split is important because it allows bounded decomposition, explicit verification, and cleaner ownership of work products.
+
+The target model also assumes explicit leases and ownership:
+
+1. task or block ownership per active agent run
+2. optional file or worktree scope where mutation is involved
+3. release or expiration rules for parallel work
+
+That ownership model is meant to reduce duplicate work, write conflicts, and noisy integrations.
 
 ## Planning and Reasoning Model
 
@@ -222,6 +251,14 @@ The main efficiency strategies are:
 4. external-first cheap read-only fanout where justified
 5. stronger runtime artifacts to reduce repeated markdown rereads
 
+Over time this should evolve into a lighter compiled-policy layer:
+
+1. boot and execution policy packets
+2. required evidence schemas
+3. compact handoff and hydration payloads
+
+The goal is lower token burn, less protocol/runtime drift, and easier automation of health and verification checks.
+
 ## Minimal Production Shape
 
 The minimum serious production shape for Vida Stack includes:
@@ -263,7 +300,16 @@ Next focus:
 - improve portability across repositories
 - prepare a cleaner public framework surface
 
-### Phase 3: Full Control Plane
+### Phase 3: Daemonized Control Plane
+
+Target focus:
+
+- background orchestration services
+- reactive status and health monitoring
+- richer doc-sync and verification workers
+- stronger event-driven runtime behavior
+
+### Phase 4: Full Control Plane
 
 Target focus:
 
@@ -274,7 +320,7 @@ Target focus:
 - documentation synchronization as a first-class subsystem
 - more complete control-plane behavior in line with the VS target architecture
 
-### Phase 4: Rust Reimplementation
+### Phase 5: Rust Reimplementation
 
 The planned endgame is a full system implemented in Rust.
 
@@ -283,7 +329,7 @@ Why Rust:
 - stronger runtime integrity
 - better performance for long-running orchestration services
 - safer concurrency for multi-agent and event-driven execution
-- more robust foundation for daemon/cloud evolution
+- more robust foundation for longer-running daemonized orchestration
 
 The current shell/Python/docs runtime is not wasted work. It is the proving ground that defines what the Rust system should actually implement.
 
