@@ -115,6 +115,33 @@ In practice, Vida Stack does not just orchestrate agents. It also decides **how 
 
 ---
 
+## 🔁 Framework Self-Improvement Loop
+
+Vida Stack is designed to improve not only the project it is working on, but also its own framework behavior. Self-improvement is treated as a runtime capability with explicit protocols, ownership boundaries, and telemetry-backed feedback loops.
+
+### What This Includes
+
+- **framework self-analysis** for detecting protocol friction, instruction conflicts, token overhead, and runtime ergonomics gaps
+- **self-reflection checkpoints** during execution to keep decisions evidence-based and reduce drift
+- **reflection-pack reconciliation** for synchronizing decisions, docs, and runtime contracts after changes
+- **subagent scorecards** that track provider quality, useful progress, merge-readiness, fallback dependence, and failure patterns
+- **evaluation loops** that turn runtime telemetry into routing and orchestration improvements
+
+### Why This Matters
+
+Most agent systems focus only on solving the current task. Vida Stack also asks whether the framework itself is creating unnecessary rereads, weak routing decisions, protocol drift, or execution friction.
+
+That means the system can:
+
+- inspect and improve its own orchestration layer
+- separate framework problems from project-specific problems
+- adapt provider strategy based on observed performance
+- keep learning loops tied to measurable runtime evidence instead of intuition
+
+In practice, this gives VIDA a built-in improvement path for its own protocols, not just for the code it helps produce.
+
+---
+
 ## 🎯 Target System Shape
 
 The target architecture is organized around a small set of core subsystems working as one control plane rather than as disconnected scripts, prompts, and docs.
