@@ -199,10 +199,21 @@ def score_defaults() -> dict[str, Any]:
             "failure_count": 0,
             "consecutive_failures": 0,
             "state": "normal",
+            "useful_progress_count": 0,
+            "timeout_after_progress_count": 0,
+            "time_to_first_useful_output_samples": 0,
+            "avg_time_to_first_useful_output_ms": 0,
+            "useful_progress_rate": 0,
         },
         "by_task_class": {},
         "by_domain": {},
     }
+
+
+def update_average(current_avg: int, current_samples: int, new_value: int) -> tuple[int, int]:
+    samples = current_samples + 1
+    avg = int(round(((current_avg * current_samples) + new_value) / samples))
+    return avg, samples
 
 
 def load_scorecards(providers: dict[str, Any]) -> dict[str, Any]:
@@ -515,6 +526,7 @@ def update_score(
     latency_ms: int,
     note: str,
     domain_tags: list[str] | None = None,
+    metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     snapshot = load_json(INIT_PATH, {})
     if not snapshot:
@@ -529,6 +541,10 @@ def update_score(
     domain_buckets = card.setdefault("by_domain", {})
     normalized_domain_tags = [tag for tag in (domain_tags or []) if tag]
     domain_cards = [domain_buckets.setdefault(tag, dict(global_card)) for tag in normalized_domain_tags]
+    metrics = metrics or {}
+    useful_progress = bool(metrics.get("useful_progress", False))
+    timeout_after_progress = bool(metrics.get("timeout_after_progress", False))
+    time_to_first_useful_output_ms = metrics.get("time_to_first_useful_output_ms")
 
     if result == "success":
         delta = 8 + max(0, min(10, (quality_score - 70) // 5))
@@ -553,6 +569,23 @@ def update_score(
         bucket["last_quality_score"] = quality_score
         bucket["last_latency_ms"] = latency_ms
         bucket["last_note"] = note
+        if useful_progress:
+            bucket["useful_progress_count"] = int(bucket.get("useful_progress_count", 0)) + 1
+        if timeout_after_progress:
+            bucket["timeout_after_progress_count"] = int(bucket.get("timeout_after_progress_count", 0)) + 1
+        if isinstance(time_to_first_useful_output_ms, int) and time_to_first_useful_output_ms > 0:
+            avg, samples = update_average(
+                int(bucket.get("avg_time_to_first_useful_output_ms", 0)),
+                int(bucket.get("time_to_first_useful_output_samples", 0)),
+                time_to_first_useful_output_ms,
+            )
+            bucket["avg_time_to_first_useful_output_ms"] = avg
+            bucket["time_to_first_useful_output_samples"] = samples
+        total_runs = int(bucket.get("success_count", 0)) + int(bucket.get("failure_count", 0))
+        bucket["useful_progress_rate"] = round(
+            int(bucket.get("useful_progress_count", 0)) / total_runs,
+            3,
+        ) if total_runs > 0 else 0
         bucket["updated_at"] = now_utc()
 
     save_json(SCORECARD_PATH, scorecards)

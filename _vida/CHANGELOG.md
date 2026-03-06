@@ -8,22 +8,27 @@ Rules:
 4. Group updates under fixed headings when applicable: `Added`, `Changed`, `Fixed`, `Protocol`.
 5. Keep this file limited to VIDA framework/runtime changes, not project feature work.
 
-## 2026-03-07 00:36
+## 2026-03-07 01:35
 
 Added:
 
-1. `install/install.sh` as a bash-only installer entrypoint for `init`, `upgrade`, and `doctor`.
+1. `_vida/docs/SUBAGENT-THINKING.MD` as the worker-lane thinking subset limited to `STC`, `PR-CoT`, and `MAR`.
 
 Changed:
 
-1. Release archive packaging to include only `AGENTS.md` and `_vida/`.
-2. Release archive workflow to keep installer and repository-level docs out of framework distribution artifacts.
-3. `install/install.sh` doctor contract to validate framework-only payload without requiring `_vida/CHANGELOG.md`.
+1. Worker-lane prompts now inject both entry and thinking contracts through `_vida/scripts/render-subagent-prompt.sh`.
+2. Semantic merge now uses similarity-based clustering instead of near-full-text grouping.
+3. Scorecards now track runtime maturity metrics including `useful_progress_rate`, `avg_time_to_first_useful_output_ms`, and `timeout_after_progress_count`.
 
 Fixed:
 
-1. Installer temporary cleanup after `init` and `upgrade`.
-2. Added local archive override support for installer validation without GitHub network access.
+1. Manifest fallback state no longer reports premature `provider_exhausted=true` during active fallback execution.
+2. Semantic consensus with strong agreement now resolves more cleanly without unnecessary open conflicts or arbitration.
+
+Protocol:
+
+1. Worker reasoning is now explicitly separated from orchestrator reasoning.
+2. Framework docs/scripts were de-projectized to remove host-specific identity, stack, and domain assumptions from canonical runtime policy.
 
 ## 2026-03-07 00:15
 

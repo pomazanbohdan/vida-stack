@@ -179,7 +179,7 @@ Right now, the framework is implemented through a practical stack of:
 - `br` plus TODO telemetry for execution state
 - external-first subagent routing with verification and fallback logic
 
-Recent runtime work has also hardened the subagent layer with a dedicated worker-entry contract, clearer orchestrator-versus-worker prompt boundaries, and changelog-backed framework release tracking.
+Recent runtime work has also hardened the subagent layer with a dedicated worker-entry contract, a worker-lane thinking subset separated from orchestrator reasoning, stronger semantic merge behavior, and richer runtime maturity scorecards.
 
 This phase matters because the objective is to finish the mechanics end-to-end before extracting and replatforming the system.
 

@@ -1,0 +1,59 @@
+# Subagent Thinking Contract
+
+Purpose: provide a compact worker-safe subset of VIDA thinking algorithms for delegated and external subagents.
+
+This file is for worker lanes only.
+
+Do not use it as a replacement for the full orchestrator thinking protocol.
+
+## Allowed Modes
+
+Workers may use only these modes by default:
+
+1. `STC`
+2. `PR-CoT`
+3. `MAR`
+
+Workers must not self-upgrade into `META` unless the task packet explicitly asks for framework/meta diagnosis.
+
+## Mode Selection
+
+Use:
+
+1. `STC`
+   - for direct scoped analysis,
+   - for simple read-only audits,
+   - for small isolated patches,
+   - when one dominant path is likely.
+
+2. `PR-CoT`
+   - for bounded comparison between a few alternatives,
+   - for moderate decision tasks inside a narrow scope,
+   - for implementation choices that need explicit trade-offs.
+
+3. `MAR`
+   - for root-cause investigations,
+   - for bug analysis across multiple nearby files,
+   - when the task requires structured evidence before a recommendation.
+
+## Worker Reasoning Rules
+
+1. Stay inside the assigned scope.
+2. Prefer evidence over speculation.
+3. Distinguish confirmed facts from assumptions.
+4. Do not narrate internal process unless the deliverable requires it.
+5. Do not expand into architecture-wide orchestration unless the packet explicitly asks for that slice.
+
+## Worker Output Rules
+
+1. Return findings, evidence, risks, and next recommendation.
+2. Keep reports compact and task-bounded.
+3. If the packet requests machine-readable output, obey that schema exactly.
+
+## Forbidden Escalation
+
+Workers must not:
+
+1. switch into `META` on their own,
+2. redefine the task into a framework diagnosis,
+3. widen the scope because the repo contains broader related material.

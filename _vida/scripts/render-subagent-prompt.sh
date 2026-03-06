@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROJECT_PREFLIGHT_DOC="<active project preflight doc from overlay>"
 SUBAGENT_ENTRY_DOC="_vida/docs/SUBAGENT-ENTRY.MD"
+SUBAGENT_THINKING_DOC="_vida/docs/SUBAGENT-THINKING.MD"
 
 usage() {
   cat <<'EOF'
@@ -126,10 +127,25 @@ entry_contract() {
 Worker Entry Contract:
 - You are a bounded worker, not the orchestrator.
 - Follow $SUBAGENT_ENTRY_DOC as the worker-level entry contract.
+- Follow $SUBAGENT_THINKING_DOC as the worker thinking subset.
 - Do not bootstrap repository-wide orchestration policy.
 - Stay inside the provided scope and return evidence in the requested format.
 - Prefer concrete findings over workflow narration.
 EOF
+}
+
+thinking_hint() {
+  case "$template" in
+    audit|read-only-audit)
+      printf '%s\n' "Use STC by default for this scoped audit."
+      ;;
+    implementation|patch|small-patch)
+      printf '%s\n' "Use STC by default; use PR-CoT only if a bounded implementation trade-off appears inside scope."
+      ;;
+    decision|complex-decision)
+      printf '%s\n' "Use PR-CoT for bounded alternatives; use MAR only if this turns into a root-cause investigation."
+      ;;
+  esac
 }
 
 case "$template" in
@@ -142,6 +158,7 @@ $protocol_unit_line
 Scope: $scope
 Must do:
 - Follow project preflight from $PROJECT_PREFLIGHT_DOC before analysis/test/build commands.
+- $(thinking_hint)
 - Use host-project quirks only when they are explicitly provided by the task packet.
 - Report concrete findings with file paths and severity.
 - Distinguish confirmed facts from assumptions.
@@ -161,6 +178,7 @@ $protocol_unit_line
 Scope: $scope
 Constraints:
 - Follow project preflight from $PROJECT_PREFLIGHT_DOC before analyze/test/build.
+- $(thinking_hint)
 - Read target files before editing.
 - Do not add dependencies absent from the host project's canonical manifest.
 - Do not widen task ownership or rewrite orchestration decisions.
@@ -183,6 +201,7 @@ $protocol_unit_line
 Scope: $scope
 Must do:
 - Follow project preflight from $PROJECT_PREFLIGHT_DOC before analysis/test/build commands.
+- $(thinking_hint)
 - Compare at least 2 alternatives.
 - Provide pros/cons, risk, migration impact, and rollback strategy.
 - Keep the decision scoped to the requested slice; do not assume orchestrator ownership.
@@ -201,6 +220,7 @@ $protocol_unit_line
 Scope: $scope
 Must do:
 - Follow project preflight from $PROJECT_PREFLIGHT_DOC before analyze/test/build.
+- $(thinking_hint)
 - Keep diff minimal.
 - Read target files before editing.
 - Do not refactor unrelated code.

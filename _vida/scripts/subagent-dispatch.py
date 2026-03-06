@@ -856,6 +856,17 @@ def digest_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+SEMANTIC_STOPWORDS = {
+    "the", "and", "for", "with", "that", "this", "from", "into", "then", "than", "have", "has", "had",
+    "still", "they", "them", "their", "there", "here", "were", "was", "are", "not", "but", "can", "could",
+    "would", "should", "into", "onto", "after", "before", "under", "over", "more", "most", "very", "also",
+    "line", "lines", "file", "files", "path", "paths", "issue", "issues", "root", "cause", "causes",
+    "problem", "findings", "report", "analysis", "severity", "confirmed", "evidence", "recommended",
+    "fix", "fixes", "high", "medium", "low", "critical", "status", "incomplete", "query", "error", "errors",
+    "project", "framework", "worker", "orchestrator", "scope", "verification", "command", "commands",
+}
+
+
 def normalize_plain_text(text: str) -> str:
     if not text:
         return ""
@@ -909,6 +920,45 @@ def normalize_output_text(text: str) -> str:
         return normalize_plain_text(stripped)
     canonical = canonicalize_json_like(parsed)
     return json.dumps(canonical, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+
+
+def semantic_anchor_tokens(text: str) -> set[str]:
+    normalized = normalize_output_text(text)
+    if not normalized:
+        return set()
+    path_tokens = {
+        part
+        for part in re.findall(r"[a-z0-9_./-]+", normalized)
+        if "/" in part
+        for part in re.split(r"[/._-]+", part)
+        if len(part) >= 4
+    }
+    word_tokens = {
+        token
+        for token in re.findall(r"[a-z0-9_]{4,}", normalized)
+        if token not in SEMANTIC_STOPWORDS and not token.isdigit()
+    }
+    preferred = {
+        token
+        for token in (path_tokens | word_tokens)
+        if token in {
+            "json2", "jsonrpc", "adapter", "interceptor", "unread", "message", "messages",
+            "dashboard", "menus", "menu", "session", "expired", "access", "denied",
+            "auth", "server", "searchread", "search", "load", "query", "counter",
+            "repository", "quick", "stats", "navigation", "recovery", "api",
+        }
+    }
+    if preferred:
+        return preferred
+    return set(sorted(path_tokens | word_tokens)[:24])
+
+
+def semantic_similarity(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    intersection = len(left & right)
+    union = len(left | right)
+    return intersection / union if union else 0.0
 
 
 def preview_text(text: str, limit: int = 160) -> str:
@@ -965,6 +1015,7 @@ def build_merge_summary(
     exact_groups: dict[str, list[str]] = {}
     semantic_groups: dict[str, list[str]] = {}
     semantic_previews: dict[str, str] = {}
+    semantic_token_index: dict[str, set[str]] = {}
     provider_evidence_weights: dict[str, int] = {}
     for item in success_items:
         text = load_output_text(Path(item["output_file"]))
@@ -976,9 +1027,20 @@ def build_merge_summary(
         semantic_text = normalize_output_text(text)
         if not semantic_text:
             semantic_text = f"empty:{item['provider']}"
-        semantic_digest = digest_text(semantic_text)
+        semantic_tokens = semantic_anchor_tokens(text)
+        semantic_digest = ""
+        for existing_key, existing_tokens in semantic_token_index.items():
+            if semantic_similarity(semantic_tokens, existing_tokens) >= 0.33:
+                semantic_digest = existing_key
+                semantic_token_index[existing_key] = existing_tokens | semantic_tokens
+                break
+        if not semantic_digest:
+            semantic_digest = digest_text(" ".join(sorted(semantic_tokens)) or semantic_text)
+            semantic_token_index[semantic_digest] = set(semantic_tokens)
         semantic_groups.setdefault(semantic_digest, []).append(item["provider"])
-        semantic_previews.setdefault(semantic_digest, preview_text(semantic_text))
+        existing_preview = semantic_previews.get(semantic_digest, "")
+        candidate_preview = preview_text(semantic_text)
+        semantic_previews[semantic_digest] = existing_preview if len(existing_preview) >= len(candidate_preview) else candidate_preview
 
     exact_agreements = sorted(sorted(group) for group in exact_groups.values() if len(group) > 1)
     semantic_weight_index = {
@@ -1033,7 +1095,6 @@ def build_merge_summary(
         and len(success_items) >= max(2, required_results - 1)
         and dominant_weight >= max(90, required_results * 30)
     )
-
     consensus_mode = "none"
     if exact_consensus:
         consensus_mode = "exact"
@@ -1050,6 +1111,14 @@ def build_merge_summary(
             open_conflicts = [cluster for cluster in semantic_clusters if cluster != largest_cluster]
         else:
             open_conflicts = semantic_clusters
+
+    if (
+        not decision_ready
+        and semantic_consensus
+        and len(success_items) >= max(2, required_results - 1)
+        and len(open_conflicts) == 0
+    ):
+        decision_ready = True
 
     tie_break_recommended = False
     tie_break_reason = ""
@@ -1546,6 +1615,9 @@ def run_ensemble(argv: list[str]) -> int:
     fallback_used = False
     if success_count < min_results:
         manifest["phase"] = "fallback_running"
+        manifest["provider_exhausted"] = False
+        manifest["fallback_used"] = False
+        manifest["useful_progress_count"] = sum(1 for item in results if item.get("useful_progress"))
         write_manifest(manifest_path, manifest)
         for item in route.get("fallback_chain", []):
             provider_name = item.get("provider")
@@ -1555,6 +1627,8 @@ def run_ensemble(argv: list[str]) -> int:
             if not provider_supports_dispatch(provider_cfg):
                 continue
             fallback_used = True
+            manifest["fallback_used"] = True
+            write_manifest(manifest_path, manifest)
             result = run_provider(
                 task_id,
                 task_class,
@@ -1571,7 +1645,7 @@ def run_ensemble(argv: list[str]) -> int:
             if result.get("status") == "success" and result.get("merge_ready") is True:
                 success_count += 1
             manifest["success_count"] = success_count
-            manifest["fallback_used"] = True
+            manifest["useful_progress_count"] = sum(1 for item in results if item.get("useful_progress"))
             write_manifest(manifest_path, manifest)
             if success_count >= min_results:
                 break

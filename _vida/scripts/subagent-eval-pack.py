@@ -113,6 +113,10 @@ def quality_score_for(run: dict[str, Any], eval_pack: dict[str, Any], is_closed:
         score = 38
     elif run.get("status") == "timeout":
         score = 12
+    if run.get("useful_progress"):
+        score += 10
+    if run.get("status") == "timeout" and run.get("useful_progress"):
+        score += 6
     if is_closed:
         score += 8
     else:
@@ -130,6 +134,11 @@ def quality_score_for(run: dict[str, Any], eval_pack: dict[str, Any], is_closed:
         score += 3
     elif duration_ms > 240000:
         score -= 8
+    ttfu_ms = int(run.get("time_to_first_useful_output_ms", 0) or 0)
+    if ttfu_ms > 0 and ttfu_ms <= 120000:
+        score += 4
+    elif ttfu_ms > 240000:
+        score -= 4
 
     if run.get("billing_tier") == "free":
         score += 4
@@ -220,6 +229,10 @@ def refresh_strategy(task_id: str) -> dict[str, Any]:
             "score": int(scorecard.get("score", 50)),
             "success_count": int(scorecard.get("success_count", 0)),
             "failure_count": int(scorecard.get("failure_count", 0)),
+            "useful_progress_count": int(scorecard.get("useful_progress_count", 0)),
+            "useful_progress_rate": float(scorecard.get("useful_progress_rate", 0) or 0),
+            "timeout_after_progress_count": int(scorecard.get("timeout_after_progress_count", 0)),
+            "avg_time_to_first_useful_output_ms": int(scorecard.get("avg_time_to_first_useful_output_ms", 0) or 0),
             "domains": scorecards.get(provider_name, {}).get("by_domain", {}),
             "strengths": strengths_for(provider_name, provider_cfg, scorecard),
             "weaknesses": weaknesses_for(provider_name, provider_cfg, scorecard),
@@ -285,6 +298,8 @@ def run(task_id: str) -> int:
             f"task_closed={is_closed}; dispatch={run_item.get('dispatch_mode')}; "
             f"billing={run_item.get('billing_tier')}; output_bytes={run_item.get('output_bytes', 0)}; "
             f"merge_ready={run_item.get('merge_ready', False)}; "
+            f"useful_progress={run_item.get('useful_progress', False)}; "
+            f"time_to_first_useful_output_ms={run_item.get('time_to_first_useful_output_ms')}; "
             f"review_state={run_item.get('review_state', 'review_pending')}; "
             f"risk_class={run_item.get('risk_class', 'R0')}; "
             f"domains={','.join(domain_tags)}"
@@ -297,6 +312,18 @@ def run(task_id: str) -> int:
             int(run_item.get("duration_ms", 0) or 0),
             note,
             domain_tags,
+            {
+                "useful_progress": bool(run_item.get("useful_progress", False)),
+                "time_to_first_useful_output_ms": (
+                    int(run_item.get("time_to_first_useful_output_ms", 0) or 0)
+                    if run_item.get("time_to_first_useful_output_ms") is not None
+                    else None
+                ),
+                "timeout_after_progress": (
+                    str(run_item.get("status")) == "timeout"
+                    and bool(run_item.get("useful_progress", False))
+                ),
+            },
         )
         review_entries.append(
             {

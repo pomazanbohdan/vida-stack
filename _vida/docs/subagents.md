@@ -17,6 +17,7 @@ Use:
 ## Mandatory Prompt Fields
 
 0. Worker entry contract: external/delegated providers must receive `_vida/docs/SUBAGENT-ENTRY.MD` semantics instead of inheriting `AGENTS.md` orchestrator identity.
+0.1. Worker thinking contract: external/delegated providers must receive `_vida/docs/SUBAGENT-THINKING.MD` semantics and stay inside `STC|PR-CoT|MAR` unless explicitly escalated by the packet.
 1. Environment prerequisite: `Follow the active project preflight and command order declared by the host-project overlay.`
 2. Working directory: current repository root (`<repo_root>` resolved at runtime).
 3. Protocol unit when applicable: `<command>#CLx` plus whether the unit is read-only or mutation-owning.
@@ -92,6 +93,7 @@ Use ready templates from:
 1. `_vida/docs/subagent-prompt-templates.md`
 2. `bash _vida/scripts/render-subagent-prompt.sh <audit|implementation|decision|patch> ...`
 3. `_vida/docs/SUBAGENT-ENTRY.MD` for the worker-lane entry contract
+4. `_vida/docs/SUBAGENT-THINKING.MD` for the worker-lane thinking subset
 
 Protocol-unit routing rule:
 
@@ -103,4 +105,5 @@ Protocol-unit routing rule:
 
 1. `AGENTS.md` is for the orchestrator only.
 2. External providers and delegated workers should follow `_vida/docs/SUBAGENT-ENTRY.MD` as their entry contract.
-3. Do not proxy the full orchestrator boot/governance layer into external worker prompts unless the task explicitly audits that framework layer.
+3. External providers and delegated workers should use `_vida/docs/SUBAGENT-THINKING.MD` as their default reasoning subset.
+4. Do not proxy the full orchestrator boot/governance layer into external worker prompts unless the task explicitly audits that framework layer.

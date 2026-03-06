@@ -29,7 +29,7 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Implement execution (dev) | `_vida/docs/implement-execution-protocol.md` | `_vida/commands/vida-implement.md`, `_vida/docs/use-case-packs.md`, `_vida/docs/command-layer-protocol.md` |
 | VIDA migration decisions | `docs/research/vida-framework/vida-migration-registry.md` | `docs/research/vida-framework/**`, `_vida/**` |
 | Subagent system activation/routing | `_vida/docs/subagent-system-protocol.md` | `_vida/scripts/subagent-system.py`, `vida.config.yaml`, `docs/process/agent-system.md`, `_vida/docs/DEV-AGENTS-MATRIX.md` |
-| Subagent dispatch | `_vida/docs/subagents.md` | `_vida/docs/SUBAGENT-ENTRY.MD`, `_vida/docs/subagent-prompt-templates.md`, `_vida/scripts/render-subagent-prompt.sh` |
+| Subagent dispatch | `_vida/docs/subagents.md` | `_vida/docs/SUBAGENT-ENTRY.MD`, `_vida/docs/SUBAGENT-THINKING.MD`, `_vida/docs/subagent-prompt-templates.md`, `_vida/scripts/render-subagent-prompt.sh` |
 | Runtime log policy | `_vida/docs/log-policy.md` | `.gitignore` |
 | TODO overhead diagnostics | `_vida/scripts/todo-overhead-report.sh` | `_vida/docs/todo-protocol.md` |
 | Project operations (build/run/observability/live checks) | host-project operations doc declared by project overlay | host-project scripts and runbooks |

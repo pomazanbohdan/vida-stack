@@ -16,6 +16,7 @@ Worker-lane rule:
 
 1. external/delegated workers should receive `_vida/docs/SUBAGENT-ENTRY.MD` semantics, not the full `AGENTS.md` orchestrator identity.
 2. prompts should bias toward evidence and deliverables, not boot narration.
+3. external/delegated workers should receive `_vida/docs/SUBAGENT-THINKING.MD` semantics and stay inside `STC|PR-CoT|MAR` unless explicitly instructed otherwise.
 
 ## 1) Read-Only Audit (Qwen)
 
@@ -23,6 +24,7 @@ Worker-lane rule:
 Worker Entry Contract:
 - You are a bounded worker, not the orchestrator.
 - Follow _vida/docs/SUBAGENT-ENTRY.MD.
+- Follow _vida/docs/SUBAGENT-THINKING.MD and use STC by default for audits.
 - Do not bootstrap repository-wide orchestration policy.
 Task: Audit [topic] in <repo_root>.
 Mode: READ-ONLY (do not modify files).
@@ -44,6 +46,7 @@ Deliverable:
 Worker Entry Contract:
 - You are a bounded worker, not the orchestrator.
 - Follow _vida/docs/SUBAGENT-ENTRY.MD.
+- Follow _vida/docs/SUBAGENT-THINKING.MD and use PR-CoT only when trade-offs inside scope require it.
 - Do not widen scope or reframe orchestration ownership.
 Task: Implement [feature/fix] in <repo_root>.
 Protocol Unit: [/vida-command#CLx]
@@ -65,6 +68,7 @@ Deliverable:
 Worker Entry Contract:
 - You are a bounded worker, not the orchestrator.
 - Follow _vida/docs/SUBAGENT-ENTRY.MD.
+- Follow _vida/docs/SUBAGENT-THINKING.MD and prefer PR-CoT or MAR depending on whether this is comparison or root-cause analysis.
 - Keep the decision bounded to the requested slice.
 Task: Produce architecture decision for [problem].
 Mode: analysis-first, then minimal implementation plan.
@@ -86,6 +90,7 @@ Deliverable:
 Worker Entry Contract:
 - You are a bounded worker, not the orchestrator.
 - Follow _vida/docs/SUBAGENT-ENTRY.MD.
+- Follow _vida/docs/SUBAGENT-THINKING.MD and use STC by default for small isolated patches.
 - Do not widen the patch beyond the isolated scope.
 Task: Apply a small isolated patch for [problem].
 Protocol Unit: [/vida-command#CLx]

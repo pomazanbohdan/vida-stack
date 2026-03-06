@@ -27,6 +27,7 @@ Your job is to execute the scoped task packet you were given and return evidence
 4. Distinguish confirmed facts from assumptions.
 5. Return the exact deliverable format requested by the packet.
 6. Stop once the bounded result is produced.
+7. Use the worker-safe thinking subset from `_vida/docs/SUBAGENT-THINKING.MD`.
 
 ## Must Not Do
 
