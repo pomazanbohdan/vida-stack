@@ -50,6 +50,71 @@ In simpler terms: Vida Stack is being evolved toward a super-autonomous orchestr
 
 ---
 
+## ✅ What It Can Do Today
+
+Vida Stack is still in active development, but it can already be used as a working framework layer for:
+
+- automatic work with tasks, epics, queues, and execution state
+- orchestration of bounded subagents with routing, fallback, and review-aware control
+- research flows with structured evidence gathering and validation
+- planning and decomposition of work into executable slices
+- formation and refinement of specifications and technical contracts
+- implementation and development execution through protocol-governed flows
+
+The system is not yet a finished standalone product, but it is already capable of real framework-driven engineering work.
+
+---
+
+## 🧠 Adaptive Thinking Engine
+
+Vida Stack does not use one flat prompting style for every problem. It routes work through a structured reasoning engine that selects the right thinking algorithm based on weighted task scoring, explicit overrides, and escalation rules.
+
+### Algorithm Selector
+
+Every non-trivial task is scored with:
+
+`C×3 + R×3 + S×2 + N×2 + F×1`
+
+Where:
+
+- **C** = Complexity
+- **R** = Reversibility
+- **S** = Stakes
+- **N** = Novelty
+- **F** = Frequency
+
+That score determines which reasoning algorithm VIDA runs:
+
+| Score | Algorithm | Description |
+| :--- | :--- | :--- |
+| `<=15` | **STC** | Stepwise Think-Critique, a lightweight step-checking mode inspired by [Chain-of-Thought Prompting](https://arxiv.org/abs/2201.11903). |
+| `16–25` | **PR-CoT** | Poly-Reflective Chain-of-Thought, a structured multi-perspective validation mode related to [Self-Consistency](https://arxiv.org/abs/2203.11171). |
+| `26–35` | **MAR** | Multi-Agent Reflexion, a multi-round refinement flow inspired by [Reflexion](https://arxiv.org/abs/2303.11366). |
+| `36–45` | **5-SOL** | A 5-option, 2-round synthesis method. This is the author's own algorithm inside VIDA. |
+| `>45` | **META** | Full ensemble mode: a combination of all reasoning algorithms in VIDA, specifically **PR-CoT + MAR + 5-SOL**, with weighted confidence and rerun logic. |
+
+### Built-In Overrides
+
+Some problem classes bypass normal scoring and force stronger reasoning:
+
+- Security and authentication decisions -> `META`
+- Database and foundation architecture -> `META`
+- DEC creation -> `MAR`
+- Multiple issues or competing choices -> `5-SOL`
+
+### Why This Matters
+
+This makes reasoning a first-class runtime capability rather than a hidden prompt style:
+
+- simpler tasks use faster low-overhead reasoning
+- architectural and ambiguous tasks use deeper multi-pass analysis
+- critical decisions use ensemble validation instead of one-shot answers
+- bug investigation can route into a dedicated root-cause pipeline before any fix is attempted
+
+In practice, Vida Stack does not just orchestrate agents. It also decides **how the system should think** before it acts.
+
+---
+
 ## 🎯 Target System Shape
 
 The target architecture is organized around a small set of core subsystems working as one control plane rather than as disconnected scripts, prompts, and docs.
@@ -217,6 +282,35 @@ Why Rust:
 
 ---
 
+## 📦 Installation
+
+The current installer is bash-only and is intended to install the framework payload into an existing repository.
+
+Quick install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- init
+```
+
+Other common commands:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- doctor
+curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- upgrade
+curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- upgrade --dry-run
+```
+
+Installer behavior:
+
+- installs only framework payload files
+- supports `init`, `upgrade`, and `doctor`
+- supports `--dry-run`, `--force`, `--dir`, and `--version`
+- uses changelog-based release versions
+
+Release archives are framework-only and exclude repository-level docs, installer sources, and changelog payload files.
+
+---
+
 ## 📂 Repository Structure
 
 Current repository layout:
@@ -256,6 +350,7 @@ Key runtime areas:
 - [_vida/scripts](_vida/scripts)
 - [_vida/templates](_vida/templates)
 - [_vida/CHANGELOG.md](_vida/CHANGELOG.md)
+- [install/install.sh](install/install.sh)
 
 ---
 
