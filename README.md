@@ -332,7 +332,9 @@ Installer behavior:
 - installs only framework payload files
 - supports `init`, `upgrade`, and `doctor`
 - supports `--dry-run`, `--force`, `--dir`, and `--version`
-- uses changelog-based release versions
+- `init` stops if `AGENTS.md` or `_vida/` already exists unless explicitly forced
+- `upgrade` replaces existing framework payload and writes backups into `.vida-backups/<version>/`
+- installs from GitHub Release archives and supports explicit release tags through `--version`
 
 Release archives are framework-only and exclude repository-level docs, installer sources, and changelog payload files.
 

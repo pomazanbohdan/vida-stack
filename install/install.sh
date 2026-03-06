@@ -144,20 +144,26 @@ install_release() {
   local agents_source="${extract_dir}/AGENTS.md"
   local vida_source="${extract_dir}/_vida"
 
+  if [[ -f "$agents_target" && "$mode" == "init" && "$FORCE" != "yes" ]]; then
+    fail "AGENTS.md already exists. Re-run with --force or use upgrade."
+  fi
+
   if [[ "$mode" == "init" && "$FORCE" != "yes" ]]; then
-    [[ ! -e "$agents_target" ]] || fail "AGENTS.md already exists. Re-run with --force or use upgrade."
     [[ ! -e "$vida_target" ]] || fail "_vida already exists. Re-run with --force or use upgrade."
   fi
 
-  if [[ "$mode" == "upgrade" && "$DRY_RUN" == "no" ]]; then
+  if [[ -f "$agents_target" && "$DRY_RUN" == "no" ]]; then
     backup_existing "$agents_target" "$backup_dir" "AGENTS.md"
+  fi
+
+  if [[ "$mode" == "upgrade" && "$DRY_RUN" == "no" ]]; then
     backup_existing "$vida_target" "$backup_dir" "_vida"
   fi
 
   if [[ "$DRY_RUN" == "yes" ]]; then
     log "Would install framework files into ${TARGET_DIR}"
     log "Would replace: AGENTS.md, _vida/"
-    if [[ "$mode" == "upgrade" ]]; then
+    if [[ -f "$agents_target" || "$mode" == "upgrade" ]]; then
       log "Would write backup into ${backup_dir}"
     fi
     return 0
