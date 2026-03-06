@@ -187,6 +187,32 @@ Recent framework-level changes are tracked in [_vida/CHANGELOG.md](_vida/CHANGEL
 
 ---
 
+## ⚙️ Subagent Modes
+
+Vida Stack currently separates subagent operation into a small set of explicit modes.
+
+### System Modes
+
+- `native` — use internal subagents only
+- `hybrid` — use internal and external providers together under routing policy
+- `disabled` — do not use the subagent system
+
+### Execution Modes
+
+- `fanout` — parallel external-first read-only execution
+- `fallback` — deterministic fallback chain when fanout results are insufficient
+- `arbitration` — bounded tie-break lane for unresolved decision-relevant conflicts
+
+### Worker Thinking Modes
+
+- `STC` — default mode for direct scoped analysis and small isolated work
+- `PR-CoT` — bounded comparison and trade-off reasoning inside a narrow scope
+- `MAR` — structured root-cause and multi-pass analysis inside worker scope
+
+Workers do not self-upgrade into `META`; full orchestrator-level reasoning remains outside the default worker lane.
+
+---
+
 <a id="architecture-baseline"></a>
 ## 🏗️ Architecture Baseline
 
