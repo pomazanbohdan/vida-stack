@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   archive:
@@ -46,9 +46,52 @@ jobs:
           set -euo pipefail
           git archive --format=tar.gz --output="dist/${ARCHIVE_BASE}.tar.gz" HEAD
 
+      - name: Build release notes from changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          awk '
+            BEGIN { capture=0 }
+            /^## [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}$/ {
+              if (capture) exit
+              capture=1
+            }
+            capture { print }
+          ' _vida/CHANGELOG.md > dist/release-notes.md
+
       - name: Upload archives
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARCHIVE_BASE }}
           path: dist/
           if-no-files-found: error
+
+      - name: Ensure release tag exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/${SAFE_VERSION}" >/dev/null 2>&1; then
+            echo "Tag ${SAFE_VERSION} already exists on origin."
+            exit 0
+          fi
+          git tag "${SAFE_VERSION}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${SAFE_VERSION}"
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="Vida Stack ${RAW_VERSION}"
+          if gh release view "${SAFE_VERSION}" >/dev/null 2>&1; then
+            gh release edit "${SAFE_VERSION}" \
+              --title "${title}" \
+              --notes-file dist/release-notes.md
+            gh release upload "${SAFE_VERSION}" dist/*.zip dist/*.tar.gz --clobber
+          else
+            gh release create "${SAFE_VERSION}" \
+              dist/*.zip dist/*.tar.gz \
+              --title "${title}" \
+              --notes-file dist/release-notes.md
+          fi
