@@ -33,18 +33,33 @@ jobs:
           echo "SAFE_VERSION=${safe_version}" >> "$GITHUB_ENV"
           echo "ARCHIVE_BASE=${archive_base}" >> "$GITHUB_ENV"
 
-      - name: Build zip archive
+      - name: Stage framework payload
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
-          git archive --format=zip --output="dist/${ARCHIVE_BASE}.zip" HEAD
+          rm -rf dist/package
+          mkdir -p dist/package/_vida
+          cp AGENTS.md dist/package/AGENTS.md
+          cp -R _vida/. dist/package/_vida/
+          rm -f dist/package/_vida/CHANGELOG.md
+          find dist/package/_vida -type d -name '__pycache__' -prune -exec rm -rf {} +
+          find dist/package/_vida -type f -name '*.pyc' -delete
+
+      - name: Build zip archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd dist/package
+            zip -qr "../${ARCHIVE_BASE}.zip" AGENTS.md _vida
+          )
 
       - name: Build tar.gz archive
         shell: bash
         run: |
           set -euo pipefail
-          git archive --format=tar.gz --output="dist/${ARCHIVE_BASE}.tar.gz" HEAD
+          tar -czf "dist/${ARCHIVE_BASE}.tar.gz" -C dist/package AGENTS.md _vida
 
       - name: Build release notes from changelog
         shell: bash

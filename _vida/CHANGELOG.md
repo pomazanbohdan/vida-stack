@@ -8,6 +8,23 @@ Rules:
 4. Group updates under fixed headings when applicable: `Added`, `Changed`, `Fixed`, `Protocol`.
 5. Keep this file limited to VIDA framework/runtime changes, not project feature work.
 
+## 2026-03-07 00:36
+
+Added:
+
+1. `install/install.sh` as a bash-only installer entrypoint for `init`, `upgrade`, and `doctor`.
+
+Changed:
+
+1. Release archive packaging to include only `AGENTS.md` and `_vida/`.
+2. Release archive workflow to keep installer and repository-level docs out of framework distribution artifacts.
+3. `install/install.sh` doctor contract to validate framework-only payload without requiring `_vida/CHANGELOG.md`.
+
+Fixed:
+
+1. Installer temporary cleanup after `init` and `upgrade`.
+2. Added local archive override support for installer validation without GitHub network access.
+
 ## 2026-03-07 00:15
 
 Added:
