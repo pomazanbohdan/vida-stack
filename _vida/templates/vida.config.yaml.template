@@ -1,0 +1,99 @@
+project:
+  id: __PROJECT_ID__
+  overlay_version: 1
+
+project_bootstrap:
+  enabled: true
+  docs_root: __DOCS_ROOT__
+  process_root: __PROCESS_ROOT__
+  research_root: __RESEARCH_ROOT__
+  readme_doc: __README_DOC__
+  architecture_doc: __ARCHITECTURE_DOC__
+  decisions_doc: __DECISIONS_DOC__
+  environments_doc: __ENVIRONMENTS_DOC__
+  project_operations_doc: __PROJECT_OPERATIONS_DOC__
+  agent_system_doc: __AGENT_SYSTEM_DOC__
+  allow_scaffold_missing: true
+  require_launch_confirmation: true
+
+language_policy:
+  user_communication: __USER_COMMUNICATION__
+  reasoning: __REASONING_LANGUAGE__
+  documentation: __DOCUMENTATION_LANGUAGE__
+  todo_protocol: __TODO_PROTOCOL_LANGUAGE__
+
+protocol_activation:
+  agent_system: false
+
+pack_router_keywords:
+  research: research
+  spec: spec
+  pool: pool
+  pool_strong: form-task
+  pool_dependency: dependency
+  dev: implement
+  bug: bug
+  reflect: reflect
+  reflect_strong: framework,self-analysis
+
+# Optional agent-system example.
+# Prefer YAML lists for repeated scalar values in new overlays and templates.
+#
+# agent_system:
+#   init_on_boot: true
+#   mode: native
+#   state_owner: orchestrator_only
+#   max_parallel_agents: 3
+#   scoring:
+#     consecutive_failure_limit: 5
+#     promotion_score: 80
+#     demotion_score: 35
+#   providers:
+#     internal_subagents:
+#       enabled: true
+#       provider_class: internal
+#       role: primary
+#       profiles:
+#         - internal_fast
+#       default_profile: internal_fast
+#       capability_band:
+#         - implementation_safe
+#       write_scope: orchestrator_native
+#       billing_tier: internal
+#       speed_tier: medium
+#       quality_tier: high
+#       specialties:
+#         - implementation
+#     example_cli:
+#       enabled: false
+#       provider_class: external_cli
+#       detect_command: example
+#       role: secondary
+#       models_hint:
+#         - example/model
+#       default_model: example/model
+#       capability_band:
+#         - read_only
+#         - review_safe
+#       write_scope: none
+#       billing_tier: free
+#       speed_tier: medium
+#       quality_tier: medium
+#       specialties:
+#         - planning
+#         - review
+#       dispatch:
+#         command: example
+#         static_args:
+#           - run
+#           - --auto
+#         workdir_flag: --dir
+#         model_flag: -m
+#         output_mode: stdout
+#         prompt_mode: positional
+#   routing:
+#     default:
+#       providers:
+#         - internal_subagents
+#       write_scope: none
+#       verification_gate: provider_return_contract
