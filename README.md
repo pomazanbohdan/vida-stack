@@ -366,6 +366,30 @@ Release archives are framework-only and exclude repository-level docs, installer
 
 ---
 
+## 🧩 External CLI Providers
+
+In hybrid development, Vida Stack can work with external CLI coding agents as read-heavy or review-oriented providers alongside the internal orchestrator lane.
+
+The framework is designed to work well with tools that either expose free usage paths directly or provide low-cost external-first access for bounded subagent work.
+
+| Provider | Role In Hybrid Flow | Free Access Note | Install |
+| :--- | :--- | :--- | :--- |
+| **Qwen Code** | External CLI provider for research, analysis, and read-only fanout | Official Qwen Code docs state that Qwen OAuth provides a free tier with **2,000 free requests/day** | `npm install -g @qwen-code/qwen-code@latest` or `brew install qwen-code` |
+| **Kilo Code CLI** | External CLI provider for terminal-first coding and parallel-agent workflows | Kilo documents a free account flow, and official Kilo announcements describe selected models as **free for a limited time** | `npm install -g @kilocode/cli` |
+| **OpenCode** | External CLI provider for multi-provider coding, review, and automation workflows | OpenCode states that **free models are included**, and Zen docs list several models available **free for a limited time** | `curl -fsSL https://opencode.ai/install | bash` or `npm install -g opencode-ai` |
+| **Mistral Vibe** | External CLI provider for terminal-based coding and prompt-driven patching | In the installation sources used here, a built-in free tier is **not explicitly documented**; typically used with Mistral or provider credentials | `curl -LsSf https://mistral.ai/vibe/install.sh | bash` or `uv tool install mistral-vibe` |
+
+Source references:
+
+- [Qwen Code](https://github.com/QwenLM/qwen-code)
+- [Kilo CLI](https://kilo.ai/docs/cli)
+- [Kilo free model note](https://blog.kilocode.ai/p/kilo-code-minimax-m2-free-access)
+- [OpenCode](https://opencode.ai/)
+- [OpenCode Zen pricing](https://opencode.ai/docs/zen)
+- [Mistral Vibe](https://docs.mistral.ai/mistral-vibe/introduction/install)
+
+---
+
 ## 📂 Repository Structure
 
 Current repository layout:
