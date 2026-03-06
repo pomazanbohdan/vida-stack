@@ -37,7 +37,7 @@ Minimum scaffoldable project artifacts:
 2. `docs/architecture.md`
 3. `docs/decisions.md`
 4. `docs/environments.md`
-5. `docs/process/project-operations.md`
+5. host-project operations doc resolved by the emitted overlay/bootstrap contract
 6. `docs/process/agent-system.md`
 
 ## Commands

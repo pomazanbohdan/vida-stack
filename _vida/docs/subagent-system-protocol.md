@@ -21,6 +21,8 @@ This protocol governs the system level above single-dispatch prompts:
 
 Single-dispatch prompt contract stays in `_vida/docs/subagents.md`.
 
+Worker-lane entry contract stays in `_vida/docs/SUBAGENT-ENTRY.MD`.
+
 ## Modes
 
 Supported system modes:
@@ -66,6 +68,15 @@ Hard rule:
 3. orchestrator owns build/close/integration transitions,
 4. providers may only return artifacts/results unless explicitly granted bounded repo-write scope.
 
+## Entry Separation
+
+Hard rule:
+
+1. `AGENTS.md` is the orchestrator-only entry contract,
+2. external and delegated workers must use `_vida/docs/SUBAGENT-ENTRY.MD`,
+3. do not proxy full orchestrator boot/governance language into worker prompts unless the task explicitly audits the framework layer,
+4. worker prompts should optimize for bounded evidence delivery, not meta-orchestration narration.
+
 ## Routing Contract
 
 Routing input:
@@ -100,7 +111,8 @@ Routing output:
 14. optional `bridge_fallback_provider`,
 15. optional `internal_escalation_trigger`,
 16. optional `max_runtime_seconds`,
-17. optional `min_output_bytes`.
+17. optional `min_output_bytes`,
+18. optional progress/timeout policy metadata.
 
 Ensemble rule:
 
@@ -171,7 +183,32 @@ Runtime expectation:
 6. bounded arbitration runs should emit `arbitration` and `post_arbitration_merge_summary` in the manifest when arbitration was attempted,
 7. route output should expose whether external-first dispatch is required, which bridge fallback is canonical, and what condition authorizes internal escalation,
 8. provider run artifacts should distinguish command success from `merge_ready`,
-9. dynamic scorecards should remain visible by task class and inferred domain.
+9. provider run artifacts should distinguish `merge_ready` from `useful_progress`,
+10. dynamic scorecards should remain visible by task class and inferred domain.
+
+## Progress-Aware Runtime
+
+Timeout policy must not be based only on a single wall-clock limit.
+
+Minimum runtime contract:
+
+1. track `useful_progress` separately from `merge_ready`,
+2. capture `time_to_first_useful_output_ms` when possible,
+3. allow at most one bounded runtime extension for providers that are still making useful progress,
+4. deny repeated unbounded extensions,
+5. terminate providers that are idle or stuck even if they previously produced low-value chatter,
+6. prefer provider-specific runtime budgets over one global timeout.
+
+Progress taxonomy:
+
+1. `boot_progress`
+   - startup/sandbox/session initialization only,
+2. `read_progress`
+   - file reads/searches without findings yet,
+3. `useful_progress`
+   - evidence-bearing findings or structured analytical movement,
+4. `merge_ready`
+   - output strong enough to participate in final ensemble synthesis.
 
 ## Learning Contract
 
@@ -183,6 +220,15 @@ Every provider has:
 4. success count,
 5. failure count,
 6. state (`preferred|normal|demoted`).
+
+Scorecards should evolve toward:
+
+1. merge-ready rate,
+2. useful-progress rate,
+3. time-to-first-useful-output,
+4. timeout-after-progress rate,
+5. fallback dependence rate,
+6. per-domain usefulness.
 
 ## Escalation And Adaptation
 

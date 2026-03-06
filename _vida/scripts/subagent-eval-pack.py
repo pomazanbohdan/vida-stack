@@ -152,14 +152,14 @@ def infer_domain_tags(run: dict[str, Any]) -> list[str]:
         return [task_class] if task_class else []
     text = prompt_path.read_text(encoding="utf-8", errors="ignore").casefold()
     tags: list[str] = []
-    if any(token in text for token in ["odoo", "json/2", "search_read", "load_menus", "res.partner"]):
-        tags.append("odoo_api")
+    if any(token in text for token in ["api", "json", "schema", "payload", "endpoint"]):
+        tags.append("api_contract")
     if any(token in text for token in ["auth", "session", "token", "bearer", "security"]):
         tags.append("auth_security")
-    if any(token in text for token in ["flutter", "widget", "ui", "layout", "renderflex"]):
-        tags.append("flutter_ui")
-    if any(token in text for token in ["riverpod", "provider", "state"]):
-        tags.append("riverpod_state")
+    if any(token in text for token in ["ui", "widget", "layout", "render", "component"]):
+        tags.append("frontend_ui")
+    if any(token in text for token in ["state", "store", "provider", "cache", "repository"]):
+        tags.append("state_management")
     if any(token in text for token in ["agents.md", "_vida", "protocol", "subagent", "framework"]):
         tags.append("vida_framework")
     if not tags and task_class:

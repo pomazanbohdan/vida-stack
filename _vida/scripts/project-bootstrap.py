@@ -57,7 +57,7 @@ def build_contract() -> dict[str, Any]:
             "architecture_doc": str(bootstrap_cfg.get("architecture_doc", "docs/architecture.md")),
             "decisions_doc": str(bootstrap_cfg.get("decisions_doc", "docs/decisions.md")),
             "environments_doc": str(bootstrap_cfg.get("environments_doc", "docs/environments.md")),
-            "project_operations_doc": str(bootstrap_cfg.get("project_operations_doc", "docs/process/project-operations.md")),
+            "project_operations_doc": str(bootstrap_cfg.get("project_operations_doc", "docs/process/operations.md")),
             "agent_system_doc": str(bootstrap_cfg.get("agent_system_doc", "docs/process/agent-system.md")),
         },
         "framework_templates": {

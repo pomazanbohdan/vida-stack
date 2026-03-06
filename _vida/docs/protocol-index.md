@@ -7,10 +7,9 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Domain | Canonical Source | Secondary/Reference |
 |---|---|---|
 | Framework topology map | `_vida/docs/framework-map-protocol.md` | `_vida/docs/protocol-index.md` |
-| Framework product/release scope | `_vida/docs/RELEASE-1-SCOPE.MD` | `_vida/README.MD`, `VS_ARCHITECTURE_PLAN.md` |
-| Framework release execution roadmap | `_vida/docs/RELEASE-1-IMPLEMENTATION-ROADMAP.MD` | `_vida/README.MD`, `_vida/docs/RELEASE-1-SCOPE.MD`, `VS_ARCHITECTURE_PLAN.md` |
 | Command layer matrix | `_vida/docs/command-layer-protocol.md` | `_vida/commands.md`, `_vida/commands/vida-*.md`, `_vida/docs/implement-execution-protocol.md`, `_vida/docs/bug-fix-protocol.md`, `_vida/docs/use-case-packs.md`, `_vida/docs/todo-protocol.md`, `_vida/docs/subagents.md`, `_vida/scripts/vida-command-audit.sh`, `_vida/scripts/render-subagent-prompt.sh`, `_vida/docs/framework-map-protocol.md` |
 | Runtime script architecture | `_vida/docs/script-runtime-architecture.md` | `_vida/docs/framework-map-protocol.md`, `_vida/scripts/*.sh`, `_vida/scripts/*.py` |
+| Framework change log | `_vida/CHANGELOG.md` | `_vida/docs/protocol-index.md` |
 | Project overlay activation | `_vida/docs/project-overlay-protocol.md` | `vida.config.yaml`, `_vida/templates/vida.config.yaml.template`, `AGENTS.md`, `_vida/scripts/vida-config.py`, `_vida/scripts/boot-profile.sh`, `_vida/scripts/quality-health-check.sh` |
 | Project bootstrap/self-reproduction | `_vida/docs/project-bootstrap-protocol.md` | `_vida/scripts/project-bootstrap.py`, `_vida/templates/vida.config.yaml.template`, `vida.config.yaml` |
 | VIDA framework self-analysis | `_vida/docs/framework-self-analysis-protocol.md` | `_vida/docs/framework-map-protocol.md`, `_vida/docs/self-reflection-protocol.md` |
@@ -30,10 +29,10 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Implement execution (dev) | `_vida/docs/implement-execution-protocol.md` | `_vida/commands/vida-implement.md`, `_vida/docs/use-case-packs.md`, `_vida/docs/command-layer-protocol.md` |
 | VIDA migration decisions | `docs/research/vida-framework/vida-migration-registry.md` | `docs/research/vida-framework/**`, `_vida/**` |
 | Subagent system activation/routing | `_vida/docs/subagent-system-protocol.md` | `_vida/scripts/subagent-system.py`, `vida.config.yaml`, `docs/process/agent-system.md`, `_vida/docs/DEV-AGENTS-MATRIX.md` |
-| Subagent dispatch | `_vida/docs/subagents.md` | `_vida/docs/subagent-prompt-templates.md`, `_vida/scripts/render-subagent-prompt.sh` |
+| Subagent dispatch | `_vida/docs/subagents.md` | `_vida/docs/SUBAGENT-ENTRY.MD`, `_vida/docs/subagent-prompt-templates.md`, `_vida/scripts/render-subagent-prompt.sh` |
 | Runtime log policy | `_vida/docs/log-policy.md` | `.gitignore` |
 | TODO overhead diagnostics | `_vida/scripts/todo-overhead-report.sh` | `_vida/docs/todo-protocol.md` |
-| Project operations (build/run/observability/live checks) | `docs/process/project-operations.md` | `docs/process/debug-apk-build.md`, `scripts/flutter-generated-sanitize.sh` |
+| Project operations (build/run/observability/live checks) | host-project operations doc declared by project overlay | host-project scripts and runbooks |
 | Environment/auth notes | `docs/environments.md` | - |
 | Skill catalog | `.agents/skills/` | - |
 | GitHub operations | `_vida/docs/pipelines.md` | `gh` CLI help |

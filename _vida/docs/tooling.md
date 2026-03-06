@@ -10,9 +10,9 @@ This document contains detailed operational guidance for MCP search tools.
 Primary tool for cross-file code discovery.
 
 ```text
-rg -n "OdooSessionExpiredException" src test
-rg -n "AuthRetryInterceptor|reAuthenticate" src
-rg --files | rg "vida|protocol|beads"
+rg -n "SessionExpired|AccessDenied" app test
+rg -n "RetryInterceptor|reAuthenticate" app
+rg --files | rg "vida|protocol|beads|runtime"
 ```
 
 When to use:
@@ -29,7 +29,7 @@ Use only when available in the current runtime and `rg` search is insufficient.
 Use when class/function name is known or partially known.
 
 ```text
-search_symbols(query="OdooApiClient", limit=5)
+search_symbols(query="ApiClient", limit=5)
 search_symbols(query="Repository", symbol_type="class", limit=5)
 search_symbols(query="authProvider", symbol_type="function", limit=5)
 ```
@@ -54,7 +54,7 @@ Use for previous architecture decisions/context.
 
 ```text
 recall(query="authentication architecture decision", limit=3)
-recall(query="Odoo API integration pattern", limit=3)
+recall(query="API integration pattern", limit=3)
 ```
 
 Notes:

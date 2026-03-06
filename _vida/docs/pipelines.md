@@ -1,6 +1,6 @@
 # Runtime Pipeline And Tooling Policy
 
-Framework-owned execution and verification policy lives here. Project-specific build/run/audit commands live in `docs/process/project-operations.md` and `scripts/`.
+Framework-owned execution and verification policy lives here. Host-project build/run/audit commands live in the active project runbooks and scripts resolved by the project overlay.
 
 ## One-Command Health Check
 
@@ -45,14 +45,14 @@ _vida/docs/todo-protocol.md
 
 ## Project Command Boundary
 
-1. Use project-documented canonical commands from `docs/process/project-operations.md`.
+1. Use project-documented canonical commands from the active host-project operations runbook.
 2. Do not invent ad hoc build/deploy/audit commands when a project script already exists.
 3. If project operational guidance changes, update `docs/process/*` and `scripts/*`, not `_vida/docs/*`.
 
 ## Project Preconditions
 
 1. Framework policy stays generic here.
-2. Project-specific preflight order (for example dependency resolution, build sequencing, or product runbooks) belongs only in `docs/process/project-operations.md`.
+2. Project-specific preflight order (for example dependency resolution, build sequencing, or product runbooks) belongs only in the active host-project operations runbook.
 3. If analyzer/build/test behavior depends on project environment preparation, the canonical sequence must be documented in project runbooks, not `_vida/docs/*`.
 
 ## Command Serialization Policy
@@ -61,7 +61,7 @@ _vida/docs/todo-protocol.md
 2. Do not parallelize stateful commands.
 3. Stateful commands include:
    - task-state mutation (`br`, `beads-workflow`, TODO sync/index writes),
-   - `flutter`, `dart run`, tests, builds, dependency resolution,
+   - language/runtime execution, tests, builds, dependency resolution,
    - project scripts that mutate cache/runtime state,
    - live API mutations,
    - DB/schema/cache/storage mutations.

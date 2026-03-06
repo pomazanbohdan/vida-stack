@@ -33,13 +33,13 @@ Dispatch only if all are true:
 Every subagent prompt must include:
 
 1. Working directory: current repository root (`<repo_root>` resolved at runtime).
-2. Environment prerequisite: `Follow project preflight from docs/process/project-operations.md before analyze/test/build`.
+2. Environment prerequisite: `Follow the active project preflight declared by the host-project overlay before analyze/test/build`.
 3. Protocol-scoped ownership unit when applicable (`/vida-*#CLx`).
-4. Odoo JSON note (if API/JSON touched): `Odoo returns false instead of null for empty fields`.
+4. Host-project data/API quirks belong in the task packet or host overlay, not as framework defaults.
 5. Verification command(s): exact commands and expected outcome.
 6. Edit constraints:
    - Read target files before editing.
-   - Do not add packages absent in `pubspec.yaml`.
+   - Do not add dependencies absent from the host project's canonical manifest.
    - Keep changes scoped to requested files.
 
 Reference:

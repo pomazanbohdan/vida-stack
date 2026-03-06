@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PROJECT_PREFLIGHT_DOC="docs/process/project-operations.md"
+PROJECT_PREFLIGHT_DOC="<active project preflight doc from overlay>"
+SUBAGENT_ENTRY_DOC="_vida/docs/SUBAGENT-ENTRY.MD"
 
 usage() {
   cat <<'EOF'
@@ -13,20 +14,19 @@ Usage:
     --scope "..." \
     --verification "..." \
     [--extra "..."] \
-    [--repo-root PATH] \
-    [--odoo-json]
+    [--repo-root PATH]
 
 Examples:
   bash _vida/scripts/render-subagent-prompt.sh audit \
-    --task "Audit auth retry flow" \
-    --scope "src/lib/core/api" \
-    --verification "rg -n \"retry\" src/lib/core/api"
+    --task "Audit retry flow" \
+    --scope "app/core,app/api" \
+    --verification "rg -n \"retry\" app/core app/api"
 
   bash _vida/scripts/render-subagent-prompt.sh implementation \
-    --task "Implement menu cache invalidation" \
-    --scope "src/lib/shared/providers,src/lib/core/cache" \
-    --verification "cd src && flutter analyze --no-pub" \
-    --extra "Keep changes scoped to menu refresh flow."
+    --task "Implement cache invalidation" \
+    --scope "app/shared,app/cache" \
+    --verification "<project analyze command>" \
+    --extra "Keep changes scoped to the requested cache flow."
 EOF
 }
 
@@ -44,8 +44,6 @@ scope=""
 verification=""
 extra=""
 repo_root="$ROOT_DIR"
-odoo_json="no"
-
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --task)
@@ -72,10 +70,6 @@ while [[ $# -gt 0 ]]; do
       repo_root="${2:-}"
       shift 2
       ;;
-    --odoo-json)
-      odoo_json="yes"
-      shift
-      ;;
     -h|--help)
       usage
       exit 0
@@ -96,11 +90,6 @@ fi
 protocol_unit_line=""
 if [[ -n "$protocol_unit" ]]; then
   protocol_unit_line="Protocol Unit: $protocol_unit"
-fi
-
-odoo_line=""
-if [[ "$odoo_json" == "yes" ]]; then
-  odoo_line=$'- Odoo JSON note: Odoo returns false instead of null for empty fields.'
 fi
 
 json_contract=$(cat <<'EOF'
@@ -132,17 +121,31 @@ optional_lines() {
   fi
 }
 
+entry_contract() {
+  cat <<EOF
+Worker Entry Contract:
+- You are a bounded worker, not the orchestrator.
+- Follow $SUBAGENT_ENTRY_DOC as the worker-level entry contract.
+- Do not bootstrap repository-wide orchestration policy.
+- Stay inside the provided scope and return evidence in the requested format.
+- Prefer concrete findings over workflow narration.
+EOF
+}
+
 case "$template" in
   audit|read-only-audit)
     cat <<EOF
+$(entry_contract)
 Task: $task in $repo_root.
 Mode: READ-ONLY (do not modify files).
 $protocol_unit_line
 Scope: $scope
 Must do:
 - Follow project preflight from $PROJECT_PREFLIGHT_DOC before analysis/test/build commands.
+- Use host-project quirks only when they are explicitly provided by the task packet.
 - Report concrete findings with file paths and severity.
 - Distinguish confirmed facts from assumptions.
+- Return findings directly; do not restate framework orchestration policy.
 $extra_line
 Verification:
 - $verification
@@ -152,14 +155,16 @@ EOF
     ;;
   implementation)
     cat <<EOF
+$(entry_contract)
 Task: $task in $repo_root.
 $protocol_unit_line
 Scope: $scope
 Constraints:
 - Follow project preflight from $PROJECT_PREFLIGHT_DOC before analyze/test/build.
 - Read target files before editing.
-- Do not add packages absent in pubspec.yaml.
-$(optional_lines "$odoo_line" "$extra_line")
+- Do not add dependencies absent from the host project's canonical manifest.
+- Do not widen task ownership or rewrite orchestration decisions.
+$(optional_lines "" "$extra_line")
 Verification:
 - $verification
 Deliverable:
@@ -171,6 +176,7 @@ EOF
     ;;
   decision|complex-decision)
     cat <<EOF
+$(entry_contract)
 Task: Produce architecture decision for $task in $repo_root.
 Mode: analysis-first, then minimal implementation plan.
 $protocol_unit_line
@@ -179,6 +185,7 @@ Must do:
 - Follow project preflight from $PROJECT_PREFLIGHT_DOC before analysis/test/build commands.
 - Compare at least 2 alternatives.
 - Provide pros/cons, risk, migration impact, and rollback strategy.
+- Keep the decision scoped to the requested slice; do not assume orchestrator ownership.
 $extra_line
 Verification:
 - $verification
@@ -188,6 +195,7 @@ EOF
     ;;
   patch|small-patch)
     cat <<EOF
+$(entry_contract)
 Task: Apply a small isolated patch for $task in $repo_root.
 $protocol_unit_line
 Scope: $scope
@@ -196,7 +204,8 @@ Must do:
 - Keep diff minimal.
 - Read target files before editing.
 - Do not refactor unrelated code.
-$(optional_lines "$odoo_line" "$extra_line")
+- Do not widen scope beyond the isolated patch.
+$(optional_lines "" "$extra_line")
 Verification:
 - $verification
 Deliverable:

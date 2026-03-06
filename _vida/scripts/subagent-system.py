@@ -293,6 +293,35 @@ def selected_profile_for(provider: str, provider_cfg: dict[str, Any], route_cfg:
     return None, "none"
 
 
+def adaptive_runtime_seconds(
+    base_limit: int,
+    provider_cfg: dict[str, Any],
+    task_card: dict[str, Any],
+    global_card: dict[str, Any],
+    effective_score: int,
+) -> int:
+    provider_limit = policy_int(provider_cfg.get("max_runtime_seconds"), 0)
+    baseline = base_limit or provider_limit or 180
+    latency_ms = policy_int(task_card.get("last_latency_ms"), 0) or policy_int(global_card.get("last_latency_ms"), 0)
+    last_result = policy_value(task_card.get("last_result"), policy_value(global_card.get("last_result"), ""))
+    quality_tier = policy_value(provider_cfg.get("quality_tier"), "medium")
+    speed_tier = policy_value(provider_cfg.get("speed_tier"), "medium")
+
+    budget = baseline
+    if latency_ms > 0 and last_result == "success":
+        learned_seconds = int((latency_ms / 1000.0) * 1.2) + 20
+        budget = max(budget, learned_seconds)
+    elif latency_ms > 0 and last_result == "failure":
+        budget = max(budget, int((latency_ms / 1000.0) * 0.9))
+
+    if quality_tier == "high" and effective_score >= 65:
+        budget += 20
+    if speed_tier == "fast":
+        budget = min(budget, baseline + 20)
+
+    return max(120, min(300, budget))
+
+
 def apply_bridge_fallback_priority(
     candidates: list[dict[str, Any]],
     bridge_fallback_provider: str,
@@ -357,6 +386,7 @@ def route_provider(task_class: str) -> dict[str, Any]:
         if mode == "native" and payload.get("provider_class") != "internal":
             continue
         card = scores.get(provider, score_defaults())
+        global_card = card.get("global", {})
         task_card = card.get("by_task_class", {}).get(task_class, {})
         learned_score = int(task_card.get("score", card.get("global", {}).get("score", 50)))
         state = task_card.get("state", card.get("global", {}).get("state", "normal"))
@@ -364,17 +394,26 @@ def route_provider(task_class: str) -> dict[str, Any]:
         if state == "demoted" and consecutive >= int(scoring_cfg["consecutive_failure_limit"]):
             continue
         priority_bonus = max(0, 30 - (idx * 10))
+        effective_score = learned_score + priority_bonus
         selected_model, model_source = selected_model_for(provider, payload, task_route_cfg)
         selected_profile, profile_source = selected_profile_for(provider, payload, task_route_cfg)
+        candidate_runtime = adaptive_runtime_seconds(
+            max_runtime_seconds,
+            payload,
+            task_card,
+            global_card,
+            effective_score,
+        )
         candidates.append(
             {
-                "effective_score": learned_score + priority_bonus,
+                "effective_score": effective_score,
                 "provider": provider,
                 "state": state,
                 "selected_model": selected_model,
                 "selected_model_source": model_source,
                 "selected_profile": selected_profile,
                 "selected_profile_source": profile_source,
+                "max_runtime_seconds": candidate_runtime,
                 "provider_class": payload.get("provider_class"),
                 "capability_band": payload.get("capability_band", []),
                 "provider_write_scope": payload.get("write_scope", "none"),
@@ -440,7 +479,7 @@ def route_provider(task_class: str) -> dict[str, Any]:
         "write_scope": write_scope,
         "verification_gate": verification_gate,
         "risk_class": risk_class,
-        "max_runtime_seconds": max_runtime_seconds,
+        "max_runtime_seconds": selected["max_runtime_seconds"],
         "min_output_bytes": min_output_bytes,
         "fanout_providers": fanout_providers,
         "fanout_min_results": fanout_min_results,
@@ -459,6 +498,7 @@ def route_provider(task_class: str) -> dict[str, Any]:
                 "selected_model_source": item["selected_model_source"],
                 "selected_profile": item["selected_profile"],
                 "selected_profile_source": item["selected_profile_source"],
+                "max_runtime_seconds": item["max_runtime_seconds"],
                 "orchestration_tier": item["orchestration_tier"],
                 "cost_priority": item["cost_priority"],
             }

@@ -81,6 +81,15 @@ def provider_selected_model(route: dict[str, Any], provider_name: str, provider_
     return default_model if isinstance(default_model, str) and default_model else None
 
 
+def route_provider_item(route: dict[str, Any], provider_name: str) -> dict[str, Any]:
+    if route.get("provider") == provider_name:
+        return route
+    for item in route.get("fallback_chain", []):
+        if item.get("provider") == provider_name:
+            return item
+    return {}
+
+
 def provider_command(
     provider_name: str,
     prompt: str,
@@ -129,6 +138,20 @@ def provider_command(
     return cmd, use_stdout_output
 
 
+def provider_env(provider_cfg: dict[str, Any]) -> dict[str, str]:
+    dispatch_cfg = provider_cfg.get("dispatch", {})
+    raw_env = dispatch_cfg.get("env", {})
+    if not isinstance(raw_env, dict):
+        return {}
+    env: dict[str, str] = {}
+    for key, value in raw_env.items():
+        name = str(key).strip()
+        if not name:
+            continue
+        env[name] = str(value)
+    return env
+
+
 def provider_supports_dispatch(provider_cfg: dict[str, Any]) -> bool:
     dispatch_cfg = provider_cfg.get("dispatch", {})
     if not isinstance(dispatch_cfg, dict):
@@ -155,10 +178,38 @@ def policy_int(value: Any, default: int) -> int:
         return default
 
 
+def policy_value(value: Any, default: str) -> str:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return trimmed if trimmed else default
+    return str(value)
+
+
 def route_runtime_limit(route: dict[str, Any], provider_cfg: dict[str, Any]) -> int:
     route_limit = policy_int(route.get("max_runtime_seconds"), 0)
     provider_limit = policy_int(provider_cfg.get("max_runtime_seconds"), 0)
     return route_limit or provider_limit or 180
+
+
+def dispatch_runtime_limit(
+    base_limit: int,
+    dispatch_mode: str,
+    provider_route: dict[str, Any],
+    provider_cfg: dict[str, Any],
+) -> int:
+    limit = max(60, base_limit)
+    orchestration_tier = policy_value(provider_route.get("orchestration_tier"), policy_value(provider_cfg.get("orchestration_tier"), "standard"))
+    quality_tier = policy_value(provider_cfg.get("quality_tier"), "medium")
+    if dispatch_mode == "fallback":
+        if orchestration_tier == "bridge":
+            limit = max(limit, 240)
+        if quality_tier == "high":
+            limit = max(limit, 220)
+    if dispatch_mode == "arbitration":
+        limit = min(limit, 180)
+    return limit
 
 
 def route_min_output_bytes(route: dict[str, Any], provider_cfg: dict[str, Any]) -> int:
@@ -187,7 +238,7 @@ def review_state_for(status: str, merge_ready: bool, risk_class: str) -> str:
 
 
 def manifest_review_state(summary: dict[str, Any], risk_class: str) -> str:
-    if summary.get("provider_exhausted"):
+    if summary.get("provider_exhausted") and not summary.get("decision_ready"):
         return "review_failed"
     if summary.get("tie_break_recommended") or summary.get("open_conflicts"):
         return "review_pending"
@@ -203,14 +254,14 @@ def manifest_review_state(summary: dict[str, Any], risk_class: str) -> str:
 def infer_domain_tags(prompt: str, task_class: str) -> list[str]:
     text = f"{task_class}\n{prompt}".casefold()
     tags: list[str] = []
-    if any(token in text for token in ["odoo", "json/2", "search_read", "load_menus", "res.partner"]):
-        tags.append("odoo_api")
+    if any(token in text for token in ["api", "json", "schema", "payload", "endpoint"]):
+        tags.append("api_contract")
     if any(token in text for token in ["auth", "session", "token", "bearer", "security"]):
         tags.append("auth_security")
-    if any(token in text for token in ["flutter", "widget", "ui", "layout", "renderflex"]):
-        tags.append("flutter_ui")
-    if any(token in text for token in ["riverpod", "provider", "state"]):
-        tags.append("riverpod_state")
+    if any(token in text for token in ["ui", "widget", "layout", "render", "component"]):
+        tags.append("frontend_ui")
+    if any(token in text for token in ["state", "store", "provider", "cache", "repository"]):
+        tags.append("state_management")
     if any(token in text for token in ["agents.md", "_vida", "protocol", "subagent", "framework"]):
         tags.append("vida_framework")
     if not tags:
@@ -237,6 +288,32 @@ def output_is_merge_ready(text: str, min_output_bytes: int) -> bool:
             "\n1. ",
         ]
     )
+
+
+def output_has_useful_progress(output_text: str, stderr_text: str, min_output_bytes: int) -> bool:
+    combined = f"{output_text}\n{stderr_text}".strip()
+    if not combined:
+        return False
+    normalized = combined.casefold()
+    useful_markers = [
+        "## findings",
+        "root cause",
+        "severity",
+        "evidence",
+        "confirmed",
+        "location:",
+        "read ",
+        "grep ",
+        "glob ",
+        "file:",
+        "path:",
+        "docs/",
+    ]
+    if any(marker in normalized for marker in useful_markers):
+        return True
+    if len(output_text.strip().encode("utf-8")) >= max(160, min_output_bytes // 2):
+        return True
+    return False
 
 
 def write_manifest(path: Path, payload: dict[str, Any]) -> None:
@@ -270,7 +347,9 @@ def provider_result_payload(
 ) -> dict[str, Any]:
     duration_ms = int((time.monotonic() - started) * 1000)
     output_text = load_output_text(output_file)
+    stderr_text = load_output_text(stderr_path)
     merge_ready = status == "success" and output_is_merge_ready(output_text, min_output_bytes)
+    useful_progress = output_has_useful_progress(output_text, stderr_text, min_output_bytes)
     review_state = review_state_for(status, merge_ready, risk_class)
     payload = {
         "ts": now_utc(),
@@ -292,6 +371,7 @@ def provider_result_payload(
         "exit_code": exit_code,
         "status": status,
         "merge_ready": merge_ready,
+        "useful_progress": useful_progress,
         "review_state": review_state,
         "risk_class": risk_class,
         "domain_tags": domain_tags,
@@ -300,6 +380,8 @@ def provider_result_payload(
         "output_file": str(output_file),
         "stderr_file": str(stderr_path),
         "output_bytes": output_size(output_file),
+        "stderr_bytes": output_size(stderr_path),
+        "time_to_first_useful_output_ms": launch_time_to_first_useful_output_ms(started, output_file, stderr_path, min_output_bytes),
         "workdir": str(workdir),
         "prompt_file": str(prompt_file),
         "route_provider": route.get("provider"),
@@ -309,6 +391,58 @@ def provider_result_payload(
     }
     append_jsonl(RUN_LOG_PATH, payload)
     return payload
+
+
+def launch_time_to_first_useful_output_ms(
+    started: float,
+    output_file: Path,
+    stderr_path: Path,
+    min_output_bytes: int,
+) -> int | None:
+    output_text = load_output_text(output_file)
+    stderr_text = load_output_text(stderr_path)
+    if not output_has_useful_progress(output_text, stderr_text, min_output_bytes):
+        return None
+    return int((time.monotonic() - started) * 1000)
+
+
+def launch_progress_snapshot(launch: dict[str, Any]) -> dict[str, Any]:
+    output_file: Path = launch["output_file"]
+    stderr_path: Path = launch["stderr_path"]
+    output_bytes = output_size(output_file)
+    stderr_bytes = output_size(stderr_path)
+    output_text = load_output_text(output_file)
+    stderr_text = load_output_text(stderr_path)
+    useful_progress = output_has_useful_progress(output_text, stderr_text, int(launch["min_output_bytes"]))
+    now_mono = time.monotonic()
+    grew = (
+        output_bytes > int(launch.get("last_output_bytes", 0))
+        or stderr_bytes > int(launch.get("last_stderr_bytes", 0))
+    )
+    if grew:
+        launch["last_output_bytes"] = output_bytes
+        launch["last_stderr_bytes"] = stderr_bytes
+        launch["last_activity_at"] = now_mono
+    if useful_progress and launch.get("first_useful_output_ms") is None:
+        launch["first_useful_output_ms"] = int((now_mono - float(launch["started"])) * 1000)
+    launch["useful_progress"] = useful_progress
+    launch["last_progress_check_at"] = now_mono
+    return {
+        "output_bytes": output_bytes,
+        "stderr_bytes": stderr_bytes,
+        "useful_progress": useful_progress,
+        "grew": grew,
+        "first_useful_output_ms": launch.get("first_useful_output_ms"),
+        "idle_seconds": int(now_mono - float(launch.get("last_activity_at", launch["started"]))),
+    }
+
+
+def runtime_extension_seconds(launch: dict[str, Any]) -> int:
+    base_limit = int(launch["max_runtime_seconds"])
+    quality_tier = str(launch["provider_cfg"].get("quality_tier", "medium"))
+    if quality_tier == "high":
+        return min(90, max(30, base_limit // 2))
+    return min(60, max(20, base_limit // 3))
 
 
 def run_provider(
@@ -327,9 +461,15 @@ def run_provider(
     stderr_path = output_file.with_suffix(output_file.suffix + ".stderr.log")
     prompt = read_prompt(prompt_file)
     selected_model = provider_selected_model(route, provider_name, provider_cfg)
+    provider_route = route_provider_item(route, provider_name)
     domain_tags = infer_domain_tags(prompt, task_class)
     risk_class = route_risk_class(route)
-    max_runtime_seconds = route_runtime_limit(route, provider_cfg)
+    max_runtime_seconds = dispatch_runtime_limit(
+        route_runtime_limit(provider_route or route, provider_cfg),
+        dispatch_mode,
+        provider_route or route,
+        provider_cfg,
+    )
     min_output_bytes = route_min_output_bytes(route, provider_cfg)
     run_id = f"spr-{uuid.uuid4().hex[:12]}"
     ts_start = now_utc()
@@ -366,6 +506,7 @@ def run_provider(
     error_text = ""
 
     env = os.environ.copy()
+    env.update(provider_env(provider_cfg))
     try:
         with stderr_path.open("w", encoding="utf-8") as stderr_handle:
             if use_stdout_output:
@@ -446,9 +587,15 @@ def start_provider_process(
     stderr_path = output_file.with_suffix(output_file.suffix + ".stderr.log")
     prompt = read_prompt(prompt_file)
     selected_model = provider_selected_model(route, provider_name, provider_cfg)
+    provider_route = route_provider_item(route, provider_name)
     domain_tags = infer_domain_tags(prompt, task_class)
     risk_class = route_risk_class(route)
-    max_runtime_seconds = route_runtime_limit(route, provider_cfg)
+    max_runtime_seconds = dispatch_runtime_limit(
+        route_runtime_limit(provider_route or route, provider_cfg),
+        dispatch_mode,
+        provider_route or route,
+        provider_cfg,
+    )
     min_output_bytes = route_min_output_bytes(route, provider_cfg)
     run_id = f"spr-{uuid.uuid4().hex[:12]}"
     ts_start = now_utc()
@@ -493,7 +640,7 @@ def start_provider_process(
             stdout=stdout_handle if stdout_handle is not None else stderr_handle,
             stderr=stderr_handle,
             text=True,
-            env=os.environ.copy(),
+            env={**os.environ.copy(), **provider_env(provider_cfg)},
         )
         return {
             "process": process,
@@ -517,6 +664,14 @@ def start_provider_process(
             "run_id": run_id,
             "ts_start": ts_start,
             "started": started,
+            "last_output_bytes": 0,
+            "last_stderr_bytes": 0,
+            "last_activity_at": started,
+            "last_progress_check_at": started,
+            "first_useful_output_ms": None,
+            "useful_progress": False,
+            "runtime_extension_applied": False,
+            "effective_runtime_seconds": max_runtime_seconds,
         }
     except Exception as exc:
         try:
@@ -704,17 +859,31 @@ def digest_text(text: str) -> str:
 def normalize_plain_text(text: str) -> str:
     if not text:
         return ""
+    text = re.sub(r"(?is)<prunable-tools>.*?</prunable-tools>", " ", text)
+    text = re.sub(r"(?im)^thinking mode:\s*[^\n]*$", " ", text)
+    text = re.sub(r"(?im)^tokens used\s*$", " ", text)
+    text = re.sub(r"(?im)^\d[\d,]*\s*$", " ", text)
+    text = re.sub(r"(?is)^.*?\b(findings|root causes|confirmed findings|confirmed facts|risks|recommended fixes)\b", r"\1", text, count=1)
     text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
     normalized_lines: list[str] = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
+        if not line:
+            continue
+        lowered = line.casefold()
+        if lowered.startswith(("exec", "thinking", "codex", "mcp:", "user")):
+            continue
+        if "succeeded in " in lowered or "exited " in lowered:
+            continue
+        if lowered.startswith(("0:", "1:", "2:", "3:", "4:", "5:")) and ("read " in lowered or "grep " in lowered):
+            continue
         line = re.sub(r"^\s{0,3}(?:[#>*-]+|\d+[.)])\s*", "", line)
         line = re.sub(r"`+", "", line)
         line = line.casefold()
         line = re.sub(r"[^a-z0-9\s:/._-]+", " ", line)
         line = re.sub(r"(?<![/:])[\.,;:!?]+$", "", line)
         line = re.sub(r"\s+", " ", line).strip()
-        if line:
+        if len(line) >= 12:
             normalized_lines.append(line)
     return "\n".join(sorted(dict.fromkeys(normalized_lines)))
 
@@ -749,15 +918,41 @@ def preview_text(text: str, limit: int = 160) -> str:
     return collapsed[: limit - 3] + "..."
 
 
-def cluster_payload(group_key: str, providers: list[str], preview: str) -> dict[str, Any]:
+def cluster_payload(group_key: str, providers: list[str], preview: str, weight: int = 0) -> dict[str, Any]:
     return {
         "cluster_id": group_key[:12] if group_key else "empty",
         "providers": sorted(providers),
         "sample": preview,
+        "weight": weight,
     }
 
 
-def build_merge_summary(results: list[dict[str, Any]], merge_policy: str, min_results: int) -> dict[str, Any]:
+def source_backing_weight(text: str) -> int:
+    if not text:
+        return 0
+    lowered = text.casefold()
+    weight = 0
+    weight += min(5, lowered.count("confirmed")) * 6
+    weight += min(5, lowered.count("evidence")) * 5
+    weight += min(5, lowered.count("live")) * 4
+    weight += min(10, lowered.count("file:")) * 3
+    weight += min(10, lowered.count("path:")) * 2
+    weight += min(6, lowered.count("_temp/")) * 4
+    weight += min(6, lowered.count("docs/")) * 2
+    weight += min(6, lowered.count("cite")) * 4
+    if "assumption" in lowered:
+        weight -= 6
+    if "require live validation" in lowered or "need live validation" in lowered:
+        weight -= 4
+    return max(0, weight)
+
+
+def build_merge_summary(
+    results: list[dict[str, Any]],
+    merge_policy: str,
+    min_results: int,
+    provider_scores: dict[str, int] | None = None,
+) -> dict[str, Any]:
     success_items = [item for item in results if item.get("status") == "success" and item.get("merge_ready") is True]
     failure_providers = sorted(item["provider"] for item in results if item.get("status") != "success")
     non_merge_ready_providers = sorted(
@@ -766,11 +961,14 @@ def build_merge_summary(results: list[dict[str, Any]], merge_policy: str, min_re
         if item.get("status") == "success" and item.get("merge_ready") is not True
     )
     required_results = max(1, min_results)
+    provider_scores = provider_scores or {}
     exact_groups: dict[str, list[str]] = {}
     semantic_groups: dict[str, list[str]] = {}
     semantic_previews: dict[str, str] = {}
+    provider_evidence_weights: dict[str, int] = {}
     for item in success_items:
         text = load_output_text(Path(item["output_file"]))
+        provider_evidence_weights[item["provider"]] = source_backing_weight(text)
         exact_text = text if text else f"empty:{item['provider']}"
         exact_digest = digest_text(exact_text)
         exact_groups.setdefault(exact_digest, []).append(item["provider"])
@@ -783,25 +981,57 @@ def build_merge_summary(results: list[dict[str, Any]], merge_policy: str, min_re
         semantic_previews.setdefault(semantic_digest, preview_text(semantic_text))
 
     exact_agreements = sorted(sorted(group) for group in exact_groups.values() if len(group) > 1)
+    semantic_weight_index = {
+        group_key: sum(
+            int(provider_scores.get(provider, 0)) + int(provider_evidence_weights.get(provider, 0))
+            for provider in providers
+        )
+        for group_key, providers in semantic_groups.items()
+    }
     semantic_clusters = sorted(
         (
-            cluster_payload(group_key, providers, semantic_previews.get(group_key, ""))
+            cluster_payload(
+                group_key,
+                providers,
+                semantic_previews.get(group_key, ""),
+                semantic_weight_index.get(group_key, 0),
+            )
             for group_key, providers in semantic_groups.items()
         ),
-        key=lambda item: (-len(item["providers"]), item["providers"]),
+        key=lambda item: (
+            -len(item["providers"]),
+            -int(item.get("weight", 0)),
+            item["providers"],
+        ),
     )
     semantic_agreements = [cluster for cluster in semantic_clusters if len(cluster["providers"]) > 1]
     unique_findings = [cluster for cluster in semantic_clusters if len(cluster["providers"]) == 1]
+    cluster_weights = {cluster["cluster_id"]: int(cluster.get("weight", 0)) for cluster in semantic_clusters}
 
     exact_consensus = len(success_items) > 1 and len(exact_groups) == 1
     semantic_consensus = len(success_items) > 1 and len(semantic_groups) == 1
     largest_cluster = semantic_clusters[0] if semantic_clusters else None
     second_cluster_size = len(semantic_clusters[1]["providers"]) if len(semantic_clusters) > 1 else 0
+    dominant_weight = cluster_weights.get(largest_cluster["cluster_id"], 0) if largest_cluster else 0
+    second_weight = cluster_weights.get(semantic_clusters[1]["cluster_id"], 0) if len(semantic_clusters) > 1 else 0
     semantic_majority = (
         largest_cluster is not None
         and len(largest_cluster["providers"]) >= required_results
         and len(largest_cluster["providers"]) > second_cluster_size
         and len(semantic_groups) > 1
+    )
+    weighted_semantic_majority = (
+        largest_cluster is not None
+        and len(semantic_groups) > 1
+        and dominant_weight >= max(60, required_results * 20)
+        and dominant_weight > second_weight
+        and (second_weight == 0 or dominant_weight >= int(second_weight * 1.25))
+    )
+    decision_ready = (
+        largest_cluster is not None
+        and weighted_semantic_majority
+        and len(success_items) >= max(2, required_results - 1)
+        and dominant_weight >= max(90, required_results * 30)
     )
 
     consensus_mode = "none"
@@ -811,17 +1041,19 @@ def build_merge_summary(results: list[dict[str, Any]], merge_policy: str, min_re
         consensus_mode = "semantic"
     elif semantic_majority:
         consensus_mode = "semantic_majority"
+    elif weighted_semantic_majority:
+        consensus_mode = "semantic_weighted_majority"
 
     open_conflicts: list[dict[str, Any]] = []
     if merge_policy == "consensus_with_conflict_flag" and len(semantic_groups) > 1:
-        if consensus_mode == "semantic_majority" and largest_cluster is not None:
+        if consensus_mode in {"semantic_majority", "semantic_weighted_majority"} and largest_cluster is not None:
             open_conflicts = [cluster for cluster in semantic_clusters if cluster != largest_cluster]
         else:
             open_conflicts = semantic_clusters
 
     tie_break_recommended = False
     tie_break_reason = ""
-    if len(success_items) < required_results:
+    if len(success_items) < required_results and not decision_ready:
         tie_break_recommended = True
         tie_break_reason = "fanout_min_results_not_met"
     elif merge_policy == "consensus_with_conflict_flag" and consensus_mode == "none" and len(semantic_groups) > 1:
@@ -842,8 +1074,14 @@ def build_merge_summary(results: list[dict[str, Any]], merge_policy: str, min_re
         "exact_consensus": exact_consensus,
         "semantic_consensus": semantic_consensus,
         "semantic_majority": semantic_majority,
+        "semantic_weighted_majority": weighted_semantic_majority,
+        "decision_ready": decision_ready,
         "consensus_mode": consensus_mode,
         "dominant_finding": largest_cluster,
+        "dominant_weight": dominant_weight,
+        "second_weight": second_weight,
+        "cluster_weights": cluster_weights,
+        "provider_evidence_weights": provider_evidence_weights,
         "tie_break_recommended": tie_break_recommended,
         "tie_break_reason": tie_break_reason,
         "provider_exhausted": len(success_items) < required_results,
@@ -1184,6 +1422,7 @@ def run_ensemble(argv: list[str]) -> int:
         "risk_class": route_risk_class(route),
         "review_state": "review_pending",
         "success_count": 0,
+        "useful_progress_count": 0,
         "provider_exhausted": False,
         "fallback_used": False,
         "merge_summary": {},
@@ -1191,6 +1430,7 @@ def run_ensemble(argv: list[str]) -> int:
         "post_arbitration_merge_summary": {},
         "results": [],
         "status": "running",
+        "phase": "fanout_running",
     }
     write_manifest(manifest_path, manifest)
     launches: dict[str, dict[str, Any]] = {}
@@ -1222,12 +1462,26 @@ def run_ensemble(argv: list[str]) -> int:
         loop_progress = False
         for provider_name, launch in list(launches.items()):
             process: subprocess.Popen[str] = launch["process"]
+            progress = launch_progress_snapshot(launch)
             elapsed = time.monotonic() - float(launch["started"])
-            if process.poll() is None and elapsed > int(launch["max_runtime_seconds"]):
+            effective_runtime_seconds = int(launch.get("effective_runtime_seconds", launch["max_runtime_seconds"]))
+            if (
+                process.poll() is None
+                and elapsed > effective_runtime_seconds
+                and launch.get("runtime_extension_applied") is not True
+                and progress.get("useful_progress")
+                and int(progress.get("idle_seconds", 0)) <= 45
+            ):
+                extension = runtime_extension_seconds(launch)
+                launch["runtime_extension_applied"] = True
+                launch["effective_runtime_seconds"] = effective_runtime_seconds + extension
+                loop_progress = True
+                continue
+            if process.poll() is None and elapsed > int(launch.get("effective_runtime_seconds", launch["max_runtime_seconds"])):
                 results.append(
                     terminate_provider_process(
                         launch,
-                        f"provider exceeded runtime limit ({launch['max_runtime_seconds']}s)",
+                        f"provider exceeded runtime limit ({launch.get('effective_runtime_seconds', launch['max_runtime_seconds'])}s)",
                         status_override="timeout",
                         exit_code_override=124,
                     )
@@ -1248,6 +1502,7 @@ def run_ensemble(argv: list[str]) -> int:
         )
         manifest["results"] = sorted(results, key=lambda item: item["provider"])
         manifest["success_count"] = success_count
+        manifest["useful_progress_count"] = sum(1 for launch in launches.values() if launch.get("useful_progress"))
         write_manifest(manifest_path, manifest)
 
         if success_count >= required_results and launches:
@@ -1261,6 +1516,7 @@ def run_ensemble(argv: list[str]) -> int:
                 launches.pop(provider_name, None)
             manifest["results"] = sorted(results, key=lambda item: item["provider"])
             manifest["success_count"] = success_count
+            manifest["useful_progress_count"] = 0
             write_manifest(manifest_path, manifest)
             break
 
@@ -1276,6 +1532,7 @@ def run_ensemble(argv: list[str]) -> int:
                 launches.pop(provider_name, None)
             manifest["results"] = sorted(results, key=lambda item: item["provider"])
             manifest["success_count"] = success_count
+            manifest["useful_progress_count"] = 0
             manifest["provider_exhausted"] = True
             write_manifest(manifest_path, manifest)
             break
@@ -1288,6 +1545,8 @@ def run_ensemble(argv: list[str]) -> int:
     )
     fallback_used = False
     if success_count < min_results:
+        manifest["phase"] = "fallback_running"
+        write_manifest(manifest_path, manifest)
         for item in route.get("fallback_chain", []):
             provider_name = item.get("provider")
             if not provider_name or provider_name in primary_fanout:
@@ -1317,7 +1576,16 @@ def run_ensemble(argv: list[str]) -> int:
             if success_count >= min_results:
                 break
 
-    merge_summary = build_merge_summary(results, str(route.get("merge_policy", "single_provider")), min_results)
+    manifest["phase"] = "merge_evaluating"
+    write_manifest(manifest_path, manifest)
+    merge_summary = build_merge_summary(
+        results,
+        str(route.get("merge_policy", "single_provider")),
+        min_results,
+        provider_scores=route_provider_scores(route),
+    )
+    manifest["phase"] = "arbitration_running" if merge_summary.get("tie_break_recommended") else "finalizing"
+    write_manifest(manifest_path, manifest)
     arbitration, post_arbitration_merge_summary = run_bounded_arbitration(
         task_id,
         task_class,
@@ -1334,6 +1602,7 @@ def run_ensemble(argv: list[str]) -> int:
         **manifest,
         "generated_at": now_utc(),
         "success_count": success_count,
+        "useful_progress_count": sum(1 for item in results if item.get("useful_progress")),
         "provider_exhausted": success_count < required_results,
         "fallback_used": fallback_used,
         "merge_summary": merge_summary,
@@ -1344,11 +1613,26 @@ def run_ensemble(argv: list[str]) -> int:
             post_arbitration_merge_summary or merge_summary,
             route_risk_class(route),
         ),
-        "status": "completed" if success_count >= required_results else "provider_exhausted",
+        "status": (
+            "completed"
+            if (
+                success_count >= required_results
+                or (post_arbitration_merge_summary or merge_summary).get("decision_ready")
+            )
+            else "provider_exhausted"
+        ),
+        "phase": (
+            "completed"
+            if (
+                success_count >= required_results
+                or (post_arbitration_merge_summary or merge_summary).get("decision_ready")
+            )
+            else "provider_exhausted"
+        ),
     }
     write_manifest(manifest_path, manifest)
     print(str(manifest_path))
-    return 0 if success_count >= required_results else 2
+    return 0 if (success_count >= required_results or (post_arbitration_merge_summary or merge_summary).get("decision_ready")) else 2
 
 
 def usage() -> int:

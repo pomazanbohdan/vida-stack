@@ -41,7 +41,7 @@ pack_router_keywords:
 #
 # agent_system:
 #   init_on_boot: true
-#   mode: native
+#   mode: hybrid
 #   state_owner: orchestrator_only
 #   max_parallel_agents: 3
 #   scoring:
@@ -52,23 +52,32 @@ pack_router_keywords:
 #     internal_subagents:
 #       enabled: true
 #       provider_class: internal
-#       role: primary
+#       role: senior_internal
+#       orchestration_tier: senior
+#       cost_priority: premium
 #       profiles:
 #         - internal_fast
+#         - internal_arch
+#         - internal_review
 #       default_profile: internal_fast
 #       capability_band:
 #         - implementation_safe
+#         - architecture_safe
 #       write_scope: orchestrator_native
 #       billing_tier: internal
 #       speed_tier: medium
 #       quality_tier: high
 #       specialties:
 #         - implementation
+#         - architecture
+#         - integration
 #     example_cli:
 #       enabled: false
 #       provider_class: external_cli
 #       detect_command: example
-#       role: secondary
+#       role: free_primary
+#       orchestration_tier: external_free
+#       cost_priority: highest
 #       models_hint:
 #         - example/model
 #       default_model: example/model
@@ -76,6 +85,8 @@ pack_router_keywords:
 #         - read_only
 #         - review_safe
 #       write_scope: none
+#       max_runtime_seconds: 180
+#       min_output_bytes: 260
 #       billing_tier: free
 #       speed_tier: medium
 #       quality_tier: medium
@@ -87,6 +98,8 @@ pack_router_keywords:
 #         static_args:
 #           - run
 #           - --auto
+#         env:
+#           EXAMPLE_TIMEOUT_MS: "600000"
 #         workdir_flag: --dir
 #         model_flag: -m
 #         output_mode: stdout
@@ -94,6 +107,22 @@ pack_router_keywords:
 #   routing:
 #     default:
 #       providers:
+#         - example_cli
 #         - internal_subagents
 #       write_scope: none
 #       verification_gate: provider_return_contract
+#       dispatch_required: external_first_when_eligible
+#       external_first_required: yes
+#       bridge_fallback_provider: example_cli
+#       internal_escalation_trigger: write_scope_or_tie_break
+#     analysis:
+#       providers:
+#         - example_cli
+#         - internal_subagents
+#       fanout_providers:
+#         - example_cli
+#       fanout_min_results: 1
+#       merge_policy: consensus_with_conflict_flag
+#       max_runtime_seconds: 180
+#       min_output_bytes: 260
+#       verification_gate: source_backed_summary

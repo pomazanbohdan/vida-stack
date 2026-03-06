@@ -1476,10 +1476,10 @@ Phase 4: RESOLVE   → Algorithm selection, fix
 
 ```yaml
 PATTERN_MATCH:
-  API: OdooApiException, AccessDenied, SessionExpired, RecordNotFound
-  Connection: ServerConnectionException, VersionDetection
+  API: ApiException, AccessDenied, SessionExpired, RecordNotFound
+  Connection: ConnectionException, VersionDetection
   Auth: AuthError, AuthErrorType
-  Network: DioException
+  Network: NetworkException
   Data: FormatException, TypeError
   State: StateError, DatabaseStateError
 
@@ -1715,24 +1715,24 @@ forbidden[8]{action,correct}:
 
 ```toon
 search_patterns[4]{type,grep_pattern,files}:
-  API,"throw.*Odoo.*Exception","core/api/odoo_api_client.dart, adapters/*.dart"
-  Connection,"ServerConnection|VersionDetection","auth/data/server_connection_service.dart, core/api/version_detector.dart"
-  Auth,"AuthError\(|AuthErrorType","auth/data/auth_service.dart"
-  State,"StateError|DatabaseStateError","auth/data/database_service.dart"
+  API,"throw.*Api.*Exception|throw.*AccessDenied","api/**, adapters/*"
+  Connection,"Connection|VersionDetection","network/**, api/**"
+  Auth,"AuthError\(|AuthErrorType|SessionExpired","auth/**, security/**"
+  State,"StateError|DatabaseStateError|CacheStateError","state/**, data/**"
 ```
 
 ---
 
-## Error Hierarchy (mobile-odoo)
+## Error Hierarchy (generic)
 
 ```toon
 errors[8]{layer,exception}:
-  API,OdooApiException + AccessDenied + SessionExpired + RecordNotFound + Validation
-  Connection,ServerConnection + VersionDetection
-  Auth,AuthError (10 types)
+  API,ApiException + AccessDenied + SessionExpired + RecordNotFound + Validation
+  Connection,ConnectionException + VersionDetection
+  Auth,AuthError (typed variants)
   State,DatabaseStateError
-  Offline,OfflineOpStatus.failed
-  UI,ToastService.showError
+  Offline,OfflineOperation.failed
+  UI,User-facing error surface
 ```
 
 ---

@@ -89,6 +89,8 @@ Right now, the framework is implemented through a practical stack of:
 
 This phase matters because the objective is to finish the mechanics end-to-end before extracting and replatforming the system.
 
+Recent framework-level changes are tracked in [_vida/CHANGELOG.md](_vida/CHANGELOG.md).
+
 ---
 
 <a id="architecture-baseline"></a>
@@ -213,28 +215,41 @@ Why Rust:
 
 ## 📂 Repository Structure
 
-Right now, the framework is implemented through a practical stack:
+Current repository layout:
 
 ```text
 .
 ├── AGENTS.md
 ├── README.md
-├── RELEASE-1-SCOPE.md
 ├── RELEASE-1-IMPLEMENTATION-ROADMAP.md
+├── RELEASE-1-SCOPE.md
 └── _vida/
+    ├── commands/
+    ├── commands.md
+    ├── constitution.md
+    ├── constraints.md
     ├── docs/
-    │   └── protocol-index.md
-    └── scripts/
+    ├── dual-model-protocol.md
+    ├── owasp-integration.md
+    ├── planning.md
+    ├── scripts/
+    ├── templates/
+    ├── transitions.md
+    └── workflow.md
 ```
 
 Key runtime areas:
 
 - [AGENTS.md](AGENTS.md)
+- [README.md](README.md)
+- [RELEASE-1-SCOPE.md](RELEASE-1-SCOPE.md)
+- [RELEASE-1-IMPLEMENTATION-ROADMAP.md](RELEASE-1-IMPLEMENTATION-ROADMAP.md)
+- [_vida/commands](_vida/commands)
+- [_vida/commands.md](_vida/commands.md)
 - [_vida/docs/protocol-index.md](_vida/docs/protocol-index.md)
 - [_vida/docs](_vida/docs)
 - [_vida/scripts](_vida/scripts)
-- [RELEASE-1-SCOPE.md](RELEASE-1-SCOPE.md)
-- [RELEASE-1-IMPLEMENTATION-ROADMAP.md](RELEASE-1-IMPLEMENTATION-ROADMAP.md)
+- [_vida/templates](_vida/templates)
 
 ---
 

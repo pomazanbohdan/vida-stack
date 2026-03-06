@@ -55,7 +55,7 @@ PROVIDER_KEYS = {
     "dispatch",
 }
 PROVIDER_CLASSES = {"internal", "external_cli", "external_review"}
-DISPATCH_KEYS = {"command", "static_args", "workdir_flag", "model_flag", "output_mode", "output_flag", "prompt_mode", "prompt_flag"}
+DISPATCH_KEYS = {"command", "static_args", "workdir_flag", "model_flag", "output_mode", "output_flag", "prompt_mode", "prompt_flag", "env"}
 DISPATCH_OUTPUT_MODES = {"stdout", "file"}
 DISPATCH_PROMPT_MODES = {"positional", "flag"}
 ROUTING_KEYS = {
@@ -412,6 +412,8 @@ def _validate_dispatch(provider_name: str, dispatch_cfg: dict[str, Any], errors:
         _validate_string_field(dispatch_cfg, "prompt_flag", path, errors, required=True)
     elif "prompt_flag" in dispatch_cfg:
         _validate_string_field(dispatch_cfg, "prompt_flag", path, errors)
+    if "env" in dispatch_cfg:
+        _validate_string_map_field(dispatch_cfg, "env", path, errors)
     for key in {"workdir_flag", "model_flag"}:
         if key in dispatch_cfg:
             _validate_string_field(dispatch_cfg, key, path, errors)
