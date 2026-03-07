@@ -8,6 +8,58 @@ Rules:
 4. Group updates under fixed headings when applicable: `Added`, `Changed`, `Fixed`, `Protocol`.
 5. Keep this file limited to VIDA framework/runtime changes, not project feature work.
 
+## 2026-03-07 19:22
+
+Added:
+
+1. Added bounded `problem-party` protocol and helper for optional multi-role conflict discussion via `problem-party-protocol.md` and `problem-party.py`.
+
+Changed:
+
+1. `orchestration-protocol.md` now recognizes `problem_party` as a bounded escalation lens for conflict-heavy but still scoped decisions.
+2. `todo-protocol.md` now requires the board artifact path to be recorded in block evidence when a task enters problem-party discussion mode.
+
+Protocol:
+
+1. `protocol-index.md` now indexes problem-party as a canonical framework protocol instead of leaving multi-role discussion as ad hoc behavior.
+
+## 2026-03-07 19:02
+
+Added:
+
+1. Added automatic follow-up task creation for unresolved secondary slices emitted by `issue-split` artifacts.
+2. Added config-driven live web-search probe support, including `subagent-system.py web-probe <subagent>`.
+3. Added declarative framework wave task-state reconciliation through `framework-task-sync.py`.
+
+Changed:
+
+1. Runtime dispatch now borrows/releases `subagent_pool` leases automatically for eligible read-only external CLI lanes.
+2. CLI model-cache discovery is now config-driven through `dispatch.models_cache_path` instead of a framework hardcode.
+
+Fixed:
+
+1. Provider-configured web-search lanes no longer stay trust-only during live web-required execution; they must pass a bounded probe or fail closed.
+2. Framework wave task-state reconciliation now uses the JSONL-first `br --no-db` path instead of depending on the malformed SQLite database.
+
+Protocol:
+
+1. `issue-contract-protocol.md`, `subagent-system-protocol.md`, `project-overlay-protocol.md`, and `protocol-index.md` now document follow-up issue-split tasks, automatic pool lease integration, live provider-configured web probes, and framework wave state sync.
+
+## 2026-03-07 18:48
+
+Changed:
+
+1. `todo-protocol.md` now treats silent framework diagnosis as a canonical deferred follow-up path inside tracked execution instead of leaving that behavior split across overlay/runtime/FSAP rules.
+
+Fixed:
+
+1. Framework gap capture during active non-framework work now has explicit TODO-level rules for workaround logging, task-boundary handoff, compact-safe persistence, and invalid closure when the gap exists only in chat memory.
+
+Protocol:
+
+1. `silent-framework-diagnosis-protocol.md` now points to `todo-protocol.md` as the execution-layer contract when tracked TODO/`br` flow is active.
+2. `protocol-index.md` now cross-links silent diagnosis and TODO planning so deferred framework follow-up behavior is discoverable from either entry point.
+
 ## 2026-03-07 18:40
 
 Added:

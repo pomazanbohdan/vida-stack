@@ -139,8 +139,12 @@ pack_router_keywords:
 #           - workspace-write
 #         workdir_flag: -C
 #         model_flag: -m
+#         models_cache_path: ~/.codex/models_cache.json
 #         web_search_mode: flag
 #         web_search_flag: --search
+#         web_probe_prompt: Use web search for one current public source and return exactly one line: VIDA_WEB_SEARCH_OK <url>
+#         web_probe_expect_substring: VIDA_WEB_SEARCH_OK
+#         web_probe_timeout_seconds: 25
 #         output_mode: file
 #         output_flag: -o
 #         prompt_mode: positional
@@ -177,6 +181,9 @@ pack_router_keywords:
 #           - -o
 #           - text
 #         web_search_mode: provider_configured
+#         web_probe_prompt: Use web search for one current public source and return exactly one line: VIDA_WEB_SEARCH_OK <url>
+#         web_probe_expect_substring: VIDA_WEB_SEARCH_OK
+#         web_probe_timeout_seconds: 25
 #         workdir_flag: --workdir
 #         output_mode: stdout
 #         prompt_mode: positional

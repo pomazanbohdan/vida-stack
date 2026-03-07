@@ -62,10 +62,11 @@ Vida Stack is still in active development, but it can already be used as a worki
 - subagent-first development execution in supported active modes with orchestrator-owned synthesis
 - hard-law route enforcement with fail-closed dispatch when mandatory fanout, verification, or lawful escalation is skipped
 - silent framework diagnosis as a background guardrail with deferred framework bug capture
+- bounded multi-role `problem_party` escalation for conflict-heavy but still scoped decisions
 - research flows with structured evidence gathering and validation
 - planning and decomposition of work into executable slices
 - formation and refinement of specifications and technical contracts
-- implementation and development execution through protocol-governed flows, including mixed-issue split handling for issue-driven work
+- implementation and development execution through protocol-governed flows, including mixed-issue split handling with automatic follow-up creation for unresolved secondary slices
 
 The system is not yet a finished standalone product, but it is already capable of real framework-driven engineering work.
 
@@ -148,6 +149,40 @@ In practice, this gives VIDA a built-in improvement path for its own protocols, 
 
 ---
 
+## 🧩 Problem-Party Escalation
+
+Vida Stack includes a bounded multi-role discussion mode called `problem_party` for conflict-heavy decisions that still need to remain scoped, auditable, and cost-aware.
+
+### What It Is
+
+`problem_party` is not the default path for ordinary execution. It is an escalation lens used when normal analysis, coach, or verifier flow still leaves a material conflict or low-confidence architecture choice.
+
+It works through:
+
+- explicit board size selection
+- bounded round limits
+- role-specific prompts
+- a structured decision artifact instead of free-form discussion residue
+
+### Board Modes
+
+- **Small board** for normal escalation:
+  `architect`, `runtime_systems`, `quality_verification`, `delivery_cost`
+- **Large board** for genuinely multi-dimensional conflicts:
+  adds `product_scope`, `security_safety`, `sre_observability`, `data_contracts`, `dx_tooling`, and `pm_process`
+
+### Why This Matters
+
+This gives VIDA a middle layer between a single arbitration lane and unbounded team-style discussion:
+
+- stronger than one reviewer when conflict is real
+- cheaper and more controlled than open-ended multi-agent debate
+- still bounded by single-writer ownership, route law, and verification requirements
+
+In practice, `problem_party` is meant for architecture disputes, protocol/process conflicts, issue-contract ambiguity, and framework remediation choices where extra viewpoints improve decision quality but must not widen execution into uncontrolled discussion.
+
+---
+
 ## 🎯 Target System Shape
 
 The target architecture is organized around a small set of core subsystems working as one control plane rather than as disconnected scripts, prompts, and docs.
@@ -188,7 +223,7 @@ Right now, the framework is implemented through a practical stack of:
 
 Recent runtime work has also hardened the framework with a bootstrap split between orchestrator and worker lanes, compact boot snapshots for dev-oriented context, request-intent gating before `br` and pack machinery, subagent-first analysis/review and development execution in supported modes, budget-aware route and escalation metadata, question-driven worker packets with stricter return contracts and non-`STC` impact tails, hard bounded log-read rules for `.vida/*` surfaces, target review-state visibility before dispatch, ensemble lease diagnostics with conflict history, canonical `route_law_summary` and machine-readable `route_receipt` artifacts, verifier-gated `decision_ready` versus `synthesis_ready` completion, pool dependency-graph analysis before multi-task writer selection, and orchestrator-synthesized user reporting that keeps subagent process details hidden by default.
 
-The newest runtime layer also adds queue-backed single-writer task-state mutations for concurrent subagent flows, silent framework diagnosis as a background capture mode, reusable proving-pack templates for product and framework regression surfaces, reusable leased subagent-pool helpers, fail-closed cheap-lane rejection for low-signal outputs, and mixed-issue split artifacts that preserve unresolved secondary symptoms as follow-up work instead of widening the current writer lane.
+The newest runtime layer also adds queue-backed single-writer task-state mutations for concurrent subagent flows, silent framework diagnosis as a background capture mode, reusable proving-pack templates for product and framework regression surfaces, reusable leased subagent-pool helpers with automatic borrow/release for eligible read-only lanes, fail-closed cheap-lane rejection for low-signal outputs, config-driven live web-search probes for provider-configured lanes, declarative framework-wave task reconciliation, bounded `problem_party` discussion boards for conflict-heavy decisions, and mixed-issue split artifacts that preserve unresolved secondary symptoms as follow-up work instead of widening the current writer lane.
 
 This phase matters because the objective is to finish the mechanics end-to-end before extracting and replatforming the system.
 

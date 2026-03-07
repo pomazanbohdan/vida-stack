@@ -1667,31 +1667,40 @@ Deliverable:
                 }
 
                 def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
-                    manifest_path = Path(cmd[6]) / "manifest.json"
-                    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-                    manifest_path.write_text(
-                        json.dumps(
-                            {
-                                "status": "completed",
-                                "phase": "completed",
-                                "synthesis_ready": True,
-                                "results": [
-                                    {
-                                        "subagent": "qwen_cli",
-                                        "status": "success",
-                                        "output_file": str(analysis_output),
-                                    }
-                                ],
-                            }
-                        ),
-                        encoding="utf-8",
-                    )
-                    return self.dispatch.subprocess.CompletedProcess(
-                        cmd,
-                        0,
-                        stdout=str(manifest_path) + "\n",
-                        stderr="",
-                    )
+                    if "ensemble" in cmd:
+                        manifest_path = Path(cmd[6]) / "manifest.json"
+                        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                        manifest_path.write_text(
+                            json.dumps(
+                                {
+                                    "status": "completed",
+                                    "phase": "completed",
+                                    "synthesis_ready": True,
+                                    "results": [
+                                        {
+                                            "subagent": "qwen_cli",
+                                            "status": "success",
+                                            "output_file": str(analysis_output),
+                                        }
+                                    ],
+                                }
+                            ),
+                            encoding="utf-8",
+                        )
+                        return self.dispatch.subprocess.CompletedProcess(
+                            cmd,
+                            0,
+                            stdout=str(manifest_path) + "\n",
+                            stderr="",
+                        )
+                    if "create" in cmd:
+                        return self.dispatch.subprocess.CompletedProcess(
+                            cmd,
+                            0,
+                            stdout=json.dumps({"id": "unit-task.1"}) + "\n",
+                            stderr="",
+                        )
+                    raise AssertionError(f"unexpected subprocess command: {cmd}")
 
                 with mock.patch.object(self.dispatch, "route_snapshot", return_value=({}, route)), \
                     mock.patch.object(self.dispatch.subprocess, "run", side_effect=fake_subprocess_run):
@@ -1719,6 +1728,90 @@ Deliverable:
         self.assertEqual(split_payload["status"], "mixed_issue_split_detected")
         self.assertEqual(split_payload["primary_executable_slice"]["symptom_ids"], ["SYM-1"])
         self.assertEqual(split_payload["secondary_unresolved_slice"]["symptom_ids"], ["SYM-2"])
+        self.assertEqual(split_payload["follow_up_task_id"], "unit-task.1")
+        self.assertEqual(prepare_manifest["issue_split_follow_up"]["task_id"], "unit-task.1")
+
+    def test_start_subagent_process_runs_live_web_probe_for_provider_configured_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            prompt_file = tmp_path / "prompt.txt"
+            output_file = tmp_path / "output.txt"
+            prompt_file.write_text("Runtime Role Packet:\n- worker_lane_confirmed: true\n", encoding="utf-8")
+            route = {"web_search_required": "yes", "dispatch_policy": {}, "route_budget": {}, "fallback_subagents": []}
+            subagent_cfg = self.minimal_subagent_cfg()
+            subagent_cfg["dispatch"]["command"] = "qwen"
+            subagent_cfg["dispatch"]["web_search_mode"] = "provider_configured"
+            subagent_cfg["subagent_backend_class"] = "external_cli"
+
+            fake_process = mock.Mock()
+            fake_process.poll.return_value = 0
+            fake_process.returncode = 0
+
+            with mock.patch.object(self.dispatch.worker_packet_gate, "validate_packet_text", return_value=[]), \
+                mock.patch.object(self.dispatch, "selected_model_for_subagent", return_value=None), \
+                mock.patch.object(self.dispatch.subagent_system, "web_search_probe_subagent", return_value={"web_probe": {"success": True}}) as mocked_probe, \
+                mock.patch.object(self.dispatch, "acquire_dispatch_pool_lease", return_value={"status": "acquired", "lease": {"holder": "unit-task:research:run"}}), \
+                mock.patch.object(self.dispatch.subprocess, "Popen", return_value=fake_process):
+                launch = self.dispatch.start_subagent_process(
+                    "unit-task",
+                    "research",
+                    "qwen_cli",
+                    prompt_file,
+                    output_file,
+                    tmp_path,
+                    route,
+                    subagent_cfg,
+                    "single",
+                )
+                self.dispatch.close_launch_handles(launch)
+
+        self.assertIn("process", launch)
+        mocked_probe.assert_called_once_with("qwen_cli")
+
+    def test_finalize_subagent_process_releases_pool_lease(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            output_file = tmp_path / "output.txt"
+            stderr_file = tmp_path / "output.txt.stderr.log"
+            prompt_file = tmp_path / "prompt.txt"
+            output_file.write_text("{\"merge_ready\":\"yes\"}\n", encoding="utf-8")
+            stderr_file.write_text("", encoding="utf-8")
+            prompt_file.write_text("", encoding="utf-8")
+            fake_process = mock.Mock()
+            fake_process.poll.return_value = 0
+            fake_process.returncode = 0
+            launch = {
+                "process": fake_process,
+                "stdout_handle": None,
+                "stderr_handle": None,
+                "task_id": "unit-task",
+                "task_class": "analysis",
+                "subagent_name": "kilo_cli",
+                "selected_model": None,
+                "subagent_cfg": self.minimal_subagent_cfg(),
+                "dispatch_mode": "single",
+                "risk_class": "R0",
+                "domain_tags": [],
+                "max_runtime_seconds": 60,
+                "min_output_bytes": 0,
+                "output_file": output_file,
+                "stderr_path": stderr_file,
+                "workdir": tmp_path,
+                "prompt_file": prompt_file,
+                "route": self.minimal_route(),
+                "run_id": "run-1",
+                "ts_start": "2026-03-07T00:00:00Z",
+                "started": 0.0,
+                "pool_lease": {"holder": "unit-task:analysis:run-1"},
+            }
+            with mock.patch.object(self.dispatch, "subagent_result_payload", return_value={"status": "success"}) as mocked_payload, \
+                mock.patch.object(self.dispatch, "release_dispatch_pool_lease", return_value={"status": "released"}) as mocked_release, \
+                mock.patch.object(self.dispatch.time, "monotonic", return_value=1.0):
+                result = self.dispatch.finalize_subagent_process(launch)
+
+        mocked_release.assert_called_once()
+        mocked_payload.assert_called_once()
+        self.assertEqual(result["pool_release"]["status"], "released")
 
     def test_parse_coach_decision_detects_return_for_rework(self) -> None:
         output = """

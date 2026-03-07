@@ -24,6 +24,8 @@ RUN_LOG_PATH = LOG_DIR / "subagent-runs.jsonl"
 ROUTE_RECEIPT_DIR = LOG_DIR / "route-receipts"
 ISSUE_CONTRACT_DIR = LOG_DIR / "issue-contracts"
 ISSUE_SPLIT_DIR = LOG_DIR / "issue-splits"
+FRAMEWORK_TASK_SYNC_STATE_PATH = ROOT_DIR / ".vida" / "state" / "framework-wave-task-sync.json"
+BR_MUTATION_QUEUE_SCRIPT = SCRIPT_DIR / "br-mutation-queue.py"
 FRAMEWORK_MUTATION_ROOTS = ("AGENTS.md", "_vida")
 FRAMEWORK_MUTATION_IGNORED_SEGMENTS = {"__pycache__"}
 FRAMEWORK_MUTATION_IGNORED_SUFFIXES = (".pyc",)
@@ -936,6 +938,153 @@ def write_issue_split_artifact(task_id: str, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
+
+
+def issue_split_follow_up_title(task_id: str, issue_split: dict[str, Any]) -> str:
+    secondary = (issue_split.get("secondary_unresolved_slice") or {}).get("symptoms") or []
+    summaries = [
+        policy_value(item.get("summary"), "").strip()
+        for item in secondary
+        if isinstance(item, dict) and policy_value(item.get("summary"), "").strip()
+    ]
+    headline = ", ".join(summaries[:2]) or "secondary unresolved slice"
+    return f"{task_id}: follow-up unresolved slice for {headline}"
+
+
+def issue_split_follow_up_description(task_id: str, issue_split: dict[str, Any]) -> str:
+    primary_ids = normalized_string_list((issue_split.get("primary_executable_slice") or {}).get("symptom_ids"))
+    secondary = (issue_split.get("secondary_unresolved_slice") or {}).get("symptoms") or []
+    lines = [
+        "Auto-created from VIDA issue-split artifact.",
+        f"Parent task: {task_id}",
+        f"Primary executable slice symptom ids: {', '.join(primary_ids) if primary_ids else '-'}",
+        "",
+        "Secondary unresolved slice:",
+    ]
+    for item in secondary:
+        if not isinstance(item, dict):
+            continue
+        summary = policy_value(item.get("summary"), "unresolved symptom")
+        symptom_id = policy_value(item.get("id"), "SYM")
+        evidence_status = policy_value(item.get("evidence_status"), "unproven")
+        lines.append(f"- {symptom_id}: {summary} (evidence_status={evidence_status})")
+    lines.extend(
+        [
+            "",
+            "Acceptance:",
+            "- normalize this secondary slice into its own issue/spec contract",
+            "- prove or reject the unresolved symptom explicitly",
+            "- avoid silently widening the original writer scope",
+        ]
+    )
+    return "\n".join(lines).strip()
+
+
+def sync_issue_split_follow_up_task(task_id: str, issue_split: dict[str, Any]) -> dict[str, Any]:
+    existing_follow_up = policy_value(issue_split.get("follow_up_task_id"), "")
+    if existing_follow_up:
+        return {
+            "status": "reused",
+            "task_id": existing_follow_up,
+        }
+    if not BR_MUTATION_QUEUE_SCRIPT.exists():
+        return {
+            "status": "blocked",
+            "reason": "br_mutation_queue_missing",
+        }
+    cmd = [
+        sys.executable,
+        str(BR_MUTATION_QUEUE_SCRIPT),
+        "br",
+        "--",
+        "create",
+        "--title",
+        issue_split_follow_up_title(task_id, issue_split),
+        "-t",
+        "task",
+        "-p",
+        "2",
+        "--parent",
+        task_id,
+        "-d",
+        issue_split_follow_up_description(task_id, issue_split),
+        "--labels",
+        "issue-split,follow-up,secondary-slice",
+        "--json",
+        "--no-db",
+    ]
+    completed = subprocess.run(
+        cmd,
+        cwd=str(ROOT_DIR),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return {
+            "status": "failed",
+            "reason": "br_create_failed",
+            "return_code": completed.returncode,
+            "stderr": (completed.stderr or "").strip(),
+            "stdout": (completed.stdout or "").strip(),
+        }
+    try:
+        payload = json.loads((completed.stdout or "").strip())
+    except json.JSONDecodeError:
+        return {
+            "status": "failed",
+            "reason": "invalid_br_create_output",
+            "stdout": (completed.stdout or "").strip(),
+        }
+    follow_up_task_id = policy_value(payload.get("id"), "")
+    if not follow_up_task_id:
+        return {
+            "status": "failed",
+            "reason": "missing_follow_up_task_id",
+            "stdout": (completed.stdout or "").strip(),
+        }
+    return {
+        "status": "created",
+        "task_id": follow_up_task_id,
+    }
+
+
+def subagent_pool_eligible(*, read_only_guard: bool, subagent_cfg: dict[str, Any]) -> bool:
+    return read_only_guard and policy_value(subagent_cfg.get("subagent_backend_class"), "") == "external_cli"
+
+
+def acquire_dispatch_pool_lease(
+    *,
+    task_id: str,
+    task_class: str,
+    subagent_name: str,
+    run_id: str,
+    max_runtime_seconds: int,
+) -> dict[str, Any]:
+    holder = f"{task_id}:{task_class}:{run_id}"
+    return subagent_system.acquire_lease(
+        "subagent_pool",
+        subagent_name,
+        holder,
+        ttl_seconds=max(60, max_runtime_seconds + 60),
+    )
+
+
+def release_dispatch_pool_lease(launch: dict[str, Any]) -> dict[str, Any] | None:
+    lease = launch.get("pool_lease")
+    if not isinstance(lease, dict):
+        return None
+    holder = policy_value(lease.get("holder"), "")
+    subagent_name = launch.get("subagent_name")
+    if not holder or not subagent_name:
+        return None
+    return subagent_system.release_lease("subagent_pool", str(subagent_name), holder)
+
+
+def provider_configured_web_probe_required(route: dict[str, Any], subagent_cfg: dict[str, Any]) -> bool:
+    if policy_value(route.get("web_search_required"), "no") != "yes":
+        return False
+    return vida_config.subagent_dispatch_web_search_mode(subagent_cfg) == "provider_configured"
 
 
 def load_internal_escalation_receipt(task_id: str, task_class: str) -> dict[str, Any]:
@@ -2313,6 +2462,76 @@ def start_subagent_process(
         }
 
     try:
+        web_probe_result: dict[str, Any] | None = None
+        if provider_configured_web_probe_required(route, subagent_cfg):
+            web_probe_result = subagent_system.web_search_probe_subagent(subagent_name)
+            web_probe = web_probe_result.get("web_probe", {}) if isinstance(web_probe_result, dict) else {}
+            if not isinstance(web_probe, dict) or not bool(web_probe.get("success", False)):
+                error_text = f"live web-search probe failed for provider-configured lane: {subagent_name}"
+                stderr_path.write_text(error_text + "\n", encoding="utf-8")
+                return {
+                    "result": subagent_result_payload(
+                        task_id=task_id,
+                        task_class=task_class,
+                        subagent_name=subagent_name,
+                        selected_model=selected_model,
+                        subagent_cfg=subagent_cfg,
+                        dispatch_mode=dispatch_mode,
+                        risk_class=risk_class,
+                        domain_tags=domain_tags,
+                        max_runtime_seconds=max_runtime_seconds,
+                        min_output_bytes=min_output_bytes,
+                        output_file=output_file,
+                        stderr_path=stderr_path,
+                        workdir=workdir,
+                        prompt_file=prompt_file,
+                        route=route,
+                        run_id=run_id,
+                        ts_start=ts_start,
+                        started=started,
+                        status="failure",
+                        exit_code=2,
+                        error_text=error_text,
+                    )
+                }
+        pool_lease: dict[str, Any] | None = None
+        if subagent_pool_eligible(read_only_guard=read_only_guard, subagent_cfg=subagent_cfg):
+            lease_attempt = acquire_dispatch_pool_lease(
+                task_id=task_id,
+                task_class=task_class,
+                subagent_name=subagent_name,
+                run_id=run_id,
+                max_runtime_seconds=max_runtime_seconds,
+            )
+            if policy_value(lease_attempt.get("status"), "") != "acquired":
+                error_text = f"subagent pool lease unavailable for {subagent_name}"
+                stderr_path.write_text(error_text + "\n", encoding="utf-8")
+                return {
+                    "result": subagent_result_payload(
+                        task_id=task_id,
+                        task_class=task_class,
+                        subagent_name=subagent_name,
+                        selected_model=selected_model,
+                        subagent_cfg=subagent_cfg,
+                        dispatch_mode=dispatch_mode,
+                        risk_class=risk_class,
+                        domain_tags=domain_tags,
+                        max_runtime_seconds=max_runtime_seconds,
+                        min_output_bytes=min_output_bytes,
+                        output_file=output_file,
+                        stderr_path=stderr_path,
+                        workdir=workdir,
+                        prompt_file=prompt_file,
+                        route=route,
+                        run_id=run_id,
+                        ts_start=ts_start,
+                        started=started,
+                        status="failure",
+                        exit_code=2,
+                        error_text=error_text,
+                    )
+                }
+            pool_lease = lease_attempt.get("lease") if isinstance(lease_attempt.get("lease"), dict) else None
         cmd, use_stdout_output = subagent_command(
             subagent_name,
             prompt,
@@ -2368,8 +2587,12 @@ def start_subagent_process(
             "effective_runtime_seconds": max_runtime_seconds,
             "framework_snapshot_before": framework_snapshot_before,
             "project_snapshot_before": project_snapshot_before,
+            "pool_lease": pool_lease,
+            "web_probe_result": web_probe_result,
         }
     except Exception as exc:
+        if "pool_lease" in locals() and pool_lease:
+            release_dispatch_pool_lease({"pool_lease": pool_lease, "subagent_name": subagent_name})
         try:
             stderr_path.write_text(str(exc) + "\n", encoding="utf-8")
         except OSError:
@@ -2425,6 +2648,7 @@ def finalize_subagent_process(
             process.kill()
             process.wait(timeout=3)
     close_launch_handles(launch)
+    pool_release = release_dispatch_pool_lease(launch)
     exit_code = int(process.returncode if process.returncode is not None else 1)
     status = status_override or "success"
     if exit_code_override is not None:
@@ -2463,7 +2687,7 @@ def finalize_subagent_process(
             )
         boundary_error = "; ".join(boundary_errors)
         error_text = f"{error_text}; {boundary_error}" if error_text else boundary_error
-    return subagent_result_payload(
+    result = subagent_result_payload(
         task_id=launch["task_id"],
         task_class=launch["task_class"],
         subagent_name=launch["subagent_name"],
@@ -2488,6 +2712,12 @@ def finalize_subagent_process(
         framework_mutation_paths=forbidden_framework_mutations,
         project_mutation_paths=forbidden_project_mutations,
     )
+    if pool_release is not None:
+        result["pool_release"] = pool_release
+    web_probe_result = launch.get("web_probe_result")
+    if isinstance(web_probe_result, dict):
+        result["web_probe"] = web_probe_result.get("web_probe", web_probe_result)
+    return result
 
 
 def terminate_subagent_process(
@@ -4723,8 +4953,15 @@ def run_prepare_execution(argv: list[str]) -> int:
             manifest["issue_contract"] = validated_issue_contract
             issue_split = build_issue_split_artifact(validated_issue_contract)
             if issue_split:
+                issue_split_path_value = write_issue_split_artifact(task_id, issue_split)
+                follow_up_sync = sync_issue_split_follow_up_task(task_id, issue_split)
+                if policy_value(follow_up_sync.get("task_id"), ""):
+                    issue_split["follow_up_task_id"] = policy_value(follow_up_sync.get("task_id"), "")
+                    issue_split["follow_up_task_status"] = policy_value(follow_up_sync.get("status"), "")
+                    issue_split_path_value.write_text(json.dumps(issue_split, indent=2, sort_keys=True) + "\n", encoding="utf-8")
                 manifest["issue_split"] = issue_split
-                manifest["issue_split_path"] = str(write_issue_split_artifact(task_id, issue_split))
+                manifest["issue_split_path"] = str(issue_split_path_value)
+                manifest["issue_split_follow_up"] = follow_up_sync
         if issue_contract_ok:
             existing_prompt_text = read_prompt(effective_prompt_file)
             if worker_packet_gate.validate_packet_text(existing_prompt_text):

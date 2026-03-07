@@ -73,6 +73,7 @@ DISPATCH_KEYS = {
     "subcommand",
     "static_args",
     "write_static_args",
+    "models_cache_path",
     "workdir_flag",
     "model_flag",
     "output_mode",
@@ -81,6 +82,10 @@ DISPATCH_KEYS = {
     "prompt_flag",
     "web_search_mode",
     "web_search_flag",
+    "web_probe_static_args",
+    "web_probe_prompt",
+    "web_probe_expect_substring",
+    "web_probe_timeout_seconds",
     "env",
     "probe_static_args",
     "probe_prompt",
@@ -574,6 +579,8 @@ def _validate_dispatch(subagent_name: str, dispatch_cfg: dict[str, Any], errors:
     for key in {"workdir_flag", "model_flag"}:
         if key in dispatch_cfg:
             _validate_string_field(dispatch_cfg, key, path, errors)
+    if "models_cache_path" in dispatch_cfg:
+        _validate_string_field(dispatch_cfg, "models_cache_path", path, errors)
     web_search_mode = None
     if "web_search_mode" in dispatch_cfg:
         web_search_mode = _validate_enum_field(
@@ -590,6 +597,7 @@ def _validate_dispatch(subagent_name: str, dispatch_cfg: dict[str, Any], errors:
         _validate_string_field(dispatch_cfg, "web_search_flag", path, errors)
     for key in {
         "probe_timeout_seconds",
+        "web_probe_timeout_seconds",
         "startup_timeout_seconds",
         "no_output_timeout_seconds",
         "progress_idle_timeout_seconds",
@@ -597,11 +605,13 @@ def _validate_dispatch(subagent_name: str, dispatch_cfg: dict[str, Any], errors:
     }:
         if key in dispatch_cfg:
             _validate_int_field(dispatch_cfg, key, path, errors, min_value=1)
-    for key in {"probe_prompt", "probe_expect_substring"}:
+    for key in {"probe_prompt", "probe_expect_substring", "web_probe_prompt", "web_probe_expect_substring"}:
         if key in dispatch_cfg:
             _validate_string_field(dispatch_cfg, key, path, errors)
     if "probe_static_args" in dispatch_cfg:
         _validate_repeated_string_field(dispatch_cfg, "probe_static_args", path, errors)
+    if "web_probe_static_args" in dispatch_cfg:
+        _validate_repeated_string_field(dispatch_cfg, "web_probe_static_args", path, errors)
 
 
 def _validate_subagent(subagent_name: str, subagent_cfg: dict[str, Any], errors: list[str]) -> None:

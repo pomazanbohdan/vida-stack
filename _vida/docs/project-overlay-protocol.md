@@ -158,23 +158,28 @@ Supported subagent-level `dispatch` keys:
 3. `subcommand`
 4. `static_args`
 5. `write_static_args`
-6. `workdir_flag`
-7. `model_flag`
-8. `output_mode`
-9. `output_flag`
-10. `prompt_mode`
-11. `prompt_flag`
-12. `web_search_mode`
-13. `web_search_flag`
-14. `env`
-15. `probe_static_args`
-16. `probe_prompt`
-17. `probe_expect_substring`
-18. `probe_timeout_seconds`
-19. `startup_timeout_seconds`
-20. `no_output_timeout_seconds`
-21. `progress_idle_timeout_seconds`
-22. `max_runtime_extension_seconds`
+6. `models_cache_path`
+7. `workdir_flag`
+8. `model_flag`
+9. `output_mode`
+10. `output_flag`
+11. `prompt_mode`
+12. `prompt_flag`
+13. `web_search_mode`
+14. `web_search_flag`
+15. `web_probe_static_args`
+16. `web_probe_prompt`
+17. `web_probe_expect_substring`
+18. `web_probe_timeout_seconds`
+19. `env`
+20. `probe_static_args`
+21. `probe_prompt`
+22. `probe_expect_substring`
+23. `probe_timeout_seconds`
+24. `startup_timeout_seconds`
+25. `no_output_timeout_seconds`
+26. `progress_idle_timeout_seconds`
+27. `max_runtime_extension_seconds`
 
 Supported `agent_system.scoring` keys:
 
@@ -254,6 +259,8 @@ Availability-state contract:
 5. new overlays should prefer explicit probe-capable dispatch for external CLI subagents that support headless smoke checks.
 6. web-search-capable subagents should declare both `capability_band=web_search` and dispatch-level wiring via `dispatch.web_search_mode`.
 7. `dispatch.web_search_mode=provider_configured` is an operator-trusted declaration of provider-side search enablement; it is weaker than an explicit flag-based path and does not by itself prove a live search probe.
+8. `dispatch.web_probe_*` allows provider-agnostic live web-search smoke checks without hardcoding a specific CLI into framework runtime.
+9. `dispatch.models_cache_path` allows CLI-specific model-cache discovery to remain config-driven.
 
 ## Portability Rule
 

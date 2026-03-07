@@ -31,6 +31,7 @@ Canonical runtime artifact:
 
 1. `.vida/logs/issue-contracts/<task_id>.json`
 2. `.vida/logs/issue-splits/<task_id>.json` when a mixed issue contains both an executable primary slice and unresolved secondary symptoms
+3. follow-up task linkage in the issue-split artifact when the unresolved slice should become separately tracked work
 
 Minimum fields:
 
@@ -110,6 +111,7 @@ the runtime should emit an `issue-split` artifact that preserves:
 
 1. the primary executable slice the writer may implement now,
 2. the secondary unresolved slice that should become follow-up work instead of silently re-expanding the current fix.
+3. follow-up task identity when runtime materializes the unresolved slice into tracked work.
 
 ## WVP / Internet Validation
 

@@ -26,6 +26,7 @@ When active, the orchestrator must treat silent diagnosis as a background framew
 5. After the current task boundary, take the captured framework bug into the framework queue and fix it systematically.
 6. Framework bug work must use WVP/web research when the fix depends on external best practice, tool behavior, or architecture claims.
 7. Closure-ready state for framework bug work still requires normal delegated verification/proving rules.
+8. When TODO/`br` flow is active, `_vida/docs/todo-protocol.md` is the canonical execution-layer contract for deferred capture, compact-safe persistence, and post-boundary follow-up routing.
 
 ## Bug Capture Contract
 

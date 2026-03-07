@@ -268,6 +268,8 @@ Release 1 should provide:
 14. subagent-first analysis and review behavior in supported `native|hybrid|disabled` runtime modes while keeping final synthesis under the orchestrator
 15. explicit budget-policy routing and internal-escalation metadata for lawful cheap, bridge, and internal lanes
 16. reusable leased subagent-pool borrowing and release helpers for bounded lane reuse
+17. automatic pool borrow/release for eligible read-only external CLI lanes
+18. config-driven live web-search probes for provider-configured web lanes
 
 Implementation audit:
 
@@ -281,6 +283,8 @@ Implementation audit:
 - [x] Development execution is now documented as orchestration-first when subagent mode is active.
 - [x] Budget-policy routing metadata now distinguishes local allowance, required dispatch path, lawful escalation, and bypass violations.
 - [x] Reusable leased subagent-pool helpers now exist on top of canonical lease primitives.
+- [x] Eligible read-only external CLI dispatches now borrow and release `subagent_pool` leases automatically.
+- [x] Provider-configured web-search lanes now support bounded live probes and fail closed if the probe does not clear.
 - [ ] Task/block/file-scope ownership beyond ensemble dispatch leases is still incomplete.
 
 ### 5.1 Multi-Agent Role Architecture
@@ -387,6 +391,7 @@ Required capabilities:
 12. independent verification as a first-class routed artifact with explicit blocking semantics before final synthesis
 13. completion semantics that distinguish `decision_ready` from `synthesis_ready`
 14. mixed-issue split artifacts that preserve unresolved secondary symptoms without widening the current writer scope
+15. automatic follow-up task creation for unresolved secondary issue slices when tracked separation is required
 
 Target review-state vocabulary for Release 1:
 
@@ -408,6 +413,7 @@ Implementation audit:
 - [x] Verification-required ensembles now remain blocked or `verification_pending` until synthesis is actually cleared.
 - [x] Runtime completion now distinguishes `decision_ready` from final `synthesis_ready`.
 - [x] Issue-driven execution now persists mixed-issue split artifacts so secondary unresolved symptoms remain explicit follow-up work.
+- [x] Unresolved secondary issue slices can now materialize follow-up tracked tasks automatically from issue-split artifacts.
 - [ ] The full target review vocabulary is not yet fully implemented end to end.
 - [ ] Policy-aware close/handoff semantics are not yet complete across all execution classes.
 
@@ -570,6 +576,7 @@ Release 1 should provide:
 13. operator-visible budget-policy and escalation summaries
 14. operator-visible route-law and verification-state summaries tied to canonical run artifacts
 15. lane-fitness telemetry that penalizes repeated low-signal cheap-lane behavior
+16. declarative framework-wave task-state reconciliation on the canonical mutation path
 
 Implementation audit:
 
@@ -582,6 +589,7 @@ Implementation audit:
 - [x] Operator status and health checks now surface budget-policy violations, escalation receipts, and diagnostic cost-class state.
 - [x] Route/run artifacts now expose `route_law_summary`, `route_receipt`, and dedicated verification blocks for operator inspection.
 - [x] Runtime scoring now persists and penalizes repeated low-fitness cheap-lane outputs.
+- [x] Declarative framework-wave task-state synchronization now exists on top of the queue-backed mutation path.
 - [ ] Full drift visibility remains incomplete.
 
 ### 13.1 Drift Detection
@@ -641,6 +649,7 @@ Release 1 should provide early but real improvement mechanics:
 6. evidence-backed improvement of routing and fallback behavior
 7. a base for future prompt/policy revision loops
 8. silent framework diagnosis as a background capture mode with deferred framework bug follow-up
+9. bounded `problem_party` escalation as an optional decision-quality lens for conflict-heavy scoped issues
 
 Implementation audit:
 
@@ -649,6 +658,7 @@ Implementation audit:
 - [x] Provider score learning exists.
 - [x] Framework self-analysis path exists.
 - [x] Silent framework diagnosis now exists as a background capture and reflection surface.
+- [x] Bounded `problem_party` discussion mode now exists as an optional escalation helper with structured decision artifacts.
 - [ ] Distilled lesson and memory update flow remain incomplete.
 
 ### 14.1 Continuous Learning Pipeline
@@ -696,6 +706,7 @@ Release 1 should provide:
 5. project bootstrap contract for seeding required project artifacts
 6. provider-level runtime budget and dispatch environment settings where orchestration realism requires them
 7. project-overlay-resolved operations and environment entrypoints instead of hardcoded project paths in framework policy
+8. config-driven CLI model-cache discovery and provider-configured web-probe settings
 
 Implementation audit:
 
@@ -703,6 +714,7 @@ Implementation audit:
 - [x] Provider/route configuration lives in overlay data.
 - [x] Runtime budget and dispatch environment settings exist in the template/runtime.
 - [x] Phase-aware timeout knobs now exist in config schema and overlay template, including longer Gemini-oriented runtime profiles.
+- [x] CLI model-cache discovery and provider-configured web probes are now config-driven in overlay/template/runtime.
 - [x] Project bootstrap contract exists.
 - [x] Framework runtime now relies on overlay-resolved operations/environment entrypoints instead of embedding project-specific runbook paths in `AGENTS.md`.
 - [ ] Full standalone portability is not yet complete.
@@ -803,11 +815,13 @@ Implementation audit:
   - [x] Phase-aware timeout controls and live route refresh now exist.
   - [x] Ensemble lease acquisition, release, conflict blocking, and lease-history diagnostics now exist.
   - [x] Reusable leased subagent-pool helpers now exist on top of the lease runtime.
+  - [x] Eligible read-only external CLI lanes now borrow and release pool leases automatically.
   - [x] Worker packets now use explicit machine-readable return fields for question-driven execution.
   - [x] Route outputs now expose budget-policy metadata and lawful internal-escalation constraints.
   - [x] Route-law summaries and canonical route receipts now exist in the dispatch runtime.
   - [x] Illegal single-lane dispatch now fails closed when route law requires fanout and synthesis.
   - [x] Cheap lanes now fail closed on low-signal outputs instead of being counted as successful progress.
+  - [x] Live provider-configured web probes now exist for web-required lanes.
   - [ ] Broader task/block/file-scope ownership contracts are not yet fully materialized as runtime-enforced stateful contracts.
 - [ ] **Partial: Review and Verification Fabric**
   - [x] Route artifacts now expose `review_state`.
@@ -819,6 +833,7 @@ Implementation audit:
   - [x] Completion now distinguishes `decision_ready` from `synthesis_ready`.
   - [x] Verification-required ensembles now remain blocked until verifier routing clears synthesis.
   - [x] Mixed-issue split artifacts now preserve unresolved secondary symptoms as follow-up work instead of widening the current writer lane.
+  - [x] Follow-up tasks can now be auto-created for unresolved secondary issue slices.
   - [ ] The full target review-state vocabulary is not yet demonstrated end to end.
   - [ ] Policy-aware close and handoff behavior is not yet fully proven across all task classes.
 - [ ] **Partial: Risk and Governance**
@@ -847,16 +862,19 @@ Implementation audit:
   - [x] Budget-policy telemetry and escalation diagnostics now exist in operator-facing surfaces.
   - [x] Route-law summaries, route receipts, and verification blocks now exist in canonical run telemetry.
   - [x] Low-fitness cheap-lane penalties now persist in routing and score telemetry.
+  - [x] Declarative framework-wave task-state synchronization now exists on the canonical mutation path.
   - [ ] Drift and anomaly visibility are not yet at the full target Release 1 maturity level.
 - [ ] **Partial: Learning and Improvement Loop**
   - [x] Reflection, eval-pack, and scorecard-driven routing adaptation exist.
   - [x] Provider promotion, demotion, cooldown, and recovery flows are implemented.
   - [x] Silent diagnosis now captures deferred framework bugs and session reflections.
+  - [x] `problem_party` now exists as a bounded multi-role escalation helper with structured decision artifacts.
   - [ ] Distilled lesson/memory update flow is not yet a full first-class runtime subsystem.
 - [ ] **Partial: Project Overlay and Portability**
   - [x] Validated overlay template exists.
   - [x] The provider template now mirrors the canonical VIDA subagent stack instead of abstract placeholders.
   - [x] Phase-aware timeout profiles now exist in the overlay template and config schema.
+  - [x] CLI model-cache discovery and provider-configured web probes are now config-driven.
   - [x] Bash installer and framework-only release packaging exist.
   - [x] Overlay-resolved operations/environment entrypoints now replace hardcoded project runbook references in framework bootstrap policy.
   - [ ] Production-ready standalone extraction discipline is not yet fully complete.

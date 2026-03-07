@@ -20,6 +20,40 @@ Hard rule:
 6. Every planned block should include `next_step` (block_id or `-` for terminal step).
 7. Use rolling-window planning: keep 2-3 upcoming planned blocks visible; expand further plan just-in-time.
 
+## 1.1) Silent Framework Diagnosis Integration
+
+When root `vida.config.yaml` enables silent framework diagnosis, TODO flow must treat framework friction as a tracked deferred follow-up, not as an ad hoc side path.
+
+Rules:
+
+1. If framework/runtime friction is detected during an active non-framework task, capture or reuse a framework bug immediately.
+2. Do not silently patch VIDA framework code mid-block unless the user explicitly reprioritizes framework work now.
+3. Continue the current task with the lightest safe workaround when possible and record that workaround in TODO evidence.
+4. At the next task boundary (`block-finish`, `block-end`, `reflect`, or `finish`), record the framework follow-up status in execution evidence or context capsule.
+5. After the current task closes or is safely parked, route the captured framework bug into the normal framework queue and make it the next framework-facing execution target according to priority/recency rules.
+6. Compact/context compression can happen at any moment, so pending framework follow-up state must survive via canonical artifacts, not chat memory.
+7. Framework follow-up work still uses normal TODO/`br` flow, web/WVP validation when architecture claims depend on external reality, and delegated verification before closure.
+
+Canonical helper:
+
+```bash
+python3 _vida/scripts/vida-silent-diagnosis.py capture \
+  --summary "<framework issue>" \
+  --details "<what happened>" \
+  --current-task "<task_id>" \
+  --workaround "<temporary workaround>"
+```
+
+Session reflection rule:
+
+1. If `framework_self_diagnosis.session_reflection_required=true`, run a final self-reflection pass near task/session completion.
+2. Reflection criteria come from overlay or default to:
+   - `architecture_cleanliness`
+   - `completeness`
+   - `token_efficiency`
+   - `orchestration_efficiency`
+3. If reflection finds new framework gaps, create follow-up framework bugs/tasks and route them through the same deferred follow-up contract.
+
 ## 2) Decomposition + Clustering Algorithm
 
 This algorithm is mandatory for non-trivial work (3+ steps).
@@ -218,19 +252,28 @@ bash _vida/scripts/beads-bg-sync.sh stop
 3. Do not use aggressive intervals below 120 sec in normal workflow.
 4. Prefer event-driven sync (`beads-workflow` auto-sync) + sparse background JSONL snapshots over high-frequency polling.
 
+Silent diagnosis TODO handoff:
+
+1. If silent diagnosis is active and a framework gap was captured during the current task, `reflect`/`finish` should reference the capture artifact or resulting framework task id.
+2. Current-task completion is allowed with a bounded workaround, but framework capture must not be left only in chat.
+3. When the current task is paused rather than closed, store the pending framework follow-up in the context capsule so post-compact recovery can resume the correct next action.
+
 ## 6) Gates
 
 0. Plan gate: non-trivial work must pass `Q-Gate` + `Conflict-Gate` before execution materialization.
 0.1. Tool-capability gate: for non-trivial flows, resolve required tool fallbacks and record evidence when fallback is used.
+0.2. If a task enters bounded conflict-discussion mode via `_vida/docs/problem-party-protocol.md`, record the board artifact path in block evidence before resuming normal execution.
 1. Step gate: `block-end` requires evidence or artifacts.
 1.1. If WVP trigger fired, `block-end`/`reflect` evidence must include WVP markers per `_vida/docs/web-validation-protocol.md`.
 2. Track gate: each parallel track must pass verify.
 3. Task gate: strict verify + self-reflection required before close.
 4. Compact gate: always record `compact_pre` and `compact_post`.
 4.1. Drift gate: run `bash _vida/scripts/context-drift-sentinel.sh check <task_id>` after capsule write checkpoints (`block-finish`, compact restore).
+4.2. If silent framework diagnosis is active and a framework gap was detected, compact-safe evidence must include the capture artifact path or follow-up framework task id.
 5. Execution gate: if no active block exists, execution must not proceed.
 6. Plan integrity gate: run `bash _vida/scripts/todo-plan-validate.sh <task_id>` after `block-plan` batch and before execution start. Use `--diff-aware` when the worktree already contains target-scope changes; coverage is evaluated against the whole task plan so already-completed blocks still count.
 6.1. For framework-only tasks, compact evidence is valid when work is confined to `_vida/*` and the block records concrete actions plus canonical artifacts or task IDs. Runtime verification may downgrade missing artifact warnings to informational severity for these tasks in non-strict mode.
+6.2. Silent diagnosis gate: when active, task closure is invalid if a detected framework gap was only discussed in chat and not captured in canonical execution evidence, context capsule, or framework task state.
 
 ## 7) Anti-Patterns
 

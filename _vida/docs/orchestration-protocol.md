@@ -58,6 +58,7 @@ Classify request intent before task resolution:
 8. `review_audit`
 9. `multi_agent_debate`
 10. `recovery_debug`
+11. `problem_party`
 
 Selection rule:
 
@@ -155,6 +156,10 @@ Before routing work, normalize the request into:
 15.1. Treat compact/context compression as an always-possible interruption:
    - persist active task assumptions in TODO evidence or context capsules before long dispatches, risky transitions, or session handoff,
    - prefer compact-resumable artifacts over chat-only state.
+15.2. When the blocking problem is materially conflict-heavy but still bounded, prefer `_vida/docs/problem-party-protocol.md` over ad hoc open-ended debate:
+   - start with the `small` board,
+   - escalate to `large` only when the small board remains unresolved,
+   - require a structured decision artifact before resuming the main flow.
 16. Synthesize results:
    - integrate business, product, architecture, implementation, and verification outputs,
    - resolve conflicts before reporting,

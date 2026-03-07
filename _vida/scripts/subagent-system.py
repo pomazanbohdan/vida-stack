@@ -593,9 +593,15 @@ def models_hint_for_subagent(subagent_name: str, subagent_cfg: dict[str, Any]) -
     hint = subagent_cfg.get("models_hint")
     if isinstance(hint, str):
         return split_csv(hint)
-    if subagent_name != "codex_cli":
+    if isinstance(hint, list):
+        return [str(item).strip() for item in hint if str(item).strip()]
+    dispatch_cfg = subagent_cfg.get("dispatch", {})
+    if not isinstance(dispatch_cfg, dict):
         return []
-    cache = Path.home() / ".codex" / "models_cache.json"
+    cache_path_raw = policy_value(dispatch_cfg.get("models_cache_path"), "")
+    if not cache_path_raw:
+        return []
+    cache = Path(cache_path_raw).expanduser()
     payload = load_json(cache, {})
     out: list[str] = []
     for item in payload.get("models", []):
@@ -1273,6 +1279,41 @@ def subagent_probe_command(subagent: str, subagent_cfg: dict[str, Any]) -> tuple
     return cmd, timeout_seconds, policy_value(dispatch_cfg.get("probe_expect_substring"), "")
 
 
+def subagent_web_search_probe_command(subagent: str, subagent_cfg: dict[str, Any]) -> tuple[list[str], int, str]:
+    dispatch_cfg = subagent_cfg.get("dispatch", {})
+    command = policy_value(dispatch_cfg.get("command"), "")
+    if not command:
+        raise ValueError(f"cli subagent {subagent} missing dispatch.command")
+    static_args = (
+        split_csv(dispatch_cfg.get("web_probe_static_args"))
+        or split_csv(dispatch_cfg.get("probe_static_args"))
+        or split_csv(dispatch_cfg.get("static_args"))
+    )
+    prompt = policy_value(
+        dispatch_cfg.get("web_probe_prompt"),
+        "Use web search for one current public source and return exactly one line: VIDA_WEB_SEARCH_OK <url>",
+    )
+    prompt_mode = policy_value(dispatch_cfg.get("prompt_mode"), "positional")
+    prompt_flag = policy_value(dispatch_cfg.get("prompt_flag"), "")
+    timeout_seconds = max(5, policy_int(dispatch_cfg.get("web_probe_timeout_seconds"), 25))
+    cmd = [command, *static_args]
+    web_search_mode = vida_config.subagent_dispatch_web_search_mode(subagent_cfg)
+    if web_search_mode == "flag":
+        web_search_flag = policy_value(dispatch_cfg.get("web_search_flag"), "")
+        if not web_search_flag:
+            raise ValueError(f"cli subagent {subagent} web-search probe requires dispatch.web_search_flag for flag mode")
+        cmd.append(web_search_flag)
+    elif web_search_mode != "provider_configured":
+        raise ValueError(f"cli subagent {subagent} does not declare web-search probe-capable wiring")
+    if prompt_mode == "flag":
+        if not prompt_flag:
+            raise ValueError(f"cli subagent {subagent} web-search probe requires dispatch.prompt_flag for flag mode")
+        cmd.extend([prompt_flag, prompt])
+    else:
+        cmd.append(prompt)
+    return cmd, timeout_seconds, policy_value(dispatch_cfg.get("web_probe_expect_substring"), "VIDA_WEB_SEARCH_OK")
+
+
 def availability_signal_for_probe(result: str, combined_text: str) -> dict[str, Any]:
     text = (combined_text or "").lower()
     if result == "success":
@@ -1396,6 +1437,101 @@ def probe_subagent(subagent: str) -> dict[str, Any]:
             "stdout_file": str(stdout_path),
             "stderr_file": str(stderr_path),
             "success": False,
+        }
+        return result
+
+
+def web_search_probe_subagent(subagent: str) -> dict[str, Any]:
+    config = vida_config.load_validated_config()
+    subagents = detect_subagents(config)
+    subagent_cfg = subagents.get(subagent)
+    if not subagent_cfg:
+        raise ValueError(f"unknown cli subagent: {subagent}")
+    if not vida_config.subagent_declares_web_search_capability(subagent_cfg):
+        raise ValueError(f"cli subagent {subagent} does not declare web_search capability")
+    if vida_config.subagent_dispatch_web_search_mode(subagent_cfg) not in {"flag", "provider_configured"}:
+        raise ValueError(f"cli subagent {subagent} does not expose web-search wiring")
+    if not subagent_cfg.get("available"):
+        metrics = {
+            "subagent_state": "degraded",
+            "failure_reason": "detect_command_missing",
+            "cooldown_until": "",
+            "probe_required": True,
+            "last_quota_exhausted_at": "",
+        }
+        result = update_subagent_availability(subagent, metrics, "web-search probe failed: detect command unavailable")
+        result["web_probe"] = {"success": False, "reason": "detect_command_missing"}
+        return result
+
+    cmd, timeout_seconds, expect_substring = subagent_web_search_probe_command(subagent, subagent_cfg)
+    probe_dir = ROOT_DIR / "_temp" / "subagent-web-probes"
+    ensure_parent(probe_dir / ".keep")
+    stdout_path = probe_dir / f"{subagent}.stdout.log"
+    stderr_path = probe_dir / f"{subagent}.stderr.log"
+    try:
+        completed = subprocess.run(
+            cmd,
+            cwd=str(ROOT_DIR),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+            env={**os.environ.copy(), **subagent_cfg.get("dispatch", {}).get("env", {})},
+        )
+        stdout_text = completed.stdout or ""
+        stderr_text = completed.stderr or ""
+        stdout_path.write_text(stdout_text, encoding="utf-8")
+        stderr_path.write_text(stderr_text, encoding="utf-8")
+        combined = "\n".join([stdout_text, stderr_text]).strip()
+        success = completed.returncode == 0 and (not expect_substring or expect_substring in combined)
+        metrics = availability_signal_for_probe("success" if success else "failure", combined)
+        note = f"web-search probe exit={completed.returncode}; expect={expect_substring or '<non-empty/zero-exit>'}"
+        result = update_subagent_availability(
+            subagent,
+            metrics,
+            note,
+            recovery_attempted=True,
+            recovery_success=success,
+        )
+        scorecards = load_json(SCORECARD_PATH, {"subagents": {}})
+        if not isinstance(scorecards, dict):
+            scorecards = {"subagents": {}}
+        if "subagents" not in scorecards and isinstance(scorecards.get("providers"), dict):
+            scorecards["subagents"] = scorecards.pop("providers")
+        card = scorecards.setdefault("subagents", {}).setdefault(subagent, score_defaults())
+        global_card = card.setdefault("global", score_defaults()["global"].copy())
+        global_card["last_web_search_probe_at"] = now_utc()
+        global_card["last_web_search_probe_success"] = success
+        global_card["last_web_search_probe_note"] = note
+        save_json(SCORECARD_PATH, scorecards)
+        result["web_probe"] = {
+            "command": cmd,
+            "timeout_seconds": timeout_seconds,
+            "stdout_file": str(stdout_path),
+            "stderr_file": str(stderr_path),
+            "success": success,
+            "expect_substring": expect_substring,
+        }
+        return result
+    except subprocess.TimeoutExpired:
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text(f"subagent web-search probe timed out after {timeout_seconds}s\n", encoding="utf-8")
+        metrics = availability_signal_for_probe("failure", "subagent web-search probe timed out")
+        result = update_subagent_availability(
+            subagent,
+            metrics,
+            f"web-search probe timeout after {timeout_seconds}s",
+            recovery_attempted=True,
+            recovery_success=False,
+        )
+        result["web_probe"] = {
+            "command": cmd,
+            "timeout_seconds": timeout_seconds,
+            "stdout_file": str(stdout_path),
+            "stderr_file": str(stderr_path),
+            "success": False,
+            "expect_substring": expect_substring,
         }
         return result
 
@@ -3301,6 +3437,7 @@ def usage() -> None:
         "  python3 _vida/scripts/subagent-system.py diagnose [task_class]\n"
         "  python3 _vida/scripts/subagent-system.py route <task_class>\n"
         "  python3 _vida/scripts/subagent-system.py probe <subagent>\n"
+        "  python3 _vida/scripts/subagent-system.py web-probe <subagent>\n"
         "  python3 _vida/scripts/subagent-system.py recover <subagent>\n"
         "  python3 _vida/scripts/subagent-system.py recover-pending\n"
         "  python3 _vida/scripts/subagent-system.py leases\n"
@@ -3344,6 +3481,12 @@ def main(argv: list[str]) -> int:
                 usage()
                 return 1
             print(json.dumps(probe_subagent(argv[2]), indent=2, sort_keys=True))
+            return 0
+        if cmd == "web-probe":
+            if len(argv) < 3:
+                usage()
+                return 1
+            print(json.dumps(web_search_probe_subagent(argv[2]), indent=2, sort_keys=True))
             return 0
         if cmd == "recover":
             if len(argv) < 3:

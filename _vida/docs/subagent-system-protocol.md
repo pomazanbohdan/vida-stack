@@ -177,7 +177,7 @@ Ensemble rule:
 7. When mode is not `disabled`, eligible non-trivial read-heavy analysis should go to subagent lanes first; the orchestrator is the synthesizer and mutation owner, not the default primary analyst.
 8. When mode is not `disabled`, development execution should be orchestrator-managed through the routed subagent system; local orchestrator-first development is not the default path.
 8.1. When route metadata marks `web_search_required=yes`, the runtime must filter out subagents that do not both expose `capability_band=web_search` and declare dispatch-level web-search wiring.
-8.2. `provider_configured` counts as operator-trusted wiring metadata; stronger live probe verification may be layered on later, but the runtime must not silently treat non-declared lanes as web-capable.
+8.2. `provider_configured` counts as operator-trusted wiring metadata at config time, but web-required execution should still require a bounded live web-search probe before the lane is treated as ready.
 9. For write-producing routes in `hybrid`, the canonical path is `analysis -> writer -> coach -> verification` when `coach_required=yes`; otherwise it remains `analysis -> writer -> verification`. The writer lane is not authorized before the analysis receipt exists.
 9.1. When the implementation request is issue-driven, the analysis phase must also emit a valid `issue_contract`; writer authorization is invalid until that artifact is `writer_ready`.
 10. Raw subagent returns belong to the evidence layer; the default user-facing output is the orchestrator's synthesized conclusion.
@@ -607,6 +607,7 @@ python3 _vida/scripts/subagent-system.py subagents
 python3 _vida/scripts/subagent-system.py diagnose [task_class]
 python3 _vida/scripts/subagent-system.py route <task_class>
 python3 _vida/scripts/subagent-system.py probe <subagent>
+python3 _vida/scripts/subagent-system.py web-probe <subagent>
 python3 _vida/scripts/subagent-system.py recover <subagent>
 python3 _vida/scripts/subagent-system.py recover-pending
 python3 _vida/scripts/subagent-system.py leases
@@ -622,6 +623,11 @@ python3 _vida/scripts/subagent-dispatch.py ensemble <task_id> <task_class> <prom
 python3 _vida/scripts/subagent-dispatch.py prepare-execution <task_id> <writer_task_class> <prompt_file> <output_dir> [workdir]
 python3 _vida/scripts/subagent-eval-pack.py run <task_id>
 ```
+
+Runtime notes:
+
+1. Read-only external CLI dispatches may borrow/release `subagent_pool` leases automatically; the helper remains the explicit operator surface.
+2. Provider-configured web-search lanes must fail closed to fallback when the live web probe does not clear.
 
 ## Verification
 
