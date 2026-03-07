@@ -71,6 +71,15 @@ Release 1 should be delivered through these phases:
 5. Phase E: Documentation Contract and Protocol Runtime Alignment
 6. Phase F: Extraction Readiness and Standalone Framework Preparation
 
+### Поточний статус реалізації (аудит кодової бази)
+
+- [x] **Phase A: Runtime Core Integrity** — реалізовано базовий runtime-скелет (`br`/TODO lifecycle, boot profile, context capsule, health-check).
+- [x] **Phase B: Orchestration and Subagent Reliability** — реалізовано базові механіки роутингу/dispatch/fallback для subagent-системи.
+- [ ] **Phase C: Verification, Review, and Risk Gates** — частково: є verify/health-gates, але `risk_class`/`review_state` ще не доведені до цільового стану Roadmap.
+- [ ] **Phase D: Telemetry, Scorecards, and Drift Awareness** — частково: є eval/telemetry-утиліти, але повна зріла модель scorecards/drift ще в процесі.
+- [x] **Phase E: Documentation Contract and Protocol Runtime Alignment** — реалізовано основу протоколів, індексів та boundary-контрактів документації.
+- [ ] **Phase F: Extraction Readiness and Standalone Framework Preparation** — ще не завершено (ціль фінальної стадії Release 1).
+
 ## Phase A: Runtime Core Integrity
 
 Goal:
