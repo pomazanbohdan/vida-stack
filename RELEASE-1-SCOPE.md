@@ -248,6 +248,7 @@ Release 1 should provide:
    - task class
    - inferred domain
 11. strategy snapshots generated from observed runs
+12. bounded ensemble lease artifacts with conflict visibility for overlapping orchestration lanes
 
 Implementation audit:
 
@@ -256,7 +257,8 @@ Implementation audit:
 - [x] Dynamic scorecards and strategy snapshots exist.
 - [x] Live runtime/config refresh now updates route decisions instead of relying only on stale init snapshots.
 - [x] Analysis routing now suppresses task-class-demoted CLI subagents from core fanout while keeping bridge/internal lanes available.
-- [ ] Ownership/lease mechanics are not yet fully runtime-enforced.
+- [x] Ensemble lease acquisition, release, and conflict blocking now exist with operator-visible lease history.
+- [ ] Task/block/file-scope ownership beyond ensemble dispatch leases is still incomplete.
 
 ### 5.1 Multi-Agent Role Architecture
 
@@ -289,8 +291,9 @@ Implementation audit:
 
 - [x] Worker vs orchestrator separation exists.
 - [x] Role-oriented lane separation exists conceptually in routing/docs.
+- [x] Ensemble lane lease acquisition/release now reduces overlapping orchestration collisions on the same task-class resource.
 - [ ] Full explicit role runtime for planner/researcher/executor/critic/integrator/supervisor is not yet materialized as separate first-class runtime agents.
-- [ ] Lease and expiration rules are not yet fully implemented as hard stateful contracts.
+- [ ] Task/block/file/worktree ownership contracts and broader expiration semantics are not yet fully implemented as hard stateful runtime contracts.
 
 ### 6. Subagent Dispatch
 
@@ -316,6 +319,7 @@ Release 1 should provide:
 11. graceful degradation instead of runtime crashes on unsupported paths
 12. explicit separation between orchestrator-entry and worker-entry prompt contracts
 13. progress-aware dispatch state such as useful-progress tracking and visible run phases during fanout, fallback, merge, and arbitration
+14. phase-aware timeout parity between ensemble fanout and single-run dispatch lanes
 
 Implementation audit:
 
@@ -324,6 +328,7 @@ Implementation audit:
 - [x] Machine-readable run artifacts and manifests exist.
 - [x] Progress-aware dispatch state exists.
 - [x] Phase-aware timeout controls now exist for startup, no-output, progress-idle, and bounded runtime extension behavior.
+- [x] Single-provider dispatch now has phase-aware timeout parity with ensemble execution instead of one coarse wall-clock timeout.
 - [x] Live ensemble manifests expose `active_subagents`, `active_count`, and timeout-policy metadata.
 - [ ] Some merge/readiness heuristics are still heuristic rather than final Release 1-stable policy.
 
@@ -356,6 +361,7 @@ Target review-state vocabulary for Release 1:
 Implementation audit:
 
 - [x] Review state is machine-visible.
+- [x] Route and eval artifacts now expose target per-run and manifest review-state intent before dispatch.
 - [x] Health and verification scripts exist.
 - [x] Merge-readiness is distinguished from raw command success.
 - [ ] The full target review vocabulary is not yet fully implemented end to end.
@@ -516,6 +522,7 @@ Release 1 should provide:
 9. risk-state visibility
 10. progress visibility across dispatch phases
 11. a baseline for future drift detection
+12. operator-visible recovery, timeout-instability, and lease-conflict summaries
 
 Implementation audit:
 
@@ -524,6 +531,7 @@ Implementation audit:
 - [x] Scorecards and strategy snapshots exist.
 - [x] Review/risk/progress visibility exist.
 - [x] Operator status exposes preferred or eligible task-class fit and recovery history visibility.
+- [x] Operator status now exposes timeout-instability classes and recent lease-conflict summaries.
 - [ ] Full drift visibility remains incomplete.
 
 ### 13.1 Drift Detection
@@ -727,9 +735,11 @@ Implementation audit:
   - [x] Worker-entry and worker-thinking contracts are separated from orchestrator governance.
   - [x] Recovery helpers, subagent suppression, active-subagent visibility, and richer scorecards now exist.
   - [x] Phase-aware timeout controls and live route refresh now exist.
-  - [ ] Lease and ownership mechanics are not yet fully materialized as runtime-enforced stateful contracts.
+  - [x] Ensemble lease acquisition, release, conflict blocking, and lease-history diagnostics now exist.
+  - [ ] Broader task/block/file-scope ownership contracts are not yet fully materialized as runtime-enforced stateful contracts.
 - [ ] **Partial: Review and Verification Fabric**
   - [x] Route artifacts now expose `review_state`.
+  - [x] Route and eval artifacts now expose `target_review_state` and `target_manifest_review_state`.
   - [x] Verification and health-check scripts are implemented.
   - [x] `quality-health-check.sh` reads canonical subagent run logs.
   - [ ] The full target review-state vocabulary is not yet demonstrated end to end.
@@ -753,7 +763,8 @@ Implementation audit:
 - [ ] **Partial: Telemetry and Evaluation**
   - [x] Eval-pack and subagent evaluation scripts exist.
   - [x] Scorecards now track useful-progress and time-to-first-useful-output metrics.
-  - [x] Operator status exposes task-class fit, recovery history, and degraded subagent visibility.
+  - [x] Operator status exposes task-class fit, recovery history, degraded subagent visibility, and timeout-instability summaries.
+  - [x] Lease conflict and recent recovery summaries are now visible in operator surfaces.
   - [ ] Drift and anomaly visibility are not yet at the full target Release 1 maturity level.
 - [ ] **Partial: Learning and Improvement Loop**
   - [x] Reflection, eval-pack, and scorecard-driven routing adaptation exist.

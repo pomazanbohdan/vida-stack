@@ -55,7 +55,7 @@ In simpler terms: Vida Stack is being evolved toward a super-autonomous orchestr
 Vida Stack is still in active development, but it can already be used as a working framework layer for:
 
 - automatic work with tasks, epics, queues, and execution state
-- orchestration of bounded subagents with routing, fallback, and review-aware control
+- orchestration of bounded subagents with routing, fallback, lease-aware dispatch, and review-aware control
 - research flows with structured evidence gathering and validation
 - planning and decomposition of work into executable slices
 - formation and refinement of specifications and technical contracts
@@ -179,7 +179,7 @@ Right now, the framework is implemented through a practical stack of:
 - `br` plus TODO telemetry for execution state
 - external-first subagent routing with verification and fallback logic
 
-Recent runtime work has also hardened the subagent layer with a dedicated worker-entry contract, a worker-lane thinking subset separated from orchestrator reasoning, stronger semantic merge behavior, richer runtime maturity scorecards, recovery helpers for degraded CLI subagents, and operator-visible subagent health surfaces.
+Recent runtime work has also hardened the subagent layer with a dedicated worker-entry contract, a worker-lane thinking subset separated from orchestrator reasoning, stronger semantic merge behavior, richer runtime maturity scorecards, recovery helpers for degraded CLI subagents, target review-state visibility before dispatch, ensemble lease diagnostics with conflict history, phase-aware timeout parity across fanout and single-run lanes, and cleaner framework-generic operator surfaces.
 
 This phase matters because the objective is to finish the mechanics end-to-end before extracting and replatforming the system.
 

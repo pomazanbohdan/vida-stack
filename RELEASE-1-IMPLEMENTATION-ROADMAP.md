@@ -84,22 +84,26 @@ Release 1 should be delivered through these phases:
   - [x] Worker-entry and worker-thinking contracts are separated from orchestrator logic.
   - [x] Degraded CLI subagent recovery helpers now exist.
   - [x] Phase-aware timeout controls and live route refresh now exist.
-  - [ ] Explicit lease and ownership runtime enforcement is not yet fully complete.
+  - [x] Ensemble lease acquisition, release, and conflict history now exist as runtime-enforced orchestration mechanics.
+  - [ ] Broader task/block/file-scope ownership enforcement is not yet fully complete.
 - [ ] **Partial: Phase C — Verification, Review, and Risk Gates**
   - [x] Route and run artifacts expose `risk_class`.
   - [x] Route and run artifacts expose `review_state`.
+  - [x] Route and eval artifacts now expose target review-state intent before dispatch.
   - [x] Health-check tooling reads canonical subagent run logs and surfaces degraded lanes.
   - [ ] Full review-state progression is not yet complete across the full target vocabulary.
   - [ ] Human approval and higher-risk escalation boundaries are not yet fully materialized.
 - [ ] **Partial: Phase D — Telemetry, Scorecards, and Drift Awareness**
   - [x] Eval-pack and subagent evaluation scripts exist.
   - [x] Scorecards track useful-progress rate, timeout-after-progress count, and time-to-first-useful-output.
-  - [x] Operator status exposes task-class fit, recovery history, and current subagent health state.
+  - [x] Operator status exposes task-class fit, recovery history, timeout-instability classes, and current subagent health state.
+  - [x] Lease-conflict and recent recovery summaries are now visible in operator surfaces.
   - [ ] Drift and anomaly handling are not yet complete at the intended Release 1 maturity level.
 - [ ] **Partial: Phase E — Documentation Contract and Protocol Runtime Alignment**
   - [x] Release-target documents, protocol index, worker contracts, and changelog are in place.
   - [x] Canonical runtime vocabulary was pushed further toward `cli subagent` terminology.
   - [x] Provider templates now mirror the real subagent runtime contract, including phase-aware timeout controls.
+  - [x] Runtime payloads now canonicalize legacy note/domain strings into framework-generic operator vocabulary.
   - [ ] Full document freshness and lifecycle enforcement are not yet complete.
 - [ ] **Partial: Phase F — Extraction Readiness and Standalone Framework Preparation**
   - [x] A bash installer exists for framework payload installation.
@@ -197,8 +201,10 @@ Implementation audit:
 - [x] Worker-entry separation exists.
 - [x] Live phase and progress visibility exist.
 - [x] Phase-aware timeout policy exists.
+- [x] Single-run dispatch now has phase-aware timeout parity with ensemble execution.
 - [x] Lane-aware demotion suppression exists for analysis fanout.
-- [ ] Explicit lease/ownership enforcement remains incomplete.
+- [x] Ensemble lease acquisition, release, and conflict-history enforcement now exist.
+- [ ] Broader task/block/file-scope ownership enforcement remains incomplete.
 
 ## Phase C: Verification, Review, and Risk Gates
 
@@ -238,6 +244,7 @@ Implementation audit:
 
 - [x] `review_state` exists in route/run artifacts.
 - [x] `risk_class` exists in route/run artifacts.
+- [x] Target review-state intent now exists in route/eval artifacts.
 - [x] Health tooling surfaces degraded lanes and verification state.
 - [ ] Full target review vocabulary is not yet complete in runtime behavior.
 - [ ] Human approval boundaries are still incomplete.
@@ -284,6 +291,7 @@ Implementation audit:
 - [x] Strategy snapshots exist.
 - [x] Useful-progress and time-to-first-useful-output metrics exist.
 - [x] Recovery history and task-class lane-readiness visibility now exist in operator surfaces.
+- [x] Timeout-instability counters and lease-conflict summaries now exist in operator surfaces.
 - [ ] Drift/anomaly handling is still incomplete.
 
 ## Phase E: Documentation Contract and Protocol Runtime Alignment
@@ -329,6 +337,7 @@ Implementation audit:
 - [x] `protocol-index.md` is synchronized as a canonical map.
 - [x] Worker contracts and subagent protocol docs are in place.
 - [x] Protocol docs now describe recovery history, lane-aware demotion, and phase-aware timeout behavior.
+- [x] Runtime surfaces now canonicalize legacy provider/domain wording into framework-generic vocabulary.
 - [ ] Full document freshness/lifecycle enforcement is still incomplete.
 
 ## Phase F: Extraction Readiness and Standalone Framework Preparation

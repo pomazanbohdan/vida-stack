@@ -19,6 +19,7 @@ STATE_DIR = ROOT_DIR / ".vida" / "state"
 INIT_PATH = STATE_DIR / "subagent-init.json"
 SCORECARD_PATH = STATE_DIR / "subagent-scorecards.json"
 STRATEGY_PATH = STATE_DIR / "subagent-strategy.json"
+LEASE_PATH = STATE_DIR / "subagent-leases.json"
 
 VIDA_CONFIG_PATH = SCRIPT_DIR / "vida-config.py"
 VIDA_CONFIG_SPEC = importlib.util.spec_from_file_location("vida_config_runtime", VIDA_CONFIG_PATH)
@@ -71,15 +72,66 @@ def load_json(path: Path, default: Any) -> Any:
 def migrate_scorecard_bucket(bucket: dict[str, Any]) -> None:
     if not isinstance(bucket, dict):
         return
-    if "subagent_state" not in bucket and isinstance(bucket.get("provider_state"), str):
-        bucket["subagent_state"] = bucket.pop("provider_state")
-    elif "provider_state" in bucket:
-        bucket.pop("provider_state", None)
+    bucket.pop("provider_state", None)
+    last_note = bucket.get("last_note")
+    if isinstance(last_note, str) and "provider_state=" in last_note:
+        bucket["last_note"] = last_note.replace("provider_state=", "subagent_state=")
+
+
+def migrate_domain_buckets(domain_buckets: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(domain_buckets, dict):
+        return {}
+    migrated: dict[str, Any] = {}
+    for raw_key, bucket in domain_buckets.items():
+        normalized_key = normalize_domain_tag(raw_key)
+        if not normalized_key:
+            continue
+        current = migrated.setdefault(normalized_key, {})
+        if isinstance(bucket, dict):
+            current.update(bucket)
+            migrate_scorecard_bucket(current)
+    return migrated
 
 
 def save_json(path: Path, payload: Any) -> None:
     ensure_state_dir()
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+DOMAIN_TAG_ALIASES = {
+    "odoo_api": "api_contract",
+    "flutter_ui": "frontend_ui",
+    "riverpod_state": "state_management",
+}
+
+
+def normalize_domain_tag(tag: Any) -> str:
+    text = policy_value(tag, "").casefold()
+    return DOMAIN_TAG_ALIASES.get(text, text)
+
+
+def canonicalize_note_text(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    out = value
+    replacements = {
+        "provider_state=": "subagent_state=",
+        "odoo_api": "api_contract",
+        "flutter_ui": "frontend_ui",
+        "riverpod_state": "state_management",
+    }
+    for source, target in replacements.items():
+        out = out.replace(source, target)
+    return out
+
+
+def normalize_domain_tags(tags: list[Any] | None) -> list[str]:
+    out: list[str] = []
+    for tag in tags or []:
+        normalized = normalize_domain_tag(tag)
+        if normalized and normalized not in out:
+            out.append(normalized)
+    return out
 
 
 def migrate_legacy_runtime_state(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -99,7 +151,23 @@ def migrate_legacy_runtime_state(snapshot: dict[str, Any]) -> dict[str, Any]:
                 migrate_scorecard_bucket(bucket)
             for bucket in (payload.get("by_domain", {}) or {}).values():
                 migrate_scorecard_bucket(bucket)
+    sanitize_runtime_payload(snapshot)
     return snapshot
+
+
+def sanitize_runtime_payload(payload: Any) -> Any:
+    if isinstance(payload, dict):
+        for key, value in list(payload.items()):
+            if key == "last_note":
+                payload[key] = canonicalize_note_text(value)
+            else:
+                payload[key] = sanitize_runtime_payload(value)
+        return payload
+    if isinstance(payload, list):
+        for idx, value in enumerate(payload):
+            payload[idx] = sanitize_runtime_payload(value)
+        return payload
+    return payload
 
 
 def runtime_snapshot(task_id: str | None = None) -> dict[str, Any]:
@@ -119,6 +187,7 @@ def runtime_snapshot(task_id: str | None = None) -> dict[str, Any]:
                 migrate_scorecard_bucket(card.get("global", {}))
                 for bucket in (card.get("by_task_class", {}) or {}).values():
                     migrate_scorecard_bucket(bucket)
+                card["by_domain"] = migrate_domain_buckets(card.get("by_domain", {}) or {})
                 for bucket in (card.get("by_domain", {}) or {}).values():
                     migrate_scorecard_bucket(bucket)
             snapshot["scorecards"] = scorecards.get("subagents", snapshot.get("scorecards", {}))
@@ -143,6 +212,158 @@ def runtime_snapshot(task_id: str | None = None) -> dict[str, Any]:
 
 def ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def load_leases() -> dict[str, Any]:
+    payload = load_json(LEASE_PATH, {"leases": {}, "next_fencing_token": 1, "history": []})
+    if not isinstance(payload, dict):
+        return {"leases": {}, "next_fencing_token": 1, "history": []}
+    payload.setdefault("leases", {})
+    payload.setdefault("next_fencing_token", 1)
+    payload.setdefault("history", [])
+    return payload
+
+
+def save_leases(payload: dict[str, Any]) -> None:
+    save_json(LEASE_PATH, payload)
+
+
+def acquire_lease(resource_type: str, resource_id: str, holder: str, ttl_seconds: int = 3600) -> dict[str, Any]:
+    payload = load_leases()
+    leases = payload.setdefault("leases", {})
+    history = payload.setdefault("history", [])
+    key = f"{resource_type}:{resource_id}"
+    now = now_utc_dt()
+    current = leases.get(key)
+    if isinstance(current, dict):
+        expires_at = parse_utc_timestamp(current.get("expires_at"))
+        current_status = policy_value(current.get("status"), "active")
+        if (
+            current_status == "active"
+            and current.get("holder") != holder
+            and expires_at is not None
+            and expires_at > now
+        ):
+            current["conflict_count"] = int(current.get("conflict_count", 0) or 0) + 1
+            current["last_conflict_at"] = now_utc()
+            current["last_conflict_holder"] = holder
+            history.append(
+                {
+                    "ts": now_utc(),
+                    "resource_type": resource_type,
+                    "resource_id": resource_id,
+                    "holder": holder,
+                    "active_holder": current.get("holder"),
+                    "event": "lease_conflict",
+                }
+            )
+            payload["history"] = history[-50:]
+            save_leases(payload)
+            return {
+                "status": "blocked",
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+                "event": "lease_conflict",
+                "lease": current,
+            }
+    fencing_token = int(payload.get("next_fencing_token", 1) or 1)
+    payload["next_fencing_token"] = fencing_token + 1
+    lease = {
+        "resource_type": resource_type,
+        "resource_id": resource_id,
+        "holder": holder,
+        "acquired_at": now_utc(),
+        "expires_at": future_utc_iso(minutes=max(1, ttl_seconds // 60)),
+        "fencing_token": fencing_token,
+        "status": "active",
+        "conflict_count": 0,
+    }
+    leases[key] = lease
+    history.append(
+        {
+            "ts": now_utc(),
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "holder": holder,
+            "event": "lease_acquired",
+            "fencing_token": fencing_token,
+        }
+    )
+    payload["history"] = history[-50:]
+    save_leases(payload)
+    return {"status": "acquired", "lease": lease}
+
+
+def release_lease(resource_type: str, resource_id: str, holder: str) -> dict[str, Any]:
+    payload = load_leases()
+    leases = payload.setdefault("leases", {})
+    history = payload.setdefault("history", [])
+    key = f"{resource_type}:{resource_id}"
+    current = leases.get(key)
+    if not isinstance(current, dict):
+        return {"status": "noop", "reason": "missing"}
+    if current.get("holder") != holder:
+        current["conflict_count"] = int(current.get("conflict_count", 0) or 0) + 1
+        current["last_conflict_at"] = now_utc()
+        current["last_conflict_holder"] = holder
+        history.append(
+            {
+                "ts": now_utc(),
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+                "holder": holder,
+                "active_holder": current.get("holder"),
+                "event": "release_conflict",
+            }
+        )
+        payload["history"] = history[-50:]
+        save_leases(payload)
+        return {"status": "blocked", "reason": "holder_mismatch", "lease": current}
+    current["status"] = "released"
+    current["released_at"] = now_utc()
+    history.append(
+        {
+            "ts": now_utc(),
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "holder": holder,
+            "event": "lease_released",
+            "fencing_token": current.get("fencing_token"),
+        }
+    )
+    payload["history"] = history[-50:]
+    save_leases(payload)
+    return {"status": "released", "lease": current}
+
+
+def active_leases() -> dict[str, Any]:
+    payload = load_leases()
+    now = now_utc_dt()
+    leases = payload.setdefault("leases", {})
+    history = payload.setdefault("history", [])
+    rows: list[dict[str, Any]] = []
+    for key, lease in leases.items():
+        if not isinstance(lease, dict):
+            continue
+        expires_at = parse_utc_timestamp(lease.get("expires_at"))
+        if lease.get("status") == "active" and expires_at is not None and expires_at <= now:
+            lease["status"] = "expired"
+        rows.append({"key": key, **lease})
+    save_leases(payload)
+    rows.sort(key=lambda item: (item.get("status") != "active", str(item.get("key"))))
+    history_rows = [item for item in history if isinstance(item, dict)][-10:]
+    lease_conflicts = sum(1 for item in history_rows if str(item.get("event", "")).endswith("conflict"))
+    return {
+        "generated_at": now_utc(),
+        "leases": rows,
+        "history": history_rows,
+        "summary": {
+            "active": sum(1 for item in rows if item.get("status") == "active"),
+            "released": sum(1 for item in rows if item.get("status") == "released"),
+            "expired": sum(1 for item in rows if item.get("status") == "expired"),
+            "recent_conflicts": lease_conflicts,
+        },
+    }
 
 
 def split_csv(value: Any) -> list[str]:
@@ -207,6 +428,28 @@ def inferred_risk_class(task_class: str, write_scope: str, verification_gate: st
     if normalized_task in {"architecture"}:
         return "R1"
     return "R0"
+
+
+def target_review_state_for(risk_class: str) -> str:
+    normalized = str(risk_class or "R0").upper()
+    if normalized == "R0":
+        return "review_passed"
+    if normalized == "R1":
+        return "policy_gate_required"
+    if normalized == "R2":
+        return "senior_review_required"
+    return "human_gate_required"
+
+
+def target_manifest_review_state_for(risk_class: str) -> str:
+    normalized = str(risk_class or "R0").upper()
+    if normalized == "R0":
+        return "promotion_ready"
+    if normalized == "R1":
+        return "policy_gate_required"
+    if normalized == "R2":
+        return "senior_review_required"
+    return "human_gate_required"
 
 
 def detect_subagents(config: dict[str, Any]) -> dict[str, Any]:
@@ -299,6 +542,9 @@ def score_defaults() -> dict[str, Any]:
             "useful_progress_count": 0,
             "chatter_only_count": 0,
             "timeout_after_progress_count": 0,
+            "startup_timeout_count": 0,
+            "no_output_timeout_count": 0,
+            "stalled_after_progress_count": 0,
             "time_to_first_useful_output_samples": 0,
             "avg_time_to_first_useful_output_ms": 0,
             "useful_progress_rate": 0,
@@ -444,6 +690,7 @@ def subagent_operator_status() -> dict[str, Any]:
     snapshot = runtime_snapshot()
     subagents = snapshot.get("subagents", {})
     scorecards = snapshot.get("scorecards", {})
+    lease_status = active_leases()
     rows: list[dict[str, Any]] = []
     for subagent_name, subagent_cfg in subagents.items():
         subagent_scorecard = scorecards.get(subagent_name, {})
@@ -461,6 +708,9 @@ def subagent_operator_status() -> dict[str, Any]:
         useful_progress_rate = float(global_card.get("useful_progress_rate", 0) or 0)
         recovery_attempt_count = int(global_card.get("recovery_attempt_count", 0) or 0)
         recovery_success_count = int(global_card.get("recovery_success_count", 0) or 0)
+        startup_timeout_count = int(global_card.get("startup_timeout_count", 0) or 0)
+        no_output_timeout_count = int(global_card.get("no_output_timeout_count", 0) or 0)
+        stalled_after_progress_count = int(global_card.get("stalled_after_progress_count", 0) or 0)
         task_class_cards = subagent_scorecard.get("by_task_class", {}) or {}
         preferred_task_classes = sorted(
             [
@@ -495,6 +745,9 @@ def subagent_operator_status() -> dict[str, Any]:
             "recovery_success_count": recovery_success_count,
             "last_recovery_status": policy_value(global_card.get("last_recovery_status"), ""),
             "last_recovery_at": policy_value(global_card.get("last_recovery_at"), ""),
+            "startup_timeout_count": startup_timeout_count,
+            "no_output_timeout_count": no_output_timeout_count,
+            "stalled_after_progress_count": stalled_after_progress_count,
             "quality_tier": policy_value(subagent_cfg.get("quality_tier"), "unknown"),
             "billing_tier": policy_value(subagent_cfg.get("billing_tier"), "unknown"),
             "preferred_task_classes": preferred_task_classes,
@@ -524,9 +777,34 @@ def subagent_operator_status() -> dict[str, Any]:
             item["subagent"],
         )
     )
+    recent_recoveries = [
+        {
+            "subagent": row["subagent"],
+            "last_recovery_at": row["last_recovery_at"],
+            "last_recovery_status": row["last_recovery_status"],
+            "recovery_attempt_count": row["recovery_attempt_count"],
+            "recovery_success_count": row["recovery_success_count"],
+        }
+        for row in rows
+        if row["last_recovery_at"]
+    ]
+    recent_recoveries.sort(key=lambda item: item["last_recovery_at"], reverse=True)
+    unstable_by_timeout_class = [
+        {
+            "subagent": row["subagent"],
+            "startup_timeout_count": row["startup_timeout_count"],
+            "no_output_timeout_count": row["no_output_timeout_count"],
+            "stalled_after_progress_count": row["stalled_after_progress_count"],
+        }
+        for row in rows
+        if row["startup_timeout_count"] or row["no_output_timeout_count"] or row["stalled_after_progress_count"]
+    ]
     return {
         "generated_at": now_utc(),
         "subagents": rows,
+        "recent_recoveries": recent_recoveries[:5],
+        "unstable_by_timeout_class": unstable_by_timeout_class,
+        "leases": lease_status.get("summary", {}),
         "summary": {
             "healthy": sum(1 for row in rows if row["subagent_state"] == "active" and not row["probe_required"] and not row["cooldown_until"]),
             "cooldown": sum(1 for row in rows if row["cooldown_until"]),
@@ -535,6 +813,7 @@ def subagent_operator_status() -> dict[str, Any]:
             "quota_exhausted": sum(1 for row in rows if row["subagent_state"] == "quota_exhausted"),
             "preferred": sum(1 for row in rows if row["state"] == "preferred"),
             "demoted": sum(1 for row in rows if row["state"] == "demoted"),
+            "recent_lease_conflicts": int(lease_status.get("summary", {}).get("recent_conflicts", 0) or 0),
         },
     }
 
@@ -750,8 +1029,10 @@ def load_scorecards(subagents: dict[str, Any]) -> dict[str, Any]:
         migrate_scorecard_bucket(card.get("global", {}))
         for bucket in (card.get("by_task_class", {}) or {}).values():
             migrate_scorecard_bucket(bucket)
+        card["by_domain"] = migrate_domain_buckets(card.get("by_domain", {}) or {})
         for bucket in (card.get("by_domain", {}) or {}).values():
             migrate_scorecard_bucket(bucket)
+    sanitize_runtime_payload(payload)
     return payload
 
 
@@ -858,6 +1139,15 @@ def adaptive_runtime_seconds(
     timeout_after_progress_count = int(
         task_card.get("timeout_after_progress_count", global_card.get("timeout_after_progress_count", 0)) or 0
     )
+    startup_timeout_count = int(
+        task_card.get("startup_timeout_count", global_card.get("startup_timeout_count", 0)) or 0
+    )
+    no_output_timeout_count = int(
+        task_card.get("no_output_timeout_count", global_card.get("no_output_timeout_count", 0)) or 0
+    )
+    stalled_after_progress_count = int(
+        task_card.get("stalled_after_progress_count", global_card.get("stalled_after_progress_count", 0)) or 0
+    )
     last_result = policy_value(task_card.get("last_result"), policy_value(global_card.get("last_result"), ""))
     quality_tier = policy_value(subagent_cfg.get("quality_tier"), "medium")
     speed_tier = policy_value(subagent_cfg.get("speed_tier"), "medium")
@@ -878,10 +1168,35 @@ def adaptive_runtime_seconds(
         budget += 15
     if timeout_after_progress_count > 0:
         budget -= min(20, timeout_after_progress_count * 10)
+    timeout_instability = startup_timeout_count + no_output_timeout_count + stalled_after_progress_count
+    if timeout_instability > 0:
+        budget -= min(15, timeout_instability * 4)
     if speed_tier == "fast":
         budget = min(budget, baseline + 20)
 
     return max(120, min(300, budget))
+
+
+def recovery_routing_adjustment(global_card: dict[str, Any], task_card: dict[str, Any]) -> tuple[int, list[str], bool]:
+    recovery_attempts = int(global_card.get("recovery_attempt_count", 0) or 0)
+    recovery_successes = int(global_card.get("recovery_success_count", 0) or 0)
+    if recovery_attempts <= 0:
+        return 0, [], False
+    success_ratio = recovery_successes / max(1, recovery_attempts)
+    last_recovery_status = policy_value(global_card.get("last_recovery_status"), "")
+    reasons: list[str] = []
+    bonus = 0
+    recovered_recently = last_recovery_status == "success" and success_ratio >= 0.5
+    if recovered_recently:
+        bonus += 6
+        reasons.append("recovery:recent_success")
+    elif last_recovery_status == "failure":
+        bonus -= min(12, recovery_attempts * 2)
+        reasons.append("recovery:failed")
+    if recovery_attempts >= 3 and success_ratio < 0.34:
+        bonus -= 6
+        reasons.append("recovery:unstable")
+    return bonus, reasons, recovered_recently
 
 
 def task_class_fit_bonus(task_class: str, subagent_cfg: dict[str, Any]) -> tuple[int, list[str]]:
@@ -1006,13 +1321,15 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         global_score = int(global_card.get("score", 50))
         task_state = policy_value(task_card.get("state"), "")
         global_state = policy_value(global_card.get("state"), "normal")
-        if task_state == "demoted":
+        recovery_adjustment, recovery_reasons, recovered_recently = recovery_routing_adjustment(global_card, task_card)
+        if task_state == "demoted" and not recovered_recently:
             suppressed_subagents.append({"subagent": subagent, "reason": "task_class_demoted"})
             continue
         if (
             global_state == "demoted"
             and task_state != "preferred"
             and subagent not in {bridge_fallback_subagent, "internal_subagents"}
+            and not recovered_recently
         ):
             suppressed_subagents.append({"subagent": subagent, "reason": "globally_demoted"})
             continue
@@ -1025,6 +1342,15 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         timeout_after_progress_count = int(
             task_card.get("timeout_after_progress_count", global_card.get("timeout_after_progress_count", 0)) or 0
         )
+        startup_timeout_count = int(
+            task_card.get("startup_timeout_count", global_card.get("startup_timeout_count", 0)) or 0
+        )
+        no_output_timeout_count = int(
+            task_card.get("no_output_timeout_count", global_card.get("no_output_timeout_count", 0)) or 0
+        )
+        stalled_after_progress_count = int(
+            task_card.get("stalled_after_progress_count", global_card.get("stalled_after_progress_count", 0)) or 0
+        )
         state = task_state or global_state
         subagent_state = policy_value(global_card.get("subagent_state"), "active")
         consecutive = int(task_card.get("consecutive_failures", card.get("global", {}).get("consecutive_failures", 0)))
@@ -1034,8 +1360,21 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         progress_bonus = int(round(useful_progress_rate * 20))
         chatter_penalty = min(20, chatter_only_count * 10)
         timeout_penalty = min(15, timeout_after_progress_count * 8)
+        timeout_instability_penalty = min(
+            18,
+            (startup_timeout_count * 4) + (no_output_timeout_count * 5) + (stalled_after_progress_count * 6),
+        )
         fit_bonus, fit_reasons = task_class_fit_bonus(task_class, payload)
-        effective_score = learned_score + priority_bonus + progress_bonus + fit_bonus - chatter_penalty - timeout_penalty
+        effective_score = (
+            learned_score
+            + priority_bonus
+            + progress_bonus
+            + fit_bonus
+            + recovery_adjustment
+            - chatter_penalty
+            - timeout_penalty
+            - timeout_instability_penalty
+        )
         selected_model, model_source = selected_model_for_subagent(subagent, payload, task_route_cfg)
         selected_profile, profile_source = selected_profile_for_subagent(subagent, payload, task_route_cfg)
         candidate_runtime = adaptive_runtime_seconds(
@@ -1056,7 +1395,7 @@ def route_subagent(task_class: str) -> dict[str, Any]:
                 "task_fit_score": learned_score,
                 "global_score": global_score,
                 "task_class_fit_bonus": fit_bonus,
-                "task_class_fit_reasons": fit_reasons,
+                "task_class_fit_reasons": [*fit_reasons, *recovery_reasons],
                 "success_count": int(task_card.get("success_count", global_card.get("success_count", 0)) or 0),
                 "selected_model": selected_model,
                 "selected_model_source": model_source,
@@ -1075,6 +1414,12 @@ def route_subagent(task_class: str) -> dict[str, Any]:
                 "useful_progress_rate": useful_progress_rate,
                 "chatter_only_count": chatter_only_count,
                 "timeout_after_progress_count": timeout_after_progress_count,
+                "startup_timeout_count": startup_timeout_count,
+                "no_output_timeout_count": no_output_timeout_count,
+                "stalled_after_progress_count": stalled_after_progress_count,
+                "timeout_instability_penalty": timeout_instability_penalty,
+                "recovery_adjustment": recovery_adjustment,
+                "recovered_recently": recovered_recently,
             }
         )
 
@@ -1092,6 +1437,8 @@ def route_subagent(task_class: str) -> dict[str, Any]:
             "write_scope": write_scope,
             "verification_gate": verification_gate,
             "risk_class": risk_class,
+            "target_review_state": target_review_state_for(risk_class),
+            "target_manifest_review_state": target_manifest_review_state_for(risk_class),
             "max_runtime_seconds": max_runtime_seconds,
             "min_output_bytes": min_output_bytes,
             "fanout_subagents": [],
@@ -1151,6 +1498,8 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         "write_scope": write_scope,
         "verification_gate": verification_gate,
         "risk_class": risk_class,
+        "target_review_state": target_review_state_for(risk_class),
+        "target_manifest_review_state": target_manifest_review_state_for(risk_class),
         "max_runtime_seconds": selected["max_runtime_seconds"],
         "startup_timeout_seconds": selected["startup_timeout_seconds"],
         "no_output_timeout_seconds": selected["no_output_timeout_seconds"],
@@ -1185,6 +1534,8 @@ def route_subagent(task_class: str) -> dict[str, Any]:
                 "subagent_state": item["subagent_state"],
                 "orchestration_tier": item["orchestration_tier"],
                 "cost_priority": item["cost_priority"],
+                "target_review_state": target_review_state_for(risk_class),
+                "target_manifest_review_state": target_manifest_review_state_for(risk_class),
             }
             for item in candidates[1:]
         ],
@@ -1210,13 +1561,14 @@ def update_score(
     global_card = card.setdefault("global", score_defaults()["global"])
     task_card = card.setdefault("by_task_class", {}).setdefault(task_class, dict(global_card))
     domain_buckets = card.setdefault("by_domain", {})
-    normalized_domain_tags = [tag for tag in (domain_tags or []) if tag]
+    normalized_domain_tags = normalize_domain_tags(domain_tags)
     domain_cards = [domain_buckets.setdefault(tag, dict(global_card)) for tag in normalized_domain_tags]
     metrics = metrics or {}
     useful_progress = bool(metrics.get("useful_progress", False))
     timeout_after_progress = bool(metrics.get("timeout_after_progress", False))
     chatter_only = bool(metrics.get("chatter_only", False))
     time_to_first_useful_output_ms = metrics.get("time_to_first_useful_output_ms")
+    failure_reason = policy_value(metrics.get("failure_reason"), "")
 
     if result == "success":
         delta = 8 + max(0, min(10, (quality_score - 70) // 5))
@@ -1247,6 +1599,12 @@ def update_score(
             bucket["chatter_only_count"] = int(bucket.get("chatter_only_count", 0)) + 1
         if timeout_after_progress:
             bucket["timeout_after_progress_count"] = int(bucket.get("timeout_after_progress_count", 0)) + 1
+        if failure_reason == "startup_timeout":
+            bucket["startup_timeout_count"] = int(bucket.get("startup_timeout_count", 0)) + 1
+        if failure_reason == "no_output_timeout":
+            bucket["no_output_timeout_count"] = int(bucket.get("no_output_timeout_count", 0)) + 1
+        if failure_reason == "stalled_after_progress":
+            bucket["stalled_after_progress_count"] = int(bucket.get("stalled_after_progress_count", 0)) + 1
         if isinstance(time_to_first_useful_output_ms, int) and time_to_first_useful_output_ms > 0:
             avg, samples = update_average(
                 int(bucket.get("avg_time_to_first_useful_output_ms", 0)),
@@ -1287,6 +1645,7 @@ def usage() -> None:
         "  python3 _vida/scripts/subagent-system.py probe <subagent>\n"
         "  python3 _vida/scripts/subagent-system.py recover <subagent>\n"
         "  python3 _vida/scripts/subagent-system.py recover-pending\n"
+        "  python3 _vida/scripts/subagent-system.py leases\n"
         "  python3 _vida/scripts/subagent-system.py record <subagent> <success|failure> <task_class> [quality_score] [latency_ms] [note]\n"
         "  python3 _vida/scripts/subagent-system.py scorecard [subagent]",
         file=sys.stderr,
@@ -1331,6 +1690,9 @@ def main(argv: list[str]) -> int:
         if cmd == "recover-pending":
             print(json.dumps(recover_pending_subagents(), indent=2, sort_keys=True))
             return 0
+        if cmd == "leases":
+            print(json.dumps(active_leases(), indent=2, sort_keys=True))
+            return 0
         if cmd == "record":
             if len(argv) < 5:
                 usage()
@@ -1347,7 +1709,9 @@ def main(argv: list[str]) -> int:
         print(f"[subagent-system] {exc}", file=sys.stderr)
         return 2
     if cmd == "scorecard":
-        payload = load_json(SCORECARD_PATH, {"subagents": {}})
+        config = vida_config.load_validated_config()
+        payload = load_scorecards(detect_subagents(config))
+        save_json(SCORECARD_PATH, payload)
         if len(argv) > 2:
             print(json.dumps(payload.get("subagents", {}).get(argv[2], {}), indent=2, sort_keys=True))
         else:

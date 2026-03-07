@@ -187,6 +187,7 @@ Runtime expectation:
 10. dynamic scorecards should remain visible by task class and inferred domain.
 11. subagent run artifacts should distinguish low-value planning chatter from evidence-bearing analysis.
 12. ensemble manifest should expose `active_subagents` and `active_count` while fanout is still running so operator visibility does not wait for the first completed result.
+13. ensemble dispatch should expose a bounded lease/ownership artifact for the active orchestration lane.
 
 ## Progress-Aware Runtime
 
@@ -224,6 +225,11 @@ Phase-aware timeout policy:
    - maximum idle time after useful progress has already appeared,
 4. `max_runtime_extension_seconds`
    - one bounded extension cap when useful progress is still active near the wall-clock limit.
+
+Parity rule:
+
+1. phase-aware timeout handling must apply to both ensemble fanout lanes and single-run fallback/single dispatch lanes,
+2. single-run fallback must not silently collapse back to one coarse wall-clock timeout.
 
 Default timeout behavior:
 
@@ -265,6 +271,11 @@ Minimum availability contract:
 11. operator status should expose actionable remediation hints, not only raw degraded state.
 12. operator status should expose recovery history and task-class readiness, not only global score.
 
+Recovery-aware routing rule:
+
+1. successful recent recovery may soften a prior demotion only when the cli subagent is currently `active`,
+2. repeated failed recoveries should reduce routing confidence and may keep prior demotion in force.
+
 Failure-reason examples:
 
 1. `daily_quota_exhausted`
@@ -296,6 +307,17 @@ Scorecards should evolve toward:
 8. recovery attempts/successes,
 9. per-domain usefulness.
 
+Review-state distinction:
+
+1. per-subagent run review state should describe the review gate reached by that one run:
+   - `review_passed`
+   - `policy_gate_required`
+   - `senior_review_required`
+   - `human_gate_required`
+2. manifest/task-level review state may advance further to:
+   - `promotion_ready`
+   once ensemble synthesis is decision-ready and no further review gate remains for the active risk class.
+
 Lane-aware promotion/demotion rule:
 
 1. demotion may apply globally or per task class,
@@ -304,6 +326,37 @@ Lane-aware promotion/demotion rule:
    - the explicit bridge fallback,
    - the internal senior lane,
    - or later re-promoted by evidence.
+
+## Lease / Ownership Runtime
+
+Minimum lease contract:
+
+1. parallel cli-subagent orchestration should acquire one bounded lease for the active ensemble lane,
+2. the lease should carry:
+   - resource type
+   - resource id
+   - holder
+   - expiry
+   - fencing token
+3. a conflicting active lease should block a second overlapping ensemble on the same resource,
+4. successful close should release the lease and record release status in the manifest,
+5. operator tooling should expose active leases as part of runtime diagnostics,
+6. lease conflicts should be written to lease history so recent orchestration contention is visible to the operator.
+
+## Operator Visibility
+
+Operator surfaces should expose more than raw health.
+
+Minimum operator summary:
+
+1. current subagent availability and remediation hints,
+2. preferred and eligible task classes,
+3. recent recoveries with status and timestamp,
+4. unstable timeout classes by cli subagent:
+   - `startup_timeout_count`
+   - `no_output_timeout_count`
+   - `stalled_after_progress_count`
+5. recent lease-conflict summary from the lease ledger.
 
 ## Escalation And Adaptation
 

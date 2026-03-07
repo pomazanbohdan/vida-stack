@@ -8,6 +8,33 @@ Rules:
 4. Group updates under fixed headings when applicable: `Added`, `Changed`, `Fixed`, `Protocol`.
 5. Keep this file limited to VIDA framework/runtime changes, not project feature work.
 
+## 2026-03-07 07:25
+
+Added:
+
+1. Route outputs now expose canonical `target_review_state` and `target_manifest_review_state` so cli-subagent review intent is visible before dispatch.
+2. Lease diagnostics now retain recent history with explicit conflict, acquire, and release events for operator inspection.
+
+Changed:
+
+1. Routing now applies timeout-instability penalties using `startup_timeout_count`, `no_output_timeout_count`, and `stalled_after_progress_count` in addition to timeout-after-progress signals.
+2. Runtime payload loading now canonicalizes legacy note/domain strings during state and scorecard reads so live operator surfaces stay framework-generic.
+3. `subagent-eval-pack.py` now reuses canonical review-target helpers from `subagent-system.py` instead of maintaining duplicated review-state mapping logic.
+
+Fixed:
+
+1. Single-run cli-subagent dispatch now has phase-aware timeout parity with ensemble execution instead of one coarse wall-clock timeout.
+2. Lease acquisition no longer treats already released leases as active blockers; overlapping active ensembles still fail closed and are recorded as conflicts.
+3. Live state/review artifacts no longer surface legacy `provider_state=` or old domain tags such as `odoo_api`, `flutter_ui`, and `riverpod_state`.
+4. Verified end-to-end runtime proofs now include:
+   - single-run parity proof `r32`
+   - lease-conflict proof `r32`
+   - clean post-conflict ensemble reruns `r33` and `r34`
+
+Protocol:
+
+1. `subagent-system-protocol.md` now explicitly requires phase-aware timeout parity for single-run lanes, recovery-aware routing softening rules, lease-conflict history visibility, and richer operator timeout/recovery summaries.
+
 ## 2026-03-07 06:40
 
 Added:

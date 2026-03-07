@@ -205,17 +205,6 @@ def weaknesses_for_subagent(subagent_name: str, subagent_cfg: dict[str, Any], sc
     return list(dict.fromkeys(weaknesses))[:4]
 
 
-def target_review_state_for(risk_class: str) -> str:
-    normalized = str(risk_class or "R0").upper()
-    if normalized == "R0":
-        return "promotion_ready"
-    if normalized == "R1":
-        return "policy_gate_required"
-    if normalized == "R2":
-        return "senior_review_required"
-    return "human_gate_required"
-
-
 def refresh_strategy(task_id: str) -> dict[str, Any]:
     snapshot = subagent_system.init_snapshot(task_id)
     config = vida_config.load_validated_config()
@@ -289,7 +278,8 @@ def refresh_strategy(task_id: str) -> dict[str, Any]:
             "merge_policy": route.get("merge_policy", "single_subagent"),
             "verification_gate": route.get("verification_gate"),
             "risk_class": route.get("risk_class", "R0"),
-            "target_review_state": target_review_state_for(str(route.get("risk_class", "R0"))),
+            "target_review_state": subagent_system.target_review_state_for(str(route.get("risk_class", "R0"))),
+            "target_manifest_review_state": subagent_system.target_manifest_review_state_for(str(route.get("risk_class", "R0"))),
         }
 
     save_json(STRATEGY_PATH, strategy)

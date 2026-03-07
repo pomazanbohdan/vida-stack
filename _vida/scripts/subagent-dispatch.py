@@ -654,123 +654,80 @@ def run_subagent(
     subagent_cfg: dict[str, Any],
     dispatch_mode: str,
 ) -> dict[str, Any]:
-    ensure_dirs()
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    stderr_path = output_file.with_suffix(output_file.suffix + ".stderr.log")
-    prompt = read_prompt(prompt_file)
-    selected_model = selected_model_for_subagent(route, subagent_name, subagent_cfg)
-    subagent_route = route_subagent_item(route, subagent_name)
-    domain_tags = infer_domain_tags(prompt, task_class)
-    risk_class = route_risk_class(route)
-    max_runtime_seconds = dispatch_runtime_limit(
-        route_runtime_limit(subagent_route or route, subagent_cfg),
-        dispatch_mode,
-        subagent_route or route,
+    launch = start_subagent_process(
+        task_id,
+        task_class,
+        subagent_name,
+        prompt_file,
+        output_file,
+        workdir,
+        route,
         subagent_cfg,
+        dispatch_mode,
     )
-    min_output_bytes = route_min_output_bytes(route, subagent_cfg)
-    startup_timeout_seconds = dispatch_timeout_seconds(subagent_cfg, "startup_timeout_seconds", 45)
-    no_output_timeout_seconds = dispatch_timeout_seconds(subagent_cfg, "no_output_timeout_seconds", 120)
-    progress_idle_timeout_seconds = dispatch_timeout_seconds(subagent_cfg, "progress_idle_timeout_seconds", 90)
-    max_runtime_extension_seconds = dispatch_timeout_seconds(subagent_cfg, "max_runtime_extension_seconds", 90)
-    run_id = f"spr-{uuid.uuid4().hex[:12]}"
-    ts_start = now_utc()
-    started = time.monotonic()
-    if not subagent_supports_dispatch(subagent_cfg):
-        error_text = f"cli subagent dispatch unavailable for {subagent_name}; internal/senior lanes require orchestrator-owned handling"
-        stderr_path.write_text(error_text + "\n", encoding="utf-8")
-        return subagent_result_payload(
-            task_id=task_id,
-            task_class=task_class,
-            subagent_name=subagent_name,
-            selected_model=selected_model,
-            subagent_cfg=subagent_cfg,
-            dispatch_mode=dispatch_mode,
-            risk_class=risk_class,
-            domain_tags=domain_tags,
-            max_runtime_seconds=max_runtime_seconds,
-            min_output_bytes=min_output_bytes,
-            output_file=output_file,
-            stderr_path=stderr_path,
-            workdir=workdir,
-            prompt_file=prompt_file,
-            route=route,
-            run_id=run_id,
-            ts_start=ts_start,
-            started=started,
-            status="failure",
-            exit_code=1,
-            error_text=error_text,
-        )
-    cmd, use_stdout_output = subagent_command(subagent_name, prompt, output_file, workdir, selected_model, subagent_cfg)
-    exit_code = 0
-    status = "success"
-    error_text = ""
+    if "result" in launch:
+        return launch["result"]
 
-    env = os.environ.copy()
-    env.update(subagent_env(subagent_cfg))
-    try:
-        with stderr_path.open("w", encoding="utf-8") as stderr_handle:
-            if use_stdout_output:
-                with output_file.open("w", encoding="utf-8") as stdout_handle:
-                    completed = subprocess.run(
-                        cmd,
-                        cwd=str(workdir),
-                        stdout=stdout_handle,
-                        stderr=stderr_handle,
-                        text=True,
-                        check=False,
-                        env=env,
-                        timeout=max_runtime_seconds,
-                    )
-            else:
-                completed = subprocess.run(
-                    cmd,
-                    cwd=str(workdir),
-                    stdout=stderr_handle,
-                    stderr=stderr_handle,
-                    text=True,
-                    check=False,
-                    env=env,
-                    timeout=max_runtime_seconds,
-                )
-        exit_code = int(completed.returncode)
-        if exit_code != 0 or output_size(output_file) == 0:
-            status = "failure"
-    except subprocess.TimeoutExpired:
-        exit_code = 124
-        status = "timeout"
-        error_text = f"cli subagent exceeded runtime limit ({max_runtime_seconds}s)"
-        stderr_path.write_text(error_text + "\n", encoding="utf-8")
-    except Exception as exc:
-        exit_code = 1
-        status = "failure"
-        error_text = str(exc)
-        stderr_path.write_text(error_text + "\n", encoding="utf-8")
-
-    return subagent_result_payload(
-        task_id=task_id,
-        task_class=task_class,
-        subagent_name=subagent_name,
-        selected_model=selected_model,
-        subagent_cfg=subagent_cfg,
-        dispatch_mode=dispatch_mode,
-        risk_class=risk_class,
-        domain_tags=domain_tags,
-        max_runtime_seconds=max_runtime_seconds,
-        min_output_bytes=min_output_bytes,
-        output_file=output_file,
-        stderr_path=stderr_path,
-        workdir=workdir,
-        prompt_file=prompt_file,
-        route=route,
-        run_id=run_id,
-        ts_start=ts_start,
-        started=started,
-        status=status,
-        exit_code=exit_code,
-        error_text=error_text,
-    )
+    while True:
+        process: subprocess.Popen[str] = launch["process"]
+        progress = launch_progress_snapshot(launch)
+        elapsed = time.monotonic() - float(launch["started"])
+        effective_runtime_seconds = int(launch.get("effective_runtime_seconds", launch["max_runtime_seconds"]))
+        if (
+            process.poll() is None
+            and not progress.get("observed_output")
+            and elapsed > int(launch.get("startup_timeout_seconds", 45))
+        ):
+            return terminate_subagent_process(
+                launch,
+                f"cli subagent hit startup timeout without output ({launch.get('startup_timeout_seconds', 45)}s)",
+                status_override="timeout",
+                exit_code_override=124,
+            )
+        if (
+            process.poll() is None
+            and not progress.get("useful_progress")
+            and int(progress.get("idle_seconds", 0)) > int(launch.get("no_output_timeout_seconds", 120))
+        ):
+            return terminate_subagent_process(
+                launch,
+                f"cli subagent hit no-output timeout without useful progress ({launch.get('no_output_timeout_seconds', 120)}s)",
+                status_override="timeout",
+                exit_code_override=124,
+            )
+        if (
+            process.poll() is None
+            and elapsed > effective_runtime_seconds
+            and launch.get("runtime_extension_applied") is not True
+            and progress.get("useful_progress")
+            and int(progress.get("idle_seconds", 0)) <= 45
+        ):
+            extension = runtime_extension_seconds(launch)
+            launch["runtime_extension_applied"] = True
+            launch["effective_runtime_seconds"] = effective_runtime_seconds + extension
+            time.sleep(0.5)
+            continue
+        if process.poll() is None and elapsed > int(launch.get("effective_runtime_seconds", launch["max_runtime_seconds"])):
+            return terminate_subagent_process(
+                launch,
+                f"cli subagent exceeded runtime limit ({launch.get('effective_runtime_seconds', launch['max_runtime_seconds'])}s)",
+                status_override="timeout",
+                exit_code_override=124,
+            )
+        if (
+            process.poll() is None
+            and progress.get("useful_progress")
+            and int(progress.get("idle_seconds", 0)) > int(launch.get("progress_idle_timeout_seconds", 90))
+        ):
+            return terminate_subagent_process(
+                launch,
+                f"cli subagent stalled after useful progress ({launch.get('progress_idle_timeout_seconds', 90)}s idle)",
+                status_override="timeout",
+                exit_code_override=124,
+            )
+        if process.poll() is not None:
+            return finalize_subagent_process(launch)
+        time.sleep(0.5)
 
 
 def start_subagent_process(
@@ -1686,6 +1643,24 @@ def run_ensemble(argv: list[str]) -> int:
     min_results = int(route.get("fanout_min_results", 0))
     required_results = max(1, min_results)
     manifest_path = output_dir / "manifest.json"
+    run_holder = f"ensemble:{task_id}:{task_class}:{uuid.uuid4().hex[:8]}"
+    lease_result = subagent_system.acquire_lease("ensemble", f"{task_id}:{task_class}", run_holder, ttl_seconds=3600)
+    if lease_result.get("status") != "acquired":
+        manifest = {
+            "generated_at": now_utc(),
+            "task_id": task_id,
+            "task_class": task_class,
+            "workdir": str(workdir),
+            "route": route,
+            "status": "blocked",
+            "phase": "lease_blocked",
+            "review_state": "review_failed",
+            "lease": lease_result,
+            "results": [],
+        }
+        write_manifest(manifest_path, manifest)
+        print(str(manifest_path))
+        return 2
 
     results: list[dict[str, Any]] = []
     manifest: dict[str, Any] = {
@@ -1708,6 +1683,7 @@ def run_ensemble(argv: list[str]) -> int:
         "arbitration": {},
         "post_arbitration_merge_summary": {},
         "results": [],
+        "lease": lease_result.get("lease", {}),
         "active_subagents": [],
         "active_count": 0,
         "status": "running",
@@ -1979,6 +1955,11 @@ def run_ensemble(argv: list[str]) -> int:
             )
             else "subagent_exhausted"
         ),
+    }
+    release_result = subagent_system.release_lease("ensemble", f"{task_id}:{task_class}", run_holder)
+    manifest["lease"] = {
+        **manifest.get("lease", {}),
+        "release_status": release_result.get("status"),
     }
     write_manifest(manifest_path, manifest)
     print(str(manifest_path))
