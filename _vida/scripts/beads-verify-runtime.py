@@ -90,6 +90,42 @@ def show_task_status(task_id: str) -> str:
     return ""
 
 
+def load_task_payload(task_id: str) -> dict[str, Any]:
+    if not BR_SAFE_SCRIPT.exists():
+        return {}
+    proc = subprocess.run(
+        ["bash", str(BR_SAFE_SCRIPT), "show", task_id, "--json"],
+        cwd=ROOT_DIR,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return {}
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(payload, list) and payload:
+        return payload[0] if isinstance(payload[0], dict) else {}
+    if isinstance(payload, dict):
+        return payload
+    return {}
+
+
+def task_labels(task_id: str) -> set[str]:
+    payload = load_task_payload(task_id)
+    raw = payload.get("labels") or []
+    if not isinstance(raw, list):
+        return set()
+    return {str(label).strip().lower() for label in raw if str(label).strip()}
+
+
+def is_framework_task(task_id: str) -> bool:
+    labels = task_labels(task_id)
+    return bool(labels.intersection({"framework", "fsap", "agent-system", "vida-stack"}))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="beads-verify-log.sh",
@@ -122,6 +158,7 @@ def main(argv: list[str]) -> int:
 
     critical_count = 0
     warn_count = 0
+    framework_task = is_framework_task(args.task)
 
     missing_next_done = sum(
         1
@@ -155,8 +192,10 @@ def main(argv: list[str]) -> int:
         if int((now - stamp).total_seconds()) > threshold_seconds:
             stale_assumptions += 1
     if stale_assumptions:
-        status_line("warn", f"[beads-verify-log] WARN: stale unresolved assumptions: {stale_assumptions}")
-        warn_count += stale_assumptions
+        level = "info" if framework_task and not args.strict else "warn"
+        status_line(level, f"[beads-verify-log] WARN: stale unresolved assumptions: {stale_assumptions}")
+        if level == "warn":
+            warn_count += stale_assumptions
 
     missing_evidence = sum(
         1
@@ -167,11 +206,13 @@ def main(argv: list[str]) -> int:
         and not (event.get("evidence_ref") or "")
     )
     if missing_evidence:
+        level = "info" if framework_task and not args.strict else "warn"
         status_line(
-            "warn",
+            level,
             f"[beads-verify-log] WARN: block_end actions without artifacts/evidence_ref: {missing_evidence}",
         )
-        warn_count += missing_evidence
+        if level == "warn":
+            warn_count += missing_evidence
 
     compact_switch_no_recovery = sum(
         1

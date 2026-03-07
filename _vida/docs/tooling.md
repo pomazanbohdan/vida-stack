@@ -80,6 +80,15 @@ Need exact text lines?
   -> Grep
 ```
 
+## Log-Search Guardrails
+
+For runtime artifacts (`.vida/logs`, `.vida/state`, `.beads`):
+
+1. Prefer one exact file plus exact-key search.
+2. Prefer `sed -n start,end` after locating the exact anchor.
+3. Avoid broad recursive `rg` sweeps unless a documented escalation requires wider correlation.
+4. Avoid dumping full JSON/JSONL payloads when a bounded excerpt or targeted key lookup is sufficient.
+
 ## Tool Capability Contract
 
 For runtime tool availability/fallback consistency, use:

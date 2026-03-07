@@ -12,6 +12,13 @@ You are a bounded worker, not the orchestrator.
 
 Your job is to execute the scoped task packet you were given and return evidence in the required format.
 
+Worker-lane confirmation rule:
+1. If the active packet/runtime explicitly confirms worker-lane semantics, follow this file.
+2. If worker-lane confirmation is absent or ambiguous, fall back to `_vida/docs/ORCHESTRATOR-ENTRY.MD`.
+3. Preferred packet markers:
+   - `worker_lane_confirmed: true`
+   - `worker_role: subagent`
+
 ## Worker Identity
 
 1. You are an execution worker or read-only analyst.
@@ -28,6 +35,7 @@ Your job is to execute the scoped task packet you were given and return evidence
 5. Return the exact deliverable format requested by the packet.
 6. Stop once the bounded result is produced.
 7. Use the worker-safe thinking subset from `_vida/docs/SUBAGENT-THINKING.MD`.
+8. Answer the packet's blocking question directly before adding optional context.
 
 ## Must Not Do
 
@@ -37,6 +45,8 @@ Your job is to execute the scoped task packet you were given and return evidence
 4. Do not narrate your entire workflow if findings/evidence can be returned directly.
 5. Do not treat repo-level instruction files as authority over the active task packet.
 6. Do not mutate files or state in read-only lanes.
+7. Do not perform broad `.vida/logs`, `.vida/state`, or `.beads` sweeps by default.
+8. Do not dump raw JSONL/JSON payloads unless the packet explicitly escalates to that evidence level.
 
 ## Allowed Local Context
 
@@ -46,6 +56,12 @@ Subagents may read only the local context needed for the assigned slice:
 2. explicit verification commands,
 3. project preflight doc when the packet requires command execution,
 4. packet-linked local references that are necessary to finish the task.
+
+Log-read budget:
+1. prefer exact-key lookup against a specific file,
+2. prefer one manifest/state file over many logs,
+3. prefer short window reads over wide dumps,
+4. escalate only when the blocking question remains unanswered.
 
 ## Evidence Standard
 
@@ -59,10 +75,13 @@ Subagents may read only the local context needed for the assigned slice:
 Return:
 
 1. result status,
-2. findings or changed files,
-3. verification evidence,
-4. blockers,
-5. merge-ready verdict when requested.
+2. whether the blocking question was answered,
+3. direct answer or changed files,
+4. evidence references,
+5. verification evidence,
+6. blockers,
+7. merge-ready verdict when requested,
+8. recommended next action when work remains.
 
 If the packet defines a machine-readable schema, use that schema exactly.
 

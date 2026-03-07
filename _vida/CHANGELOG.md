@@ -8,6 +8,30 @@ Rules:
 4. Group updates under fixed headings when applicable: `Added`, `Changed`, `Fixed`, `Protocol`.
 5. Keep this file limited to VIDA framework/runtime changes, not project feature work.
 
+## 2026-03-07 07:50
+
+Added:
+
+1. `_vida/docs/ORCHESTRATOR-ENTRY.MD` as the canonical L0 orchestrator contract replacing the old monolithic `AGENTS.md` body.
+2. Explicit worker-lane confirmation markers and blocking-question packet fields in canonical rendered subagent prompts.
+
+Changed:
+
+1. `AGENTS.md` now acts as a bootstrap router that selects orchestrator vs worker entry instead of serving as the full contract for every lane.
+2. Orchestration now classifies requests as `answer_only`, `artifact_flow`, `execution_flow`, or `mixed` before engaging `br`, TODO, or pack machinery.
+3. The framework now treats subagent execution as the default analysis/review fabric in supported modes while keeping final synthesis, mutation ownership, and user-facing reporting under the orchestrator.
+4. Protocol index and framework map now reflect the bootstrap split, worker entry topology, request-intent gate, and log-read budget as canonical framework structure.
+
+Fixed:
+
+1. Worker prompts now carry a complete machine-readable return contract with `question_answered`, `answer`, `evidence_refs`, and `recommended_next_action` instead of a partial summary schema.
+2. User-facing reporting now defaults to orchestrator-synthesized conclusions rather than relaying raw subagent reports or fragments.
+
+Protocol:
+
+1. `orchestration-protocol.md`, `subagent-system-protocol.md`, `subagents.md`, `pipelines.md`, and `tooling.md` now codify the hard log-read budget, question-driven worker packets, and the rule that broad `.vida/logs`/`.vida/state`/`.beads` reads require explicit escalation.
+2. `subagent-system-protocol.md` and related worker docs now formalize the mode-synced `native|hybrid|disabled` subagent-first behavior and the orchestrator-only ownership of final user-facing answers.
+
 ## 2026-03-07 07:25
 
 Added:

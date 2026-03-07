@@ -104,6 +104,22 @@ Use the smallest proof that demonstrates the framework change:
 
 Avoid full project build/test loops unless the framework change directly affects them.
 
+## Lean Execution Shortcut
+
+For framework-owned implementation work discovered during FSAP, keep TODO/SSOT intact but prefer the lean starter path:
+
+```bash
+bash _vida/scripts/framework-wave-start.sh <task_id> <reflection-pack|dev-pack|work-pool-pack> "<goal>" [constraints]
+```
+
+Use this when all are true:
+
+1. scope is framework-owned,
+2. execution remains inside `_vida/*` and `AGENTS.md`,
+3. no product-facing live validation is required.
+
+This shortcut does not bypass TODO or `br`; it compresses the routine start path.
+
 ## Output Contract
 
 Report in this structure:

@@ -144,10 +144,11 @@ Supported subagent-level keys:
 13. `capability_band`
 14. `write_scope`
 15. `billing_tier`
-16. `speed_tier`
-17. `quality_tier`
-18. `specialties`
-19. `dispatch`
+16. `budget_cost_units`
+17. `speed_tier`
+18. `quality_tier`
+19. `specialties`
+20. `dispatch`
 
 Supported subagent-level `dispatch` keys:
 
@@ -164,6 +165,19 @@ Supported subagent-level `dispatch` keys:
 11. `probe_prompt`
 12. `probe_expect_substring`
 13. `probe_timeout_seconds`
+14. `startup_timeout_seconds`
+15. `no_output_timeout_seconds`
+16. `progress_idle_timeout_seconds`
+17. `max_runtime_extension_seconds`
+
+Supported `agent_system.scoring` keys:
+
+1. `consecutive_failure_limit`
+2. `promotion_score`
+3. `demotion_score`
+4. `probation_success_runs`
+5. `probation_task_runs`
+6. `retirement_failure_limit`
 
 Repeated-scalar encoding:
 
@@ -197,6 +211,16 @@ Supported routing-level keys:
 12. `external_first_required`
 13. `bridge_fallback_subagent`
 14. `internal_escalation_trigger`
+15. `verification_route_task_class`
+16. `independent_verification_required`
+17. `graph_strategy`
+18. `deterministic_first`
+19. `budget_policy`
+20. `max_budget_units`
+21. `max_cli_subagent_calls`
+22. `max_verification_passes`
+23. `max_fallback_hops`
+24. `max_total_runtime_seconds`
 
 Validation scope:
 

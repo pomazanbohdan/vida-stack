@@ -55,6 +55,7 @@ In simpler terms: Vida Stack is being evolved toward a super-autonomous orchestr
 Vida Stack is still in active development, but it can already be used as a working framework layer for:
 
 - automatic work with tasks, epics, queues, and execution state
+- request-intent classification into answer, artifact, execution, and mixed flows before heavy runtime engagement
 - orchestration of bounded subagents with routing, fallback, lease-aware dispatch, and review-aware control
 - research flows with structured evidence gathering and validation
 - planning and decomposition of work into executable slices
@@ -173,13 +174,14 @@ This repository is not a toy example and not a detached greenfield framework exp
 
 Right now, the framework is implemented through a practical stack of:
 
-- `AGENTS.md` as the bootloader and top-level contract
+- `AGENTS.md` as a bootstrap router for orchestrator versus worker lane entry
+- `_vida/docs/ORCHESTRATOR-ENTRY.MD` and `_vida/docs/SUBAGENT-ENTRY.MD` as split lane contracts
 - `_vida/docs/*` for canonical protocols
 - `_vida/scripts/*` for runtime helpers and enforcement
 - `br` plus TODO telemetry for execution state
 - external-first subagent routing with verification and fallback logic
 
-Recent runtime work has also hardened the subagent layer with a dedicated worker-entry contract, a worker-lane thinking subset separated from orchestrator reasoning, stronger semantic merge behavior, richer runtime maturity scorecards, recovery helpers for degraded CLI subagents, target review-state visibility before dispatch, ensemble lease diagnostics with conflict history, phase-aware timeout parity across fanout and single-run lanes, and cleaner framework-generic operator surfaces.
+Recent runtime work has also hardened the framework with a bootstrap split between orchestrator and worker lanes, request-intent gating before `br` and pack machinery, subagent-first analysis/review behavior in supported modes, question-driven worker packets with stricter return contracts, hard bounded log-read rules for `.vida/*` surfaces, stronger semantic merge behavior, richer runtime maturity scorecards, target review-state visibility before dispatch, ensemble lease diagnostics with conflict history, and cleaner framework-generic operator surfaces.
 
 This phase matters because the objective is to finish the mechanics end-to-end before extracting and replatforming the system.
 
@@ -254,11 +256,11 @@ That means the long-term runtime direction is:
 
 ### Minimal Repo Surface
 
-In the final system, the repository should no longer carry the full framework bootloader in `AGENTS.md`.
+This transition has already started.
 
-Today, `AGENTS.md` is a large static instruction surface. It currently carries the L0 orchestrator identity, core ownership contract, hard invariants, post-compression boot sequence, boot profiles, state-management rules, skill and fallback rules, operational references, and minimal runtime rules.
+Today, `AGENTS.md` is no longer the full monolithic framework contract. It now acts as a bootstrap router that selects the orchestrator or worker entry path, while the larger lane-specific contracts live in `_vida/docs/ORCHESTRATOR-ENTRY.MD`, `_vida/docs/SUBAGENT-ENTRY.MD`, and `_vida/docs/SUBAGENT-THINKING.MD`.
 
-The final architecture is intended to replace that file-as-bootloader model with a runtime-loaded session contract.
+The final architecture pushes this further by replacing even that bootstrap-heavy repository model with a runtime-loaded session contract.
 
 The repository should expose only a minimal bootstrap instruction in `AGENTS.md`, for example:
 
@@ -280,7 +282,7 @@ That means the repository is no longer the primary container of framework instru
 
 Instead:
 
-- `AGENTS.md` becomes a thin bootstrap entrypoint
+- `AGENTS.md` stays a thin bootstrap entrypoint
 - framework rules move into runtime-managed memory
 - framework protocols stop living primarily as repo-loaded startup instructions
 - project documentation moves into project memory layers
@@ -289,7 +291,7 @@ Instead:
 
 The result is a much smaller repository surface and a much more optimized development start flow.
 
-Instead of manually reading and reconstructing framework state from a large `AGENTS.md` and multiple framework docs, the user or agent starts a session once, and the system restores the correct working context automatically.
+Instead of manually reconstructing framework state from a monolithic bootloader and many framework docs, the user or agent starts a session once, and the system restores the correct working context automatically.
 
 In that final shape, the repository is only the bootstrap edge. The real framework lives in the control plane, memory layer, and persistent runtime state.
 

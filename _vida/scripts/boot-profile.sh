@@ -145,62 +145,19 @@ run_checks() {
   local task_id="$2"
   local non_dev="$3"
 
-  local common=(
-    "AGENTS.md"
-    "_vida/docs/thinking-protocol.md#section-algorithm-selector"
-    "_vida/docs/thinking-protocol.md#section-stc"
-    "_vida/docs/thinking-protocol.md#section-pr-cot"
-    "_vida/docs/thinking-protocol.md#section-mar"
-    "_vida/docs/thinking-protocol.md#section-5-solutions"
-    "_vida/docs/thinking-protocol.md#section-meta-analysis"
-    "_vida/docs/thinking-protocol.md#section-bug-reasoning"
-    "_vida/docs/thinking-protocol.md#section-web-search"
-    "_vida/docs/thinking-protocol.md#section-reasoning-modules"
-    "_vida/docs/web-validation-protocol.md"
-    "_vida/docs/beads-protocol.md"
-    "_vida/docs/project-overlay-protocol.md"
-  )
-
-  local standard=(
-    "_vida/docs/todo-protocol.md"
-    "_vida/docs/implement-execution-protocol.md"
-    "_vida/docs/use-case-packs.md"
-  )
-
-  local full=(
-    "_vida/docs/orchestration-protocol.md"
-    "_vida/docs/pipelines.md"
-  )
-
   local read_contract=()
 
   local entry f
-  for entry in "${common[@]}"; do
+  if [[ "$non_dev" == "yes" ]]; then
+    mapfile -t read_contract < <(python3 _vida/scripts/boot-packet.py read-contract "$profile" --non-dev)
+  else
+    mapfile -t read_contract < <(python3 _vida/scripts/boot-packet.py read-contract "$profile")
+  fi
+
+  for entry in "${read_contract[@]}"; do
     f="${entry%%#*}"
     check_file "$f"
-    read_contract+=("$entry")
   done
-
-  if [[ "$profile" == "standard" || "$profile" == "full" ]]; then
-    for entry in "${standard[@]}"; do
-      f="${entry%%#*}"
-      check_file "$f"
-      read_contract+=("$entry")
-    done
-  fi
-
-  if [[ "$profile" == "full" ]]; then
-    for entry in "${full[@]}"; do
-      f="${entry%%#*}"
-      check_file "$f"
-      read_contract+=("$entry")
-    done
-  fi
-
-  if [[ "$non_dev" == "yes" ]]; then
-    check_file "_vida/docs/spec-contract-protocol.md"
-    read_contract+=("_vida/docs/spec-contract-protocol.md")
-  fi
 
   if [[ -n "$task_id" ]]; then
     if ! bash _vida/scripts/context-capsule.sh hydrate "$task_id" >/dev/null 2>&1; then
@@ -211,15 +168,11 @@ run_checks() {
   fi
 
   if [[ -f "vida.config.yaml" ]]; then
-    read_contract+=("vida.config.yaml")
     python3 _vida/scripts/vida-config.py validate >/dev/null
     if python3 _vida/scripts/vida-config.py protocol-active agent_system >/dev/null 2>&1; then
       check_file "_vida/docs/subagent-system-protocol.md"
       check_file "_vida/scripts/vida-config.py"
       check_file "_vida/scripts/subagent-system.py"
-      read_contract+=("_vida/docs/subagent-system-protocol.md")
-      read_contract+=("_vida/scripts/vida-config.py")
-      read_contract+=("_vida/scripts/subagent-system.py")
       python3 _vida/scripts/subagent-system.py init "$task_id" >/dev/null
     fi
   fi
@@ -276,6 +229,8 @@ print(
     f"✅ boot_receipt={path.name} subject={payload.get('subject')} profile={payload.get('profile')} status={payload.get('status')} contract_files={len(payload.get('contract_files') or [])} boot_packet={boot_packet_path.name}"
 )
 PY
+
+  python3 _vida/scripts/boot-packet.py summary "$subject" >/dev/null
 }
 
 cmd="${1:-}"

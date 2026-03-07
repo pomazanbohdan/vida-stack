@@ -112,12 +112,14 @@ Release 1 should provide:
 6. mandatory read/restore of top-level framework policy
 7. bootstrap validation before non-trivial execution
 8. fail-fast behavior when critical runtime prerequisites are missing
+9. bootstrap routing between orchestrator and worker lane entry contracts
 
 Implementation audit:
 
 - [x] Boot profiles and receipts exist.
 - [x] Context hydration gates exist.
 - [x] Fail-fast behavior exists in boot/runtime scripts.
+- [x] `AGENTS.md` now routes between split orchestrator and worker entry contracts instead of carrying one monolithic lane contract.
 - [ ] `micro` and `swarm` are not yet established as fully proven runtime profiles at the same maturity as `lean|standard|full`.
 
 ### 2. Problem Framing and Routing
@@ -126,6 +128,10 @@ Release 1 should provide:
 
 1. problem framing contract before work starts
 2. request classification by intent and execution type
+   - `answer_only`
+   - `artifact_flow`
+   - `execution_flow`
+   - `mixed`
 3. pack routing for:
    - research
    - spec
@@ -147,6 +153,7 @@ Implementation audit:
 - [x] Pack routing exists.
 - [x] Execution mode routing exists.
 - [x] Reflection-path routing exists.
+- [x] Request-intent classification now exists before `br`, TODO, or pack-heavy execution is engaged.
 - [ ] Some higher-level decision-card style framing remains protocol-led rather than fully machine-shaped.
 
 ### 3. Task and Execution State
@@ -249,6 +256,7 @@ Release 1 should provide:
    - inferred domain
 11. strategy snapshots generated from observed runs
 12. bounded ensemble lease artifacts with conflict visibility for overlapping orchestration lanes
+13. subagent-first analysis and review behavior in supported `native|hybrid|disabled` runtime modes while keeping final synthesis under the orchestrator
 
 Implementation audit:
 
@@ -258,6 +266,7 @@ Implementation audit:
 - [x] Live runtime/config refresh now updates route decisions instead of relying only on stale init snapshots.
 - [x] Analysis routing now suppresses task-class-demoted CLI subagents from core fanout while keeping bridge/internal lanes available.
 - [x] Ensemble lease acquisition, release, and conflict blocking now exist with operator-visible lease history.
+- [x] Subagent-first analysis/review behavior is now codified as the default supported-mode fabric while final user-facing synthesis stays orchestrator-owned.
 - [ ] Task/block/file-scope ownership beyond ensemble dispatch leases is still incomplete.
 
 ### 5.1 Multi-Agent Role Architecture
@@ -320,6 +329,7 @@ Release 1 should provide:
 12. explicit separation between orchestrator-entry and worker-entry prompt contracts
 13. progress-aware dispatch state such as useful-progress tracking and visible run phases during fanout, fallback, merge, and arbitration
 14. phase-aware timeout parity between ensemble fanout and single-run dispatch lanes
+15. question-driven worker packets with machine-readable answer contracts
 
 Implementation audit:
 
@@ -330,6 +340,7 @@ Implementation audit:
 - [x] Phase-aware timeout controls now exist for startup, no-output, progress-idle, and bounded runtime extension behavior.
 - [x] Single-provider dispatch now has phase-aware timeout parity with ensemble execution instead of one coarse wall-clock timeout.
 - [x] Live ensemble manifests expose `active_subagents`, `active_count`, and timeout-policy metadata.
+- [x] Worker prompts now carry explicit question/answer/evidence/next-action return fields instead of a looser partial summary contract.
 - [ ] Some merge/readiness heuristics are still heuristic rather than final Release 1-stable policy.
 
 ### 7. Review and Verification Fabric
@@ -643,6 +654,7 @@ Release 1 should provide:
 4. portable framework defaults when overlay is missing
 5. project bootstrap contract for seeding required project artifacts
 6. provider-level runtime budget and dispatch environment settings where orchestration realism requires them
+7. project-overlay-resolved operations and environment entrypoints instead of hardcoded project paths in framework policy
 
 Implementation audit:
 
@@ -651,6 +663,7 @@ Implementation audit:
 - [x] Runtime budget and dispatch environment settings exist in the template/runtime.
 - [x] Phase-aware timeout knobs now exist in config schema and overlay template, including longer Gemini-oriented runtime profiles.
 - [x] Project bootstrap contract exists.
+- [x] Framework runtime now relies on overlay-resolved operations/environment entrypoints instead of embedding project-specific runbook paths in `AGENTS.md`.
 - [ ] Full standalone portability is not yet complete.
 
 ### 17. Cost and Efficiency Model
@@ -700,11 +713,13 @@ Release 1 should provide a compact but complete execution surface:
 7. provider dispatch commands
 8. eval commands
 9. project bootstrap commands
+10. bootstrap/session-entry commands and helpers for lighter framework startup
 
 Implementation audit:
 
 - [x] Command-layer protocol map exists.
 - [x] Pack helper, routing, status, verification, eval, and bootstrap commands exist.
+- [x] Bootstrap/session-start helper surfaces now exist for the lighter entry topology.
 
 
 ## Current Implementation Status (Codebase Audit)
@@ -714,11 +729,13 @@ Implementation audit:
   - [x] Context capsule write/read/hydrate flow exists.
   - [x] Post-compaction restore flow exists through `beads-compact.sh`.
   - [x] Boot packet artifacts now exist and are linked from protocol docs.
+  - [x] `AGENTS.md` now acts as a bootstrap router over split orchestrator and worker entry contracts.
 - [x] **Done: Problem Framing and Routing**
   - [x] Pack detection exists through `vida-pack-router.sh` and `vida-pack-helper.sh detect`.
   - [x] Non-dev pack initialization exists through `nondev-pack-init.sh`.
   - [x] Execution mode routing exists through `task-execution-mode.sh`.
   - [x] Reflection-pack routing exists for drift and framework self-analysis flows.
+  - [x] Request-intent classification now exists before engaging heavy execution machinery.
 - [x] **Done: Task and Execution State**
   - [x] `br` remains the authoritative task-state path.
   - [x] TODO block lifecycle scripts and validation utilities exist.
@@ -733,9 +750,11 @@ Implementation audit:
   - [x] Provider detection, requested/effective mode calculation, and route snapshots exist.
   - [x] External-first fanout, deterministic fallback, and bounded arbitration are implemented.
   - [x] Worker-entry and worker-thinking contracts are separated from orchestrator governance.
+  - [x] Supported-mode subagent-first analysis/review behavior is now codified while synthesis and mutation ownership remain orchestrator-owned.
   - [x] Recovery helpers, subagent suppression, active-subagent visibility, and richer scorecards now exist.
   - [x] Phase-aware timeout controls and live route refresh now exist.
   - [x] Ensemble lease acquisition, release, conflict blocking, and lease-history diagnostics now exist.
+  - [x] Worker packets now use explicit machine-readable return fields for question-driven execution.
   - [ ] Broader task/block/file-scope ownership contracts are not yet fully materialized as runtime-enforced stateful contracts.
 - [ ] **Partial: Review and Verification Fabric**
   - [x] Route artifacts now expose `review_state`.
@@ -756,9 +775,10 @@ Implementation audit:
   - [x] Web access and browser-capable runtime surfaces are present.
   - [x] External API and tool result capture surfaces are present.
 - [ ] **Partial: Documentation and Contract Sync**
-  - [x] Protocol index, framework map, worker contracts, and changelog are in place.
+  - [x] Protocol index, framework map, orchestrator/worker contracts, and changelog are in place.
   - [x] Framework/project boundary documentation is established.
   - [x] Release-target documents are synchronized with the current framework shape.
+  - [x] Bootstrap split and bounded log-read policy are now reflected in framework docs.
   - [ ] Document lifecycle and freshness enforcement are not yet complete at the full Release 1 level.
 - [ ] **Partial: Telemetry and Evaluation**
   - [x] Eval-pack and subagent evaluation scripts exist.
@@ -775,6 +795,7 @@ Implementation audit:
   - [x] The provider template now mirrors the canonical VIDA subagent stack instead of abstract placeholders.
   - [x] Phase-aware timeout profiles now exist in the overlay template and config schema.
   - [x] Bash installer and framework-only release packaging exist.
+  - [x] Overlay-resolved operations/environment entrypoints now replace hardcoded project runbook references in framework bootstrap policy.
   - [ ] Production-ready standalone extraction discipline is not yet fully complete.
 - [ ] **Not Done: Cost and Efficiency Model**
   - [ ] Compiled-policy level optimization artifacts are not yet implemented.

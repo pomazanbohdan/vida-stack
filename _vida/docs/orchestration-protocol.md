@@ -4,10 +4,10 @@ Purpose: define how the top-level orchestrator turns a non-trivial request into 
 
 ## Core Contract
 
-1. Orchestration is protocol-driven and always runs through `br` + packs.
+1. Orchestration is protocol-driven and uses `br` + packs only when request intent requires task execution or artifact production.
 2. The orchestrator owns problem framing, lens selection, workstream decomposition, agent routing, synthesis, and the final quality gate.
 3. Packs are the runtime route; orchestration lenses are the reasoning posture. A lens never replaces a pack.
-4. Task state lives only in `br`; execution visibility lives only in TODO blocks.
+4. Task state lives only in `br`; execution visibility lives only in TODO blocks when task flow is engaged.
 5. No interactive menu dependencies.
 
 ## Scope
@@ -21,6 +21,23 @@ Purpose: define how the top-level orchestrator turns a non-trivial request into 
 1. User request text.
 2. Optional explicit `task_id`.
 3. Existing task, decision, or spec context when present.
+
+## Request Intent Classes
+
+Classify request intent before task resolution:
+
+1. `answer_only`
+   - explanation, diagnosis, comparison, review findings, framework discussion, architecture recommendation,
+   - no automatic `br`, TODO, or pack flow.
+2. `artifact_flow`
+   - research artifact, spec, task-pool, formal report, docs update, decision record,
+   - `br` + pack + TODO required.
+3. `execution_flow`
+   - implementation, bug fix, refactor, protocol/script/code mutation,
+   - `br` + TODO required.
+4. `mixed`
+   - starts as `answer_only`,
+   - enters task flow only after explicit mutation decision, approved task context, or user-confirmed execution scope.
 
 ## Orchestration Lenses
 
@@ -54,50 +71,58 @@ Before routing work, normalize the request into:
 ## Algorithm
 
 1. Frame the problem.
-2. Determine request class and active orchestration lens.
-3. Resolve active task:
+2. Determine request intent class and active orchestration lens.
+3. Apply TODO engagement gate:
+   - `answer_only` -> stay outside `br`/TODO/pack flow,
+   - `artifact_flow` and `execution_flow` -> task flow required,
+   - `mixed` -> start answer path first and enter task flow only when execution becomes required.
+4. Resolve active task only when task flow is required:
    - if `task_id` is provided, use it;
    - else prefer active `in_progress` task from `br`;
    - else pick first `ready` task or create one when the request is net-new framework/project work.
-4. Detect pack:
+5. Detect pack only when task flow is required:
    - `bash _vida/scripts/vida-pack-helper.sh detect "<request>"`.
-5. Select execution mode/profile:
+6. Select execution mode/profile:
    - task execution mode via `_vida/scripts/task-execution-mode.sh`,
    - boot profile via `_vida/scripts/boot-profile.sh`,
    - META / FSAP / SCP / WVP when triggers fire.
-6. Select orchestration hierarchy:
+7. Select orchestration hierarchy:
    - default to free external read-only fanout for eligible non-trivial analysis/research/review/verification work,
    - use the configured bridge fallback subagent before internal escalation,
    - reserve internal subagents for senior arbitration, architecture-heavy synthesis, and mutation-owning execution.
-7. Decompose the work into layers:
+8. Decompose the work into layers:
    - analysis,
    - design/contract,
    - implementation/materialization,
    - validation,
    - governance/documentation,
    - delivery/handoff.
-8. Decide dependency order:
+9. Decide dependency order:
    - parallel only for independent read-only or isolated-scope steps,
    - otherwise keep a single writer lane on `track_id=main`.
-9. Inject expert agents only when needed:
+10. Inject expert agents only when needed:
    - missing domain expertise,
    - risk cannot be assessed confidently,
    - cross-functional consequences require additional lenses,
    - conflict arbitration or critique is needed,
    - read-only ensemble fanout is available and materially reduces risk.
-10. Start pack session:
+10.1. For eligible non-trivial work, prefer separate cli-subagent lanes for authorship and verification:
+   - one cli subagent or cli-subagent ensemble produces the primary analysis/recommendation,
+   - another eligible cli subagent (or verification ensemble) validates it independently when route policy requires it,
+   - the orchestrator owns synthesis, escalation, and mutation-only control.
+11. Start pack session only when task flow is required:
    - `bash _vida/scripts/vida-pack-helper.sh start <task_id> <pack_id> "<goal>" [constraints]`.
    - optional shortcut for standard non-dev flows:
      `bash _vida/scripts/nondev-pack-init.sh <task_id> <pack_id> "<goal>" [constraints]`.
-11. Pre-register execution blocks:
+12. Pre-register execution blocks only when task flow is required:
    - `bash _vida/scripts/vida-pack-helper.sh scaffold <task_id> <pack_id>`.
-12. Execute via TODO lifecycle only:
+13. Execute via TODO lifecycle only when task flow is engaged:
    - `block-plan -> block-start -> block-end -> reflect -> verify`.
-13. Synthesize results:
+14. Synthesize results:
    - integrate business, product, architecture, implementation, and verification outputs,
    - resolve conflicts before reporting,
    - convert the result into an execution-ready artifact when appropriate.
-14. End pack session:
+15. End pack session only when task flow was engaged:
    - `bash _vida/scripts/vida-pack-helper.sh end <task_id> <pack_id> <done|partial|failed> "<summary>" [next_step]`.
 
 ## Dynamic Expert Injection
@@ -115,8 +140,12 @@ Routing rule:
 
 1. Use `_vida/docs/subagent-system-protocol.md` + project overlay for subagent choice.
 2. Use `_vida/docs/subagents.md` for dispatch contract.
-3. For eligible non-trivial read-heavy work, prefer external free fanout first, then the configured bridge fallback, then internal senior escalation only when route policy or evidence requires it.
-4. Keep writer ownership singular under the orchestrator even when read-only fanout is active.
+3. For eligible non-trivial read-heavy work, prefer subagent-first execution whenever the active subagent mode is not `disabled`.
+4. In `hybrid`, prefer external free fanout first, then the configured bridge fallback, then internal senior escalation only when route policy or evidence requires it.
+5. In `native`, prefer internal subagents as the first analysis/review lane.
+6. In `disabled`, keep analysis local and obey bounded-read policy.
+7. Keep writer ownership singular under the orchestrator even when read-only fanout is active.
+8. Prefer independent verification by a different cli subagent when route metadata marks independent verification as required and a distinct eligible verifier exists.
 
 ## Conflict Resolution
 
@@ -126,6 +155,16 @@ When agent or domain outputs disagree:
 2. Prefer canonical evidence and protocol ownership over eloquence or volume.
 3. Synthesize one decision or surface a bounded user decision when equivalent paths remain.
 4. Do not forward contradictory raw fragments as if they were a final answer.
+
+## User-Facing Reporting
+
+When subagents participate in the flow:
+
+1. treat subagent outputs as internal evidence unless the user explicitly asks to inspect them,
+2. present one orchestrator-synthesized answer in chat,
+3. do not stream or paste raw subagent reports into the final user response by default,
+4. reference subagent findings only through synthesized conclusions, evidence refs, or clearly marked supporting summaries,
+5. expose raw subagent disagreement only when it remains decision-relevant after synthesis.
 
 ## Delivery Alignment
 
@@ -153,6 +192,7 @@ Do not finalize until the orchestrator can answer yes to all:
 
 ## Decision Matrix
 
+0. answer-only advisory/diagnosis/review request -> no pack, no automatic `br`, no TODO.
 1. research request -> `research-pack`.
 2. spec creation/update -> `spec-pack`.
 3. scope/task pool formation -> `work-pool-pack` (`/vida-form-task`).
@@ -169,10 +209,10 @@ Change-impact triggers routed to `reflection-pack`:
 
 ## Output Contract
 
-1. Active task id + short description.
-2. Selected pack id + short goal.
-3. Active orchestration lens or lens set.
-4. Planned/started blocks snapshot.
+1. For task-flow outputs, include active task id + short description.
+2. For task-flow outputs, include selected pack id + short goal.
+3. For task-flow outputs, include planned/started blocks snapshot.
+4. Include active orchestration lens or lens set when useful.
 5. For non-trivial reports, default report order:
    - `Problem Framing`
    - `Assumptions / Constraints`
@@ -182,14 +222,17 @@ Change-impact triggers routed to `reflection-pack`:
    - `Risks / Trade-offs`
    - `Next Actions`
 6. Completion state and next step.
+7. When subagents contributed, report the orchestrator's synthesized result, not raw subagent text, unless the user explicitly asks for the raw output.
 
 ## Constraints
 
 1. Do not mutate task state outside `br`.
-2. Do not execute work outside active TODO block lifecycle.
-3. Do not route through non-canonical command paths.
-4. Do not use multiple writer lanes without explicit scope isolation.
-5. Do not replace synthesis with unintegrated agent fragments.
+2. Do not execute task-flow work outside active TODO block lifecycle.
+3. Do not engage `br`/TODO/pack flow for `answer_only` requests by default.
+4. Do not route through non-canonical command paths.
+5. Do not use multiple writer lanes without explicit scope isolation.
+6. Do not replace synthesis with unintegrated agent fragments.
+7. Do not expose raw subagent reports as the default user-facing deliverable.
 
 ## Related
 

@@ -11,14 +11,16 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Runtime script architecture | `_vida/docs/script-runtime-architecture.md` | `_vida/docs/framework-map-protocol.md`, `_vida/scripts/*.sh`, `_vida/scripts/*.py` |
 | Framework change log | `_vida/CHANGELOG.md` | `_vida/docs/protocol-index.md` |
 | Project overlay activation | `_vida/docs/project-overlay-protocol.md` | `vida.config.yaml`, `_vida/templates/vida.config.yaml.template`, `AGENTS.md`, `_vida/scripts/vida-config.py`, `_vida/scripts/boot-profile.sh`, `_vida/scripts/quality-health-check.sh` |
-| Boot packet runtime artifact | `_vida/docs/boot-packet-protocol.md` | `_vida/scripts/boot-packet.py`, `_vida/scripts/boot-profile.sh`, `AGENTS.md` |
+| Boot packet runtime artifact | `_vida/docs/boot-packet-protocol.md` | `_vida/scripts/boot-packet.py`, `_vida/scripts/boot-profile.sh`, `AGENTS.md`, `_vida/docs/ORCHESTRATOR-ENTRY.MD`, `_vida/docs/SUBAGENT-ENTRY.MD` |
 | Project bootstrap/self-reproduction | `_vida/docs/project-bootstrap-protocol.md` | `_vida/scripts/project-bootstrap.py`, `_vida/templates/vida.config.yaml.template`, `vida.config.yaml` |
 | VIDA framework self-analysis | `_vida/docs/framework-self-analysis-protocol.md` | `_vida/docs/framework-map-protocol.md`, `_vida/docs/self-reflection-protocol.md` |
-| Core agent policy | `AGENTS.md` | `_vida/docs/README.md`, `docs/README.md` |
+| Core bootstrap router | `AGENTS.md` | `_vida/docs/ORCHESTRATOR-ENTRY.MD`, `_vida/docs/SUBAGENT-ENTRY.MD`, `_vida/docs/SUBAGENT-THINKING.MD`, `_vida/docs/README.md`, `docs/README.md` |
+| Orchestrator entry contract | `_vida/docs/ORCHESTRATOR-ENTRY.MD` | `AGENTS.md`, `_vida/docs/orchestration-protocol.md`, `_vida/docs/use-case-packs.md` |
 | Thinking algorithms | `_vida/docs/thinking-protocol.md` | `_vida/docs/algorithms-one-screen.md`, `_vida/docs/algorithms-quick-reference.md` |
 | Runtime orchestration | `_vida/docs/orchestration-protocol.md` | `AGENTS.md`, `_vida/docs/use-case-packs.md`, `_vida/scripts/vida-pack-helper.sh` |
 | Change-impact reconciliation (absorbed cascade) | `_vida/docs/use-case-packs.md` | `_vida/docs/form-task-protocol.md`, `_vida/docs/implement-execution-protocol.md`, `_vida/commands/vida-spec.md` |
 | Task state (SSOT) | `_vida/docs/beads-protocol.md` | `_vida/docs/todo-protocol.md` |
+| Framework wave starter | `_vida/scripts/framework-wave-start.sh` | `_vida/docs/framework-self-analysis-protocol.md`, `_vida/docs/todo-protocol.md`, `_vida/scripts/vida-pack-helper.sh`, `_vida/scripts/boot-profile.sh` |
 | Shared reference catalog (non-runtime) | `docs/**` | `_vida/docs/beads-protocol.md` |
 | Execution pipelines | `_vida/docs/pipelines.md` | `_vida/scripts/quality-health-check.sh`, `_vida/scripts/framework-boundary-check.sh` |
 | Use-case routing | `_vida/docs/use-case-packs.md` | `_vida/scripts/vida-pack-router.sh`, `_vida/scripts/vida-pack-helper.sh` |
@@ -31,6 +33,8 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | VIDA migration decisions | `docs/research/vida-framework/vida-migration-registry.md` | `docs/research/vida-framework/**`, `_vida/**` |
 | Subagent system activation/routing | `_vida/docs/subagent-system-protocol.md` | `_vida/scripts/subagent-system.py`, `vida.config.yaml`, `docs/process/agent-system.md`, `_vida/docs/DEV-AGENTS-MATRIX.md` |
 | Subagent onboarding and recovery | `_vida/docs/subagent-onboarding-protocol.md` | `_vida/scripts/subagent-system.py`, `_vida/scripts/subagent-dispatch.py`, `_vida/scripts/subagent-eval-pack.py`, `vida.config.yaml`, `_vida/templates/vida.config.yaml.template` |
+| Worker entry contract | `_vida/docs/SUBAGENT-ENTRY.MD` | `AGENTS.md`, `_vida/docs/subagents.md`, `_vida/docs/subagent-system-protocol.md`, `_vida/docs/SUBAGENT-THINKING.MD` |
+| Worker thinking subset | `_vida/docs/SUBAGENT-THINKING.MD` | `AGENTS.md`, `_vida/docs/SUBAGENT-ENTRY.MD`, `_vida/docs/subagent-prompt-templates.md` |
 | Subagent dispatch | `_vida/docs/subagents.md` | `_vida/docs/SUBAGENT-ENTRY.MD`, `_vida/docs/SUBAGENT-THINKING.MD`, `_vida/docs/subagent-prompt-templates.md`, `_vida/scripts/render-subagent-prompt.sh` |
 | Runtime log policy | `_vida/docs/log-policy.md` | `.gitignore` |
 | TODO overhead diagnostics | `_vida/scripts/todo-overhead-report.sh` | `_vida/docs/todo-protocol.md` |
@@ -46,6 +50,9 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 3. For server/API assumptions: live request validation is required.
 4. For external assumptions (API/package/platform/security/migration): WVP evidence is required (`_vida/docs/web-validation-protocol.md`).
 5. For topology/refactor changes: update `_vida/docs/framework-map-protocol.md` in the same change.
+6. For entry-contract changes: keep `AGENTS.md`, `_vida/docs/ORCHESTRATOR-ENTRY.MD`, `_vida/docs/SUBAGENT-ENTRY.MD`, and `_vida/docs/SUBAGENT-THINKING.MD` synchronized in the same change.
+7. Before pack/command/TODO engagement, run request-intent classification and skip task machinery for `answer_only` unless the user explicitly asks for an artifact or mutation.
+8. Broad reads of `.vida/logs`, `.vida/state`, and `.beads` are forbidden by default; use exact-key, specific-file, short-window reads unless the active lane contract explicitly escalates.
 
 ## Execution Command Path
 

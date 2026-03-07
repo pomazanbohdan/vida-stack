@@ -33,6 +33,8 @@ Canonical lifecycle:
    - cli subagent is temporarily excluded from routing until `cooldown_until`.
 8. `recovered`
    - cli subagent re-enters via probe or successful post-cooldown run.
+9. `retired`
+   - cli subagent is intentionally removed from active routing, typically by overlay disable or manual retirement.
 
 ## Minimum Onboarding Contract
 
@@ -91,6 +93,7 @@ Promotion into regular fanout should require:
 3. no active cooldown,
 4. no persistent `interactive_blocked` or `auth_invalid` reason,
 5. acceptable chatter/failure behavior for the lane.
+6. lane-specific probation must resolve into `promoted` before the cli subagent joins critical fanout for that lane.
 
 ## Degradation And Cooldown
 
@@ -123,6 +126,16 @@ Lane fitness should be evaluated independently for:
 5. `implementation` when applicable
 
 Runtime should prefer task-class success history over global reputation when both exist.
+
+## Lifecycle Runtime Expectations
+
+Minimum runtime/operator surface should expose:
+
+1. global `lifecycle_stage` for each cli subagent,
+2. lane-specific lifecycle stage for task classes with real history,
+3. probation thresholds before a cli subagent becomes fully promoted,
+4. retirement visibility for manually disabled cli subagents,
+5. routing suppression for retired cli subagents.
 
 ## Anti-Patterns
 

@@ -154,6 +154,19 @@ bash _vida/scripts/vida-command-audit.sh plan <task_id> [--limit N]
 bash _vida/scripts/vida-command-audit.sh repair-next <task_id>
 ```
 
+Framework-only lean starter:
+
+```bash
+bash _vida/scripts/framework-wave-start.sh <task_id> <pack_id> "<goal>" [constraints]
+```
+
+Use for framework-owned `_vida/*` work when you want the canonical start path with less routine overhead. It preserves:
+
+1. `br` as SSOT,
+2. pack logging,
+3. TODO scaffolding/validation,
+4. boot-profile validation.
+
 Command audit mode:
 
 1. Run `bash _vida/scripts/vida-command-audit.sh report <task_id>` to see done/pending coverage.
@@ -217,6 +230,7 @@ bash _vida/scripts/beads-bg-sync.sh stop
 4.1. Drift gate: run `bash _vida/scripts/context-drift-sentinel.sh check <task_id>` after capsule write checkpoints (`block-finish`, compact restore).
 5. Execution gate: if no active block exists, execution must not proceed.
 6. Plan integrity gate: run `bash _vida/scripts/todo-plan-validate.sh <task_id>` after `block-plan` batch and before execution start. Use `--diff-aware` when the worktree already contains target-scope changes; coverage is evaluated against the whole task plan so already-completed blocks still count.
+6.1. For framework-only tasks, compact evidence is valid when work is confined to `_vida/*` and the block records concrete actions plus canonical artifacts or task IDs. Runtime verification may downgrade missing artifact warnings to informational severity for these tasks in non-strict mode.
 
 ## 7) Anti-Patterns
 

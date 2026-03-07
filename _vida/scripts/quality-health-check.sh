@@ -172,17 +172,22 @@ if [[ -f "vida.config.yaml" ]]; then
     exit 2
   fi
 
-  if python3 _vida/scripts/subagent-system.py subagents >/tmp/vida-subagent-health.json 2>/dev/null; then
+  if python3 _vida/scripts/subagent-system.py diagnose >/tmp/vida-subagent-health.json 2>/dev/null; then
     degraded_count="$(jq -r '.summary.degraded // 0' /tmp/vida-subagent-health.json 2>/dev/null)"
     cooldown_count="$(jq -r '.summary.cooldown // 0' /tmp/vida-subagent-health.json 2>/dev/null)"
     probe_count="$(jq -r '.summary.probe_required // 0' /tmp/vida-subagent-health.json 2>/dev/null)"
-    degraded_names="$(jq -r '[.subagents[] | select(.subagent_state != "active") | .subagent] | join(", ")' /tmp/vida-subagent-health.json 2>/dev/null)"
-    cooldown_names="$(jq -r '[.subagents[] | select((.cooldown_until // "") != "") | .subagent] | join(", ")' /tmp/vida-subagent-health.json 2>/dev/null)"
-    probe_names="$(jq -r '[.subagents[] | select(.probe_required == true) | .subagent] | join(", ")' /tmp/vida-subagent-health.json 2>/dev/null)"
+    degraded_names="$(jq -r '[.alerts[] | select(.kind == "availability_or_lifecycle" and .lifecycle_stage == "degraded") | .subagent] | unique | join(", ")' /tmp/vida-subagent-health.json 2>/dev/null)"
+    cooldown_names="$(jq -r '[.alerts[] | select(.kind == "availability_or_lifecycle" and .lifecycle_stage == "cooldown") | .subagent] | unique | join(", ")' /tmp/vida-subagent-health.json 2>/dev/null)"
+    probe_names="$(jq -r '[.alerts[] | select(.recommended_action == "run_probe" or .recommended_action == "repair_auth_then_probe" or .recommended_action == "fix_headless_profile_then_probe") | .subagent] | unique | join(", ")' /tmp/vida-subagent-health.json 2>/dev/null)"
+    lease_conflicts="$(jq -r '.leases.recent_conflicts // 0' /tmp/vida-subagent-health.json 2>/dev/null)"
+    unstable_names="$(jq -r '[.unstable_by_timeout_class[] | .subagent] | unique | join(", ")' /tmp/vida-subagent-health.json 2>/dev/null)"
     if [[ "$degraded_count" -gt 0 || "$cooldown_count" -gt 0 || "$probe_count" -gt 0 ]]; then
       vida_status_line warn "[health] cli subagent status: degraded=$degraded_count [${degraded_names:-none}] cooldown=$cooldown_count [${cooldown_names:-none}] probe_required=$probe_count [${probe_names:-none}]"
     else
       vida_status_line ok "[health] cli subagent status healthy"
+    fi
+    if [[ "${lease_conflicts:-0}" -gt 0 || -n "${unstable_names:-}" ]]; then
+      vida_status_line info "[health] cli subagent diagnosis: recent_lease_conflicts=${lease_conflicts:-0} unstable_timeout_classes=[${unstable_names:-none}]"
     fi
   fi
 fi
@@ -250,7 +255,7 @@ if [[ -n "$TASK_ID" ]]; then
   if [[ -f ".vida/logs/beads-execution.jsonl" ]]; then
     task_labels="$(br show "$TASK_ID" --json 2>/dev/null | jq -r '.[0].labels // [] | join(" ")' 2>/dev/null || true)"
     task_scope_is_framework="no"
-    if grep -Eq '(^| )(scope:framework|domain:framework)( |$)' <<<"$task_labels"; then
+    if grep -Eq '(^| )(scope:framework|domain:framework|framework|fsap|agent-system|vida-stack)( |$)' <<<"$task_labels"; then
       task_scope_is_framework="yes"
     fi
 
@@ -298,6 +303,8 @@ if [[ -n "$TASK_ID" ]]; then
     elif [[ "$wvp_trigger_count" -gt 0 && "$wvp_structured_count" -eq 0 && "$wvp_evidence_count" -eq 0 ]]; then
       if [[ "$MODE" == "strict-dev" ]]; then
         vida_status_line info "[health] strict-dev: WVP-like triggers detected for $TASK_ID with no markers; non-blocking in dev cycle"
+      elif [[ "$task_scope_is_framework" == "yes" ]]; then
+        vida_status_line info "[health] framework task: WVP-like triggers are informational for $TASK_ID"
       else
         vida_status_line warn "[health] WARN: WVP-like triggers detected for $TASK_ID but no web-validation evidence markers found (see _vida/docs/web-validation-protocol.md)"
       fi

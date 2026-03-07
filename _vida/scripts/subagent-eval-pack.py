@@ -149,6 +149,14 @@ def quality_score_for(run: dict[str, Any], eval_pack: dict[str, Any], is_closed:
 
     if run.get("dispatch_mode") == "fanout":
         score += 2
+    if run.get("verification_role") == "author" and run.get("independent_verification_passed"):
+        score += 6
+    if run.get("verification_role") == "author" and run.get("independent_verification_failed"):
+        score -= 10
+    if run.get("verification_role") == "verifier":
+        score += 4
+    if run.get("verification_caught_issue"):
+        score += 6
 
     return max(0, min(100, score))
 
@@ -192,6 +200,22 @@ def strengths_for_subagent(subagent_name: str, subagent_cfg: dict[str, Any], sco
     return list(dict.fromkeys(strengths))[:5]
 
 
+def budget_efficiency_score(subagent_cfg: dict[str, Any], scorecard: dict[str, Any]) -> int:
+    cost_units = subagent_system.subagent_budget_cost_units(subagent_cfg)
+    useful_progress_rate = float(scorecard.get("useful_progress_rate", 0) or 0)
+    avg_ttfu_ms = int(scorecard.get("avg_time_to_first_useful_output_ms", 0) or 0)
+    score = 50
+    score += max(0, int(round(useful_progress_rate * 30)))
+    score -= min(24, cost_units * 6)
+    if avg_ttfu_ms > 0 and avg_ttfu_ms <= 120000:
+        score += 8
+    elif avg_ttfu_ms > 240000:
+        score -= 8
+    if subagent_cfg.get("billing_tier") == "free":
+        score += 8
+    return max(0, min(100, score))
+
+
 def weaknesses_for_subagent(subagent_name: str, subagent_cfg: dict[str, Any], scorecard: dict[str, Any]) -> list[str]:
     weaknesses: list[str] = []
     if subagent_cfg.get("write_scope") == "none":
@@ -205,12 +229,102 @@ def weaknesses_for_subagent(subagent_name: str, subagent_cfg: dict[str, Any], sc
     return list(dict.fromkeys(weaknesses))[:4]
 
 
+def prompt_family_for_run(run: dict[str, Any]) -> str:
+    prompt_path = Path(str(run.get("prompt_file", "")))
+    if prompt_path.name:
+        return prompt_path.stem
+    return str(run.get("task_class", "default")) or "default"
+
+
+def build_memory_hints(runs: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+    grouped: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    subagent_signatures: dict[str, dict[str, int]] = {}
+    for run in runs:
+        task_class = str(run.get("task_class", "") or "default")
+        subagent = str(run.get("subagent", "") or "")
+        if not subagent:
+            continue
+        grouped.setdefault(task_class, {}).setdefault(subagent, []).append(run)
+        failure_reason = str(run.get("failure_reason", "") or "").strip()
+        if failure_reason:
+            subagent_signatures.setdefault(subagent, {})
+            subagent_signatures[subagent][failure_reason] = subagent_signatures[subagent].get(failure_reason, 0) + 1
+
+    task_class_memory: dict[str, Any] = {}
+    for task_class, by_subagent in grouped.items():
+        preferred: list[str] = []
+        avoid: list[str] = []
+        retry_useful: list[str] = []
+        failure_prone: list[str] = []
+        prompt_families: dict[str, Any] = {}
+        for subagent, subagent_runs in by_subagent.items():
+            total = len(subagent_runs)
+            merge_ready_runs = sum(1 for item in subagent_runs if item.get("merge_ready") is True)
+            useful_runs = sum(1 for item in subagent_runs if item.get("useful_progress") is True)
+            chatter_runs = sum(1 for item in subagent_runs if item.get("chatter_only") is True)
+            timeout_runs = sum(1 for item in subagent_runs if str(item.get("status")) == "timeout")
+            merge_rate = merge_ready_runs / max(1, total)
+            useful_rate = useful_runs / max(1, total)
+            chatter_rate = chatter_runs / max(1, total)
+            timeout_rate = timeout_runs / max(1, total)
+            if total >= 3 and merge_rate >= 0.75 and useful_rate >= 0.75:
+                preferred.append(subagent)
+            if total >= 2 and (merge_rate < 0.35 or chatter_rate >= 0.4 or timeout_rate >= 0.5):
+                avoid.append(subagent)
+            ordered = sorted(
+                subagent_runs,
+                key=lambda item: (str(item.get("task_id", "")), str(item.get("ts_start", item.get("ts", ""))))
+            )
+            saw_failure = False
+            for item in ordered:
+                if str(item.get("status")) in {"timeout", "failure"} or int(item.get("exit_code", 0) or 0) != 0:
+                    saw_failure = True
+                elif saw_failure and item.get("merge_ready") is True:
+                    retry_useful.append(subagent)
+                    break
+            if total >= 2 and timeout_rate >= 0.5:
+                failure_prone.append(subagent)
+
+            family_groups: dict[str, list[dict[str, Any]]] = {}
+            for item in subagent_runs:
+                family_groups.setdefault(prompt_family_for_run(item), []).append(item)
+            prompt_families[subagent] = {}
+            for family, family_runs in family_groups.items():
+                fam_total = len(family_runs)
+                fam_merge = sum(1 for item in family_runs if item.get("merge_ready") is True)
+                fam_useful = sum(1 for item in family_runs if item.get("useful_progress") is True)
+                prompt_families[subagent][family] = {
+                    "runs": fam_total,
+                    "merge_ready_rate": round(fam_merge / max(1, fam_total), 3),
+                    "useful_progress_rate": round(fam_useful / max(1, fam_total), 3),
+                }
+
+        task_class_memory[task_class] = {
+            "preferred_subagents": sorted(set(preferred)),
+            "avoid_subagents": sorted(set(avoid)),
+            "retry_useful_subagents": sorted(set(retry_useful)),
+            "failure_prone_subagents": sorted(set(failure_prone)),
+            "prompt_families": prompt_families,
+        }
+
+    recurring_failure_signatures: dict[str, Any] = {}
+    for subagent, counts in subagent_signatures.items():
+        recurring_failure_signatures[subagent] = [
+            {"failure_reason": reason, "count": count}
+            for reason, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+            if count >= 2
+        ]
+    return task_class_memory, recurring_failure_signatures
+
+
 def refresh_strategy(task_id: str) -> dict[str, Any]:
     snapshot = subagent_system.init_snapshot(task_id)
     config = vida_config.load_validated_config()
     routing = vida_config.dotted_get(config, "agent_system.routing", {}) or {}
     subagents = snapshot.get("subagents", {})
     scorecards = snapshot.get("scorecards", {})
+    recent_runs = load_jsonl(RUN_LOG_PATH)[-300:]
+    task_class_memory, recurring_failure_signatures = build_memory_hints(recent_runs)
 
     strategy = {
         "generated_at": now_utc(),
@@ -228,6 +342,7 @@ def refresh_strategy(task_id: str) -> dict[str, Any]:
             "quality_tier": subagent_cfg.get("quality_tier", "unknown"),
             "write_scope": subagent_cfg.get("write_scope", "none"),
             "state": scorecard.get("state", "normal"),
+            "lifecycle_stage": scorecard.get("lifecycle_stage", "declared"),
             "subagent_state": scorecard.get("subagent_state", "active"),
             "failure_reason": scorecard.get("failure_reason", ""),
             "cooldown_until": scorecard.get("cooldown_until", ""),
@@ -243,9 +358,12 @@ def refresh_strategy(task_id: str) -> dict[str, Any]:
             "useful_progress_rate": float(scorecard.get("useful_progress_rate", 0) or 0),
             "timeout_after_progress_count": int(scorecard.get("timeout_after_progress_count", 0)),
             "avg_time_to_first_useful_output_ms": int(scorecard.get("avg_time_to_first_useful_output_ms", 0) or 0),
+            "budget_cost_units": subagent_system.subagent_budget_cost_units(subagent_cfg),
+            "budget_efficiency_score": budget_efficiency_score(subagent_cfg, scorecard),
             "domains": scorecards.get(subagent_name, {}).get("by_domain", {}),
             "strengths": strengths_for_subagent(subagent_name, subagent_cfg, scorecard),
             "weaknesses": weaknesses_for_subagent(subagent_name, subagent_cfg, scorecard),
+            "recurring_failure_signatures": recurring_failure_signatures.get(subagent_name, []),
         }
 
     discovered_domains: set[str] = set()
@@ -280,6 +398,21 @@ def refresh_strategy(task_id: str) -> dict[str, Any]:
             "risk_class": route.get("risk_class", "R0"),
             "target_review_state": subagent_system.target_review_state_for(str(route.get("risk_class", "R0"))),
             "target_manifest_review_state": subagent_system.target_manifest_review_state_for(str(route.get("risk_class", "R0"))),
+            "independent_verification_required": route.get("independent_verification_required", "no"),
+            "verification_route_task_class": route.get("verification_route_task_class", ""),
+            "verification_plan": route.get("verification_plan", {}),
+            "route_budget": route.get("route_budget", {}),
+            "route_graph": route.get("route_graph", {}),
+            "memory_hints": task_class_memory.get(
+                task_class,
+                {
+                    "preferred_subagents": [],
+                    "avoid_subagents": [],
+                    "retry_useful_subagents": [],
+                    "failure_prone_subagents": [],
+                    "prompt_families": {},
+                },
+            ),
         }
 
     save_json(STRATEGY_PATH, strategy)
@@ -308,6 +441,10 @@ def run(task_id: str) -> int:
             f"useful_progress={run_item.get('useful_progress', False)}; "
             f"chatter_only={run_item.get('chatter_only', False)}; "
             f"time_to_first_useful_output_ms={run_item.get('time_to_first_useful_output_ms')}; "
+            f"verification_role={run_item.get('verification_role', '')}; "
+            f"independent_verification_passed={run_item.get('independent_verification_passed', False)}; "
+            f"independent_verification_failed={run_item.get('independent_verification_failed', False)}; "
+            f"verification_caught_issue={run_item.get('verification_caught_issue', False)}; "
             f"subagent_state={run_item.get('subagent_state', 'active')}; "
             f"failure_reason={run_item.get('failure_reason', '')}; "
             f"cooldown_until={run_item.get('cooldown_until', '')}; "
@@ -340,6 +477,10 @@ def run(task_id: str) -> int:
                 "cooldown_until": str(run_item.get("cooldown_until", "")),
                 "probe_required": bool(run_item.get("probe_required", False)),
                 "last_quota_exhausted_at": str(run_item.get("last_quota_exhausted_at", "")),
+                "verification_role": str(run_item.get("verification_role", "")),
+                "independent_verification_passed": bool(run_item.get("independent_verification_passed", False)),
+                "independent_verification_failed": bool(run_item.get("independent_verification_failed", False)),
+                "verification_caught_issue": bool(run_item.get("verification_caught_issue", False)),
             },
         )
         review_entries.append(

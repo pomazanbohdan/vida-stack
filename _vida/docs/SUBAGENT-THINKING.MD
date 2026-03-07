@@ -49,6 +49,8 @@ Use:
 1. Return findings, evidence, risks, and next recommendation.
 2. Keep reports compact and task-bounded.
 3. If the packet requests machine-readable output, obey that schema exactly.
+4. Answer the packet's blocking question before adding optional context.
+5. Stop once the blocking question is answered with bounded evidence.
 
 ## Forbidden Escalation
 

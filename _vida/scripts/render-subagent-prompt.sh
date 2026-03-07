@@ -14,6 +14,7 @@ Usage:
     [--protocol-unit "/vida-command#CLx"] \
     --scope "..." \
     --verification "..." \
+    [--question "..."] \
     [--extra "..."] \
     [--repo-root PATH]
 
@@ -21,11 +22,13 @@ Examples:
   bash _vida/scripts/render-subagent-prompt.sh audit \
     --task "Audit retry flow" \
     --scope "app/core,app/api" \
+    --question "What exact runtime packet markers are missing?" \
     --verification "rg -n \"retry\" app/core app/api"
 
   bash _vida/scripts/render-subagent-prompt.sh implementation \
     --task "Implement cache invalidation" \
     --scope "app/shared,app/cache" \
+    --question "What is the minimal isolated change that fixes the requested cache flow?" \
     --verification "<project analyze command>" \
     --extra "Keep changes scoped to the requested cache flow."
 EOF
@@ -43,6 +46,7 @@ task=""
 protocol_unit=""
 scope=""
 verification=""
+question=""
 extra=""
 repo_root="$ROOT_DIR"
 while [[ $# -gt 0 ]]; do
@@ -61,6 +65,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --verification)
       verification="${2:-}"
+      shift 2
+      ;;
+    --question)
+      question="${2:-}"
       shift 2
       ;;
     --extra)
@@ -96,12 +104,16 @@ fi
 json_contract=$(cat <<'EOF'
 {
   "status": "done|partial|blocked",
+  "question_answered": "yes|no",
+  "answer": "direct bounded answer",
+  "evidence_refs": ["path/to/file:12", "command -> key line"],
   "changed_files": ["path/a", "path/b"],
   "verification_commands": ["exact command"],
   "verification_results": ["command -> pass|fail"],
   "merge_ready": "yes|no",
   "blockers": [],
-  "notes": "short note"
+  "notes": "short note",
+  "recommended_next_action": "concise next step"
 }
 EOF
 )
@@ -124,6 +136,12 @@ optional_lines() {
 
 entry_contract() {
   cat <<EOF
+Runtime Role Packet:
+- worker_lane_confirmed: true
+- worker_role: subagent
+- orchestrator_entry_fallback: _vida/docs/ORCHESTRATOR-ENTRY.MD
+- worker_entry: $SUBAGENT_ENTRY_DOC
+- worker_thinking: $SUBAGENT_THINKING_DOC
 Worker Entry Contract:
 - You are a bounded worker, not the orchestrator.
 - Follow $SUBAGENT_ENTRY_DOC as the worker-level entry contract.
@@ -148,6 +166,14 @@ thinking_hint() {
   esac
 }
 
+blocking_question_line() {
+  if [[ -n "$question" ]]; then
+    printf '%s\n' "Blocking Question: $question"
+  else
+    printf '%s\n' "Blocking Question: [provide one explicit blocking question for this worker lane]"
+  fi
+}
+
 case "$template" in
   audit|read-only-audit)
     cat <<EOF
@@ -156,13 +182,16 @@ Task: $task in $repo_root.
 Mode: READ-ONLY (do not modify files).
 $protocol_unit_line
 Scope: $scope
+$(blocking_question_line)
 Must do:
 - Follow project preflight from $PROJECT_PREFLIGHT_DOC before analysis/test/build commands.
 - $(thinking_hint)
 - Use host-project quirks only when they are explicitly provided by the task packet.
+- Answer the blocking question directly before optional context.
 - Report concrete findings with file paths and severity.
 - Distinguish confirmed facts from assumptions.
 - Return findings directly; do not restate framework orchestration policy.
+- Do not perform broad .vida/logs, .vida/state, or .beads sweeps unless the task packet explicitly escalates to them.
 $extra_line
 Verification:
 - $verification
@@ -176,12 +205,15 @@ $(entry_contract)
 Task: $task in $repo_root.
 $protocol_unit_line
 Scope: $scope
+$(blocking_question_line)
 Constraints:
 - Follow project preflight from $PROJECT_PREFLIGHT_DOC before analyze/test/build.
 - $(thinking_hint)
 - Read target files before editing.
 - Do not add dependencies absent from the host project's canonical manifest.
 - Do not widen task ownership or rewrite orchestration decisions.
+- Answer the blocking question directly before optional context.
+- Do not perform broad .vida/logs, .vida/state, or .beads sweeps unless the task packet explicitly escalates to them.
 $(optional_lines "" "$extra_line")
 Verification:
 - $verification
@@ -199,12 +231,15 @@ Task: Produce architecture decision for $task in $repo_root.
 Mode: analysis-first, then minimal implementation plan.
 $protocol_unit_line
 Scope: $scope
+$(blocking_question_line)
 Must do:
 - Follow project preflight from $PROJECT_PREFLIGHT_DOC before analysis/test/build commands.
 - $(thinking_hint)
 - Compare at least 2 alternatives.
 - Provide pros/cons, risk, migration impact, and rollback strategy.
 - Keep the decision scoped to the requested slice; do not assume orchestrator ownership.
+- Answer the blocking question directly before optional context.
+- Do not perform broad .vida/logs, .vida/state, or .beads sweeps unless the task packet explicitly escalates to them.
 $extra_line
 Verification:
 - $verification
@@ -218,6 +253,7 @@ $(entry_contract)
 Task: Apply a small isolated patch for $task in $repo_root.
 $protocol_unit_line
 Scope: $scope
+$(blocking_question_line)
 Must do:
 - Follow project preflight from $PROJECT_PREFLIGHT_DOC before analyze/test/build.
 - $(thinking_hint)
@@ -225,6 +261,8 @@ Must do:
 - Read target files before editing.
 - Do not refactor unrelated code.
 - Do not widen scope beyond the isolated patch.
+- Answer the blocking question directly before optional context.
+- Do not perform broad .vida/logs, .vida/state, or .beads sweeps unless the task packet explicitly escalates to them.
 $(optional_lines "" "$extra_line")
 Verification:
 - $verification

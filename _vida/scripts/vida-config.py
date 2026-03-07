@@ -49,6 +49,7 @@ SUBAGENT_KEYS = {
     "capability_band",
     "write_scope",
     "billing_tier",
+    "budget_cost_units",
     "speed_tier",
     "quality_tier",
     "specialties",
@@ -91,8 +92,25 @@ ROUTING_KEYS = {
     "external_first_required",
     "bridge_fallback_subagent",
     "internal_escalation_trigger",
+    "verification_route_task_class",
+    "independent_verification_required",
+    "graph_strategy",
+    "deterministic_first",
+    "budget_policy",
+    "max_budget_units",
+    "max_cli_subagent_calls",
+    "max_verification_passes",
+    "max_fallback_hops",
+    "max_total_runtime_seconds",
 }
-SCORING_KEYS = {"consecutive_failure_limit", "promotion_score", "demotion_score"}
+SCORING_KEYS = {
+    "consecutive_failure_limit",
+    "promotion_score",
+    "demotion_score",
+    "probation_success_runs",
+    "probation_task_runs",
+    "retirement_failure_limit",
+}
 
 
 class OverlayValidationError(ValueError):
@@ -470,7 +488,7 @@ def _validate_subagent(subagent_name: str, subagent_cfg: dict[str, Any], errors:
     }:
         if key in subagent_cfg:
             _validate_string_field(subagent_cfg, key, path, errors)
-    for key in {"max_runtime_seconds", "min_output_bytes"}:
+    for key in {"max_runtime_seconds", "min_output_bytes", "budget_cost_units"}:
         if key in subagent_cfg:
             _validate_int_field(subagent_cfg, key, path, errors, min_value=0)
     for key in {"models_hint", "profiles", "capability_band", "specialties"}:
@@ -501,10 +519,23 @@ def _validate_routing(route_name: str, route_cfg: dict[str, Any], errors: list[s
         "external_first_required",
         "bridge_fallback_subagent",
         "internal_escalation_trigger",
+        "verification_route_task_class",
+        "independent_verification_required",
+        "graph_strategy",
+        "deterministic_first",
+        "budget_policy",
     }:
         if key in route_cfg:
             _validate_string_field(route_cfg, key, path, errors)
-    for key in {"max_runtime_seconds", "min_output_bytes"}:
+    for key in {
+        "max_runtime_seconds",
+        "min_output_bytes",
+        "max_budget_units",
+        "max_cli_subagent_calls",
+        "max_verification_passes",
+        "max_fallback_hops",
+        "max_total_runtime_seconds",
+    }:
         if key in route_cfg:
             _validate_int_field(route_cfg, key, path, errors, min_value=0)
     fanout = _validate_repeated_string_field(route_cfg, "fanout_subagents", path, errors) if "fanout_subagents" in route_cfg else None

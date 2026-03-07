@@ -98,6 +98,11 @@ def save_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
+def load_strategy_memory() -> dict[str, Any]:
+    payload = load_json(STRATEGY_PATH, {})
+    return payload if isinstance(payload, dict) else {}
+
+
 DOMAIN_TAG_ALIASES = {
     "odoo_api": "api_contract",
     "flutter_ui": "frontend_ui",
@@ -190,6 +195,15 @@ def runtime_snapshot(task_id: str | None = None) -> dict[str, Any]:
                 card["by_domain"] = migrate_domain_buckets(card.get("by_domain", {}) or {})
                 for bucket in (card.get("by_domain", {}) or {}).values():
                     migrate_scorecard_bucket(bucket)
+            for subagent_name, payload in (scorecards.get("subagents", {}) or {}).items():
+                if not isinstance(payload, dict):
+                    continue
+                global_card = payload.setdefault("global", score_defaults()["global"].copy())
+                global_card["lifecycle_stage"] = lifecycle_stage_for(
+                    current_subagents.get(subagent_name, {}),
+                    global_card,
+                    scoring_cfg,
+                )
             snapshot["scorecards"] = scorecards.get("subagents", snapshot.get("scorecards", {}))
         snapshot["config_path"] = str(vida_config.CONFIG_PATH) if vida_config.CONFIG_PATH.exists() else ""
         snapshot["protocol_activation"] = {
@@ -228,8 +242,39 @@ def save_leases(payload: dict[str, Any]) -> None:
     save_json(LEASE_PATH, payload)
 
 
+def cleanup_leases(payload: dict[str, Any], *, retain_hours: int = 24) -> dict[str, Any]:
+    leases = payload.setdefault("leases", {})
+    history = payload.setdefault("history", [])
+    now = now_utc_dt()
+    retain_after = now - timedelta(hours=max(1, retain_hours))
+    pruned: dict[str, Any] = {}
+    for key, lease in leases.items():
+        if not isinstance(lease, dict):
+            continue
+        expires_at = parse_utc_timestamp(lease.get("expires_at"))
+        released_at = parse_utc_timestamp(lease.get("released_at"))
+        if lease.get("status") == "active" and expires_at is not None and expires_at <= now:
+            lease["status"] = "expired"
+            lease["expired_at"] = now_utc()
+        status = policy_value(lease.get("status"), "active")
+        keep = True
+        if status in {"released", "expired"}:
+            marker = released_at or expires_at
+            if marker is not None and marker < retain_after:
+                keep = False
+        if keep:
+            pruned[key] = lease
+    payload["leases"] = pruned
+    payload["history"] = [
+        item
+        for item in history[-200:]
+        if isinstance(item, dict)
+    ]
+    return payload
+
+
 def acquire_lease(resource_type: str, resource_id: str, holder: str, ttl_seconds: int = 3600) -> dict[str, Any]:
-    payload = load_leases()
+    payload = cleanup_leases(load_leases())
     leases = payload.setdefault("leases", {})
     history = payload.setdefault("history", [])
     key = f"{resource_type}:{resource_id}"
@@ -294,8 +339,52 @@ def acquire_lease(resource_type: str, resource_id: str, holder: str, ttl_seconds
     return {"status": "acquired", "lease": lease}
 
 
+def renew_lease(resource_type: str, resource_id: str, holder: str, ttl_seconds: int = 3600) -> dict[str, Any]:
+    payload = cleanup_leases(load_leases())
+    leases = payload.setdefault("leases", {})
+    history = payload.setdefault("history", [])
+    key = f"{resource_type}:{resource_id}"
+    current = leases.get(key)
+    if not isinstance(current, dict):
+        return {"status": "noop", "reason": "missing"}
+    if current.get("holder") != holder:
+        current["conflict_count"] = int(current.get("conflict_count", 0) or 0) + 1
+        current["last_conflict_at"] = now_utc()
+        current["last_conflict_holder"] = holder
+        history.append(
+            {
+                "ts": now_utc(),
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+                "holder": holder,
+                "active_holder": current.get("holder"),
+                "event": "renew_conflict",
+            }
+        )
+        payload["history"] = history[-200:]
+        save_leases(payload)
+        return {"status": "blocked", "reason": "holder_mismatch", "lease": current}
+    if policy_value(current.get("status"), "active") != "active":
+        return {"status": "noop", "reason": "not_active", "lease": current}
+    current["renewed_at"] = now_utc()
+    current["expires_at"] = future_utc_iso(minutes=max(1, ttl_seconds // 60))
+    history.append(
+        {
+            "ts": now_utc(),
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "holder": holder,
+            "event": "lease_renewed",
+            "fencing_token": current.get("fencing_token"),
+        }
+    )
+    payload["history"] = history[-200:]
+    save_leases(payload)
+    return {"status": "renewed", "lease": current}
+
+
 def release_lease(resource_type: str, resource_id: str, holder: str) -> dict[str, Any]:
-    payload = load_leases()
+    payload = cleanup_leases(load_leases())
     leases = payload.setdefault("leases", {})
     history = payload.setdefault("history", [])
     key = f"{resource_type}:{resource_id}"
@@ -316,7 +405,7 @@ def release_lease(resource_type: str, resource_id: str, holder: str) -> dict[str
                 "event": "release_conflict",
             }
         )
-        payload["history"] = history[-50:]
+        payload["history"] = history[-200:]
         save_leases(payload)
         return {"status": "blocked", "reason": "holder_mismatch", "lease": current}
     current["status"] = "released"
@@ -331,28 +420,35 @@ def release_lease(resource_type: str, resource_id: str, holder: str) -> dict[str
             "fencing_token": current.get("fencing_token"),
         }
     )
-    payload["history"] = history[-50:]
+    payload["history"] = history[-200:]
     save_leases(payload)
     return {"status": "released", "lease": current}
 
 
 def active_leases() -> dict[str, Any]:
-    payload = load_leases()
-    now = now_utc_dt()
+    payload = cleanup_leases(load_leases())
     leases = payload.setdefault("leases", {})
     history = payload.setdefault("history", [])
     rows: list[dict[str, Any]] = []
+    by_resource_type: dict[str, dict[str, int]] = {}
     for key, lease in leases.items():
         if not isinstance(lease, dict):
             continue
-        expires_at = parse_utc_timestamp(lease.get("expires_at"))
-        if lease.get("status") == "active" and expires_at is not None and expires_at <= now:
-            lease["status"] = "expired"
         rows.append({"key": key, **lease})
+        resource_type = policy_value(lease.get("resource_type"), "unknown")
+        status = policy_value(lease.get("status"), "active")
+        bucket = by_resource_type.setdefault(resource_type, {"active": 0, "released": 0, "expired": 0})
+        bucket[status] = int(bucket.get(status, 0) or 0) + 1
     save_leases(payload)
     rows.sort(key=lambda item: (item.get("status") != "active", str(item.get("key"))))
-    history_rows = [item for item in history if isinstance(item, dict)][-10:]
+    history_rows = [item for item in history if isinstance(item, dict)][-20:]
     lease_conflicts = sum(1 for item in history_rows if str(item.get("event", "")).endswith("conflict"))
+    recent_conflicts_by_resource: dict[str, int] = {}
+    for item in history_rows:
+        if not str(item.get("event", "")).endswith("conflict"):
+            continue
+        resource_key = f"{policy_value(item.get('resource_type'), 'unknown')}:{policy_value(item.get('resource_id'), 'unknown')}"
+        recent_conflicts_by_resource[resource_key] = recent_conflicts_by_resource.get(resource_key, 0) + 1
     return {
         "generated_at": now_utc(),
         "leases": rows,
@@ -362,6 +458,8 @@ def active_leases() -> dict[str, Any]:
             "released": sum(1 for item in rows if item.get("status") == "released"),
             "expired": sum(1 for item in rows if item.get("status") == "expired"),
             "recent_conflicts": lease_conflicts,
+            "by_resource_type": by_resource_type,
+            "recent_conflicts_by_resource": recent_conflicts_by_resource,
         },
     }
 
@@ -484,6 +582,7 @@ def detect_subagents(config: dict[str, Any]) -> dict[str, Any]:
             "capability_band": split_csv(subagent_cfg.get("capability_band")),
             "write_scope": policy_value(subagent_cfg.get("write_scope"), "none"),
             "billing_tier": policy_value(subagent_cfg.get("billing_tier"), "unknown"),
+            "budget_cost_units": policy_int(subagent_cfg.get("budget_cost_units"), 0),
             "speed_tier": policy_value(subagent_cfg.get("speed_tier"), "unknown"),
             "quality_tier": policy_value(subagent_cfg.get("quality_tier"), "unknown"),
             "specialties": split_csv(subagent_cfg.get("specialties")),
@@ -499,6 +598,9 @@ def thresholds(config: dict[str, Any]) -> dict[str, int]:
         "consecutive_failure_limit": int(scoring.get("consecutive_failure_limit", 5)),
         "promotion_score": int(scoring.get("promotion_score", 80)),
         "demotion_score": int(scoring.get("demotion_score", 35)),
+        "probation_success_runs": int(scoring.get("probation_success_runs", 3)),
+        "probation_task_runs": int(scoring.get("probation_task_runs", 1)),
+        "retirement_failure_limit": int(scoring.get("retirement_failure_limit", 12)),
     }
 
 
@@ -557,10 +659,76 @@ def score_defaults() -> dict[str, Any]:
             "recovery_success_count": 0,
             "last_recovery_at": "",
             "last_recovery_status": "",
+            "authored_runs_count": 0,
+            "authored_verified_pass_count": 0,
+            "authored_verified_fail_count": 0,
+            "verifier_runs_count": 0,
+            "verifier_success_count": 0,
+            "verifier_catch_count": 0,
+            "lifecycle_stage": "declared",
+            "retirement_reason": "",
         },
         "by_task_class": {},
         "by_domain": {},
     }
+
+
+def lifecycle_stage_for(
+    subagent_cfg: dict[str, Any],
+    global_card: dict[str, Any],
+    scoring_cfg: dict[str, int],
+) -> str:
+    enabled = bool(subagent_cfg.get("enabled", False))
+    available = bool(subagent_cfg.get("available", False))
+    subagent_state = policy_value(global_card.get("subagent_state"), "active")
+    score_state = policy_value(global_card.get("state"), "normal")
+    success_count = int(global_card.get("success_count", 0) or 0)
+    failure_count = int(global_card.get("failure_count", 0) or 0)
+    last_probe_at = policy_value(global_card.get("last_probe_at"), "")
+    last_recovery_status = policy_value(global_card.get("last_recovery_status"), "")
+    last_recovery_at = policy_value(global_card.get("last_recovery_at"), "")
+    cooldown_until = parse_utc_timestamp(global_card.get("cooldown_until"))
+    probation_success_runs = max(1, int(scoring_cfg.get("probation_success_runs", 3)))
+    retirement_failure_limit = max(1, int(scoring_cfg.get("retirement_failure_limit", 12)))
+
+    if not enabled or subagent_state == "disabled_manual":
+        return "retired"
+    if failure_count >= retirement_failure_limit and success_count <= 0:
+        return "retired"
+    if cooldown_until is not None and cooldown_until > now_utc_dt():
+        return "cooldown"
+    if subagent_state in {"degraded", "quota_exhausted"} or score_state == "demoted":
+        return "degraded"
+    if last_recovery_status == "success" and last_recovery_at:
+        return "recovered"
+    if score_state == "preferred" or success_count >= probation_success_runs:
+        return "promoted"
+    if last_probe_at:
+        return "probation" if success_count > 0 else "probed"
+    if available:
+        return "detected"
+    return "declared"
+
+
+def lane_lifecycle_stage_for(
+    task_card: dict[str, Any],
+    global_stage: str,
+    scoring_cfg: dict[str, int],
+) -> str:
+    if not isinstance(task_card, dict) or not task_card:
+        return global_stage
+    state = policy_value(task_card.get("state"), "normal")
+    success_count = int(task_card.get("success_count", 0) or 0)
+    score = int(task_card.get("score", 50) or 50)
+    probation_task_runs = max(1, int(scoring_cfg.get("probation_task_runs", 1)))
+    promotion_score = int(scoring_cfg.get("promotion_score", 80))
+    if state == "demoted":
+        return "degraded"
+    if state == "preferred" or (score >= promotion_score and success_count >= probation_task_runs):
+        return "promoted"
+    if success_count > 0:
+        return "probation"
+    return global_stage
 
 
 def should_degrade_for_chatter(bucket: dict[str, Any]) -> bool:
@@ -638,6 +806,7 @@ def apply_availability_metrics(bucket: dict[str, Any], result: str, metrics: dic
         bucket["failure_reason"] = ""
         bucket["cooldown_until"] = ""
         bucket["probe_required"] = False
+        bucket["retirement_reason"] = ""
         apply_behavioral_degradation(bucket)
         normalize_availability_bucket(bucket)
         return
@@ -653,6 +822,8 @@ def apply_availability_metrics(bucket: dict[str, Any], result: str, metrics: dic
     if quota_exhausted_at:
         bucket["last_quota_exhausted_at"] = quota_exhausted_at
     bucket["probe_required"] = probe_required
+    if policy_value(bucket.get("subagent_state"), "") == "disabled_manual":
+        bucket["retirement_reason"] = failure_reason or "disabled_manual"
     apply_behavioral_degradation(bucket)
     normalize_availability_bucket(bucket)
 
@@ -665,6 +836,8 @@ def update_subagent_availability(
     recovery_attempted: bool = False,
     recovery_success: bool = False,
 ) -> dict[str, Any]:
+    config = vida_config.load_validated_config()
+    scoring_cfg = thresholds(config)
     snapshot = runtime_snapshot()
     scorecards = load_json(SCORECARD_PATH, {"subagents": {}})
     subagent_cards = scorecards.setdefault("subagents", {})
@@ -679,6 +852,7 @@ def update_subagent_availability(
         global_card["last_recovery_status"] = "success" if recovery_success else "failure"
         if recovery_success:
             global_card["recovery_success_count"] = int(global_card.get("recovery_success_count", 0)) + 1
+    global_card["lifecycle_stage"] = lifecycle_stage_for(snapshot.get("subagents", {}).get(subagent, {}), global_card, scoring_cfg)
     save_json(SCORECARD_PATH, scorecards)
     snapshot["scorecards"] = scorecards["subagents"]
     snapshot["written_at"] = now_utc()
@@ -687,6 +861,8 @@ def update_subagent_availability(
 
 
 def subagent_operator_status() -> dict[str, Any]:
+    config = vida_config.load_validated_config()
+    scoring_cfg = thresholds(config)
     snapshot = runtime_snapshot()
     subagents = snapshot.get("subagents", {})
     scorecards = snapshot.get("scorecards", {})
@@ -706,6 +882,7 @@ def subagent_operator_status() -> dict[str, Any]:
         failure_count = int(global_card.get("failure_count", 0))
         chatter_only_count = int(global_card.get("chatter_only_count", 0))
         useful_progress_rate = float(global_card.get("useful_progress_rate", 0) or 0)
+        lifecycle_stage = lifecycle_stage_for(subagent_cfg, global_card, scoring_cfg)
         recovery_attempt_count = int(global_card.get("recovery_attempt_count", 0) or 0)
         recovery_success_count = int(global_card.get("recovery_success_count", 0) or 0)
         startup_timeout_count = int(global_card.get("startup_timeout_count", 0) or 0)
@@ -731,6 +908,7 @@ def subagent_operator_status() -> dict[str, Any]:
         row = {
             "subagent": subagent_name,
             "available": bool(subagent_cfg.get("available", False)),
+            "lifecycle_stage": lifecycle_stage,
             "subagent_state": subagent_state,
             "failure_reason": failure_reason,
             "cooldown_until": cooldown_until,
@@ -745,14 +923,35 @@ def subagent_operator_status() -> dict[str, Any]:
             "recovery_success_count": recovery_success_count,
             "last_recovery_status": policy_value(global_card.get("last_recovery_status"), ""),
             "last_recovery_at": policy_value(global_card.get("last_recovery_at"), ""),
+            "authored_runs_count": int(global_card.get("authored_runs_count", 0) or 0),
+            "authored_verified_pass_count": int(global_card.get("authored_verified_pass_count", 0) or 0),
+            "authored_verified_fail_count": int(global_card.get("authored_verified_fail_count", 0) or 0),
+            "verifier_runs_count": int(global_card.get("verifier_runs_count", 0) or 0),
+            "verifier_success_count": int(global_card.get("verifier_success_count", 0) or 0),
+            "verifier_catch_count": int(global_card.get("verifier_catch_count", 0) or 0),
             "startup_timeout_count": startup_timeout_count,
             "no_output_timeout_count": no_output_timeout_count,
             "stalled_after_progress_count": stalled_after_progress_count,
             "quality_tier": policy_value(subagent_cfg.get("quality_tier"), "unknown"),
             "billing_tier": policy_value(subagent_cfg.get("billing_tier"), "unknown"),
+            "budget_cost_units": policy_int(subagent_cfg.get("budget_cost_units"), 0),
             "preferred_task_classes": preferred_task_classes,
             "eligible_task_classes": eligible_task_classes,
+            "lane_stages": {
+                task_class: lane_lifecycle_stage_for(bucket, lifecycle_stage, scoring_cfg)
+                for task_class, bucket in sorted(task_class_cards.items())
+                if isinstance(bucket, dict)
+            },
             "recommended_action": (
+                "retired_manual"
+                if lifecycle_stage == "retired"
+                else
+                "investigate"
+                if lifecycle_stage == "degraded"
+                else
+                "build_lane_history"
+                if lifecycle_stage == "probation"
+                else
                 "wait_for_cooldown"
                 if cooldown_until
                 else "repair_auth_then_probe"
@@ -799,23 +998,128 @@ def subagent_operator_status() -> dict[str, Any]:
         for row in rows
         if row["startup_timeout_count"] or row["no_output_timeout_count"] or row["stalled_after_progress_count"]
     ]
+    routing_cfg = vida_config.dotted_get(config, "agent_system.routing", {}) or {}
+    review_targets: dict[str, Any] = {}
+    for task_class in sorted(routing_cfg.keys()):
+        route = route_subagent(task_class)
+        review_targets[task_class] = {
+            "risk_class": route.get("risk_class", "R0"),
+            "target_review_state": route.get("target_review_state", target_review_state_for("R0")),
+            "target_manifest_review_state": route.get(
+                "target_manifest_review_state",
+                target_manifest_review_state_for("R0"),
+            ),
+            "verification_gate": route.get("verification_gate", "subagent_return_contract"),
+            "write_scope": route.get("write_scope", "none"),
+            "independent_verification_required": route.get("independent_verification_required", "no"),
+            "verification_route_task_class": route.get("verification_route_task_class", ""),
+            "verification_plan": route.get("verification_plan", {}),
+            "route_budget": route.get("route_budget", {}),
+            "route_graph": route.get("route_graph", {}),
+        }
     return {
         "generated_at": now_utc(),
         "subagents": rows,
         "recent_recoveries": recent_recoveries[:5],
         "unstable_by_timeout_class": unstable_by_timeout_class,
+        "review_targets": review_targets,
         "leases": lease_status.get("summary", {}),
         "summary": {
-            "healthy": sum(1 for row in rows if row["subagent_state"] == "active" and not row["probe_required"] and not row["cooldown_until"]),
+            "probation": sum(1 for row in rows if row["lifecycle_stage"] == "probation"),
+            "promoted": sum(1 for row in rows if row["lifecycle_stage"] == "promoted"),
+            "retired": sum(1 for row in rows if row["lifecycle_stage"] == "retired"),
+            "healthy": sum(
+                1
+                for row in rows
+                if row["subagent_state"] == "active"
+                and row["lifecycle_stage"] not in {"degraded", "retired"}
+                and not row["probe_required"]
+                and not row["cooldown_until"]
+            ),
             "cooldown": sum(1 for row in rows if row["cooldown_until"]),
             "probe_required": sum(1 for row in rows if row["probe_required"]),
-            "degraded": sum(1 for row in rows if row["subagent_state"] == "degraded"),
+            "degraded": sum(
+                1
+                for row in rows
+                if row["subagent_state"] == "degraded" or row["lifecycle_stage"] == "degraded"
+            ),
             "quota_exhausted": sum(1 for row in rows if row["subagent_state"] == "quota_exhausted"),
             "preferred": sum(1 for row in rows if row["state"] == "preferred"),
             "demoted": sum(1 for row in rows if row["state"] == "demoted"),
             "recent_lease_conflicts": int(lease_status.get("summary", {}).get("recent_conflicts", 0) or 0),
         },
     }
+
+
+def subagent_diagnosis(task_class: str | None = None) -> dict[str, Any]:
+    status = subagent_operator_status()
+    rows = status.get("subagents", [])
+    alerts: list[dict[str, Any]] = []
+    recommended_actions: list[dict[str, Any]] = []
+    for row in rows:
+        subagent = policy_value(row.get("subagent"), "")
+        lifecycle_stage = policy_value(row.get("lifecycle_stage"), "")
+        recommended_action = policy_value(row.get("recommended_action"), "")
+        if lifecycle_stage in {"degraded", "cooldown", "retired"} or row.get("probe_required"):
+            alerts.append(
+                {
+                    "subagent": subagent,
+                    "severity": "warn" if lifecycle_stage != "retired" else "info",
+                    "kind": "availability_or_lifecycle",
+                    "lifecycle_stage": lifecycle_stage,
+                    "failure_reason": policy_value(row.get("failure_reason"), ""),
+                    "recommended_action": recommended_action,
+                }
+            )
+        lane_stages = row.get("lane_stages", {})
+        if isinstance(lane_stages, dict):
+            risky_lanes = sorted(
+                lane
+                for lane, stage in lane_stages.items()
+                if stage in {"probation", "degraded"}
+            )
+            if risky_lanes:
+                alerts.append(
+                    {
+                        "subagent": subagent,
+                        "severity": "info",
+                        "kind": "lane_readiness",
+                        "risky_lanes": risky_lanes,
+                        "recommended_action": recommended_action or "build_lane_history",
+                    }
+                )
+        if recommended_action not in {"", "healthy", "none"}:
+            recommended_actions.append(
+                {
+                    "subagent": subagent,
+                    "recommended_action": recommended_action,
+                    "lifecycle_stage": lifecycle_stage,
+                }
+            )
+
+    unstable = sorted(
+        status.get("unstable_by_timeout_class", []),
+        key=lambda item: -(
+            int(item.get("startup_timeout_count", 0) or 0)
+            + int(item.get("no_output_timeout_count", 0) or 0)
+            + int(item.get("stalled_after_progress_count", 0) or 0)
+        ),
+    )
+    lease_summary = status.get("leases", {}) or {}
+    diagnosis = {
+        "generated_at": now_utc(),
+        "summary": status.get("summary", {}),
+        "alerts": alerts,
+        "recommended_actions": recommended_actions[:8],
+        "unstable_by_timeout_class": unstable[:5],
+        "recent_recoveries": status.get("recent_recoveries", []),
+        "leases": lease_summary,
+        "review_targets": status.get("review_targets", {}),
+    }
+    if task_class:
+        diagnosis["task_class"] = task_class
+        diagnosis["route"] = route_subagent(task_class)
+    return diagnosis
 
 
 def subagent_probe_command(subagent: str, subagent_cfg: dict[str, Any]) -> tuple[list[str], int, str]:
@@ -1021,8 +1325,13 @@ def load_scorecards(subagents: dict[str, Any]) -> dict[str, Any]:
     if "subagents" not in payload and isinstance(payload.get("providers"), dict):
         payload["subagents"] = payload.pop("providers")
     subagent_payload = payload.setdefault("subagents", {})
+    scoring_cfg = thresholds(vida_config.load_validated_config())
     for name in subagents:
         subagent_payload.setdefault(name, score_defaults())
+        if isinstance(subagent_payload.get(name), dict):
+            global_card = subagent_payload[name].setdefault("global", score_defaults()["global"].copy())
+            global_card.setdefault("lifecycle_stage", "declared")
+            global_card.setdefault("retirement_reason", "")
     for card in subagent_payload.values():
         if not isinstance(card, dict):
             continue
@@ -1032,6 +1341,15 @@ def load_scorecards(subagents: dict[str, Any]) -> dict[str, Any]:
         card["by_domain"] = migrate_domain_buckets(card.get("by_domain", {}) or {})
         for bucket in (card.get("by_domain", {}) or {}).values():
             migrate_scorecard_bucket(bucket)
+    for subagent_name, card in subagent_payload.items():
+        if not isinstance(card, dict):
+            continue
+        global_card = card.setdefault("global", score_defaults()["global"].copy())
+        global_stage = lifecycle_stage_for(subagents.get(subagent_name, {}), global_card, scoring_cfg)
+        global_card["lifecycle_stage"] = global_stage
+        for task_card in (card.get("by_task_class", {}) or {}).values():
+            if isinstance(task_card, dict):
+                task_card["lifecycle_stage"] = lane_lifecycle_stage_for(task_card, global_stage, scoring_cfg)
     sanitize_runtime_payload(payload)
     return payload
 
@@ -1050,6 +1368,11 @@ def init_snapshot(task_id: str | None = None) -> dict[str, Any]:
     scoring_cfg = thresholds(config)
     mode, reasons = effective_mode(config, subagent_state)
     scorecards = load_scorecards(subagent_state)
+    for subagent_name, payload in scorecards.get("subagents", {}).items():
+        if not isinstance(payload, dict):
+            continue
+        global_card = payload.setdefault("global", score_defaults()["global"].copy())
+        global_card["lifecycle_stage"] = lifecycle_stage_for(subagent_state.get(subagent_name, {}), global_card, scoring_cfg)
     snapshot = {
         "written_at": now_utc(),
         "task_id": task_id,
@@ -1114,6 +1437,48 @@ def selected_profile_for_subagent(subagent: str, subagent_cfg: dict[str, Any], r
     if isinstance(default_profile, str) and default_profile:
         return default_profile, "subagent_default"
     return None, "none"
+
+
+def verification_task_class_for(task_class: str, write_scope: str) -> str:
+    normalized_task = policy_value(task_class, "default")
+    normalized_scope = policy_value(write_scope, "none")
+    if normalized_task in {"review", "review_ensemble", "verification", "verification_ensemble"}:
+        return ""
+    if normalized_scope != "none":
+        return "review_ensemble"
+    mapping = {
+        "research": "verification_ensemble",
+        "research_fast": "verification_ensemble",
+        "ui_research": "verification_ensemble",
+        "research_deep": "verification_ensemble",
+        "analysis": "verification_ensemble",
+        "meta_analysis": "verification_ensemble",
+        "architecture": "review_ensemble",
+        "small_patch": "review_ensemble",
+        "small_patch_write": "review_ensemble",
+        "ui_patch": "review_ensemble",
+        "implementation": "review_ensemble",
+    }
+    return mapping.get(normalized_task, "")
+
+
+def independent_verification_required_for(task_class: str, write_scope: str, dispatch_required: str) -> bool:
+    normalized_task = policy_value(task_class, "default")
+    normalized_scope = policy_value(write_scope, "none")
+    normalized_dispatch = policy_value(dispatch_required, "")
+    if normalized_task in {"review", "review_ensemble", "verification", "verification_ensemble"}:
+        return False
+    if normalized_scope != "none":
+        return True
+    return normalized_task in {
+        "research",
+        "research_fast",
+        "ui_research",
+        "research_deep",
+        "analysis",
+        "meta_analysis",
+        "architecture",
+    } or "fanout" in normalized_dispatch or "external_first" in normalized_dispatch
 
 
 def adaptive_runtime_seconds(
@@ -1235,6 +1600,32 @@ def task_class_fit_bonus(task_class: str, subagent_cfg: dict[str, Any]) -> tuple
     return bonus, reasons
 
 
+def strategy_memory_adjustment(task_class: str, subagent: str, strategy: dict[str, Any]) -> tuple[int, list[str]]:
+    task_entry = (strategy.get("task_classes", {}) or {}).get(task_class, {})
+    memory_hints = task_entry.get("memory_hints", {}) if isinstance(task_entry, dict) else {}
+    if not isinstance(memory_hints, dict):
+        return 0, []
+    bonus = 0
+    reasons: list[str] = []
+    preferred = set(split_csv(memory_hints.get("preferred_subagents")))
+    avoid = set(split_csv(memory_hints.get("avoid_subagents")))
+    retry_useful = set(split_csv(memory_hints.get("retry_useful_subagents")))
+    failure_prone = set(split_csv(memory_hints.get("failure_prone_subagents")))
+    if subagent in preferred:
+        bonus += 8
+        reasons.append("memory:preferred")
+    if subagent in retry_useful:
+        bonus += 4
+        reasons.append("memory:retry_useful")
+    if subagent in avoid:
+        bonus -= 8
+        reasons.append("memory:avoid")
+    if subagent in failure_prone:
+        bonus -= 6
+        reasons.append("memory:failure_prone")
+    return bonus, reasons
+
+
 def apply_bridge_fallback_priority(
     candidates: list[dict[str, Any]],
     bridge_fallback_subagent: str,
@@ -1256,17 +1647,227 @@ def apply_bridge_fallback_priority(
     return [*selected, bridge_item, *external_items, *internal_items]
 
 
-def route_subagent(task_class: str) -> dict[str, Any]:
-    snapshot = runtime_snapshot()
-    if snapshot.get("agent_system", {}).get("effective_mode") == "disabled":
-        return {
-            "task_class": task_class,
-            "selected_subagent": None,
-            "reason": "subagent system disabled",
-            "effective_score": 0,
-        }
+def subagent_budget_cost_units(payload: dict[str, Any]) -> int:
+    explicit = payload.get("budget_cost_units")
+    if isinstance(explicit, int) and explicit >= 0:
+        return explicit
+    billing_tier = policy_value(payload.get("billing_tier"), "")
+    orchestration_tier = policy_value(payload.get("orchestration_tier"), "")
+    if billing_tier == "free" or orchestration_tier == "external_free":
+        return 0
+    if orchestration_tier == "bridge" or billing_tier == "low":
+        return 3
+    if orchestration_tier == "senior" or billing_tier == "internal":
+        return 8
+    return 2
 
-    config = vida_config.load_validated_config()
+
+def route_budget_limits(task_route_cfg: dict[str, Any], write_scope: str, dispatch_required: str) -> dict[str, int | str]:
+    max_budget_units = max(0, policy_int(task_route_cfg.get("max_budget_units"), 0))
+    if max_budget_units <= 0:
+        max_budget_units = 2 if write_scope == "none" else 6
+        if "fanout" in dispatch_required:
+            max_budget_units += 2
+    max_cli_subagent_calls = max(1, policy_int(task_route_cfg.get("max_cli_subagent_calls"), 0))
+    if max_cli_subagent_calls <= 1:
+        max_cli_subagent_calls = 5 if "fanout" in dispatch_required else 3
+    max_verification_passes = max(0, policy_int(task_route_cfg.get("max_verification_passes"), 1))
+    max_fallback_hops = max(0, policy_int(task_route_cfg.get("max_fallback_hops"), 1))
+    max_total_runtime_seconds = max(30, policy_int(task_route_cfg.get("max_total_runtime_seconds"), 0))
+    if max_total_runtime_seconds <= 30:
+        max_total_runtime_seconds = max(180, policy_int(task_route_cfg.get("max_runtime_seconds"), 180))
+        if "fanout" in dispatch_required:
+            max_total_runtime_seconds *= 2
+    return {
+        "budget_policy": policy_value(task_route_cfg.get("budget_policy"), "balanced"),
+        "max_budget_units": max_budget_units,
+        "max_cli_subagent_calls": max_cli_subagent_calls,
+        "max_verification_passes": max_verification_passes,
+        "max_fallback_hops": max_fallback_hops,
+        "max_total_runtime_seconds": max_total_runtime_seconds,
+    }
+
+
+def budget_efficiency_adjustment(
+    payload: dict[str, Any],
+    task_card: dict[str, Any],
+    global_card: dict[str, Any],
+    budget_policy: str,
+    max_budget_units: int,
+) -> tuple[int, list[str]]:
+    reasons: list[str] = []
+    cost_units = subagent_budget_cost_units(payload)
+    useful_progress_rate = float(task_card.get("useful_progress_rate", global_card.get("useful_progress_rate", 0)) or 0)
+    avg_ttfu_ms = policy_int(
+        task_card.get("avg_time_to_first_useful_output_ms"),
+        policy_int(global_card.get("avg_time_to_first_useful_output_ms"), 0),
+    )
+    adjustment = 0
+    if budget_policy in {"balanced", "strict"}:
+        adjustment -= min(18, cost_units * (4 if budget_policy == "strict" else 3))
+        if cost_units == 0:
+            adjustment += 6
+            reasons.append("budget:free_lane")
+    if max_budget_units > 0 and cost_units > max_budget_units:
+        adjustment -= min(25, (cost_units - max_budget_units) * 6)
+        reasons.append("budget:over_cap")
+    elif max_budget_units > 0 and cost_units >= max(1, max_budget_units // 2):
+        adjustment -= 4
+        reasons.append("budget:near_cap")
+    if useful_progress_rate >= 0.7 and cost_units <= max(1, max_budget_units):
+        adjustment += 6
+        reasons.append("budget:efficient_progress")
+    elif useful_progress_rate >= 0.4 and cost_units == 0:
+        adjustment += 3
+        reasons.append("budget:free_progress")
+    if avg_ttfu_ms > 0 and avg_ttfu_ms <= 120000 and cost_units <= max(1, max_budget_units):
+        adjustment += 3
+        reasons.append("budget:fast_first_signal")
+    elif avg_ttfu_ms > 240000 and cost_units > 0:
+        adjustment -= 4
+        reasons.append("budget:slow_paid_signal")
+    return adjustment, reasons
+
+
+def build_route_graph(
+    *,
+    task_class: str,
+    dispatch_required: str,
+    deterministic_first: str,
+    graph_strategy: str,
+    selected_subagent: str,
+    fanout_subagents: list[str],
+    verification_plan: dict[str, Any],
+    bridge_fallback_subagent: str,
+    internal_escalation_trigger: str,
+    budget: dict[str, Any],
+) -> dict[str, Any]:
+    primary_mode = "fanout" if fanout_subagents else "single"
+    nodes: list[dict[str, Any]] = [
+        {"id": "entry", "type": "entry", "label": task_class},
+        {
+            "id": "primary",
+            "type": "dispatch",
+            "mode": primary_mode,
+            "selected_subagent": selected_subagent,
+            "fanout_subagents": fanout_subagents,
+        },
+    ]
+    edges: list[dict[str, Any]] = [
+        {"from": "entry", "to": "primary", "condition": "route_selected"},
+    ]
+    path = ["entry", "primary"]
+    if bridge_fallback_subagent:
+        nodes.append(
+            {
+                "id": "bridge_fallback",
+                "type": "fallback",
+                "selected_subagent": bridge_fallback_subagent,
+                "condition": "primary_route_insufficient",
+            }
+        )
+        edges.append(
+            {
+                "from": "primary",
+                "to": "bridge_fallback",
+                "condition": "subagent_exhausted_or_quality_gap",
+            }
+        )
+    if internal_escalation_trigger:
+        nodes.append(
+            {
+                "id": "internal_escalation",
+                "type": "escalation",
+                "selected_subagent": "internal_subagents",
+                "condition": internal_escalation_trigger,
+            }
+        )
+        edges.append(
+            {
+                "from": "bridge_fallback" if bridge_fallback_subagent else "primary",
+                "to": "internal_escalation",
+                "condition": internal_escalation_trigger,
+            }
+        )
+    if verification_plan.get("required") == "yes":
+        nodes.append(
+            {
+                "id": "verification",
+                "type": "verification",
+                "route_task_class": verification_plan.get("route_task_class"),
+                "selected_subagent": verification_plan.get("selected_subagent"),
+                "independent": bool(verification_plan.get("independent", False)),
+            }
+        )
+        edges.append(
+            {
+                "from": "primary",
+                "to": "verification",
+                "condition": "primary_result_ready",
+            }
+        )
+        path.append("verification")
+    nodes.append(
+        {
+            "id": "synthesis",
+            "type": "synthesis",
+            "owner": "orchestrator",
+            "budget_policy": budget.get("budget_policy"),
+        }
+    )
+    edges.append(
+        {
+            "from": "verification" if verification_plan.get("required") == "yes" else "primary",
+            "to": "synthesis",
+            "condition": "verification_gate_passed_or_not_required",
+        }
+    )
+    path.append("synthesis")
+    return {
+        "graph_strategy": graph_strategy,
+        "deterministic_first": deterministic_first,
+        "primary_mode": primary_mode,
+        "nodes": nodes,
+        "edges": edges,
+        "planned_path": path,
+    }
+
+
+def build_route_budget(
+    *,
+    budget_limits: dict[str, Any],
+    selected: dict[str, Any],
+    fanout_subagents: list[str],
+    verification_plan: dict[str, Any],
+    bridge_fallback_subagent: str,
+) -> dict[str, Any]:
+    primary_calls = len(fanout_subagents) if fanout_subagents else 1
+    verification_calls = 1 if verification_plan.get("required") == "yes" and verification_plan.get("selected_subagent") else 0
+    fallback_hops = 1 if bridge_fallback_subagent else 0
+    selected_cost_units = int(selected.get("budget_cost_units", 0))
+    estimated_units = selected_cost_units
+    if fanout_subagents:
+        estimated_units = 0
+    if verification_calls and verification_plan.get("selected_subagent") == bridge_fallback_subagent:
+        estimated_units += 3
+    return {
+        **budget_limits,
+        "estimated_primary_calls": primary_calls,
+        "estimated_verification_calls": verification_calls,
+        "estimated_fallback_hops": fallback_hops,
+        "estimated_selected_cost_units": selected_cost_units,
+        "estimated_route_cost_units": estimated_units,
+    }
+
+
+def route_candidate_context(
+    task_class: str,
+    snapshot: dict[str, Any],
+    config: dict[str, Any],
+    strategy: dict[str, Any],
+    *,
+    excluded_subagents: set[str] | None = None,
+) -> dict[str, Any]:
     task_route_cfg = route_config_for(config, task_class)
     subagent_order = split_csv(task_route_cfg.get("subagents"))
     if not subagent_order:
@@ -1288,10 +1889,24 @@ def route_subagent(task_class: str) -> dict[str, Any]:
     external_first_required = policy_value(task_route_cfg.get("external_first_required"), "no")
     bridge_fallback_subagent = policy_value(task_route_cfg.get("bridge_fallback_subagent"), "")
     internal_escalation_trigger = policy_value(task_route_cfg.get("internal_escalation_trigger"), "")
-
+    graph_strategy = policy_value(task_route_cfg.get("graph_strategy"), "deterministic_then_escalate")
+    deterministic_first = policy_value(task_route_cfg.get("deterministic_first"), "yes" if external_first_required == "yes" else "no")
+    budget_limits = route_budget_limits(task_route_cfg, write_scope, dispatch_required)
+    verification_route_task_class = policy_value(
+        task_route_cfg.get("verification_route_task_class"),
+        verification_task_class_for(task_class, write_scope),
+    )
+    independent_verification_required = policy_value(
+        task_route_cfg.get("independent_verification_required"),
+        "yes" if independent_verification_required_for(task_class, write_scope, dispatch_required) else "no",
+    )
+    excluded = excluded_subagents or set()
     candidates: list[dict[str, Any]] = []
     suppressed_subagents: list[dict[str, Any]] = []
     for idx, subagent in enumerate(subagent_order):
+        if subagent in excluded:
+            suppressed_subagents.append({"subagent": subagent, "reason": "excluded_for_independent_verification"})
+            continue
         payload = subagents.get(subagent, {})
         if not payload.get("enabled"):
             suppressed_subagents.append({"subagent": subagent, "reason": "disabled"})
@@ -1319,9 +1934,17 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         task_card = card.get("by_task_class", {}).get(task_class, {})
         learned_score = int(task_card.get("score", card.get("global", {}).get("score", 50)))
         global_score = int(global_card.get("score", 50))
+        lifecycle_stage = lifecycle_stage_for(payload, global_card, scoring_cfg)
+        lane_stage = lane_lifecycle_stage_for(task_card, lifecycle_stage, scoring_cfg)
         task_state = policy_value(task_card.get("state"), "")
         global_state = policy_value(global_card.get("state"), "normal")
         recovery_adjustment, recovery_reasons, recovered_recently = recovery_routing_adjustment(global_card, task_card)
+        if lifecycle_stage == "retired":
+            suppressed_subagents.append({"subagent": subagent, "reason": "retired"})
+            continue
+        if lane_stage == "probation" and risk_class != "R0":
+            suppressed_subagents.append({"subagent": subagent, "reason": "probation_lane_restricted"})
+            continue
         if task_state == "demoted" and not recovered_recently:
             suppressed_subagents.append({"subagent": subagent, "reason": "task_class_demoted"})
             continue
@@ -1333,23 +1956,23 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         ):
             suppressed_subagents.append({"subagent": subagent, "reason": "globally_demoted"})
             continue
-        useful_progress_rate = float(
-            task_card.get("useful_progress_rate", global_card.get("useful_progress_rate", 0)) or 0
-        )
-        chatter_only_count = int(
-            task_card.get("chatter_only_count", global_card.get("chatter_only_count", 0)) or 0
-        )
+        useful_progress_rate = float(task_card.get("useful_progress_rate", global_card.get("useful_progress_rate", 0)) or 0)
+        chatter_only_count = int(task_card.get("chatter_only_count", global_card.get("chatter_only_count", 0)) or 0)
         timeout_after_progress_count = int(
             task_card.get("timeout_after_progress_count", global_card.get("timeout_after_progress_count", 0)) or 0
         )
-        startup_timeout_count = int(
-            task_card.get("startup_timeout_count", global_card.get("startup_timeout_count", 0)) or 0
-        )
-        no_output_timeout_count = int(
-            task_card.get("no_output_timeout_count", global_card.get("no_output_timeout_count", 0)) or 0
-        )
+        startup_timeout_count = int(task_card.get("startup_timeout_count", global_card.get("startup_timeout_count", 0)) or 0)
+        no_output_timeout_count = int(task_card.get("no_output_timeout_count", global_card.get("no_output_timeout_count", 0)) or 0)
         stalled_after_progress_count = int(
             task_card.get("stalled_after_progress_count", global_card.get("stalled_after_progress_count", 0)) or 0
+        )
+        budget_cost_units = subagent_budget_cost_units(payload)
+        budget_adjustment, budget_reasons = budget_efficiency_adjustment(
+            payload,
+            task_card,
+            global_card,
+            str(budget_limits.get("budget_policy", "balanced")),
+            int(budget_limits.get("max_budget_units", 0) or 0),
         )
         state = task_state or global_state
         subagent_state = policy_value(global_card.get("subagent_state"), "active")
@@ -1365,12 +1988,15 @@ def route_subagent(task_class: str) -> dict[str, Any]:
             (startup_timeout_count * 4) + (no_output_timeout_count * 5) + (stalled_after_progress_count * 6),
         )
         fit_bonus, fit_reasons = task_class_fit_bonus(task_class, payload)
+        memory_adjustment, memory_reasons = strategy_memory_adjustment(task_class, subagent, strategy)
         effective_score = (
             learned_score
             + priority_bonus
             + progress_bonus
             + fit_bonus
+            + memory_adjustment
             + recovery_adjustment
+            + budget_adjustment
             - chatter_penalty
             - timeout_penalty
             - timeout_instability_penalty
@@ -1392,10 +2018,15 @@ def route_subagent(task_class: str) -> dict[str, Any]:
                 "effective_score": effective_score,
                 "subagent": subagent,
                 "state": state,
+                "lifecycle_stage": lifecycle_stage,
+                "lane_stage": lane_stage,
                 "task_fit_score": learned_score,
                 "global_score": global_score,
                 "task_class_fit_bonus": fit_bonus,
-                "task_class_fit_reasons": [*fit_reasons, *recovery_reasons],
+                "task_class_fit_reasons": [*fit_reasons, *memory_reasons, *recovery_reasons, *budget_reasons],
+                "memory_adjustment": memory_adjustment,
+                "budget_adjustment": budget_adjustment,
+                "budget_cost_units": budget_cost_units,
                 "success_count": int(task_card.get("success_count", global_card.get("success_count", 0)) or 0),
                 "selected_model": selected_model,
                 "selected_model_source": model_source,
@@ -1420,8 +2051,151 @@ def route_subagent(task_class: str) -> dict[str, Any]:
                 "timeout_instability_penalty": timeout_instability_penalty,
                 "recovery_adjustment": recovery_adjustment,
                 "recovered_recently": recovered_recently,
+                "memory_reasons": memory_reasons,
             }
         )
+    return {
+        "task_class": task_class,
+        "task_route_cfg": task_route_cfg,
+        "candidates": candidates,
+        "suppressed_subagents": suppressed_subagents,
+        "write_scope": write_scope,
+        "verification_gate": verification_gate,
+        "risk_class": risk_class,
+        "max_runtime_seconds": max_runtime_seconds,
+        "min_output_bytes": min_output_bytes,
+        "merge_policy": merge_policy,
+        "fanout_order": fanout_order,
+        "dispatch_required": dispatch_required,
+        "external_first_required": external_first_required,
+        "bridge_fallback_subagent": bridge_fallback_subagent,
+        "internal_escalation_trigger": internal_escalation_trigger,
+        "graph_strategy": graph_strategy,
+        "deterministic_first": deterministic_first,
+        "max_parallel_agents": max_parallel_agents,
+        "state_owner": state_owner,
+        "budget_limits": budget_limits,
+        "verification_route_task_class": verification_route_task_class,
+        "independent_verification_required": independent_verification_required,
+    }
+
+
+def build_independent_verification_plan(
+    task_class: str,
+    snapshot: dict[str, Any],
+    config: dict[str, Any],
+    strategy: dict[str, Any],
+    excluded_subagents: set[str],
+    verification_task_class: str | None = None,
+    required: str = "no",
+) -> dict[str, Any]:
+    verification_task_class = verification_task_class or verification_task_class_for(task_class, "none")
+    if not verification_task_class:
+        return {
+            "required": required,
+            "route_task_class": "",
+            "selected_subagent": None,
+            "fallback_subagents": [],
+            "independent": False,
+            "reason": "no_verification_route",
+        }
+    verification_ctx = route_candidate_context(
+        verification_task_class,
+        snapshot,
+        config,
+        strategy,
+        excluded_subagents=excluded_subagents,
+    )
+    verification_candidates = verification_ctx["candidates"]
+    used_exclusion_fallback = False
+    if not verification_candidates:
+        verification_ctx = route_candidate_context(
+            verification_task_class,
+            snapshot,
+            config,
+            strategy,
+            excluded_subagents=set(),
+        )
+        verification_candidates = verification_ctx["candidates"]
+        used_exclusion_fallback = True
+    if not verification_candidates:
+        return {
+            "required": required,
+            "route_task_class": verification_task_class,
+            "selected_subagent": None,
+            "fallback_subagents": [],
+            "independent": False,
+            "reason": "no_eligible_verifier",
+            "target_review_state": target_review_state_for(verification_ctx["risk_class"]),
+            "target_manifest_review_state": target_manifest_review_state_for(verification_ctx["risk_class"]),
+            "verification_gate": verification_ctx["verification_gate"],
+        }
+    verification_candidates.sort(key=lambda item: int(item["effective_score"]), reverse=True)
+    verification_candidates = apply_bridge_fallback_priority(
+        verification_candidates,
+        verification_ctx["bridge_fallback_subagent"],
+    )
+    selected = verification_candidates[0]
+    return {
+        "required": required,
+        "route_task_class": verification_task_class,
+        "selected_subagent": selected["subagent"],
+        "selected_model": selected["selected_model"],
+        "selected_profile": selected["selected_profile"],
+        "selected_model_source": selected["selected_model_source"],
+        "selected_profile_source": selected["selected_profile_source"],
+        "effective_score": selected["effective_score"],
+        "target_review_state": target_review_state_for(verification_ctx["risk_class"]),
+        "target_manifest_review_state": target_manifest_review_state_for(verification_ctx["risk_class"]),
+        "verification_gate": verification_ctx["verification_gate"],
+        "independent": not used_exclusion_fallback and selected["subagent"] not in excluded_subagents,
+        "reason": "independent_verifier_selected" if not used_exclusion_fallback else "same_lane_verifier_fallback",
+        "fallback_subagents": [
+            {
+                "subagent": item["subagent"],
+                "effective_score": item["effective_score"],
+                "selected_model": item["selected_model"],
+                "selected_profile": item["selected_profile"],
+            }
+            for item in verification_candidates[1:]
+        ],
+    }
+
+
+def route_subagent(task_class: str) -> dict[str, Any]:
+    snapshot = runtime_snapshot()
+    if snapshot.get("agent_system", {}).get("effective_mode") == "disabled":
+        return {
+            "task_class": task_class,
+            "selected_subagent": None,
+            "reason": "subagent system disabled",
+            "effective_score": 0,
+        }
+
+    config = vida_config.load_validated_config()
+    strategy = load_strategy_memory()
+    context = route_candidate_context(task_class, snapshot, config, strategy)
+    task_route_cfg = context["task_route_cfg"]
+    candidates = context["candidates"]
+    suppressed_subagents = context["suppressed_subagents"]
+    write_scope = context["write_scope"]
+    verification_gate = context["verification_gate"]
+    risk_class = context["risk_class"]
+    max_runtime_seconds = context["max_runtime_seconds"]
+    min_output_bytes = context["min_output_bytes"]
+    merge_policy = context["merge_policy"]
+    fanout_order = context["fanout_order"]
+    dispatch_required = context["dispatch_required"]
+    external_first_required = context["external_first_required"]
+    bridge_fallback_subagent = context["bridge_fallback_subagent"]
+    internal_escalation_trigger = context["internal_escalation_trigger"]
+    graph_strategy = context["graph_strategy"]
+    deterministic_first = context["deterministic_first"]
+    max_parallel_agents = context["max_parallel_agents"]
+    state_owner = context["state_owner"]
+    budget_limits = context["budget_limits"]
+    verification_route_task_class = context["verification_route_task_class"]
+    independent_verification_required = context["independent_verification_required"]
 
     if not candidates:
         return {
@@ -1448,6 +2222,27 @@ def route_subagent(task_class: str) -> dict[str, Any]:
             "external_first_required": external_first_required,
             "bridge_fallback_subagent": bridge_fallback_subagent,
             "internal_escalation_trigger": internal_escalation_trigger,
+            "graph_strategy": graph_strategy,
+            "deterministic_first": deterministic_first,
+            "route_budget": budget_limits,
+            "route_graph": {
+                "graph_strategy": graph_strategy,
+                "deterministic_first": deterministic_first,
+                "primary_mode": "none",
+                "nodes": [],
+                "edges": [],
+                "planned_path": [],
+            },
+            "verification_route_task_class": verification_route_task_class,
+            "independent_verification_required": independent_verification_required,
+            "verification_plan": {
+                "required": independent_verification_required,
+                "route_task_class": verification_route_task_class,
+                "selected_subagent": None,
+                "fallback_subagents": [],
+                "independent": False,
+                "reason": "no_primary_route_available",
+            },
             "max_parallel_agents": max_parallel_agents,
             "state_owner": state_owner,
             "suppressed_subagents": suppressed_subagents,
@@ -1476,15 +2271,48 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         fanout_subagents = proven_fanout
     else:
         fanout_subagents = requested_fanout
+    verification_plan = build_independent_verification_plan(
+        task_class,
+        snapshot,
+        config,
+        strategy,
+        {selected["subagent"], *fanout_subagents},
+        verification_route_task_class,
+        independent_verification_required,
+    )
+    route_budget = build_route_budget(
+        budget_limits=budget_limits,
+        selected=selected,
+        fanout_subagents=fanout_subagents,
+        verification_plan=verification_plan,
+        bridge_fallback_subagent=bridge_fallback_subagent,
+    )
+    route_graph = build_route_graph(
+        task_class=task_class,
+        dispatch_required=dispatch_required,
+        deterministic_first=deterministic_first,
+        graph_strategy=graph_strategy,
+        selected_subagent=selected["subagent"],
+        fanout_subagents=fanout_subagents,
+        verification_plan=verification_plan,
+        bridge_fallback_subagent=bridge_fallback_subagent,
+        internal_escalation_trigger=internal_escalation_trigger,
+        budget=route_budget,
+    )
     return {
         "task_class": task_class,
         "selected_subagent": selected["subagent"],
         "reason": f"state={selected['state']}",
+        "lifecycle_stage": selected["lifecycle_stage"],
+        "lane_stage": selected["lane_stage"],
         "effective_score": selected["effective_score"],
         "task_fit_score": selected["task_fit_score"],
         "global_score": selected["global_score"],
         "task_class_fit_bonus": selected["task_class_fit_bonus"],
         "task_class_fit_reasons": selected["task_class_fit_reasons"],
+        "memory_adjustment": selected["memory_adjustment"],
+        "budget_adjustment": selected["budget_adjustment"],
+        "budget_cost_units": selected["budget_cost_units"],
         "selected_model": selected["selected_model"],
         "selected_model_source": selected["selected_model_source"],
         "selected_profile": selected["selected_profile"],
@@ -1512,6 +2340,13 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         "external_first_required": external_first_required,
         "bridge_fallback_subagent": bridge_fallback_subagent,
         "internal_escalation_trigger": internal_escalation_trigger,
+        "graph_strategy": graph_strategy,
+        "deterministic_first": deterministic_first,
+        "route_budget": route_budget,
+        "route_graph": route_graph,
+        "verification_route_task_class": verification_route_task_class,
+        "independent_verification_required": independent_verification_required,
+        "verification_plan": verification_plan,
         "max_parallel_agents": max_parallel_agents,
         "state_owner": state_owner,
         "suppressed_subagents": suppressed_subagents,
@@ -1519,10 +2354,15 @@ def route_subagent(task_class: str) -> dict[str, Any]:
             {
                 "subagent": item["subagent"],
                 "effective_score": item["effective_score"],
+                "lifecycle_stage": item["lifecycle_stage"],
+                "lane_stage": item["lane_stage"],
                 "task_fit_score": item["task_fit_score"],
                 "global_score": item["global_score"],
                 "task_class_fit_bonus": item["task_class_fit_bonus"],
                 "task_class_fit_reasons": item["task_class_fit_reasons"],
+                "memory_adjustment": item["memory_adjustment"],
+                "budget_adjustment": item["budget_adjustment"],
+                "budget_cost_units": item["budget_cost_units"],
                 "selected_model": item["selected_model"],
                 "selected_model_source": item["selected_model_source"],
                 "selected_profile": item["selected_profile"],
@@ -1569,6 +2409,10 @@ def update_score(
     chatter_only = bool(metrics.get("chatter_only", False))
     time_to_first_useful_output_ms = metrics.get("time_to_first_useful_output_ms")
     failure_reason = policy_value(metrics.get("failure_reason"), "")
+    verification_role = policy_value(metrics.get("verification_role"), "")
+    independent_verification_passed = bool(metrics.get("independent_verification_passed", False))
+    independent_verification_failed = bool(metrics.get("independent_verification_failed", False))
+    verification_caught_issue = bool(metrics.get("verification_caught_issue", False))
 
     if result == "success":
         delta = 8 + max(0, min(10, (quality_score - 70) // 5))
@@ -1580,6 +2424,29 @@ def update_score(
         for bucket in (global_card, task_card, *domain_cards):
             bucket["failure_count"] = int(bucket.get("failure_count", 0)) + 1
             bucket["consecutive_failures"] = int(bucket.get("consecutive_failures", 0)) + 1
+
+    if verification_role == "author":
+        for bucket in (global_card, task_card, *domain_cards):
+            bucket["authored_runs_count"] = int(bucket.get("authored_runs_count", 0)) + 1
+            if independent_verification_passed:
+                bucket["authored_verified_pass_count"] = int(bucket.get("authored_verified_pass_count", 0)) + 1
+            if independent_verification_failed:
+                bucket["authored_verified_fail_count"] = int(bucket.get("authored_verified_fail_count", 0)) + 1
+        if independent_verification_passed:
+            delta += 5
+        if independent_verification_failed:
+            delta -= 10
+    elif verification_role == "verifier":
+        for bucket in (global_card, task_card, *domain_cards):
+            bucket["verifier_runs_count"] = int(bucket.get("verifier_runs_count", 0)) + 1
+            if result == "success":
+                bucket["verifier_success_count"] = int(bucket.get("verifier_success_count", 0)) + 1
+            if verification_caught_issue:
+                bucket["verifier_catch_count"] = int(bucket.get("verifier_catch_count", 0)) + 1
+        if verification_caught_issue:
+            delta += 6
+        elif result == "success":
+            delta += 4
 
     for bucket in (global_card, task_card, *domain_cards):
         next_score = max(0, min(100, int(bucket.get("score", 50)) + delta))
@@ -1620,6 +2487,8 @@ def update_score(
         ) if total_runs > 0 else 0
         apply_availability_metrics(bucket, result, metrics)
         bucket["updated_at"] = now_utc()
+    global_card["lifecycle_stage"] = lifecycle_stage_for(snapshot.get("subagents", {}).get(subagent, {}), global_card, scoring_cfg)
+    task_card["lifecycle_stage"] = lane_lifecycle_stage_for(task_card, global_card["lifecycle_stage"], scoring_cfg)
 
     save_json(SCORECARD_PATH, scorecards)
     snapshot["scorecards"] = scorecards["subagents"]
@@ -1641,11 +2510,14 @@ def usage() -> None:
         "  python3 _vida/scripts/subagent-system.py init [task_id]\n"
         "  python3 _vida/scripts/subagent-system.py status\n"
         "  python3 _vida/scripts/subagent-system.py subagents\n"
+        "  python3 _vida/scripts/subagent-system.py diagnose [task_class]\n"
         "  python3 _vida/scripts/subagent-system.py route <task_class>\n"
         "  python3 _vida/scripts/subagent-system.py probe <subagent>\n"
         "  python3 _vida/scripts/subagent-system.py recover <subagent>\n"
         "  python3 _vida/scripts/subagent-system.py recover-pending\n"
         "  python3 _vida/scripts/subagent-system.py leases\n"
+        "  python3 _vida/scripts/subagent-system.py lease-renew <resource_type> <resource_id> <holder> [ttl_seconds]\n"
+        "  python3 _vida/scripts/subagent-system.py lease-cleanup\n"
         "  python3 _vida/scripts/subagent-system.py record <subagent> <success|failure> <task_class> [quality_score] [latency_ms] [note]\n"
         "  python3 _vida/scripts/subagent-system.py scorecard [subagent]",
         file=sys.stderr,
@@ -1669,6 +2541,10 @@ def main(argv: list[str]) -> int:
         if cmd == "subagents":
             print(json.dumps(subagent_operator_status(), indent=2, sort_keys=True))
             return 0
+        if cmd == "diagnose":
+            task_class = argv[2] if len(argv) > 2 else None
+            print(json.dumps(subagent_diagnosis(task_class), indent=2, sort_keys=True))
+            return 0
         if cmd == "route":
             if len(argv) < 3:
                 usage()
@@ -1691,6 +2567,18 @@ def main(argv: list[str]) -> int:
             print(json.dumps(recover_pending_subagents(), indent=2, sort_keys=True))
             return 0
         if cmd == "leases":
+            print(json.dumps(active_leases(), indent=2, sort_keys=True))
+            return 0
+        if cmd == "lease-renew":
+            if len(argv) < 5:
+                usage()
+                return 1
+            ttl_seconds = int(argv[5]) if len(argv) > 5 else 3600
+            print(json.dumps(renew_lease(argv[2], argv[3], argv[4], ttl_seconds), indent=2, sort_keys=True))
+            return 0
+        if cmd == "lease-cleanup":
+            payload = cleanup_leases(load_leases())
+            save_leases(payload)
             print(json.dumps(active_leases(), indent=2, sort_keys=True))
             return 0
         if cmd == "record":

@@ -235,13 +235,7 @@ def review_state_for(status: str, merge_ready: bool, risk_class: str) -> str:
         return "review_failed"
     if not merge_ready:
         return "review_pending"
-    if risk_class == "R0":
-        return "review_passed"
-    if risk_class == "R1":
-        return "policy_gate_required"
-    if risk_class == "R2":
-        return "senior_review_required"
-    return "human_gate_required"
+    return subagent_system.target_review_state_for(risk_class)
 
 
 def manifest_review_state(summary: dict[str, Any], risk_class: str) -> str:
@@ -249,13 +243,7 @@ def manifest_review_state(summary: dict[str, Any], risk_class: str) -> str:
         return "review_failed"
     if summary.get("tie_break_recommended") or summary.get("open_conflicts"):
         return "review_pending"
-    if risk_class == "R0":
-        return "promotion_ready"
-    if risk_class == "R1":
-        return "policy_gate_required"
-    if risk_class == "R2":
-        return "senior_review_required"
-    return "human_gate_required"
+    return subagent_system.target_manifest_review_state_for(risk_class)
 
 
 def infer_domain_tags(prompt: str, task_class: str) -> list[str]:
@@ -402,6 +390,8 @@ def subagent_result_payload(
     useful_progress = output_has_useful_progress(output_text, stderr_text, min_output_bytes)
     chatter_only = (not merge_ready) and looks_like_planning_chatter(output_text.casefold())
     review_state = review_state_for(status, merge_ready, risk_class)
+    target_review_state = subagent_system.target_review_state_for(risk_class)
+    target_manifest_review_state = subagent_system.target_manifest_review_state_for(risk_class)
     availability = subagent_availability_signal(status, error_text, output_text, stderr_text)
     payload = {
         "ts": now_utc(),
@@ -427,6 +417,8 @@ def subagent_result_payload(
         "chatter_only": chatter_only,
         "review_state": review_state,
         "risk_class": risk_class,
+        "target_review_state": target_review_state,
+        "target_manifest_review_state": target_manifest_review_state,
         "domain_tags": domain_tags,
         "max_runtime_seconds": max_runtime_seconds,
         "min_output_bytes": min_output_bytes,
@@ -1655,6 +1647,8 @@ def run_ensemble(argv: list[str]) -> int:
             "status": "blocked",
             "phase": "lease_blocked",
             "review_state": "review_failed",
+            "target_review_state": subagent_system.target_review_state_for(route_risk_class(route)),
+            "target_manifest_review_state": subagent_system.target_manifest_review_state_for(route_risk_class(route)),
             "lease": lease_result,
             "results": [],
         }
@@ -1675,6 +1669,8 @@ def run_ensemble(argv: list[str]) -> int:
         "max_parallel_agents": max_parallel_agents,
         "risk_class": route_risk_class(route),
         "review_state": "review_pending",
+        "target_review_state": subagent_system.target_review_state_for(route_risk_class(route)),
+        "target_manifest_review_state": subagent_system.target_manifest_review_state_for(route_risk_class(route)),
         "success_count": 0,
         "useful_progress_count": 0,
         "subagent_exhausted": False,
@@ -1684,6 +1680,7 @@ def run_ensemble(argv: list[str]) -> int:
         "post_arbitration_merge_summary": {},
         "results": [],
         "lease": lease_result.get("lease", {}),
+        "lease_renew_count": 0,
         "active_subagents": [],
         "active_count": 0,
         "status": "running",
@@ -1719,6 +1716,21 @@ def run_ensemble(argv: list[str]) -> int:
     while launches:
         completed_subagents: list[str] = []
         loop_progress = False
+        lease_payload = manifest.get("lease", {})
+        lease_acquired_at = subagent_system.parse_utc_timestamp(lease_payload.get("acquired_at")) if isinstance(lease_payload, dict) else None
+        lease_ttl_seconds = 3600
+        if lease_acquired_at is not None:
+            lease_expires_at = subagent_system.parse_utc_timestamp(lease_payload.get("expires_at"))
+            if lease_expires_at is not None:
+                lease_ttl_seconds = max(60, int((lease_expires_at - lease_acquired_at).total_seconds()))
+        last_renewed_at = subagent_system.parse_utc_timestamp(lease_payload.get("renewed_at")) if isinstance(lease_payload, dict) else None
+        renew_base = last_renewed_at or lease_acquired_at
+        if renew_base is not None and (subagent_system.now_utc_dt() - renew_base).total_seconds() >= max(60, lease_ttl_seconds // 2):
+            renew_result = subagent_system.renew_lease("ensemble", f"{task_id}:{task_class}", run_holder, lease_ttl_seconds)
+            if renew_result.get("status") == "renewed":
+                manifest["lease"] = renew_result.get("lease", manifest.get("lease", {}))
+                manifest["lease_renew_count"] = int(manifest.get("lease_renew_count", 0) or 0) + 1
+                write_manifest(manifest_path, manifest)
         for subagent_name, launch in list(launches.items()):
             process: subprocess.Popen[str] = launch["process"]
             progress = launch_progress_snapshot(launch)
@@ -1939,6 +1951,8 @@ def run_ensemble(argv: list[str]) -> int:
             post_arbitration_merge_summary or merge_summary,
             route_risk_class(route),
         ),
+        "target_review_state": subagent_system.target_review_state_for(route_risk_class(route)),
+        "target_manifest_review_state": subagent_system.target_manifest_review_state_for(route_risk_class(route)),
         "status": (
             "completed"
             if (

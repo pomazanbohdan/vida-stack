@@ -74,6 +74,18 @@ _vida/docs/todo-protocol.md
 3. Use `grep`/`Glob` only for exact string or filename pattern matching.
 4. Full MCP search guide: `_vida/docs/tooling.md`.
 
+## Log-Read Budget (Mandatory)
+
+Broad runtime-log inspection is forbidden by default.
+
+Rules:
+1. Start with exact-key lookup against a specific file whenever possible.
+2. Prefer a single manifest/state file over broad `.vida/logs`, `.vida/state`, or `.beads` scans.
+3. Prefer short window reads (`sed -n start,end`) over large dumps.
+4. Do not emit raw JSONL dumps unless an explicit escalation reason is recorded in the active task/report.
+5. If subagent evidence already provides the relevant file/line or artifact reference, do not repeat wide local log inspection without a new blocker or conflict.
+6. `answer_only` flows should avoid runtime log sweeps unless the answer cannot be produced from bounded evidence.
+
 ## Script Runtime Architecture
 
 Framework runtime scripts follow one hybrid rule:

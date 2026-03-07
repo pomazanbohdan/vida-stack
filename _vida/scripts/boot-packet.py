@@ -89,15 +89,60 @@ def packet_for(profile: str, non_dev: bool) -> dict[str, Any]:
     }
 
 
+def read_contract_for(profile: str, non_dev: bool) -> list[str]:
+    config = vida_config.load_validated_config() if Path(ROOT_DIR / "vida.config.yaml").exists() else {}
+    protocol_activation = vida_config.dotted_get(config, "protocol_activation", {}) or {}
+    agent_system_active = bool(protocol_activation.get("agent_system", False))
+    return profile_reads(profile, non_dev, agent_system_active)
+
+
 def usage() -> int:
-    print("Usage: python3 _vida/scripts/boot-packet.py <lean|standard|full> [--non-dev]", file=sys.stderr)
+    print(
+        "Usage: python3 _vida/scripts/boot-packet.py <lean|standard|full|read-contract|summary> [args]",
+        file=sys.stderr,
+    )
     return 1
 
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         return usage()
-    profile = argv[1].strip().lower()
+    command = argv[1].strip().lower()
+    if command == "read-contract":
+        if len(argv) < 3:
+            return usage()
+        profile = argv[2].strip().lower()
+        if profile not in {"lean", "standard", "full"}:
+            return usage()
+        non_dev = "--non-dev" in argv[3:]
+        for entry in read_contract_for(profile, non_dev):
+            print(entry)
+        return 0
+    if command == "summary":
+        if len(argv) < 3:
+            return usage()
+        subject = argv[2].strip()
+        latest = ROOT_DIR / ".vida" / "logs" / "boot-receipts" / f"{subject}.latest.boot-packet.json"
+        if not latest.exists():
+            print(f"[boot-packet] Missing packet: {latest}", file=sys.stderr)
+            return 1
+        payload = json.loads(latest.read_text())
+        print(
+            json.dumps(
+                {
+                    "subject": subject,
+                    "profile": payload.get("profile"),
+                    "non_dev": payload.get("non_dev"),
+                    "read_contract_count": len(payload.get("read_contract") or []),
+                    "invariants_count": len(payload.get("invariants") or []),
+                    "protocol_activation": payload.get("protocol_activation", {}),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+    profile = command
     if profile not in {"lean", "standard", "full"}:
         return usage()
     non_dev = "--non-dev" in argv[2:]

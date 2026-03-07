@@ -34,6 +34,14 @@ Supported system modes:
 3. `disabled`
    - do not use subagents.
 
+Mode-synced execution rule:
+1. `native`
+   - internal subagents are the first eligible analysis/review lane.
+2. `hybrid`
+   - external-first routing remains the default for eligible read-only work.
+3. `disabled`
+   - no subagent-first requirement; the orchestrator may execute locally.
+
 ## Initialization Flow
 
 Canonical runtime flow:
@@ -76,6 +84,7 @@ Hard rule:
 2. external and delegated workers must use `_vida/docs/SUBAGENT-ENTRY.MD`,
 3. do not proxy full orchestrator boot/governance language into worker prompts unless the task explicitly audits the framework layer,
 4. worker prompts should optimize for bounded evidence delivery, not meta-orchestration narration.
+5. worker prompts should carry explicit worker-lane confirmation markers so runtime role does not depend on repository-global instruction inheritance.
 
 ## Routing Contract
 
@@ -113,6 +122,13 @@ Routing output:
 16. optional `max_runtime_seconds`,
 17. optional `min_output_bytes`,
 18. optional progress/timeout policy metadata.
+19. optional independent-verification metadata:
+   - `verification_route_task_class`
+   - `independent_verification_required`
+   - `verification_plan`
+20. optional deterministic-route and FinOps metadata:
+   - `route_graph`
+   - `route_budget`
 
 Ensemble rule:
 
@@ -121,6 +137,29 @@ Ensemble rule:
 3. Keep writer ownership single-lane under the orchestrator even when read-only fanout is active.
 4. `bridge_fallback_subagent` is the canonical next hop after free external subagents and before internal escalation.
 5. Internal subagents are the senior lane for arbitration, architecture, and mutation-owning work; they are not the default cheap first pass for eligible read-only classes.
+6. When `independent_verification_required=yes`, the runtime should choose a distinct eligible cli subagent or verification ensemble for validation before orchestrator synthesis whenever such a verifier exists.
+7. When mode is not `disabled`, eligible non-trivial read-heavy analysis should go to subagent lanes first; the orchestrator is the synthesizer and mutation owner, not the default primary analyst.
+8. Raw subagent returns belong to the evidence layer; the default user-facing output is the orchestrator's synthesized conclusion.
+
+## Independent Verification Contract
+
+Independent verification is a first-class runtime artifact, not an ad hoc orchestrator habit.
+
+Minimum contract:
+
+1. eligible non-trivial work should separate authorship and verification when route policy requires it,
+2. verification should be selected from a dedicated verification route class when possible,
+3. the verifier should differ from the author/fanout lane when another eligible verifier exists,
+4. fallback to the same cli subagent as verifier is allowed only when no other eligible verifier remains,
+5. route output should expose the selected verifier plan so operator tooling and proving-wave scripts do not guess,
+6. authored-result quality and verifier quality should both influence scorecards over time,
+7. the orchestrator should synthesize and escalate; it should not be the default primary analyst and primary verifier for eligible lanes.
+
+Suggested route split:
+
+1. analysis/research/meta-analysis -> `verification_ensemble`,
+2. write-producing bounded lanes -> `review_ensemble`,
+3. review/verification lanes themselves may skip a second independent verifier unless project overlay asks for it.
 
 ## Ensemble Merge Semantics
 
@@ -134,7 +173,8 @@ Minimum merge contract:
 4. separate exact consensus from normalized semantic consensus before synthesis,
 5. separate `consensus`, `unique_findings`, and `open_conflicts`,
 6. emit a tie-break signal when semantic conflict remains decision-relevant,
-5. keep raw subagent disagreement out of the final answer unless it remains decision-relevant.
+7. keep raw subagent disagreement out of the final answer unless it remains decision-relevant,
+8. keep raw subagent report bodies out of the default final answer unless the user explicitly asks to inspect them.
 
 `merge_policy=consensus_with_conflict_flag` means:
 
@@ -147,11 +187,44 @@ Minimum merge contract:
    - or the orchestrator confidence remains below the active task threshold,
 4. keep the orchestrator as the final synthesizer even after tie-break review.
 
+Reporting boundary:
+
+1. Subagent responses are synthesis inputs, not default deliverables.
+2. The orchestrator should answer the user in its own voice using merged findings and cited evidence.
+3. If the user asks to see a subagent report, provide it explicitly as an inspection artifact rather than mixing it into the default final answer.
+
 Efficiency rule:
 
 1. do not exceed project `max_parallel_agents`,
 2. do not re-run equivalent subagents when current consensus is already sufficient,
 3. escalate only on unresolved decision-critical conflict, not on stylistic variance.
+
+## Deterministic Route Graph
+
+Routing output should expose a compact deterministic route artifact so orchestration is inspectable without replaying the whole decision.
+
+Minimum contract:
+
+1. `route_graph.graph_strategy` should describe the route family, for example `deterministic_then_escalate`,
+2. `route_graph.deterministic_first` should indicate whether the route is intended to stay on deterministic workflow edges until evidence forces escalation,
+3. `route_graph.nodes` should identify the primary dispatch lane, bridge fallback, internal escalation, verification lane, and orchestrator synthesis node when relevant,
+4. `route_graph.edges` should describe the escalation/verification conditions,
+5. `route_graph.planned_path` should give operators one compact intended execution path.
+
+## Task-Level FinOps Budget
+
+Routing and dispatch should expose a bounded budget object for each task class rather than relying only on raw timeouts.
+
+Minimum contract:
+
+1. `route_budget.budget_policy` should declare how aggressive cost minimization is for the route,
+2. `route_budget.max_budget_units` should cap the intended route cost using normalized subagent cost units,
+3. `route_budget.max_cli_subagent_calls` should cap total cli-subagent dispatches for the route,
+4. `route_budget.max_verification_passes` should cap verification reruns/extra verification lanes,
+5. `route_budget.max_fallback_hops` should cap bridge/internal escalation depth,
+6. `route_budget.max_total_runtime_seconds` should cap the whole route, not only individual subagents,
+7. route selection should prefer lower-cost eligible cli subagents when quality signals are near-equivalent,
+8. route selection may still escalate above budget when policy explicitly requires bridge/internal escalation for safety or verification.
 
 ## Bounded Arbitration Lane
 
@@ -270,6 +343,7 @@ Minimum availability contract:
 10. routing should expose `suppressed_subagents` with reasons when availability rules filter candidates out.
 11. operator status should expose actionable remediation hints, not only raw degraded state.
 12. operator status should expose recovery history and task-class readiness, not only global score.
+13. operator status should expose lifecycle stage (`detected|probed|probation|promoted|degraded|cooldown|recovered|retired`) per cli subagent.
 
 Recovery-aware routing rule:
 
@@ -306,6 +380,31 @@ Scorecards should evolve toward:
 7. subagent-availability stability,
 8. recovery attempts/successes,
 9. per-domain usefulness.
+10. authored-result verification pass/fail history,
+11. verifier success/catch history.
+
+## Execution Memory And Long-Horizon Routing
+
+Scorecards are not sufficient as the only memory layer.
+
+Minimum execution-memory contract:
+
+1. persist a strategy snapshot derived from accumulated subagent runs,
+2. carry forward memory hints per task class:
+   - `preferred_subagents`
+   - `avoid_subagents`
+   - `retry_useful_subagents`
+   - `failure_prone_subagents`
+3. track prompt-family effectiveness where practical so repeated prompt patterns can be compared over time,
+4. track recurring failure signatures per subagent beyond one latest failure reason,
+5. allow routing to consume bounded memory adjustments from strategy state, not only raw scorecards,
+6. keep memory-derived routing influence bounded so recent short-horizon evidence can still override stale history.
+
+Runtime expectation:
+
+1. strategy state should be written to `.vida/state/subagent-strategy.json`,
+2. `subagent-eval-pack.py` should refresh this state after task-close or explicit evaluation runs,
+3. `route` output should expose when long-horizon memory changed the selected ordering or score.
 
 Review-state distinction:
 
@@ -326,6 +425,8 @@ Lane-aware promotion/demotion rule:
    - the explicit bridge fallback,
    - the internal senior lane,
    - or later re-promoted by evidence.
+4. probationary cli subagents may participate only in bounded low-risk lanes until lane-specific evidence promotes them.
+5. promoted state should be tracked independently per task class when practical.
 
 ## Lease / Ownership Runtime
 
@@ -342,6 +443,8 @@ Minimum lease contract:
 4. successful close should release the lease and record release status in the manifest,
 5. operator tooling should expose active leases as part of runtime diagnostics,
 6. lease conflicts should be written to lease history so recent orchestration contention is visible to the operator.
+7. runtime should support lease renewal for longer active orchestrations instead of assuming one fixed acquire/release window,
+8. runtime should expose cleanup/expiry semantics so stale released/expired leases do not accumulate indefinitely.
 
 ## Operator Visibility
 
@@ -356,7 +459,15 @@ Minimum operator summary:
    - `startup_timeout_count`
    - `no_output_timeout_count`
    - `stalled_after_progress_count`
-5. recent lease-conflict summary from the lease ledger.
+5. review-target map by task class:
+   - `risk_class`
+   - `target_review_state`
+   - `target_manifest_review_state`
+   - `verification_gate`
+   - `write_scope`
+6. recent lease-conflict summary from the lease ledger.
+7. one-shot diagnosis surface that aggregates alerts, remediation, timeout instability, and lane-readiness without requiring manual JSON synthesis.
+8. lease summary should distinguish `active`, `released`, and `expired`, and group recent conflicts by resource when possible.
 
 ## Escalation And Adaptation
 
@@ -381,6 +492,9 @@ Current portable defaults:
 1. `consecutive_failure_limit = 5`
 2. `promotion_score = 80`
 3. `demotion_score = 35`
+4. `probation_success_runs = 3`
+5. `probation_task_runs = 1`
+6. `retirement_failure_limit = 12`
 
 Project overlay may override these values.
 
@@ -392,10 +506,14 @@ Canonical helpers:
 python3 _vida/scripts/subagent-system.py init [task_id]
 python3 _vida/scripts/subagent-system.py status
 python3 _vida/scripts/subagent-system.py subagents
+python3 _vida/scripts/subagent-system.py diagnose [task_class]
 python3 _vida/scripts/subagent-system.py route <task_class>
 python3 _vida/scripts/subagent-system.py probe <subagent>
 python3 _vida/scripts/subagent-system.py recover <subagent>
 python3 _vida/scripts/subagent-system.py recover-pending
+python3 _vida/scripts/subagent-system.py leases
+python3 _vida/scripts/subagent-system.py lease-renew <resource_type> <resource_id> <holder> [ttl_seconds]
+python3 _vida/scripts/subagent-system.py lease-cleanup
 python3 _vida/scripts/subagent-system.py record <subagent> <success|failure> <task_class> [quality_score] [latency_ms] [note]
 python3 _vida/scripts/subagent-system.py scorecard [subagent]
 python3 _vida/scripts/subagent-dispatch.py subagent <task_id> <task_class> <subagent> <prompt_file> <output_file> [workdir]

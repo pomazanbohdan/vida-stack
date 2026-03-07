@@ -52,6 +52,9 @@ pack_router_keywords:
 #     consecutive_failure_limit: 5
 #     promotion_score: 80
 #     demotion_score: 35
+#     probation_success_runs: 3
+#     probation_task_runs: 1
+#     retirement_failure_limit: 12
 #   subagents:
 #     internal_subagents:
 #       enabled: true
@@ -59,6 +62,7 @@ pack_router_keywords:
 #       role: senior_internal
 #       orchestration_tier: senior
 #       cost_priority: premium
+#       budget_cost_units: 10
 #       profiles:
 #         - internal_fast
 #         - internal_arch
@@ -82,6 +86,7 @@ pack_router_keywords:
 #       role: bridge_fallback
 #       orchestration_tier: bridge
 #       cost_priority: fallback
+#       budget_cost_units: 1
 #       models_hint:
 #         - gpt-5.1-codex-mini
 #         - gpt-5.2-codex
@@ -125,6 +130,7 @@ pack_router_keywords:
 #       role: free_primary
 #       orchestration_tier: external_free
 #       cost_priority: highest
+#       budget_cost_units: 0
 #       capability_band:
 #         - read_only
 #         - review_safe
@@ -159,6 +165,7 @@ pack_router_keywords:
 #       role: free_primary
 #       orchestration_tier: external_free
 #       cost_priority: highest
+#       budget_cost_units: 0
 #       capability_band:
 #         - read_only
 #         - review_safe
@@ -201,6 +208,7 @@ pack_router_keywords:
 #       role: free_primary
 #       orchestration_tier: external_free
 #       cost_priority: highest
+#       budget_cost_units: 0
 #       models_hint:
 #         - kilo/minimax/minimax-m2.5:free
 #       default_model: kilo/minimax/minimax-m2.5:free
@@ -239,6 +247,7 @@ pack_router_keywords:
 #       role: free_primary
 #       orchestration_tier: external_free
 #       cost_priority: highest
+#       budget_cost_units: 0
 #       models_hint:
 #         - opencode/minimax-m2.5-free
 #         - opencode/gpt-5.1-codex-mini
@@ -277,6 +286,7 @@ pack_router_keywords:
 #       role: free_primary
 #       orchestration_tier: external_free
 #       cost_priority: highest
+#       budget_cost_units: 0
 #       capability_band:
 #         - read_only
 #         - review_safe
@@ -311,13 +321,23 @@ pack_router_keywords:
 #         - internal_subagents
 #       write_scope: none
 #       verification_gate: subagent_return_contract
+#       graph_strategy: deterministic_then_escalate
+#       deterministic_first: yes
+#       budget_policy: balanced
+#       max_budget_units: 4
+#       max_cli_subagent_calls: 5
+#       max_verification_passes: 1
+#       max_fallback_hops: 1
+#       max_total_runtime_seconds: 420
 #       dispatch_required: external_first_when_eligible
 #       external_first_required: yes
 #       bridge_fallback_subagent: codex_cli
 #       internal_escalation_trigger: write_scope_or_tie_break
+#       independent_verification_required: no
 #     analysis:
 #       subagents:
 #         - qwen_cli
+#         - gemini_cli
 #         - kilo_cli
 #         - opencode_cli
 #         - vibe_cli
@@ -333,7 +353,229 @@ pack_router_keywords:
 #       merge_policy: consensus_with_conflict_flag
 #       max_runtime_seconds: 180
 #       min_output_bytes: 320
+#       graph_strategy: deterministic_then_escalate
+#       deterministic_first: yes
+#       budget_policy: strict
+#       max_budget_units: 3
+#       max_cli_subagent_calls: 3
+#       max_verification_passes: 1
+#       max_fallback_hops: 1
+#       max_total_runtime_seconds: 360
 #       verification_gate: source_backed_summary
 #       dispatch_required: fanout_then_synthesize
 #       external_first_required: yes
 #       bridge_fallback_subagent: codex_cli
+#       internal_escalation_trigger: semantic_conflict_without_majority
+#       verification_route_task_class: verification_ensemble
+#       independent_verification_required: yes
+#     meta_analysis:
+#       subagents:
+#         - qwen_cli
+#         - gemini_cli
+#         - kilo_cli
+#         - vibe_cli
+#         - opencode_cli
+#         - codex_cli
+#         - internal_subagents
+#       models:
+#         codex_cli: gpt-5.1-codex-mini
+#       profiles:
+#         internal_subagents: internal_review
+#       fanout_subagents:
+#         - qwen_cli
+#         - gemini_cli
+#         - kilo_cli
+#         - opencode_cli
+#         - vibe_cli
+#         - codex_cli
+#       fanout_min_results: 3
+#       merge_policy: consensus_with_conflict_flag
+#       write_scope: none
+#       verification_gate: source_backed_summary
+#       max_runtime_seconds: 240
+#       min_output_bytes: 320
+#       graph_strategy: deterministic_then_escalate
+#       deterministic_first: yes
+#       budget_policy: balanced
+#       max_budget_units: 4
+#       max_cli_subagent_calls: 5
+#       max_verification_passes: 1
+#       max_fallback_hops: 1
+#       max_total_runtime_seconds: 480
+#       dispatch_required: fanout_then_synthesize
+#       external_first_required: yes
+#       bridge_fallback_subagent: codex_cli
+#       internal_escalation_trigger: semantic_conflict_without_majority
+#       verification_route_task_class: verification_ensemble
+#       independent_verification_required: yes
+#     review:
+#       subagents:
+#         - qwen_cli
+#         - gemini_cli
+#         - kilo_cli
+#         - opencode_cli
+#         - vibe_cli
+#         - codex_cli
+#         - internal_subagents
+#       models:
+#         codex_cli: gpt-5.1-codex-mini
+#       profiles:
+#         internal_subagents: internal_review
+#       write_scope: none
+#       verification_gate: review_findings
+#       max_runtime_seconds: 180
+#       min_output_bytes: 260
+#       dispatch_required: external_first_review
+#       external_first_required: yes
+#       bridge_fallback_subagent: codex_cli
+#       internal_escalation_trigger: unresolved_high_risk_findings
+#       independent_verification_required: no
+#     review_ensemble:
+#       subagents:
+#         - qwen_cli
+#         - gemini_cli
+#         - kilo_cli
+#         - opencode_cli
+#         - vibe_cli
+#         - codex_cli
+#         - internal_subagents
+#       models:
+#         codex_cli: gpt-5.1-codex-mini
+#       profiles:
+#         internal_subagents: internal_review
+#       fanout_subagents:
+#         - qwen_cli
+#         - gemini_cli
+#         - kilo_cli
+#         - opencode_cli
+#         - vibe_cli
+#       fanout_min_results: 3
+#       merge_policy: consensus_with_conflict_flag
+#       write_scope: none
+#       verification_gate: review_findings
+#       max_runtime_seconds: 180
+#       min_output_bytes: 280
+#       dispatch_required: fanout_then_synthesize
+#       external_first_required: yes
+#       bridge_fallback_subagent: codex_cli
+#       internal_escalation_trigger: unresolved_high_risk_findings
+#       independent_verification_required: no
+#     small_patch:
+#       subagents:
+#         - codex_cli
+#         - internal_subagents
+#       models:
+#         codex_cli: gpt-5.1-codex-mini
+#       profiles:
+#         internal_subagents: internal_fast
+#       write_scope: scoped_only
+#       verification_gate: targeted_verification
+#       graph_strategy: deterministic_then_escalate
+#       deterministic_first: no
+#       budget_policy: balanced
+#       max_budget_units: 3
+#       max_cli_subagent_calls: 3
+#       max_verification_passes: 1
+#       max_fallback_hops: 1
+#       max_total_runtime_seconds: 480
+#       dispatch_required: bridge_write_then_internal_if_expands
+#       external_first_required: no
+#       bridge_fallback_subagent: codex_cli
+#       internal_escalation_trigger: scope_expands_beyond_bounded_write
+#       verification_route_task_class: review_ensemble
+#       independent_verification_required: yes
+#     implementation:
+#       subagents:
+#         - codex_cli
+#         - internal_subagents
+#       models:
+#         codex_cli: gpt-5.1-codex
+#       profiles:
+#         internal_subagents: internal_fast
+#       write_scope: scoped_only
+#       verification_gate: targeted_verification
+#       graph_strategy: deterministic_then_escalate
+#       deterministic_first: no
+#       budget_policy: balanced
+#       max_budget_units: 5
+#       max_cli_subagent_calls: 4
+#       max_verification_passes: 1
+#       max_fallback_hops: 1
+#       max_total_runtime_seconds: 540
+#       dispatch_required: external_readonly_then_senior_writer
+#       external_first_required: no
+#       bridge_fallback_subagent: codex_cli
+#       internal_escalation_trigger: cross_module_or_architecture_shift
+#       verification_route_task_class: review_ensemble
+#       independent_verification_required: yes
+#     architecture:
+#       subagents:
+#         - qwen_cli
+#         - gemini_cli
+#         - codex_cli
+#         - internal_subagents
+#       models:
+#         codex_cli: gpt-5.2-codex
+#       profiles:
+#         internal_subagents: internal_arch
+#       write_scope: none
+#       verification_gate: architectural_review
+#       dispatch_required: external_first_then_senior_arbitration
+#       external_first_required: yes
+#       bridge_fallback_subagent: codex_cli
+#       internal_escalation_trigger: architecture_decision_required
+#       verification_route_task_class: review_ensemble
+#       independent_verification_required: yes
+#     verification:
+#       subagents:
+#         - qwen_cli
+#         - gemini_cli
+#         - kilo_cli
+#         - vibe_cli
+#         - opencode_cli
+#         - codex_cli
+#         - internal_subagents
+#       models:
+#         codex_cli: gpt-5.1-codex-mini
+#       profiles:
+#         internal_subagents: internal_review
+#       write_scope: none
+#       verification_gate: verification_summary
+#       max_runtime_seconds: 180
+#       min_output_bytes: 240
+#       dispatch_required: external_first_review
+#       external_first_required: yes
+#       bridge_fallback_subagent: codex_cli
+#       internal_escalation_trigger: unresolved_verification_conflict
+#       independent_verification_required: no
+#     verification_ensemble:
+#       subagents:
+#         - qwen_cli
+#         - gemini_cli
+#         - kilo_cli
+#         - vibe_cli
+#         - opencode_cli
+#         - codex_cli
+#         - internal_subagents
+#       models:
+#         codex_cli: gpt-5.1-codex-mini
+#       profiles:
+#         internal_subagents: internal_review
+#       fanout_subagents:
+#         - qwen_cli
+#         - gemini_cli
+#         - kilo_cli
+#         - opencode_cli
+#         - vibe_cli
+#         - codex_cli
+#       fanout_min_results: 3
+#       merge_policy: consensus_with_conflict_flag
+#       write_scope: none
+#       verification_gate: verification_summary
+#       max_runtime_seconds: 180
+#       min_output_bytes: 260
+#       dispatch_required: fanout_then_synthesize
+#       external_first_required: yes
+#       bridge_fallback_subagent: codex_cli
+#       internal_escalation_trigger: unresolved_verification_conflict
+#       independent_verification_required: no

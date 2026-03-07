@@ -12,6 +12,8 @@ It is not a full protocol compiler.
 
 ```bash
 python3 _vida/scripts/boot-packet.py <lean|standard|full> [--non-dev]
+python3 _vida/scripts/boot-packet.py read-contract <lean|standard|full> [--non-dev]
+python3 _vida/scripts/boot-packet.py summary <task_id|session>
 ```
 
 ## Output Contract
@@ -55,4 +57,6 @@ Characteristics:
 1. generated on demand,
 2. no signature/hash enforcement yet,
 3. integrated with boot receipts and receipt verification,
-4. intended as the first step toward lighter compiled boot contracts.
+4. `boot-profile.sh` should consume boot-packet read-contract output instead of duplicating profile file lists,
+5. health/verification flows may consume packet summaries as a compact proof surface,
+6. intended as the first step toward lighter compiled boot contracts.

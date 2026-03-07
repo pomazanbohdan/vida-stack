@@ -78,13 +78,16 @@ Release 1 should be delivered through these phases:
   - [x] Context capsule and compaction recovery flow exist.
   - [x] Boot profile execution and receipt validation exist.
   - [x] Health-check and finish-gate tooling exist.
+  - [x] `AGENTS.md` now routes into split orchestrator and worker boot contracts.
 - [ ] **Partial: Phase B — Orchestration and Subagent Reliability**
   - [x] Route snapshots, requested/effective mode selection, and provider scoring are implemented.
   - [x] External-first fanout, fallback, arbitration, and live ensemble visibility are implemented.
   - [x] Worker-entry and worker-thinking contracts are separated from orchestrator logic.
+  - [x] Subagent-first analysis/review behavior is now codified for supported runtime modes.
   - [x] Degraded CLI subagent recovery helpers now exist.
   - [x] Phase-aware timeout controls and live route refresh now exist.
   - [x] Ensemble lease acquisition, release, and conflict history now exist as runtime-enforced orchestration mechanics.
+  - [x] Worker packets now use explicit machine-readable return fields for question-driven execution.
   - [ ] Broader task/block/file-scope ownership enforcement is not yet fully complete.
 - [ ] **Partial: Phase C — Verification, Review, and Risk Gates**
   - [x] Route and run artifacts expose `risk_class`.
@@ -100,15 +103,16 @@ Release 1 should be delivered through these phases:
   - [x] Lease-conflict and recent recovery summaries are now visible in operator surfaces.
   - [ ] Drift and anomaly handling are not yet complete at the intended Release 1 maturity level.
 - [ ] **Partial: Phase E — Documentation Contract and Protocol Runtime Alignment**
-  - [x] Release-target documents, protocol index, worker contracts, and changelog are in place.
+  - [x] Release-target documents, protocol index, orchestrator/worker contracts, and changelog are in place.
   - [x] Canonical runtime vocabulary was pushed further toward `cli subagent` terminology.
   - [x] Provider templates now mirror the real subagent runtime contract, including phase-aware timeout controls.
   - [x] Runtime payloads now canonicalize legacy note/domain strings into framework-generic operator vocabulary.
+  - [x] Bootstrap split, request-intent gate, and bounded log-read budget are now reflected in framework docs.
   - [ ] Full document freshness and lifecycle enforcement are not yet complete.
 - [ ] **Partial: Phase F — Extraction Readiness and Standalone Framework Preparation**
   - [x] A bash installer exists for framework payload installation.
   - [x] Framework-only release packaging exists.
-  - [x] The repository now has a clearer standalone framework surface than before.
+  - [x] The repository now has a clearer standalone framework surface than before, including a lighter bootstrap `AGENTS.md`.
   - [ ] Standalone extraction readiness is not yet complete enough to call Release 1 finished.
 
 ## Phase A: Runtime Core Integrity
@@ -150,6 +154,7 @@ Implementation audit:
 - [x] `br` + TODO execution boundaries exist.
 - [x] Compact restore and hydration gates exist.
 - [x] Boot-profile validation exists.
+- [x] `AGENTS.md` now routes into split orchestrator and worker boot contracts.
 - [ ] Full proof that all non-trivial work always stays inside active block lifecycle still depends on operational discipline, not only static runtime enforcement.
 
 ## Phase B: Orchestration and Subagent Reliability
@@ -199,11 +204,13 @@ Implementation audit:
 - [x] Route outputs are machine-usable and policy-shaped.
 - [x] Fanout, fallback, and bounded arbitration exist.
 - [x] Worker-entry separation exists.
+- [x] Supported-mode subagent-first analysis/review behavior is codified.
 - [x] Live phase and progress visibility exist.
 - [x] Phase-aware timeout policy exists.
 - [x] Single-run dispatch now has phase-aware timeout parity with ensemble execution.
 - [x] Lane-aware demotion suppression exists for analysis fanout.
 - [x] Ensemble lease acquisition, release, and conflict-history enforcement now exist.
+- [x] Worker packets now use explicit machine-readable return contracts.
 - [ ] Broader task/block/file-scope ownership enforcement remains incomplete.
 
 ## Phase C: Verification, Review, and Risk Gates
@@ -318,6 +325,7 @@ Priority work:
 5. reduce repeated heavy rereads where stable packets can replace markdown
 6. define document-state progression, stale-reference checks, and re-verification expectations for canonical docs
 7. keep agent-system templates and overlay examples aligned with the real routing model, runtime budget fields, and dispatch environment settings
+8. keep bootstrap routing, request-intent gating, and bounded log-read policy aligned across entry contracts and protocol docs
 
 Exit criteria:
 
@@ -338,6 +346,7 @@ Implementation audit:
 - [x] Worker contracts and subagent protocol docs are in place.
 - [x] Protocol docs now describe recovery history, lane-aware demotion, and phase-aware timeout behavior.
 - [x] Runtime surfaces now canonicalize legacy provider/domain wording into framework-generic vocabulary.
+- [x] Bootstrap split and bounded log-read policy are now reflected in framework docs.
 - [ ] Full document freshness/lifecycle enforcement is still incomplete.
 
 ## Phase F: Extraction Readiness and Standalone Framework Preparation
