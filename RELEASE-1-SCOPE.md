@@ -526,22 +526,54 @@ Release 1 should provide a compact but complete execution surface:
 9. project bootstrap commands
 
 
-## Поточний статус реалізації (аудит кодової бази)
+## Current Implementation Status (Codebase Audit)
 
-- [x] **Boot and Runtime Activation**
-- [x] **Problem Framing and Routing**
-- [x] **Task and Execution State**
-- [x] **Use-Case Packs (базовий набір)**
-- [x] **Subagent System / Dispatch (базовий контур)**
-- [ ] **Review and Verification Fabric (цільовий рівень Release 1)**
-- [ ] **Risk and Governance (повна machine-visible модель)**
-- [x] **Execution Environment**
-- [x] **Documentation and Contract Sync (базовий контур)**
-- [ ] **Telemetry and Evaluation (повний цільовий рівень)**
-- [ ] **Learning and Improvement Loop (повний цільовий рівень)**
-- [ ] **Project Overlay and Portability (production-ready extraction level)**
-- [ ] **Cost and Efficiency Model (compiled-policy рівень)**
-- [ ] **Release 1 Exit Criteria (ще не повністю досягнуті)**
+- [x] **Done: Boot and Runtime Activation**
+- [x] **Done: Problem Framing and Routing**
+- [x] **Done: Task and Execution State**
+- [ ] **Partial: Use-Case Packs**
+  Done in this area:
+  - canonical pack routing exists for research, spec, work-pool, dev, bug-fix, and reflection flows
+  - pack helpers and TODO scaffolding are implemented
+  - reflection-pack is wired into documentation and framework self-analysis flows
+- [ ] **Partial: Subagent System and Dispatch**
+  Done in this area:
+  - provider detection, requested/effective mode calculation, and route snapshots exist
+  - external-first fanout, deterministic fallback, and bounded arbitration are implemented
+  - worker-entry and worker-thinking contracts are separated from orchestrator governance
+  - recovery helpers, subagent suppression, active-subagent visibility, and richer scorecards now exist
+- [ ] **Partial: Review and Verification Fabric**
+  Done in this area:
+  - route artifacts now expose `review_state`
+  - verification and health-check scripts are implemented
+  - quality-health-check reads canonical subagent run logs
+- [ ] **Partial: Risk and Governance**
+  Done in this area:
+  - route artifacts now expose `risk_class`
+  - degraded, cooldown, auth-invalid, and interactive-blocked subagent states are modeled
+  - bounded recovery and routing suppression semantics are implemented for broken CLI subagents
+- [x] **Done: Execution Environment**
+- [ ] **Partial: Documentation and Contract Sync**
+  Done in this area:
+  - protocol index, framework map, worker contracts, and changelog are in place
+  - framework/project boundary documentation is established
+  - release-target documents are synchronized with the current framework shape
+- [ ] **Partial: Telemetry and Evaluation**
+  Done in this area:
+  - eval-pack and subagent evaluation scripts exist
+  - scorecards now track useful-progress and time-to-first-useful-output metrics
+  - operator status exposes preferred task classes and degraded subagent visibility
+- [ ] **Partial: Learning and Improvement Loop**
+  Done in this area:
+  - reflection, eval-pack, and scorecard-driven routing adaptation exist
+  - provider promotion, demotion, cooldown, and recovery flows are implemented
+- [ ] **Partial: Project Overlay and Portability**
+  Done in this area:
+  - validated overlay template exists
+  - the provider template now mirrors the canonical VIDA subagent stack instead of abstract placeholders
+  - bash installer and framework-only release packaging exist
+- [ ] **Not Done: Cost and Efficiency Model**
+- [ ] **Not Done: Release 1 Exit Criteria**
 
 ## Release 1 Capability Matrix
 

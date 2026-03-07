@@ -71,14 +71,35 @@ Release 1 should be delivered through these phases:
 5. Phase E: Documentation Contract and Protocol Runtime Alignment
 6. Phase F: Extraction Readiness and Standalone Framework Preparation
 
-### Поточний статус реалізації (аудит кодової бази)
+### Current Implementation Status (Codebase Audit)
 
-- [x] **Phase A: Runtime Core Integrity** — реалізовано базовий runtime-скелет (`br`/TODO lifecycle, boot profile, context capsule, health-check).
-- [x] **Phase B: Orchestration and Subagent Reliability** — реалізовано базові механіки роутингу/dispatch/fallback для subagent-системи.
-- [ ] **Phase C: Verification, Review, and Risk Gates** — частково: є verify/health-gates, але `risk_class`/`review_state` ще не доведені до цільового стану Roadmap.
-- [ ] **Phase D: Telemetry, Scorecards, and Drift Awareness** — частково: є eval/telemetry-утиліти, але повна зріла модель scorecards/drift ще в процесі.
-- [x] **Phase E: Documentation Contract and Protocol Runtime Alignment** — реалізовано основу протоколів, індексів та boundary-контрактів документації.
-- [ ] **Phase F: Extraction Readiness and Standalone Framework Preparation** — ще не завершено (ціль фінальної стадії Release 1).
+- [x] **Done: Phase A — Runtime Core Integrity**
+- [ ] **Partial: Phase B — Orchestration and Subagent Reliability**
+  Done in this phase:
+  - route snapshots, requested/effective mode selection, and provider scoring are implemented
+  - external-first fanout, fallback, arbitration, and live ensemble visibility are implemented
+  - worker-entry and worker-thinking contracts are separated from orchestrator logic
+  - degraded CLI subagent recovery helpers now exist
+- [ ] **Partial: Phase C — Verification, Review, and Risk Gates**
+  Done in this phase:
+  - route and run artifacts expose `risk_class`
+  - route and run artifacts expose `review_state`
+  - health-check tooling reads canonical subagent run logs and surfaces degraded lanes
+- [ ] **Partial: Phase D — Telemetry, Scorecards, and Drift Awareness**
+  Done in this phase:
+  - eval-pack and subagent evaluation scripts exist
+  - scorecards track useful-progress rate, timeout-after-progress count, and time-to-first-useful-output
+  - operator status exposes preferred task classes and current subagent health state
+- [ ] **Partial: Phase E — Documentation Contract and Protocol Runtime Alignment**
+  Done in this phase:
+  - release-target documents, protocol index, worker contracts, and changelog are in place
+  - canonical runtime vocabulary was pushed further toward `cli subagent` terminology
+  - provider templates now mirror the real subagent runtime contract
+- [ ] **Partial: Phase F — Extraction Readiness and Standalone Framework Preparation**
+  Done in this phase:
+  - a bash installer exists for framework payload installation
+  - framework-only release packaging exists
+  - the repository now has a clearer standalone framework surface than before
 
 ## Phase A: Runtime Core Integrity
 
