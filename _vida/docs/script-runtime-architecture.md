@@ -93,4 +93,4 @@ Do not place here:
 1. project build commands,
 2. app-specific delivery scripts,
 3. product runtime runbooks,
-4. provider/model choices for project overlay.
+4. subagent/model choices for project overlay.

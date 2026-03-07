@@ -38,20 +38,24 @@ pack_router_keywords:
 
 # Optional agent-system example.
 # Prefer YAML lists for repeated scalar values in new overlays and templates.
+# This example mirrors the canonical VIDA cli-subagent stack and includes the
+# runtime knobs that have proven useful in real CLI-subagent orchestration:
+# cli-subagent runtime caps, minimum useful output thresholds, bridge fallback,
+# and cli-subagent-side timeout env vars where those CLIs actually honor them.
 #
 # agent_system:
 #   init_on_boot: true
 #   mode: hybrid
 #   state_owner: orchestrator_only
-#   max_parallel_agents: 3
+#   max_parallel_agents: 5
 #   scoring:
 #     consecutive_failure_limit: 5
 #     promotion_score: 80
 #     demotion_score: 35
-#   providers:
+#   subagents:
 #     internal_subagents:
 #       enabled: true
-#       provider_class: internal
+#       subagent_backend_class: internal
 #       role: senior_internal
 #       orchestration_tier: senior
 #       cost_priority: premium
@@ -71,16 +75,123 @@ pack_router_keywords:
 #         - implementation
 #         - architecture
 #         - integration
-#     example_cli:
-#       enabled: false
-#       provider_class: external_cli
-#       detect_command: example
+#     codex_cli:
+#       enabled: true
+#       subagent_backend_class: external_cli
+#       detect_command: codex
+#       role: bridge_fallback
+#       orchestration_tier: bridge
+#       cost_priority: fallback
+#       models_hint:
+#         - gpt-5.1-codex-mini
+#         - gpt-5.2-codex
+#       default_model: gpt-5.1-codex-mini
+#       capability_band:
+#         - read_only
+#         - review_safe
+#         - bounded_write_safe
+#       write_scope: scoped_only
+#       max_runtime_seconds: 240
+#       min_output_bytes: 260
+#       billing_tier: low
+#       speed_tier: medium
+#       quality_tier: high
+#       specialties:
+#         - code_edit
+#         - deep_review
+#         - bounded_write
+#       dispatch:
+#         command: codex
+#         static_args:
+#           - -a
+#           - never
+#           - exec
+#           - --ephemeral
+#           - -s
+#           - read-only
+#         workdir_flag: -C
+#         model_flag: -m
+#         output_mode: file
+#         output_flag: -o
+#         prompt_mode: positional
+#     qwen_cli:
+#       enabled: true
+#       subagent_backend_class: external_cli
+#       detect_command: qwen
+#       role: free_primary
+#       orchestration_tier: external_free
+#       cost_priority: highest
+#       capability_band:
+#         - read_only
+#         - review_safe
+#       write_scope: none
+#       max_runtime_seconds: 180
+#       min_output_bytes: 260
+#       billing_tier: free
+#       speed_tier: medium
+#       quality_tier: high
+#       specialties:
+#         - long_context
+#         - agentic_coding
+#         - review
+#       dispatch:
+#         command: qwen
+#         static_args:
+#           - --sandbox
+#           - -y
+#           - -o
+#           - text
+#         workdir_flag: --workdir
+#         output_mode: stdout
+#         prompt_mode: positional
+#     gemini_cli:
+#       enabled: true
+#       subagent_backend_class: external_cli
+#       detect_command: gemini
+#       role: free_primary
+#       orchestration_tier: external_free
+#       cost_priority: highest
+#       capability_band:
+#         - read_only
+#         - review_safe
+#       write_scope: none
+#       max_runtime_seconds: 180
+#       min_output_bytes: 260
+#       billing_tier: free
+#       speed_tier: medium
+#       quality_tier: high
+#       specialties:
+#         - research
+#         - review
+#         - long_context
+#       dispatch:
+#         command: gemini
+#         static_args:
+#           - --sandbox
+#           - -y
+#           - --output-format
+#           - text
+#         probe_static_args:
+#           - --sandbox
+#           - -y
+#           - --output-format
+#           - text
+#         probe_prompt: Return exactly one line: GEMINI_OK
+#         probe_expect_substring: GEMINI_OK
+#         probe_timeout_seconds: 20
+#         output_mode: stdout
+#         prompt_mode: flag
+#         prompt_flag: -p
+#     kilo_cli:
+#       enabled: true
+#       subagent_backend_class: external_cli
+#       detect_command: kilo
 #       role: free_primary
 #       orchestration_tier: external_free
 #       cost_priority: highest
 #       models_hint:
-#         - example/model
-#       default_model: example/model
+#         - kilo/minimax/minimax-m2.5:free
+#       default_model: kilo/minimax/minimax-m2.5:free
 #       capability_band:
 #         - read_only
 #         - review_safe
@@ -92,37 +203,113 @@ pack_router_keywords:
 #       quality_tier: medium
 #       specialties:
 #         - planning
+#         - spec
 #         - review
 #       dispatch:
-#         command: example
+#         command: kilo
 #         static_args:
 #           - run
 #           - --auto
 #         env:
-#           EXAMPLE_TIMEOUT_MS: "600000"
+#           OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS: "600000"
 #         workdir_flag: --dir
 #         model_flag: -m
 #         output_mode: stdout
 #         prompt_mode: positional
-#   routing:
-#     default:
-#       providers:
-#         - example_cli
-#         - internal_subagents
+#     opencode_cli:
+#       enabled: true
+#       subagent_backend_class: external_cli
+#       detect_command: opencode
+#       role: free_primary
+#       orchestration_tier: external_free
+#       cost_priority: highest
+#       models_hint:
+#         - opencode/minimax-m2.5-free
+#         - opencode/gpt-5.1-codex-mini
+#       default_model: opencode/minimax-m2.5-free
+#       capability_band:
+#         - read_only
+#         - review_safe
 #       write_scope: none
-#       verification_gate: provider_return_contract
-#       dispatch_required: external_first_when_eligible
-#       external_first_required: yes
-#       bridge_fallback_provider: example_cli
-#       internal_escalation_trigger: write_scope_or_tie_break
-#     analysis:
-#       providers:
-#         - example_cli
-#         - internal_subagents
-#       fanout_providers:
-#         - example_cli
-#       fanout_min_results: 1
-#       merge_policy: consensus_with_conflict_flag
 #       max_runtime_seconds: 180
 #       min_output_bytes: 260
+#       billing_tier: free
+#       speed_tier: fast
+#       quality_tier: medium
+#       specialties:
+#         - planning
+#         - spec
+#         - review
+#       dispatch:
+#         command: opencode
+#         static_args:
+#           - run
+#         env:
+#           OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS: "600000"
+#         workdir_flag: --dir
+#         model_flag: -m
+#         output_mode: stdout
+#         prompt_mode: positional
+#     vibe_cli:
+#       enabled: true
+#       subagent_backend_class: external_cli
+#       detect_command: vibe
+#       role: free_primary
+#       orchestration_tier: external_free
+#       cost_priority: highest
+#       capability_band:
+#         - read_only
+#         - review_safe
+#       write_scope: none
+#       max_runtime_seconds: 180
+#       min_output_bytes: 260
+#       billing_tier: free
+#       speed_tier: medium
+#       quality_tier: high
+#       specialties:
+#         - engineering
+#         - cli_review
+#         - multi_file
+#       dispatch:
+#         command: vibe
+#         workdir_flag: --workdir
+#         output_mode: stdout
+#         prompt_mode: flag
+#         prompt_flag: -p
+#   routing:
+#     default:
+#       subagents:
+#         - qwen_cli
+#         - kilo_cli
+#         - opencode_cli
+#         - vibe_cli
+#         - codex_cli
+#         - internal_subagents
+#       write_scope: none
+#       verification_gate: subagent_return_contract
+#       dispatch_required: external_first_when_eligible
+#       external_first_required: yes
+#       bridge_fallback_subagent: codex_cli
+#       internal_escalation_trigger: write_scope_or_tie_break
+#     analysis:
+#       subagents:
+#         - qwen_cli
+#         - kilo_cli
+#         - opencode_cli
+#         - vibe_cli
+#         - codex_cli
+#         - internal_subagents
+#       fanout_subagents:
+#         - qwen_cli
+#         - gemini_cli
+#         - kilo_cli
+#         - opencode_cli
+#         - vibe_cli
+#       fanout_min_results: 3
+#       merge_policy: consensus_with_conflict_flag
+#       max_runtime_seconds: 180
+#       min_output_bytes: 320
 #       verification_gate: source_backed_summary
+#       dispatch_required: fanout_then_synthesize
+#       external_first_required: yes
+#       bridge_fallback_subagent: codex_cli

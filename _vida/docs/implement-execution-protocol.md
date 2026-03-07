@@ -100,7 +100,7 @@ On trigger:
    - docs checks.
 3. Parallel write lanes are forbidden unless explicit isolation exists (separate worktrees + merge gate).
 4. Keep main thread clean: subagents return concise artifacts, not raw noisy logs.
-5. When route metadata declares `fanout_providers`, use that fanout only for read-only phases and keep the writer lane singular under the orchestrator.
+5. When route metadata declares `fanout_subagents`, use that fanout only for read-only phases and keep the writer lane singular under the orchestrator.
 
 ## Skills Policy
 

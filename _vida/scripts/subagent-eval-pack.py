@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Post-task provider evaluation and strategy refresh for VIDA subagents."""
+"""Post-task subagent evaluation and strategy refresh for VIDA."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent.parent
 LOG_DIR = ROOT_DIR / ".vida" / "logs"
 STATE_DIR = ROOT_DIR / ".vida" / "state"
-RUN_LOG_PATH = LOG_DIR / "subagent-provider-runs.jsonl"
+RUN_LOG_PATH = LOG_DIR / "subagent-runs.jsonl"
 PROCESSED_PATH = STATE_DIR / "subagent-eval-processed.json"
 STRATEGY_PATH = STATE_DIR / "subagent-strategy.json"
 
@@ -115,6 +115,8 @@ def quality_score_for(run: dict[str, Any], eval_pack: dict[str, Any], is_closed:
         score = 12
     if run.get("useful_progress"):
         score += 10
+    if run.get("chatter_only"):
+        score -= 12
     if run.get("status") == "timeout" and run.get("useful_progress"):
         score += 6
     if is_closed:
@@ -167,7 +169,7 @@ def infer_domain_tags(run: dict[str, Any]) -> list[str]:
         tags.append("auth_security")
     if any(token in text for token in ["ui", "widget", "layout", "render", "component"]):
         tags.append("frontend_ui")
-    if any(token in text for token in ["state", "store", "provider", "cache", "repository"]):
+    if any(token in text for token in ["state", "store", "subagent", "cache", "repository"]):
         tags.append("state_management")
     if any(token in text for token in ["agents.md", "_vida", "protocol", "subagent", "framework"]):
         tags.append("vida_framework")
@@ -176,66 +178,82 @@ def infer_domain_tags(run: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(tags))
 
 
-def strengths_for(provider_name: str, provider_cfg: dict[str, Any], scorecard: dict[str, Any]) -> list[str]:
+def strengths_for_subagent(subagent_name: str, subagent_cfg: dict[str, Any], scorecard: dict[str, Any]) -> list[str]:
     strengths: list[str] = []
-    if provider_cfg.get("billing_tier") == "free":
+    if subagent_cfg.get("billing_tier") == "free":
         strengths.append("zero-cost lane")
-    if provider_cfg.get("speed_tier") == "fast":
+    if subagent_cfg.get("speed_tier") == "fast":
         strengths.append("fast turnaround")
-    if provider_cfg.get("quality_tier") == "high":
+    if subagent_cfg.get("quality_tier") == "high":
         strengths.append("high-quality review lane")
     if int(scorecard.get("success_count", 0)) >= int(scorecard.get("failure_count", 0)):
         strengths.append("stable recent outcomes")
-    strengths.extend(provider_cfg.get("specialties", []))
+    strengths.extend(subagent_cfg.get("specialties", []))
     return list(dict.fromkeys(strengths))[:5]
 
 
-def weaknesses_for(provider_name: str, provider_cfg: dict[str, Any], scorecard: dict[str, Any]) -> list[str]:
+def weaknesses_for_subagent(subagent_name: str, subagent_cfg: dict[str, Any], scorecard: dict[str, Any]) -> list[str]:
     weaknesses: list[str] = []
-    if provider_cfg.get("write_scope") == "none":
+    if subagent_cfg.get("write_scope") == "none":
         weaknesses.append("read-only only")
-    if provider_cfg.get("billing_tier") in {"low", "paid"}:
+    if subagent_cfg.get("billing_tier") in {"low", "paid"}:
         weaknesses.append("cost-limited lane")
-    if provider_cfg.get("default_model") in {None, ""}:
+    if subagent_cfg.get("default_model") in {None, ""}:
         weaknesses.append("backend resolved outside repo config")
     if int(scorecard.get("score", 50)) < 45:
         weaknesses.append("weak recent confidence trend")
     return list(dict.fromkeys(weaknesses))[:4]
 
 
+def target_review_state_for(risk_class: str) -> str:
+    normalized = str(risk_class or "R0").upper()
+    if normalized == "R0":
+        return "promotion_ready"
+    if normalized == "R1":
+        return "policy_gate_required"
+    if normalized == "R2":
+        return "senior_review_required"
+    return "human_gate_required"
+
+
 def refresh_strategy(task_id: str) -> dict[str, Any]:
     snapshot = subagent_system.init_snapshot(task_id)
     config = vida_config.load_validated_config()
     routing = vida_config.dotted_get(config, "agent_system.routing", {}) or {}
-    providers = snapshot.get("providers", {})
+    subagents = snapshot.get("subagents", {})
     scorecards = snapshot.get("scorecards", {})
 
     strategy = {
         "generated_at": now_utc(),
         "task_id": task_id,
-        "providers": {},
+        "subagents": {},
         "task_classes": {},
         "domains": {},
     }
 
-    for provider_name, provider_cfg in providers.items():
-        scorecard = scorecards.get(provider_name, {}).get("global", {})
-        strategy["providers"][provider_name] = {
-            "billing_tier": provider_cfg.get("billing_tier", "unknown"),
-            "speed_tier": provider_cfg.get("speed_tier", "unknown"),
-            "quality_tier": provider_cfg.get("quality_tier", "unknown"),
-            "write_scope": provider_cfg.get("write_scope", "none"),
+    for subagent_name, subagent_cfg in subagents.items():
+        scorecard = scorecards.get(subagent_name, {}).get("global", {})
+        strategy["subagents"][subagent_name] = {
+            "billing_tier": subagent_cfg.get("billing_tier", "unknown"),
+            "speed_tier": subagent_cfg.get("speed_tier", "unknown"),
+            "quality_tier": subagent_cfg.get("quality_tier", "unknown"),
+            "write_scope": subagent_cfg.get("write_scope", "none"),
             "state": scorecard.get("state", "normal"),
+            "subagent_state": scorecard.get("subagent_state", "active"),
+            "failure_reason": scorecard.get("failure_reason", ""),
+            "cooldown_until": scorecard.get("cooldown_until", ""),
+            "probe_required": bool(scorecard.get("probe_required", False)),
             "score": int(scorecard.get("score", 50)),
             "success_count": int(scorecard.get("success_count", 0)),
             "failure_count": int(scorecard.get("failure_count", 0)),
             "useful_progress_count": int(scorecard.get("useful_progress_count", 0)),
+            "chatter_only_count": int(scorecard.get("chatter_only_count", 0)),
             "useful_progress_rate": float(scorecard.get("useful_progress_rate", 0) or 0),
             "timeout_after_progress_count": int(scorecard.get("timeout_after_progress_count", 0)),
             "avg_time_to_first_useful_output_ms": int(scorecard.get("avg_time_to_first_useful_output_ms", 0) or 0),
-            "domains": scorecards.get(provider_name, {}).get("by_domain", {}),
-            "strengths": strengths_for(provider_name, provider_cfg, scorecard),
-            "weaknesses": weaknesses_for(provider_name, provider_cfg, scorecard),
+            "domains": scorecards.get(subagent_name, {}).get("by_domain", {}),
+            "strengths": strengths_for_subagent(subagent_name, subagent_cfg, scorecard),
+            "weaknesses": weaknesses_for_subagent(subagent_name, subagent_cfg, scorecard),
         }
 
     discovered_domains: set[str] = set()
@@ -244,35 +262,31 @@ def refresh_strategy(task_id: str) -> dict[str, Any]:
             discovered_domains.add(str(domain_name))
     for domain_name in sorted(discovered_domains):
         ranked: list[dict[str, Any]] = []
-        for provider_name, payload in scorecards.items():
+        for subagent_name, payload in scorecards.items():
             domain_card = payload.get("by_domain", {}).get(domain_name)
             if not isinstance(domain_card, dict):
                 continue
             ranked.append(
                 {
-                    "provider": provider_name,
+                    "subagent": subagent_name,
                     "score": int(domain_card.get("score", 50)),
                     "state": str(domain_card.get("state", "normal")),
                 }
             )
-        ranked.sort(key=lambda item: (-item["score"], item["provider"]))
+        ranked.sort(key=lambda item: (-item["score"], item["subagent"]))
         strategy["domains"][domain_name] = ranked
 
     for task_class in sorted(routing.keys()):
-        route = subagent_system.route_provider(task_class)
-        ordered = [route.get("provider")] + [item.get("provider") for item in route.get("fallback_chain", [])]
+        route = subagent_system.route_subagent(task_class)
+        ordered = [route.get("selected_subagent")] + [item.get("subagent") for item in route.get("fallback_subagents", [])]
         strategy["task_classes"][task_class] = {
-            "recommended_order": [provider for provider in ordered if provider],
-            "fanout_providers": route.get("fanout_providers", []),
+            "recommended_order": [subagent for subagent in ordered if subagent],
+            "fanout_subagents": route.get("fanout_subagents", []),
             "fanout_min_results": int(route.get("fanout_min_results", 0)),
-            "merge_policy": route.get("merge_policy", "single_provider"),
+            "merge_policy": route.get("merge_policy", "single_subagent"),
             "verification_gate": route.get("verification_gate"),
             "risk_class": route.get("risk_class", "R0"),
-            "target_review_state": (
-                "promotion_ready"
-                if str(route.get("risk_class", "R0")) == "R0"
-                else "policy_or_human_gate"
-            ),
+            "target_review_state": target_review_state_for(str(route.get("risk_class", "R0"))),
         }
 
     save_json(STRATEGY_PATH, strategy)
@@ -299,13 +313,17 @@ def run(task_id: str) -> int:
             f"billing={run_item.get('billing_tier')}; output_bytes={run_item.get('output_bytes', 0)}; "
             f"merge_ready={run_item.get('merge_ready', False)}; "
             f"useful_progress={run_item.get('useful_progress', False)}; "
+            f"chatter_only={run_item.get('chatter_only', False)}; "
             f"time_to_first_useful_output_ms={run_item.get('time_to_first_useful_output_ms')}; "
+            f"subagent_state={run_item.get('subagent_state', 'active')}; "
+            f"failure_reason={run_item.get('failure_reason', '')}; "
+            f"cooldown_until={run_item.get('cooldown_until', '')}; "
             f"review_state={run_item.get('review_state', 'review_pending')}; "
             f"risk_class={run_item.get('risk_class', 'R0')}; "
             f"domains={','.join(domain_tags)}"
         )
         score_update = subagent_system.update_score(
-            str(run_item.get("provider")),
+            str(run_item.get("subagent")),
             result,
             str(run_item.get("task_class")),
             quality,
@@ -314,6 +332,7 @@ def run(task_id: str) -> int:
             domain_tags,
             {
                 "useful_progress": bool(run_item.get("useful_progress", False)),
+                "chatter_only": bool(run_item.get("chatter_only", False)),
                 "time_to_first_useful_output_ms": (
                     int(run_item.get("time_to_first_useful_output_ms", 0) or 0)
                     if run_item.get("time_to_first_useful_output_ms") is not None
@@ -323,12 +342,17 @@ def run(task_id: str) -> int:
                     str(run_item.get("status")) == "timeout"
                     and bool(run_item.get("useful_progress", False))
                 ),
+                "subagent_state": str(run_item.get("subagent_state", "active")),
+                "failure_reason": str(run_item.get("failure_reason", "")),
+                "cooldown_until": str(run_item.get("cooldown_until", "")),
+                "probe_required": bool(run_item.get("probe_required", False)),
+                "last_quota_exhausted_at": str(run_item.get("last_quota_exhausted_at", "")),
             },
         )
         review_entries.append(
             {
                 "run_id": run_id,
-                "provider": run_item.get("provider"),
+                "subagent": run_item.get("subagent"),
                 "task_class": run_item.get("task_class"),
                 "domain_tags": domain_tags,
                 "quality_score": quality,
@@ -349,8 +373,8 @@ def run(task_id: str) -> int:
         "generated_at": now_utc(),
         "task_id": task_id,
         "task_closed": is_closed,
-        "provider_runs_seen": len(runs),
-        "provider_runs_processed": len(review_entries),
+        "subagent_runs_seen": len(runs),
+        "subagent_runs_processed": len(review_entries),
         "eval_pack": eval_pack,
         "review_entries": review_entries,
         "strategy_path": str(STRATEGY_PATH),

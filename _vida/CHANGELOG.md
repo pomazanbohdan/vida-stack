@@ -8,6 +8,47 @@ Rules:
 4. Group updates under fixed headings when applicable: `Added`, `Changed`, `Fixed`, `Protocol`.
 5. Keep this file limited to VIDA framework/runtime changes, not project feature work.
 
+## 2026-03-07 06:05
+
+Added:
+
+1. `subagent-system.py` now exposes recovery helpers: `recover <subagent>` and `recover-pending`.
+2. Ensemble manifests now expose live `active_subagents` and `active_count` during running fanout.
+
+Changed:
+
+1. Runtime vocabulary was pushed further toward canonical `cli subagent` terminology across dispatch, routing, evaluation, and operator status surfaces.
+2. Worker gating now relies on structured evidence signals instead of a coarse byte-size fallback for `useful_progress` and `merge_ready`.
+3. Operator status now exposes `preferred_task_classes` so lane-fit can be seen without inspecting separate route calls.
+4. `quality-health-check.sh` now reads the canonical `.vida/logs/subagent-runs.jsonl` run log and surfaces `cli subagent` health state directly.
+
+Fixed:
+
+1. Routing now hydrates fresh scorecards from `SCORECARD_PATH` instead of relying on stale `INIT_PATH` runtime snapshots.
+2. `auth_invalid` and `interactive_blocked` remediation semantics now consistently suppress routing and require bounded recovery/probe flow.
+3. Health output now shows degraded/cooldown/probe-required cli subagents by name.
+4. Runtime availability state migration now canonicalizes old `provider_state` payloads to `subagent_state`.
+
+Protocol:
+
+1. `subagent-system-protocol.md` now reflects recovery commands, suppressed-subagent visibility, and live ensemble manifest expectations.
+2. `subagent-onboarding-protocol.md` now documents recovery flow and routing-block semantics for broken cli subagents.
+
+## 2026-03-07 01:41
+
+Changed:
+
+1. `_vida/templates/vida.config.yaml.template` now mirrors the canonical VIDA provider stack instead of a generic single-provider example.
+2. The template now includes practical runtime settings for real CLI subagents: provider tiers, `max_runtime_seconds`, `min_output_bytes`, bridge fallback, and external-first routing metadata.
+
+Fixed:
+
+1. The template now embeds provider-specific timeout environment settings where they are known to be operationally useful, including `OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` for `kilo_cli` and `opencode_cli`.
+
+Protocol:
+
+1. The default overlay template is now aligned with the real subagent runtime contract, so new projects inherit working provider configuration instead of abstract placeholders.
+
 ## 2026-03-07 01:35
 
 Added:

@@ -31,11 +31,11 @@ PROJECT_BOOTSTRAP_KEYS = {
     "allow_scaffold_missing",
     "require_launch_confirmation",
 }
-AGENT_SYSTEM_KEYS = {"init_on_boot", "mode", "state_owner", "max_parallel_agents", "providers", "routing", "scoring"}
+AGENT_SYSTEM_KEYS = {"init_on_boot", "mode", "state_owner", "max_parallel_agents", "subagents", "routing", "scoring"}
 AGENT_SYSTEM_MODES = {"native", "hybrid", "disabled"}
-PROVIDER_KEYS = {
+SUBAGENT_KEYS = {
     "enabled",
-    "provider_class",
+    "subagent_backend_class",
     "detect_command",
     "role",
     "orchestration_tier",
@@ -54,24 +54,38 @@ PROVIDER_KEYS = {
     "specialties",
     "dispatch",
 }
-PROVIDER_CLASSES = {"internal", "external_cli", "external_review"}
-DISPATCH_KEYS = {"command", "static_args", "workdir_flag", "model_flag", "output_mode", "output_flag", "prompt_mode", "prompt_flag", "env"}
+SUBAGENT_CLASSES = {"internal", "external_cli", "external_review"}
+DISPATCH_KEYS = {
+    "command",
+    "static_args",
+    "workdir_flag",
+    "model_flag",
+    "output_mode",
+    "output_flag",
+    "prompt_mode",
+    "prompt_flag",
+    "env",
+    "probe_static_args",
+    "probe_prompt",
+    "probe_expect_substring",
+    "probe_timeout_seconds",
+}
 DISPATCH_OUTPUT_MODES = {"stdout", "file"}
 DISPATCH_PROMPT_MODES = {"positional", "flag"}
 ROUTING_KEYS = {
-    "providers",
+    "subagents",
     "models",
     "profiles",
     "write_scope",
     "verification_gate",
     "max_runtime_seconds",
     "min_output_bytes",
-    "fanout_providers",
+    "fanout_subagents",
     "fanout_min_results",
     "merge_policy",
     "dispatch_required",
     "external_first_required",
-    "bridge_fallback_provider",
+    "bridge_fallback_subagent",
     "internal_escalation_trigger",
 }
 SCORING_KEYS = {"consecutive_failure_limit", "promotion_score", "demotion_score"}
@@ -392,8 +406,8 @@ def _validate_project_bootstrap(payload: dict[str, Any], errors: list[str]) -> N
             _validate_string_field(payload, key, path, errors)
 
 
-def _validate_dispatch(provider_name: str, dispatch_cfg: dict[str, Any], errors: list[str]) -> None:
-    path = f"agent_system.providers.{provider_name}.dispatch"
+def _validate_dispatch(subagent_name: str, dispatch_cfg: dict[str, Any], errors: list[str]) -> None:
+    path = f"agent_system.subagents.{subagent_name}.dispatch"
     _validate_allowed_keys(dispatch_cfg, DISPATCH_KEYS, path, errors)
     _validate_string_field(dispatch_cfg, "command", path, errors, required=True)
     if "static_args" in dispatch_cfg:
@@ -419,11 +433,11 @@ def _validate_dispatch(provider_name: str, dispatch_cfg: dict[str, Any], errors:
             _validate_string_field(dispatch_cfg, key, path, errors)
 
 
-def _validate_provider(provider_name: str, provider_cfg: dict[str, Any], errors: list[str]) -> None:
-    path = f"agent_system.providers.{provider_name}"
-    _validate_allowed_keys(provider_cfg, PROVIDER_KEYS, path, errors)
-    enabled = _validate_bool_field(provider_cfg, "enabled", path, errors)
-    provider_class = _validate_enum_field(provider_cfg, "provider_class", path, errors, allowed=PROVIDER_CLASSES, required=True)
+def _validate_subagent(subagent_name: str, subagent_cfg: dict[str, Any], errors: list[str]) -> None:
+    path = f"agent_system.subagents.{subagent_name}"
+    _validate_allowed_keys(subagent_cfg, SUBAGENT_KEYS, path, errors)
+    enabled = _validate_bool_field(subagent_cfg, "enabled", path, errors)
+    subagent_backend_class = _validate_enum_field(subagent_cfg, "subagent_backend_class", path, errors, allowed=SUBAGENT_CLASSES, required=True)
     for key in {
         "detect_command",
         "role",
@@ -436,29 +450,29 @@ def _validate_provider(provider_name: str, provider_cfg: dict[str, Any], errors:
         "speed_tier",
         "quality_tier",
     }:
-        if key in provider_cfg:
-            _validate_string_field(provider_cfg, key, path, errors)
+        if key in subagent_cfg:
+            _validate_string_field(subagent_cfg, key, path, errors)
     for key in {"max_runtime_seconds", "min_output_bytes"}:
-        if key in provider_cfg:
-            _validate_int_field(provider_cfg, key, path, errors, min_value=0)
+        if key in subagent_cfg:
+            _validate_int_field(subagent_cfg, key, path, errors, min_value=0)
     for key in {"models_hint", "profiles", "capability_band", "specialties"}:
-        if key in provider_cfg:
-            _validate_repeated_string_field(provider_cfg, key, path, errors)
-    profiles = _validate_repeated_string_field(provider_cfg, "profiles", path, errors) if "profiles" in provider_cfg else None
-    default_profile = _validate_string_field(provider_cfg, "default_profile", path, errors) if "default_profile" in provider_cfg else None
+        if key in subagent_cfg:
+            _validate_repeated_string_field(subagent_cfg, key, path, errors)
+    profiles = _validate_repeated_string_field(subagent_cfg, "profiles", path, errors) if "profiles" in subagent_cfg else None
+    default_profile = _validate_string_field(subagent_cfg, "default_profile", path, errors) if "default_profile" in subagent_cfg else None
     if profiles is not None and default_profile and default_profile not in profiles:
         errors.append(f"{path}.default_profile: must be present in profiles")
-    dispatch_cfg = _require_mapping(provider_cfg, "dispatch", path, errors, required=bool(enabled) and provider_class == "external_cli")
+    dispatch_cfg = _require_mapping(subagent_cfg, "dispatch", path, errors, required=bool(enabled) and subagent_backend_class == "external_cli")
     if dispatch_cfg is not None:
-        _validate_dispatch(provider_name, dispatch_cfg, errors)
+        _validate_dispatch(subagent_name, dispatch_cfg, errors)
 
 
 def _validate_routing(route_name: str, route_cfg: dict[str, Any], errors: list[str]) -> None:
     path = f"agent_system.routing.{route_name}"
     _validate_allowed_keys(route_cfg, ROUTING_KEYS, path, errors)
-    providers = _validate_repeated_string_field(route_cfg, "providers", path, errors) if "providers" in route_cfg else None
-    if route_name == "default" and providers is None:
-        errors.append(f"{path}.providers: missing required provider order")
+    subagents = _validate_repeated_string_field(route_cfg, "subagents", path, errors) if "subagents" in route_cfg else None
+    if route_name == "default" and subagents is None:
+        errors.append(f"{path}.subagents: missing required subagent order")
     _validate_string_map_field(route_cfg, "models", path, errors)
     _validate_string_map_field(route_cfg, "profiles", path, errors)
     for key in {
@@ -467,7 +481,7 @@ def _validate_routing(route_name: str, route_cfg: dict[str, Any], errors: list[s
         "merge_policy",
         "dispatch_required",
         "external_first_required",
-        "bridge_fallback_provider",
+        "bridge_fallback_subagent",
         "internal_escalation_trigger",
     }:
         if key in route_cfg:
@@ -475,10 +489,10 @@ def _validate_routing(route_name: str, route_cfg: dict[str, Any], errors: list[s
     for key in {"max_runtime_seconds", "min_output_bytes"}:
         if key in route_cfg:
             _validate_int_field(route_cfg, key, path, errors, min_value=0)
-    fanout = _validate_repeated_string_field(route_cfg, "fanout_providers", path, errors) if "fanout_providers" in route_cfg else None
+    fanout = _validate_repeated_string_field(route_cfg, "fanout_subagents", path, errors) if "fanout_subagents" in route_cfg else None
     fanout_min = _validate_int_field(route_cfg, "fanout_min_results", path, errors, min_value=0) if "fanout_min_results" in route_cfg else None
     if fanout is not None and fanout_min is not None and fanout_min > len(fanout):
-        errors.append(f"{path}.fanout_min_results: must be <= number of fanout_providers")
+        errors.append(f"{path}.fanout_min_results: must be <= number of fanout_subagents")
 
 
 def _validate_scoring(scoring_cfg: dict[str, Any], errors: list[str]) -> None:
@@ -497,18 +511,18 @@ def _validate_agent_system(agent_cfg: dict[str, Any], errors: list[str]) -> None
     _validate_enum_field(agent_cfg, "mode", path, errors, allowed=AGENT_SYSTEM_MODES, required=True)
     _validate_string_field(agent_cfg, "state_owner", path, errors, required=True)
     _validate_int_field(agent_cfg, "max_parallel_agents", path, errors, required=True, min_value=1)
-    providers_cfg = _require_mapping(agent_cfg, "providers", path, errors, required=True)
-    if providers_cfg is not None:
-        if not providers_cfg:
-            errors.append(f"{path}.providers: must not be empty")
-        for provider_name, provider_cfg in providers_cfg.items():
-            if not isinstance(provider_name, str) or not provider_name.strip():
-                errors.append(f"{path}.providers: provider names must be non-empty strings")
+    subagents_cfg = _require_mapping(agent_cfg, "subagents", path, errors, required=True)
+    if subagents_cfg is not None:
+        if not subagents_cfg:
+            errors.append(f"{path}.subagents: must not be empty")
+        for subagent_name, subagent_cfg in subagents_cfg.items():
+            if not isinstance(subagent_name, str) or not subagent_name.strip():
+                errors.append(f"{path}.subagents: subagent names must be non-empty strings")
                 continue
-            if not _is_mapping(provider_cfg):
-                errors.append(f"{path}.providers.{provider_name}: expected mapping")
+            if not _is_mapping(subagent_cfg):
+                errors.append(f"{path}.subagents.{subagent_name}: expected mapping")
                 continue
-            _validate_provider(provider_name, provider_cfg, errors)
+            _validate_subagent(subagent_name, subagent_cfg, errors)
     routing_cfg = _require_mapping(agent_cfg, "routing", path, errors, required=True)
     if routing_cfg is not None:
         if not routing_cfg:

@@ -171,9 +171,29 @@ if [[ -f "vida.config.yaml" ]]; then
     vida_status_line fail "[health] FAIL: vida.config.yaml schema validation failed" >&2
     exit 2
   fi
+
+  if python3 _vida/scripts/subagent-system.py subagents >/tmp/vida-subagent-health.json 2>/dev/null; then
+    degraded_count="$(jq -r '.summary.degraded // 0' /tmp/vida-subagent-health.json 2>/dev/null)"
+    cooldown_count="$(jq -r '.summary.cooldown // 0' /tmp/vida-subagent-health.json 2>/dev/null)"
+    probe_count="$(jq -r '.summary.probe_required // 0' /tmp/vida-subagent-health.json 2>/dev/null)"
+    degraded_names="$(jq -r '[.subagents[] | select(.subagent_state != "active") | .subagent] | join(", ")' /tmp/vida-subagent-health.json 2>/dev/null)"
+    cooldown_names="$(jq -r '[.subagents[] | select((.cooldown_until // "") != "") | .subagent] | join(", ")' /tmp/vida-subagent-health.json 2>/dev/null)"
+    probe_names="$(jq -r '[.subagents[] | select(.probe_required == true) | .subagent] | join(", ")' /tmp/vida-subagent-health.json 2>/dev/null)"
+    if [[ "$degraded_count" -gt 0 || "$cooldown_count" -gt 0 || "$probe_count" -gt 0 ]]; then
+      vida_status_line warn "[health] cli subagent status: degraded=$degraded_count [${degraded_names:-none}] cooldown=$cooldown_count [${cooldown_names:-none}] probe_required=$probe_count [${probe_names:-none}]"
+    else
+      vida_status_line ok "[health] cli subagent status healthy"
+    fi
+  fi
 fi
 
 if [[ -n "$TASK_ID" ]]; then
+  vida_status_line info "[health] boot receipt verification for task: $TASK_ID"
+  if ! bash _vida/scripts/boot-profile.sh verify-receipt "$TASK_ID" >/dev/null; then
+    vida_status_line fail "[health] FAIL: missing or invalid boot receipt/packet for task $TASK_ID" >&2
+    exit 4
+  fi
+
   if [[ "$MODE" == "full" || "$MODE" == "strict-dev" ]]; then
     vida_status_line info "[health] strict log verify for task: $TASK_ID"
     bash _vida/scripts/beads-verify-log.sh --task "$TASK_ID" --strict
@@ -234,13 +254,18 @@ if [[ -n "$TASK_ID" ]]; then
       task_scope_is_framework="yes"
     fi
 
-    provider_run_count="$(jq -r --arg task "$TASK_ID" '
-      select((.task_id // "") == $task and (.type // "") == "subagent_provider_run")
-      | 1
-    ' .vida/logs/subagent-provider-runs.jsonl 2>/dev/null | wc -l | awk "{print \$1}")"
+    subagent_run_count="0"
+    if [[ -f ".vida/logs/subagent-runs.jsonl" ]]; then
+      subagent_run_count="$({
+        jq -r --arg task "$TASK_ID" '
+          select((.task_id // "") == $task and (.type // "") == "subagent_run")
+          | 1
+        ' .vida/logs/subagent-runs.jsonl 2>/dev/null || true
+      } | wc -l | awk "{print \$1}")"
+    fi
 
-    if [[ "$provider_run_count" -gt 0 && ! -f ".vida/logs/subagent-review-${TASK_ID}.json" ]]; then
-      vida_status_line fail "[health] FAIL: provider runs detected for $TASK_ID but subagent review file is missing" >&2
+    if [[ "$subagent_run_count" -gt 0 && ! -f ".vida/logs/subagent-review-${TASK_ID}.json" ]]; then
+      vida_status_line fail "[health] FAIL: subagent runs detected for $TASK_ID but subagent review file is missing" >&2
       exit 4
     fi
 

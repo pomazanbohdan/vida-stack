@@ -14,7 +14,7 @@ Purpose: define how the top-level orchestrator turns a non-trivial request into 
 
 1. Entry behavior is executed via scripts (`vida-pack-helper.sh`) and TODO blocks.
 2. This protocol covers request interpretation above command-level execution details.
-3. Detailed task-state, TODO, and provider-routing rules remain in their canonical protocols.
+3. Detailed task-state, TODO, and subagent-routing rules remain in their canonical protocols.
 
 ## Inputs
 
@@ -67,8 +67,8 @@ Before routing work, normalize the request into:
    - META / FSAP / SCP / WVP when triggers fire.
 6. Select orchestration hierarchy:
    - default to free external read-only fanout for eligible non-trivial analysis/research/review/verification work,
-   - use the configured bridge fallback provider before internal escalation,
-   - reserve internal providers for senior arbitration, architecture-heavy synthesis, and mutation-owning execution.
+   - use the configured bridge fallback subagent before internal escalation,
+   - reserve internal subagents for senior arbitration, architecture-heavy synthesis, and mutation-owning execution.
 7. Decompose the work into layers:
    - analysis,
    - design/contract,
@@ -113,7 +113,7 @@ When dispatching additional agents, define all of:
 
 Routing rule:
 
-1. Use `_vida/docs/subagent-system-protocol.md` + project overlay for provider choice.
+1. Use `_vida/docs/subagent-system-protocol.md` + project overlay for subagent choice.
 2. Use `_vida/docs/subagents.md` for dispatch contract.
 3. For eligible non-trivial read-heavy work, prefer external free fanout first, then the configured bridge fallback, then internal senior escalation only when route policy or evidence requires it.
 4. Keep writer ownership singular under the orchestrator even when read-only fanout is active.

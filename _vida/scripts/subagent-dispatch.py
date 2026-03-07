@@ -20,7 +20,7 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent.parent
 LOG_DIR = ROOT_DIR / ".vida" / "logs"
-RUN_LOG_PATH = LOG_DIR / "subagent-provider-runs.jsonl"
+RUN_LOG_PATH = LOG_DIR / "subagent-runs.jsonl"
 
 
 def load_module(name: str, path: Path) -> Any:
@@ -71,36 +71,36 @@ def normalize_arg_list(value: Any) -> list[str]:
     return []
 
 
-def provider_selected_model(route: dict[str, Any], provider_name: str, provider_cfg: dict[str, Any]) -> str | None:
-    if route.get("provider") == provider_name:
+def selected_model_for_subagent(route: dict[str, Any], subagent_name: str, subagent_cfg: dict[str, Any]) -> str | None:
+    if route.get("selected_subagent") == subagent_name:
         return route.get("selected_model")
-    for item in route.get("fallback_chain", []):
-        if item.get("provider") == provider_name:
+    for item in route.get("fallback_subagents", []):
+        if item.get("subagent") == subagent_name:
             return item.get("selected_model")
-    default_model = provider_cfg.get("default_model")
+    default_model = subagent_cfg.get("default_model")
     return default_model if isinstance(default_model, str) and default_model else None
 
 
-def route_provider_item(route: dict[str, Any], provider_name: str) -> dict[str, Any]:
-    if route.get("provider") == provider_name:
+def route_subagent_item(route: dict[str, Any], subagent_name: str) -> dict[str, Any]:
+    if route.get("selected_subagent") == subagent_name:
         return route
-    for item in route.get("fallback_chain", []):
-        if item.get("provider") == provider_name:
+    for item in route.get("fallback_subagents", []):
+        if item.get("subagent") == subagent_name:
             return item
     return {}
 
 
-def provider_command(
-    provider_name: str,
+def subagent_command(
+    subagent_name: str,
     prompt: str,
     output_path: Path,
     workdir: Path,
     model: str | None,
-    provider_cfg: dict[str, Any],
+    subagent_cfg: dict[str, Any],
 ) -> tuple[list[str], bool]:
-    dispatch_cfg = provider_cfg.get("dispatch", {})
-    if not provider_supports_dispatch(provider_cfg):
-        raise ValueError(f"Provider does not expose dispatch config: {provider_name}")
+    dispatch_cfg = subagent_cfg.get("dispatch", {})
+    if not subagent_supports_dispatch(subagent_cfg):
+        raise ValueError(f"Cli subagent does not expose dispatch config: {subagent_name}")
 
     command = str(dispatch_cfg.get("command", "")).strip()
     cmd = [command, *normalize_arg_list(dispatch_cfg.get("static_args"))]
@@ -117,29 +117,29 @@ def provider_command(
     if output_mode == "file":
         output_flag = str(dispatch_cfg.get("output_flag", "")).strip()
         if not output_flag:
-            raise ValueError(f"Provider dispatch output_flag missing for file mode: {provider_name}")
+            raise ValueError(f"Cli subagent dispatch output_flag missing for file mode: {subagent_name}")
         cmd.extend([output_flag, str(output_path)])
         use_stdout_output = False
     elif output_mode == "stdout":
         use_stdout_output = True
     else:
-        raise ValueError(f"Unsupported provider dispatch output_mode={output_mode}: {provider_name}")
+        raise ValueError(f"Unsupported cli subagent dispatch output_mode={output_mode}: {subagent_name}")
 
     prompt_mode = str(dispatch_cfg.get("prompt_mode", "positional")).strip() or "positional"
     if prompt_mode == "flag":
         prompt_flag = str(dispatch_cfg.get("prompt_flag", "")).strip()
         if not prompt_flag:
-            raise ValueError(f"Provider dispatch prompt_flag missing for flag mode: {provider_name}")
+            raise ValueError(f"Cli subagent dispatch prompt_flag missing for flag mode: {subagent_name}")
         cmd.extend([prompt_flag, prompt])
     elif prompt_mode == "positional":
         cmd.append(prompt)
     else:
-        raise ValueError(f"Unsupported provider dispatch prompt_mode={prompt_mode}: {provider_name}")
+        raise ValueError(f"Unsupported cli subagent dispatch prompt_mode={prompt_mode}: {subagent_name}")
     return cmd, use_stdout_output
 
 
-def provider_env(provider_cfg: dict[str, Any]) -> dict[str, str]:
-    dispatch_cfg = provider_cfg.get("dispatch", {})
+def subagent_env(subagent_cfg: dict[str, Any]) -> dict[str, str]:
+    dispatch_cfg = subagent_cfg.get("dispatch", {})
     raw_env = dispatch_cfg.get("env", {})
     if not isinstance(raw_env, dict):
         return {}
@@ -152,8 +152,8 @@ def provider_env(provider_cfg: dict[str, Any]) -> dict[str, str]:
     return env
 
 
-def provider_supports_dispatch(provider_cfg: dict[str, Any]) -> bool:
-    dispatch_cfg = provider_cfg.get("dispatch", {})
+def subagent_supports_dispatch(subagent_cfg: dict[str, Any]) -> bool:
+    dispatch_cfg = subagent_cfg.get("dispatch", {})
     if not isinstance(dispatch_cfg, dict):
         return False
     command = dispatch_cfg.get("command")
@@ -187,21 +187,21 @@ def policy_value(value: Any, default: str) -> str:
     return str(value)
 
 
-def route_runtime_limit(route: dict[str, Any], provider_cfg: dict[str, Any]) -> int:
+def route_runtime_limit(route: dict[str, Any], subagent_cfg: dict[str, Any]) -> int:
     route_limit = policy_int(route.get("max_runtime_seconds"), 0)
-    provider_limit = policy_int(provider_cfg.get("max_runtime_seconds"), 0)
-    return route_limit or provider_limit or 180
+    subagent_limit = policy_int(subagent_cfg.get("max_runtime_seconds"), 0)
+    return route_limit or subagent_limit or 180
 
 
 def dispatch_runtime_limit(
     base_limit: int,
     dispatch_mode: str,
-    provider_route: dict[str, Any],
-    provider_cfg: dict[str, Any],
+    subagent_route: dict[str, Any],
+    subagent_cfg: dict[str, Any],
 ) -> int:
     limit = max(60, base_limit)
-    orchestration_tier = policy_value(provider_route.get("orchestration_tier"), policy_value(provider_cfg.get("orchestration_tier"), "standard"))
-    quality_tier = policy_value(provider_cfg.get("quality_tier"), "medium")
+    orchestration_tier = policy_value(subagent_route.get("orchestration_tier"), policy_value(subagent_cfg.get("orchestration_tier"), "standard"))
+    quality_tier = policy_value(subagent_cfg.get("quality_tier"), "medium")
     if dispatch_mode == "fallback":
         if orchestration_tier == "bridge":
             limit = max(limit, 240)
@@ -212,10 +212,10 @@ def dispatch_runtime_limit(
     return limit
 
 
-def route_min_output_bytes(route: dict[str, Any], provider_cfg: dict[str, Any]) -> int:
+def route_min_output_bytes(route: dict[str, Any], subagent_cfg: dict[str, Any]) -> int:
     route_min = policy_int(route.get("min_output_bytes"), 0)
-    provider_min = policy_int(provider_cfg.get("min_output_bytes"), 0)
-    return route_min or provider_min or 220
+    subagent_min = policy_int(subagent_cfg.get("min_output_bytes"), 0)
+    return route_min or subagent_min or 220
 
 
 def route_risk_class(route: dict[str, Any]) -> str:
@@ -229,26 +229,26 @@ def review_state_for(status: str, merge_ready: bool, risk_class: str) -> str:
     if not merge_ready:
         return "review_pending"
     if risk_class == "R0":
-        return "promotion_ready"
+        return "review_passed"
     if risk_class == "R1":
-        return "policy_check_pending"
+        return "policy_gate_required"
     if risk_class == "R2":
-        return "senior_review_pending"
-    return "requires_human"
+        return "senior_review_required"
+    return "human_gate_required"
 
 
 def manifest_review_state(summary: dict[str, Any], risk_class: str) -> str:
-    if summary.get("provider_exhausted") and not summary.get("decision_ready"):
+    if summary.get("subagent_exhausted") and not summary.get("decision_ready"):
         return "review_failed"
     if summary.get("tie_break_recommended") or summary.get("open_conflicts"):
         return "review_pending"
     if risk_class == "R0":
         return "promotion_ready"
     if risk_class == "R1":
-        return "policy_check_pending"
+        return "policy_gate_required"
     if risk_class == "R2":
-        return "senior_review_pending"
-    return "requires_human"
+        return "senior_review_required"
+    return "human_gate_required"
 
 
 def infer_domain_tags(prompt: str, task_class: str) -> list[str]:
@@ -260,7 +260,7 @@ def infer_domain_tags(prompt: str, task_class: str) -> list[str]:
         tags.append("auth_security")
     if any(token in text for token in ["ui", "widget", "layout", "render", "component"]):
         tags.append("frontend_ui")
-    if any(token in text for token in ["state", "store", "provider", "cache", "repository"]):
+    if any(token in text for token in ["state", "store", "subagent", "cache", "repository"]):
         tags.append("state_management")
     if any(token in text for token in ["agents.md", "_vida", "protocol", "subagent", "framework"]):
         tags.append("vida_framework")
@@ -274,20 +274,45 @@ def output_is_merge_ready(text: str, min_output_bytes: int) -> bool:
     if len(stripped.encode("utf-8")) < max(1, min_output_bytes):
         return False
     normalized = stripped.casefold()
-    if normalized.startswith("let me ") or normalized.startswith("now let me "):
+    if looks_like_planning_chatter(normalized):
         return False
-    return any(
-        token in normalized
-        for token in [
-            "## findings",
-            "root cause",
-            "recommended",
-            "severity",
-            "evidence",
-            "\n- ",
-            "\n1. ",
-        ]
+    return structured_evidence_score(normalized) >= 3
+
+
+def looks_like_planning_chatter(normalized_text: str) -> bool:
+    stripped = normalized_text.strip()
+    if not stripped:
+        return False
+    chatter_prefixes = (
+        "let me ",
+        "now let me ",
+        "i will ",
+        "i'll ",
+        "i am going to ",
+        "i will begin by ",
+        "i will start by ",
     )
+    if stripped.startswith(chatter_prefixes):
+        evidence_markers = ("## findings", "root cause", "severity", "evidence", "confirmed", "file:", "path:")
+        if not any(marker in stripped for marker in evidence_markers):
+            return True
+    chatter_lines = [
+        line.strip()
+        for line in stripped.splitlines()
+        if line.strip()
+    ]
+    if chatter_lines:
+        chatter_hits = sum(
+            1
+            for line in chatter_lines[:8]
+            if line.startswith(("i will ", "i'll ", "let me ", "now let me "))
+        )
+        if chatter_hits >= 2 and not any(
+            marker in stripped
+            for marker in ("## findings", "root cause", "severity", "evidence", "confirmed", "grep ", "read ", "file:", "path:")
+        ):
+            return True
+    return False
 
 
 def output_has_useful_progress(output_text: str, stderr_text: str, min_output_bytes: int) -> bool:
@@ -295,25 +320,23 @@ def output_has_useful_progress(output_text: str, stderr_text: str, min_output_by
     if not combined:
         return False
     normalized = combined.casefold()
-    useful_markers = [
-        "## findings",
-        "root cause",
-        "severity",
-        "evidence",
-        "confirmed",
-        "location:",
-        "read ",
-        "grep ",
-        "glob ",
-        "file:",
-        "path:",
-        "docs/",
-    ]
-    if any(marker in normalized for marker in useful_markers):
-        return True
-    if len(output_text.strip().encode("utf-8")) >= max(160, min_output_bytes // 2):
-        return True
-    return False
+    if looks_like_planning_chatter(normalized):
+        return False
+    return structured_evidence_score(normalized) >= 1
+
+
+def structured_evidence_score(normalized_text: str) -> int:
+    score = 0
+    if any(marker in normalized_text for marker in ("## findings", "findings report", "root cause")):
+        score += 1
+    if any(marker in normalized_text for marker in ("severity", "evidence", "confirmed", "impact:", "recommended")):
+        score += 1
+    if any(marker in normalized_text for marker in ("file:", "path:", "location:", "`src/", "`lib/", "`docs/")):
+        score += 1
+    bullet_hits = normalized_text.count("\n- ") + normalized_text.count("\n1. ") + normalized_text.count("\n2. ")
+    if bullet_hits >= 2:
+        score += 1
+    return score
 
 
 def write_manifest(path: Path, payload: dict[str, Any]) -> None:
@@ -321,13 +344,29 @@ def write_manifest(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def provider_result_payload(
+def manifest_active_subagents(launches: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for subagent_name, launch in sorted(launches.items()):
+        items.append(
+            {
+                "subagent": subagent_name,
+                "dispatch_mode": launch.get("dispatch_mode"),
+                "runtime_extension_applied": bool(launch.get("runtime_extension_applied", False)),
+                "effective_runtime_seconds": int(launch.get("effective_runtime_seconds", launch.get("max_runtime_seconds", 0)) or 0),
+                "useful_progress": bool(launch.get("useful_progress", False)),
+                "first_useful_output_ms": launch.get("first_useful_output_ms"),
+            }
+        )
+    return items
+
+
+def subagent_result_payload(
     *,
     task_id: str,
     task_class: str,
-    provider_name: str,
+    subagent_name: str,
     selected_model: str | None,
-    provider_cfg: dict[str, Any],
+    subagent_cfg: dict[str, Any],
     dispatch_mode: str,
     risk_class: str,
     domain_tags: list[str],
@@ -350,21 +389,23 @@ def provider_result_payload(
     stderr_text = load_output_text(stderr_path)
     merge_ready = status == "success" and output_is_merge_ready(output_text, min_output_bytes)
     useful_progress = output_has_useful_progress(output_text, stderr_text, min_output_bytes)
+    chatter_only = (not merge_ready) and looks_like_planning_chatter(output_text.casefold())
     review_state = review_state_for(status, merge_ready, risk_class)
+    availability = subagent_availability_signal(status, error_text, output_text, stderr_text)
     payload = {
         "ts": now_utc(),
-        "type": "subagent_provider_run",
+        "type": "subagent_run",
         "run_id": run_id,
         "task_id": task_id,
         "task_class": task_class,
         "dispatch_mode": dispatch_mode,
-        "provider": provider_name,
+        "subagent": subagent_name,
         "selected_model": selected_model,
-        "billing_tier": provider_cfg.get("billing_tier", "unknown"),
-        "speed_tier": provider_cfg.get("speed_tier", "unknown"),
-        "quality_tier": provider_cfg.get("quality_tier", "unknown"),
-        "specialties": provider_cfg.get("specialties", []),
-        "write_scope": provider_cfg.get("write_scope", "none"),
+        "billing_tier": subagent_cfg.get("billing_tier", "unknown"),
+        "speed_tier": subagent_cfg.get("speed_tier", "unknown"),
+        "quality_tier": subagent_cfg.get("quality_tier", "unknown"),
+        "specialties": subagent_cfg.get("specialties", []),
+        "write_scope": subagent_cfg.get("write_scope", "none"),
         "ts_start": ts_start,
         "ts_end": now_utc(),
         "duration_ms": duration_ms,
@@ -372,6 +413,7 @@ def provider_result_payload(
         "status": status,
         "merge_ready": merge_ready,
         "useful_progress": useful_progress,
+        "chatter_only": chatter_only,
         "review_state": review_state,
         "risk_class": risk_class,
         "domain_tags": domain_tags,
@@ -382,15 +424,125 @@ def provider_result_payload(
         "output_bytes": output_size(output_file),
         "stderr_bytes": output_size(stderr_path),
         "time_to_first_useful_output_ms": launch_time_to_first_useful_output_ms(started, output_file, stderr_path, min_output_bytes),
+        "subagent_state": availability["subagent_state"],
+        "failure_reason": availability["failure_reason"],
+        "cooldown_until": availability["cooldown_until"],
+        "probe_required": availability["probe_required"],
+        "last_quota_exhausted_at": availability["last_quota_exhausted_at"],
         "workdir": str(workdir),
         "prompt_file": str(prompt_file),
-        "route_provider": route.get("provider"),
+        "route_selected_subagent": route.get("selected_subagent"),
         "verification_gate": route.get("verification_gate"),
         "merge_policy": route.get("merge_policy"),
         "error": error_text,
     }
     append_jsonl(RUN_LOG_PATH, payload)
     return payload
+
+
+def subagent_availability_signal(
+    status: str,
+    error_text: str,
+    output_text: str,
+    stderr_text: str,
+) -> dict[str, Any]:
+    combined = "\n".join(
+        part for part in [error_text, output_text, stderr_text] if isinstance(part, str) and part.strip()
+    ).lower()
+    signal = {
+        "subagent_state": "active",
+        "failure_reason": "",
+        "cooldown_until": "",
+        "probe_required": False,
+        "last_quota_exhausted_at": "",
+    }
+    if status == "success":
+        return signal
+
+    if any(
+        marker in combined
+        for marker in (
+            "quota exceeded",
+            "quota exhausted",
+            "daily quota",
+            "daily limit",
+            "try again tomorrow",
+            "usage limit reached for today",
+        )
+    ):
+        now_ts = subagent_system.now_utc()
+        return {
+            "subagent_state": "quota_exhausted",
+            "failure_reason": "daily_quota_exhausted",
+            "cooldown_until": subagent_system.next_utc_day_iso(),
+            "probe_required": True,
+            "last_quota_exhausted_at": now_ts,
+        }
+    if any(
+        marker in combined
+        for marker in (
+            "rate limit",
+            "too many requests",
+            "429",
+            "requests per minute",
+        )
+    ):
+        return {
+            "subagent_state": "degraded",
+            "failure_reason": "rate_limited",
+            "cooldown_until": subagent_system.future_utc_iso(minutes=30),
+            "probe_required": True,
+            "last_quota_exhausted_at": "",
+        }
+    if any(
+        marker in combined
+        for marker in (
+            "invalid api key",
+            "authentication failed",
+            "unauthorized",
+            "invalid credentials",
+            "permission denied",
+        )
+    ):
+        return {
+            "subagent_state": "degraded",
+            "failure_reason": "auth_invalid",
+            "cooldown_until": "",
+            "probe_required": True,
+            "last_quota_exhausted_at": "",
+        }
+    if any(
+        marker in combined
+        for marker in (
+            "approval mode",
+            "interactive mode",
+            "requires interactive",
+            "stdin is not a tty",
+            "prompt for approval",
+        )
+    ):
+        return {
+            "subagent_state": "degraded",
+            "failure_reason": "interactive_blocked",
+            "cooldown_until": subagent_system.future_utc_iso(hours=12),
+            "probe_required": True,
+            "last_quota_exhausted_at": "",
+        }
+    if status == "timeout":
+        return {
+            "subagent_state": "degraded",
+            "failure_reason": "runtime_unstable",
+            "cooldown_until": subagent_system.future_utc_iso(minutes=30),
+            "probe_required": True,
+            "last_quota_exhausted_at": "",
+        }
+    return {
+        "subagent_state": "degraded",
+        "failure_reason": "runtime_unstable",
+        "cooldown_until": "",
+        "probe_required": True,
+        "last_quota_exhausted_at": "",
+    }
 
 
 def launch_time_to_first_useful_output_ms(
@@ -439,50 +591,50 @@ def launch_progress_snapshot(launch: dict[str, Any]) -> dict[str, Any]:
 
 def runtime_extension_seconds(launch: dict[str, Any]) -> int:
     base_limit = int(launch["max_runtime_seconds"])
-    quality_tier = str(launch["provider_cfg"].get("quality_tier", "medium"))
+    quality_tier = str(launch["subagent_cfg"].get("quality_tier", "medium"))
     if quality_tier == "high":
         return min(90, max(30, base_limit // 2))
     return min(60, max(20, base_limit // 3))
 
 
-def run_provider(
+def run_subagent(
     task_id: str,
     task_class: str,
-    provider_name: str,
+    subagent_name: str,
     prompt_file: Path,
     output_file: Path,
     workdir: Path,
     route: dict[str, Any],
-    provider_cfg: dict[str, Any],
+    subagent_cfg: dict[str, Any],
     dispatch_mode: str,
 ) -> dict[str, Any]:
     ensure_dirs()
     output_file.parent.mkdir(parents=True, exist_ok=True)
     stderr_path = output_file.with_suffix(output_file.suffix + ".stderr.log")
     prompt = read_prompt(prompt_file)
-    selected_model = provider_selected_model(route, provider_name, provider_cfg)
-    provider_route = route_provider_item(route, provider_name)
+    selected_model = selected_model_for_subagent(route, subagent_name, subagent_cfg)
+    subagent_route = route_subagent_item(route, subagent_name)
     domain_tags = infer_domain_tags(prompt, task_class)
     risk_class = route_risk_class(route)
     max_runtime_seconds = dispatch_runtime_limit(
-        route_runtime_limit(provider_route or route, provider_cfg),
+        route_runtime_limit(subagent_route or route, subagent_cfg),
         dispatch_mode,
-        provider_route or route,
-        provider_cfg,
+        subagent_route or route,
+        subagent_cfg,
     )
-    min_output_bytes = route_min_output_bytes(route, provider_cfg)
+    min_output_bytes = route_min_output_bytes(route, subagent_cfg)
     run_id = f"spr-{uuid.uuid4().hex[:12]}"
     ts_start = now_utc()
     started = time.monotonic()
-    if not provider_supports_dispatch(provider_cfg):
-        error_text = f"provider dispatch unavailable for {provider_name}; internal/senior lanes require orchestrator-owned handling"
+    if not subagent_supports_dispatch(subagent_cfg):
+        error_text = f"cli subagent dispatch unavailable for {subagent_name}; internal/senior lanes require orchestrator-owned handling"
         stderr_path.write_text(error_text + "\n", encoding="utf-8")
-        return provider_result_payload(
+        return subagent_result_payload(
             task_id=task_id,
             task_class=task_class,
-            provider_name=provider_name,
+            subagent_name=subagent_name,
             selected_model=selected_model,
-            provider_cfg=provider_cfg,
+            subagent_cfg=subagent_cfg,
             dispatch_mode=dispatch_mode,
             risk_class=risk_class,
             domain_tags=domain_tags,
@@ -500,13 +652,13 @@ def run_provider(
             exit_code=1,
             error_text=error_text,
         )
-    cmd, use_stdout_output = provider_command(provider_name, prompt, output_file, workdir, selected_model, provider_cfg)
+    cmd, use_stdout_output = subagent_command(subagent_name, prompt, output_file, workdir, selected_model, subagent_cfg)
     exit_code = 0
     status = "success"
     error_text = ""
 
     env = os.environ.copy()
-    env.update(provider_env(provider_cfg))
+    env.update(subagent_env(subagent_cfg))
     try:
         with stderr_path.open("w", encoding="utf-8") as stderr_handle:
             if use_stdout_output:
@@ -538,7 +690,7 @@ def run_provider(
     except subprocess.TimeoutExpired:
         exit_code = 124
         status = "timeout"
-        error_text = f"provider exceeded runtime limit ({max_runtime_seconds}s)"
+        error_text = f"cli subagent exceeded runtime limit ({max_runtime_seconds}s)"
         stderr_path.write_text(error_text + "\n", encoding="utf-8")
     except Exception as exc:
         exit_code = 1
@@ -546,12 +698,12 @@ def run_provider(
         error_text = str(exc)
         stderr_path.write_text(error_text + "\n", encoding="utf-8")
 
-    return provider_result_payload(
+    return subagent_result_payload(
         task_id=task_id,
         task_class=task_class,
-        provider_name=provider_name,
+        subagent_name=subagent_name,
         selected_model=selected_model,
-        provider_cfg=provider_cfg,
+        subagent_cfg=subagent_cfg,
         dispatch_mode=dispatch_mode,
         risk_class=risk_class,
         domain_tags=domain_tags,
@@ -571,46 +723,46 @@ def run_provider(
     )
 
 
-def start_provider_process(
+def start_subagent_process(
     task_id: str,
     task_class: str,
-    provider_name: str,
+    subagent_name: str,
     prompt_file: Path,
     output_file: Path,
     workdir: Path,
     route: dict[str, Any],
-    provider_cfg: dict[str, Any],
+    subagent_cfg: dict[str, Any],
     dispatch_mode: str,
 ) -> dict[str, Any]:
     ensure_dirs()
     output_file.parent.mkdir(parents=True, exist_ok=True)
     stderr_path = output_file.with_suffix(output_file.suffix + ".stderr.log")
     prompt = read_prompt(prompt_file)
-    selected_model = provider_selected_model(route, provider_name, provider_cfg)
-    provider_route = route_provider_item(route, provider_name)
+    selected_model = selected_model_for_subagent(route, subagent_name, subagent_cfg)
+    subagent_route = route_subagent_item(route, subagent_name)
     domain_tags = infer_domain_tags(prompt, task_class)
     risk_class = route_risk_class(route)
     max_runtime_seconds = dispatch_runtime_limit(
-        route_runtime_limit(provider_route or route, provider_cfg),
+        route_runtime_limit(subagent_route or route, subagent_cfg),
         dispatch_mode,
-        provider_route or route,
-        provider_cfg,
+        subagent_route or route,
+        subagent_cfg,
     )
-    min_output_bytes = route_min_output_bytes(route, provider_cfg)
+    min_output_bytes = route_min_output_bytes(route, subagent_cfg)
     run_id = f"spr-{uuid.uuid4().hex[:12]}"
     ts_start = now_utc()
     started = time.monotonic()
 
-    if not provider_supports_dispatch(provider_cfg):
-        error_text = f"provider dispatch unavailable for {provider_name}; internal/senior lanes require orchestrator-owned handling"
+    if not subagent_supports_dispatch(subagent_cfg):
+        error_text = f"cli subagent dispatch unavailable for {subagent_name}; internal/senior lanes require orchestrator-owned handling"
         stderr_path.write_text(error_text + "\n", encoding="utf-8")
         return {
-            "result": provider_result_payload(
+            "result": subagent_result_payload(
                 task_id=task_id,
                 task_class=task_class,
-                provider_name=provider_name,
+                subagent_name=subagent_name,
                 selected_model=selected_model,
-                provider_cfg=provider_cfg,
+                subagent_cfg=subagent_cfg,
                 dispatch_mode=dispatch_mode,
                 risk_class=risk_class,
                 domain_tags=domain_tags,
@@ -631,7 +783,7 @@ def start_provider_process(
         }
 
     try:
-        cmd, use_stdout_output = provider_command(provider_name, prompt, output_file, workdir, selected_model, provider_cfg)
+        cmd, use_stdout_output = subagent_command(subagent_name, prompt, output_file, workdir, selected_model, subagent_cfg)
         stderr_handle = stderr_path.open("w", encoding="utf-8")
         stdout_handle = output_file.open("w", encoding="utf-8") if use_stdout_output else None
         process = subprocess.Popen(
@@ -640,7 +792,7 @@ def start_provider_process(
             stdout=stdout_handle if stdout_handle is not None else stderr_handle,
             stderr=stderr_handle,
             text=True,
-            env={**os.environ.copy(), **provider_env(provider_cfg)},
+            env={**os.environ.copy(), **subagent_env(subagent_cfg)},
         )
         return {
             "process": process,
@@ -648,13 +800,13 @@ def start_provider_process(
             "stderr_handle": stderr_handle,
             "task_id": task_id,
             "task_class": task_class,
-            "provider_name": provider_name,
+            "subagent_name": subagent_name,
             "prompt_file": prompt_file,
             "output_file": output_file,
             "stderr_path": stderr_path,
             "workdir": workdir,
             "route": route,
-            "provider_cfg": provider_cfg,
+            "subagent_cfg": subagent_cfg,
             "dispatch_mode": dispatch_mode,
             "selected_model": selected_model,
             "domain_tags": domain_tags,
@@ -679,12 +831,12 @@ def start_provider_process(
         except OSError:
             pass
         return {
-            "result": provider_result_payload(
+            "result": subagent_result_payload(
                 task_id=task_id,
                 task_class=task_class,
-                provider_name=provider_name,
+                subagent_name=subagent_name,
                 selected_model=selected_model,
-                provider_cfg=provider_cfg,
+                subagent_cfg=subagent_cfg,
                 dispatch_mode=dispatch_mode,
                 risk_class=risk_class,
                 domain_tags=domain_tags,
@@ -714,7 +866,7 @@ def close_launch_handles(launch: dict[str, Any]) -> None:
         stderr_handle.close()
 
 
-def finalize_provider_process(
+def finalize_subagent_process(
     launch: dict[str, Any],
     *,
     status_override: str | None = None,
@@ -735,12 +887,12 @@ def finalize_provider_process(
         exit_code = exit_code_override
     elif status_override is None and (exit_code != 0 or output_size(launch["output_file"]) == 0):
         status = "failure"
-    return provider_result_payload(
+    return subagent_result_payload(
         task_id=launch["task_id"],
         task_class=launch["task_class"],
-        provider_name=launch["provider_name"],
+        subagent_name=launch["subagent_name"],
         selected_model=launch["selected_model"],
-        provider_cfg=launch["provider_cfg"],
+        subagent_cfg=launch["subagent_cfg"],
         dispatch_mode=launch["dispatch_mode"],
         risk_class=launch["risk_class"],
         domain_tags=launch["domain_tags"],
@@ -760,7 +912,7 @@ def finalize_provider_process(
     )
 
 
-def terminate_provider_process(
+def terminate_subagent_process(
     launch: dict[str, Any],
     reason: str,
     *,
@@ -775,7 +927,7 @@ def terminate_provider_process(
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=3)
-    return finalize_provider_process(
+    return finalize_subagent_process(
         launch,
         status_override=status_override,
         exit_code_override=exit_code_override,
@@ -785,59 +937,59 @@ def terminate_provider_process(
 
 def route_snapshot(task_class: str, task_id: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     snapshot = subagent_system.init_snapshot(task_id)
-    route = subagent_system.route_provider(task_class)
+    route = subagent_system.route_subagent(task_class)
     return snapshot, route
 
 
-def candidate_provider_cfg(snapshot: dict[str, Any], provider_name: str) -> dict[str, Any]:
-    providers = snapshot.get("providers", {})
-    cfg = providers.get(provider_name, {})
+def candidate_subagent_cfg(snapshot: dict[str, Any], subagent_name: str) -> dict[str, Any]:
+    subagents = snapshot.get("subagents", {})
+    cfg = subagents.get(subagent_name, {})
     if not cfg:
-        raise ValueError(f"Provider not found in snapshot: {provider_name}")
+        raise ValueError(f"Cli subagent not found in snapshot: {subagent_name}")
     return cfg
 
 
 def run_single(argv: list[str]) -> int:
     if len(argv) < 7:
         print(
-            "Usage: python3 _vida/scripts/subagent-dispatch.py provider <task_id> <task_class> <provider> <prompt_file> <output_file> [workdir]",
+            "Usage: python3 _vida/scripts/subagent-dispatch.py subagent <task_id> <task_class> <subagent> <prompt_file> <output_file> [workdir]",
             file=sys.stderr,
         )
         return 1
-    task_id, task_class, provider_name, prompt_file_raw, output_file_raw = argv[2:7]
+    task_id, task_class, subagent_name, prompt_file_raw, output_file_raw = argv[2:7]
     workdir = Path(argv[7]).resolve() if len(argv) > 7 else ROOT_DIR
     prompt_file = Path(prompt_file_raw).resolve()
     output_file = Path(output_file_raw).resolve()
     snapshot, route = route_snapshot(task_class, task_id)
-    payload = run_provider(
+    payload = run_subagent(
         task_id,
         task_class,
-        provider_name,
+        subagent_name,
         prompt_file,
         output_file,
         workdir,
         route,
-        candidate_provider_cfg(snapshot, provider_name),
+        candidate_subagent_cfg(snapshot, subagent_name),
         "single",
     )
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0 if payload["status"] == "success" else 2
 
 
-def ensemble_providers(route: dict[str, Any]) -> list[str]:
-    providers = list(route.get("fanout_providers", []))
-    primary = route.get("provider")
-    if primary and primary not in providers:
-        providers.insert(0, primary)
-    if not providers and primary:
-        providers = [primary]
+def ensemble_subagents(route: dict[str, Any]) -> list[str]:
+    subagents = list(route.get("fanout_subagents", []))
+    primary = route.get("selected_subagent")
+    if primary and primary not in subagents:
+        subagents.insert(0, primary)
+    if not subagents and primary:
+        subagents = [primary]
     deduped: list[str] = []
     seen: set[str] = set()
-    for provider in providers:
-        if provider in seen:
+    for subagent_name in subagents:
+        if subagent_name in seen:
             continue
-        deduped.append(provider)
-        seen.add(provider)
+        deduped.append(subagent_name)
+        seen.add(subagent_name)
     return deduped
 
 
@@ -845,7 +997,7 @@ def load_output_text(path: Path) -> str:
     if not path.exists():
         return ""
     try:
-        return path.read_text(encoding="utf-8").strip()
+        return path.read_text(encoding="utf-8", errors="ignore").strip()
     except OSError:
         return ""
 
@@ -968,10 +1120,10 @@ def preview_text(text: str, limit: int = 160) -> str:
     return collapsed[: limit - 3] + "..."
 
 
-def cluster_payload(group_key: str, providers: list[str], preview: str, weight: int = 0) -> dict[str, Any]:
+def cluster_payload(group_key: str, subagents: list[str], preview: str, weight: int = 0) -> dict[str, Any]:
     return {
         "cluster_id": group_key[:12] if group_key else "empty",
-        "providers": sorted(providers),
+        "subagents": sorted(subagents),
         "sample": preview,
         "weight": weight,
     }
@@ -1001,32 +1153,32 @@ def build_merge_summary(
     results: list[dict[str, Any]],
     merge_policy: str,
     min_results: int,
-    provider_scores: dict[str, int] | None = None,
+    subagent_scores: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     success_items = [item for item in results if item.get("status") == "success" and item.get("merge_ready") is True]
-    failure_providers = sorted(item["provider"] for item in results if item.get("status") != "success")
-    non_merge_ready_providers = sorted(
-        item["provider"]
+    failure_subagents = sorted(item["subagent"] for item in results if item.get("status") != "success")
+    non_merge_ready_subagents = sorted(
+        item["subagent"]
         for item in results
         if item.get("status") == "success" and item.get("merge_ready") is not True
     )
     required_results = max(1, min_results)
-    provider_scores = provider_scores or {}
+    subagent_scores = subagent_scores or {}
     exact_groups: dict[str, list[str]] = {}
     semantic_groups: dict[str, list[str]] = {}
     semantic_previews: dict[str, str] = {}
     semantic_token_index: dict[str, set[str]] = {}
-    provider_evidence_weights: dict[str, int] = {}
+    subagent_evidence_weights: dict[str, int] = {}
     for item in success_items:
         text = load_output_text(Path(item["output_file"]))
-        provider_evidence_weights[item["provider"]] = source_backing_weight(text)
-        exact_text = text if text else f"empty:{item['provider']}"
+        subagent_evidence_weights[item["subagent"]] = source_backing_weight(text)
+        exact_text = text if text else f"empty:{item['subagent']}"
         exact_digest = digest_text(exact_text)
-        exact_groups.setdefault(exact_digest, []).append(item["provider"])
+        exact_groups.setdefault(exact_digest, []).append(item["subagent"])
 
         semantic_text = normalize_output_text(text)
         if not semantic_text:
-            semantic_text = f"empty:{item['provider']}"
+            semantic_text = f"empty:{item['subagent']}"
         semantic_tokens = semantic_anchor_tokens(text)
         semantic_digest = ""
         for existing_key, existing_tokens in semantic_token_index.items():
@@ -1037,7 +1189,7 @@ def build_merge_summary(
         if not semantic_digest:
             semantic_digest = digest_text(" ".join(sorted(semantic_tokens)) or semantic_text)
             semantic_token_index[semantic_digest] = set(semantic_tokens)
-        semantic_groups.setdefault(semantic_digest, []).append(item["provider"])
+        semantic_groups.setdefault(semantic_digest, []).append(item["subagent"])
         existing_preview = semantic_previews.get(semantic_digest, "")
         candidate_preview = preview_text(semantic_text)
         semantic_previews[semantic_digest] = existing_preview if len(existing_preview) >= len(candidate_preview) else candidate_preview
@@ -1045,41 +1197,41 @@ def build_merge_summary(
     exact_agreements = sorted(sorted(group) for group in exact_groups.values() if len(group) > 1)
     semantic_weight_index = {
         group_key: sum(
-            int(provider_scores.get(provider, 0)) + int(provider_evidence_weights.get(provider, 0))
-            for provider in providers
+            int(subagent_scores.get(subagent_name, 0)) + int(subagent_evidence_weights.get(subagent_name, 0))
+            for subagent_name in subagents
         )
-        for group_key, providers in semantic_groups.items()
+        for group_key, subagents in semantic_groups.items()
     }
     semantic_clusters = sorted(
         (
             cluster_payload(
                 group_key,
-                providers,
+                subagents,
                 semantic_previews.get(group_key, ""),
                 semantic_weight_index.get(group_key, 0),
             )
-            for group_key, providers in semantic_groups.items()
+            for group_key, subagents in semantic_groups.items()
         ),
         key=lambda item: (
-            -len(item["providers"]),
+            -len(item["subagents"]),
             -int(item.get("weight", 0)),
-            item["providers"],
+            item["subagents"],
         ),
     )
-    semantic_agreements = [cluster for cluster in semantic_clusters if len(cluster["providers"]) > 1]
-    unique_findings = [cluster for cluster in semantic_clusters if len(cluster["providers"]) == 1]
+    semantic_agreements = [cluster for cluster in semantic_clusters if len(cluster["subagents"]) > 1]
+    unique_findings = [cluster for cluster in semantic_clusters if len(cluster["subagents"]) == 1]
     cluster_weights = {cluster["cluster_id"]: int(cluster.get("weight", 0)) for cluster in semantic_clusters}
 
     exact_consensus = len(success_items) > 1 and len(exact_groups) == 1
     semantic_consensus = len(success_items) > 1 and len(semantic_groups) == 1
     largest_cluster = semantic_clusters[0] if semantic_clusters else None
-    second_cluster_size = len(semantic_clusters[1]["providers"]) if len(semantic_clusters) > 1 else 0
+    second_cluster_size = len(semantic_clusters[1]["subagents"]) if len(semantic_clusters) > 1 else 0
     dominant_weight = cluster_weights.get(largest_cluster["cluster_id"], 0) if largest_cluster else 0
     second_weight = cluster_weights.get(semantic_clusters[1]["cluster_id"], 0) if len(semantic_clusters) > 1 else 0
     semantic_majority = (
         largest_cluster is not None
-        and len(largest_cluster["providers"]) >= required_results
-        and len(largest_cluster["providers"]) > second_cluster_size
+        and len(largest_cluster["subagents"]) >= required_results
+        and len(largest_cluster["subagents"]) > second_cluster_size
         and len(semantic_groups) > 1
     )
     weighted_semantic_majority = (
@@ -1131,9 +1283,9 @@ def build_merge_summary(
 
     return {
         "merge_policy": merge_policy,
-        "success_providers": sorted(item["provider"] for item in success_items),
-        "failure_providers": failure_providers,
-        "non_merge_ready_providers": non_merge_ready_providers,
+        "success_subagents": sorted(item["subagent"] for item in success_items),
+        "failure_subagents": failure_subagents,
+        "non_merge_ready_subagents": non_merge_ready_subagents,
         "agreements": exact_agreements,
         "semantic_agreements": semantic_agreements,
         "unique_findings": unique_findings,
@@ -1150,10 +1302,10 @@ def build_merge_summary(
         "dominant_weight": dominant_weight,
         "second_weight": second_weight,
         "cluster_weights": cluster_weights,
-        "provider_evidence_weights": provider_evidence_weights,
+        "subagent_evidence_weights": subagent_evidence_weights,
         "tie_break_recommended": tie_break_recommended,
         "tie_break_reason": tie_break_reason,
-        "provider_exhausted": len(success_items) < required_results,
+        "subagent_exhausted": len(success_items) < required_results,
         "orchestrator_review_required": tie_break_recommended or len(open_conflicts) > 0,
     }
 
@@ -1162,16 +1314,16 @@ def clone_json_payload(payload: Any) -> Any:
     return json.loads(json.dumps(payload))
 
 
-def route_provider_scores(route: dict[str, Any]) -> dict[str, int]:
+def route_subagent_scores(route: dict[str, Any]) -> dict[str, int]:
     scores: dict[str, int] = {}
-    primary = route.get("provider")
+    primary = route.get("selected_subagent")
     if isinstance(primary, str) and primary:
         scores[primary] = int(route.get("effective_score", 0))
-    for item in route.get("fallback_chain", []):
-        provider_name = item.get("provider")
-        if not isinstance(provider_name, str) or not provider_name or provider_name in scores:
+    for item in route.get("fallback_subagents", []):
+        subagent_name = item.get("subagent")
+        if not isinstance(subagent_name, str) or not subagent_name or subagent_name in scores:
             continue
-        scores[provider_name] = int(item.get("effective_score", 0))
+        scores[subagent_name] = int(item.get("effective_score", 0))
     return scores
 
 
@@ -1193,37 +1345,37 @@ def arbitration_candidates(
     requested_fanout: list[str],
     results: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    ordered_providers: list[str] = []
-    for provider_name in [route.get("provider"), *requested_fanout]:
-        if isinstance(provider_name, str) and provider_name and provider_name not in ordered_providers:
-            ordered_providers.append(provider_name)
-    for item in route.get("fallback_chain", []):
-        provider_name = item.get("provider")
-        if isinstance(provider_name, str) and provider_name and provider_name not in ordered_providers:
-            ordered_providers.append(provider_name)
+    ordered_subagents: list[str] = []
+    for subagent_name in [route.get("selected_subagent"), *requested_fanout]:
+        if isinstance(subagent_name, str) and subagent_name and subagent_name not in ordered_subagents:
+            ordered_subagents.append(subagent_name)
+    for item in route.get("fallback_subagents", []):
+        subagent_name = item.get("subagent")
+        if isinstance(subagent_name, str) and subagent_name and subagent_name not in ordered_subagents:
+            ordered_subagents.append(subagent_name)
 
-    scores = route_provider_scores(route)
-    result_by_provider = {item["provider"]: item for item in results}
-    providers = snapshot.get("providers", {})
+    scores = route_subagent_scores(route)
+    result_by_subagent = {item["subagent"]: item for item in results}
+    subagents = snapshot.get("subagents", {})
     candidates: list[dict[str, Any]] = []
-    for provider_name in ordered_providers:
-        provider_cfg = providers.get(provider_name, {})
-        if not provider_supports_dispatch(provider_cfg):
+    for subagent_name in ordered_subagents:
+        subagent_cfg = subagents.get(subagent_name, {})
+        if not subagent_supports_dispatch(subagent_cfg):
             continue
-        if not provider_cfg.get("enabled") or not provider_cfg.get("available"):
+        if not subagent_cfg.get("enabled") or not subagent_cfg.get("available"):
             continue
-        prior = result_by_provider.get(provider_name)
+        prior = result_by_subagent.get(subagent_name)
         if prior and prior.get("status") != "success":
             continue
         used = prior is not None
         candidates.append(
             {
-                "provider": provider_name,
+                "subagent": subagent_name,
                 "used": used,
-                "selection_reason": "rerun_best_available_provider" if used else "unused_supported_provider",
-                "quality_rank": quality_rank(provider_cfg.get("quality_tier")),
-                "role_rank": role_rank(provider_cfg.get("role")),
-                "effective_score": scores.get(provider_name, 0),
+                "selection_reason": "rerun_best_available_subagent" if used else "unused_supported_subagent",
+                "quality_rank": quality_rank(subagent_cfg.get("quality_tier")),
+                "role_rank": role_rank(subagent_cfg.get("role")),
+                "effective_score": scores.get(subagent_name, 0),
             }
         )
 
@@ -1233,7 +1385,7 @@ def arbitration_candidates(
             -int(item["quality_rank"]),
             -int(item["role_rank"]),
             -int(item["effective_score"]),
-            str(item["provider"]),
+            str(item["subagent"]),
         )
     )
     return candidates
@@ -1245,7 +1397,7 @@ def arbitration_prompt_text(
     merge_summary: dict[str, Any],
     results: list[dict[str, Any]],
 ) -> str:
-    result_by_provider = {item["provider"]: item for item in results if item.get("status") == "success"}
+    result_by_subagent = {item["subagent"]: item for item in results if item.get("status") == "success"}
     allowed_cluster_ids = [cluster.get("cluster_id", "") for cluster in merge_summary.get("open_conflicts", [])]
     lines = [
         "You are the bounded arbitration lane for VIDA ensemble conflict resolution.",
@@ -1262,18 +1414,18 @@ def arbitration_prompt_text(
     ]
     for cluster in merge_summary.get("open_conflicts", []):
         cluster_id = str(cluster.get("cluster_id", ""))
-        providers = [str(provider) for provider in cluster.get("providers", []) if isinstance(provider, str)]
+        subagents = [str(subagent_name) for subagent_name in cluster.get("subagents", []) if isinstance(subagent_name, str)]
         sample = str(cluster.get("sample", "")).strip()
         lines.append(f"- cluster_id: {cluster_id}")
-        lines.append(f"  providers: {', '.join(providers) if providers else '(none)'}")
+        lines.append(f"  subagents: {', '.join(subagents) if subagents else '(none)'}")
         lines.append(f"  normalized_sample: {sample or '(empty)'}")
-        for provider_name in providers:
-            payload = result_by_provider.get(provider_name)
+        for subagent_name in subagents:
+            payload = result_by_subagent.get(subagent_name)
             if not payload:
                 continue
             raw_excerpt = preview_text(load_output_text(Path(payload["output_file"])), 420)
             if raw_excerpt:
-                lines.append(f"  {provider_name}_excerpt: {raw_excerpt}")
+                lines.append(f"  {subagent_name}_excerpt: {raw_excerpt}")
         lines.append("")
     lines.extend(
         [
@@ -1335,11 +1487,11 @@ def parse_arbitration_decision(text: str, allowed_cluster_ids: list[str]) -> dic
 def apply_arbitration_decision(
     merge_summary: dict[str, Any],
     arbitration_decision: dict[str, Any],
-    arbitration_provider: str,
+    arbitration_subagent: str,
 ) -> dict[str, Any]:
     post_summary = clone_json_payload(merge_summary)
     post_summary["arbitrated_consensus"] = False
-    post_summary["arbitration_provider"] = arbitration_provider
+    post_summary["arbitration_subagent"] = arbitration_subagent
     post_summary["arbitration_decision"] = arbitration_decision.get("decision", "no_decision")
     post_summary["arbitration_selected_cluster_id"] = arbitration_decision.get("selected_cluster_id", "")
     post_summary["arbitration_confidence"] = arbitration_decision.get("confidence", "medium")
@@ -1397,10 +1549,10 @@ def run_bounded_arbitration(
         "requested": merge_summary.get("tie_break_reason") == "semantic_conflict_without_majority",
         "trigger_reason": merge_summary.get("tie_break_reason", ""),
         "status": "skipped",
-        "selected_provider": None,
+        "selected_subagent": None,
         "selection_reason": "",
-        "provider_reused": False,
-        "candidate_providers": [],
+        "subagent_reused": False,
+        "candidate_subagents": [],
         "decision": {
             "decision": "no_decision",
             "selected_cluster_id": "",
@@ -1413,20 +1565,20 @@ def run_bounded_arbitration(
         return arbitration, merge_summary
 
     candidates = arbitration_candidates(route, snapshot, requested_fanout, results)
-    arbitration["candidate_providers"] = [item["provider"] for item in candidates]
+    arbitration["candidate_subagents"] = [item["subagent"] for item in candidates]
     if not candidates:
         arbitration["status"] = "unavailable"
-        arbitration["selection_reason"] = "no_supported_arbitration_provider"
-        return arbitration, unresolved_arbitration_summary(merge_summary, "arbitration_provider_unavailable")
+        arbitration["selection_reason"] = "no_supported_arbitration_subagent"
+        return arbitration, unresolved_arbitration_summary(merge_summary, "arbitration_subagent_unavailable")
 
     selected = candidates[0]
-    provider_name = str(selected["provider"])
-    arbitration["selected_provider"] = provider_name
+    subagent_name = str(selected["subagent"])
+    arbitration["selected_subagent"] = subagent_name
     arbitration["selection_reason"] = str(selected["selection_reason"])
-    arbitration["provider_reused"] = bool(selected["used"])
+    arbitration["subagent_reused"] = bool(selected["used"])
 
     arbitration_prompt_file = output_dir / "arbitration-prompt.txt"
-    arbitration_output_file = output_dir / f"{provider_name}.arbitration.txt"
+    arbitration_output_file = output_dir / f"{subagent_name}.arbitration.txt"
     arbitration_prompt_file.write_text(
         arbitration_prompt_text(read_prompt(prompt_file), task_class, merge_summary, results),
         encoding="utf-8",
@@ -1434,26 +1586,26 @@ def run_bounded_arbitration(
     arbitration["prompt_file"] = str(arbitration_prompt_file)
     arbitration["output_file"] = str(arbitration_output_file)
 
-    payload = run_provider(
+    payload = run_subagent(
         task_id,
         task_class,
-        provider_name,
+        subagent_name,
         arbitration_prompt_file,
         arbitration_output_file,
         workdir,
         route,
-        candidate_provider_cfg(snapshot, provider_name),
+        candidate_subagent_cfg(snapshot, subagent_name),
         "arbitration",
     )
     arbitration["run"] = payload
     arbitration["status"] = str(payload.get("status", "failure"))
 
     if payload.get("status") != "success":
-        return arbitration, unresolved_arbitration_summary(merge_summary, "arbitration_provider_failed")
+        return arbitration, unresolved_arbitration_summary(merge_summary, "arbitration_subagent_failed")
 
     allowed_cluster_ids = [str(cluster.get("cluster_id", "")) for cluster in merge_summary.get("open_conflicts", [])]
     arbitration["decision"] = parse_arbitration_decision(load_output_text(arbitration_output_file), allowed_cluster_ids)
-    return arbitration, apply_arbitration_decision(merge_summary, arbitration["decision"], provider_name)
+    return arbitration, apply_arbitration_decision(merge_summary, arbitration["decision"], subagent_name)
 
 
 def run_ensemble(argv: list[str]) -> int:
@@ -1470,7 +1622,7 @@ def run_ensemble(argv: list[str]) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     snapshot, route = route_snapshot(task_class, task_id)
-    requested_fanout = ensemble_providers(route)
+    requested_fanout = ensemble_subagents(route)
     max_parallel_agents = max(1, int(snapshot.get("agent_system", {}).get("max_parallel_agents", 1)))
     primary_fanout = requested_fanout[:max_parallel_agents]
     min_results = int(route.get("fanout_min_results", 0))
@@ -1484,52 +1636,56 @@ def run_ensemble(argv: list[str]) -> int:
         "task_class": task_class,
         "workdir": str(workdir),
         "route": route,
-        "requested_fanout_providers": requested_fanout,
-        "fanout_providers": primary_fanout,
+        "requested_fanout_subagents": requested_fanout,
+        "fanout_subagents": primary_fanout,
         "fanout_min_results": min_results,
         "max_parallel_agents": max_parallel_agents,
         "risk_class": route_risk_class(route),
         "review_state": "review_pending",
         "success_count": 0,
         "useful_progress_count": 0,
-        "provider_exhausted": False,
+        "subagent_exhausted": False,
         "fallback_used": False,
         "merge_summary": {},
         "arbitration": {},
         "post_arbitration_merge_summary": {},
         "results": [],
+        "active_subagents": [],
+        "active_count": 0,
         "status": "running",
         "phase": "fanout_running",
     }
     write_manifest(manifest_path, manifest)
     launches: dict[str, dict[str, Any]] = {}
-    for provider_name in primary_fanout:
-        launch = start_provider_process(
+    for subagent_name in primary_fanout:
+        launch = start_subagent_process(
             task_id,
             task_class,
-            provider_name,
+            subagent_name,
             prompt_file,
-            output_dir / f"{provider_name}.txt",
+            output_dir / f"{subagent_name}.txt",
             workdir,
             route,
-            candidate_provider_cfg(snapshot, provider_name),
+            candidate_subagent_cfg(snapshot, subagent_name),
             "fanout",
         )
         if "result" in launch:
             results.append(launch["result"])
         else:
-            launches[provider_name] = launch
+            launches[subagent_name] = launch
 
-    manifest["results"] = sorted(results, key=lambda item: item["provider"])
+    manifest["results"] = sorted(results, key=lambda item: item["subagent"])
     manifest["success_count"] = sum(
         1 for item in results if item.get("status") == "success" and item.get("merge_ready") is True
     )
+    manifest["active_subagents"] = manifest_active_subagents(launches)
+    manifest["active_count"] = len(launches)
     write_manifest(manifest_path, manifest)
 
     while launches:
-        completed_providers: list[str] = []
+        completed_subagents: list[str] = []
         loop_progress = False
-        for provider_name, launch in list(launches.items()):
+        for subagent_name, launch in list(launches.items()):
             process: subprocess.Popen[str] = launch["process"]
             progress = launch_progress_snapshot(launch)
             elapsed = time.monotonic() - float(launch["started"])
@@ -1548,61 +1704,67 @@ def run_ensemble(argv: list[str]) -> int:
                 continue
             if process.poll() is None and elapsed > int(launch.get("effective_runtime_seconds", launch["max_runtime_seconds"])):
                 results.append(
-                    terminate_provider_process(
+                    terminate_subagent_process(
                         launch,
-                        f"provider exceeded runtime limit ({launch.get('effective_runtime_seconds', launch['max_runtime_seconds'])}s)",
+                        f"cli subagent exceeded runtime limit ({launch.get('effective_runtime_seconds', launch['max_runtime_seconds'])}s)",
                         status_override="timeout",
                         exit_code_override=124,
                     )
                 )
-                completed_providers.append(provider_name)
+                completed_subagents.append(subagent_name)
                 loop_progress = True
                 continue
             if process.poll() is not None:
-                results.append(finalize_provider_process(launch))
-                completed_providers.append(provider_name)
+                results.append(finalize_subagent_process(launch))
+                completed_subagents.append(subagent_name)
                 loop_progress = True
 
-        for provider_name in completed_providers:
-            launches.pop(provider_name, None)
+        for subagent_name in completed_subagents:
+            launches.pop(subagent_name, None)
 
         success_count = sum(
             1 for item in results if item.get("status") == "success" and item.get("merge_ready") is True
         )
-        manifest["results"] = sorted(results, key=lambda item: item["provider"])
+        manifest["results"] = sorted(results, key=lambda item: item["subagent"])
         manifest["success_count"] = success_count
         manifest["useful_progress_count"] = sum(1 for launch in launches.values() if launch.get("useful_progress"))
+        manifest["active_subagents"] = manifest_active_subagents(launches)
+        manifest["active_count"] = len(launches)
         write_manifest(manifest_path, manifest)
 
         if success_count >= required_results and launches:
-            for provider_name, launch in list(launches.items()):
+            for subagent_name, launch in list(launches.items()):
                 results.append(
-                    terminate_provider_process(
+                    terminate_subagent_process(
                         launch,
                         "terminated after required merge-ready ensemble results were reached",
                     )
                 )
-                launches.pop(provider_name, None)
-            manifest["results"] = sorted(results, key=lambda item: item["provider"])
+                launches.pop(subagent_name, None)
+            manifest["results"] = sorted(results, key=lambda item: item["subagent"])
             manifest["success_count"] = success_count
             manifest["useful_progress_count"] = 0
+            manifest["active_subagents"] = []
+            manifest["active_count"] = 0
             write_manifest(manifest_path, manifest)
             break
 
         max_possible_successes = success_count + len(launches)
         if max_possible_successes < required_results and launches:
-            for provider_name, launch in list(launches.items()):
+            for subagent_name, launch in list(launches.items()):
                 results.append(
-                    terminate_provider_process(
+                    terminate_subagent_process(
                         launch,
-                        "terminated because fanout_min_results became unreachable with remaining providers",
+                        "terminated because fanout_min_results became unreachable with remaining subagents",
                     )
                 )
-                launches.pop(provider_name, None)
-            manifest["results"] = sorted(results, key=lambda item: item["provider"])
+                launches.pop(subagent_name, None)
+            manifest["results"] = sorted(results, key=lambda item: item["subagent"])
             manifest["success_count"] = success_count
             manifest["useful_progress_count"] = 0
-            manifest["provider_exhausted"] = True
+            manifest["subagent_exhausted"] = True
+            manifest["active_subagents"] = []
+            manifest["active_count"] = 0
             write_manifest(manifest_path, manifest)
             break
 
@@ -1615,37 +1777,43 @@ def run_ensemble(argv: list[str]) -> int:
     fallback_used = False
     if success_count < min_results:
         manifest["phase"] = "fallback_running"
-        manifest["provider_exhausted"] = False
+        manifest["subagent_exhausted"] = False
         manifest["fallback_used"] = False
         manifest["useful_progress_count"] = sum(1 for item in results if item.get("useful_progress"))
+        manifest["active_subagents"] = []
+        manifest["active_count"] = 0
         write_manifest(manifest_path, manifest)
-        for item in route.get("fallback_chain", []):
-            provider_name = item.get("provider")
-            if not provider_name or provider_name in primary_fanout:
+        for item in route.get("fallback_subagents", []):
+            subagent_name = item.get("subagent")
+            if not subagent_name or subagent_name in primary_fanout:
                 continue
-            provider_cfg = candidate_provider_cfg(snapshot, provider_name)
-            if not provider_supports_dispatch(provider_cfg):
+            subagent_cfg = candidate_subagent_cfg(snapshot, subagent_name)
+            if not subagent_supports_dispatch(subagent_cfg):
                 continue
             fallback_used = True
             manifest["fallback_used"] = True
+            manifest["active_subagents"] = []
+            manifest["active_count"] = 0
             write_manifest(manifest_path, manifest)
-            result = run_provider(
+            result = run_subagent(
                 task_id,
                 task_class,
-                provider_name,
+                subagent_name,
                 prompt_file,
-                output_dir / f"{provider_name}.txt",
+                output_dir / f"{subagent_name}.txt",
                 workdir,
                 route,
-                provider_cfg,
+                subagent_cfg,
                 "fallback",
             )
             results.append(result)
-            manifest["results"] = sorted(results, key=lambda item: item["provider"])
+            manifest["results"] = sorted(results, key=lambda item: item["subagent"])
             if result.get("status") == "success" and result.get("merge_ready") is True:
                 success_count += 1
             manifest["success_count"] = success_count
             manifest["useful_progress_count"] = sum(1 for item in results if item.get("useful_progress"))
+            manifest["active_subagents"] = []
+            manifest["active_count"] = 0
             write_manifest(manifest_path, manifest)
             if success_count >= min_results:
                 break
@@ -1654,9 +1822,9 @@ def run_ensemble(argv: list[str]) -> int:
     write_manifest(manifest_path, manifest)
     merge_summary = build_merge_summary(
         results,
-        str(route.get("merge_policy", "single_provider")),
+        str(route.get("merge_policy", "single_subagent")),
         min_results,
-        provider_scores=route_provider_scores(route),
+        subagent_scores=route_subagent_scores(route),
     )
     manifest["phase"] = "arbitration_running" if merge_summary.get("tie_break_recommended") else "finalizing"
     write_manifest(manifest_path, manifest)
@@ -1677,12 +1845,14 @@ def run_ensemble(argv: list[str]) -> int:
         "generated_at": now_utc(),
         "success_count": success_count,
         "useful_progress_count": sum(1 for item in results if item.get("useful_progress")),
-        "provider_exhausted": success_count < required_results,
+        "subagent_exhausted": success_count < required_results,
         "fallback_used": fallback_used,
         "merge_summary": merge_summary,
         "arbitration": arbitration,
         "post_arbitration_merge_summary": post_arbitration_merge_summary,
-        "results": sorted(results, key=lambda item: item["provider"]),
+        "results": sorted(results, key=lambda item: item["subagent"]),
+        "active_subagents": [],
+        "active_count": 0,
         "review_state": manifest_review_state(
             post_arbitration_merge_summary or merge_summary,
             route_risk_class(route),
@@ -1693,7 +1863,7 @@ def run_ensemble(argv: list[str]) -> int:
                 success_count >= required_results
                 or (post_arbitration_merge_summary or merge_summary).get("decision_ready")
             )
-            else "provider_exhausted"
+            else "subagent_exhausted"
         ),
         "phase": (
             "completed"
@@ -1701,7 +1871,7 @@ def run_ensemble(argv: list[str]) -> int:
                 success_count >= required_results
                 or (post_arbitration_merge_summary or merge_summary).get("decision_ready")
             )
-            else "provider_exhausted"
+            else "subagent_exhausted"
         ),
     }
     write_manifest(manifest_path, manifest)
@@ -1712,7 +1882,7 @@ def run_ensemble(argv: list[str]) -> int:
 def usage() -> int:
     print(
         "Usage:\n"
-        "  python3 _vida/scripts/subagent-dispatch.py provider <task_id> <task_class> <provider> <prompt_file> <output_file> [workdir]\n"
+        "  python3 _vida/scripts/subagent-dispatch.py subagent <task_id> <task_class> <subagent> <prompt_file> <output_file> [workdir]\n"
         "  python3 _vida/scripts/subagent-dispatch.py ensemble <task_id> <task_class> <prompt_file> <output_dir> [workdir]",
         file=sys.stderr,
     )
@@ -1723,7 +1893,7 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2:
         return usage()
     cmd = argv[1]
-    if cmd == "provider":
+    if cmd == "subagent":
         return run_single(argv)
     if cmd == "ensemble":
         return run_ensemble(argv)

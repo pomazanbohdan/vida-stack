@@ -6,18 +6,18 @@ Use this protocol for every subagent dispatch.
 
 This file defines dispatch invariants only.
 
-Concrete provider/model choices are not hardcoded here.
+Concrete subagent backend/model choices are not hardcoded here.
 
 Use:
 
 1. `_vida/docs/subagent-system-protocol.md` for system-level activation, routing, fallback, and scoring.
-2. `_vida/docs/DEV-AGENTS-MATRIX.md` for generic provider classes and routing categories.
-3. project overlay (`vida.config.yaml` + project docs) for concrete providers/models enabled in the current repository.
+2. `_vida/docs/DEV-AGENTS-MATRIX.md` for generic subagent backend classes and routing categories.
+3. project overlay (`vida.config.yaml` + project docs) for concrete subagents/models enabled in the current repository.
 
 ## Mandatory Prompt Fields
 
-0. Worker entry contract: external/delegated providers must receive `_vida/docs/SUBAGENT-ENTRY.MD` semantics instead of inheriting `AGENTS.md` orchestrator identity.
-0.1. Worker thinking contract: external/delegated providers must receive `_vida/docs/SUBAGENT-THINKING.MD` semantics and stay inside `STC|PR-CoT|MAR` unless explicitly escalated by the packet.
+0. Worker entry contract: external/delegated subagents must receive `_vida/docs/SUBAGENT-ENTRY.MD` semantics instead of inheriting `AGENTS.md` orchestrator identity.
+0.1. Worker thinking contract: external/delegated subagents must receive `_vida/docs/SUBAGENT-THINKING.MD` semantics and stay inside `STC|PR-CoT|MAR` unless explicitly escalated by the packet.
 1. Environment prerequisite: `Follow the active project preflight and command order declared by the host-project overlay.`
 2. Working directory: current repository root (`<repo_root>` resolved at runtime).
 3. Protocol unit when applicable: `<command>#CLx` plus whether the unit is read-only or mutation-owning.
@@ -38,8 +38,8 @@ Before dispatch:
 4. Define expected deliverable format.
 5. Confirm dependency prerequisites are in prompt.
 6. Prefer `bash _vida/scripts/render-subagent-prompt.sh ...` to render the baseline prompt with `<repo_root>`, worker entry contract, protocol-unit hint, and project preflight already filled in.
-7. If project overlay activates the subagent system, consult the active routing snapshot before choosing provider class.
-8. If routing metadata includes `fanout_providers`, dispatch only those providers for read-only work, require at least `fanout_min_results`, and merge results via the declared `merge_policy`.
+7. If project overlay activates the subagent system, consult the active routing snapshot before choosing subagent backend class.
+8. If routing metadata includes `fanout_subagents`, dispatch only those subagents for read-only work, require at least `fanout_min_results`, and merge results via the declared `merge_policy`.
 
 ## Mandatory Return Contract
 
@@ -84,7 +84,7 @@ Text-only summaries without `changed_files` and verification evidence are invali
 2. Classify root cause: environment/toolchain or code.
 3. If environment/toolchain: re-dispatch with corrected prerequisites, without code edits.
 4. If code: run systematic-debugging Phase 1 before implementing fixes.
-5. If the provider fails repeatedly, record provider failure in the subagent-system scorecard and re-route through the next eligible provider.
+5. If the cli subagent fails repeatedly, record subagent failure in the subagent-system scorecard and re-route through the next eligible subagent.
 
 ## Prompt Templates
 
@@ -104,6 +104,6 @@ Protocol-unit routing rule:
 ## Role Boundary
 
 1. `AGENTS.md` is for the orchestrator only.
-2. External providers and delegated workers should follow `_vida/docs/SUBAGENT-ENTRY.MD` as their entry contract.
-3. External providers and delegated workers should use `_vida/docs/SUBAGENT-THINKING.MD` as their default reasoning subset.
+2. External subagents and delegated workers should follow `_vida/docs/SUBAGENT-ENTRY.MD` as their entry contract.
+3. External subagents and delegated workers should use `_vida/docs/SUBAGENT-THINKING.MD` as their default reasoning subset.
 4. Do not proxy the full orchestrator boot/governance layer into external worker prompts unless the task explicitly audits that framework layer.

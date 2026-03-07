@@ -123,14 +123,14 @@ Current supported `agent_system` keys:
 2. `mode`
 3. `state_owner`
 4. `max_parallel_agents`
-5. `providers`
+5. `subagents`
 6. `routing`
 7. `scoring`
 
-Supported provider-level keys:
+Supported subagent-level keys:
 
 1. `enabled`
-2. `provider_class`
+2. `subagent_backend_class`
 3. `detect_command`
 4. `role`
 5. `orchestration_tier`
@@ -149,7 +149,7 @@ Supported provider-level keys:
 18. `specialties`
 19. `dispatch`
 
-Supported provider-level `dispatch` keys:
+Supported subagent-level `dispatch` keys:
 
 1. `command`
 2. `static_args`
@@ -159,6 +159,11 @@ Supported provider-level `dispatch` keys:
 6. `output_flag`
 7. `prompt_mode`
 8. `prompt_flag`
+9. `env`
+10. `probe_static_args`
+11. `probe_prompt`
+12. `probe_expect_substring`
+13. `probe_timeout_seconds`
 
 Repeated-scalar encoding:
 
@@ -168,29 +173,29 @@ Repeated-scalar encoding:
 
 Common repeated-scalar examples:
 
-1. provider `profiles`
-2. provider `models_hint`
-3. provider `capability_band`
-4. provider `specialties`
-5. route `providers`
-6. route `fanout_providers`
-7. provider `dispatch.static_args`
+1. subagent `profiles`
+2. subagent `models_hint`
+3. subagent `capability_band`
+4. subagent `specialties`
+5. route `subagents`
+6. route `fanout_subagents`
+7. subagent `dispatch.static_args`
 
 Supported routing-level keys:
 
-1. `providers`
+1. `subagents`
 2. `models`
 3. `profiles`
 4. `write_scope`
 5. `verification_gate`
 6. `max_runtime_seconds`
 7. `min_output_bytes`
-8. `fanout_providers`
+8. `fanout_subagents`
 9. `fanout_min_results`
 10. `merge_policy`
 11. `dispatch_required`
 12. `external_first_required`
-13. `bridge_fallback_provider`
+13. `bridge_fallback_subagent`
 14. `internal_escalation_trigger`
 
 Validation scope:
@@ -198,8 +203,20 @@ Validation scope:
 1. required top-level sections and required fields inside them,
 2. unsupported keys in canonical sections,
 3. type checks for booleans, integers, strings, mappings, and repeated-string fields,
-4. provider `dispatch` requirements for enabled `external_cli` providers,
-5. route/provider consistency checks such as `default_profile in profiles` and `fanout_min_results <= fanout_providers`.
+4. subagent `dispatch` requirements for enabled `external_cli` subagents,
+5. route/subagent consistency checks such as `default_profile in profiles` and `fanout_min_results <= fanout_subagents`.
+
+Availability-state contract:
+
+1. subagent runtime may persist subagent availability separately from quality score,
+2. canonical subagent availability states are:
+   - `active`
+   - `degraded`
+   - `quota_exhausted`
+   - `disabled_manual`
+3. temporary subagent suppression should use `cooldown_until`,
+4. probe-driven recovery may use `probe_required=true`,
+5. new overlays should prefer explicit probe-capable dispatch for external CLI subagents that support headless smoke checks.
 
 ## Portability Rule
 
@@ -214,17 +231,17 @@ Portable default behavior:
 
 Overlay may configure:
 
-1. which provider classes are allowed,
+1. which subagent backend classes are allowed,
 2. which routing preferences are preferred,
 3. which escalation thresholds apply,
 4. external-first routing preference for eligible read-only classes,
-5. which provider is the canonical bridge fallback before internal escalation.
+5. which subagent is the canonical bridge fallback before internal escalation.
 
 Overlay may not configure:
 
 1. permission to bypass `br` as SSOT,
 2. permission to bypass verification gates,
-3. permission to let external providers mutate framework task state directly.
+3. permission to let external subagents mutate framework task state directly.
 
 ## Runtime Files
 

@@ -1,10 +1,10 @@
 # Dev Agents Matrix — Generic Routing Classes
 
-> Generic provider classes only. Concrete models/providers are project-owned.
+> Generic subagent backend classes only. Concrete models/subagents are project-owned.
 
-## Provider Classes
+## Subagent Backend Classes
 
-| Provider Class | Best Use | Write Mode | Notes |
+| Subagent Backend Class | Best Use | Write Mode | Notes |
 |---|---|---|---|
 | `internal` | Default framework-native implementation lane | ✅ | Runtime-managed inside the current platform |
 | `external_cli` | Cheap or specialized CLI-driven execution lane | ✅ with scoped ownership | Must never own workflow state |
@@ -12,12 +12,12 @@
 
 ## Routing Rules
 
-1. Provider selection must come from active subagent-system state, not from hardcoded framework docs.
-2. Project overlay may map task classes to provider order and optional provider-specific model/profile policy, but framework chooses only among generic provider classes.
-3. Use strong or promoted providers for architecture/high-risk tasks.
-4. Use cheap or review providers only when bounded scope and verification contract are explicit.
-5. Cheap/fast model lanes and native role profiles should stay project-owned; framework only carries the generic route contract that can return a selected model/profile for an eligible provider.
-6. Read-only task classes may additionally return advisory fanout metadata (`fanout_providers`, `fanout_min_results`, `merge_policy`) for orchestrator-managed ensemble dispatch.
+1. Subagent selection must come from active subagent-system state, not from hardcoded framework docs.
+2. Project overlay may map task classes to subagent order and optional backend-specific model/profile policy, but framework chooses only among generic subagent backend classes.
+3. Use strong or promoted subagents for architecture/high-risk tasks.
+4. Use cheap or review subagents only when bounded scope and verification contract are explicit.
+5. Cheap/fast model lanes and native role profiles should stay project-owned; framework only carries the generic route contract that can return a selected model/profile for an eligible subagent.
+6. Read-only task classes may additionally return advisory fanout metadata (`fanout_subagents`, `fanout_min_results`, `merge_policy`) for orchestrator-managed ensemble dispatch.
 
 ## Delegation Gate
 

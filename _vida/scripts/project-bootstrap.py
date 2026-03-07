@@ -137,7 +137,7 @@ def template_for(kind: str, contract: dict[str, Any]) -> str:
         return (
             "# Agent System\n\n"
             f"Project subagent/runtime runbook for `{project_id}`.\n\n"
-            "1. Concrete provider and model choices live here.\n"
+            "1. Concrete cli subagent and model choices live here.\n"
             "2. Framework routing logic stays in `_vida/*`.\n"
         )
     raise KeyError(f"Unknown bootstrap template kind: {kind}")

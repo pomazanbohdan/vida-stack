@@ -376,9 +376,9 @@ The framework is designed to work well with tools that either expose free usage 
 | :--- | :--- | :--- | :--- |
 | **Qwen Code** | External CLI provider for research, analysis, and read-only fanout | Official Qwen Code docs state that Qwen OAuth provides a free tier with **2,000 free requests/day** | `npm install -g @qwen-code/qwen-code@latest` or `brew install qwen-code` |
 | **Kilo Code CLI** | External CLI provider for terminal-first coding and parallel-agent workflows | Kilo documents a free account flow, and official Kilo announcements describe selected models as **free for a limited time** | `npm install -g @kilocode/cli` |
-| **OpenCode** | External CLI provider for multi-provider coding, review, and automation workflows | OpenCode states that **free models are included**, and Zen docs list several models available **free for a limited time** | `curl -fsSL https://opencode.ai/install | bash` or `npm install -g opencode-ai` |
+| **OpenCode** | External CLI provider for multi-provider coding, review, and automation workflows | OpenCode states that **free models are included**, and Zen docs list several models available **free for a limited time** | `curl -fsSL https://opencode.ai/install \| bash` or `npm install -g opencode-ai` |
 | **Gemini CLI** | External CLI provider for terminal-first coding, large-context analysis, and hybrid read-heavy workflows | Official Gemini CLI pricing docs state that Google login provides a free tier with **1,000 model requests/day** and **60 requests/minute** | `npm install -g @google/gemini-cli`, `brew install gemini-cli`, or `npx @google/gemini-cli` |
-| **Mistral Vibe** | External CLI provider for terminal-based coding and prompt-driven patching | In the installation sources used here, a built-in free tier is **not explicitly documented**; typically used with Mistral or provider credentials | `curl -LsSf https://mistral.ai/vibe/install.sh | bash` or `uv tool install mistral-vibe` |
+| **Mistral Vibe** | External CLI provider for terminal-based coding and prompt-driven patching | In the installation sources used here, a built-in free tier is **not explicitly documented**; typically used with Mistral or provider credentials | `curl -LsSf https://mistral.ai/vibe/install.sh \| bash` or `uv tool install mistral-vibe` |
 
 Source references:
 

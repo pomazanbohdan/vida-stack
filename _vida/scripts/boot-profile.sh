@@ -90,21 +90,30 @@ write_receipt() {
 
   mkdir -p "$receipt_dir"
 
-  local subject timestamp safe_subject latest_file archive_file
+  local subject timestamp safe_subject latest_file archive_file packet_file packet_latest
   subject="${task_id:-session}"
   safe_subject="${subject//[^A-Za-z0-9._-]/_}"
   timestamp="$(date -u +"%Y%m%dT%H%M%SZ")"
   latest_file="$receipt_dir/${safe_subject}.latest.json"
   archive_file="$receipt_dir/${safe_subject}-${timestamp}.json"
+  packet_file="$receipt_dir/${safe_subject}-${timestamp}.boot-packet.json"
+  packet_latest="$receipt_dir/${safe_subject}.latest.boot-packet.json"
 
-  python - "$profile" "$task_id" "$non_dev" "$capsule_status" "$status" "$latest_file" "$archive_file" "${read_contract[@]}" <<'PY'
+  if [[ "$non_dev" == "yes" ]]; then
+    python3 _vida/scripts/boot-packet.py "$profile" --non-dev >"$packet_file"
+  else
+    python3 _vida/scripts/boot-packet.py "$profile" >"$packet_file"
+  fi
+  cp "$packet_file" "$packet_latest"
+
+  python - "$profile" "$task_id" "$non_dev" "$capsule_status" "$status" "$latest_file" "$archive_file" "$packet_file" "${read_contract[@]}" <<'PY'
 import json
 import hashlib
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-profile, task_id, non_dev, capsule_status, status, latest_file, archive_file, *read_contract = sys.argv[1:]
+profile, task_id, non_dev, capsule_status, status, latest_file, archive_file, packet_file, *read_contract = sys.argv[1:]
 contract_files = []
 for entry in read_contract:
     target = entry.split("#", 1)[0]
@@ -124,6 +133,7 @@ payload = {
     "status": status,
     "read_contract": read_contract,
     "contract_files": contract_files,
+    "boot_packet_file": packet_file,
 }
 for target in (Path(latest_file), Path(archive_file)):
     target.write_text(json.dumps(payload, indent=2) + "\n")
@@ -247,8 +257,23 @@ if expected and payload.get("profile") != expected:
         file=sys.stderr,
     )
     raise SystemExit(1)
+boot_packet_file = payload.get("boot_packet_file")
+if not boot_packet_file:
+    print("[boot-profile] Receipt missing boot_packet_file", file=sys.stderr)
+    raise SystemExit(1)
+boot_packet_path = Path(boot_packet_file)
+if not boot_packet_path.exists():
+    print(f"[boot-profile] Boot packet missing: {boot_packet_path}", file=sys.stderr)
+    raise SystemExit(1)
+boot_packet = json.loads(boot_packet_path.read_text())
+if boot_packet.get("profile") != payload.get("profile"):
+    print(
+        f"[boot-profile] Boot packet profile mismatch: receipt={payload.get('profile')} packet={boot_packet.get('profile')}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 print(
-    f"✅ boot_receipt={path.name} subject={payload.get('subject')} profile={payload.get('profile')} status={payload.get('status')} contract_files={len(payload.get('contract_files') or [])}"
+    f"✅ boot_receipt={path.name} subject={payload.get('subject')} profile={payload.get('profile')} status={payload.get('status')} contract_files={len(payload.get('contract_files') or [])} boot_packet={boot_packet_path.name}"
 )
 PY
 }
