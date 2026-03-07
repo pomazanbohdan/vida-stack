@@ -8,6 +8,17 @@ Rules:
 4. Group updates under fixed headings when applicable: `Added`, `Changed`, `Fixed`, `Protocol`.
 5. Keep this file limited to VIDA framework/runtime changes, not project feature work.
 
+## 2026-03-07 06:35
+
+Changed:
+
+1. `RELEASE-1-SCOPE.md` now includes lower-level implementation audit checklists under major capability sections instead of relying only on the top summary block.
+2. `RELEASE-1-IMPLEMENTATION-ROADMAP.md` now includes lower-level implementation audit checklists under each delivery phase.
+
+Protocol:
+
+1. Release-target documents now treat detailed capability and phase audits as checklist-backed evidence, not only high-level status summaries.
+
 ## 2026-03-07 06:31
 
 Changed:

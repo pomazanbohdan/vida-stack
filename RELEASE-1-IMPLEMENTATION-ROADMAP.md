@@ -140,6 +140,13 @@ Why this comes first:
 
 Without a stable execution kernel, every later subsystem becomes harder to trust.
 
+Implementation audit:
+
+- [x] `br` + TODO execution boundaries exist.
+- [x] Compact restore and hydration gates exist.
+- [x] Boot-profile validation exists.
+- [ ] Full proof that all non-trivial work always stays inside active block lifecycle still depends on operational discipline, not only static runtime enforcement.
+
 ## Phase B: Orchestration and Subagent Reliability
 
 Goal:
@@ -182,6 +189,14 @@ Why this comes second:
 
 Vida Stack cannot claim to be an orchestration framework if its orchestration layer is still flaky under real bug-fix and analysis flows.
 
+Implementation audit:
+
+- [x] Route outputs are machine-usable and policy-shaped.
+- [x] Fanout, fallback, and bounded arbitration exist.
+- [x] Worker-entry separation exists.
+- [x] Live phase and progress visibility exist.
+- [ ] Explicit lease/ownership enforcement remains incomplete.
+
 ## Phase C: Verification, Review, and Risk Gates
 
 Goal:
@@ -215,6 +230,14 @@ Exit criteria:
 Why this comes third:
 
 Once orchestration works, the next risk is silent acceptance of low-quality or unsafe outputs.
+
+Implementation audit:
+
+- [x] `review_state` exists in route/run artifacts.
+- [x] `risk_class` exists in route/run artifacts.
+- [x] Health tooling surfaces degraded lanes and verification state.
+- [ ] Full target review vocabulary is not yet complete in runtime behavior.
+- [ ] Human approval boundaries are still incomplete.
 
 ## Phase D: Telemetry, Scorecards, and Drift Awareness
 
@@ -250,6 +273,14 @@ Exit criteria:
 Why this comes fourth:
 
 Telemetry is most valuable after the runtime and gate semantics are already trustworthy.
+
+Implementation audit:
+
+- [x] Eval-pack integration exists.
+- [x] Dynamic scorecards exist.
+- [x] Strategy snapshots exist.
+- [x] Useful-progress and time-to-first-useful-output metrics exist.
+- [ ] Drift/anomaly handling is still incomplete.
 
 ## Phase E: Documentation Contract and Protocol Runtime Alignment
 
@@ -288,6 +319,13 @@ Why this comes fifth:
 
 By this point, documentation becomes not just descriptive, but a stable release and extraction surface.
 
+Implementation audit:
+
+- [x] Top-level release documents exist and are maintained.
+- [x] `protocol-index.md` is synchronized as a canonical map.
+- [x] Worker contracts and subagent protocol docs are in place.
+- [ ] Full document freshness/lifecycle enforcement is still incomplete.
+
 ## Phase F: Extraction Readiness and Standalone Framework Preparation
 
 Goal:
@@ -320,6 +358,13 @@ Exit criteria:
 Why this comes last:
 
 Extraction should be the result of maturity, not a substitute for it.
+
+Implementation audit:
+
+- [x] Framework-only installer exists.
+- [x] Framework-only release packaging exists.
+- [x] Project-specific identity has been materially reduced from framework docs/scripts.
+- [ ] Standalone extraction readiness is not yet complete enough to call Release 1 finished.
 
 ## Ordered Workstreams
 

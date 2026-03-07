@@ -113,6 +113,13 @@ Release 1 should provide:
 7. bootstrap validation before non-trivial execution
 8. fail-fast behavior when critical runtime prerequisites are missing
 
+Implementation audit:
+
+- [x] Boot profiles and receipts exist.
+- [x] Context hydration gates exist.
+- [x] Fail-fast behavior exists in boot/runtime scripts.
+- [ ] `micro` and `swarm` are not yet established as fully proven runtime profiles at the same maturity as `lean|standard|full`.
+
 ### 2. Problem Framing and Routing
 
 Release 1 should provide:
@@ -135,6 +142,13 @@ Release 1 should provide:
 8. risk-policy selection
 9. user-decision escalation when assumptions are unsafe
 
+Implementation audit:
+
+- [x] Pack routing exists.
+- [x] Execution mode routing exists.
+- [x] Reflection-path routing exists.
+- [ ] Some higher-level decision-card style framing remains protocol-led rather than fully machine-shaped.
+
 ### 3. Task and Execution State
 
 Release 1 should provide:
@@ -156,6 +170,13 @@ Release 1 should provide:
 9. quality gates before close or handoff
 10. explicit separation between lifecycle state and execution telemetry
 
+Implementation audit:
+
+- [x] Single authoritative task state exists.
+- [x] TODO lifecycle commands and validation exist.
+- [x] Context capsules and quality gates exist.
+- [ ] Not every lifecycle guarantee is yet proven as an always-on invariant for every execution path.
+
 ### 4. Use-Case Packs
 
 Release 1 should provide complete pack execution for:
@@ -176,6 +197,13 @@ Each pack should support:
 5. handoff/close semantics
 6. change-impact absorption where required
 
+Implementation audit:
+
+- [x] Canonical pack catalog exists.
+- [x] Pack helper and scaffold flow exist.
+- [x] Reflection-pack change-impact handling exists.
+- [ ] Full end-to-end proof for every pack remains incomplete.
+
 ### 4.1 Planning and Reasoning Methods
 
 Release 1 should support structured planning behavior rather than unconstrained prompt execution.
@@ -188,6 +216,12 @@ Target planning families:
 4. dependency-aware workflow graph execution where appropriate
 
 Release 1 does not need every planning family implemented as an isolated named engine, but the runtime should already support their practical equivalents through protocols, orchestration, and bounded decomposition.
+
+Implementation audit:
+
+- [x] Structured reasoning protocols exist.
+- [x] Planning decomposition and bounded execution flows exist.
+- [ ] Dependency-aware workflow-graph execution is not yet a fully explicit standalone runtime engine.
 
 ### 5. Subagent System
 
@@ -214,6 +248,13 @@ Release 1 should provide:
    - task class
    - inferred domain
 11. strategy snapshots generated from observed runs
+
+Implementation audit:
+
+- [x] Provider detection and runtime snapshots exist.
+- [x] Hybrid mode and external-first routing exist.
+- [x] Dynamic scorecards and strategy snapshots exist.
+- [ ] Ownership/lease mechanics are not yet fully runtime-enforced.
 
 ### 5.1 Multi-Agent Role Architecture
 
@@ -242,6 +283,13 @@ Release 1 should also provide explicit ownership mechanics for bounded parallel 
 3. ownership release or expiration rules
 4. reduced write-conflict risk through scope isolation
 
+Implementation audit:
+
+- [x] Worker vs orchestrator separation exists.
+- [x] Role-oriented lane separation exists conceptually in routing/docs.
+- [ ] Full explicit role runtime for planner/researcher/executor/critic/integrator/supervisor is not yet materialized as separate first-class runtime agents.
+- [ ] Lease and expiration rules are not yet fully implemented as hard stateful contracts.
+
 ### 6. Subagent Dispatch
 
 Release 1 should provide:
@@ -266,6 +314,14 @@ Release 1 should provide:
 11. graceful degradation instead of runtime crashes on unsupported paths
 12. explicit separation between orchestrator-entry and worker-entry prompt contracts
 13. progress-aware dispatch state such as useful-progress tracking and visible run phases during fanout, fallback, merge, and arbitration
+
+Implementation audit:
+
+- [x] Canonical prompt rendering exists.
+- [x] Fanout, fallback, and arbitration exist.
+- [x] Machine-readable run artifacts and manifests exist.
+- [x] Progress-aware dispatch state exists.
+- [ ] Some merge/readiness heuristics are still heuristic rather than final Release 1-stable policy.
 
 ### 7. Review and Verification Fabric
 
@@ -293,6 +349,14 @@ Target review-state vocabulary for Release 1:
 5. `requires_human`
 6. `promotion_ready`
 
+Implementation audit:
+
+- [x] Review state is machine-visible.
+- [x] Health and verification scripts exist.
+- [x] Merge-readiness is distinguished from raw command success.
+- [ ] The full target review vocabulary is not yet fully implemented end to end.
+- [ ] Policy-aware close/handoff semantics are not yet complete across all execution classes.
+
 ### 8. Risk and Governance
 
 Release 1 should provide explicit risk-aware runtime behavior.
@@ -315,6 +379,14 @@ Target minimal risk classes for Release 1:
 4. `R3` — high-impact or orchestrator-native write requiring stronger approval
 5. `R4` — reserved for future destructive or externally privileged execution
 
+Implementation audit:
+
+- [x] Risk class is machine-visible.
+- [x] Risk-aware degraded/suppressed subagent states exist.
+- [x] Recovery and routing suppression exist for broken lanes.
+- [ ] The full `R0`-`R4` model is not yet fully exercised.
+- [ ] Human escalation boundaries remain incomplete.
+
 ### 9. Quality, Health, and Runtime Gates
 
 Release 1 should provide:
@@ -330,6 +402,13 @@ Release 1 should provide:
 9. WVP evidence checks when external assumptions are involved
 10. finish-gate blocking on contradictions
 
+Implementation audit:
+
+- [x] One-command health check exists.
+- [x] Quick, strict-dev, and full modes exist.
+- [x] TODO validation and boot-profile validation exist.
+- [x] Finish-gate contradiction checks exist.
+
 ### 9.1 Safety and Governance
 
 Release 1 should already include the baseline safety/governance model for an autonomous engineering runtime.
@@ -342,6 +421,12 @@ Required governance capabilities:
 4. human checkpoint support
 5. audit trails for critical execution
 6. escalation paths when autonomy should stop
+
+Implementation audit:
+
+- [x] Explicit permissions/contracts exist in framework policy.
+- [x] Audit trails and health surfaces exist.
+- [ ] Prompt-injection-aware and human-checkpoint governance remain only partially materialized as runtime mechanics.
 
 ### 10. Web and Reality Validation
 
@@ -358,6 +443,12 @@ Release 1 should provide:
    - bug-fix
    - implementation decisions when external facts matter
 
+Implementation audit:
+
+- [x] Canonical web-validation protocol exists.
+- [x] Source hierarchy and evidence capture rules exist.
+- [ ] Full proof of consistent runtime enforcement across every eligible flow remains incomplete.
+
 ### 11. Execution Environment
 
 Release 1 should operate inside a real interactive environment, not prompt-only context.
@@ -370,6 +461,11 @@ Required environment surfaces:
 4. code/runtime execution
 5. external API integration surface
 6. normalized tool result capture
+
+Implementation audit:
+
+- [x] Terminal, filesystem, web, and API surfaces exist.
+- [x] Tool result capture exists in runtime artifacts.
 
 ### 12. Documentation and Contract Sync
 
@@ -394,6 +490,13 @@ Release 1 should also define the baseline document-governance model:
 3. stale-reference detection for superseded docs
 4. freshness binding between runtime/policy changes and document re-verification
 
+Implementation audit:
+
+- [x] Canonical source mapping exists.
+- [x] Framework/project boundary documentation exists.
+- [x] Reflection-pack reconciliation exists.
+- [ ] Full document lifecycle and freshness verification remain incomplete.
+
 ### 13. Telemetry and Evaluation
 
 Release 1 should provide:
@@ -409,6 +512,14 @@ Release 1 should provide:
 9. risk-state visibility
 10. progress visibility across dispatch phases
 11. a baseline for future drift detection
+
+Implementation audit:
+
+- [x] Provider run logs exist.
+- [x] Eval-pack generation exists.
+- [x] Scorecards and strategy snapshots exist.
+- [x] Review/risk/progress visibility exist.
+- [ ] Full drift visibility remains incomplete.
 
 ### 13.1 Drift Detection
 
@@ -430,6 +541,12 @@ Required Release 1 drift capabilities:
 3. explicit framework self-analysis path
 4. evidence for re-routing, demotion, or stricter review
 
+Implementation audit:
+
+- [x] Demotion and re-routing evidence exist.
+- [x] Framework self-analysis path exists.
+- [ ] Anomaly and drift handling are not yet complete at the intended Release 1 level.
+
 ### 13.2 Evaluation Framework
 
 Release 1 should provide continuous evaluation foundations.
@@ -443,6 +560,12 @@ Required evaluation capabilities:
 5. benchmark-ready evaluation artifacts
 6. task-scoped eval-pack generation
 
+Implementation audit:
+
+- [x] Task-scoped eval-pack generation exists.
+- [x] Reasoning/routing proxy metrics exist.
+- [ ] Cost-per-task and human-correction visibility are not yet complete as a polished operator-facing model.
+
 ### 14. Learning and Improvement Loop
 
 Release 1 should provide early but real improvement mechanics:
@@ -454,6 +577,14 @@ Release 1 should provide early but real improvement mechanics:
 5. bounded framework diagnosis flows
 6. evidence-backed improvement of routing and fallback behavior
 7. a base for future prompt/policy revision loops
+
+Implementation audit:
+
+- [x] Self-reflection protocol exists.
+- [x] Evaluation packs exist.
+- [x] Provider score learning exists.
+- [x] Framework self-analysis path exists.
+- [ ] Distilled lesson and memory update flow remain incomplete.
 
 ### 14.1 Continuous Learning Pipeline
 
@@ -468,6 +599,11 @@ Release 1 should establish the base shape of:
 
 It does not need full automated fine-tuning or continuous training in Release 1, but the runtime should preserve the artifacts needed for that future path.
 
+Implementation audit:
+
+- [x] Tasks, logs, and evaluation artifacts exist.
+- [ ] Distilled lessons and memory updates are not yet complete as first-class runtime outputs.
+
 ### 15. Skills and Capability Routing
 
 Release 1 should provide:
@@ -477,6 +613,12 @@ Release 1 should provide:
 3. domain-triggered skill routing
 4. explicit fallback behavior when a tool or skill is unavailable
 5. capability evidence logging when fallback is used
+
+Implementation audit:
+
+- [x] Skill validation and discovery utilities exist.
+- [x] Fallback evidence logging exists in protocol/scripts.
+- [ ] Full dynamic capability-routing maturity still depends on runtime usage breadth.
 
 ### 16. Project Overlay and Portability
 
@@ -488,6 +630,14 @@ Release 1 should provide:
 4. portable framework defaults when overlay is missing
 5. project bootstrap contract for seeding required project artifacts
 6. provider-level runtime budget and dispatch environment settings where orchestration realism requires them
+
+Implementation audit:
+
+- [x] Overlay activation and schema validation exist.
+- [x] Provider/route configuration lives in overlay data.
+- [x] Runtime budget and dispatch environment settings exist in the template/runtime.
+- [x] Project bootstrap contract exists.
+- [ ] Full standalone portability is not yet complete.
 
 ### 17. Cost and Efficiency Model
 
@@ -502,6 +652,13 @@ Required efficiency capabilities:
 5. context pruning
 6. lower-reread runtime artifacts as a path toward compiled policy
 
+Implementation audit:
+
+- [x] External-first low-cost fanout exists.
+- [x] Compact hydration exists.
+- [ ] Cost-per-task visibility is not yet complete.
+- [ ] Compiled-policy-level optimization remains incomplete.
+
 ### 17.1 Compiled Policy Direction
 
 Release 1 should establish the first practical step toward compiled protocol/runtime artifacts:
@@ -510,6 +667,11 @@ Release 1 should establish the first practical step toward compiled protocol/run
 2. compact boot or handoff payloads
 3. evidence schemas that can be checked by runtime gates
 4. derived manifests that reduce markdown-only enforcement
+
+Implementation audit:
+
+- [x] Boot packets and derived manifests exist as early machine-visible artifacts.
+- [ ] A broader compiled-policy layer is not yet complete.
 
 ### 18. Execution Surface
 
@@ -524,6 +686,11 @@ Release 1 should provide a compact but complete execution surface:
 7. provider dispatch commands
 8. eval commands
 9. project bootstrap commands
+
+Implementation audit:
+
+- [x] Command-layer protocol map exists.
+- [x] Pack helper, routing, status, verification, eval, and bootstrap commands exist.
 
 
 ## Current Implementation Status (Codebase Audit)
