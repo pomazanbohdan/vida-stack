@@ -120,11 +120,12 @@ bash _vida/scripts/beads-compact.sh post [task_after]
 
 Rules:
 
-1. `pre` is mandatory before compact/clear.
-2. `post` restores status view and records task drift (`task_before` vs `task_after`).
-3. `pre` writes Context Capsule (`.vida/logs/context-capsules/<task_id>.json`) with epic/task goal linkage.
-4. `post` must pass hydration gate via `context-capsule.sh hydrate <task_id>` before execution resumes.
-5. If hydration fails, stop with blocker `BLK_CONTEXT_NOT_HYDRATED`.
+1. Treat compact/clear as something that may happen at any moment during active execution, not only as a planned step.
+2. `pre` is mandatory before planned compact/clear and strongly preferred before any risky long-running transition that may strand chat-only state.
+3. `post` restores status view and records task drift (`task_before` vs `task_after`).
+4. `pre` writes Context Capsule (`.vida/logs/context-capsules/<task_id>.json`) with epic/task goal linkage.
+5. `post` must pass hydration gate via `context-capsule.sh hydrate <task_id>` before execution resumes.
+6. If hydration fails, stop with blocker `BLK_CONTEXT_NOT_HYDRATED`.
 
 ## 6.1) Context Capsule Contract
 

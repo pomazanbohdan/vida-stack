@@ -190,6 +190,9 @@ auto_start_next_block() {
     | head -n 1)"
 
   if [[ "$target_status" == "todo" && "$source_track" == "$target_track" ]]; then
+    if writer_block_requires_execution_auth "$issue_id" "$target" "${target_goal:--}"; then
+      run_execution_auth_gate "$issue_id" "$target" "${target_goal:--}" || return $?
+    fi
     bash "$LOG_SCRIPT" block-start "$issue_id" "$target" "${target_goal:--}" "$target_track" "orchestrator" "-" "-"
     AUTO_STARTED_BLOCK="$target"
     AUTO_STARTED_GOAL="${target_goal:--}"
@@ -268,6 +271,66 @@ maybe_auto_sync_todo() {
       auto_sync_todo "$issue_id"
     fi
   fi
+}
+
+task_has_open_pack() {
+  local issue_id="$1"
+  local pack_id="$2"
+  [[ -f ".vida/logs/beads-execution.jsonl" ]] || return 1
+
+  local balance
+  balance="$(
+    jq -sr --arg task "$issue_id" --arg pack "$pack_id" '
+      reduce .[] as $event (0;
+        if (($event.task_id // "") == $task and ($event.pack_id // "") == $pack) then
+          if ($event.type // "") == "pack_start" then . + 1
+          elif ($event.type // "") == "pack_end" then . - 1
+          else .
+          end
+        else .
+        end
+      )
+    ' .vida/logs/beads-execution.jsonl 2>/dev/null || echo 0
+  )"
+  [[ "${balance:-0}" =~ ^-?[0-9]+$ ]] || balance=0
+  (( balance > 0 ))
+}
+
+writer_block_requires_execution_auth() {
+  local issue_id="$1"
+  local block_id="$2"
+  local goal="$3"
+
+  task_has_open_pack "$issue_id" "dev-pack" || return 1
+  case "$block_id" in
+    P02|IEP04|CL4)
+      return 0
+      ;;
+  esac
+  grep -Eqi 'implement|materializ' <<<"$goal"
+}
+
+run_execution_auth_gate() {
+  local issue_id="$1"
+  local block_id="$2"
+  local goal="$3"
+  local summary status
+
+  set +e
+  summary="$(
+    python3 "$SCRIPT_DIR/execution-auth-gate.py" check "$issue_id" implementation --local-write --block-id "$block_id"
+  )"
+  status=$?
+  set -e
+
+  if [[ $status -ne 0 ]]; then
+    bash "$LOG_SCRIPT" op-event "$issue_id" execution_auth_blocked "$summary"
+    vida_status_line blocked "[beads-workflow] BLK_EXECUTION_AUTH_MISSING task=$issue_id block=$block_id goal=$goal" >&2
+    return $status
+  fi
+
+  bash "$LOG_SCRIPT" op-event "$issue_id" execution_auth_passed "$summary"
+  return 0
 }
 
 usage() {
@@ -409,6 +472,9 @@ case "$cmd" in
       "block_redirect" \
       "$redirect_meta"
 
+    if writer_block_requires_execution_auth "$issue_id" "$to_block_id" "${target_goal:--}"; then
+      run_execution_auth_gate "$issue_id" "$to_block_id" "${target_goal:--}" || exit $?
+    fi
     bash "$LOG_SCRIPT" block-start \
       "$issue_id" \
       "$to_block_id" \
@@ -447,6 +513,9 @@ case "$cmd" in
     depends_on="${7:--}"
     next_step="${8:--}"
     [[ -n "$issue_id" && -n "$block_id" && -n "$goal" ]] || { usage; exit 1; }
+    if writer_block_requires_execution_auth "$issue_id" "$block_id" "$goal"; then
+      run_execution_auth_gate "$issue_id" "$block_id" "$goal" || exit $?
+    fi
     bash "$LOG_SCRIPT" block-start "$issue_id" "$block_id" "$goal" "$track_id" "$owner" "$depends_on" "$next_step"
     bash "$LOG_SCRIPT" telemetry-event "$issue_id" "$block_id" "${owner:-orchestrator}" block_start 0 in_progress true
     maybe_auto_sync_todo "$issue_id" block-start force

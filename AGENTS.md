@@ -50,7 +50,10 @@ These rules apply across all lanes unless a more specific worker rule narrows be
 8. **[MUST]** Never widen scope silently when user intent, ownership layer, or risk posture changes materially.
 9. **[MUST]** Before conclusions that depend on live server/API behavior, validate with real requests and actual payloads.
 10. **[MUST]** Respect LEGACY-ZERO: no obsolete aliases, dual-paths, or compatibility leftovers unless the user explicitly asks for a migration window.
-11. **[MUST]** Explicit VIDA framework self-diagnosis is an orchestrator-only exception path: run it directly in the main orchestrator lane, outside TODO/`br` flow, unless the user explicitly requests task tracking.
+11. **[MUST]** Explicit VIDA framework self-diagnosis is an orchestrator-only exception path only for direct chat diagnosis: run it directly in the main orchestrator lane, outside TODO/`br` flow, unless the user explicitly requests task tracking; in tracked FSAP/remediation flow, keep primary framing in the orchestrator lane but require delegated verification/proving before closure unless a structured override receipt is recorded.
+12. **[MUST NOT]** Do not execute behavior based only on generic assistant defaults when that behavior is not explicitly described or authorized by the active VIDA/project protocol stack.
+13. **[MUST]** Treat framework/project protocols as an allowlist: if an execution behavior, fallback, or mutation path is not described, route-authorized, or explicitly escalated by the framework, it is forbidden by default.
+14. **[MUST]** Treat compact/context compression as possible at any moment; persist critical task/routing assumptions through canonical receipts, TODO evidence, or context capsules before risky transitions.
 
 Reporting prefix:
 1. Start reports with `Thinking mode: <STC|PR-CoT|MAR|5-SOL|META>.`

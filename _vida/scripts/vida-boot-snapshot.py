@@ -70,6 +70,32 @@ def issue_mode(issue: dict[str, Any]) -> str:
     return "auto"
 
 
+def issue_priority(issue: dict[str, Any]) -> int:
+    try:
+        return int(issue.get("priority", 999) or 999)
+    except (TypeError, ValueError):
+        return 999
+
+
+def parse_issue_timestamp(value: Any) -> float:
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def issue_sort_key(issue: dict[str, Any]) -> tuple[int, float, float, str]:
+    return (
+        issue_priority(issue),
+        -parse_issue_timestamp(issue.get("updated_at")),
+        -parse_issue_timestamp(issue.get("created_at")),
+        str(issue.get("id") or ""),
+    )
+
+
 def top_level(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [row for row in rows if not row.get("parent")]
 
@@ -93,6 +119,8 @@ def issue_entry(issue: dict[str, Any], subtasks: list[dict[str, Any]], subtasks_
         "title": clean_text(issue.get("title")),
         "status": issue.get("status"),
         "mode": issue_mode(issue),
+        "priority": issue_priority(issue),
+        "updated_at": issue.get("updated_at"),
         "subtasks": [
             {
                 "id": child.get("id"),
@@ -120,7 +148,7 @@ def child_entries_for(issue_id: str) -> list[dict[str, Any]]:
                 "status": dependent.get("status"),
             }
         )
-    children.sort(key=lambda item: (0 if item.get("status") == "in_progress" else 1, item.get("id") or ""))
+    children.sort(key=lambda item: (0 if item.get("status") == "in_progress" else 1, *issue_sort_key(item)))
     return children
 
 
@@ -130,10 +158,10 @@ def build_snapshot(top_limit: int, ready_limit: int, subtasks_limit: int) -> dic
     blocked_rows = run_br_json("list", "--status", "blocked", "--json")
     ready_rows = run_br_json("ready", "--json")
 
-    top_open = sorted(top_level(open_rows), key=lambda item: item.get("id") or "")
-    top_doing = sorted(top_level(doing_rows), key=lambda item: item.get("id") or "")
-    top_blocked = sorted(top_level(blocked_rows), key=lambda item: item.get("id") or "")
-    top_ready = unique_by_id(sorted(top_level(ready_rows), key=lambda item: item.get("id") or ""))
+    top_open = sorted(top_level(open_rows), key=issue_sort_key)
+    top_doing = sorted(top_level(doing_rows), key=issue_sort_key)
+    top_blocked = sorted(top_level(blocked_rows), key=issue_sort_key)
+    top_ready = unique_by_id(sorted(top_level(ready_rows), key=issue_sort_key))
     top_ready_open = [row for row in top_ready if row.get("status") == "open"]
     top_ready_in_progress = [row for row in top_ready if row.get("status") == "in_progress"]
 
@@ -150,6 +178,8 @@ def build_snapshot(top_limit: int, ready_limit: int, subtasks_limit: int) -> dic
             "id": row.get("id"),
             "title": clean_text(row.get("title")),
             "status": row.get("status"),
+            "priority": issue_priority(row),
+            "updated_at": row.get("updated_at"),
         }
         for row in unique_by_id(top_doing + top_open + top_blocked)
         if issue_mode(row) == "decision_required"
@@ -157,6 +187,19 @@ def build_snapshot(top_limit: int, ready_limit: int, subtasks_limit: int) -> dic
 
     return {
         "generated_at": now_utc(),
+        "execution_continue_default": {
+            "mode": "route_then_external_analysis",
+            "summary": (
+                "For write-producing continuation work in hybrid mode, stop after compact task snapshot, "
+                "build the route receipt, and obtain the external analysis receipt before writer dispatch."
+            ),
+            "selection_policy": "prefer explicit priority first, then most recently updated work within the same priority band",
+            "compact_assumption": "compact_can_happen_any_time",
+            "prepare_execution_command": (
+                "python3 _vida/scripts/subagent-dispatch.py prepare-execution <task_id> <writer_task_class> "
+                "<prompt_file> <output_dir> [workdir]"
+            ),
+        },
         "summary": {
             "top_level_in_progress": len(top_doing),
             "top_level_open": len(top_open),
@@ -197,6 +240,9 @@ def render_text(snapshot: dict[str, Any]) -> str:
     summary = snapshot["summary"]
     lines = [
         "VIDA BOOT SNAPSHOT",
+        f"execution_continue_default: {snapshot['execution_continue_default']['summary']}",
+        f"task_selection_policy: {snapshot['execution_continue_default']['selection_policy']}",
+        f"compact_assumption: {snapshot['execution_continue_default']['compact_assumption']}",
         (
             "summary: "
             f"in_progress={summary['top_level_in_progress']} "

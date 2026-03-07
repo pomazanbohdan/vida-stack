@@ -8,6 +8,33 @@ Rules:
 4. Group updates under fixed headings when applicable: `Added`, `Changed`, `Fixed`, `Protocol`.
 5. Keep this file limited to VIDA framework/runtime changes, not project feature work.
 
+## 2026-03-07 11:23
+
+Added:
+
+1. Route outputs now expose canonical `route_law_summary` so hard routing requirements and blocking conditions are visible before dispatch.
+2. Canonical subagent run payloads and ensemble manifests now include machine-readable `route_receipt` artifacts with dispatch, fanout, fallback, verification, and budget law context.
+3. Ensemble execution now persists a dedicated `verification` result block so independent verifier routing is inspectable as part of the canonical runtime artifact.
+
+Changed:
+
+1. `framework-self-analysis-protocol.md` now enforces a hard-law doctrine: mandatory framework behavior must be encoded as runtime law, verifier gates, blocker codes, or explicit option matrices instead of advisory prose.
+2. `orchestration-protocol.md`, `implement-execution-protocol.md`, `subagent-system-protocol.md`, `subagents.md`, and `bug-fix-protocol.md` now treat external-first dispatch, fanout minimums, independent verification, and pool-graph analysis as invalid-to-bypass requirements rather than recommendations.
+3. `/vida-implement` execution now formally requires top-level pool dependency graph analysis before selecting a writer lane for epic/wave/multi-task execution.
+4. Ensemble completion now distinguishes `decision_ready` from `synthesis_ready`, so routed flows cannot report completion before required independent verification finishes.
+
+Fixed:
+
+1. Illegal `single` dispatch on routes that require `fanout_then_synthesize` now fails fast with a policy-violation error instead of allowing silent internal/manual bypass.
+2. Routed analysis/meta-analysis/review paths now fail closed when they try to skip mandatory external-first or verification requirements.
+3. Verification-required ensemble runs no longer appear complete after primary merge consensus alone; they stay blocked or `verification_pending` until the verifier path clears synthesis.
+
+Protocol:
+
+1. VIDA framework self-diagnosis now explicitly classifies missing runtime enforcement for a mandatory rule as a framework defect, not as acceptable operator discipline.
+2. Multi-issue bug-fix planning now requires an explicit dependency graph with `blocked|soft-blocked|parallel-investigation|single-writer` classification before implementation order is valid.
+3. Routed subagent orchestration now treats manual/direct invocation outside canonical dispatch runtime as protocol-invalid unless a lawful fallback or escalation receipt exists.
+
 ## 2026-03-07 11:00
 
 Changed:

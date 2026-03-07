@@ -153,22 +153,27 @@ Supported subagent-level keys:
 Supported subagent-level `dispatch` keys:
 
 1. `command`
-2. `static_args`
-3. `workdir_flag`
-4. `model_flag`
-5. `output_mode`
-6. `output_flag`
-7. `prompt_mode`
-8. `prompt_flag`
-9. `env`
-10. `probe_static_args`
-11. `probe_prompt`
-12. `probe_expect_substring`
-13. `probe_timeout_seconds`
-14. `startup_timeout_seconds`
-15. `no_output_timeout_seconds`
-16. `progress_idle_timeout_seconds`
-17. `max_runtime_extension_seconds`
+2. `pre_static_args`
+3. `subcommand`
+4. `static_args`
+5. `write_static_args`
+6. `workdir_flag`
+7. `model_flag`
+8. `output_mode`
+9. `output_flag`
+10. `prompt_mode`
+11. `prompt_flag`
+12. `web_search_mode`
+13. `web_search_flag`
+14. `env`
+15. `probe_static_args`
+16. `probe_prompt`
+17. `probe_expect_substring`
+18. `probe_timeout_seconds`
+19. `startup_timeout_seconds`
+20. `no_output_timeout_seconds`
+21. `progress_idle_timeout_seconds`
+22. `max_runtime_extension_seconds`
 
 Supported `agent_system.scoring` keys:
 
@@ -194,6 +199,7 @@ Common repeated-scalar examples:
 5. route `subagents`
 6. route `fanout_subagents`
 7. subagent `dispatch.static_args`
+8. subagent `dispatch.pre_static_args`
 
 Supported routing-level keys:
 
@@ -209,18 +215,19 @@ Supported routing-level keys:
 10. `merge_policy`
 11. `dispatch_required`
 12. `external_first_required`
-13. `bridge_fallback_subagent`
-14. `internal_escalation_trigger`
-15. `verification_route_task_class`
-16. `independent_verification_required`
-17. `graph_strategy`
-18. `deterministic_first`
-19. `budget_policy`
-20. `max_budget_units`
-21. `max_cli_subagent_calls`
-22. `max_verification_passes`
-23. `max_fallback_hops`
-24. `max_total_runtime_seconds`
+13. `web_search_required`
+14. `bridge_fallback_subagent`
+15. `internal_escalation_trigger`
+16. `verification_route_task_class`
+17. `independent_verification_required`
+18. `graph_strategy`
+19. `deterministic_first`
+20. `budget_policy`
+21. `max_budget_units`
+22. `max_cli_subagent_calls`
+23. `max_verification_passes`
+24. `max_fallback_hops`
+25. `max_total_runtime_seconds`
 
 Validation scope:
 
@@ -228,7 +235,8 @@ Validation scope:
 2. unsupported keys in canonical sections,
 3. type checks for booleans, integers, strings, mappings, and repeated-string fields,
 4. subagent `dispatch` requirements for enabled `external_cli` subagents,
-5. route/subagent consistency checks such as `default_profile in profiles` and `fanout_min_results <= fanout_subagents`.
+5. route/subagent consistency checks such as `default_profile in profiles` and `fanout_min_results <= fanout_subagents`,
+6. web-search capability consistency between `capability_band` and dispatch wiring.
 
 Availability-state contract:
 
@@ -241,6 +249,8 @@ Availability-state contract:
 3. temporary subagent suppression should use `cooldown_until`,
 4. probe-driven recovery may use `probe_required=true`,
 5. new overlays should prefer explicit probe-capable dispatch for external CLI subagents that support headless smoke checks.
+6. web-search-capable subagents should declare both `capability_band=web_search` and dispatch-level wiring via `dispatch.web_search_mode`.
+7. `dispatch.web_search_mode=provider_configured` is an operator-trusted declaration of provider-side search enablement; it is weaker than an explicit flag-based path and does not by itself prove a live search probe.
 
 ## Portability Rule
 

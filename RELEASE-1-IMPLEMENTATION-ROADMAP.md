@@ -91,6 +91,8 @@ Release 1 should be delivered through these phases:
   - [x] Ensemble lease acquisition, release, and conflict history now exist as runtime-enforced orchestration mechanics.
   - [x] Worker packets now use explicit machine-readable return fields for question-driven execution.
   - [x] Budget-policy routing and escalation metadata now exist in route/run surfaces.
+  - [x] Route-law summaries and canonical route receipts now exist for dispatch authorization and artifact correlation.
+  - [x] Illegal single-lane dispatch now fails closed when route law requires fanout and synthesis.
   - [ ] Broader task/block/file-scope ownership enforcement is not yet fully complete.
 - [ ] **Partial: Phase C — Verification, Review, and Risk Gates**
   - [x] Route and run artifacts expose `risk_class`.
@@ -98,6 +100,9 @@ Release 1 should be delivered through these phases:
   - [x] Route and eval artifacts now expose target review-state intent before dispatch.
   - [x] Health-check tooling reads canonical subagent run logs and surfaces degraded lanes.
   - [x] Default user-facing reporting now stays orchestrator-synthesized instead of exposing subagent/process sections by default.
+  - [x] Independent verification now persists as a dedicated manifest block.
+  - [x] Completion now distinguishes `decision_ready` from `synthesis_ready`.
+  - [x] Verification-required ensembles now stay blocked until verifier routing clears synthesis.
   - [ ] Full review-state progression is not yet complete across the full target vocabulary.
   - [ ] Human approval and higher-risk escalation boundaries are not yet fully materialized.
 - [ ] **Partial: Phase D — Telemetry, Scorecards, and Drift Awareness**
@@ -106,6 +111,7 @@ Release 1 should be delivered through these phases:
   - [x] Operator status exposes task-class fit, recovery history, timeout-instability classes, and current subagent health state.
   - [x] Lease-conflict and recent recovery summaries are now visible in operator surfaces.
   - [x] Budget-policy and escalation diagnostics are now visible in run logs and health surfaces.
+  - [x] Route-law summaries, route receipts, and verification blocks are now part of canonical runtime telemetry.
   - [ ] Drift and anomaly handling are not yet complete at the intended Release 1 maturity level.
 - [ ] **Partial: Phase E — Documentation Contract and Protocol Runtime Alignment**
   - [x] Release-target documents, protocol index, orchestrator/worker contracts, and changelog are in place.
@@ -113,6 +119,7 @@ Release 1 should be delivered through these phases:
   - [x] Provider templates now mirror the real subagent runtime contract, including phase-aware timeout controls.
   - [x] Runtime payloads now canonicalize legacy note/domain strings into framework-generic operator vocabulary.
   - [x] Bootstrap split, request-intent gate, and bounded log-read budget are now reflected in framework docs.
+  - [x] Hard-law routing and verification requirements are now reflected in protocol documents instead of advisory wording.
   - [ ] Full document freshness and lifecycle enforcement are not yet complete.
 - [ ] **Partial: Phase F — Extraction Readiness and Standalone Framework Preparation**
   - [x] A bash installer exists for framework payload installation.
@@ -192,6 +199,7 @@ Priority work:
 8. separate orchestrator-entry from worker-entry semantics in subagent execution
 9. improve runtime phase visibility and useful-progress tracking during fanout, fallback, merge, and arbitration
 10. keep active-mode development execution orchestration-first and budget-policy-legible under `native|hybrid|disabled`
+11. materialize canonical route-law and route-receipt artifacts that fail closed when dispatch violates mandatory fanout policy
 
 Exit criteria:
 
@@ -220,6 +228,8 @@ Implementation audit:
 - [x] Ensemble lease acquisition, release, and conflict-history enforcement now exist.
 - [x] Worker packets now use explicit machine-readable return contracts.
 - [x] Budget-policy routing and escalation metadata now exist in route/run artifacts.
+- [x] Canonical route-law summaries and route receipts now exist in runtime artifacts.
+- [x] Illegal single-lane dispatch now fails closed on `fanout_then_synthesize` routes.
 - [ ] Broader task/block/file-scope ownership enforcement remains incomplete.
 
 ## Phase C: Verification, Review, and Risk Gates
@@ -244,6 +254,7 @@ Priority work:
 3. bind review behavior to route and write scope
 4. distinguish low-risk promotion from senior-review-required paths
 5. make handoff/close logic aware of review and risk state
+6. preserve verifier-owned completion blocking until independent verification clears synthesis
 
 Exit criteria:
 
@@ -263,6 +274,9 @@ Implementation audit:
 - [x] Target review-state intent now exists in route/eval artifacts.
 - [x] Health tooling surfaces degraded lanes and verification state.
 - [x] Default user-facing reporting stays orchestrator-synthesized unless explicit subagent inspection is requested.
+- [x] Independent verification now persists as a dedicated manifest block.
+- [x] Runtime completion now distinguishes `decision_ready` from `synthesis_ready`.
+- [x] Verification-required ensembles now remain blocked until verifier routing clears synthesis.
 - [ ] Full target review vocabulary is not yet complete in runtime behavior.
 - [ ] Human approval boundaries are still incomplete.
 
@@ -289,6 +303,7 @@ Priority work:
 4. create better route hints from observed performance
 5. build the base for future anomaly and drift detection
 6. expose progress-aware orchestration signals that improve review and routing decisions
+7. surface canonical route-law and verification-state artifacts in operator telemetry
 
 Exit criteria:
 
@@ -310,6 +325,7 @@ Implementation audit:
 - [x] Recovery history and task-class lane-readiness visibility now exist in operator surfaces.
 - [x] Timeout-instability counters and lease-conflict summaries now exist in operator surfaces.
 - [x] Budget-policy and escalation diagnostics now exist in health and run artifacts.
+- [x] Route-law summaries, route receipts, and verification blocks now exist in canonical run telemetry.
 - [ ] Drift/anomaly handling is still incomplete.
 
 ## Phase E: Documentation Contract and Protocol Runtime Alignment
@@ -337,6 +353,7 @@ Priority work:
 6. define document-state progression, stale-reference checks, and re-verification expectations for canonical docs
 7. keep agent-system templates and overlay examples aligned with the real routing model, runtime budget fields, and dispatch environment settings
 8. keep bootstrap routing, request-intent gating, and bounded log-read policy aligned across entry contracts and protocol docs
+9. keep hard-law routing, independent verification, and dependency-graph execution rules reflected as framework doctrine instead of advisory prose
 
 Exit criteria:
 
@@ -358,6 +375,7 @@ Implementation audit:
 - [x] Protocol docs now describe recovery history, lane-aware demotion, and phase-aware timeout behavior.
 - [x] Runtime surfaces now canonicalize legacy provider/domain wording into framework-generic vocabulary.
 - [x] Bootstrap split and bounded log-read policy are now reflected in framework docs.
+- [x] Hard-law routing and verification requirements are now reflected in protocol docs.
 - [ ] Full document freshness/lifecycle enforcement is still incomplete.
 
 ## Phase F: Extraction Readiness and Standalone Framework Preparation

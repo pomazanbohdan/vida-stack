@@ -503,13 +503,17 @@ def route_allowed_internal_reasons(task_route_cfg: dict[str, Any], internal_esca
 
 def route_required_dispatch_path(
     *,
+    analysis_required: str,
     local_execution_allowed: str,
     external_first_required: str,
     bridge_fallback_subagent: str,
     internal_escalation_allowed: str,
 ) -> list[str]:
     path: list[str] = []
-    if local_execution_allowed == "yes":
+    if analysis_required == "yes":
+        path.append("analysis_external_zero_budget")
+        path.append("analysis_receipt")
+    elif local_execution_allowed == "yes":
         path.append("local_or_external_free")
     elif external_first_required == "yes":
         path.append("external_free")
@@ -520,6 +524,29 @@ def route_required_dispatch_path(
     if internal_escalation_allowed == "yes":
         path.append("internal_escalation")
     return path
+
+
+WRITE_PRODUCING_TASK_CLASSES = {
+    "small_patch",
+    "small_patch_write",
+    "ui_patch",
+    "implementation",
+}
+
+
+def analysis_required_for(task_class: str, write_scope: str) -> bool:
+    normalized_task = policy_value(task_class, "default")
+    normalized_scope = policy_value(write_scope, "none")
+    return normalized_task in WRITE_PRODUCING_TASK_CLASSES or normalized_scope != "none"
+
+
+def analysis_route_task_class_for(task_class: str, write_scope: str) -> str:
+    if not analysis_required_for(task_class, write_scope):
+        return ""
+    normalized_task = policy_value(task_class, "default")
+    if normalized_task == "architecture":
+        return "meta_analysis"
+    return "analysis"
 
 
 def budget_policy_summary_from_runs(task_class: str | None = None) -> dict[str, Any]:
@@ -1659,6 +1686,7 @@ def task_class_fit_bonus(task_class: str, subagent_cfg: dict[str, Any]) -> tuple
 
     direct_specialty_map = {
         "analysis": {"review", "research", "planning", "spec"},
+        "coach": {"review", "planning", "spec", "architecture"},
         "review": {"review", "deep_review"},
         "research": {"research", "long_context"},
         "verification": {"review", "deep_review"},
@@ -1668,6 +1696,7 @@ def task_class_fit_bonus(task_class: str, subagent_cfg: dict[str, Any]) -> tuple
     }
     direct_capability_map = {
         "analysis": {"read_only", "review_safe"},
+        "coach": {"read_only", "review_safe"},
         "review": {"review_safe"},
         "research": {"read_only"},
         "verification": {"review_safe"},
@@ -1758,6 +1787,7 @@ def route_budget_limits(task_route_cfg: dict[str, Any], write_scope: str, dispat
     max_cli_subagent_calls = max(1, policy_int(task_route_cfg.get("max_cli_subagent_calls"), 0))
     if max_cli_subagent_calls <= 1:
         max_cli_subagent_calls = 5 if "fanout" in dispatch_required else 3
+    max_coach_passes = max(0, policy_int(task_route_cfg.get("max_coach_passes"), 1))
     max_verification_passes = max(0, policy_int(task_route_cfg.get("max_verification_passes"), 1))
     max_fallback_hops = max(0, policy_int(task_route_cfg.get("max_fallback_hops"), 1))
     max_total_runtime_seconds = max(30, policy_int(task_route_cfg.get("max_total_runtime_seconds"), 0))
@@ -1769,6 +1799,7 @@ def route_budget_limits(task_route_cfg: dict[str, Any], write_scope: str, dispat
         "budget_policy": policy_value(task_route_cfg.get("budget_policy"), "balanced"),
         "max_budget_units": max_budget_units,
         "max_cli_subagent_calls": max_cli_subagent_calls,
+        "max_coach_passes": max_coach_passes,
         "max_verification_passes": max_verification_passes,
         "max_fallback_hops": max_fallback_hops,
         "max_total_runtime_seconds": max_total_runtime_seconds,
@@ -1823,28 +1854,55 @@ def build_route_graph(
     dispatch_required: str,
     deterministic_first: str,
     graph_strategy: str,
+    analysis_plan: dict[str, Any],
     selected_subagent: str,
     fanout_subagents: list[str],
+    coach_plan: dict[str, Any],
     verification_plan: dict[str, Any],
     bridge_fallback_subagent: str,
     internal_escalation_trigger: str,
     budget: dict[str, Any],
 ) -> dict[str, Any]:
-    primary_mode = "fanout" if fanout_subagents else "single"
-    nodes: list[dict[str, Any]] = [
-        {"id": "entry", "type": "entry", "label": task_class},
+    analysis_mode = "fanout" if analysis_plan.get("fanout_subagents") else "single"
+    writer_mode = "fanout" if fanout_subagents else "single"
+    nodes: list[dict[str, Any]] = [{"id": "entry", "type": "entry", "label": task_class}]
+    edges: list[dict[str, Any]] = []
+    path = ["entry"]
+
+    if analysis_plan.get("required") == "yes":
+        nodes.append(
+            {
+                "id": "analysis",
+                "type": "analysis",
+                "mode": analysis_mode,
+                "route_task_class": analysis_plan.get("route_task_class"),
+                "selected_subagent": analysis_plan.get("selected_subagent"),
+                "fanout_subagents": analysis_plan.get("fanout_subagents", []),
+                "fanout_min_results": analysis_plan.get("fanout_min_results", 0),
+                "receipt_required": analysis_plan.get("receipt_required", "no"),
+                "zero_budget_required": analysis_plan.get("zero_budget_required", "no"),
+            }
+        )
+        edges.append({"from": "entry", "to": "analysis", "condition": "route_selected"})
+        path.append("analysis")
+
+    nodes.append(
         {
-            "id": "primary",
+            "id": "writer",
             "type": "dispatch",
-            "mode": primary_mode,
+            "mode": writer_mode,
             "selected_subagent": selected_subagent,
             "fanout_subagents": fanout_subagents,
         },
-    ]
-    edges: list[dict[str, Any]] = [
-        {"from": "entry", "to": "primary", "condition": "route_selected"},
-    ]
-    path = ["entry", "primary"]
+    )
+    edges.append(
+        {
+            "from": "analysis" if analysis_plan.get("required") == "yes" else "entry",
+            "to": "writer",
+            "condition": "analysis_receipt_ready" if analysis_plan.get("required") == "yes" else "route_selected",
+        }
+    )
+    path.append("writer")
     if bridge_fallback_subagent:
         nodes.append(
             {
@@ -1856,7 +1914,7 @@ def build_route_graph(
         )
         edges.append(
             {
-                "from": "primary",
+                "from": "writer",
                 "to": "bridge_fallback",
                 "condition": "subagent_exhausted_or_quality_gap",
             }
@@ -1877,6 +1935,28 @@ def build_route_graph(
                 "condition": internal_escalation_trigger,
             }
         )
+    if coach_plan.get("required") == "yes":
+        nodes.append(
+            {
+                "id": "coach",
+                "type": "coach",
+                "route_task_class": coach_plan.get("route_task_class"),
+                "selected_subagent": coach_plan.get("selected_subagent"),
+                "selected_subagents": coach_plan.get("selected_subagents", []),
+                "independent": bool(coach_plan.get("independent", False)),
+                "min_results": int(coach_plan.get("min_results", 0) or 0),
+                "merge_policy": coach_plan.get("merge_policy", "unanimous_approve_rework_bias"),
+                "max_passes": int(coach_plan.get("max_passes", 0) or 0),
+            }
+        )
+        edges.append(
+            {
+                "from": "writer",
+                "to": "coach",
+                "condition": "writer_result_ready",
+            }
+        )
+        path.append("coach")
     if verification_plan.get("required") == "yes":
         nodes.append(
             {
@@ -1889,9 +1969,9 @@ def build_route_graph(
         )
         edges.append(
             {
-                "from": "primary",
+                "from": "coach" if coach_plan.get("required") == "yes" else "writer",
                 "to": "verification",
-                "condition": "primary_result_ready",
+                "condition": "coach_approved" if coach_plan.get("required") == "yes" else "writer_result_ready",
             }
         )
         path.append("verification")
@@ -1905,45 +1985,121 @@ def build_route_graph(
     )
     edges.append(
         {
-            "from": "verification" if verification_plan.get("required") == "yes" else "primary",
+            "from": (
+                "verification"
+                if verification_plan.get("required") == "yes"
+                else ("coach" if coach_plan.get("required") == "yes" else "writer")
+            ),
             "to": "synthesis",
-            "condition": "verification_gate_passed_or_not_required",
+            "condition": (
+                "verification_gate_passed_or_not_required"
+                if verification_plan.get("required") == "yes"
+                else ("coach_approved" if coach_plan.get("required") == "yes" else "writer_result_ready")
+            ),
         }
     )
     path.append("synthesis")
     return {
         "graph_strategy": graph_strategy,
         "deterministic_first": deterministic_first,
-        "primary_mode": primary_mode,
+        "primary_mode": writer_mode,
         "nodes": nodes,
         "edges": edges,
         "planned_path": path,
     }
 
 
+def build_route_law_summary(
+    *,
+    dispatch_required: str,
+    external_first_required: str,
+    analysis_plan: dict[str, Any],
+    fanout_min_results: int,
+    coach_plan: dict[str, Any],
+    verification_plan: dict[str, Any],
+    dispatch_policy: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "mandatory_laws": {
+            "external_first": external_first_required == "yes",
+            "analysis_phase_required": analysis_plan.get("required") == "yes",
+            "analysis_receipt_required": analysis_plan.get("receipt_required") == "yes",
+            "analysis_zero_budget_required": analysis_plan.get("zero_budget_required") == "yes",
+            "fanout_then_synthesize": dispatch_required == "fanout_then_synthesize",
+            "fanout_min_results_enforced": fanout_min_results > 0,
+            "coach_phase_required": coach_plan.get("required") == "yes",
+            "independent_verification": verification_plan.get("required") == "yes",
+            "direct_internal_bypass_forbidden": dispatch_policy.get("direct_internal_bypass_forbidden") == "yes",
+            "cli_dispatch_required_if_delegating": dispatch_policy.get("cli_dispatch_required_if_delegating") == "yes",
+        },
+        "blocking_conditions": [
+            condition
+            for condition in [
+                "missing_external_first_dispatch" if external_first_required == "yes" else "",
+                "missing_analysis_phase" if analysis_plan.get("required") == "yes" else "",
+                "missing_analysis_receipt" if analysis_plan.get("receipt_required") == "yes" else "",
+                "missing_fanout_results" if fanout_min_results > 0 else "",
+                "missing_coach_review" if coach_plan.get("required") == "yes" else "",
+                "missing_independent_verification" if verification_plan.get("required") == "yes" else "",
+                "illegal_internal_bypass" if dispatch_policy.get("direct_internal_bypass_forbidden") == "yes" else "",
+            ]
+            if condition
+        ],
+    }
+
+
 def build_route_budget(
     *,
+    snapshot: dict[str, Any],
     budget_limits: dict[str, Any],
     selected: dict[str, Any],
     fanout_subagents: list[str],
+    coach_plan: dict[str, Any],
     verification_plan: dict[str, Any],
     bridge_fallback_subagent: str,
+    internal_escalation_trigger: str,
 ) -> dict[str, Any]:
+    subagents = snapshot.get("subagents", {})
+
+    def budget_units_for_subagent(subagent_name: str) -> int:
+        if not subagent_name:
+            return 0
+        payload = subagents.get(subagent_name, {})
+        if not isinstance(payload, dict):
+            return 0
+        return subagent_budget_cost_units(payload)
+
     primary_calls = len(fanout_subagents) if fanout_subagents else 1
+    coach_selected_subagents = [
+        str(item).strip()
+        for item in coach_plan.get("selected_subagents", [])
+        if str(item).strip()
+    ]
+    if not coach_selected_subagents and coach_plan.get("selected_subagent"):
+        coach_selected_subagents = [str(coach_plan.get("selected_subagent", "")).strip()]
+    coach_calls = len(coach_selected_subagents) if coach_plan.get("required") == "yes" else 0
     verification_calls = 1 if verification_plan.get("required") == "yes" and verification_plan.get("selected_subagent") else 0
-    fallback_hops = 1 if bridge_fallback_subagent else 0
+    fallback_hops = (1 if bridge_fallback_subagent else 0) + (1 if internal_escalation_trigger else 0)
     selected_cost_units = int(selected.get("budget_cost_units", 0))
-    estimated_units = selected_cost_units
-    if fanout_subagents:
-        estimated_units = 0
-    if verification_calls and verification_plan.get("selected_subagent") == bridge_fallback_subagent:
-        estimated_units += 3
+    primary_units = sum(budget_units_for_subagent(subagent) for subagent in fanout_subagents) if fanout_subagents else selected_cost_units
+    coach_units = sum(budget_units_for_subagent(subagent) for subagent in coach_selected_subagents) if coach_calls else 0
+    verification_units = budget_units_for_subagent(str(verification_plan.get("selected_subagent", ""))) if verification_calls else 0
+    fallback_units = budget_units_for_subagent(bridge_fallback_subagent) if bridge_fallback_subagent else 0
+    internal_escalation_units = budget_units_for_subagent("internal_subagents") if internal_escalation_trigger else 0
+    estimated_units = primary_units + coach_units + verification_units
     return {
         **budget_limits,
         "estimated_primary_calls": primary_calls,
+        "estimated_coach_calls": coach_calls,
         "estimated_verification_calls": verification_calls,
         "estimated_fallback_hops": fallback_hops,
         "estimated_selected_cost_units": selected_cost_units,
+        "estimated_primary_cost_units": primary_units,
+        "estimated_coach_cost_units": coach_units,
+        "estimated_coach_selected_subagents": coach_selected_subagents,
+        "estimated_verification_cost_units": verification_units,
+        "estimated_optional_fallback_cost_units": fallback_units,
+        "estimated_optional_internal_escalation_cost_units": internal_escalation_units,
         "estimated_route_cost_units": estimated_units,
         "estimated_selected_cost_class": cost_class_for_units(selected_cost_units),
         "estimated_route_cost_class": cost_class_for_units(estimated_units),
@@ -1977,11 +2133,44 @@ def route_candidate_context(
     fanout_order = split_csv(task_route_cfg.get("fanout_subagents"))
     dispatch_required = policy_value(task_route_cfg.get("dispatch_required"), "optional")
     external_first_required = policy_value(task_route_cfg.get("external_first_required"), "no")
+    web_search_required = policy_value(task_route_cfg.get("web_search_required"), "no")
     bridge_fallback_subagent = policy_value(task_route_cfg.get("bridge_fallback_subagent"), "")
     internal_escalation_trigger = policy_value(task_route_cfg.get("internal_escalation_trigger"), "")
     graph_strategy = policy_value(task_route_cfg.get("graph_strategy"), "deterministic_then_escalate")
     deterministic_first = policy_value(task_route_cfg.get("deterministic_first"), "yes" if external_first_required == "yes" else "no")
+    analysis_required = policy_value(
+        task_route_cfg.get("analysis_required"),
+        "yes" if analysis_required_for(task_class, write_scope) else "no",
+    )
+    analysis_route_task_class = policy_value(
+        task_route_cfg.get("analysis_route_task_class"),
+        analysis_route_task_class_for(task_class, write_scope),
+    )
+    analysis_fanout_order = split_csv(task_route_cfg.get("analysis_fanout_subagents"))
+    analysis_fanout_min_results = policy_int(task_route_cfg.get("analysis_fanout_min_results"), 0)
+    analysis_merge_policy = policy_value(
+        task_route_cfg.get("analysis_merge_policy"),
+        "consensus_with_conflict_flag" if analysis_required == "yes" else "single_subagent",
+    )
+    analysis_external_first_required = policy_value(
+        task_route_cfg.get("analysis_external_first_required"),
+        "yes" if analysis_required == "yes" else "no",
+    )
+    analysis_receipt_required = policy_value(
+        task_route_cfg.get("analysis_receipt_required"),
+        "yes" if analysis_required == "yes" else "no",
+    )
+    analysis_zero_budget_required = policy_value(
+        task_route_cfg.get("analysis_zero_budget_required"),
+        "yes" if analysis_required == "yes" and mode == "hybrid" else "no",
+    )
+    analysis_default_in_boot = policy_value(
+        task_route_cfg.get("analysis_default_in_boot"),
+        "yes" if analysis_required == "yes" else "no",
+    )
     budget_limits = route_budget_limits(task_route_cfg, write_scope, dispatch_required)
+    coach_required = policy_value(task_route_cfg.get("coach_required"), "no")
+    coach_route_task_class = policy_value(task_route_cfg.get("coach_route_task_class"), "")
     local_execution_allowed = policy_value(task_route_cfg.get("local_execution_allowed"), "no")
     local_execution_preferred = policy_value(
         task_route_cfg.get("local_execution_preferred"),
@@ -1989,7 +2178,7 @@ def route_candidate_context(
     )
     direct_internal_bypass_forbidden = policy_value(
         task_route_cfg.get("direct_internal_bypass_forbidden"),
-        "yes" if external_first_required == "yes" else "no",
+        "yes" if external_first_required == "yes" or analysis_required == "yes" else "no",
     )
     allowed_internal_reasons = route_allowed_internal_reasons(task_route_cfg, internal_escalation_trigger)
     internal_escalation_allowed = "yes" if allowed_internal_reasons else "no"
@@ -1998,6 +2187,7 @@ def route_candidate_context(
         "yes" if write_scope == "none" and external_first_required == "yes" else "no",
     )
     required_dispatch_path = route_required_dispatch_path(
+        analysis_required=analysis_required,
         local_execution_allowed=local_execution_allowed,
         external_first_required=external_first_required,
         bridge_fallback_subagent=bridge_fallback_subagent,
@@ -2085,6 +2275,14 @@ def route_candidate_context(
             str(budget_limits.get("budget_policy", "balanced")),
             int(budget_limits.get("max_budget_units", 0) or 0),
         )
+        capability_band = {item.casefold() for item in split_csv(payload.get("capability_band"))}
+        if web_search_required == "yes":
+            if "web_search" not in capability_band:
+                suppressed_subagents.append({"subagent": subagent, "reason": "missing_web_search_capability"})
+                continue
+            if not vida_config.subagent_has_web_search_wiring(payload):
+                suppressed_subagents.append({"subagent": subagent, "reason": "missing_web_search_dispatch_wiring"})
+                continue
         state = task_state or global_state
         subagent_state = policy_value(global_card.get("subagent_state"), "active")
         consecutive = int(task_card.get("consecutive_failures", card.get("global", {}).get("consecutive_failures", 0)))
@@ -2149,7 +2347,7 @@ def route_candidate_context(
                 "progress_idle_timeout_seconds": progress_idle_timeout_seconds,
                 "subagent_backend_class": payload.get("subagent_backend_class"),
                 "subagent_state": subagent_state,
-                "capability_band": payload.get("capability_band", []),
+                "capability_band": split_csv(payload.get("capability_band")),
                 "subagent_write_scope": payload.get("write_scope", "none"),
                 "orchestration_tier": payload.get("orchestration_tier", "standard"),
                 "cost_priority": payload.get("cost_priority", "normal"),
@@ -2179,6 +2377,18 @@ def route_candidate_context(
         "fanout_order": fanout_order,
         "dispatch_required": dispatch_required,
         "external_first_required": external_first_required,
+        "web_search_required": web_search_required,
+        "analysis_required": analysis_required,
+        "analysis_route_task_class": analysis_route_task_class,
+        "analysis_fanout_order": analysis_fanout_order,
+        "analysis_fanout_min_results": analysis_fanout_min_results,
+        "analysis_merge_policy": analysis_merge_policy,
+        "analysis_external_first_required": analysis_external_first_required,
+        "analysis_receipt_required": analysis_receipt_required,
+        "analysis_zero_budget_required": analysis_zero_budget_required,
+        "analysis_default_in_boot": analysis_default_in_boot,
+        "coach_required": coach_required,
+        "coach_route_task_class": coach_route_task_class,
         "bridge_fallback_subagent": bridge_fallback_subagent,
         "internal_escalation_trigger": internal_escalation_trigger,
         "graph_strategy": graph_strategy,
@@ -2186,6 +2396,7 @@ def route_candidate_context(
         "max_parallel_agents": max_parallel_agents,
         "state_owner": state_owner,
         "budget_limits": budget_limits,
+        "max_coach_passes": int(budget_limits.get("max_coach_passes", 0) or 0),
         "verification_route_task_class": verification_route_task_class,
         "independent_verification_required": independent_verification_required,
         "local_execution_allowed": local_execution_allowed,
@@ -2280,6 +2491,247 @@ def build_independent_verification_plan(
     }
 
 
+def build_coach_plan(
+    task_class: str,
+    snapshot: dict[str, Any],
+    config: dict[str, Any],
+    strategy: dict[str, Any],
+    excluded_subagents: set[str],
+    coach_task_class: str | None = None,
+    required: str = "no",
+    max_passes: int = 0,
+) -> dict[str, Any]:
+    if required != "yes" or not coach_task_class:
+        return {
+            "required": "no",
+            "route_task_class": "",
+            "selected_subagent": None,
+            "selected_subagents": [],
+            "min_results": 0,
+            "merge_policy": "single_subagent",
+            "fallback_subagents": [],
+            "independent": False,
+            "reason": "coach_not_required",
+            "max_passes": max(0, max_passes),
+        }
+
+    coach_ctx = route_candidate_context(
+        coach_task_class,
+        snapshot,
+        config,
+        strategy,
+        excluded_subagents=excluded_subagents,
+    )
+    coach_candidates = coach_ctx["candidates"]
+    used_exclusion_fallback = False
+    if not coach_candidates:
+        coach_ctx = route_candidate_context(
+            coach_task_class,
+            snapshot,
+            config,
+            strategy,
+            excluded_subagents=set(),
+        )
+        coach_candidates = coach_ctx["candidates"]
+        used_exclusion_fallback = True
+    if not coach_candidates:
+        return {
+            "required": required,
+            "route_task_class": coach_task_class,
+            "selected_subagent": None,
+            "selected_subagents": [],
+            "min_results": max(2, 0) if required == "yes" else 0,
+            "merge_policy": "unanimous_approve_rework_bias",
+            "fallback_subagents": [],
+            "independent": False,
+            "reason": "no_eligible_coach",
+            "max_passes": max(0, max_passes),
+        }
+
+    coach_candidates.sort(key=lambda item: int(item["effective_score"]), reverse=True)
+    coach_candidates = apply_bridge_fallback_priority(
+        coach_candidates,
+        coach_ctx["bridge_fallback_subagent"],
+    )
+    candidate_by_subagent = {item["subagent"]: item for item in coach_candidates}
+    explicit_order = [
+        subagent
+        for subagent in coach_ctx.get("fanout_order", [])
+        if subagent in candidate_by_subagent
+    ]
+    ordered_subagents: list[str] = []
+    for subagent in [*explicit_order, *(item["subagent"] for item in coach_candidates)]:
+        if subagent and subagent not in ordered_subagents:
+            ordered_subagents.append(subagent)
+    requested_min_results = policy_int(
+        (coach_ctx.get("task_route_cfg") or {}).get("fanout_min_results"),
+        2 if required == "yes" else 0,
+    )
+    min_results = requested_min_results if requested_min_results > 0 else (2 if required == "yes" else 0)
+    selected_subagents = ordered_subagents[: max(1, min_results)] if ordered_subagents else []
+    fallback_subagents = ordered_subagents[len(selected_subagents) :]
+    selected = candidate_by_subagent.get(selected_subagents[0], coach_candidates[0]) if selected_subagents else coach_candidates[0]
+    merge_policy = policy_value(
+        (coach_ctx.get("task_route_cfg") or {}).get("merge_policy"),
+        coach_ctx.get("merge_policy", "unanimous_approve_rework_bias"),
+    )
+    if merge_policy == "single_subagent" and min_results > 1:
+        merge_policy = "unanimous_approve_rework_bias"
+    independent = (
+        bool(selected_subagents)
+        and not used_exclusion_fallback
+        and len(set(selected_subagents)) == len(selected_subagents)
+        and all(subagent not in excluded_subagents for subagent in selected_subagents)
+    )
+    reason = "independent_coach_selected"
+    if len(selected_subagents) > 1:
+        reason = "independent_coach_ensemble_selected"
+    if used_exclusion_fallback:
+        reason = "same_lane_coach_fallback"
+    return {
+        "required": required,
+        "route_task_class": coach_task_class,
+        "selected_subagent": selected["subagent"],
+        "selected_subagents": selected_subagents,
+        "selected_model": selected["selected_model"],
+        "selected_profile": selected["selected_profile"],
+        "selected_model_source": selected["selected_model_source"],
+        "selected_profile_source": selected["selected_profile_source"],
+        "effective_score": selected["effective_score"],
+        "independent": independent,
+        "min_results": min_results,
+        "merge_policy": merge_policy,
+        "reason": reason,
+        "max_passes": max(0, max_passes),
+        "fallback_subagents": [
+            {
+                "subagent": candidate_by_subagent[subagent]["subagent"],
+                "effective_score": candidate_by_subagent[subagent]["effective_score"],
+                "selected_model": candidate_by_subagent[subagent]["selected_model"],
+                "selected_profile": candidate_by_subagent[subagent]["selected_profile"],
+            }
+            for subagent in fallback_subagents
+        ],
+    }
+
+
+def build_analysis_plan(
+    writer_task_class: str,
+    snapshot: dict[str, Any],
+    config: dict[str, Any],
+    strategy: dict[str, Any],
+    *,
+    required: str,
+    analysis_task_class: str,
+    zero_budget_required: str,
+    external_first_required: str,
+    merge_policy_override: str = "",
+    fanout_override: list[str] | None = None,
+    fanout_min_override: int | None = None,
+) -> dict[str, Any]:
+    if required != "yes" or not analysis_task_class:
+        return {
+            "required": "no",
+            "route_task_class": "",
+            "selected_subagent": None,
+            "fanout_subagents": [],
+            "fanout_min_results": 0,
+            "merge_policy": "single_subagent",
+            "external_first_required": external_first_required,
+            "zero_budget_required": zero_budget_required,
+            "receipt_required": "no",
+            "default_in_boot": "no",
+            "reason": "analysis_not_required",
+        }
+
+    analysis_ctx = route_candidate_context(
+        analysis_task_class,
+        snapshot,
+        config,
+        strategy,
+    )
+    candidates = analysis_ctx["candidates"]
+    if zero_budget_required == "yes":
+        zero_budget_candidates = [
+            item
+            for item in candidates
+            if int(item.get("budget_cost_units", 0) or 0) == 0
+            and item.get("subagent_backend_class") == "external_cli"
+        ]
+        if zero_budget_candidates:
+            candidates = zero_budget_candidates
+
+    if not candidates:
+        return {
+            "required": required,
+            "route_task_class": analysis_task_class,
+            "selected_subagent": None,
+            "fanout_subagents": [],
+            "fanout_min_results": 0,
+            "merge_policy": merge_policy_override or analysis_ctx["merge_policy"],
+            "external_first_required": external_first_required,
+            "zero_budget_required": zero_budget_required,
+            "receipt_required": "yes",
+            "default_in_boot": "yes",
+            "reason": "no_eligible_analysis_lane",
+        }
+
+    candidates.sort(key=lambda item: int(item["effective_score"]), reverse=True)
+    candidate_by_subagent = {item["subagent"]: item for item in candidates}
+    selected = candidates[0]
+    eligible_subagents = set(candidate_by_subagent.keys())
+    requested_fanout = [
+        subagent
+        for subagent in (fanout_override or analysis_ctx["fanout_order"])
+        if subagent in eligible_subagents
+    ]
+    default_fanout_min = min(2, len(requested_fanout)) if requested_fanout else 0
+    fanout_min_results = max(
+        0,
+        min(
+            fanout_min_override if fanout_min_override is not None else default_fanout_min,
+            len(requested_fanout),
+        ),
+    )
+    proven_fanout = [
+        subagent
+        for subagent in requested_fanout
+        if int(candidate_by_subagent.get(subagent, {}).get("success_count", 0)) > 0
+    ]
+    if fanout_min_results > 0 and len(proven_fanout) >= fanout_min_results:
+        fanout_subagents = proven_fanout
+    else:
+        fanout_subagents = requested_fanout
+
+    return {
+        "required": required,
+        "route_task_class": analysis_task_class,
+        "selected_subagent": selected["subagent"],
+        "selected_model": selected["selected_model"],
+        "selected_profile": selected["selected_profile"],
+        "selected_model_source": selected["selected_model_source"],
+        "selected_profile_source": selected["selected_profile_source"],
+        "effective_score": selected["effective_score"],
+        "fanout_subagents": fanout_subagents,
+        "fanout_min_results": fanout_min_results,
+        "merge_policy": merge_policy_override or analysis_ctx["merge_policy"],
+        "external_first_required": external_first_required,
+        "zero_budget_required": zero_budget_required,
+        "receipt_required": "yes",
+        "default_in_boot": "yes",
+        "reason": "analysis_phase_required",
+        "fallback_subagents": [
+            {
+                "subagent": item["subagent"],
+                "effective_score": item["effective_score"],
+                "selected_model": item["selected_model"],
+                "selected_profile": item["selected_profile"],
+            }
+            for item in candidates[1:]
+        ],
+    }
+
+
 def route_subagent(task_class: str) -> dict[str, Any]:
     snapshot = runtime_snapshot()
     if snapshot.get("agent_system", {}).get("effective_mode") == "disabled":
@@ -2305,6 +2757,18 @@ def route_subagent(task_class: str) -> dict[str, Any]:
     fanout_order = context["fanout_order"]
     dispatch_required = context["dispatch_required"]
     external_first_required = context["external_first_required"]
+    web_search_required = context.get("web_search_required", "no")
+    analysis_required = context["analysis_required"]
+    analysis_route_task_class = context["analysis_route_task_class"]
+    analysis_fanout_order = context["analysis_fanout_order"]
+    analysis_fanout_min_results = context["analysis_fanout_min_results"]
+    analysis_merge_policy = context["analysis_merge_policy"]
+    analysis_external_first_required = context["analysis_external_first_required"]
+    analysis_receipt_required = context["analysis_receipt_required"]
+    analysis_zero_budget_required = context["analysis_zero_budget_required"]
+    analysis_default_in_boot = context["analysis_default_in_boot"]
+    coach_required = context.get("coach_required", "no")
+    coach_route_task_class = context.get("coach_route_task_class", "")
     bridge_fallback_subagent = context["bridge_fallback_subagent"]
     internal_escalation_trigger = context["internal_escalation_trigger"]
     graph_strategy = context["graph_strategy"]
@@ -2312,21 +2776,26 @@ def route_subagent(task_class: str) -> dict[str, Any]:
     max_parallel_agents = context["max_parallel_agents"]
     state_owner = context["state_owner"]
     budget_limits = context["budget_limits"]
+    max_coach_passes = int(context.get("max_coach_passes", int(budget_limits.get("max_coach_passes", 0) or 0)) or 0)
     verification_route_task_class = context["verification_route_task_class"]
     independent_verification_required = context["independent_verification_required"]
     local_execution_allowed = context["local_execution_allowed"]
     local_execution_preferred = context["local_execution_preferred"]
     direct_internal_bypass_forbidden = context["direct_internal_bypass_forbidden"]
     internal_escalation_allowed = context["internal_escalation_allowed"]
+    configured_internal_route_authorized = policy_value(task_route_cfg.get("internal_route_authorized"), "no")
     allowed_internal_reasons = context["allowed_internal_reasons"]
     cli_dispatch_required_if_delegating = context["cli_dispatch_required_if_delegating"]
     required_dispatch_path = context["required_dispatch_path"]
 
     if not candidates:
+        no_eligible_reason = "no eligible subagents after mode/capability/score filtering"
+        if web_search_required == "yes":
+            no_eligible_reason = "no_eligible_web_search_lane"
         return {
             "task_class": task_class,
             "selected_subagent": None,
-            "reason": "no eligible subagents after mode/capability/score filtering",
+            "reason": no_eligible_reason,
             "effective_score": 0,
             "selected_model": None,
             "selected_model_source": "none",
@@ -2345,6 +2814,13 @@ def route_subagent(task_class: str) -> dict[str, Any]:
             "merge_policy": merge_policy,
             "dispatch_required": dispatch_required,
             "external_first_required": external_first_required,
+            "analysis_required": analysis_required,
+            "analysis_route_task_class": analysis_route_task_class,
+            "analysis_receipt_required": analysis_receipt_required,
+            "analysis_zero_budget_required": analysis_zero_budget_required,
+            "analysis_default_in_boot": analysis_default_in_boot,
+            "coach_required": coach_required,
+            "coach_route_task_class": coach_route_task_class,
             "bridge_fallback_subagent": bridge_fallback_subagent,
             "internal_escalation_trigger": internal_escalation_trigger,
             "graph_strategy": graph_strategy,
@@ -2370,6 +2846,31 @@ def route_subagent(task_class: str) -> dict[str, Any]:
             },
             "verification_route_task_class": verification_route_task_class,
             "independent_verification_required": independent_verification_required,
+            "analysis_plan": {
+                "required": analysis_required,
+                "route_task_class": analysis_route_task_class,
+                "selected_subagent": None,
+                "fanout_subagents": [],
+                "fanout_min_results": 0,
+                "merge_policy": analysis_merge_policy,
+                "external_first_required": analysis_external_first_required,
+                "zero_budget_required": analysis_zero_budget_required,
+                "receipt_required": analysis_receipt_required,
+                "default_in_boot": analysis_default_in_boot,
+                "reason": "no_primary_route_available",
+            },
+            "coach_plan": {
+                "required": coach_required,
+                "route_task_class": coach_route_task_class,
+                "selected_subagent": None,
+                "selected_subagents": [],
+                "min_results": 2 if coach_required == "yes" else 0,
+                "merge_policy": "unanimous_approve_rework_bias" if coach_required == "yes" else "single_subagent",
+                "fallback_subagents": [],
+                "independent": False,
+                "reason": "no_primary_route_available",
+                "max_passes": max_coach_passes,
+            },
             "verification_plan": {
                 "required": independent_verification_required,
                 "route_task_class": verification_route_task_class,
@@ -2414,6 +2915,36 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         fanout_subagents = proven_fanout
     else:
         fanout_subagents = requested_fanout
+    analysis_plan = build_analysis_plan(
+        task_class,
+        snapshot,
+        config,
+        strategy,
+        required=analysis_required,
+        analysis_task_class=analysis_route_task_class,
+        zero_budget_required=analysis_zero_budget_required,
+        external_first_required=analysis_external_first_required,
+        merge_policy_override=analysis_merge_policy,
+        fanout_override=analysis_fanout_order,
+        fanout_min_override=analysis_fanout_min_results if analysis_fanout_min_results > 0 else None,
+    )
+    coach_plan = build_coach_plan(
+        task_class,
+        snapshot,
+        config,
+        strategy,
+        {selected["subagent"]},
+        coach_route_task_class,
+        coach_required,
+        max_coach_passes,
+    )
+    budget_limits = {
+        **budget_limits,
+        "max_coach_passes": max(
+            int(budget_limits.get("max_coach_passes", 0) or 0),
+            int(coach_plan.get("min_results", 0) or 0),
+        ),
+    }
     verification_plan = build_independent_verification_plan(
         task_class,
         snapshot,
@@ -2424,19 +2955,24 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         independent_verification_required,
     )
     route_budget = build_route_budget(
+        snapshot=snapshot,
         budget_limits=budget_limits,
         selected=selected,
         fanout_subagents=fanout_subagents,
+        coach_plan=coach_plan,
         verification_plan=verification_plan,
         bridge_fallback_subagent=bridge_fallback_subagent,
+        internal_escalation_trigger=internal_escalation_trigger,
     )
     route_graph = build_route_graph(
         task_class=task_class,
         dispatch_required=dispatch_required,
         deterministic_first=deterministic_first,
         graph_strategy=graph_strategy,
+        analysis_plan=analysis_plan,
         selected_subagent=selected["subagent"],
         fanout_subagents=fanout_subagents,
+        coach_plan=coach_plan,
         verification_plan=verification_plan,
         bridge_fallback_subagent=bridge_fallback_subagent,
         internal_escalation_trigger=internal_escalation_trigger,
@@ -2444,11 +2980,7 @@ def route_subagent(task_class: str) -> dict[str, Any]:
     )
     internal_route_authorized = (
         "yes"
-        if (
-            snapshot.get("agent_system", {}).get("effective_mode") == "native"
-            or selected["subagent"] == "internal_subagents"
-            or internal_escalation_allowed == "yes"
-        )
+        if snapshot.get("agent_system", {}).get("effective_mode") == "native"
         else "no"
     )
     dispatch_policy = {
@@ -2461,6 +2993,15 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         "allowed_internal_reasons": allowed_internal_reasons,
         "required_dispatch_path": required_dispatch_path,
     }
+    route_law_summary = build_route_law_summary(
+        dispatch_required=dispatch_required,
+        external_first_required=external_first_required,
+        analysis_plan=analysis_plan,
+        fanout_min_results=fanout_min_results,
+        coach_plan=coach_plan,
+        verification_plan=verification_plan,
+        dispatch_policy=dispatch_policy,
+    )
     return {
         "task_class": task_class,
         "selected_subagent": selected["subagent"],
@@ -2500,12 +3041,23 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         "merge_policy": merge_policy,
         "dispatch_required": dispatch_required,
         "external_first_required": external_first_required,
+        "web_search_required": web_search_required,
+        "analysis_required": analysis_required,
+        "analysis_route_task_class": analysis_route_task_class,
+        "analysis_receipt_required": analysis_receipt_required,
+        "analysis_zero_budget_required": analysis_zero_budget_required,
+        "analysis_default_in_boot": analysis_default_in_boot,
+        "analysis_plan": analysis_plan,
+        "coach_required": coach_required,
+        "coach_route_task_class": coach_route_task_class,
+        "coach_plan": coach_plan,
         "bridge_fallback_subagent": bridge_fallback_subagent,
         "internal_escalation_trigger": internal_escalation_trigger,
         "graph_strategy": graph_strategy,
         "deterministic_first": deterministic_first,
         "route_budget": route_budget,
         "dispatch_policy": dispatch_policy,
+        "route_law_summary": route_law_summary,
         "route_graph": route_graph,
         "verification_route_task_class": verification_route_task_class,
         "independent_verification_required": independent_verification_required,

@@ -95,6 +95,7 @@ pack_router_keywords:
 #         - read_only
 #         - review_safe
 #         - bounded_write_safe
+#         - web_search
 #       write_scope: scoped_only
 #       max_runtime_seconds: 240
 #       min_output_bytes: 260
@@ -107,15 +108,24 @@ pack_router_keywords:
 #         - bounded_write
 #       dispatch:
 #         command: codex
-#         static_args:
+#         pre_static_args:
+#           - -c
+#           - model_reasoning_effort="high"
 #           - -a
 #           - never
-#           - exec
+#         subcommand: exec
+#         static_args:
 #           - --ephemeral
 #           - -s
 #           - read-only
+#         write_static_args:
+#           - --ephemeral
+#           - -s
+#           - workspace-write
 #         workdir_flag: -C
 #         model_flag: -m
+#         web_search_mode: flag
+#         web_search_flag: --search
 #         output_mode: file
 #         output_flag: -o
 #         prompt_mode: positional
@@ -134,6 +144,7 @@ pack_router_keywords:
 #       capability_band:
 #         - read_only
 #         - review_safe
+#         - web_search
 #       write_scope: none
 #       max_runtime_seconds: 180
 #       min_output_bytes: 260
@@ -147,10 +158,10 @@ pack_router_keywords:
 #       dispatch:
 #         command: qwen
 #         static_args:
-#           - --sandbox
 #           - -y
 #           - -o
 #           - text
+#         web_search_mode: provider_configured
 #         workdir_flag: --workdir
 #         output_mode: stdout
 #         prompt_mode: positional
@@ -182,12 +193,10 @@ pack_router_keywords:
 #       dispatch:
 #         command: gemini
 #         static_args:
-#           - --sandbox
 #           - -y
 #           - --output-format
 #           - text
 #         probe_static_args:
-#           - --sandbox
 #           - -y
 #           - --output-format
 #           - text
@@ -331,6 +340,8 @@ pack_router_keywords:
 #       max_total_runtime_seconds: 420
 #       dispatch_required: external_first_when_eligible
 #       external_first_required: yes
+#       # Set web_search_required: yes only on routes that must validate internet facts
+#       # and ensure at least one listed route subagent both declares web_search and exposes dispatch wiring.
 #       local_execution_allowed: no
 #       local_execution_preferred: no
 #       cli_dispatch_required_if_delegating: yes
@@ -382,19 +393,13 @@ pack_router_keywords:
 #     analysis:
 #       subagents:
 #         - qwen_cli
-#         - gemini_cli
 #         - kilo_cli
-#         - opencode_cli
-#         - vibe_cli
 #         - codex_cli
 #         - internal_subagents
 #       fanout_subagents:
 #         - qwen_cli
-#         - gemini_cli
 #         - kilo_cli
-#         - opencode_cli
-#         - vibe_cli
-#       fanout_min_results: 3
+#       fanout_min_results: 1
 #       merge_policy: consensus_with_conflict_flag
 #       max_runtime_seconds: 180
 #       min_output_bytes: 320
@@ -412,7 +417,7 @@ pack_router_keywords:
 #       bridge_fallback_subagent: codex_cli
 #       internal_escalation_trigger: semantic_conflict_without_majority
 #       verification_route_task_class: verification_ensemble
-#       independent_verification_required: yes
+#       independent_verification_required: no
 #     meta_analysis:
 #       subagents:
 #         - qwen_cli
@@ -477,24 +482,21 @@ pack_router_keywords:
 #       independent_verification_required: no
 #     review_ensemble:
 #       subagents:
-#         - qwen_cli
 #         - gemini_cli
 #         - kilo_cli
 #         - opencode_cli
+#         - qwen_cli
 #         - vibe_cli
 #         - codex_cli
-#         - internal_subagents
 #       models:
 #         codex_cli: gpt-5.1-codex-mini
-#       profiles:
-#         internal_subagents: internal_review
 #       fanout_subagents:
-#         - qwen_cli
 #         - gemini_cli
 #         - kilo_cli
 #         - opencode_cli
+#         - qwen_cli
 #         - vibe_cli
-#       fanout_min_results: 3
+#       fanout_min_results: 2
 #       merge_policy: consensus_with_conflict_flag
 #       write_scope: none
 #       verification_gate: review_findings
@@ -505,6 +507,33 @@ pack_router_keywords:
 #       bridge_fallback_subagent: codex_cli
 #       internal_escalation_trigger: unresolved_high_risk_findings
 #       independent_verification_required: no
+#     coach:
+#       subagents:
+#         - gemini_cli
+#         - kilo_cli
+#         - opencode_cli
+#         - qwen_cli
+#         - vibe_cli
+#         - codex_cli
+#       models:
+#         codex_cli: gpt-5.1-codex-mini
+#       fanout_subagents:
+#         - gemini_cli
+#         - kilo_cli
+#         - opencode_cli
+#         - qwen_cli
+#         - vibe_cli
+#       fanout_min_results: 2
+#       merge_policy: unanimous_approve_rework_bias
+#       write_scope: none
+#       verification_gate: coach_review
+#       max_runtime_seconds: 180
+#       min_output_bytes: 280
+#       dispatch_required: external_first_review
+#       external_first_required: yes
+#       bridge_fallback_subagent: codex_cli
+#       internal_escalation_trigger: unresolved_coach_conflict
+#       independent_verification_required: no
 #     small_patch:
 #       subagents:
 #         - codex_cli
@@ -513,6 +542,19 @@ pack_router_keywords:
 #         codex_cli: gpt-5.1-codex-mini
 #       profiles:
 #         internal_subagents: internal_fast
+#       analysis_required: yes
+#       analysis_route_task_class: analysis
+#       analysis_fanout_subagents:
+#         - qwen_cli
+#         - kilo_cli
+#       analysis_fanout_min_results: 1
+#       analysis_merge_policy: consensus_with_conflict_flag
+#       analysis_external_first_required: yes
+#       analysis_receipt_required: yes
+#       analysis_zero_budget_required: yes
+#       analysis_default_in_boot: yes
+#       coach_required: yes
+#       coach_route_task_class: coach
 #       write_scope: scoped_only
 #       verification_gate: targeted_verification
 #       graph_strategy: deterministic_then_escalate
@@ -520,6 +562,7 @@ pack_router_keywords:
 #       budget_policy: balanced
 #       max_budget_units: 3
 #       max_cli_subagent_calls: 3
+#       max_coach_passes: 2
 #       max_verification_passes: 1
 #       max_fallback_hops: 1
 #       max_total_runtime_seconds: 480
@@ -537,6 +580,20 @@ pack_router_keywords:
 #         codex_cli: gpt-5.1-codex
 #       profiles:
 #         internal_subagents: internal_fast
+#       max_runtime_seconds: 420
+#       analysis_required: yes
+#       analysis_route_task_class: analysis
+#       analysis_fanout_subagents:
+#         - qwen_cli
+#         - kilo_cli
+#       analysis_fanout_min_results: 1
+#       analysis_merge_policy: consensus_with_conflict_flag
+#       analysis_external_first_required: yes
+#       analysis_receipt_required: yes
+#       analysis_zero_budget_required: yes
+#       analysis_default_in_boot: yes
+#       coach_required: yes
+#       coach_route_task_class: coach
 #       write_scope: scoped_only
 #       verification_gate: targeted_verification
 #       graph_strategy: deterministic_then_escalate
@@ -544,8 +601,9 @@ pack_router_keywords:
 #       budget_policy: balanced
 #       max_budget_units: 5
 #       max_cli_subagent_calls: 4
+#       max_coach_passes: 2
 #       max_verification_passes: 1
-#       max_fallback_hops: 1
+#       max_fallback_hops: 2
 #       max_total_runtime_seconds: 540
 #       dispatch_required: external_readonly_then_senior_writer
 #       external_first_required: no

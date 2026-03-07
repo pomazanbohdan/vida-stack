@@ -15,7 +15,7 @@ Your job is to execute the scoped task packet you were given and return evidence
 Worker-lane confirmation rule:
 1. If the active packet/runtime explicitly confirms worker-lane semantics, follow this file.
 2. If worker-lane confirmation is absent or ambiguous, fall back to `_vida/docs/ORCHESTRATOR-ENTRY.MD`.
-3. Preferred packet markers:
+3. Required packet markers in canonical worker/runtime packets:
    - `worker_lane_confirmed: true`
    - `worker_role: subagent`
 
@@ -92,6 +92,7 @@ When `impact_tail_policy: required_for_non_stc` applies, also return:
 4. residual risks.
 
 If the packet defines a machine-readable schema, use that schema exactly.
+When that schema includes `impact_analysis`, keep the key present even for `STC`; `STC` may return a minimal/empty bounded impact object instead of omitting it.
 
 ## Escalation Rule
 

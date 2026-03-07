@@ -2,6 +2,21 @@
 
 Purpose: run a bounded meta-diagnostic of the VIDA framework itself when the user explicitly asks to inspect protocol friction, instruction conflicts, token overhead, runtime ergonomics, or framework/process efficiency.
 
+Quality and token efficiency are equal-weight goals in FSAP/debug mode.
+
+## Hard-Law Doctrine
+
+FSAP must treat mandatory framework behavior as executable law, not advisory prose.
+
+1. If a framework rule is expressed as `must`, `required`, `forbidden`, `invalid`, or `blocked`, FSAP must verify that a runtime gate, verifier, blocker code, or fail-fast path exists for it.
+2. If a mandatory rule exists only as guidance text, classify that as a `framework-owned` protocol gap even when operators usually follow it.
+3. Recommendations are valid only for non-mandatory heuristics, ranking preferences, and explicitly labeled option matrices.
+4. When options exist, FSAP must require explicit option-selection conditions instead of vague language such as `maybe`, `probably`, `consider`, or `prefer` without a decision boundary.
+5. Canonical update rule: every mandatory behavior discovered during FSAP should either:
+   - already have a runtime enforcement path,
+   - be implemented with one during the same improvement cycle,
+   - or be reported as an unresolved framework defect.
+
 ## Trigger
 
 Run FSAP only on explicit user request, for example:
@@ -16,11 +31,12 @@ Do not use FSAP for product/codebase diagnosis unless the user explicitly asks a
 
 ## Routing
 
-1. Default execution lane: main orchestrator only.
+1. Default execution lane: main orchestrator only for direct chat diagnosis and tracked FSAP trigger framing.
 2. Default task-flow policy: bypass TODO/`br`/pack flow and execute in chat mode unless the user explicitly requests tracked execution or a formal artifact.
 3. Delegation policy:
-   - do not delegate the primary FSAP analysis to subagents by default;
-   - use delegated lanes only for narrow secondary verification when the orchestrator is blocked or the user explicitly requests delegation.
+   - do not delegate the primary FSAP trigger framing or ownership split to subagents by default;
+   - in untracked chat mode, use delegated lanes only for narrow secondary verification when the orchestrator is blocked or the user explicitly requests delegation;
+   - in tracked FSAP/remediation mode, delegated verification/proving is the default before closure or report-finalization, and a local-only close path requires a structured override receipt.
 4. Thinking mode:
    - default `META` for explicit self-analysis requests;
    - downgrade to `MAR` only for narrow single-script questions with low blast radius.
@@ -30,7 +46,7 @@ When the user explicitly requests tracked execution, use `reflection-pack` and t
 
 1. `FSAP01`: `FSAP-0_2_Trigger_Runtime_Snapshot_and_Evidence_Scope`
 2. `FSAP02`: `FSAP-3_5_Friction_Classification_Ownership_Split_and_Improvement_Decision`
-3. `FSAP03`: `FSAP-6_8_Canonical_Update_Verification_and_Report`
+3. `FSAP03`: `FSAP-6_8_Canonical_Update_Delegated_Verification_and_Report`
 
 ## Core Boundary
 
@@ -74,20 +90,37 @@ Rule:
      - instruction conflict
      - ergonomics/observability gap
      - project issue mislocated in framework
+   - additionally classify whether the issue is:
+     - `hard-law missing`
+     - `hard-law present but unenforced`
+     - `heuristic and correctly non-mandatory`
 5. `FSAP-4 Ownership Split`
    - mark every finding `framework-owned` or `project-owned`.
 6. `FSAP-5 Improvement Decision`
    - choose fixes that reduce:
+     - quality regressions,
      - iteration count
      - repeated rereads
      - stale state/conflicting status
      - unnecessary token spend
      - ambiguous ownership
+   - do not accept a "token-efficient" change that weakens enforcement quality, and do not accept a "quality" change that needlessly multiplies tokens when an equally safe cheaper path exists.
+   - for every mandatory rule, decide the concrete enforcement surface:
+     - runtime gate,
+     - verifier gate,
+     - blocker code,
+     - schema validation,
+     - or structured option matrix
 7. `FSAP-6 Canonical Update`
    - update framework files in `_vida/*`.
    - if project fixes are in scope, update `docs/*` / `scripts/*` separately in the same request.
+   - do not leave a mandatory finding in advisory wording when the framework can enforce it mechanically.
 8. `FSAP-7 Verification`
    - run the lightest proof that the framework fix changed behavior.
+   - in tracked mode, prefer delegated verification/proving lanes over a second local orchestrator-only audit.
+   - before closure-ready state, require either:
+     - a delegated verification artifact with real subagent activity, or
+     - a structured override receipt recorded by `_vida/scripts/fsap-verification-gate.py`.
 9. `FSAP-8 Report`
    - report findings in chat, grouped by ownership.
 
@@ -102,6 +135,7 @@ Every FSAP report must include:
 3. concrete file/script references for each finding
 4. why the issue increases iterations/context/tokens
 5. whether the fix belongs to framework or project layer
+6. whether each mandatory finding is already enforced, newly enforced, or still unenforced
 
 ## Preferred Verification
 
@@ -109,8 +143,9 @@ Use the smallest proof that demonstrates the framework change:
 
 1. `bash -n` for shell scripts
 2. `todo-tool current|compact` for TODO/runtime state fixes in tracked mode
-3. `quality-health-check.sh --mode quick <task_id>` for protocol sanity in tracked mode
-4. a focused smoke command that reproduces the improved behavior
+3. `python3 _vida/scripts/fsap-verification-gate.py check <task_id>` for tracked FSAP verification readiness
+4. `quality-health-check.sh --mode quick <task_id>` for protocol sanity in tracked mode
+5. a focused smoke command that reproduces the improved behavior
 
 Avoid full project build/test loops unless the framework change directly affects them.
 
@@ -146,4 +181,6 @@ Report in this structure:
 4. Leaving framework/project ownership ambiguous after the analysis.
 5. Auto-routing explicit VIDA self-diagnosis into TODO/`br` flow when the user asked for direct diagnosis only.
 6. Delegating the primary FSAP analysis away from the main orchestrator without an explicit reason.
+7. Using the self-diagnosis exception to close tracked FSAP/remediation work without delegated verification or a structured override receipt.
 7. Starting token-cost diagnosis with broad queue discovery before trying the compact boot snapshot or another exact-key status source.
+8. Leaving mandatory framework behavior as a recommendation when the runtime could block or verify it directly.

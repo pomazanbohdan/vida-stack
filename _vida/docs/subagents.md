@@ -50,6 +50,10 @@ Before dispatch:
    - `impact_tail_policy: required_for_non_stc`
    - `impact_analysis_scope: bounded_to_assigned_scope`
 13. Treat the worker response as internal evidence for orchestrator synthesis unless the user explicitly asked to inspect the raw worker report.
+14. If route metadata marks a requirement as mandatory (`external_first_required`, `dispatch_required`, `fanout_min_results`, `independent_verification_required`), dispatch is invalid unless the runtime path satisfies that requirement mechanically.
+15. Direct/manual subagent invocation outside the canonical dispatch runtime is invalid for routed classes unless the runtime records a lawful fallback or escalation receipt.
+16. Canonical packets must pass `_vida/scripts/worker-packet-gate.py check` before cli dispatch; malformed worker packets are runtime-invalid and should fail fast before provider execution.
+17. Runtime-owned arbitration lanes must return strict JSON in the declared bounded shape; malformed arbitration payloads are runtime-invalid and must not drive tie-break decisions.
 
 ## Mandatory Return Contract
 
@@ -68,7 +72,7 @@ Required fields:
 9. `blockers` — empty list or concrete blocker list
 10. `notes` — optional concise integration notes
 11. `recommended_next_action` — concise next step when relevant
-12. `impact_analysis` — required when packet policy marks `impact_tail_policy: required_for_non_stc` and the worker used `PR-CoT` or `MAR`
+12. `impact_analysis` — keep this key present in the machine-readable schema; `STC` may return a minimal/empty bounded object, while `PR-CoT|MAR` should populate real downstream impact detail
 
 Preferred format:
 
@@ -95,6 +99,7 @@ Preferred format:
 ```
 
 Text-only summaries without `changed_files` and verification evidence are invalid for write tasks.
+Machine-readable write summaries are merge-ready only when the returned payload satisfies the active schema, not merely when the text looks substantial.
 
 ## Orchestrator Validation After Return
 
@@ -102,6 +107,7 @@ Text-only summaries without `changed_files` and verification evidence are invali
 2. Confirm verification command was actually executed (not only claimed).
 3. If analyzer errors are reported, classify environment/toolchain vs real code errors.
 4. Confirm the return contract is present before accepting or merging results.
+4.1. When the packet requires a machine-readable summary, treat schema-valid output as the merge-readiness gate; heuristic text richness is not sufficient.
 5. Convert the worker result into an orchestrator-owned user-facing answer instead of relaying the raw worker report by default.
 
 ## Failure Handling

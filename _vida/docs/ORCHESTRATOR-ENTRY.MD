@@ -25,6 +25,14 @@ Operating principles:
 3. Product outcome over abstract answer.
 4. System integrity over local optimization.
 5. Token discipline over broad rereads.
+6. During framework/debug work, treat quality and token efficiency as equal first-class goals; do not optimize one by silently sacrificing the other.
+7. Assume compact/context compression can happen at any moment and prefer execution state that survives it.
+
+Policy precedence:
+1. repository-local VIDA orchestration rules override generic autonomous coding defaults while this lane is active,
+2. user intent to "implement", "continue development", or "fix now" authorizes execution routing, not automatic local orchestrator-first coding,
+3. when active VIDA route policy conflicts with a generic assistant default, obey VIDA route policy.
+4. when an execution behavior is not described or authorized by active VIDA/project protocols, treat it as forbidden rather than filling the gap with a generic assistant heuristic.
 
 ## Request Intent Gate
 
@@ -99,9 +107,28 @@ Required behavior:
 6. in `hybrid`, honor route dispatch policy before any local-first or direct-internal path; external-first routing, bridge fallback, and lawful internal escalation must remain inspectable,
 7. keep user-facing reporting ownership under the orchestrator; do not expose raw subagent reports unless the user explicitly asks to inspect them.
 
+Execution Authorization Gate:
+1. before any deep local implementation prep, local test-design loop, or write-producing analysis, confirm all are true:
+   - route selected,
+   - if the route requires an analysis phase, the analysis lane is selected first and its receipt exists or the runtime recorded an explicit analysis blocker,
+   - author lane selected,
+   - verifier lane selected or explicit `no_eligible_verifier` recorded,
+   - writer ownership fixed,
+   - local execution path explicitly authorized by route metadata or lawful escalation,
+2. if any item is missing, stop at orchestration/routing work and do not continue into local orchestrator-first development,
+3. "minimal routing context" remains allowed before the gate:
+   - compact task-state snapshot,
+   - exact TODO/task reads,
+   - bounded protocol/contract reads,
+   - dispatch preparation,
+   - analysis-receipt preparation for write-producing routes,
+4. this gate is mandatory for `execution_flow` whenever the active subagent mode is not `disabled`.
+5. if the orchestrator cannot point to the exact protocol/routing clause that authorizes an execution behavior, that behavior is forbidden by default.
+
 Exception:
-1. explicit VIDA/framework self-diagnosis runs in the main orchestrator lane by default,
-2. do not delegate FSAP-first diagnosis to subagents unless the user explicitly asks for delegated verification or the orchestrator is blocked on a narrow secondary question.
+1. explicit VIDA/framework self-diagnosis runs in the main orchestrator lane by default for direct chat diagnosis and tracked FSAP trigger framing,
+2. do not delegate FSAP-first diagnosis to subagents unless the user explicitly asks for delegated verification or the orchestrator is blocked on a narrow secondary question,
+3. once tracked FSAP/remediation flow is active, delegated verification or proving lanes become the default for closure-ready state; do not use the self-diagnosis exception to justify local-only repeated audits or closure without either a delegated verification artifact or a structured override receipt.
 
 ## Blocking-Question Dispatch Rule
 
@@ -158,8 +185,9 @@ Use for routine execution and token-efficient continuation.
    - `python3 _vida/scripts/vida-boot-snapshot.py`
    - default target: top-level `in_progress`, `ready_head`, and open/in-progress subtask tree
    - if the snapshot answers the request, stop there and avoid wider status discovery
-4. Hydrate active context capsule when task context exists.
-5. Read required thinking protocol sections:
+4. If the request is write-producing continuation work, stop after the compact snapshot long enough to build the route receipt and prepare the external analysis receipt; do not expand into broad protocol reading before that route step.
+5. Hydrate active context capsule when task context exists.
+6. Read required thinking protocol sections:
    - `_vida/docs/thinking-protocol.md#section-algorithm-selector`
    - `_vida/docs/thinking-protocol.md#section-stc`
    - `_vida/docs/thinking-protocol.md#section-pr-cot`
@@ -169,11 +197,11 @@ Use for routine execution and token-efficient continuation.
    - `_vida/docs/thinking-protocol.md#section-bug-reasoning`
    - `_vida/docs/thinking-protocol.md#section-web-search`
    - `_vida/docs/thinking-protocol.md#section-reasoning-modules`
-6. Read `_vida/docs/web-validation-protocol.md`.
-7. Read `_vida/docs/project-overlay-protocol.md`.
-8. Read `vida.config.yaml` when present.
-9. If `protocol_activation.agent_system=true`, read `_vida/docs/subagent-system-protocol.md`.
-10. Read `_vida/docs/beads-protocol.md` only if the request is not `answer_only` and the compact snapshot is insufficient.
+7. Read `_vida/docs/web-validation-protocol.md`.
+8. Read `_vida/docs/project-overlay-protocol.md`.
+9. Read `vida.config.yaml` when present.
+10. If `protocol_activation.agent_system=true`, read `_vida/docs/subagent-system-protocol.md`.
+11. Read `_vida/docs/beads-protocol.md` only if the request is not `answer_only` and the compact snapshot is insufficient.
 
 ### Standard Boot
 
@@ -207,7 +235,8 @@ Use when at least one is true:
 5. Route all framework-owned changes to `AGENTS.md` and `_vida/*`.
 6. Use `br ready`, `br update`, and `br close` only when task flow is engaged.
 7. During active task execution, use TODO blocks and keep near-term planning lean.
-8. Explicit VIDA/framework self-diagnosis is executed directly by the main orchestrator and bypasses TODO/`br`/pack flow by default.
+8. Explicit VIDA/framework self-diagnosis is executed directly by the main orchestrator and bypasses TODO/`br`/pack flow by default only for untracked chat diagnosis.
+9. Tracked FSAP/remediation keeps orchestrator ownership for framing and synthesis, but closure-ready state requires delegated verification/proving or a structured override receipt.
 
 ## Output Contract
 

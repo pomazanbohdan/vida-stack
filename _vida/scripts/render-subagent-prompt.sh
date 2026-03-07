@@ -2,9 +2,23 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PROJECT_PREFLIGHT_DOC="<active project preflight doc from overlay>"
 SUBAGENT_ENTRY_DOC="_vida/docs/SUBAGENT-ENTRY.MD"
 SUBAGENT_THINKING_DOC="_vida/docs/SUBAGENT-THINKING.MD"
+WORKER_PACKET_GATE="$ROOT_DIR/_vida/scripts/worker-packet-gate.py"
+
+resolve_project_preflight_doc() {
+  local resolved
+  resolved="$(
+    python3 "$ROOT_DIR/_vida/scripts/project-bootstrap.py" emit-contract --json 2>/dev/null \
+      | jq -r '.paths.project_operations_doc // empty' 2>/dev/null
+  )"
+  if [[ -z "$resolved" || "$resolved" == "null" ]]; then
+    resolved="docs/process/project-operations.md"
+  fi
+  printf '%s\n' "$resolved"
+}
+
+PROJECT_PREFLIGHT_DOC="$(resolve_project_preflight_doc)"
 
 usage() {
   cat <<'EOF'
@@ -91,7 +105,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$template" || -z "$task" || -z "$scope" || -z "$verification" ]]; then
+if [[ -z "$template" || -z "$task" || -z "$scope" || -z "$verification" || -z "$question" ]]; then
   usage >&2
   exit 1
 fi
@@ -103,14 +117,14 @@ fi
 
 json_contract=$(cat <<'EOF'
 {
-  "status": "done|partial|blocked",
-  "question_answered": "yes|no",
+  "status": "done",
+  "question_answered": "yes",
   "answer": "direct bounded answer",
   "evidence_refs": ["path/to/file:12", "command -> key line"],
   "changed_files": ["path/a", "path/b"],
   "verification_commands": ["exact command"],
   "verification_results": ["command -> pass|fail"],
-  "merge_ready": "yes|no",
+  "merge_ready": "yes",
   "blockers": [],
   "notes": "short note",
   "recommended_next_action": "concise next step",
@@ -175,13 +189,10 @@ thinking_hint() {
 }
 
 blocking_question_line() {
-  if [[ -n "$question" ]]; then
-    printf '%s\n' "Blocking Question: $question"
-  else
-    printf '%s\n' "Blocking Question: [provide one explicit blocking question for this worker lane]"
-  fi
+  printf '%s\n' "Blocking Question: $question"
 }
 
+render_prompt() {
 case "$template" in
   audit|read-only-audit)
     cat <<EOF
@@ -223,7 +234,7 @@ Constraints:
 - Do not widen task ownership or rewrite orchestration decisions.
 - Answer the blocking question directly before optional context.
 - Do not perform broad .vida/logs, .vida/state, or .beads sweeps unless the task packet explicitly escalates to them.
-- If you use PR-CoT or MAR, include `impact_analysis` in the machine-readable summary.
+- Machine-readable summaries must always include impact_analysis; for STC keep it minimal, and for PR-CoT or MAR populate bounded downstream effects.
 $(optional_lines "" "$extra_line")
 Verification:
 - $verification
@@ -274,7 +285,7 @@ Must do:
 - Do not widen scope beyond the isolated patch.
 - Answer the blocking question directly before optional context.
 - Do not perform broad .vida/logs, .vida/state, or .beads sweeps unless the task packet explicitly escalates to them.
-- If you use PR-CoT or MAR, include `impact_analysis` in the machine-readable summary.
+- Machine-readable summaries must always include impact_analysis; for STC keep it minimal, and for PR-CoT or MAR populate bounded downstream effects.
 $(optional_lines "" "$extra_line")
 Verification:
 - $verification
@@ -291,3 +302,8 @@ EOF
     exit 1
     ;;
 esac
+}
+
+rendered_prompt="$(render_prompt)"
+python3 "$WORKER_PACKET_GATE" check - <<<"$rendered_prompt" >/dev/null
+printf '%s\n' "$rendered_prompt"

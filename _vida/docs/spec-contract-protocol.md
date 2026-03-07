@@ -11,6 +11,7 @@ Scope:
    - `bug-pool-pack`
    - `reflection-pack`
 2. Excluded from direct development execution flow (`/vida-implement*`, `dev-pack`).
+3. Raw issue text for bugfix execution is normalized by `_vida/docs/issue-contract-protocol.md` instead of running full SCP by default.
 
 ## Core Principle
 
@@ -21,6 +22,12 @@ Spec is a contract between:
 3. real external API/docs,
 4. architecture constraints,
 5. delivery/testability constraints.
+
+## SCP / Issue-Contract Boundary
+
+1. SCP remains the canonical contract path for non-development spec work.
+2. `issue_contract` is the narrow execution-side contract for bug/spec convergence when the incoming issue text is effectively the working spec.
+3. If issue analysis shows a non-equivalent change (`spec_delta_required`), route back into SCP/FTP reconciliation before implementation continues.
 
 ## Command Layer Mapping
 

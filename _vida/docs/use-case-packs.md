@@ -154,7 +154,7 @@ Explicit VIDA/framework self-analysis scaffold (`reflection-pack` + FSAP):
 
 1. `FSAP01`: `FSAP-0_2_Trigger_Runtime_Snapshot_and_Evidence_Scope`
 2. `FSAP02`: `FSAP-3_5_Friction_Classification_Ownership_Split_and_Improvement_Decision`
-3. `FSAP03`: `FSAP-6_8_Canonical_Update_Verification_and_Report`
+3. `FSAP03`: `FSAP-6_8_Canonical_Update_Delegated_Verification_and_Report`
 
 ## Notes
 
@@ -162,6 +162,7 @@ Explicit VIDA/framework self-analysis scaffold (`reflection-pack` + FSAP):
 2. TODO board is execution visibility, not task-state authority.
 3. Multi-pack requests use sequence: `research -> spec -> work-pool -> dev/bug-pool -> reflection`.
 4. Explicit VIDA/framework diagnosis requests route through `reflection-pack` and `_vida/docs/framework-self-analysis-protocol.md`.
+5. Tracked FSAP/remediation closure requires delegated verification/proving evidence or a structured override receipt recorded through `_vida/scripts/fsap-verification-gate.py`.
 
 Non-dev handoff boundary:
 

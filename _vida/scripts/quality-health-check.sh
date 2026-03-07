@@ -253,6 +253,30 @@ if [[ -n "$TASK_ID" ]]; then
   fi
 
   if [[ -f ".vida/logs/beads-execution.jsonl" ]]; then
+    writer_block_started="$(
+      jq -sr --arg task "$TASK_ID" '
+        any(
+          .[];
+          (.task_id // "") == $task
+          and (.type // "") == "block_start"
+          and ((.block_id // "") == "P02" or (.block_id // "") == "IEP04" or (.block_id // "") == "CL4")
+        )
+      ' .vida/logs/beads-execution.jsonl 2>/dev/null || echo false
+    )"
+    if [[ "$writer_block_started" == "true" ]]; then
+      vida_status_line info "[health] execution authorization gate verification for task: $TASK_ID"
+      if ! python3 _vida/scripts/execution-auth-gate.py check "$TASK_ID" implementation --local-write >/dev/null; then
+        vida_status_line fail "[health] FAIL: execution authorization gate is blocked for task $TASK_ID" >&2
+        exit 4
+      fi
+    fi
+
+    vida_status_line info "[health] coach review gate check for task: $TASK_ID"
+    if ! python3 _vida/scripts/coach-review-gate.py check "$TASK_ID" >/dev/null; then
+      vida_status_line fail "[health] FAIL: coach review gate is blocked for task $TASK_ID" >&2
+      exit 4
+    fi
+
     task_labels="$(br show "$TASK_ID" --json 2>/dev/null | jq -r '.[0].labels // [] | join(" ")' 2>/dev/null || true)"
     task_scope_is_framework="no"
     if grep -Eq '(^| )(scope:framework|domain:framework|framework|fsap|agent-system|vida-stack)( |$)' <<<"$task_labels"; then
@@ -274,8 +298,23 @@ if [[ -n "$TASK_ID" ]]; then
       exit 4
     fi
 
+    vida_status_line info "[health] tracked FSAP verification gate check for task: $TASK_ID"
+    if ! python3 _vida/scripts/fsap-verification-gate.py check "$TASK_ID" >/dev/null; then
+      vida_status_line fail "[health] FAIL: tracked FSAP verification gate is blocked for task $TASK_ID" >&2
+      exit 4
+    fi
+
+    latest_task_receipt_epoch=""
+    if [[ "$MODE" == "quick" && -d ".vida/logs/route-receipts" ]]; then
+      latest_task_receipt_epoch="$(
+        find .vida/logs/route-receipts -maxdepth 1 -type f -name "${TASK_ID}.*.json" -printf '%T@\n' 2>/dev/null \
+          | sort -nr \
+          | head -1
+      )"
+    fi
+
     if [[ "$subagent_run_count" -gt 0 && -f ".vida/logs/subagent-runs.jsonl" ]]; then
-      budget_policy_summary="$(jq -sr --arg task "$TASK_ID" '
+      budget_policy_summary="$(jq -sr --arg task "$TASK_ID" --arg since_epoch "$latest_task_receipt_epoch" '
         reduce .[] as $item (
           {
             bypass: 0,
@@ -283,7 +322,14 @@ if [[ -n "$TASK_ID" ]]; then
             internal_escalation: 0,
             internal_missing_receipt: 0
           };
-          if (($item.task_id // "") == $task and ($item.type // "") == "subagent_run") then
+          if (
+            ($item.task_id // "") == $task
+            and ($item.type // "") == "subagent_run"
+            and (
+              ($since_epoch | length) == 0
+              or (((($item.ts_end // $item.ts // "") | fromdateiso8601?) // 0) >= (($since_epoch | tonumber?) // 0))
+            )
+          ) then
             .bypass += (if ($item.policy_bypass // false) then 1 else 0 end)
             | .budget_violation += (if ($item.budget_violation // false) then 1 else 0 end)
             | .internal_escalation += (if ($item.internal_escalation_used // false) then 1 else 0 end)
@@ -302,7 +348,8 @@ if [[ -n "$TASK_ID" ]]; then
         vida_status_line warn "[health] WARN: subagent routing bypass detected for $TASK_ID (policy_bypass=${bypass_count})"
       fi
       if [[ "${budget_violation_count:-0}" -gt 0 ]]; then
-        vida_status_line warn "[health] WARN: budget policy violations detected for $TASK_ID (${budget_violation_count})"
+        vida_status_line fail "[health] FAIL: budget policy violations detected for $TASK_ID (${budget_violation_count})" >&2
+        exit 4
       fi
       if [[ "${internal_missing_receipt_count:-0}" -gt 0 ]]; then
         vida_status_line warn "[health] WARN: internal escalations without receipt detected for $TASK_ID (${internal_missing_receipt_count}/${internal_escalation_count})"

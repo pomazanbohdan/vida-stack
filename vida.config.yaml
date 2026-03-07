@@ -1,0 +1,194 @@
+project:
+  id: vida-stack
+  overlay_version: 1
+
+protocol_activation:
+  agent_system: true
+
+project_bootstrap:
+  enabled: true
+  docs_root: docs
+  process_root: docs/process
+  research_root: docs/research
+  readme_doc: README.md
+  architecture_doc: RELEASE-1-SCOPE.md
+  decisions_doc: docs/decisions.md
+  environments_doc: docs/environments.md
+  project_operations_doc: docs/process/project-operations.md
+  agent_system_doc: _vida/docs/subagent-system-protocol.md
+  allow_scaffold_missing: true
+  require_launch_confirmation: false
+
+agent_system:
+  init_on_boot: true
+  mode: hybrid
+  state_owner: orchestrator_only
+  max_parallel_agents: 3
+  subagents:
+    codex_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      role: bridge_fallback
+      orchestration_tier: bridge
+      cost_priority: fallback
+      max_runtime_seconds: 1800
+      min_output_bytes: 180
+      capability_band:
+        - bounded_write_safe
+        - review_safe
+        - web_search
+      write_scope: scoped_only
+      billing_tier: paid
+      speed_tier: medium
+      quality_tier: high
+      dispatch:
+        command: codex
+        pre_static_args:
+          - -c
+          - model_reasoning_effort="high"
+          - -a
+          - never
+        subcommand: exec
+        output_mode: stdout
+        prompt_mode: positional
+        web_search_mode: flag
+        web_search_flag: --search
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      role: free_primary
+      orchestration_tier: external_free
+      cost_priority: highest
+      max_runtime_seconds: 1200
+      min_output_bytes: 160
+      capability_band:
+        - read_only
+        - review_safe
+        - web_search
+      write_scope: none
+      billing_tier: free
+      speed_tier: fast
+      quality_tier: high
+      dispatch:
+        command: qwen
+        static_args:
+          - -y
+          - -o
+          - text
+        output_mode: stdout
+        prompt_mode: positional
+        web_search_mode: provider_configured
+    gemini_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      role: free_secondary
+      orchestration_tier: external_free
+      cost_priority: highest
+      max_runtime_seconds: 1800
+      min_output_bytes: 160
+      capability_band:
+        - read_only
+        - review_safe
+        - web_search
+      write_scope: none
+      billing_tier: free
+      speed_tier: medium
+      quality_tier: high
+      dispatch:
+        command: gemini
+        static_args:
+          - -y
+        probe_static_args:
+          - -y
+        output_mode: stdout
+        prompt_mode: positional
+        web_search_mode: provider_configured
+  routing:
+    default:
+      subagents:
+        - qwen_cli
+        - gemini_cli
+        - codex_cli
+    analysis:
+      subagents:
+        - qwen_cli
+        - gemini_cli
+      fanout_subagents:
+        - qwen_cli
+        - gemini_cli
+      fanout_min_results: 1
+      merge_policy: consensus_with_conflict_flag
+      dispatch_required: fanout_then_synthesize
+      external_first_required: yes
+      web_search_required: yes
+      bridge_fallback_subagent: codex_cli
+      internal_escalation_trigger: quality_gap
+      max_fallback_hops: 2
+    coach:
+      subagents:
+        - qwen_cli
+        - gemini_cli
+      fanout_subagents:
+        - qwen_cli
+        - gemini_cli
+      fanout_min_results: 2
+      merge_policy: unanimous_approve_rework_bias
+      dispatch_required: fanout_then_synthesize
+      external_first_required: yes
+      max_fallback_hops: 1
+    review_ensemble:
+      subagents:
+        - qwen_cli
+        - gemini_cli
+      fanout_subagents:
+        - qwen_cli
+        - gemini_cli
+      fanout_min_results: 1
+      merge_policy: consensus_with_conflict_flag
+      dispatch_required: fanout_then_synthesize
+      external_first_required: yes
+      max_fallback_hops: 1
+    research:
+      subagents:
+        - qwen_cli
+        - gemini_cli
+      fanout_subagents:
+        - qwen_cli
+        - gemini_cli
+      fanout_min_results: 1
+      merge_policy: consensus_with_conflict_flag
+      dispatch_required: fanout_then_synthesize
+      external_first_required: yes
+      web_search_required: yes
+      bridge_fallback_subagent: codex_cli
+      internal_escalation_trigger: quality_gap
+      max_fallback_hops: 2
+    status_diagnostic:
+      subagents:
+        - qwen_cli
+      dispatch_required: local_or_external_first
+      local_execution_allowed: yes
+      local_execution_preferred: yes
+      external_first_required: no
+    implementation:
+      subagents:
+        - codex_cli
+      analysis_required: yes
+      analysis_route_task_class: analysis
+      analysis_fanout_subagents:
+        - qwen_cli
+        - gemini_cli
+      analysis_external_first_required: yes
+      analysis_receipt_required: yes
+      coach_required: yes
+      coach_route_task_class: coach
+      write_scope: scoped_only
+      verification_gate: targeted_verification
+      dispatch_required: external_readonly_then_senior_writer
+      bridge_fallback_subagent: codex_cli
+      verification_route_task_class: review_ensemble
+      independent_verification_required: yes
+      max_coach_passes: 2
+      max_fallback_hops: 1
+  scoring:
+    consecutive_failure_limit: 3

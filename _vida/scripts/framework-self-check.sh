@@ -20,6 +20,8 @@ bash _vida/scripts/todo-tool.sh compact "$TASK_ID"
 echo
 bash _vida/scripts/quality-health-check.sh --mode quick "$TASK_ID"
 echo
+python3 _vida/scripts/fsap-verification-gate.py check "$TASK_ID"
+echo
 bash _vida/scripts/framework-boundary-check.sh --strict
 echo
 vida_status_line ok "[framework-self-check] ✨ No open issues"

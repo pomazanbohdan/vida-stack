@@ -149,6 +149,7 @@ Release 1 should provide:
 7. dependency strategy selection
 8. risk-policy selection
 9. user-decision escalation when assumptions are unsafe
+10. dependency-graph analysis before selecting writer lanes for epic, wave, and multi-task implementation flows
 
 Implementation audit:
 
@@ -156,6 +157,7 @@ Implementation audit:
 - [x] Execution mode routing exists.
 - [x] Reflection-path routing exists.
 - [x] Request-intent classification now exists before `br`, TODO, or pack-heavy execution is engaged.
+- [x] Multi-task development execution now requires top-level dependency-graph analysis before selecting the writer lane.
 - [ ] Some higher-level decision-card style framing remains protocol-led rather than fully machine-shaped.
 
 ### 3. Task and Execution State
@@ -338,6 +340,8 @@ Release 1 should provide:
 15. question-driven worker packets with machine-readable answer contracts
 16. bounded impact-analysis tails for non-`STC` worker reasoning when the packet requires it
 17. explicit dispatch-policy and budget-policy telemetry in canonical run artifacts
+18. machine-readable route receipts for canonical dispatch authorization and artifact correlation
+19. fail-closed rejection of illegal single-lane paths when route law requires fanout and synthesis
 
 Implementation audit:
 
@@ -351,6 +355,8 @@ Implementation audit:
 - [x] Worker prompts now carry explicit question/answer/evidence/next-action return fields instead of a looser partial summary contract.
 - [x] Non-`STC` worker packets can now require bounded impact-analysis tails.
 - [x] Canonical run logs now include budget-policy, cheap-lane, fallback, and internal-escalation telemetry.
+- [x] Canonical route receipts now exist for dispatch authorization, hash validation, and run-artifact correlation.
+- [x] Illegal `single` dispatch now fails fast when route law requires `fanout_then_synthesize`.
 - [ ] Some merge/readiness heuristics are still heuristic rather than final Release 1-stable policy.
 
 ### 7. Review and Verification Fabric
@@ -370,6 +376,8 @@ Required capabilities:
 9. source-backed verification for research/review flows
 10. required evidence capture in logs and artifacts
 11. orchestrator-owned default user reporting that hides explicit subagent/process sections unless inspection is requested
+12. independent verification as a first-class routed artifact with explicit blocking semantics before final synthesis
+13. completion semantics that distinguish `decision_ready` from `synthesis_ready`
 
 Target review-state vocabulary for Release 1:
 
@@ -387,6 +395,9 @@ Implementation audit:
 - [x] Health and verification scripts exist.
 - [x] Merge-readiness is distinguished from raw command success.
 - [x] Default user-facing reporting is now explicitly orchestrator-synthesized instead of exposing raw subagent/process sections.
+- [x] Ensemble manifests now persist a dedicated `verification` result block for independent verifier routing.
+- [x] Verification-required ensembles now remain blocked or `verification_pending` until synthesis is actually cleared.
+- [x] Runtime completion now distinguishes `decision_ready` from final `synthesis_ready`.
 - [ ] The full target review vocabulary is not yet fully implemented end to end.
 - [ ] Policy-aware close/handoff semantics are not yet complete across all execution classes.
 
@@ -547,6 +558,7 @@ Release 1 should provide:
 11. a baseline for future drift detection
 12. operator-visible recovery, timeout-instability, and lease-conflict summaries
 13. operator-visible budget-policy and escalation summaries
+14. operator-visible route-law and verification-state summaries tied to canonical run artifacts
 
 Implementation audit:
 
@@ -557,6 +569,7 @@ Implementation audit:
 - [x] Operator status exposes preferred or eligible task-class fit and recovery history visibility.
 - [x] Operator status now exposes timeout-instability classes and recent lease-conflict summaries.
 - [x] Operator status and health checks now surface budget-policy violations, escalation receipts, and diagnostic cost-class state.
+- [x] Route/run artifacts now expose `route_law_summary`, `route_receipt`, and dedicated verification blocks for operator inspection.
 - [ ] Full drift visibility remains incomplete.
 
 ### 13.1 Drift Detection
@@ -775,6 +788,8 @@ Implementation audit:
   - [x] Ensemble lease acquisition, release, conflict blocking, and lease-history diagnostics now exist.
   - [x] Worker packets now use explicit machine-readable return fields for question-driven execution.
   - [x] Route outputs now expose budget-policy metadata and lawful internal-escalation constraints.
+  - [x] Route-law summaries and canonical route receipts now exist in the dispatch runtime.
+  - [x] Illegal single-lane dispatch now fails closed when route law requires fanout and synthesis.
   - [ ] Broader task/block/file-scope ownership contracts are not yet fully materialized as runtime-enforced stateful contracts.
 - [ ] **Partial: Review and Verification Fabric**
   - [x] Route artifacts now expose `review_state`.
@@ -782,6 +797,9 @@ Implementation audit:
   - [x] Verification and health-check scripts are implemented.
   - [x] `quality-health-check.sh` reads canonical subagent run logs.
   - [x] Default user-facing reports now hide explicit subagent/process sections unless inspection is requested.
+  - [x] Independent verification now persists as a dedicated manifest block.
+  - [x] Completion now distinguishes `decision_ready` from `synthesis_ready`.
+  - [x] Verification-required ensembles now remain blocked until verifier routing clears synthesis.
   - [ ] The full target review-state vocabulary is not yet demonstrated end to end.
   - [ ] Policy-aware close and handoff behavior is not yet fully proven across all task classes.
 - [ ] **Partial: Risk and Governance**
@@ -807,6 +825,7 @@ Implementation audit:
   - [x] Operator status exposes task-class fit, recovery history, degraded subagent visibility, and timeout-instability summaries.
   - [x] Lease conflict and recent recovery summaries are now visible in operator surfaces.
   - [x] Budget-policy telemetry and escalation diagnostics now exist in operator-facing surfaces.
+  - [x] Route-law summaries, route receipts, and verification blocks now exist in canonical run telemetry.
   - [ ] Drift and anomaly visibility are not yet at the full target Release 1 maturity level.
 - [ ] **Partial: Learning and Improvement Loop**
   - [x] Reflection, eval-pack, and scorecard-driven routing adaptation exist.

@@ -1,6 +1,6 @@
 # Bug Fix Protocol (BFP)
 
-Purpose: one unified algorithm for fixing single or multiple errors after task/pool development, with mandatory regression and documentation/spec synchronization.
+Purpose: one unified `issue-as-contract` algorithm for fixing single or multiple reported errors, with mandatory equivalence gating, regression, and documentation/spec synchronization.
 
 Scope:
 
@@ -13,10 +13,10 @@ Scope:
 For `/vida-bug-fix`, BFP layers map to CLP as follows:
 
 1. `CL1 Intake` -> `BFP-0 Intake` + `BFP-1 Impact & Priority`
-2. `CL2 Reality And Inputs` -> `BFP-2 Reproduce & Validate` + `BFP-3 Root Cause`
-3. `CL3 Contract And Decisions` -> `BFP-4 Fix Plan`
-4. `CL4 Materialization` -> `BFP-5 Implement`
-5. `CL5 Gates And Handoff` -> `BFP-6 Verify & Regression` + `BFP-7 Documentation/Spec Sync` + `BFP-8 Closure`
+2. `CL2 Reality And Inputs` -> `BFP-2 Issue Classification` + `BFP-3 Issue Contract` + `BFP-4 Reproduce & Validate`
+3. `CL3 Contract And Decisions` -> `BFP-5 Equivalence Gate` + `BFP-6 Root Cause & Fix Plan`
+4. `CL4 Materialization` -> `BFP-7 Implement`
+5. `CL5 Gates And Handoff` -> `BFP-8 Verify & Regression` + `BFP-9 Documentation/Spec Sync` + `BFP-10 Closure`
 
 Canonical layer source: `_vida/docs/command-layer-protocol.md`
 
@@ -29,7 +29,7 @@ Canonical layer source: `_vida/docs/command-layer-protocol.md`
 3. test/log report snippet,
 4. task or pool context (`br` task, milestone, feature scope).
 
-## Unified Flow (BFP-0..8)
+## Unified Flow (BFP-0..10)
 
 1. `BFP-0 Intake`:
    - normalize issue list (`FX-01..FX-N`),
@@ -38,42 +38,55 @@ Canonical layer source: `_vida/docs/command-layer-protocol.md`
    - classify severity (`low/medium/high/critical`),
    - estimate blast radius,
    - mark fix order.
-3. `BFP-2 Reproduce & Validate`:
+3. `BFP-2 Issue Classification`:
+   - classify each issue as `defect_equivalent|defect_needs_contract_update|feature_delta|as_designed|not_a_bug|insufficient_evidence`.
+4. `BFP-3 Issue Contract`:
+   - build the canonical `issue_contract` artifact by `_vida/docs/issue-contract-protocol.md`,
+   - do not send a writer lane raw bug text when the issue contract is still missing.
+5. `BFP-4 Reproduce & Validate`:
    - reproduce each issue,
    - for server/API assumptions run live checks (`curl` or equivalent),
    - capture status/payload/error evidence.
-4. `BFP-3 Root Cause`:
+6. `BFP-5 Equivalence Gate`:
+   - if `issue_contract.status=writer_ready`, continue to fix planning,
+   - if `issue_contract.status=spec_delta_required`, stop and reconcile spec/product contract first,
+   - if `issue_contract.status=issue_closed_no_fix`, close with rationale,
+   - if `issue_contract.status=insufficient_evidence`, gather more evidence before implementation.
+7. `BFP-6 Root Cause & Fix Plan`:
    - run root-cause-first reasoning (no hotfix),
    - build falsifiable hypothesis per issue.
-5. `BFP-4 Fix Plan`:
    - define implementation sequence and dependencies,
+   - for multi-issue pools, build the issue graph and classify `blocked|soft-blocked|parallel-investigation|single-writer` before choosing fix order,
    - define regression tests per issue.
-6. `BFP-5 Implement`:
+8. `BFP-7 Implement`:
    - apply fixes in ordered chain,
    - add/adjust tests.
-7. `BFP-6 Verify & Regression`:
+9. `BFP-8 Verify & Regression`:
    - verify original reproductions are resolved,
    - run regression checks to detect side effects.
-8. `BFP-7 Documentation/Spec Sync`:
-   - update impacted specs/contracts and operational docs immediately.
-9. `BFP-8 Closure`:
+10. `BFP-9 Documentation/Spec Sync`:
+   - update impacted specs/contracts and operational docs immediately,
+   - if the issue was non-equivalent, the pre-implementation spec reconciliation is mandatory, not optional.
+11. `BFP-10 Closure`:
    - provide result matrix (fixed/partial/blocked),
    - confidence + residual risks + next actions.
 
 ## Mandatory Artifacts
 
 1. `Issue Matrix`: id, severity, source, status.
-2. `Root Cause Notes`: issue -> cause -> evidence.
-3. `Fix/Regression Matrix`: issue -> fix -> tests -> result.
-4. `Doc Sync List`: updated spec/docs/contracts.
+2. `Issue Contract`: normalized equivalence decision and acceptance slice.
+3. `Root Cause Notes`: issue -> cause -> evidence.
+4. `Fix/Regression Matrix`: issue -> fix -> tests -> result.
+5. `Doc Sync List`: updated spec/docs/contracts.
 
 ## Gates
 
 1. No fix without reproducible evidence (or explicit reason why not reproducible).
-2. No final success without regression evidence.
-3. No closure without documentation/spec sync for affected behavior.
-4. No hotfix-style unresolved workaround as final state.
-5. If a root-cause fix requires a non-equivalent product/UX/contract choice,
+2. No writer lane without `issue_contract` when the issue text is the execution spec.
+3. No final success without regression evidence.
+4. No closure without documentation/spec sync for affected behavior.
+5. No hotfix-style unresolved workaround as final state.
+6. If a root-cause fix requires a non-equivalent product/UX/contract choice,
    escalate to the user before implementation instead of silently selecting a branch.
 
 ## Batch Handling
@@ -84,6 +97,7 @@ For N issues:
 2. allow parallel investigation if scopes are independent,
 3. serialize conflicting code scopes,
 4. close each issue with explicit status (`fixed|partial|blocked`).
+5. if the batch lacks an explicit dependency graph, implementation order is not yet valid.
 
 ## Transparency Rules
 

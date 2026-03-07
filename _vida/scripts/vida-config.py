@@ -58,13 +58,18 @@ SUBAGENT_KEYS = {
 SUBAGENT_CLASSES = {"internal", "external_cli", "external_review"}
 DISPATCH_KEYS = {
     "command",
+    "pre_static_args",
+    "subcommand",
     "static_args",
+    "write_static_args",
     "workdir_flag",
     "model_flag",
     "output_mode",
     "output_flag",
     "prompt_mode",
     "prompt_flag",
+    "web_search_mode",
+    "web_search_flag",
     "env",
     "probe_static_args",
     "probe_prompt",
@@ -77,10 +82,33 @@ DISPATCH_KEYS = {
 }
 DISPATCH_OUTPUT_MODES = {"stdout", "file"}
 DISPATCH_PROMPT_MODES = {"positional", "flag"}
+DISPATCH_WEB_SEARCH_MODES = {"none", "flag", "provider_configured"}
+YES_NO_VALUES = {"yes", "no"}
+ROUTING_DISPATCH_REQUIRED_VALUES = {
+    "bridge_or_critical_review",
+    "bridge_write_then_internal_if_expands",
+    "external_first_review",
+    "external_first_then_senior_arbitration",
+    "external_first_when_eligible",
+    "external_readonly_then_senior_writer",
+    "fanout_then_synthesize",
+    "local_or_external_first",
+}
 ROUTING_KEYS = {
     "subagents",
     "models",
     "profiles",
+    "analysis_required",
+    "analysis_route_task_class",
+    "analysis_fanout_subagents",
+    "analysis_fanout_min_results",
+    "analysis_merge_policy",
+    "analysis_external_first_required",
+    "analysis_receipt_required",
+    "analysis_zero_budget_required",
+    "analysis_default_in_boot",
+    "coach_required",
+    "coach_route_task_class",
     "write_scope",
     "verification_gate",
     "max_runtime_seconds",
@@ -90,6 +118,7 @@ ROUTING_KEYS = {
     "merge_policy",
     "dispatch_required",
     "external_first_required",
+    "web_search_required",
     "bridge_fallback_subagent",
     "internal_escalation_trigger",
     "verification_route_task_class",
@@ -99,6 +128,7 @@ ROUTING_KEYS = {
     "budget_policy",
     "max_budget_units",
     "max_cli_subagent_calls",
+    "max_coach_passes",
     "max_verification_passes",
     "max_fallback_hops",
     "max_total_runtime_seconds",
@@ -401,6 +431,51 @@ def _validate_string_map_field(payload: dict[str, Any], key: str, path: str, err
     return out
 
 
+def _normalized_string(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _coerce_repeated_strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, list):
+        out: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                out.append(item.strip())
+        return out
+    return []
+
+
+def subagent_declares_web_search_capability(subagent_cfg: dict[str, Any]) -> bool:
+    capability_band = {entry.casefold() for entry in _coerce_repeated_strings(subagent_cfg.get("capability_band"))}
+    return "web_search" in capability_band
+
+
+def subagent_dispatch_web_search_mode(subagent_cfg: dict[str, Any]) -> str:
+    dispatch_cfg = subagent_cfg.get("dispatch", {})
+    if not isinstance(dispatch_cfg, dict):
+        return "none"
+    return (_normalized_string(dispatch_cfg.get("web_search_mode")) or "none").casefold()
+
+
+def subagent_has_web_search_wiring(subagent_cfg: dict[str, Any]) -> bool:
+    if not subagent_declares_web_search_capability(subagent_cfg):
+        return False
+    dispatch_cfg = subagent_cfg.get("dispatch", {})
+    if not isinstance(dispatch_cfg, dict):
+        return False
+    mode = subagent_dispatch_web_search_mode(subagent_cfg)
+    if mode == "provider_configured":
+        return True
+    if mode == "flag":
+        return bool(_normalized_string(dispatch_cfg.get("web_search_flag")))
+    return False
+
+
 def _validate_project(project_cfg: dict[str, Any], errors: list[str]) -> None:
     path = "project"
     _validate_allowed_keys(project_cfg, PROJECT_KEYS, path, errors)
@@ -437,6 +512,10 @@ def _validate_dispatch(subagent_name: str, dispatch_cfg: dict[str, Any], errors:
     path = f"agent_system.subagents.{subagent_name}.dispatch"
     _validate_allowed_keys(dispatch_cfg, DISPATCH_KEYS, path, errors)
     _validate_string_field(dispatch_cfg, "command", path, errors, required=True)
+    if "pre_static_args" in dispatch_cfg:
+        _validate_repeated_string_field(dispatch_cfg, "pre_static_args", path, errors)
+    if "subcommand" in dispatch_cfg:
+        _validate_string_field(dispatch_cfg, "subcommand", path, errors)
     if "static_args" in dispatch_cfg:
         _validate_repeated_string_field(dispatch_cfg, "static_args", path, errors)
     output_mode = None
@@ -458,6 +537,20 @@ def _validate_dispatch(subagent_name: str, dispatch_cfg: dict[str, Any], errors:
     for key in {"workdir_flag", "model_flag"}:
         if key in dispatch_cfg:
             _validate_string_field(dispatch_cfg, key, path, errors)
+    web_search_mode = None
+    if "web_search_mode" in dispatch_cfg:
+        web_search_mode = _validate_enum_field(
+            dispatch_cfg,
+            "web_search_mode",
+            path,
+            errors,
+            allowed=DISPATCH_WEB_SEARCH_MODES,
+            required=True,
+        )
+    if web_search_mode == "flag":
+        _validate_string_field(dispatch_cfg, "web_search_flag", path, errors, required=True)
+    elif "web_search_flag" in dispatch_cfg:
+        _validate_string_field(dispatch_cfg, "web_search_flag", path, errors)
     for key in {
         "probe_timeout_seconds",
         "startup_timeout_seconds",
@@ -499,6 +592,7 @@ def _validate_subagent(subagent_name: str, subagent_cfg: dict[str, Any], errors:
     for key in {"models_hint", "profiles", "capability_band", "specialties"}:
         if key in subagent_cfg:
             _validate_repeated_string_field(subagent_cfg, key, path, errors)
+    declares_web_search = subagent_declares_web_search_capability(subagent_cfg)
     profiles = _validate_repeated_string_field(subagent_cfg, "profiles", path, errors) if "profiles" in subagent_cfg else None
     default_profile = _validate_string_field(subagent_cfg, "default_profile", path, errors) if "default_profile" in subagent_cfg else None
     if profiles is not None and default_profile and default_profile not in profiles:
@@ -506,6 +600,15 @@ def _validate_subagent(subagent_name: str, subagent_cfg: dict[str, Any], errors:
     dispatch_cfg = _require_mapping(subagent_cfg, "dispatch", path, errors, required=bool(enabled) and subagent_backend_class == "external_cli")
     if dispatch_cfg is not None:
         _validate_dispatch(subagent_name, dispatch_cfg, errors)
+        web_search_mode = subagent_dispatch_web_search_mode(subagent_cfg)
+        if declares_web_search and web_search_mode not in {"flag", "provider_configured"}:
+            errors.append(
+                f"{path}.dispatch.web_search_mode: required as 'flag' or 'provider_configured' when capability_band contains 'web_search'"
+            )
+        if not declares_web_search and web_search_mode in {"flag", "provider_configured"}:
+            errors.append(
+                f"{path}.capability_band: must contain 'web_search' when dispatch.web_search_mode enables web search"
+            )
 
 
 def _validate_routing(route_name: str, route_cfg: dict[str, Any], errors: list[str]) -> None:
@@ -517,30 +620,47 @@ def _validate_routing(route_name: str, route_cfg: dict[str, Any], errors: list[s
     _validate_string_map_field(route_cfg, "models", path, errors)
     _validate_string_map_field(route_cfg, "profiles", path, errors)
     for key in {
+        "analysis_route_task_class",
+        "analysis_merge_policy",
+        "coach_route_task_class",
         "write_scope",
         "verification_gate",
         "merge_policy",
-        "dispatch_required",
-        "external_first_required",
-        "local_execution_allowed",
-        "local_execution_preferred",
-        "cli_dispatch_required_if_delegating",
-        "direct_internal_bypass_forbidden",
         "bridge_fallback_subagent",
         "internal_escalation_trigger",
         "verification_route_task_class",
-        "independent_verification_required",
         "graph_strategy",
-        "deterministic_first",
         "budget_policy",
     }:
         if key in route_cfg:
             _validate_string_field(route_cfg, key, path, errors)
     for key in {
+        "analysis_required",
+        "analysis_external_first_required",
+        "analysis_receipt_required",
+        "analysis_zero_budget_required",
+        "analysis_default_in_boot",
+        "coach_required",
+        "external_first_required",
+        "web_search_required",
+        "local_execution_allowed",
+        "local_execution_preferred",
+        "cli_dispatch_required_if_delegating",
+        "direct_internal_bypass_forbidden",
+        "independent_verification_required",
+        "deterministic_first",
+    }:
+        if key in route_cfg:
+            _validate_enum_field(route_cfg, key, path, errors, allowed=YES_NO_VALUES)
+    if "dispatch_required" in route_cfg:
+        _validate_enum_field(route_cfg, "dispatch_required", path, errors, allowed=ROUTING_DISPATCH_REQUIRED_VALUES)
+    for key in {
+        "analysis_fanout_min_results",
         "max_runtime_seconds",
         "min_output_bytes",
         "max_budget_units",
         "max_cli_subagent_calls",
+        "max_coach_passes",
         "max_verification_passes",
         "max_fallback_hops",
         "max_total_runtime_seconds",
@@ -548,11 +668,182 @@ def _validate_routing(route_name: str, route_cfg: dict[str, Any], errors: list[s
         if key in route_cfg:
             _validate_int_field(route_cfg, key, path, errors, min_value=0)
     fanout = _validate_repeated_string_field(route_cfg, "fanout_subagents", path, errors) if "fanout_subagents" in route_cfg else None
+    analysis_fanout = _validate_repeated_string_field(route_cfg, "analysis_fanout_subagents", path, errors) if "analysis_fanout_subagents" in route_cfg else None
     if "allowed_internal_reasons" in route_cfg:
         _validate_repeated_string_field(route_cfg, "allowed_internal_reasons", path, errors)
+    dispatch_required = _normalized_string(route_cfg.get("dispatch_required"))
+    analysis_required = _normalized_string(route_cfg.get("analysis_required"))
+    analysis_route_task_class = _normalized_string(route_cfg.get("analysis_route_task_class"))
+    analysis_external_first_required = _normalized_string(route_cfg.get("analysis_external_first_required"))
+    coach_required = _normalized_string(route_cfg.get("coach_required"))
+    coach_route_task_class = _normalized_string(route_cfg.get("coach_route_task_class"))
+    verification_required = _normalized_string(route_cfg.get("independent_verification_required"))
+    verification_route_task_class = _normalized_string(route_cfg.get("verification_route_task_class"))
+    local_execution_allowed = _normalized_string(route_cfg.get("local_execution_allowed"))
+    local_execution_preferred = _normalized_string(route_cfg.get("local_execution_preferred"))
+    external_first_required = _normalized_string(route_cfg.get("external_first_required"))
+    if dispatch_required == "fanout_then_synthesize" and not fanout:
+        errors.append(f"{path}.fanout_subagents: required when dispatch_required=fanout_then_synthesize")
+    if analysis_required == "yes" and not analysis_route_task_class:
+        errors.append(f"{path}.analysis_route_task_class: required when analysis_required=yes")
+    if analysis_required == "yes" and analysis_external_first_required == "yes" and not analysis_fanout:
+        errors.append(
+            f"{path}.analysis_fanout_subagents: required when analysis_required=yes and analysis_external_first_required=yes"
+        )
+    if coach_required == "yes" and not coach_route_task_class:
+        errors.append(f"{path}.coach_route_task_class: required when coach_required=yes")
+    if verification_required == "yes" and not verification_route_task_class:
+        errors.append(f"{path}.verification_route_task_class: required when independent_verification_required=yes")
+    if coach_required == "yes" and verification_required == "yes" and coach_route_task_class == verification_route_task_class:
+        errors.append(
+            f"{path}.coach_route_task_class: must differ from verification_route_task_class when coach_required=yes and independent_verification_required=yes"
+        )
+    if external_first_required == "yes" and (local_execution_allowed == "yes" or local_execution_preferred == "yes"):
+        errors.append(f"{path}.external_first_required: must be 'no' when local_execution_allowed=yes or local_execution_preferred=yes")
     fanout_min = _validate_int_field(route_cfg, "fanout_min_results", path, errors, min_value=0) if "fanout_min_results" in route_cfg else None
     if fanout is not None and fanout_min is not None and fanout_min > len(fanout):
         errors.append(f"{path}.fanout_min_results: must be <= number of fanout_subagents")
+    analysis_fanout_min = _validate_int_field(route_cfg, "analysis_fanout_min_results", path, errors, min_value=0) if "analysis_fanout_min_results" in route_cfg else None
+    if analysis_fanout is not None and analysis_fanout_min is not None and analysis_fanout_min > len(analysis_fanout):
+        errors.append(f"{path}.analysis_fanout_min_results: must be <= number of analysis_fanout_subagents")
+    max_coach_passes = _validate_int_field(route_cfg, "max_coach_passes", path, errors, min_value=0) if "max_coach_passes" in route_cfg else None
+    if coach_required == "yes" and max_coach_passes is not None and max_coach_passes < 1:
+        errors.append(f"{path}.max_coach_passes: must be >= 1 when coach_required=yes")
+    max_fallback_hops = _validate_int_field(route_cfg, "max_fallback_hops", path, errors, min_value=0) if "max_fallback_hops" in route_cfg else None
+    declared_fallback_hops = int(bool(_normalized_string(route_cfg.get("bridge_fallback_subagent")))) + int(
+        bool(_normalized_string(route_cfg.get("internal_escalation_trigger")))
+    )
+    if max_fallback_hops is not None and max_fallback_hops < declared_fallback_hops:
+        errors.append(
+            f"{path}.max_fallback_hops: must be >= {declared_fallback_hops} to cover declared bridge_fallback_subagent and internal_escalation_trigger"
+        )
+
+
+def _validate_known_subagent_refs(
+    *,
+    field_name: str,
+    values: list[str],
+    path: str,
+    known_subagents: set[str],
+    route_subagents: set[str] | None,
+    errors: list[str],
+    require_route_membership: bool,
+) -> None:
+    for item in values:
+        if item not in known_subagents:
+            errors.append(f"{path}.{field_name}: unknown subagent '{item}'")
+            continue
+        if require_route_membership and route_subagents is not None and item not in route_subagents:
+            errors.append(f"{path}.{field_name}: '{item}' must also be present in subagents")
+
+
+def _validate_routing_cross_references(
+    route_name: str,
+    route_cfg: dict[str, Any],
+    *,
+    routing_cfg: dict[str, Any],
+    subagents_cfg: dict[str, Any],
+    known_subagents: set[str],
+    known_routes: set[str],
+    errors: list[str],
+) -> None:
+    path = f"agent_system.routing.{route_name}"
+    route_subagents_list = _coerce_repeated_strings(route_cfg.get("subagents"))
+    route_subagents = set(route_subagents_list) if route_subagents_list else None
+    fanout_subagents = _coerce_repeated_strings(route_cfg.get("fanout_subagents"))
+    analysis_fanout_subagents = _coerce_repeated_strings(route_cfg.get("analysis_fanout_subagents"))
+    _validate_known_subagent_refs(
+        field_name="subagents",
+        values=route_subagents_list,
+        path=path,
+        known_subagents=known_subagents,
+        route_subagents=None,
+        errors=errors,
+        require_route_membership=False,
+    )
+    _validate_known_subagent_refs(
+        field_name="fanout_subagents",
+        values=fanout_subagents,
+        path=path,
+        known_subagents=known_subagents,
+        route_subagents=route_subagents,
+        errors=errors,
+        require_route_membership=True,
+    )
+    _validate_known_subagent_refs(
+        field_name="analysis_fanout_subagents",
+        values=analysis_fanout_subagents,
+        path=path,
+        known_subagents=known_subagents,
+        route_subagents=None,
+        errors=errors,
+        require_route_membership=False,
+    )
+
+    for field_name in {"models", "profiles"}:
+        value = route_cfg.get(field_name)
+        if not _is_mapping(value):
+            continue
+        for item in value:
+            if item not in known_subagents:
+                errors.append(f"{path}.{field_name}: unknown subagent '{item}'")
+                continue
+
+    bridge_fallback_subagent = _normalized_string(route_cfg.get("bridge_fallback_subagent"))
+    if bridge_fallback_subagent is not None:
+        if bridge_fallback_subagent not in known_subagents:
+            errors.append(f"{path}.bridge_fallback_subagent: unknown subagent '{bridge_fallback_subagent}'")
+        if bridge_fallback_subagent in set(fanout_subagents):
+            errors.append(f"{path}.bridge_fallback_subagent: must not overlap fanout_subagents")
+        if bridge_fallback_subagent in set(analysis_fanout_subagents):
+            errors.append(f"{path}.bridge_fallback_subagent: must not overlap analysis_fanout_subagents")
+    if _normalized_string(route_cfg.get("web_search_required")) == "yes":
+        has_web_capable_subagent = False
+        wired_web_fanout_count = 0
+        for item in route_subagents_list:
+            if item not in known_subagents:
+                continue
+            subagent_cfg = subagents_cfg.get(item)
+            if not _is_mapping(subagent_cfg):
+                continue
+            if subagent_has_web_search_wiring(subagent_cfg):
+                has_web_capable_subagent = True
+        for item in fanout_subagents:
+            if item not in known_subagents:
+                continue
+            subagent_cfg = subagents_cfg.get(item)
+            if _is_mapping(subagent_cfg) and subagent_has_web_search_wiring(subagent_cfg):
+                wired_web_fanout_count += 1
+        if not has_web_capable_subagent:
+            errors.append(
+                f"{path}.web_search_required: requires at least one route subagent with declared 'web_search' capability and dispatch wiring"
+            )
+        fanout_min_results = route_cfg.get("fanout_min_results")
+        try:
+            configured_fanout_min = int(fanout_min_results) if fanout_min_results is not None else 0
+        except (TypeError, ValueError):
+            configured_fanout_min = 0
+        if fanout_subagents and configured_fanout_min > wired_web_fanout_count:
+            errors.append(
+                f"{path}.fanout_min_results: must be <= number of web-search-wired fanout_subagents when web_search_required=yes"
+            )
+
+    for field_name in {"analysis_route_task_class", "coach_route_task_class", "verification_route_task_class"}:
+        route_ref = _normalized_string(route_cfg.get(field_name))
+        if route_ref is None:
+            continue
+        if route_ref not in known_routes:
+            errors.append(f"{path}.{field_name}: unknown route '{route_ref}'")
+    analysis_route_task_class = _normalized_string(route_cfg.get("analysis_route_task_class"))
+    if analysis_route_task_class is not None and analysis_route_task_class in known_routes:
+        analysis_route_cfg = routing_cfg.get(analysis_route_task_class)
+        if _is_mapping(analysis_route_cfg):
+            analysis_route_subagents = set(_coerce_repeated_strings(analysis_route_cfg.get("subagents")))
+            for item in analysis_fanout_subagents:
+                if item in known_subagents and item not in analysis_route_subagents:
+                    errors.append(
+                        f"{path}.analysis_fanout_subagents: '{item}' must also be present in agent_system.routing.{analysis_route_task_class}.subagents"
+                    )
 
 
 def _validate_scoring(scoring_cfg: dict[str, Any], errors: list[str]) -> None:
@@ -595,6 +886,27 @@ def _validate_agent_system(agent_cfg: dict[str, Any], errors: list[str]) -> None
                 errors.append(f"{path}.routing.{route_name}: expected mapping")
                 continue
             _validate_routing(route_name, route_cfg, errors)
+    if subagents_cfg is not None and routing_cfg is not None:
+        known_subagents = {
+            subagent_name
+            for subagent_name, subagent_cfg in subagents_cfg.items()
+            if isinstance(subagent_name, str) and subagent_name.strip() and _is_mapping(subagent_cfg)
+        }
+        known_routes = {
+            route_name for route_name, route_cfg in routing_cfg.items() if isinstance(route_name, str) and route_name.strip() and _is_mapping(route_cfg)
+        }
+        for route_name, route_cfg in routing_cfg.items():
+            if not isinstance(route_name, str) or not route_name.strip() or not _is_mapping(route_cfg):
+                continue
+            _validate_routing_cross_references(
+                route_name,
+                route_cfg,
+                routing_cfg=routing_cfg,
+                subagents_cfg=subagents_cfg,
+                known_subagents=known_subagents,
+                known_routes=known_routes,
+                errors=errors,
+            )
     scoring_cfg = _require_mapping(agent_cfg, "scoring", path, errors, required=False)
     if scoring_cfg is not None:
         _validate_scoring(scoring_cfg, errors)

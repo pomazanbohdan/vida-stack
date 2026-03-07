@@ -110,7 +110,7 @@ scaffold_pack_blocks() {
       if [[ "$(reflection_variant_for "$task_id" "$variant")" == "fsap" ]]; then
         bash "$WORKFLOW_SCRIPT" block-plan "$task_id" "FSAP01" "FSAP-0_2_Trigger_Runtime_Snapshot_and_Evidence_Scope" "main" "orchestrator" "-" "FSAP02"
         bash "$WORKFLOW_SCRIPT" block-plan "$task_id" "FSAP02" "FSAP-3_5_Friction_Classification_Ownership_Split_and_Improvement_Decision" "main" "orchestrator" "FSAP01" "FSAP03"
-        bash "$WORKFLOW_SCRIPT" block-plan "$task_id" "FSAP03" "FSAP-6_8_Canonical_Update_Verification_and_Report" "main" "orchestrator" "FSAP02" "-"
+        bash "$WORKFLOW_SCRIPT" block-plan "$task_id" "FSAP03" "FSAP-6_8_Canonical_Update_Delegated_Verification_and_Report" "main" "orchestrator" "FSAP02" "-"
       else
         bash "$WORKFLOW_SCRIPT" block-plan "$task_id" "P01" "Reconcile_Decisions_with_Canonical_Docs" "main" "orchestrator" "-" "P02"
         bash "$WORKFLOW_SCRIPT" block-plan "$task_id" "P02" "Update_SSoT_and_Protocol_Index" "main" "orchestrator" "P01" "P03"

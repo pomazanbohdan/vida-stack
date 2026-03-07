@@ -2,11 +2,24 @@
 
 Purpose: define one generic, portable protocol for subagent-system initialization, routing, fallback, and learning.
 
+## Hard-Law Encoding
+
+Mandatory routing policy is runtime law.
+
+1. If route metadata marks `external_first_required=yes`, any direct internal bypass outside lawful escalation is invalid.
+2. If route metadata marks `analysis_required=yes`, writer dispatch is invalid until the declared analysis phase completes and the analysis receipt exists or the runtime records an explicit blocker.
+3. If route metadata marks `dispatch_required=fanout_then_synthesize`, single-lane dispatch is invalid unless the runtime is executing the declared bridge fallback or bounded arbitration path.
+4. If route metadata marks `independent_verification_required=yes`, synthesis-ready state is invalid until a verifier plan and verifier artifact exist or the runtime records an explicit `no_eligible_verifier` blocker.
+5. If route metadata marks `fanout_min_results > 0`, the fanout phase is incomplete until that threshold is met or the runtime records `subagent_exhausted`.
+6. If route metadata marks `coach_required=yes` on a write-producing route, closure-ready state is invalid until a coach artifact exists with either `coach_approved` or a structured `return_for_rework` blocker.
+7. Recommendations are permitted only for ranking/routing heuristics after all mandatory route laws are satisfied.
+
 Cost-priority default:
 
 1. free external read-only subagents should be the default first pass for eligible non-trivial read-heavy work,
-2. bridge fallback should be explicit and deterministic,
-3. internal subagents should remain the senior lane under orchestrator control.
+2. for write-producing routes in `hybrid`, free external zero-budget analysis lanes should be the default first pass before any writer or bridge dispatch,
+3. bridge fallback should be explicit and deterministic,
+4. internal subagents should remain the senior lane under orchestrator control.
 
 ## Scope
 
@@ -126,10 +139,14 @@ Routing output:
    - `verification_route_task_class`
    - `independent_verification_required`
    - `verification_plan`
-20. optional deterministic-route and FinOps metadata:
+20. optional coach-review metadata for post-write routes:
+   - `coach_required`
+   - `coach_route_task_class`
+   - `coach_plan`
+21. optional deterministic-route and FinOps metadata:
    - `route_graph`
    - `route_budget`
-21. optional dispatch-policy metadata:
+22. optional dispatch-policy metadata:
    - `dispatch_policy.local_execution_allowed`
    - `dispatch_policy.local_execution_preferred`
    - `dispatch_policy.cli_dispatch_required_if_delegating`
@@ -138,6 +155,14 @@ Routing output:
    - `dispatch_policy.internal_escalation_allowed`
    - `dispatch_policy.allowed_internal_reasons`
    - `dispatch_policy.required_dispatch_path`
+23. optional analysis-phase metadata:
+   - `analysis_required`
+   - `analysis_route_task_class`
+   - `analysis_plan`
+   - `analysis_receipt_required`
+   - `analysis_zero_budget_required`
+24. optional external-validation metadata:
+   - `web_search_required`
 
 Ensemble rule:
 
@@ -149,7 +174,15 @@ Ensemble rule:
 6. When `independent_verification_required=yes`, the runtime should choose a distinct eligible cli subagent or verification ensemble for validation before orchestrator synthesis whenever such a verifier exists.
 7. When mode is not `disabled`, eligible non-trivial read-heavy analysis should go to subagent lanes first; the orchestrator is the synthesizer and mutation owner, not the default primary analyst.
 8. When mode is not `disabled`, development execution should be orchestrator-managed through the routed subagent system; local orchestrator-first development is not the default path.
-9. Raw subagent returns belong to the evidence layer; the default user-facing output is the orchestrator's synthesized conclusion.
+8.1. When route metadata marks `web_search_required=yes`, the runtime must filter out subagents that do not both expose `capability_band=web_search` and declare dispatch-level web-search wiring.
+8.2. `provider_configured` counts as operator-trusted wiring metadata; stronger live probe verification may be layered on later, but the runtime must not silently treat non-declared lanes as web-capable.
+9. For write-producing routes in `hybrid`, the canonical path is `analysis -> writer -> coach -> verification` when `coach_required=yes`; otherwise it remains `analysis -> writer -> verification`. The writer lane is not authorized before the analysis receipt exists.
+9.1. When the implementation request is issue-driven, the analysis phase must also emit a valid `issue_contract`; writer authorization is invalid until that artifact is `writer_ready`.
+10. Raw subagent returns belong to the evidence layer; the default user-facing output is the orchestrator's synthesized conclusion.
+11. Runtime artifacts must expose a machine-readable route receipt with the selected law-bearing fields before synthesis is considered valid.
+12. Generic assistant defaults that would otherwise jump directly into local implementation are subordinate to this route contract while the subagent system is active.
+13. A run is not mutation-authorized until the route receipt or lawful escalation receipt makes writer ownership and local-execution authorization explicit.
+14. Undocumented execution behavior is forbidden by default while this system is active; route policy acts as an allowlist, not a set of suggestions.
 
 ## Internal Escalation Boundary
 
@@ -169,6 +202,8 @@ Hybrid-mode rule:
 1. when `external_first_required=yes`, direct internal bypass is forbidden when `dispatch_policy.direct_internal_bypass_forbidden=yes`,
 2. internal escalation remains allowed when route metadata exposes `internal_escalation_allowed=yes`,
 3. lawful internal escalation must carry a concise escalation receipt in run artifacts/logs.
+4. a run that violates items 1-3 is protocol-invalid and should fail fast instead of degrading to advisory reporting.
+5. lawful local-orchestrator mutation under active subagent mode must also carry a concise escalation receipt; otherwise the run remains routing-incomplete and must stay in orchestration mode.
 
 ## Independent Verification Contract
 
@@ -183,6 +218,29 @@ Minimum contract:
 5. route output should expose the selected verifier plan so operator tooling and proving-wave scripts do not guess,
 6. authored-result quality and verifier quality should both influence scorecards over time,
 7. the orchestrator should synthesize and escalate; it should not be the default primary analyst and primary verifier for eligible lanes.
+8. when `required=yes`, missing verification is a blocking state, not a soft warning.
+
+## Coach Review Contract
+
+Coach review is the post-write formative gate for implementation routes.
+
+Minimum contract:
+
+1. `coach` runs after the writer phase and before final independent verification on routes that declare `coach_required=yes`,
+2. `coach` checks the implementation against the original prompt/spec and either approves it for the final verifier or returns it for rework,
+3. `coach` is not the final independent verifier and must not silently replace that role when `independent_verification_required=yes`,
+4. the default coach path should use two independent cheaper coach lanes when the route exposes enough eligible coaches; runtime should treat coach as an ensemble/quorum artifact, not a single review opinion,
+5. the safe default merge policy is `unanimous_approve_rework_bias`: approve only when the required coach quorum approves; any valid `return_for_rework` vote blocks advancement and must be merged into one fresh-start rework handoff,
+6. `coach` output must be structured enough for runtime to distinguish `coach_approved` from `return_for_rework`,
+7. each coach lane must judge readiness for final independent verification from its own lane only; pending parallel coach lanes are not blockers and must not force `merge_ready=no`,
+8. environment/tool absence alone is not a coach blocker unless it proves a concrete implementation gap; lane-local tool limits should stay in verification notes/results, not silently flip approval into rework,
+9. runtime may use an ordered feedback-extraction chain (`stdout json -> stderr json -> error/status json -> text fallbacks`) to recover coach evidence, but text-only fallback must never create a synthetic approval verdict,
+10. structured rework handoffs must carry feedback provenance (`feedback_source` + `feedback_sources`) so the next writer pass can trace the origin of the coach delta,
+11. `max_coach_passes` caps repeated coach-review loops,
+12. `return_for_rework` must emit a structured rework-handoff artifact rooted in the original prompt/spec plus coach delta,
+13. the next writer pass must consume that rework-handoff as a fresh-start packet instead of continuing prior writer context by default,
+14. contradictory coach finality payloads are protocol-invalid and must normalize to an explicit `invalid_coach_payload*` failure state instead of being silently coerced,
+15. missing coach artifacts on a coach-required route are blocking, not advisory.
 
 Suggested route split:
 
@@ -204,6 +262,7 @@ Minimum merge contract:
 6. emit a tie-break signal when semantic conflict remains decision-relevant,
 7. keep raw subagent disagreement out of the final answer unless it remains decision-relevant,
 8. keep raw subagent report bodies out of the default final answer unless the user explicitly asks to inspect them.
+9. a merge summary that does not satisfy items 1-2 is not synthesis-ready.
 
 `merge_policy=consensus_with_conflict_flag` means:
 
@@ -236,8 +295,8 @@ Minimum contract:
 
 1. `route_graph.graph_strategy` should describe the route family, for example `deterministic_then_escalate`,
 2. `route_graph.deterministic_first` should indicate whether the route is intended to stay on deterministic workflow edges until evidence forces escalation,
-3. `route_graph.nodes` should identify the primary dispatch lane, bridge fallback, internal escalation, verification lane, and orchestrator synthesis node when relevant,
-4. `route_graph.edges` should describe the escalation/verification conditions,
+3. `route_graph.nodes` should identify the primary dispatch lane, bridge fallback, internal escalation, optional coach lane, verification lane, and orchestrator synthesis node when relevant,
+4. `route_graph.edges` should describe the escalation/coach/verification conditions,
 5. `route_graph.planned_path` should give operators one compact intended execution path.
 
 ## Task-Level FinOps Budget
@@ -249,7 +308,8 @@ Minimum contract:
 1. `route_budget.budget_policy` should declare how aggressive cost minimization is for the route,
 2. `route_budget.max_budget_units` should cap the intended route cost using normalized subagent cost units,
 3. `route_budget.max_cli_subagent_calls` should cap total cli-subagent dispatches for the route,
-4. `route_budget.max_verification_passes` should cap verification reruns/extra verification lanes,
+4. `route_budget.max_coach_passes` should cap coach reruns on coach-required routes,
+5. `route_budget.max_verification_passes` should cap verification reruns/extra verification lanes,
 5. `route_budget.max_fallback_hops` should cap bridge/internal escalation depth,
 6. `route_budget.max_total_runtime_seconds` should cap the whole route, not only individual subagents,
 7. route selection should prefer lower-cost eligible cli subagents when quality signals are near-equivalent,
@@ -553,6 +613,7 @@ python3 _vida/scripts/subagent-system.py record <subagent> <success|failure> <ta
 python3 _vida/scripts/subagent-system.py scorecard [subagent]
 python3 _vida/scripts/subagent-dispatch.py subagent <task_id> <task_class> <subagent> <prompt_file> <output_file> [workdir]
 python3 _vida/scripts/subagent-dispatch.py ensemble <task_id> <task_class> <prompt_file> <output_dir> [workdir]
+python3 _vida/scripts/subagent-dispatch.py prepare-execution <task_id> <writer_task_class> <prompt_file> <output_dir> [workdir]
 python3 _vida/scripts/subagent-eval-pack.py run <task_id>
 ```
 

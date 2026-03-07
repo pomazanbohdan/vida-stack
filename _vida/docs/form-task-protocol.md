@@ -37,6 +37,7 @@ Canonical layer source: `_vida/docs/command-layer-protocol.md`
 ## Mandatory Inputs
 
 1. Spec scope and decisions.
+1.1. Equivalent bugfix paths may use approved `issue_contract` input from `_vida/docs/issue-contract-protocol.md` instead of a longer SCP artifact when the scope is already bounded.
 2. SCP readiness/confidence evidence.
 3. Relevant research references.
 4. Feature checklist entries in scope.

@@ -25,6 +25,7 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Execution pipelines | `_vida/docs/pipelines.md` | `_vida/scripts/quality-health-check.sh`, `_vida/scripts/framework-boundary-check.sh` |
 | Use-case routing | `_vida/docs/use-case-packs.md` | `_vida/scripts/vida-pack-router.sh`, `_vida/scripts/vida-pack-helper.sh` |
 | Bug-fix unified flow | `_vida/docs/bug-fix-protocol.md` | `_vida/commands/vida-bug-fix.md`, `_vida/docs/use-case-packs.md` |
+| Issue-as-contract bridge | `_vida/docs/issue-contract-protocol.md` | `_vida/docs/bug-fix-protocol.md`, `_vida/docs/implement-execution-protocol.md`, `_vida/scripts/subagent-dispatch.py`, `_vida/scripts/execution-auth-gate.py` |
 | Web/internet validation | `_vida/docs/web-validation-protocol.md` | `_vida/docs/thinking-protocol.md#section-web-search`, `_vida/docs/spec-contract-protocol.md` |
 | Spec contract (non-dev flows) | `_vida/docs/spec-contract-protocol.md` | `_vida/docs/spec-contract-artifacts.md`, `_vida/commands/vida-spec.md`, `_vida/scripts/skill-discovery.py`, `_vida/scripts/scp-confidence.py` |
 | Form-task bridge (spec->dev) | `_vida/docs/form-task-protocol.md` | `_vida/commands/vida-form-task.md`, `_vida/docs/use-case-packs.md` |
