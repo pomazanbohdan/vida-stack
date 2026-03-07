@@ -254,23 +254,44 @@ That means the long-term runtime direction is:
 
 ### Minimal Repo Surface
 
-In that final shape, the repository should expose only a minimal human/operator entry surface.
+In the final system, the repository should no longer carry the full framework bootloader in `AGENTS.md`.
 
-Instead of asking the user or agent to navigate many framework docs directly, the expected experience is closer to:
+Today, `AGENTS.md` is a large static instruction surface. It currently carries the L0 orchestrator identity, core ownership contract, hard invariants, post-compression boot sequence, boot profiles, state-management rules, skill and fallback rules, operational references, and minimal runtime rules.
+
+The final architecture is intended to replace that file-as-bootloader model with a runtime-loaded session contract.
+
+The repository should expose only a minimal bootstrap instruction in `AGENTS.md`, for example:
 
 ```bash
 vs-session start
 ```
 
-From there, the system should load:
+From that single entrypoint, the control plane should initialize the full working session automatically:
 
-- active framework rules
-- project-specific memory context
-- current operational state
-- available commands
-- the next valid orchestration path
+- load the active framework identity, orchestrator contract, and runtime invariants
+- hydrate the current session, task state, and execution position
+- attach project-specific memory context
+- load framework protocols, overlays, and command contracts from memory-backed storage
+- detect available subagents, routing state, recovery state, and health state
+- resolve the current execution surface, available commands, and next valid control-plane actions
+- present the next valid orchestration path in an optimized form
 
-So the repository stops being the primary place where orchestration knowledge lives. It becomes the bootstrap surface for a larger memory-backed runtime.
+That means the repository is no longer the primary container of framework instructions or startup logic.
+
+Instead:
+
+- `AGENTS.md` becomes a thin bootstrap entrypoint
+- framework rules move into runtime-managed memory
+- framework protocols stop living primarily as repo-loaded startup instructions
+- project documentation moves into project memory layers
+- session boot, protocol activation, and context hydration become runtime responsibilities
+- operator interaction becomes command-first rather than document-first
+
+The result is a much smaller repository surface and a much more optimized development start flow.
+
+Instead of manually reading and reconstructing framework state from a large `AGENTS.md` and multiple framework docs, the user or agent starts a session once, and the system restores the correct working context automatically.
+
+In that final shape, the repository is only the bootstrap edge. The real framework lives in the control plane, memory layer, and persistent runtime state.
 
 ---
 
