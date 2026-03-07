@@ -187,6 +187,93 @@ Recent framework-level changes are tracked in [_vida/CHANGELOG.md](_vida/CHANGEL
 
 ---
 
+## 🧱 Final System Shape
+
+Vida Stack is not intended to remain a shell-and-markdown framework forever.
+
+The current repository is the proving ground where protocols, orchestration rules, task lifecycles, verification behavior, and subagent coordination are validated under real working conditions.
+
+The final target is a **Rust-based control plane** with **SurrealDB-backed state and memory**, where the current script runtime is replaced by a real daemonized orchestration kernel.
+
+### What Changes In The Final System
+
+The current framework relies on:
+
+- shell and Python runtime helpers
+- markdown protocol surfaces
+- file-based artifacts, logs, and snapshots
+- command-driven orchestration glue
+
+The final system is intended to replace that with:
+
+- a Rust daemon as the orchestration kernel
+- SurrealDB as the operational state and memory backend
+- compact typed control-plane commands instead of long script chains
+- memory-backed framework and project knowledge instead of `/docs/*` as the primary runtime source
+- structured agent interaction optimized for lower-friction execution
+
+### Command Model
+
+In the final system, agents and operators should work through optimized runtime commands rather than multi-step script choreography.
+
+For example, a command such as:
+
+```bash
+vs-task next
+```
+
+should be enough to:
+
+- close the current task step if it is valid to close
+- inspect blockers, dependencies, and runtime state
+- open the next eligible task automatically
+- return a compact structured report explaining what was taken into progress, or why nothing could advance
+
+The goal is to reduce orchestration friction while keeping runtime state explicit and machine-verifiable.
+
+### Structured Interaction Format
+
+The final system is also expected to use a compact structured interaction format for agent/runtime exchange.
+
+A strong candidate for this is [TOON](https://github.com/toon-format/toon), which is designed as a compact, schema-aware alternative to verbose JSON for LLM-facing workflows.
+
+That would make command outputs, handoff packets, runtime summaries, and status views more compact and better suited for agent interaction.
+
+### Memory-Backed Framework Runtime
+
+The final system is not intended to keep framework knowledge primarily in repository docs.
+
+Instead, framework rules, project documentation, protocol contracts, and operational memory are expected to move into a memory-backed system similar to [memory-mcp-1file](https://github.com/pomazanbohdan/memory-mcp-1file), which already combines semantic memory, graph memory, code indexing, and a SurrealDB backend.
+
+That means the long-term runtime direction is:
+
+- documentation stored as memory records rather than scattered markdown files
+- framework instructions retrieved from memory layers instead of `/docs/*`
+- project context, contracts, and operational knowledge queried through runtime memory tools
+- a much smaller repository surface for the operator
+
+### Minimal Repo Surface
+
+In that final shape, the repository should expose only a minimal human/operator entry surface.
+
+Instead of asking the user or agent to navigate many framework docs directly, the expected experience is closer to:
+
+```bash
+vs-session start
+```
+
+From there, the system should load:
+
+- active framework rules
+- project-specific memory context
+- current operational state
+- available commands
+- the next valid orchestration path
+
+So the repository stops being the primary place where orchestration knowledge lives. It becomes the bootstrap surface for a larger memory-backed runtime.
+
+---
+
 ## ⚙️ Subagent Modes
 
 Vida Stack currently separates subagent operation into a small set of explicit modes.
@@ -332,6 +419,19 @@ Why Rust:
 - better performance for long-running orchestration services
 - safer concurrency for multi-agent and event-driven execution
 - more robust foundation for longer-running daemonized orchestration
+
+Why SurrealDB:
+
+- one operational state backend for tasks, blocks, runs, leases, reviews, scorecards, and memory
+- queryable graph-friendly runtime model instead of scattered file artifacts
+- stronger recovery, telemetry, and orchestration-state persistence
+
+What changes compared with the current runtime:
+
+- today's system proves the protocol and orchestration logic through scripts, docs, logs, and file artifacts
+- the final system should own that logic as a typed runtime kernel
+- current markdown-heavy framework knowledge should move into memory-backed runtime surfaces
+- current script chains should compress into optimized control-plane commands such as `vs-session start` and `vs-task next`
 
 ---
 
