@@ -529,51 +529,74 @@ Release 1 should provide a compact but complete execution surface:
 ## Current Implementation Status (Codebase Audit)
 
 - [x] **Done: Boot and Runtime Activation**
+  - [x] `boot-profile.sh` implements runtime boot execution and receipt verification.
+  - [x] Context capsule write/read/hydrate flow exists.
+  - [x] Post-compaction restore flow exists through `beads-compact.sh`.
+  - [x] Boot packet artifacts now exist and are linked from protocol docs.
 - [x] **Done: Problem Framing and Routing**
+  - [x] Pack detection exists through `vida-pack-router.sh` and `vida-pack-helper.sh detect`.
+  - [x] Non-dev pack initialization exists through `nondev-pack-init.sh`.
+  - [x] Execution mode routing exists through `task-execution-mode.sh`.
+  - [x] Reflection-pack routing exists for drift and framework self-analysis flows.
 - [x] **Done: Task and Execution State**
+  - [x] `br` remains the authoritative task-state path.
+  - [x] TODO block lifecycle scripts and validation utilities exist.
+  - [x] Compact and delta runtime views exist.
+  - [x] Quality gates and context checkpoints are wired into the task flow.
 - [ ] **Partial: Use-Case Packs**
-  Done in this area:
-  - canonical pack routing exists for research, spec, work-pool, dev, bug-fix, and reflection flows
-  - pack helpers and TODO scaffolding are implemented
-  - reflection-pack is wired into documentation and framework self-analysis flows
+  - [x] Canonical pack routing exists for research, spec, work-pool, dev, bug-fix, and reflection flows.
+  - [x] Pack helpers and TODO scaffolding are implemented.
+  - [x] Reflection-pack is wired into documentation and framework self-analysis flows.
+  - [ ] Full end-to-end completion proof for every pack is not yet established inside this repository.
 - [ ] **Partial: Subagent System and Dispatch**
-  Done in this area:
-  - provider detection, requested/effective mode calculation, and route snapshots exist
-  - external-first fanout, deterministic fallback, and bounded arbitration are implemented
-  - worker-entry and worker-thinking contracts are separated from orchestrator governance
-  - recovery helpers, subagent suppression, active-subagent visibility, and richer scorecards now exist
+  - [x] Provider detection, requested/effective mode calculation, and route snapshots exist.
+  - [x] External-first fanout, deterministic fallback, and bounded arbitration are implemented.
+  - [x] Worker-entry and worker-thinking contracts are separated from orchestrator governance.
+  - [x] Recovery helpers, subagent suppression, active-subagent visibility, and richer scorecards now exist.
+  - [ ] Lease and ownership mechanics are not yet fully materialized as runtime-enforced stateful contracts.
 - [ ] **Partial: Review and Verification Fabric**
-  Done in this area:
-  - route artifacts now expose `review_state`
-  - verification and health-check scripts are implemented
-  - quality-health-check reads canonical subagent run logs
+  - [x] Route artifacts now expose `review_state`.
+  - [x] Verification and health-check scripts are implemented.
+  - [x] `quality-health-check.sh` reads canonical subagent run logs.
+  - [ ] The full target review-state vocabulary is not yet demonstrated end to end.
+  - [ ] Policy-aware close and handoff behavior is not yet fully proven across all task classes.
 - [ ] **Partial: Risk and Governance**
-  Done in this area:
-  - route artifacts now expose `risk_class`
-  - degraded, cooldown, auth-invalid, and interactive-blocked subagent states are modeled
-  - bounded recovery and routing suppression semantics are implemented for broken CLI subagents
+  - [x] Route artifacts now expose `risk_class`.
+  - [x] Degraded, cooldown, auth-invalid, and interactive-blocked subagent states are modeled.
+  - [x] Bounded recovery and routing suppression semantics are implemented for broken CLI subagents.
+  - [ ] The full `R0` to `R4` risk model is not yet fully exercised in runtime behavior.
+  - [ ] Human approval boundaries are not yet fully materialized as a complete Release 1 runtime surface.
 - [x] **Done: Execution Environment**
+  - [x] Terminal execution is present.
+  - [x] Filesystem execution is present.
+  - [x] Web access and browser-capable runtime surfaces are present.
+  - [x] External API and tool result capture surfaces are present.
 - [ ] **Partial: Documentation and Contract Sync**
-  Done in this area:
-  - protocol index, framework map, worker contracts, and changelog are in place
-  - framework/project boundary documentation is established
-  - release-target documents are synchronized with the current framework shape
+  - [x] Protocol index, framework map, worker contracts, and changelog are in place.
+  - [x] Framework/project boundary documentation is established.
+  - [x] Release-target documents are synchronized with the current framework shape.
+  - [ ] Document lifecycle and freshness enforcement are not yet complete at the full Release 1 level.
 - [ ] **Partial: Telemetry and Evaluation**
-  Done in this area:
-  - eval-pack and subagent evaluation scripts exist
-  - scorecards now track useful-progress and time-to-first-useful-output metrics
-  - operator status exposes preferred task classes and degraded subagent visibility
+  - [x] Eval-pack and subagent evaluation scripts exist.
+  - [x] Scorecards now track useful-progress and time-to-first-useful-output metrics.
+  - [x] Operator status exposes preferred task classes and degraded subagent visibility.
+  - [ ] Drift and anomaly visibility are not yet at the full target Release 1 maturity level.
 - [ ] **Partial: Learning and Improvement Loop**
-  Done in this area:
-  - reflection, eval-pack, and scorecard-driven routing adaptation exist
-  - provider promotion, demotion, cooldown, and recovery flows are implemented
+  - [x] Reflection, eval-pack, and scorecard-driven routing adaptation exist.
+  - [x] Provider promotion, demotion, cooldown, and recovery flows are implemented.
+  - [ ] Distilled lesson/memory update flow is not yet a full first-class runtime subsystem.
 - [ ] **Partial: Project Overlay and Portability**
-  Done in this area:
-  - validated overlay template exists
-  - the provider template now mirrors the canonical VIDA subagent stack instead of abstract placeholders
-  - bash installer and framework-only release packaging exist
+  - [x] Validated overlay template exists.
+  - [x] The provider template now mirrors the canonical VIDA subagent stack instead of abstract placeholders.
+  - [x] Bash installer and framework-only release packaging exist.
+  - [ ] Production-ready standalone extraction discipline is not yet fully complete.
 - [ ] **Not Done: Cost and Efficiency Model**
+  - [ ] Compiled-policy level optimization artifacts are not yet implemented.
+  - [ ] Cost-per-task visibility is not yet surfaced as a complete Release 1 operator model.
 - [ ] **Not Done: Release 1 Exit Criteria**
+  - [ ] Stable full-pack execution proof is still incomplete.
+  - [ ] Standalone-framework readiness is still incomplete.
+  - [ ] Full verification/review gate completeness is still incomplete.
 
 ## Release 1 Capability Matrix
 

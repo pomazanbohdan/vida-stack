@@ -74,32 +74,37 @@ Release 1 should be delivered through these phases:
 ### Current Implementation Status (Codebase Audit)
 
 - [x] **Done: Phase A — Runtime Core Integrity**
+  - [x] `br` plus TODO runtime boundaries exist.
+  - [x] Context capsule and compaction recovery flow exist.
+  - [x] Boot profile execution and receipt validation exist.
+  - [x] Health-check and finish-gate tooling exist.
 - [ ] **Partial: Phase B — Orchestration and Subagent Reliability**
-  Done in this phase:
-  - route snapshots, requested/effective mode selection, and provider scoring are implemented
-  - external-first fanout, fallback, arbitration, and live ensemble visibility are implemented
-  - worker-entry and worker-thinking contracts are separated from orchestrator logic
-  - degraded CLI subagent recovery helpers now exist
+  - [x] Route snapshots, requested/effective mode selection, and provider scoring are implemented.
+  - [x] External-first fanout, fallback, arbitration, and live ensemble visibility are implemented.
+  - [x] Worker-entry and worker-thinking contracts are separated from orchestrator logic.
+  - [x] Degraded CLI subagent recovery helpers now exist.
+  - [ ] Explicit lease and ownership runtime enforcement is not yet fully complete.
 - [ ] **Partial: Phase C — Verification, Review, and Risk Gates**
-  Done in this phase:
-  - route and run artifacts expose `risk_class`
-  - route and run artifacts expose `review_state`
-  - health-check tooling reads canonical subagent run logs and surfaces degraded lanes
+  - [x] Route and run artifacts expose `risk_class`.
+  - [x] Route and run artifacts expose `review_state`.
+  - [x] Health-check tooling reads canonical subagent run logs and surfaces degraded lanes.
+  - [ ] Full review-state progression is not yet complete across the full target vocabulary.
+  - [ ] Human approval and higher-risk escalation boundaries are not yet fully materialized.
 - [ ] **Partial: Phase D — Telemetry, Scorecards, and Drift Awareness**
-  Done in this phase:
-  - eval-pack and subagent evaluation scripts exist
-  - scorecards track useful-progress rate, timeout-after-progress count, and time-to-first-useful-output
-  - operator status exposes preferred task classes and current subagent health state
+  - [x] Eval-pack and subagent evaluation scripts exist.
+  - [x] Scorecards track useful-progress rate, timeout-after-progress count, and time-to-first-useful-output.
+  - [x] Operator status exposes preferred task classes and current subagent health state.
+  - [ ] Drift and anomaly handling are not yet complete at the intended Release 1 maturity level.
 - [ ] **Partial: Phase E — Documentation Contract and Protocol Runtime Alignment**
-  Done in this phase:
-  - release-target documents, protocol index, worker contracts, and changelog are in place
-  - canonical runtime vocabulary was pushed further toward `cli subagent` terminology
-  - provider templates now mirror the real subagent runtime contract
+  - [x] Release-target documents, protocol index, worker contracts, and changelog are in place.
+  - [x] Canonical runtime vocabulary was pushed further toward `cli subagent` terminology.
+  - [x] Provider templates now mirror the real subagent runtime contract.
+  - [ ] Full document freshness and lifecycle enforcement are not yet complete.
 - [ ] **Partial: Phase F — Extraction Readiness and Standalone Framework Preparation**
-  Done in this phase:
-  - a bash installer exists for framework payload installation
-  - framework-only release packaging exists
-  - the repository now has a clearer standalone framework surface than before
+  - [x] A bash installer exists for framework payload installation.
+  - [x] Framework-only release packaging exists.
+  - [x] The repository now has a clearer standalone framework surface than before.
+  - [ ] Standalone extraction readiness is not yet complete enough to call Release 1 finished.
 
 ## Phase A: Runtime Core Integrity
 

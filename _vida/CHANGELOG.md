@@ -8,6 +8,17 @@ Rules:
 4. Group updates under fixed headings when applicable: `Added`, `Changed`, `Fixed`, `Protocol`.
 5. Keep this file limited to VIDA framework/runtime changes, not project feature work.
 
+## 2026-03-07 06:31
+
+Changed:
+
+1. `RELEASE-1-SCOPE.md` implementation audit now uses explicit `Done`, `Partial`, and `Not Done` status groups with checklist evidence instead of coarse summary labels.
+2. `RELEASE-1-IMPLEMENTATION-ROADMAP.md` implementation audit now tracks completed and missing work through checklist subitems rather than broad one-line status statements.
+
+Protocol:
+
+1. Release-target documentation status now distinguishes fully implemented items from partially implemented areas with concrete completed sub-capabilities.
+
 ## 2026-03-07 06:05
 
 Added:
