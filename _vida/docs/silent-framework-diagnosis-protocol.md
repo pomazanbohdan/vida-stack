@@ -27,6 +27,7 @@ When active, the orchestrator must treat silent diagnosis as a background framew
 6. Framework bug work must use WVP/web research when the fix depends on external best practice, tool behavior, or architecture claims.
 7. Closure-ready state for framework bug work still requires normal delegated verification/proving rules.
 8. When TODO/`br` flow is active, `_vida/docs/todo-protocol.md` is the canonical execution-layer contract for deferred capture, compact-safe persistence, and post-boundary follow-up routing.
+9. Durable lessons, corrections, and anomalies belong in `_vida/docs/framework-memory-protocol.md`, not only in chat or transient reflection output.
 
 ## Bug Capture Contract
 
@@ -70,3 +71,4 @@ If `framework_self_diagnosis.session_reflection_required: true`, the orchestrato
 4. orchestration efficiency.
 
 If new framework gaps are found, create follow-up framework tasks/bugs and route them through the normal VIDA framework workflow.
+Record durable anomalies or reusable lessons in framework memory when they should influence future framework work beyond the current session.

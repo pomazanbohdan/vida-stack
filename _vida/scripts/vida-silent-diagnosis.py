@@ -17,6 +17,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent.parent
 STATE_PATH = ROOT_DIR / ".vida" / "state" / "silent-framework-diagnosis.json"
 QUEUE_RUNNER = SCRIPT_DIR / "br-mutation-queue.py"
+FRAMEWORK_MEMORY_MODULE = None
 
 
 def now_utc() -> str:
@@ -37,6 +38,13 @@ def load_config() -> dict[str, Any]:
         return vida_config.load_validated_config()
     except Exception:
         return {}
+
+
+def framework_memory_module():
+    global FRAMEWORK_MEMORY_MODULE
+    if FRAMEWORK_MEMORY_MODULE is None:
+        FRAMEWORK_MEMORY_MODULE = load_module("vida_framework_memory", SCRIPT_DIR / "framework-memory.py")
+    return FRAMEWORK_MEMORY_MODULE
 
 
 def diagnosis_config(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -147,6 +155,15 @@ def capture_bug(
     }
     state.setdefault("pending_framework_bugs", []).append(entry)
     save_state(state)
+    try:
+        framework_memory_module().record_entry(
+            kind="anomaly",
+            summary=summary.strip(),
+            source_task=current_task.strip(),
+            details={"source": "silent_framework_diagnosis", "bug_id": entry["bug_id"]},
+        )
+    except Exception:
+        pass
     return entry
 
 
@@ -160,6 +177,16 @@ def record_session_reflection(current_task: str, criteria: list[str], gaps: list
     }
     state.setdefault("session_reflections", []).append(entry)
     save_state(state)
+    for gap in entry["gaps"]:
+        try:
+            framework_memory_module().record_entry(
+                kind="anomaly",
+                summary=gap,
+                source_task=current_task.strip(),
+                details={"source": "session_reflection", "criteria": entry["criteria"]},
+            )
+        except Exception:
+            continue
     return entry
 
 

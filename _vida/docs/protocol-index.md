@@ -15,6 +15,9 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Project bootstrap/self-reproduction | `_vida/docs/project-bootstrap-protocol.md` | `_vida/scripts/project-bootstrap.py`, `_vida/templates/vida.config.yaml.template`, `vida.config.yaml` |
 | VIDA framework self-analysis | `_vida/docs/framework-self-analysis-protocol.md` | `_vida/docs/framework-map-protocol.md`, `_vida/docs/self-reflection-protocol.md` |
 | Silent framework diagnosis | `_vida/docs/silent-framework-diagnosis-protocol.md` | `_vida/scripts/vida-silent-diagnosis.py`, `vida.config.yaml`, `_vida/docs/framework-self-analysis-protocol.md`, `_vida/docs/todo-protocol.md` |
+| Human approval lifecycle | `_vida/docs/human-approval-protocol.md` | `_vida/scripts/human-approval-gate.py`, `_vida/scripts/subagent-dispatch.py`, `_vida/docs/subagent-system-protocol.md`, `_vida/docs/implement-execution-protocol.md` |
+| Framework memory ledger | `_vida/docs/framework-memory-protocol.md` | `_vida/scripts/framework-memory.py`, `_vida/scripts/vida-silent-diagnosis.py`, `_vida/docs/silent-framework-diagnosis-protocol.md` |
+| Document lifecycle and freshness | `_vida/docs/document-lifecycle-protocol.md` | `_vida/scripts/doc-lifecycle.py`, `_vida/docs/project-overlay-protocol.md`, `_vida/docs/silent-framework-diagnosis-protocol.md` |
 | Problem-party discussion | `_vida/docs/problem-party-protocol.md` | `_vida/scripts/problem-party.py`, `_vida/docs/orchestration-protocol.md`, `_vida/docs/todo-protocol.md` |
 | Core bootstrap router | `AGENTS.md` | `_vida/docs/ORCHESTRATOR-ENTRY.MD`, `_vida/docs/SUBAGENT-ENTRY.MD`, `_vida/docs/SUBAGENT-THINKING.MD`, `_vida/docs/README.md`, `docs/README.md` |
 | Orchestrator entry contract | `_vida/docs/ORCHESTRATOR-ENTRY.MD` | `AGENTS.md`, `_vida/docs/orchestration-protocol.md`, `_vida/docs/use-case-packs.md` |

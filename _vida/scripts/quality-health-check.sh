@@ -57,6 +57,9 @@ required_files=(
   "_vida/docs/beads-protocol.md"
   "_vida/docs/project-overlay-protocol.md"
   "_vida/docs/project-bootstrap-protocol.md"
+  "_vida/docs/human-approval-protocol.md"
+  "_vida/docs/framework-memory-protocol.md"
+  "_vida/docs/document-lifecycle-protocol.md"
   "_vida/docs/subagent-system-protocol.md"
   "_vida/scripts/validate-skills.sh"
   "_vida/scripts/beads-workflow.sh"
@@ -86,6 +89,10 @@ required_files=(
   "_vida/scripts/subagent-system.py"
   "_vida/scripts/subagent-dispatch.py"
   "_vida/scripts/subagent-eval-pack.py"
+  "_vida/scripts/human-approval-gate.py"
+  "_vida/scripts/framework-memory.py"
+  "_vida/scripts/doc-lifecycle.py"
+  "_vida/scripts/framework-operator-status.py"
 )
 
 vida_status_line info "[health] checking required files"

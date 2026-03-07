@@ -27,6 +27,7 @@ Framework template:
 2. template is canonical for scaffold/default structure,
 3. instantiated root `vida.config.yaml` remains project-owned data.
 4. project docs referenced from `project_bootstrap` remain project-owned runbooks; framework runtime law must stay in `AGENTS.md` and `_vida/*`, not be synchronized into `docs/*`.
+5. framework-owned document lifecycle/freshness metadata belongs in `_vida/docs/document-lifecycle-protocol.md` and `.vida/state/doc-lifecycle.json`, not inside project-owned docs.
 
 ## Language Policy
 
@@ -235,6 +236,8 @@ Supported routing-level keys:
 23. `max_verification_passes`
 24. `max_fallback_hops`
 25. `max_total_runtime_seconds`
+26. `problem_party_required`
+27. `problem_party_task_class`
 
 Validation scope:
 

@@ -81,6 +81,10 @@ Canonical layer source: `_vida/docs/command-layer-protocol.md`
    - if the coach quorum approves: continue to final verification.
 11. `IEP-6 Verify And Review`
    - regression checks + independent review + API live validation (when applicable).
+11.1. `IEP-6.2 Human Approval Gate` (when the selected route or verifier manifest lands in `policy_gate_required`, `senior_review_required`, or `human_gate_required`)
+   - record a matching approval or rejection receipt through `_vida/docs/human-approval-protocol.md`,
+   - missing approval receipt keeps the task in `approval_pending`,
+   - rejection receipt blocks closure-ready state and feeds the next rework/escalation decision.
 12. `IEP-7 Close And Continue`
    - close task in `br`, sync logs, auto-pick next `ready` task.
 13. `IEP-8 Pool Completion`

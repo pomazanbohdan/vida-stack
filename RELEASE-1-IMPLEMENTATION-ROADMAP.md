@@ -110,6 +110,8 @@ Release 1 should be delivered through these phases:
   - [x] Verification-required ensembles now stay blocked until verifier routing clears synthesis.
   - [x] Mixed-issue split artifacts now preserve unresolved secondary symptoms as explicit follow-up work.
   - [x] Unresolved secondary issue slices can now auto-create follow-up tracked tasks.
+  - [x] Human approval receipts now exist as explicit closure artifacts for gated routes.
+  - [x] Human approval now acts as a distinct post-verification closure gate before synthesis-ready completion.
   - [ ] Full review-state progression is not yet complete across the full target vocabulary.
   - [ ] Human approval and higher-risk escalation boundaries are not yet fully materialized.
 - [ ] **Partial: Phase D — Telemetry, Scorecards, and Drift Awareness**
@@ -121,6 +123,8 @@ Release 1 should be delivered through these phases:
   - [x] Route-law summaries, route receipts, and verification blocks are now part of canonical runtime telemetry.
   - [x] Low-fitness cheap-lane penalties now persist in scorecards and routing telemetry.
   - [x] Declarative framework-wave task-state reconciliation now exists on top of the canonical mutation path.
+  - [x] Aggregated framework operator status now exists as a dedicated visibility surface.
+  - [x] Aggregated framework operator status now combines approval and framework-memory summaries.
   - [ ] Drift and anomaly handling are not yet complete at the intended Release 1 maturity level.
 - [ ] **Partial: Phase E — Documentation Contract and Protocol Runtime Alignment**
   - [x] Release-target documents, protocol index, orchestrator/worker contracts, and changelog are in place.
@@ -131,6 +135,8 @@ Release 1 should be delivered through these phases:
   - [x] Hard-law routing and verification requirements are now reflected in protocol documents instead of advisory wording.
   - [x] Silent diagnosis and proving-pack protocol surfaces now exist in the canonical framework map.
   - [x] Problem-party, framework-task-sync, issue-split follow-up, and live web probes are now reflected in protocol docs.
+  - [x] Human approval, framework memory, and document lifecycle protocol surfaces now exist in the canonical framework map.
+  - [x] Framework-owned document lifecycle state and freshness validation rules now exist in canonical protocol form.
   - [ ] Full document freshness and lifecycle enforcement are not yet complete.
 - [ ] **Partial: Phase F — Extraction Readiness and Standalone Framework Preparation**
   - [x] A bash installer exists for framework payload installation.
@@ -276,6 +282,7 @@ Priority work:
 6. preserve verifier-owned completion blocking until independent verification clears synthesis
 7. preserve mixed-issue secondary symptoms as explicit follow-up artifacts instead of widening the current writer lane
 8. materialize unresolved secondary issue slices as explicit follow-up tasks when the runtime chooses tracked separation
+9. make human approval a first-class closure artifact instead of a soft status-only concept
 
 Exit criteria:
 
@@ -300,6 +307,7 @@ Implementation audit:
 - [x] Verification-required ensembles now remain blocked until verifier routing clears synthesis.
 - [x] Mixed-issue split artifacts now preserve unresolved secondary symptoms outside the current writer scope.
 - [x] Unresolved secondary issue slices can now auto-create follow-up tracked tasks.
+- [x] Human approval receipts now exist as explicit closure artifacts for gated routes.
 - [ ] Full target review vocabulary is not yet complete in runtime behavior.
 - [ ] Human approval boundaries are still incomplete.
 
@@ -329,6 +337,7 @@ Priority work:
 7. surface canonical route-law and verification-state artifacts in operator telemetry
 8. persist low-fitness cheap-lane penalties as reusable routing evidence
 9. reconcile framework-wave task state through declarative manifests on the canonical mutation path
+10. expose aggregated operator status across governance, memory, lifecycle, and routing surfaces
 
 Exit criteria:
 
@@ -353,6 +362,8 @@ Implementation audit:
 - [x] Route-law summaries, route receipts, and verification blocks now exist in canonical run telemetry.
 - [x] Low-fitness cheap-lane penalties now persist in routing telemetry and scorecards.
 - [x] Declarative framework-wave task-state reconciliation now exists on top of the queue-backed mutation path.
+- [x] Aggregated framework operator status now exists as a dedicated visibility surface.
+- [x] Aggregated framework operator status now combines approval and framework-memory summaries.
 - [ ] Drift/anomaly handling is still incomplete.
 
 ## Phase E: Documentation Contract and Protocol Runtime Alignment
@@ -383,6 +394,7 @@ Priority work:
 9. keep hard-law routing, independent verification, and dependency-graph execution rules reflected as framework doctrine instead of advisory prose
 10. keep silent diagnosis and proving-pack protocol surfaces aligned with runtime helpers and overlay knobs
 11. keep problem-party, framework-task-sync, issue-split follow-up, and live web-probe behavior aligned across docs, template, and runtime
+12. keep human approval, framework memory, and document lifecycle surfaces aligned across docs, runtime, and overlay ownership
 
 Exit criteria:
 
@@ -407,6 +419,8 @@ Implementation audit:
 - [x] Hard-law routing and verification requirements are now reflected in protocol docs.
 - [x] Silent diagnosis and proving-pack protocol surfaces now exist and are linked from the canonical map.
 - [x] Problem-party, framework-task-sync, issue-split follow-up, and live web-probe behavior are now reflected in protocol docs.
+- [x] Human approval, framework memory, and document lifecycle surfaces now exist and are reflected in protocol docs.
+- [x] Framework-owned document lifecycle state and freshness validation rules now exist in canonical protocol form.
 - [ ] Full document freshness/lifecycle enforcement is still incomplete.
 
 ## Phase F: Extraction Readiness and Standalone Framework Preparation

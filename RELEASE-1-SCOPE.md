@@ -392,6 +392,8 @@ Required capabilities:
 13. completion semantics that distinguish `decision_ready` from `synthesis_ready`
 14. mixed-issue split artifacts that preserve unresolved secondary symptoms without widening the current writer scope
 15. automatic follow-up task creation for unresolved secondary issue slices when tracked separation is required
+16. first-class human approval receipts for routes whose closure requires explicit human gate clearance
+17. explicit human approval gating after technical verification and before closure-ready synthesis
 
 Target review-state vocabulary for Release 1:
 
@@ -414,6 +416,8 @@ Implementation audit:
 - [x] Runtime completion now distinguishes `decision_ready` from final `synthesis_ready`.
 - [x] Issue-driven execution now persists mixed-issue split artifacts so secondary unresolved symptoms remain explicit follow-up work.
 - [x] Unresolved secondary issue slices can now materialize follow-up tracked tasks automatically from issue-split artifacts.
+- [x] Human approval receipts now exist as first-class closure artifacts for gated routes.
+- [x] Runtime now applies human approval as a distinct post-verification closure gate instead of treating it as a soft status label.
 - [ ] The full target review vocabulary is not yet fully implemented end to end.
 - [ ] Policy-aware close/handoff semantics are not yet complete across all execution classes.
 
@@ -430,6 +434,7 @@ Required capabilities:
 5. human escalation for unsafe or ambiguous high-impact paths
 6. protocol-critical gate failures with explicit fallback evidence
 7. machine-visible risk state in runtime artifacts
+8. explicit human approval governance for gated post-verification closure paths
 
 Target minimal risk classes for Release 1:
 
@@ -444,6 +449,7 @@ Implementation audit:
 - [x] Risk class is machine-visible.
 - [x] Risk-aware degraded/suppressed subagent states exist.
 - [x] Recovery and routing suppression exist for broken lanes.
+- [x] Human approval receipts now exist as a distinct governance surface instead of only an implied route status.
 - [ ] The full `R0`-`R4` model is not yet fully exercised.
 - [ ] Human escalation boundaries remain incomplete.
 
@@ -549,12 +555,15 @@ Release 1 should also define the baseline document-governance model:
 2. verifier rules for current-vs-target separation
 3. stale-reference detection for superseded docs
 4. freshness binding between runtime/policy changes and document re-verification
+5. framework-owned document lifecycle ledger and validation commands
 
 Implementation audit:
 
 - [x] Canonical source mapping exists.
 - [x] Framework/project boundary documentation exists.
 - [x] Reflection-pack reconciliation exists.
+- [x] Framework-owned document lifecycle ledger and validator now exist.
+- [x] Framework-owned document lifecycle state now has explicit canonical values and freshness validation rules.
 - [ ] Full document lifecycle and freshness verification remain incomplete.
 
 ### 13. Telemetry and Evaluation
@@ -577,6 +586,7 @@ Release 1 should provide:
 14. operator-visible route-law and verification-state summaries tied to canonical run artifacts
 15. lane-fitness telemetry that penalizes repeated low-signal cheap-lane behavior
 16. declarative framework-wave task-state reconciliation on the canonical mutation path
+17. aggregated operator status views that combine governance, memory, lifecycle, and routing signals
 
 Implementation audit:
 
@@ -590,6 +600,8 @@ Implementation audit:
 - [x] Route/run artifacts now expose `route_law_summary`, `route_receipt`, and dedicated verification blocks for operator inspection.
 - [x] Runtime scoring now persists and penalizes repeated low-fitness cheap-lane outputs.
 - [x] Declarative framework-wave task-state synchronization now exists on top of the queue-backed mutation path.
+- [x] Aggregated framework operator status now exists as a dedicated visibility surface.
+- [x] Aggregated framework operator status now combines approval and framework-memory summaries in one operator view.
 - [ ] Full drift visibility remains incomplete.
 
 ### 13.1 Drift Detection
@@ -650,6 +662,8 @@ Release 1 should provide early but real improvement mechanics:
 7. a base for future prompt/policy revision loops
 8. silent framework diagnosis as a background capture mode with deferred framework bug follow-up
 9. bounded `problem_party` escalation as an optional decision-quality lens for conflict-heavy scoped issues
+10. durable framework memory ledger for anomaly capture, reflection carryover, and future framework learning
+11. explicit framework memory capture for `lesson`, `correction`, and `anomaly` entries
 
 Implementation audit:
 
@@ -659,6 +673,8 @@ Implementation audit:
 - [x] Framework self-analysis path exists.
 - [x] Silent framework diagnosis now exists as a background capture and reflection surface.
 - [x] Bounded `problem_party` discussion mode now exists as an optional escalation helper with structured decision artifacts.
+- [x] Framework memory ledger now exists for durable framework anomaly and reflection capture.
+- [x] Framework memory now has explicit `lesson`, `correction`, and `anomaly` kinds in a canonical ledger.
 - [ ] Distilled lesson and memory update flow remain incomplete.
 
 ### 14.1 Continuous Learning Pipeline
@@ -834,12 +850,15 @@ Implementation audit:
   - [x] Verification-required ensembles now remain blocked until verifier routing clears synthesis.
   - [x] Mixed-issue split artifacts now preserve unresolved secondary symptoms as follow-up work instead of widening the current writer lane.
   - [x] Follow-up tasks can now be auto-created for unresolved secondary issue slices.
+  - [x] Human approval receipts now exist as explicit closure artifacts for gated routes.
+  - [x] Human approval now acts as an explicit post-verification closure gate.
   - [ ] The full target review-state vocabulary is not yet demonstrated end to end.
   - [ ] Policy-aware close and handoff behavior is not yet fully proven across all task classes.
 - [ ] **Partial: Risk and Governance**
   - [x] Route artifacts now expose `risk_class`.
   - [x] Degraded, cooldown, auth-invalid, and interactive-blocked subagent states are modeled.
   - [x] Bounded recovery and routing suppression semantics are implemented for broken CLI subagents.
+  - [x] Human approval receipts now exist as a first-class governance surface.
   - [ ] The full `R0` to `R4` risk model is not yet fully exercised in runtime behavior.
   - [ ] Human approval boundaries are not yet fully materialized as a complete Release 1 runtime surface.
 - [x] **Done: Execution Environment**
@@ -853,6 +872,8 @@ Implementation audit:
   - [x] Release-target documents are synchronized with the current framework shape.
   - [x] Bootstrap split and bounded log-read policy are now reflected in framework docs.
   - [x] Silent diagnosis and proving-pack protocol docs now exist in the canonical framework map.
+  - [x] Framework-owned document lifecycle protocol and validator now exist.
+  - [x] Framework-owned document lifecycle state and freshness validation rules now exist in canonical protocol form.
   - [ ] Document lifecycle and freshness enforcement are not yet complete at the full Release 1 level.
 - [ ] **Partial: Telemetry and Evaluation**
   - [x] Eval-pack and subagent evaluation scripts exist.
@@ -863,12 +884,16 @@ Implementation audit:
   - [x] Route-law summaries, route receipts, and verification blocks now exist in canonical run telemetry.
   - [x] Low-fitness cheap-lane penalties now persist in routing and score telemetry.
   - [x] Declarative framework-wave task-state synchronization now exists on the canonical mutation path.
+  - [x] Aggregated framework operator status now exists as a dedicated visibility surface.
+  - [x] Aggregated framework operator status now combines approval and framework-memory summaries.
   - [ ] Drift and anomaly visibility are not yet at the full target Release 1 maturity level.
 - [ ] **Partial: Learning and Improvement Loop**
   - [x] Reflection, eval-pack, and scorecard-driven routing adaptation exist.
   - [x] Provider promotion, demotion, cooldown, and recovery flows are implemented.
   - [x] Silent diagnosis now captures deferred framework bugs and session reflections.
   - [x] `problem_party` now exists as a bounded multi-role escalation helper with structured decision artifacts.
+  - [x] Framework memory ledger now exists for durable anomaly and reflection capture.
+  - [x] Framework memory now has explicit `lesson`, `correction`, and `anomaly` entry kinds.
   - [ ] Distilled lesson/memory update flow is not yet a full first-class runtime subsystem.
 - [ ] **Partial: Project Overlay and Portability**
   - [x] Validated overlay template exists.

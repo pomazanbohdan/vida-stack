@@ -8,11 +8,33 @@ Rules:
 4. Group updates under fixed headings when applicable: `Added`, `Changed`, `Fixed`, `Protocol`.
 5. Keep this file limited to VIDA framework/runtime changes, not project feature work.
 
+## 2026-03-07 19:45
+
+Added:
+
+1. Added first-class human approval receipt helper via [human-approval-gate.py](_vida/scripts/human-approval-gate.py).
+2. Added canonical approval governance protocol via [human-approval-protocol.md](_vida/docs/human-approval-protocol.md).
+3. Added framework memory ledger via [framework-memory.py](_vida/scripts/framework-memory.py) and [framework-memory-protocol.md](_vida/docs/framework-memory-protocol.md).
+4. Added document lifecycle ledger and validator via [doc-lifecycle.py](_vida/scripts/doc-lifecycle.py) and [document-lifecycle-protocol.md](_vida/docs/document-lifecycle-protocol.md).
+5. Added aggregated operator visibility surface via [framework-operator-status.py](_vida/scripts/framework-operator-status.py).
+
+Changed:
+
+1. `subagent-dispatch.py` now fails closed when a route reaches `policy_gate_required`, `senior_review_required`, or `human_gate_required` without a matching approval receipt.
+2. `implement-execution-protocol.md` and `subagent-system-protocol.md` now treat human approval as a distinct post-verification closure gate rather than an implied status label.
+3. `vida-silent-diagnosis.py` now records durable anomaly memory from framework bug capture and session reflection.
+4. `project-overlay-protocol.md` now points framework-owned doc lifecycle/freshness metadata to the dedicated framework protocol/state instead of leaving it implicit.
+5. `problem-party.py` now emits route-visible receipts and `subagent-system.py`/`vida-config.py` now carry route metadata for problem-party activation.
+
+Protocol:
+
+1. `protocol-index.md` now maps the human approval lifecycle, framework memory ledger, and document lifecycle/freshness as canonical framework protocols.
+
 ## 2026-03-07 19:22
 
 Added:
 
-1. Added bounded `problem-party` protocol and helper for optional multi-role conflict discussion via `problem-party-protocol.md` and `problem-party.py`.
+1. Added bounded `problem-party` protocol and helper for optional multi-role conflict discussion via [problem-party-protocol.md](_vida/docs/problem-party-protocol.md) and [problem-party.py](_vida/scripts/problem-party.py).
 
 Changed:
 
@@ -29,7 +51,7 @@ Added:
 
 1. Added automatic follow-up task creation for unresolved secondary slices emitted by `issue-split` artifacts.
 2. Added config-driven live web-search probe support, including `subagent-system.py web-probe <subagent>`.
-3. Added declarative framework wave task-state reconciliation through `framework-task-sync.py`.
+3. Added declarative framework wave task-state reconciliation through [framework-task-sync.py](_vida/scripts/framework-task-sync.py).
 
 Changed:
 
@@ -64,10 +86,10 @@ Protocol:
 
 Added:
 
-1. Added queue-backed single-writer task-state mutation path through `br-mutation-queue.py` and wired mutating `br`/`beads_mutate` calls through the canonical serialized runtime path.
-2. Added silent VIDA framework self-diagnosis mode with root overlay support, boot visibility, deferred framework bug capture, and session reflection via `vida-silent-diagnosis.py`.
-3. Added reusable leased subagent pool helper in `subagent-pool.py`.
-4. Added reusable product/framework proving-pack templates in `proving-pack.py`.
+1. Added queue-backed single-writer task-state mutation path through [br-mutation-queue.py](_vida/scripts/br-mutation-queue.py) and wired mutating `br`/`beads_mutate` calls through the canonical serialized runtime path.
+2. Added silent VIDA framework self-diagnosis mode with root overlay support, boot visibility, deferred framework bug capture, and session reflection via [vida-silent-diagnosis.py](_vida/scripts/vida-silent-diagnosis.py).
+3. Added reusable leased subagent pool helper in [subagent-pool.py](_vida/scripts/subagent-pool.py).
+4. Added reusable product/framework proving-pack templates in [proving-pack.py](_vida/scripts/proving-pack.py).
 5. Added mixed-issue split artifacts under `.vida/logs/issue-splits/<task_id>.json` so one bug can preserve a primary executable slice and a secondary unresolved slice without widening the writer lane.
 
 Changed:

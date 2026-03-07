@@ -1,0 +1,29 @@
+{
+  "entries": [
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-07T20:07:08Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-07T20:07:36Z"
+    }
+  ],
+  "summary": {
+    "anomaly_count": 2,
+    "correction_count": 0,
+    "lesson_count": 0
+  }
+}

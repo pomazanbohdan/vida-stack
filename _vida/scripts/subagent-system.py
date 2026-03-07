@@ -2340,6 +2340,8 @@ def route_candidate_context(
     budget_limits = route_budget_limits(task_route_cfg, write_scope, dispatch_required)
     coach_required = policy_value(task_route_cfg.get("coach_required"), "no")
     coach_route_task_class = policy_value(task_route_cfg.get("coach_route_task_class"), "")
+    problem_party_required = policy_value(task_route_cfg.get("problem_party_required"), "no")
+    problem_party_task_class = policy_value(task_route_cfg.get("problem_party_task_class"), "problem_party")
     local_execution_allowed = policy_value(task_route_cfg.get("local_execution_allowed"), "no")
     local_execution_preferred = policy_value(
         task_route_cfg.get("local_execution_preferred"),
@@ -2581,6 +2583,8 @@ def route_candidate_context(
         "analysis_default_in_boot": analysis_default_in_boot,
         "coach_required": coach_required,
         "coach_route_task_class": coach_route_task_class,
+        "problem_party_required": problem_party_required,
+        "problem_party_task_class": problem_party_task_class,
         "bridge_fallback_subagent": bridge_fallback_subagent,
         "internal_escalation_trigger": internal_escalation_trigger,
         "graph_strategy": graph_strategy,
@@ -2961,6 +2965,8 @@ def route_subagent(task_class: str) -> dict[str, Any]:
     analysis_default_in_boot = context["analysis_default_in_boot"]
     coach_required = context.get("coach_required", "no")
     coach_route_task_class = context.get("coach_route_task_class", "")
+    problem_party_required = context.get("problem_party_required", "no")
+    problem_party_task_class = context.get("problem_party_task_class", "problem_party")
     bridge_fallback_subagent = context["bridge_fallback_subagent"]
     internal_escalation_trigger = context["internal_escalation_trigger"]
     graph_strategy = context["graph_strategy"]
@@ -3013,6 +3019,8 @@ def route_subagent(task_class: str) -> dict[str, Any]:
             "analysis_default_in_boot": analysis_default_in_boot,
             "coach_required": coach_required,
             "coach_route_task_class": coach_route_task_class,
+            "problem_party_required": problem_party_required,
+            "problem_party_task_class": problem_party_task_class,
             "bridge_fallback_subagent": bridge_fallback_subagent,
             "internal_escalation_trigger": internal_escalation_trigger,
             "graph_strategy": graph_strategy,
@@ -3243,6 +3251,8 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         "coach_required": coach_required,
         "coach_route_task_class": coach_route_task_class,
         "coach_plan": coach_plan,
+        "problem_party_required": problem_party_required,
+        "problem_party_task_class": problem_party_task_class,
         "bridge_fallback_subagent": bridge_fallback_subagent,
         "internal_escalation_trigger": internal_escalation_trigger,
         "graph_strategy": graph_strategy,

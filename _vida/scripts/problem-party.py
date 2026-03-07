@@ -13,6 +13,7 @@ from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 LOG_DIR = ROOT_DIR / ".vida" / "logs" / "problem-party"
+ROUTE_RECEIPT_DIR = ROOT_DIR / ".vida" / "logs" / "route-receipts"
 
 BOARD_PRESETS: dict[str, dict[str, Any]] = {
     "small": {
@@ -179,6 +180,31 @@ def synthesize_board(manifest_path: Path, role_notes_path: Path, output_path: Pa
     return write_json(out, artifact)
 
 
+def write_decision_receipt(
+    *,
+    task_id: str,
+    task_class: str,
+    topic: str,
+    decision_artifact_path: Path,
+) -> Path:
+    decision_artifact = load_json(decision_artifact_path, {})
+    safe_task_id = safe_slug(task_id)
+    safe_task_class = safe_slug(task_class)
+    receipt_path = ROUTE_RECEIPT_DIR / f"{safe_task_id}.{safe_task_class}.problem-party.json"
+    payload = {
+        "generated_at": now_utc(),
+        "task_id": task_id,
+        "task_class": task_class,
+        "topic": topic,
+        "status": "problem_party_ready",
+        "decision_artifact_path": str(decision_artifact_path),
+        "decision": str(decision_artifact.get("decision", "")).strip(),
+        "next_execution_step": str(decision_artifact.get("next_execution_step", "")).strip(),
+        "confidence": str(decision_artifact.get("confidence", "")).strip(),
+    }
+    return write_json(receipt_path, payload)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
@@ -195,6 +221,12 @@ def parse_args() -> argparse.Namespace:
     synthesize.add_argument("board_manifest")
     synthesize.add_argument("role_notes")
     synthesize.add_argument("--output")
+
+    receipt = sub.add_parser("receipt")
+    receipt.add_argument("task_id")
+    receipt.add_argument("task_class")
+    receipt.add_argument("topic")
+    receipt.add_argument("decision_artifact")
 
     return parser.parse_args()
 
@@ -219,6 +251,15 @@ def main() -> int:
             Path(args.board_manifest).expanduser(),
             Path(args.role_notes).expanduser(),
             Path(args.output).expanduser() if args.output else None,
+        )
+        print(str(path))
+        return 0
+    if args.command == "receipt":
+        path = write_decision_receipt(
+            task_id=args.task_id,
+            task_class=args.task_class,
+            topic=args.topic,
+            decision_artifact_path=Path(args.decision_artifact).expanduser(),
         )
         print(str(path))
         return 0

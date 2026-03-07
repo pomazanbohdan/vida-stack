@@ -824,6 +824,12 @@ def internal_escalation_receipt_path(task_id: str, task_class: str) -> Path:
     return ROUTE_RECEIPT_DIR / f"{safe_task_id}.{safe_task_class}.internal-escalation.json"
 
 
+def approval_receipt_path(task_id: str, task_class: str) -> Path:
+    safe_task_id = re.sub(r"[^A-Za-z0-9._-]+", "-", task_id.strip() or "task")
+    safe_task_class = re.sub(r"[^A-Za-z0-9._-]+", "-", task_class.strip() or "task_class")
+    return ROUTE_RECEIPT_DIR / f"{safe_task_id}.{safe_task_class}.approval.json"
+
+
 def load_analysis_receipt(task_id: str, task_class: str) -> dict[str, Any]:
     path = analysis_receipt_path(task_id, task_class)
     if not path.exists():
@@ -1098,6 +1104,17 @@ def load_internal_escalation_receipt(task_id: str, task_class: str) -> dict[str,
     return payload if isinstance(payload, dict) else {}
 
 
+def load_approval_receipt(task_id: str, task_class: str) -> dict[str, Any]:
+    path = approval_receipt_path(task_id, task_class)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def clear_analysis_blocker(task_id: str, task_class: str) -> None:
     path = analysis_blocker_path(task_id, task_class)
     try:
@@ -1118,6 +1135,15 @@ def clear_analysis_receipt(task_id: str, task_class: str) -> None:
 
 def clear_coach_receipt(task_id: str, task_class: str) -> None:
     path = coach_receipt_path(task_id, task_class)
+    try:
+        if path.exists():
+            path.unlink()
+    except OSError:
+        return
+
+
+def clear_approval_receipt(task_id: str, task_class: str) -> None:
+    path = approval_receipt_path(task_id, task_class)
     try:
         if path.exists():
             path.unlink()
@@ -1322,6 +1348,82 @@ def validate_internal_escalation_receipt(
         return False, receipt, "stale_internal_escalation_receipt"
 
     return True, receipt, ""
+
+
+def approval_gate_required(review_state: str) -> bool:
+    return policy_value(review_state, "") in {
+        "policy_gate_required",
+        "senior_review_required",
+        "human_gate_required",
+    }
+
+
+def validate_approval_receipt(
+    task_id: str,
+    task_class: str,
+    route: dict[str, Any],
+    review_state: str,
+) -> tuple[bool, dict[str, Any], str]:
+    normalized_state = policy_value(review_state, "")
+    if not approval_gate_required(normalized_state):
+        return True, {"status": "not_required", "review_state": normalized_state}, ""
+
+    receipt = load_approval_receipt(task_id, task_class)
+    if not receipt:
+        return False, {}, "missing_approval_receipt"
+
+    decision = policy_value(receipt.get("decision"), "").casefold()
+    if decision == "rejected":
+        return False, receipt, "approval_rejected"
+    if decision != "approved":
+        return False, receipt, "invalid_approval_decision"
+
+    receipt_state = policy_value(receipt.get("review_state"), "")
+    if receipt_state != normalized_state:
+        return False, receipt, "approval_state_mismatch"
+    if policy_value(receipt.get("approver_id"), "") == "":
+        return False, receipt, "missing_approver_id"
+    if policy_value(receipt.get("notes"), "") == "":
+        return False, receipt, "missing_approval_notes"
+    if receipt.get("route_receipt_hash") != route_receipt_hash(route):
+        return False, receipt, "stale_approval_receipt"
+
+    return True, receipt, ""
+
+
+def apply_manifest_approval_gate(
+    task_id: str,
+    task_class: str,
+    route: dict[str, Any],
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    gated = dict(manifest)
+    target_review_state = policy_value(
+        gated.get("target_manifest_review_state"),
+        policy_value(gated.get("review_state"), ""),
+    )
+    receipt_ok, receipt, receipt_error = validate_approval_receipt(
+        task_id,
+        task_class,
+        route,
+        target_review_state,
+    )
+    gated["approval"] = {
+        "required": approval_gate_required(target_review_state),
+        "review_state": target_review_state,
+        "valid": receipt_ok,
+        "reason": receipt_error,
+        "receipt": receipt,
+    }
+    if not approval_gate_required(target_review_state):
+        return gated
+    if receipt_ok:
+        return gated
+    gated["synthesis_ready"] = False
+    gated["verification_pending"] = False
+    gated["status"] = "blocked" if receipt_error == "approval_rejected" else "approval_pending"
+    gated["phase"] = gated["status"]
+    return gated
 
 
 def write_analysis_receipt(
@@ -4802,6 +4904,8 @@ def run_ensemble(argv: list[str]) -> int:
     elif decision_ready and manifest["verification_pending"]:
         manifest["status"] = "verification_pending"
         manifest["phase"] = "verification_pending"
+    manifest = apply_manifest_approval_gate(task_id, task_class, route, manifest)
+    synthesis_ready = bool(manifest.get("synthesis_ready", False))
     release_result = subagent_system.release_lease("ensemble", f"{task_id}:{task_class}", run_holder)
     manifest["lease"] = {
         **manifest.get("lease", {}),

@@ -221,6 +221,7 @@ Minimum contract:
 6. authored-result quality and verifier quality should both influence scorecards over time,
 7. the orchestrator should synthesize and escalate; it should not be the default primary analyst and primary verifier for eligible lanes.
 8. when `required=yes`, missing verification is a blocking state, not a soft warning.
+9. when the active review target requires policy, senior, or human approval, technical verification alone is insufficient; runtime must apply the human-approval gate before closure-ready synthesis.
 
 ## Coach Review Contract
 
@@ -513,6 +514,7 @@ Review-state distinction:
 2. manifest/task-level review state may advance further to:
    - `promotion_ready`
    once ensemble synthesis is decision-ready and no further review gate remains for the active risk class.
+3. when the manifest/task-level review state remains `policy_gate_required`, `senior_review_required`, or `human_gate_required`, closure-ready state still requires a matching approval receipt under `_vida/docs/human-approval-protocol.md`.
 
 Lane-aware promotion/demotion rule:
 
