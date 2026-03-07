@@ -23,6 +23,28 @@ LOG_DIR = ROOT_DIR / ".vida" / "logs"
 RUN_LOG_PATH = LOG_DIR / "subagent-runs.jsonl"
 ROUTE_RECEIPT_DIR = LOG_DIR / "route-receipts"
 ISSUE_CONTRACT_DIR = LOG_DIR / "issue-contracts"
+ISSUE_SPLIT_DIR = LOG_DIR / "issue-splits"
+FRAMEWORK_MUTATION_ROOTS = ("AGENTS.md", "_vida")
+FRAMEWORK_MUTATION_IGNORED_SEGMENTS = {"__pycache__"}
+FRAMEWORK_MUTATION_IGNORED_SUFFIXES = (".pyc",)
+PROJECT_MUTATION_EXCLUDED_ROOTS = {"AGENTS.md", "_vida", ".vida", ".beads", "_temp", ".git"}
+PROJECT_MUTATION_IGNORED_SEGMENTS = {
+    "__pycache__",
+    ".dart_tool",
+    "build",
+    "node_modules",
+    ".gradle",
+    ".idea",
+    ".vscode",
+    "Pods",
+    "DerivedData",
+    "target",
+    "dist",
+    "coverage",
+    ".pytest_cache",
+    ".mypy_cache",
+}
+PROJECT_MUTATION_IGNORED_SUFFIXES = (".pyc", ".log")
 
 
 def load_module(name: str, path: Path) -> Any:
@@ -72,6 +94,17 @@ ISSUE_CONTRACT_TEMPLATE = {
     "equivalence_assessment": "equivalent_fix|spec_delta_required|as_designed|not_a_bug|insufficient_evidence",
     "reported_behavior": "what is happening now",
     "expected_behavior": "what should happen",
+    "reported_scope": ["reported symptoms/behavioral surface before proof narrowing"],
+    "proven_scope": ["bounded proven behavioral scope the writer may change"],
+    "symptoms": [
+        {
+            "id": "SYM-1",
+            "summary": "one reported symptom",
+            "evidence_status": "reproduced|red_test|live_evidence|unproven",
+            "disposition": "in_scope|out_of_scope",
+            "evidence_refs": ["path/to/evidence"],
+        }
+    ],
     "scope_in": ["bounded behavioral scope that may change"],
     "scope_out": ["related areas that must not change"],
     "acceptance_checks": ["direct acceptance checks for the writer"],
@@ -98,6 +131,100 @@ def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
     ensure_dirs()
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def _framework_snapshot_metadata(path: Path) -> tuple[int, int]:
+    stat = path.stat()
+    return stat.st_size, stat.st_mtime_ns
+
+
+def _framework_snapshot_include(path: Path, root_dir: Path = ROOT_DIR) -> bool:
+    if not path.is_file():
+        return False
+    relative = path.relative_to(root_dir)
+    if any(segment in FRAMEWORK_MUTATION_IGNORED_SEGMENTS for segment in relative.parts):
+        return False
+    return not relative.name.endswith(FRAMEWORK_MUTATION_IGNORED_SUFFIXES)
+
+
+def _project_snapshot_include(path: Path, root_dir: Path = ROOT_DIR) -> bool:
+    if not path.is_file():
+        return False
+    relative = path.relative_to(root_dir)
+    if relative.parts and relative.parts[0] in PROJECT_MUTATION_EXCLUDED_ROOTS:
+        return False
+    if any(segment in PROJECT_MUTATION_IGNORED_SEGMENTS for segment in relative.parts):
+        return False
+    return not relative.name.endswith(PROJECT_MUTATION_IGNORED_SUFFIXES)
+
+
+def _mutation_snapshot(
+    relative_roots: tuple[str, ...] | list[str],
+    *,
+    root_dir: Path = ROOT_DIR,
+    include_path: Any = _framework_snapshot_include,
+) -> dict[str, tuple[int, int]]:
+    snapshot: dict[str, tuple[int, int]] = {}
+    for relative_root in relative_roots:
+        target = root_dir / relative_root
+        if target.is_file():
+            if include_path(target, root_dir):
+                snapshot[target.relative_to(root_dir).as_posix()] = _framework_snapshot_metadata(target)
+            continue
+        if not target.is_dir():
+            continue
+        for path in target.rglob("*"):
+            if not include_path(path, root_dir):
+                continue
+            relative = path.relative_to(root_dir).as_posix()
+            snapshot[relative] = _framework_snapshot_metadata(path)
+    return snapshot
+
+
+def _mutation_paths(
+    before: dict[str, tuple[int, int]],
+    after: dict[str, tuple[int, int]],
+) -> list[str]:
+    changed = set()
+    before_keys = set(before)
+    after_keys = set(after)
+    changed.update(after_keys - before_keys)
+    changed.update(before_keys - after_keys)
+    for path in before_keys & after_keys:
+        if before[path] != after[path]:
+            changed.add(path)
+    return sorted(changed)
+
+
+def framework_mutation_snapshot(root_dir: Path = ROOT_DIR) -> dict[str, tuple[int, int]]:
+    return _mutation_snapshot(FRAMEWORK_MUTATION_ROOTS, root_dir=root_dir, include_path=_framework_snapshot_include)
+
+
+def framework_mutation_paths(
+    before: dict[str, tuple[int, int]],
+    after: dict[str, tuple[int, int]],
+) -> list[str]:
+    return _mutation_paths(before, after)
+
+
+def project_mutation_roots(root_dir: Path = ROOT_DIR) -> tuple[str, ...]:
+    roots: list[str] = []
+    for child in sorted(root_dir.iterdir(), key=lambda item: item.name):
+        if child.name in PROJECT_MUTATION_EXCLUDED_ROOTS:
+            continue
+        roots.append(child.name)
+    return tuple(roots)
+
+
+def project_mutation_snapshot(root_dir: Path = ROOT_DIR) -> dict[str, tuple[int, int]]:
+    return _mutation_snapshot(project_mutation_roots(root_dir), root_dir=root_dir, include_path=_project_snapshot_include)
+
+
+def project_mutation_paths(
+    before: dict[str, tuple[int, int]],
+    after: dict[str, tuple[int, int]],
+) -> list[str]:
+    return _mutation_paths(before, after)
 
 
 def read_prompt(prompt_file: Path) -> str:
@@ -177,7 +304,8 @@ def writer_prompt_text(
         f"- Follow project preflight from {project_preflight_doc()} before analyze/test/build commands.",
         "- Use STC by default; use PR-CoT only if a bounded implementation trade-off appears inside scope.",
         "- Read target files before editing and keep the change-set inside the approved scope.",
-        "- Treat `issue_contract.scope_in` as the allowed behavior surface and `issue_contract.scope_out` as forbidden change area.",
+        "- Treat `issue_contract.proven_scope` as the allowed behavior surface and `issue_contract.scope_out` as forbidden change area.",
+        "- `issue_contract.reported_scope` may be broader than the executable fix; do not silently widen into reported-but-unproven scope.",
         "- Do not widen task ownership or rewrite orchestration decisions.",
         "- Machine-readable summaries must always include impact_analysis; for STC keep it minimal, and for PR-CoT or MAR populate bounded downstream effects.",
         "Verification:",
@@ -389,6 +517,26 @@ def policy_value(value: Any, default: str) -> str:
         trimmed = value.strip()
         return trimmed if trimmed else default
     return str(value)
+
+
+def read_only_boundary_guard_required(
+    prompt_text: str,
+    *,
+    task_class: str,
+    route: dict[str, Any],
+    subagent_cfg: dict[str, Any],
+) -> bool:
+    if "Mode: READ-ONLY" in prompt_text:
+        return True
+    route_write_scope = policy_value(route.get("write_scope"), "")
+    if route_write_scope:
+        return route_write_scope == "none"
+    normalized_task_class = policy_value(route.get("task_class"), task_class).lower()
+    if normalized_task_class == "read_only_prep":
+        return True
+    if any(token in normalized_task_class for token in ("analysis", "review", "verification", "research", "coach")):
+        return True
+    return policy_value(subagent_cfg.get("write_scope"), "none") == "none"
 
 
 def route_runtime_limit(route: dict[str, Any], subagent_cfg: dict[str, Any]) -> int:
@@ -615,6 +763,11 @@ def issue_contract_path(task_id: str) -> Path:
     return ISSUE_CONTRACT_DIR / f"{safe_task_id}.json"
 
 
+def issue_split_path(task_id: str) -> Path:
+    safe_task_id = re.sub(r"[^A-Za-z0-9._-]+", "-", task_id.strip() or "task")
+    return ISSUE_SPLIT_DIR / f"{safe_task_id}.json"
+
+
 def route_receipt_hash(route: dict[str, Any]) -> str:
     return digest_text(json.dumps(route_receipt_payload(route), sort_keys=True))
 
@@ -735,6 +888,56 @@ def load_issue_contract(task_id: str) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def build_issue_split_artifact(issue_contract: dict[str, Any]) -> dict[str, Any]:
+    symptoms = issue_contract.get("symptoms")
+    if not isinstance(symptoms, list) or len(symptoms) <= 1:
+        return {}
+    primary_slice: list[dict[str, Any]] = []
+    secondary_slice: list[dict[str, Any]] = []
+    for item in symptoms:
+        if not isinstance(item, dict):
+            continue
+        symptom_payload = {
+            "id": policy_value(item.get("id"), "SYM"),
+            "summary": policy_value(item.get("summary"), ""),
+            "evidence_status": policy_value(item.get("evidence_status"), "unproven").casefold(),
+            "disposition": policy_value(item.get("disposition"), "in_scope").casefold(),
+            "evidence_refs": normalized_string_list(item.get("evidence_refs")),
+        }
+        if (
+            symptom_payload["disposition"] != "out_of_scope"
+            and symptom_payload["evidence_status"] in {"reproduced", "red_test", "live_evidence"}
+        ):
+            primary_slice.append(symptom_payload)
+        else:
+            secondary_slice.append(symptom_payload)
+    if not primary_slice or not secondary_slice:
+        return {}
+    return {
+        "ts": now_utc(),
+        "task_id": policy_value(issue_contract.get("task_id"), ""),
+        "status": "mixed_issue_split_detected",
+        "primary_executable_slice": {
+            "symptom_ids": [item["id"] for item in primary_slice],
+            "symptoms": primary_slice,
+            "proven_scope": normalized_string_list(issue_contract.get("proven_scope")),
+        },
+        "secondary_unresolved_slice": {
+            "symptom_ids": [item["id"] for item in secondary_slice],
+            "symptoms": secondary_slice,
+            "reported_scope": normalized_string_list(issue_contract.get("reported_scope")),
+        },
+        "recommended_follow_up": "create_or_update_follow_up_issue_for_secondary_slice",
+    }
+
+
+def write_issue_split_artifact(task_id: str, payload: dict[str, Any]) -> Path:
+    path = issue_split_path(task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
 def load_internal_escalation_receipt(task_id: str, task_class: str) -> dict[str, Any]:
     path = internal_escalation_receipt_path(task_id, task_class)
     if not path.exists():
@@ -833,6 +1036,35 @@ def normalized_issue_contract(
     classification = policy_value(raw_issue_contract.get("classification"), "insufficient_evidence")
     equivalence_assessment = policy_value(raw_issue_contract.get("equivalence_assessment"), "")
     status = issue_contract_status(classification, equivalence_assessment)
+    reported_scope = normalized_string_list(
+        raw_issue_contract.get("reported_scope", raw_issue_contract.get("scope_in"))
+    )
+    proven_scope = normalized_string_list(
+        raw_issue_contract.get("proven_scope", raw_issue_contract.get("scope_in"))
+    )
+    raw_symptoms = raw_issue_contract.get("symptoms")
+    normalized_symptoms: list[dict[str, Any]] = []
+    if isinstance(raw_symptoms, list):
+        for index, item in enumerate(raw_symptoms, start=1):
+            if not isinstance(item, dict):
+                continue
+            symptom_id = policy_value(item.get("id"), f"SYM-{index}") or f"SYM-{index}"
+            summary = policy_value(item.get("summary"), "")
+            evidence_status = policy_value(item.get("evidence_status"), "unproven").casefold()
+            if evidence_status not in {"reproduced", "red_test", "live_evidence", "unproven"}:
+                evidence_status = "unproven"
+            disposition = policy_value(item.get("disposition"), "in_scope").casefold()
+            if disposition not in {"in_scope", "out_of_scope"}:
+                disposition = "in_scope"
+            normalized_symptoms.append(
+                {
+                    "id": symptom_id,
+                    "summary": summary,
+                    "evidence_status": evidence_status,
+                    "disposition": disposition,
+                    "evidence_refs": normalized_string_list(item.get("evidence_refs")),
+                }
+            )
     return {
         "ts": now_utc(),
         "task_id": task_id,
@@ -842,7 +1074,10 @@ def normalized_issue_contract(
         "equivalence_assessment": equivalence_assessment,
         "reported_behavior": policy_value(raw_issue_contract.get("reported_behavior"), ""),
         "expected_behavior": policy_value(raw_issue_contract.get("expected_behavior"), ""),
-        "scope_in": normalized_string_list(raw_issue_contract.get("scope_in")),
+        "reported_scope": reported_scope,
+        "proven_scope": proven_scope,
+        "symptoms": normalized_symptoms,
+        "scope_in": proven_scope,
         "scope_out": normalized_string_list(raw_issue_contract.get("scope_out")),
         "acceptance_checks": normalized_string_list(raw_issue_contract.get("acceptance_checks")),
         "spec_sync_targets": normalized_string_list(raw_issue_contract.get("spec_sync_targets")),
@@ -883,6 +1118,23 @@ def validate_issue_contract(
     if payload.get("route_receipt_hash") != route_receipt_hash(route):
         return False, payload, "stale_issue_contract"
     if status == "writer_ready":
+        if not normalized_string_list(payload.get("proven_scope")):
+            return False, payload, "missing_proven_scope"
+        symptoms = payload.get("symptoms")
+        if isinstance(symptoms, list) and len(symptoms) > 1:
+            unresolved: list[str] = []
+            for item in symptoms:
+                if not isinstance(item, dict):
+                    unresolved.append("(invalid_symptom)")
+                    continue
+                disposition = policy_value(item.get("disposition"), "in_scope").casefold()
+                evidence_status = policy_value(item.get("evidence_status"), "unproven").casefold()
+                if disposition == "out_of_scope":
+                    continue
+                if evidence_status not in {"reproduced", "red_test", "live_evidence"}:
+                    unresolved.append(policy_value(item.get("id"), "SYM"))
+            if unresolved:
+                return False, payload, "unproven_symptoms:" + ",".join(unresolved)
         return True, payload, ""
     if status in {"spec_delta_required", "issue_closed_no_fix", "insufficient_evidence"}:
         return False, payload, status
@@ -1357,6 +1609,41 @@ def looks_like_planning_chatter(normalized_text: str) -> bool:
     return False
 
 
+def text_has_machine_readable_payload(text: str) -> bool:
+    return bool(worker_packet_gate.extract_json_payload(text))
+
+
+def output_quality_state(
+    prompt_text: str,
+    output_text: str,
+    stderr_text: str,
+    *,
+    machine_readable_contract_required: bool,
+    merge_ready: bool,
+    worker_output_valid: bool,
+) -> tuple[str, list[str]]:
+    combined = "\n".join(
+        part for part in (output_text, stderr_text) if isinstance(part, str) and part.strip()
+    ).strip()
+    if not combined:
+        return "", []
+    normalized = combined.casefold()
+    reasons: list[str] = []
+    if looks_like_planning_chatter(normalized):
+        reasons.append("planning_chatter_detected")
+        return "preamble_only_output", reasons
+    if machine_readable_contract_required:
+        if not text_has_machine_readable_payload(output_text) and not text_has_machine_readable_payload(stderr_text):
+            reasons.append("machine_readable_payload_missing")
+            if structured_evidence_score(normalized) <= 0:
+                reasons.append("no_structured_evidence")
+            return "missing_machine_readable_payload", reasons
+    if not merge_ready and not worker_output_valid and structured_evidence_score(normalized) <= 0:
+        reasons.append("structured_evidence_missing")
+        return "low_signal_output", reasons
+    return "", []
+
+
 def output_has_useful_progress(output_text: str, stderr_text: str, min_output_bytes: int) -> bool:
     combined = f"{output_text}\n{stderr_text}".strip()
     if not combined:
@@ -1429,6 +1716,8 @@ def subagent_result_payload(
     status: str,
     exit_code: int,
     error_text: str,
+    framework_mutation_paths: list[str] | None = None,
+    project_mutation_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     duration_ms = int((time.monotonic() - started) * 1000)
     prompt_text = read_prompt(prompt_file)
@@ -1448,16 +1737,51 @@ def subagent_result_payload(
         )
     else:
         machine_readable_contract_required = worker_packet_gate.machine_readable_contract_required(prompt_text)
+    output_quality_state_value, output_quality_reasons = output_quality_state(
+        prompt_text,
+        output_text,
+        stderr_text,
+        machine_readable_contract_required=machine_readable_contract_required,
+        merge_ready=merge_ready,
+        worker_output_valid=worker_output_valid,
+    )
+    fail_closed_output = output_quality_state_value in {
+        "preamble_only_output",
+        "missing_machine_readable_payload",
+        "low_signal_output",
+    }
+    if status == "success" and fail_closed_output:
+        status = "failure"
+        if exit_code == 0:
+            exit_code = 3
+        output_quality_error = (
+            f"fail-closed output quality violation: {output_quality_state_value}"
+            + (f" ({', '.join(output_quality_reasons)})" if output_quality_reasons else "")
+        )
+        error_text = f"{error_text}; {output_quality_error}" if error_text else output_quality_error
     contract_failure = "worker packet validation failed" in error_text.casefold() or "worker output contract invalid" in error_text.casefold()
     useful_progress = False if contract_failure else output_has_useful_progress(output_text, stderr_text, min_output_bytes)
-    if machine_readable_contract_required and worker_output_valid:
+    if machine_readable_contract_required and worker_output_valid and not fail_closed_output:
         useful_progress = True
-    chatter_only = (not merge_ready) and (not worker_output_valid) and looks_like_planning_chatter(output_text.casefold())
+    if fail_closed_output:
+        useful_progress = False
+    chatter_only = (
+        output_quality_state_value == "preamble_only_output"
+        or ((not merge_ready) and (not worker_output_valid) and looks_like_planning_chatter(output_text.casefold()))
+    )
     review_state = review_state_for(status, merge_ready, risk_class)
     target_review_state = subagent_system.target_review_state_for(risk_class)
     target_manifest_review_state = subagent_system.target_manifest_review_state_for(risk_class)
-    availability = subagent_availability_signal(status, error_text, output_text, stderr_text)
+    availability = subagent_availability_signal(
+        status,
+        error_text,
+        output_text,
+        stderr_text,
+        output_quality_state_value=output_quality_state_value,
+    )
     route_policy = route_policy_payload(task_id, route, subagent_name, subagent_cfg, dispatch_mode)
+    forbidden_framework_mutations = sorted(framework_mutation_paths or [])
+    forbidden_project_mutations = sorted(project_mutation_paths or [])
     payload = {
         "ts": now_utc(),
         "type": "subagent_run",
@@ -1512,6 +1836,9 @@ def subagent_result_payload(
         "machine_readable_contract_required": machine_readable_contract_required,
         "worker_output_valid": worker_output_valid,
         "worker_output_errors": worker_output_errors,
+        "output_quality_state": output_quality_state_value,
+        "output_quality_reasons": output_quality_reasons,
+        "low_signal_output": output_quality_state_value in {"low_signal_output", "missing_machine_readable_payload"},
         "selected_budget_units": route_policy["selected_budget_units"],
         "selected_cost_class": route_policy["selected_cost_class"],
         "route_budget_policy": route_policy["route_budget_policy"],
@@ -1527,6 +1854,10 @@ def subagent_result_payload(
         "cost_escalation_trigger": route_policy["cost_escalation_trigger"],
         "internal_escalation_receipt": route_policy["internal_escalation_receipt"],
         "route_receipt": route_receipt_payload(route),
+        "framework_boundary_violation": bool(forbidden_framework_mutations),
+        "framework_boundary_violation_paths": forbidden_framework_mutations,
+        "project_boundary_violation": bool(forbidden_project_mutations),
+        "project_boundary_violation_paths": forbidden_project_mutations,
     }
     append_jsonl(RUN_LOG_PATH, payload)
     return payload
@@ -1537,6 +1868,8 @@ def subagent_availability_signal(
     error_text: str,
     output_text: str,
     stderr_text: str,
+    *,
+    output_quality_state_value: str = "",
 ) -> dict[str, Any]:
     combined = "\n".join(
         part for part in [error_text, output_text, stderr_text] if isinstance(part, str) and part.strip()
@@ -1550,6 +1883,30 @@ def subagent_availability_signal(
     }
     if status == "success":
         return signal
+    if output_quality_state_value == "preamble_only_output":
+        return {
+            "subagent_state": "degraded",
+            "failure_reason": "preamble_only_output",
+            "cooldown_until": subagent_system.future_utc_iso(minutes=20),
+            "probe_required": True,
+            "last_quota_exhausted_at": "",
+        }
+    if output_quality_state_value == "missing_machine_readable_payload":
+        return {
+            "subagent_state": "degraded",
+            "failure_reason": "missing_machine_readable_payload",
+            "cooldown_until": subagent_system.future_utc_iso(minutes=20),
+            "probe_required": True,
+            "last_quota_exhausted_at": "",
+        }
+    if output_quality_state_value == "low_signal_output":
+        return {
+            "subagent_state": "degraded",
+            "failure_reason": "low_signal_output",
+            "cooldown_until": subagent_system.future_utc_iso(minutes=15),
+            "probe_required": True,
+            "last_quota_exhausted_at": "",
+        }
     if "policy violation:" in combined or "worker packet validation failed" in combined or "worker output contract invalid" in combined:
         return signal
 
@@ -1865,6 +2222,22 @@ def start_subagent_process(
     subagent_route = route_subagent_item(route, subagent_name)
     domain_tags = infer_domain_tags(prompt, task_class)
     risk_class = route_risk_class(route)
+    read_only_guard = read_only_boundary_guard_required(
+        prompt,
+        task_class=task_class,
+        route=route,
+        subagent_cfg=subagent_cfg,
+    )
+    framework_snapshot_before = (
+        framework_mutation_snapshot(ROOT_DIR)
+        if read_only_guard
+        else None
+    )
+    project_snapshot_before = (
+        project_mutation_snapshot(ROOT_DIR)
+        if read_only_guard
+        else None
+    )
     max_runtime_seconds = dispatch_runtime_limit(
         route_runtime_limit(subagent_route or route, subagent_cfg),
         dispatch_mode,
@@ -1993,6 +2366,8 @@ def start_subagent_process(
             "useful_progress": False,
             "runtime_extension_applied": False,
             "effective_runtime_seconds": max_runtime_seconds,
+            "framework_snapshot_before": framework_snapshot_before,
+            "project_snapshot_before": project_snapshot_before,
         }
     except Exception as exc:
         try:
@@ -2056,6 +2431,38 @@ def finalize_subagent_process(
         exit_code = exit_code_override
     elif status_override is None and (exit_code != 0 or output_size(launch["output_file"]) == 0):
         status = "failure"
+    forbidden_framework_mutations: list[str] = []
+    forbidden_project_mutations: list[str] = []
+    framework_snapshot_before = launch.get("framework_snapshot_before")
+    if isinstance(framework_snapshot_before, dict):
+        forbidden_framework_mutations = framework_mutation_paths(
+            framework_snapshot_before,
+            framework_mutation_snapshot(ROOT_DIR),
+        )
+    project_snapshot_before = launch.get("project_snapshot_before")
+    if isinstance(project_snapshot_before, dict):
+        forbidden_project_mutations = project_mutation_paths(
+            project_snapshot_before,
+            project_mutation_snapshot(ROOT_DIR),
+        )
+    if forbidden_framework_mutations or forbidden_project_mutations:
+        if status == "success":
+            status = "failure"
+            if exit_code == 0:
+                exit_code = 3
+        boundary_errors: list[str] = []
+        if forbidden_framework_mutations:
+            boundary_errors.append(
+                "forbidden framework mutation detected: "
+                + ", ".join(forbidden_framework_mutations[:8])
+            )
+        if forbidden_project_mutations:
+            boundary_errors.append(
+                "forbidden project mutation detected: "
+                + ", ".join(forbidden_project_mutations[:8])
+            )
+        boundary_error = "; ".join(boundary_errors)
+        error_text = f"{error_text}; {boundary_error}" if error_text else boundary_error
     return subagent_result_payload(
         task_id=launch["task_id"],
         task_class=launch["task_class"],
@@ -2078,6 +2485,8 @@ def finalize_subagent_process(
         status=status,
         exit_code=exit_code,
         error_text=error_text,
+        framework_mutation_paths=forbidden_framework_mutations,
+        project_mutation_paths=forbidden_project_mutations,
     )
 
 
@@ -2697,6 +3106,7 @@ def verification_prompt_text(
         f"- Follow project preflight from {project_preflight_doc()} before analysis/test/build commands.",
         "- Use STC by default; use PR-CoT only if a bounded verification trade-off appears inside scope.",
         "- Do not re-solve the task from scratch.",
+        "- Do not create or update files under `AGENTS.md`, `_vida/*`, `docs/*`, `scripts/*`, project root config files, or application source trees; return the JSON summary in stdout only.",
         "- Validate whether the candidate conclusion is sufficiently supported for orchestrator synthesis.",
         "- Highlight contract risks, residual blockers, and whether synthesis is justified.",
         f"- Primary task class: {task_class}",
@@ -2756,9 +3166,12 @@ def analysis_prompt_text(
         f"- Follow project preflight from {project_preflight_doc()} before analysis/test/build commands.",
         "- Use STC by default; use MAR only if a bounded root-cause investigation is necessary inside scope.",
         "- Do not modify files and do not act as the writer.",
+        "- Do not create or update files under `AGENTS.md`, `_vida/*`, `docs/*`, `scripts/*`, project root config files, or application source trees; return the JSON summary in stdout only.",
+        "- Runtime/temp artifacts are orchestrator-owned under `_temp/` and `.vida/logs/`; do not create your own task-local analysis files.",
         "- Return only evidence-backed findings that help the writer choose the correct root-cause fix order.",
         "- Classify the issue as one of: defect_equivalent, defect_needs_contract_update, feature_delta, as_designed, not_a_bug, insufficient_evidence.",
         "- Decide whether the requested change is an equivalent fix or requires a spec/product-contract delta before any writer pass.",
+        "- If the issue has multiple symptoms, populate `issue_contract.symptoms` and mark each in-scope symptom as evidenced (`reproduced|red_test|live_evidence`) or explicitly excluded via `disposition=out_of_scope` before you mark the contract writer-ready.",
         f"- Writer task class: {writer_task_class}",
         f"- Analysis task class: {analysis_task_class}",
         "Verification:",
@@ -2801,6 +3214,7 @@ def coach_prompt_text(
         "- If the implementation should continue to independent verification, approve it.",
         "- If there are concrete gaps, return it for rework with specific guidance.",
         "- Do not mutate files, do not act as the orchestrator, and do not replace the final independent verifier.",
+        "- Do not create task-local review/spec files under `AGENTS.md`, `_vida/*`, `docs/*`, `scripts/*`, project root config files, or application source trees; return the JSON summary in stdout only.",
         f"- Writer task class: {writer_task_class}",
         f"- Coach task class: {coach_task_class}",
         f"- Planned coach lanes: {coach_total}",
@@ -3026,6 +3440,7 @@ def coach_decision_from_result(result: dict[str, Any]) -> dict[str, Any]:
     stderr_file = str(result.get("stderr_file", "")).strip()
     stderr_path = Path(stderr_file) if stderr_file else Path()
     status = str(result.get("status", "")).strip()
+    output_quality_state_value = str(result.get("output_quality_state", "")).strip()
     candidates = [
         ("output_json_payload", "output_text", load_output_text(output_path) if output_file and output_path.exists() else ""),
         ("stderr_json_payload", "stderr_text", load_output_text(stderr_path) if stderr_file and stderr_path.exists() else ""),
@@ -3051,6 +3466,10 @@ def coach_decision_from_result(result: dict[str, Any]) -> dict[str, Any]:
                 feedback_text = candidate_feedback
 
     reason = "missing_coach_decision_payload"
+    invalid_reasons = ["missing_coach_decision_payload"]
+    if output_quality_state_value:
+        reason = output_quality_state_value
+        invalid_reasons = [output_quality_state_value]
     if feedback_text:
         reason = f"{reason}: {feedback_text}"
     elif status:
@@ -3059,7 +3478,7 @@ def coach_decision_from_result(result: dict[str, Any]) -> dict[str, Any]:
         "approved": False,
         "coach_decision": "coach_failed",
         "payload_state": "missing_payload",
-        "invalid_reasons": ["missing_coach_decision_payload"],
+        "invalid_reasons": invalid_reasons,
         "rework_required": "yes",
         "coach_feedback": feedback_text,
         "recommended_next_action": "rerun_coach_review_with_valid_machine_readable_output",
@@ -4204,6 +4623,7 @@ def run_prepare_execution(argv: list[str]) -> int:
         "effective_prompt_file": str(effective_prompt_file),
         "analysis_receipt_path": str(analysis_receipt_path(task_id, writer_task_class)),
         "issue_contract_path": str(issue_contract_path(task_id)),
+        "issue_split_path": str(issue_split_path(task_id)),
         "writer_authorized": False,
         "status": "blocked",
     }
@@ -4301,6 +4721,10 @@ def run_prepare_execution(argv: list[str]) -> int:
             manifest["issue_contract_error"] = issue_contract_validation_error
         if validated_issue_contract:
             manifest["issue_contract"] = validated_issue_contract
+            issue_split = build_issue_split_artifact(validated_issue_contract)
+            if issue_split:
+                manifest["issue_split"] = issue_split
+                manifest["issue_split_path"] = str(write_issue_split_artifact(task_id, issue_split))
         if issue_contract_ok:
             existing_prompt_text = read_prompt(effective_prompt_file)
             if worker_packet_gate.validate_packet_text(existing_prompt_text):

@@ -229,6 +229,20 @@ class VidaConfigValidationTest(unittest.TestCase):
             errors,
         )
 
+    def test_framework_self_diagnosis_enabled_requires_silent_mode_true(self) -> None:
+        cfg = self._base_config()
+        cfg["framework_self_diagnosis"] = {
+            "enabled": True,
+            "silent_mode": False,
+        }
+
+        errors = self.module.validate_config(cfg)
+
+        self.assertIn(
+            "framework_self_diagnosis.silent_mode: must be true when enabled=true",
+            errors,
+        )
+
     def test_route_cross_references_unknown_subagents_and_routes_fail_validation(self) -> None:
         cfg = self._base_config()
         cfg["agent_system"]["routing"]["analysis"] = {
@@ -425,6 +439,17 @@ class VidaConfigValidationTest(unittest.TestCase):
         self.assertEqual(codex_dispatch.get("subcommand"), "exec")
         self.assertEqual(codex_dispatch.get("web_search_mode"), "flag")
         self.assertEqual(codex_dispatch.get("web_search_flag"), "--search")
+
+    def test_repository_overlay_declares_read_only_prep_route(self) -> None:
+        cfg = self.module.load_config(validate=False)
+
+        route = cfg["agent_system"]["routing"]["read_only_prep"]
+
+        self.assertEqual(route["write_scope"], "none")
+        self.assertEqual(route["dispatch_required"], "fanout_then_synthesize")
+        self.assertEqual(route["external_first_required"], "yes")
+        self.assertEqual(route["independent_verification_required"], "no")
+        self.assertEqual(route["local_execution_allowed"], "no")
 
     def test_qwen_template_example_does_not_force_sandbox(self) -> None:
         template = CONFIG_TEMPLATE_PATH.read_text(encoding="utf-8")

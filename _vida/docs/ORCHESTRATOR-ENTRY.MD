@@ -202,6 +202,7 @@ Use for routine execution and token-efficient continuation.
 9. Read `vida.config.yaml` when present.
 10. If `protocol_activation.agent_system=true`, read `_vida/docs/subagent-system-protocol.md`.
 11. Read `_vida/docs/beads-protocol.md` only if the request is not `answer_only` and the compact snapshot is insufficient.
+12. If `framework_self_diagnosis.enabled=true`, read `_vida/docs/silent-framework-diagnosis-protocol.md` and keep the silent diagnosis contract active for the session.
 
 ### Standard Boot
 

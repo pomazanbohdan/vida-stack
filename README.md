@@ -57,13 +57,15 @@ Vida Stack is still in active development, but it can already be used as a worki
 - automatic work with tasks, epics, queues, and execution state
 - request-intent classification into answer, artifact, execution, and mixed flows before heavy runtime engagement
 - compact boot snapshots and low-cost status diagnostics before broader task or log discovery
+- queue-backed single-writer task-state mutations for subagent-heavy execution
 - orchestration of bounded subagents with routing, fallback, lease-aware dispatch, and review-aware control
 - subagent-first development execution in supported active modes with orchestrator-owned synthesis
 - hard-law route enforcement with fail-closed dispatch when mandatory fanout, verification, or lawful escalation is skipped
+- silent framework diagnosis as a background guardrail with deferred framework bug capture
 - research flows with structured evidence gathering and validation
 - planning and decomposition of work into executable slices
 - formation and refinement of specifications and technical contracts
-- implementation and development execution through protocol-governed flows
+- implementation and development execution through protocol-governed flows, including mixed-issue split handling for issue-driven work
 
 The system is not yet a finished standalone product, but it is already capable of real framework-driven engineering work.
 
@@ -185,6 +187,8 @@ Right now, the framework is implemented through a practical stack of:
 - external-first subagent routing with verification, route receipts, and fallback logic
 
 Recent runtime work has also hardened the framework with a bootstrap split between orchestrator and worker lanes, compact boot snapshots for dev-oriented context, request-intent gating before `br` and pack machinery, subagent-first analysis/review and development execution in supported modes, budget-aware route and escalation metadata, question-driven worker packets with stricter return contracts and non-`STC` impact tails, hard bounded log-read rules for `.vida/*` surfaces, target review-state visibility before dispatch, ensemble lease diagnostics with conflict history, canonical `route_law_summary` and machine-readable `route_receipt` artifacts, verifier-gated `decision_ready` versus `synthesis_ready` completion, pool dependency-graph analysis before multi-task writer selection, and orchestrator-synthesized user reporting that keeps subagent process details hidden by default.
+
+The newest runtime layer also adds queue-backed single-writer task-state mutations for concurrent subagent flows, silent framework diagnosis as a background capture mode, reusable proving-pack templates for product and framework regression surfaces, reusable leased subagent-pool helpers, fail-closed cheap-lane rejection for low-signal outputs, and mixed-issue split artifacts that preserve unresolved secondary symptoms as follow-up work instead of widening the current writer lane.
 
 This phase matters because the objective is to finish the mechanics end-to-end before extracting and replatforming the system.
 

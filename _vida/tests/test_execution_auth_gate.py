@@ -166,6 +166,35 @@ class ExecutionAuthGateTest(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertIn("missing_issue_contract", payload["blockers"])
 
+    def test_gate_blocks_when_issue_contract_has_no_proven_scope(self) -> None:
+        self.analysis_blocker_path.write_text(
+            json.dumps(
+                {
+                    "status": "analysis_failed",
+                    "reason": "fanout_min_results_not_met",
+                    "route_receipt_hash": self.module.json_hash(self.route_payload),
+                }
+            )
+        )
+        self._write_local_override_receipt()
+        self.issue_contract_path.parent.mkdir(parents=True, exist_ok=True)
+        self.issue_contract_path.write_text(json.dumps({"status": "writer_ready", "proven_scope": []}))
+
+        with mock.patch.object(
+            self.module.dispatch_runtime,
+            "validate_issue_contract",
+            return_value=(False, {"status": "writer_ready", "proven_scope": []}, "missing_proven_scope"),
+        ):
+            exit_code, payload = self.module.check_gate(
+                self.task_id,
+                self.task_class,
+                local_write=True,
+                block_id="P02",
+            )
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("missing_proven_scope", payload["blockers"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -42,6 +42,8 @@ Canonical layer source: `_vida/docs/command-layer-protocol.md`
    - classify each issue as `defect_equivalent|defect_needs_contract_update|feature_delta|as_designed|not_a_bug|insufficient_evidence`.
 4. `BFP-3 Issue Contract`:
    - build the canonical `issue_contract` artifact by `_vida/docs/issue-contract-protocol.md`,
+   - separate `reported_scope` from `proven_scope` before any writer-ready decision,
+   - if one issue contains both a primary executable slice and secondary unresolved symptoms, emit the `issue-split` artifact instead of silently widening the current bug fix,
    - do not send a writer lane raw bug text when the issue contract is still missing.
 5. `BFP-4 Reproduce & Validate`:
    - reproduce each issue,
@@ -49,6 +51,7 @@ Canonical layer source: `_vida/docs/command-layer-protocol.md`
    - capture status/payload/error evidence.
 6. `BFP-5 Equivalence Gate`:
    - if `issue_contract.status=writer_ready`, continue to fix planning,
+   - for multi-symptom issues, each in-scope symptom must already have repro/red-test/live evidence or be explicitly excluded,
    - if `issue_contract.status=spec_delta_required`, stop and reconcile spec/product contract first,
    - if `issue_contract.status=issue_closed_no_fix`, close with rationale,
    - if `issue_contract.status=insufficient_evidence`, gather more evidence before implementation.

@@ -10,6 +10,11 @@ BEADS_RUNTIME_BACKUP_DIR="$BEADS_RUNTIME_BEADS_DIR/backups"
 BEADS_RUNTIME_MODE_FILE="$BEADS_RUNTIME_BEADS_DIR/runtime-mode.json"
 BEADS_RUNTIME_DEFAULT_MODE="jsonl_safe"
 BEADS_RUNTIME_MUTATOR="$BEADS_RUNTIME_DIR/br-jsonl-mutate.py"
+BEADS_RUNTIME_MUTATION_QUEUE="$BEADS_RUNTIME_DIR/br-mutation-queue.py"
+
+# Single-writer rule:
+# - read-only `br` commands may execute directly through br-safe
+# - all mutating task-state commands must route through the queue-backed writer
 
 beads_require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -68,6 +73,17 @@ beads_set_mode() {
 }
 
 beads_br() {
+  local subcommand="${1:-}"
+  case "$subcommand" in
+    create|update|close|link|unlink|sync)
+      if [[ ! -f "$BEADS_RUNTIME_MUTATION_QUEUE" ]]; then
+        echo "[beads-runtime] Missing mutation queue: $BEADS_RUNTIME_MUTATION_QUEUE" >&2
+        return 127
+      fi
+      python3 "$BEADS_RUNTIME_MUTATION_QUEUE" br -- "$@"
+      return $?
+      ;;
+  esac
   if [[ ! -x "$BEADS_RUNTIME_BR_SAFE_SCRIPT" ]]; then
     echo "[beads-runtime] Missing executable router: $BEADS_RUNTIME_BR_SAFE_SCRIPT" >&2
     return 127
@@ -76,11 +92,11 @@ beads_br() {
 }
 
 beads_mutate() {
-  if [[ ! -f "$BEADS_RUNTIME_MUTATOR" ]]; then
-    echo "[beads-runtime] Missing mutator: $BEADS_RUNTIME_MUTATOR" >&2
+  if [[ ! -f "$BEADS_RUNTIME_MUTATION_QUEUE" ]]; then
+    echo "[beads-runtime] Missing mutation queue: $BEADS_RUNTIME_MUTATION_QUEUE" >&2
     return 127
   fi
-  python3 "$BEADS_RUNTIME_MUTATOR" "$@"
+  python3 "$BEADS_RUNTIME_MUTATION_QUEUE" mutator -- "$@"
 }
 
 beads_snapshot_jsonl() {

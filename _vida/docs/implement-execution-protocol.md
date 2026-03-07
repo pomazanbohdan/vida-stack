@@ -60,7 +60,8 @@ Canonical layer source: `_vida/docs/command-layer-protocol.md`
 6. `IEP-4 Preflight`
    - baseline checks, dependency readiness, risk scan.
 7. `IEP-4.2 Execution Authorization Gate`
-   - confirm route receipt, analysis lane, analysis receipt (when required), `issue_contract` readiness when the task is issue-driven, author lane, verifier lane (or explicit `no_eligible_verifier`), and writer ownership before deep local implementation prep.
+   - confirm route receipt, analysis lane, analysis receipt (when required), `issue_contract` readiness when the task is issue-driven, non-empty `issue_contract.proven_scope`, symptom-level evidence for any multi-symptom issue, author lane, verifier lane (or explicit `no_eligible_verifier`), and writer ownership before deep local implementation prep.
+   - if `issue_contract` emits a mixed-issue split artifact, keep writer ownership on the primary executable slice only and preserve the unresolved slice as follow-up work.
    - if local mutation is proposed under active subagent mode, require route authorization or lawful escalation receipt.
    - if the gate is not satisfied: `BLOCKED (BLK_EXECUTION_AUTH_MISSING)`.
 8. `IEP-4.5 Change-Impact Gate`
@@ -128,10 +129,11 @@ On trigger:
    - risk analysis,
    - review triage,
    - docs checks.
-3. Parallel write lanes are forbidden unless explicit isolation exists (separate worktrees + merge gate).
-4. Keep main thread clean: subagents return concise artifacts, not raw noisy logs.
-5. When route metadata declares `fanout_subagents`, use that fanout only for read-only phases and keep the writer lane singular under the orchestrator.
-6. If route metadata declares hard routing requirements, local/manual bypass is invalid unless a lawful escalation receipt exists.
+3. When a downstream or dependent task needs preparation but must not enter writer execution yet, use a prep-only route such as `read_only_prep` and keep writer authorization blocked.
+4. Parallel write lanes are forbidden unless explicit isolation exists (separate worktrees + merge gate).
+5. Keep main thread clean: subagents return concise artifacts, not raw noisy logs.
+6. When route metadata declares `fanout_subagents`, use that fanout only for read-only phases and keep the writer lane singular under the orchestrator.
+7. If route metadata declares hard routing requirements, local/manual bypass is invalid unless a lawful escalation receipt exists.
 
 ## Skills Policy
 

@@ -80,6 +80,7 @@ Release 1 should be delivered through these phases:
   - [x] Health-check and finish-gate tooling exist.
   - [x] `AGENTS.md` now routes into split orchestrator and worker boot contracts.
   - [x] Compact boot snapshots now exist for bounded development-status reads.
+  - [x] Queue-backed single-writer task-state mutation now exists for canonical mutating runtime paths.
 - [ ] **Partial: Phase B — Orchestration and Subagent Reliability**
   - [x] Route snapshots, requested/effective mode selection, and provider scoring are implemented.
   - [x] External-first fanout, fallback, arbitration, and live ensemble visibility are implemented.
@@ -93,6 +94,8 @@ Release 1 should be delivered through these phases:
   - [x] Budget-policy routing and escalation metadata now exist in route/run surfaces.
   - [x] Route-law summaries and canonical route receipts now exist for dispatch authorization and artifact correlation.
   - [x] Illegal single-lane dispatch now fails closed when route law requires fanout and synthesis.
+  - [x] Cheap lanes now fail closed on low-signal outputs instead of being counted as successful progress.
+  - [x] Reusable leased subagent-pool helpers now exist on top of the lease runtime.
   - [ ] Broader task/block/file-scope ownership enforcement is not yet fully complete.
 - [ ] **Partial: Phase C — Verification, Review, and Risk Gates**
   - [x] Route and run artifacts expose `risk_class`.
@@ -103,6 +106,7 @@ Release 1 should be delivered through these phases:
   - [x] Independent verification now persists as a dedicated manifest block.
   - [x] Completion now distinguishes `decision_ready` from `synthesis_ready`.
   - [x] Verification-required ensembles now stay blocked until verifier routing clears synthesis.
+  - [x] Mixed-issue split artifacts now preserve unresolved secondary symptoms as explicit follow-up work.
   - [ ] Full review-state progression is not yet complete across the full target vocabulary.
   - [ ] Human approval and higher-risk escalation boundaries are not yet fully materialized.
 - [ ] **Partial: Phase D — Telemetry, Scorecards, and Drift Awareness**
@@ -112,6 +116,7 @@ Release 1 should be delivered through these phases:
   - [x] Lease-conflict and recent recovery summaries are now visible in operator surfaces.
   - [x] Budget-policy and escalation diagnostics are now visible in run logs and health surfaces.
   - [x] Route-law summaries, route receipts, and verification blocks are now part of canonical runtime telemetry.
+  - [x] Low-fitness cheap-lane penalties now persist in scorecards and routing telemetry.
   - [ ] Drift and anomaly handling are not yet complete at the intended Release 1 maturity level.
 - [ ] **Partial: Phase E — Documentation Contract and Protocol Runtime Alignment**
   - [x] Release-target documents, protocol index, orchestrator/worker contracts, and changelog are in place.
@@ -120,6 +125,7 @@ Release 1 should be delivered through these phases:
   - [x] Runtime payloads now canonicalize legacy note/domain strings into framework-generic operator vocabulary.
   - [x] Bootstrap split, request-intent gate, and bounded log-read budget are now reflected in framework docs.
   - [x] Hard-law routing and verification requirements are now reflected in protocol documents instead of advisory wording.
+  - [x] Silent diagnosis and proving-pack protocol surfaces now exist in the canonical framework map.
   - [ ] Full document freshness and lifecycle enforcement are not yet complete.
 - [ ] **Partial: Phase F — Extraction Readiness and Standalone Framework Preparation**
   - [x] A bash installer exists for framework payload installation.
@@ -141,6 +147,7 @@ Scope:
 4. context capsule and hydration reliability
 5. boot-profile correctness
 6. finish/verify/health gates that actually block bad state
+7. queue-backed single-writer serialization for mutating task-state commands
 
 Priority work:
 
@@ -168,6 +175,7 @@ Implementation audit:
 - [x] Boot-profile validation exists.
 - [x] `AGENTS.md` now routes into split orchestrator and worker boot contracts.
 - [x] Compact boot snapshots now exist for bounded development-status reads.
+- [x] Queue-backed single-writer mutation now exists for canonical task-state writes.
 - [ ] Full proof that all non-trivial work always stays inside active block lifecycle still depends on operational discipline, not only static runtime enforcement.
 
 ## Phase B: Orchestration and Subagent Reliability
@@ -200,6 +208,7 @@ Priority work:
 9. improve runtime phase visibility and useful-progress tracking during fanout, fallback, merge, and arbitration
 10. keep active-mode development execution orchestration-first and budget-policy-legible under `native|hybrid|disabled`
 11. materialize canonical route-law and route-receipt artifacts that fail closed when dispatch violates mandatory fanout policy
+12. reject low-signal cheap-lane outputs and provide reusable pooled lease helpers for bounded orchestration reuse
 
 Exit criteria:
 
@@ -230,6 +239,8 @@ Implementation audit:
 - [x] Budget-policy routing and escalation metadata now exist in route/run artifacts.
 - [x] Canonical route-law summaries and route receipts now exist in runtime artifacts.
 - [x] Illegal single-lane dispatch now fails closed on `fanout_then_synthesize` routes.
+- [x] Cheap lanes now fail closed on low-signal outputs.
+- [x] Reusable leased subagent-pool helpers now exist.
 - [ ] Broader task/block/file-scope ownership enforcement remains incomplete.
 
 ## Phase C: Verification, Review, and Risk Gates
@@ -255,6 +266,7 @@ Priority work:
 4. distinguish low-risk promotion from senior-review-required paths
 5. make handoff/close logic aware of review and risk state
 6. preserve verifier-owned completion blocking until independent verification clears synthesis
+7. preserve mixed-issue secondary symptoms as explicit follow-up artifacts instead of widening the current writer lane
 
 Exit criteria:
 
@@ -277,6 +289,7 @@ Implementation audit:
 - [x] Independent verification now persists as a dedicated manifest block.
 - [x] Runtime completion now distinguishes `decision_ready` from `synthesis_ready`.
 - [x] Verification-required ensembles now remain blocked until verifier routing clears synthesis.
+- [x] Mixed-issue split artifacts now preserve unresolved secondary symptoms outside the current writer scope.
 - [ ] Full target review vocabulary is not yet complete in runtime behavior.
 - [ ] Human approval boundaries are still incomplete.
 
@@ -304,6 +317,7 @@ Priority work:
 5. build the base for future anomaly and drift detection
 6. expose progress-aware orchestration signals that improve review and routing decisions
 7. surface canonical route-law and verification-state artifacts in operator telemetry
+8. persist low-fitness cheap-lane penalties as reusable routing evidence
 
 Exit criteria:
 
@@ -326,6 +340,7 @@ Implementation audit:
 - [x] Timeout-instability counters and lease-conflict summaries now exist in operator surfaces.
 - [x] Budget-policy and escalation diagnostics now exist in health and run artifacts.
 - [x] Route-law summaries, route receipts, and verification blocks now exist in canonical run telemetry.
+- [x] Low-fitness cheap-lane penalties now persist in routing telemetry and scorecards.
 - [ ] Drift/anomaly handling is still incomplete.
 
 ## Phase E: Documentation Contract and Protocol Runtime Alignment
@@ -354,6 +369,7 @@ Priority work:
 7. keep agent-system templates and overlay examples aligned with the real routing model, runtime budget fields, and dispatch environment settings
 8. keep bootstrap routing, request-intent gating, and bounded log-read policy aligned across entry contracts and protocol docs
 9. keep hard-law routing, independent verification, and dependency-graph execution rules reflected as framework doctrine instead of advisory prose
+10. keep silent diagnosis and proving-pack protocol surfaces aligned with runtime helpers and overlay knobs
 
 Exit criteria:
 
@@ -376,6 +392,7 @@ Implementation audit:
 - [x] Runtime surfaces now canonicalize legacy provider/domain wording into framework-generic vocabulary.
 - [x] Bootstrap split and bounded log-read policy are now reflected in framework docs.
 - [x] Hard-law routing and verification requirements are now reflected in protocol docs.
+- [x] Silent diagnosis and proving-pack protocol surfaces now exist and are linked from the canonical map.
 - [ ] Full document freshness/lifecycle enforcement is still incomplete.
 
 ## Phase F: Extraction Readiness and Standalone Framework Preparation

@@ -1,25 +1,99 @@
 {
-  "status": "writer_ready",
-  "classification": "defect_equivalent",
-  "equivalence_assessment": "equivalent_fix",
-  "reported_behavior": "framework runtime accepted issue-driven execution without a normalized issue contract artifact",
-  "expected_behavior": "issue-driven execution should route through a machine-readable issue contract before writer authorization",
-  "scope_in": [
-    "issue-driven implementation authorization",
-    "canonical issue contract artifact flow"
-  ],
-  "scope_out": [
-    "host-project product behavior",
-    "non-issue-based execution flows"
-  ],
   "acceptance_checks": [
-    "issue contract artifact exists under .vida/logs/issue-contracts/",
-    "writer routing can reference a normalized issue contract"
+    "writer receives issue contract"
   ],
-  "spec_sync_targets": [
-    "_vida/docs/issue-contract-protocol.md"
+  "classification": "defect_equivalent",
+  "conflict_statuses": [
+    "writer_ready"
   ],
+  "equivalence_assessment": "equivalent_fix",
+  "evidence_refs": [
+    "lib/src/issue.dart:10"
+  ],
+  "expected_behavior": "writer can proceed",
+  "proven_scope": [
+    "validated bug scope"
+  ],
+  "reported_behavior": "validated bug scope",
+  "reported_scope": [
+    "validated bug scope"
+  ],
+  "resolution_path": "implementation",
+  "route_receipt": {
+    "analysis_default_in_boot": null,
+    "analysis_plan": {
+      "default_in_boot": null,
+      "external_first_required": null,
+      "fanout_min_results": 0,
+      "fanout_subagents": [
+        "qwen_cli",
+        "gemini_cli",
+        "kilo_cli"
+      ],
+      "merge_policy": null,
+      "reason": "",
+      "receipt_required": "yes",
+      "required": "yes",
+      "route_task_class": "analysis",
+      "selected_subagent": null,
+      "zero_budget_required": null
+    },
+    "analysis_receipt_required": null,
+    "analysis_required": null,
+    "analysis_route_task_class": null,
+    "analysis_zero_budget_required": null,
+    "bridge_fallback_subagent": null,
+    "coach_plan": {
+      "independent": false,
+      "max_passes": 0,
+      "merge_policy": "single_subagent",
+      "min_results": 0,
+      "reason": "",
+      "required": "no",
+      "route_task_class": null,
+      "selected_subagent": null,
+      "selected_subagents": []
+    },
+    "coach_required": "no",
+    "coach_route_task_class": "",
+    "dispatch_policy": {},
+    "dispatch_required": null,
+    "external_first_required": null,
+    "fanout_min_results": 0,
+    "fanout_subagents": [],
+    "independent_verification_required": null,
+    "internal_escalation_trigger": null,
+    "merge_policy": null,
+    "route_budget": {},
+    "route_graph": {},
+    "task_class": "implementation",
+    "verification_plan": {
+      "independent": false,
+      "reason": "",
+      "required": "no",
+      "route_task_class": null,
+      "selected_subagent": null
+    },
+    "verification_route_task_class": null,
+    "web_search_required": "no"
+  },
+  "route_receipt_hash": "dddc79e0bc6de475ba17237d6fcba5641732e2275d8363b3418bdf1efe58596c",
+  "scope_in": [
+    "validated bug scope"
+  ],
+  "scope_out": [],
+  "source_output_files": [
+    "/tmp/tmp8fusgj3h/analysis.output.json"
+  ],
+  "source_subagents": [
+    "qwen_cli"
+  ],
+  "spec_sync_targets": [],
+  "status": "writer_ready",
+  "symptoms": [],
+  "task_class": "implementation",
+  "task_id": "unit-task",
+  "ts": "2026-03-07T18:45:35Z",
   "wvp_required": "no",
-  "wvp_status": "not_required",
-  "resolution_path": "writer_authorized"
+  "wvp_status": "not_required"
 }

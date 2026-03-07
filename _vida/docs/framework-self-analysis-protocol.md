@@ -4,6 +4,12 @@ Purpose: run a bounded meta-diagnostic of the VIDA framework itself when the use
 
 Quality and token efficiency are equal-weight goals in FSAP/debug mode.
 
+Silent mode note:
+
+1. Explicit FSAP is the foreground diagnosis protocol.
+2. Silent diagnosis is the background capture protocol activated from root `vida.config.yaml`.
+3. Silent diagnosis must hand off framework fixes into normal tracked framework work after the active task boundary; it is not a license for silent in-place framework rewrites during unrelated product work.
+
 ## Hard-Law Doctrine
 
 FSAP must treat mandatory framework behavior as executable law, not advisory prose.

@@ -163,6 +163,22 @@ agent_system:
       bridge_fallback_subagent: codex_cli
       internal_escalation_trigger: quality_gap
       max_fallback_hops: 2
+    read_only_prep:
+      subagents:
+        - qwen_cli
+        - gemini_cli
+      fanout_subagents:
+        - qwen_cli
+        - gemini_cli
+      fanout_min_results: 1
+      merge_policy: consensus_with_conflict_flag
+      write_scope: none
+      dispatch_required: fanout_then_synthesize
+      external_first_required: yes
+      independent_verification_required: no
+      local_execution_allowed: no
+      bridge_fallback_subagent: codex_cli
+      max_fallback_hops: 1
     status_diagnostic:
       subagents:
         - qwen_cli

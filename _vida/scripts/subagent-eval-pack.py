@@ -463,6 +463,7 @@ def run(task_id: str) -> int:
             {
                 "useful_progress": bool(run_item.get("useful_progress", False)),
                 "chatter_only": bool(run_item.get("chatter_only", False)),
+                "output_quality_state": str(run_item.get("output_quality_state", "")),
                 "time_to_first_useful_output_ms": (
                     int(run_item.get("time_to_first_useful_output_ms", 0) or 0)
                     if run_item.get("time_to_first_useful_output_ms") is not None

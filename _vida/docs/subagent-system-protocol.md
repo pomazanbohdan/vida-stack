@@ -88,6 +88,7 @@ Hard rule:
 2. orchestrator owns TODO lifecycle,
 3. orchestrator owns build/close/integration transitions,
 4. subagents may only return artifacts/results unless explicitly granted bounded repo-write scope.
+5. read-only lanes must not mutate framework-owned or project-owned workspace trees; runtime should fail closed on unauthorized writes under `AGENTS.md`, `_vida/*`, project docs/scripts/config roots, or application source trees.
 
 ## Entry Separation
 
@@ -168,6 +169,7 @@ Ensemble rule:
 
 1. On eligible read-only classes, `fanout_*` metadata is the default execution plan unless route metadata explicitly says otherwise.
 2. Eligible classes are research, analysis, meta-analysis, review, and verification unless project overlay narrows them.
+2.1. `read_only_prep` is the canonical prep-only route class for issue-contract drafting, bounded research, regression-plan prep, and other dependent-task preparation that must remain non-writing.
 3. Keep writer ownership single-lane under the orchestrator even when read-only fanout is active.
 4. `bridge_fallback_subagent` is the canonical next hop after free external subagents and before internal escalation.
 5. Internal subagents are the senior lane for arbitration, architecture, and mutation-owning work; they are not the default cheap first pass for eligible read-only classes.
@@ -540,6 +542,7 @@ Minimum lease contract:
 6. lease conflicts should be written to lease history so recent orchestration contention is visible to the operator.
 7. runtime should support lease renewal for longer active orchestrations instead of assuming one fixed acquire/release window,
 8. runtime should expose cleanup/expiry semantics so stale released/expired leases do not accumulate indefinitely.
+9. reusable read-only subagent pooling may be layered on top of the same lease ledger; pool borrow/release must reuse the canonical lease system instead of inventing a second ownership store.
 
 ## Operator Visibility
 
@@ -609,6 +612,9 @@ python3 _vida/scripts/subagent-system.py recover-pending
 python3 _vida/scripts/subagent-system.py leases
 python3 _vida/scripts/subagent-system.py lease-renew <resource_type> <resource_id> <holder> [ttl_seconds]
 python3 _vida/scripts/subagent-system.py lease-cleanup
+python3 _vida/scripts/subagent-pool.py borrow <task_class> <holder> [--ttl-seconds N]
+python3 _vida/scripts/subagent-pool.py release <subagent> <holder>
+python3 _vida/scripts/subagent-pool.py status
 python3 _vida/scripts/subagent-system.py record <subagent> <success|failure> <task_class> [quality_score] [latency_ms] [note]
 python3 _vida/scripts/subagent-system.py scorecard [subagent]
 python3 _vida/scripts/subagent-dispatch.py subagent <task_id> <task_class> <subagent> <prompt_file> <output_file> [workdir]

@@ -8,6 +8,35 @@ Rules:
 4. Group updates under fixed headings when applicable: `Added`, `Changed`, `Fixed`, `Protocol`.
 5. Keep this file limited to VIDA framework/runtime changes, not project feature work.
 
+## 2026-03-07 18:40
+
+Added:
+
+1. Added queue-backed single-writer task-state mutation path through [br-mutation-queue.py](/home/unnamed/project/mobile-odoo/_vida/scripts/br-mutation-queue.py) and wired mutating `br`/`beads_mutate` calls through the canonical serialized runtime path.
+2. Added silent VIDA framework self-diagnosis mode with root overlay support, boot visibility, deferred framework bug capture, and session reflection via [vida-silent-diagnosis.py](/home/unnamed/project/mobile-odoo/_vida/scripts/vida-silent-diagnosis.py).
+3. Added reusable leased subagent pool helper in [subagent-pool.py](/home/unnamed/project/mobile-odoo/_vida/scripts/subagent-pool.py).
+4. Added reusable product/framework proving-pack templates in [proving-pack.py](/home/unnamed/project/mobile-odoo/_vida/scripts/proving-pack.py).
+5. Added mixed-issue split artifacts under `.vida/logs/issue-splits/<task_id>.json` so one bug can preserve a primary executable slice and a secondary unresolved slice without widening the writer lane.
+
+Changed:
+
+1. Cheap analysis/review/coach lanes now fail closed when they return preamble-only output, missing machine-readable payloads, or other low-signal results instead of being treated as successful progress.
+2. Runtime scoring and routing now persist and penalize low-fitness cheap-lane behavior, so repeated preamble-only or machine-readable-missing outputs demote lanes instead of letting them stay preferred.
+3. Boot snapshots now surface active silent framework diagnosis configuration directly from the overlay.
+4. Issue-driven execution now preserves mixed-symptom follow-up scope through explicit issue-split artifacts while keeping writer authorization bound only to the primary proven slice.
+
+Fixed:
+
+1. Cheap lanes that exit with prose-only partial output no longer create false-positive success paths in `prepare-execution` or `coach-review`.
+2. Concurrent task-state mutations now serialize through one canonical writer path instead of relying on multiple independent mutating entry points under subagent-heavy execution.
+3. Framework self-diagnosis/debug mode is now synchronized between project overlay, template, schema validation, boot/runtime helpers, and protocol docs instead of existing only as fragmented behavior.
+
+Protocol:
+
+1. `beads-protocol.md` now defines queue-backed single-writer serialization as the canonical mutation rule for mutating task-state commands.
+2. `framework-self-analysis-protocol.md`, `silent-framework-diagnosis-protocol.md`, `project-overlay-protocol.md`, and `ORCHESTRATOR-ENTRY.MD` now formalize silent framework diagnosis as a background capture protocol for an agentic engineering platform, with quality and token efficiency treated as equal-weight goals.
+3. `issue-contract-protocol.md`, `bug-fix-protocol.md`, and `implement-execution-protocol.md` now explicitly document mixed-issue split handling so unresolved secondary symptoms are preserved as follow-up work instead of silently re-entering the current writer scope.
+
 ## 2026-03-07 11:23
 
 Added:

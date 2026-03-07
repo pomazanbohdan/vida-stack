@@ -179,6 +179,349 @@ class WorkerPacketDispatchTest(unittest.TestCase):
             self.assertFalse(launch["result"]["worker_output_valid"])
             self.assertFalse(launch["result"]["useful_progress"])
 
+    def test_framework_mutation_paths_detect_new_framework_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            (tmp_path / "AGENTS.md").write_text("bootstrap\n", encoding="utf-8")
+            docs_dir = tmp_path / "_vida" / "docs"
+            docs_dir.mkdir(parents=True, exist_ok=True)
+            (docs_dir / "protocol.md").write_text("protocol\n", encoding="utf-8")
+            before = self.dispatch.framework_mutation_snapshot(tmp_path)
+
+            (docs_dir / "mobile-1ic.1-analysis.json").write_text("{}", encoding="utf-8")
+            pycache_dir = tmp_path / "_vida" / "scripts" / "__pycache__"
+            pycache_dir.mkdir(parents=True, exist_ok=True)
+            (pycache_dir / "ignored.pyc").write_bytes(b"pyc")
+
+            after = self.dispatch.framework_mutation_snapshot(tmp_path)
+            changed = self.dispatch.framework_mutation_paths(before, after)
+
+            self.assertEqual(changed, ["_vida/docs/mobile-1ic.1-analysis.json"])
+
+    def test_project_mutation_paths_detect_new_project_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            src_dir = tmp_path / "src" / "lib"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            (src_dir / "existing.dart").write_text("class Existing {}\n", encoding="utf-8")
+            before = self.dispatch.project_mutation_snapshot(tmp_path)
+
+            (src_dir / "leak.dart").write_text("class Leak {}\n", encoding="utf-8")
+            after = self.dispatch.project_mutation_snapshot(tmp_path)
+            changed = self.dispatch.project_mutation_paths(before, after)
+
+            self.assertEqual(changed, ["src/lib/leak.dart"])
+
+    def test_project_mutation_paths_detect_new_custom_project_root_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            before = self.dispatch.project_mutation_snapshot(tmp_path)
+
+            assets_dir = tmp_path / "assets" / "icons"
+            assets_dir.mkdir(parents=True, exist_ok=True)
+            (assets_dir / "logo.svg").write_text("<svg />\n", encoding="utf-8")
+
+            after = self.dispatch.project_mutation_snapshot(tmp_path)
+            changed = self.dispatch.project_mutation_paths(before, after)
+
+            self.assertEqual(changed, ["assets/icons/logo.svg"])
+
+    def test_start_subagent_process_snapshots_read_only_lane_even_for_write_capable_subagent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            src_dir = tmp_path / "src" / "lib"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            (src_dir / "existing.dart").write_text("class Existing {}\n", encoding="utf-8")
+            prompt_file = tmp_path / "analysis.prompt.txt"
+            output_file = tmp_path / "analysis.output.txt"
+            prompt_file.write_text(
+                self.dispatch.analysis_prompt_text(
+                    "Investigate task",
+                    "implementation",
+                    "analysis",
+                ),
+                encoding="utf-8",
+            )
+
+            subagent_cfg = self.minimal_subagent_cfg()
+            subagent_cfg["write_scope"] = "scoped_only"
+            route = {
+                **self.minimal_route(),
+                "task_class": "analysis",
+                "write_scope": "none",
+            }
+            process = mock.Mock()
+
+            with mock.patch.object(self.dispatch, "ROOT_DIR", tmp_path), mock.patch.object(
+                self.dispatch.subprocess,
+                "Popen",
+                return_value=process,
+            ):
+                launch = self.dispatch.start_subagent_process(
+                    task_id="unit-task",
+                    task_class="analysis",
+                    subagent_name="codex_cli",
+                    prompt_file=prompt_file,
+                    output_file=output_file,
+                    workdir=tmp_path,
+                    route=route,
+                    subagent_cfg=subagent_cfg,
+                    dispatch_mode="single",
+                )
+
+            self.assertIn("framework_snapshot_before", launch)
+            self.assertIsInstance(launch["framework_snapshot_before"], dict)
+            self.assertIn("project_snapshot_before", launch)
+            self.assertIsInstance(launch["project_snapshot_before"], dict)
+
+    def test_read_only_prep_task_class_is_treated_as_read_only_boundary(self) -> None:
+        required = self.dispatch.read_only_boundary_guard_required(
+            "Task packet without explicit mode marker",
+            task_class="read_only_prep",
+            route={"task_class": "read_only_prep"},
+            subagent_cfg={"write_scope": "scoped_only"},
+        )
+
+        self.assertTrue(required)
+
+    def test_finalize_subagent_process_fails_when_read_only_lane_mutates_framework_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            log_dir = tmp_path / ".vida" / "logs"
+            run_log_path = log_dir / "subagent-runs.jsonl"
+            (tmp_path / "AGENTS.md").write_text("bootstrap\n", encoding="utf-8")
+            (tmp_path / "_vida" / "docs").mkdir(parents=True, exist_ok=True)
+            (tmp_path / "_vida" / "docs" / "protocol.md").write_text("protocol\n", encoding="utf-8")
+
+            prompt_file = tmp_path / "analysis.prompt.txt"
+            output_file = tmp_path / "analysis.output.txt"
+            stderr_path = tmp_path / "analysis.output.txt.stderr.log"
+            prompt_file.write_text(
+                self.dispatch.analysis_prompt_text(
+                    "Investigate task",
+                    "implementation",
+                    "analysis",
+                ),
+                encoding="utf-8",
+            )
+            output_file.write_text(
+                json.dumps(
+                    {
+                        "status": "done",
+                        "question_answered": "yes",
+                        "answer": "bounded answer",
+                        "evidence_refs": ["src/file.dart:1"],
+                        "changed_files": [],
+                        "verification_commands": [],
+                        "verification_results": [],
+                        "merge_ready": "yes",
+                        "blockers": [],
+                        "notes": "",
+                        "recommended_next_action": "proceed_to_writer",
+                        "impact_analysis": {
+                            "affected_scope": ["scope"],
+                            "contract_impact": [],
+                            "follow_up_actions": [],
+                            "residual_risks": [],
+                        },
+                        "issue_contract": {
+                            "classification": "defect_equivalent",
+                            "equivalence_assessment": "equivalent_fix",
+                            "reported_behavior": "broken",
+                            "expected_behavior": "fixed",
+                            "scope_in": ["scope"],
+                            "scope_out": [],
+                            "acceptance_checks": ["ac"],
+                            "spec_sync_targets": [],
+                            "wvp_required": "no",
+                            "wvp_status": "not_required",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stderr_path.write_text("", encoding="utf-8")
+
+            before_snapshot = self.dispatch.framework_mutation_snapshot(tmp_path)
+            (tmp_path / "_vida" / "docs" / "mobile-1ic.1-analysis.json").write_text(
+                "{}",
+                encoding="utf-8",
+            )
+
+            process = mock.Mock()
+            process.poll.return_value = 0
+            process.returncode = 0
+            process.wait.return_value = 0
+
+            launch = {
+                "process": process,
+                "stdout_handle": None,
+                "stderr_handle": None,
+                "task_id": "mobile-1ic.1",
+                "task_class": "analysis",
+                "subagent_name": "qwen_cli",
+                "prompt_file": prompt_file,
+                "output_file": output_file,
+                "stderr_path": stderr_path,
+                "workdir": tmp_path,
+                "route": {
+                    "task_class": "analysis",
+                    "dispatch_policy": {
+                        "direct_internal_bypass_forbidden": "no",
+                        "internal_escalation_allowed": "no",
+                        "internal_route_authorized": "no",
+                    },
+                    "analysis_plan": {"required": "no", "receipt_required": "no", "route_task_class": ""},
+                    "route_budget": {},
+                    "fallback_subagents": [],
+                },
+                "subagent_cfg": self.minimal_subagent_cfg(),
+                "dispatch_mode": "single",
+                "selected_model": None,
+                "domain_tags": ["vida_framework"],
+                "risk_class": "R1",
+                "max_runtime_seconds": 60,
+                "min_output_bytes": 50,
+                "run_id": "spr-test",
+                "ts_start": "2026-03-07T00:00:00Z",
+                "started": 0.0,
+                "framework_snapshot_before": before_snapshot,
+            }
+
+            with mock.patch.object(self.dispatch, "ROOT_DIR", tmp_path), mock.patch.object(
+                self.dispatch,
+                "LOG_DIR",
+                log_dir,
+            ), mock.patch.object(self.dispatch, "RUN_LOG_PATH", run_log_path), mock.patch.object(
+                self.dispatch.time,
+                "monotonic",
+                return_value=1.0,
+            ):
+                payload = self.dispatch.finalize_subagent_process(launch)
+
+            self.assertEqual(payload["status"], "failure")
+            self.assertTrue(payload["framework_boundary_violation"])
+            self.assertIn("_vida/docs/mobile-1ic.1-analysis.json", payload["framework_boundary_violation_paths"])
+            self.assertIn("forbidden framework mutation detected", payload["error"])
+
+    def test_finalize_subagent_process_fails_when_read_only_lane_mutates_project_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            log_dir = tmp_path / ".vida" / "logs"
+            run_log_path = log_dir / "subagent-runs.jsonl"
+            src_dir = tmp_path / "src" / "lib"
+            src_dir.mkdir(parents=True, exist_ok=True)
+            (src_dir / "existing.dart").write_text("class Existing {}\n", encoding="utf-8")
+
+            prompt_file = tmp_path / "analysis.prompt.txt"
+            output_file = tmp_path / "analysis.output.txt"
+            stderr_path = tmp_path / "analysis.output.txt.stderr.log"
+            prompt_file.write_text(
+                self.dispatch.analysis_prompt_text(
+                    "Investigate task",
+                    "implementation",
+                    "analysis",
+                ),
+                encoding="utf-8",
+            )
+            output_file.write_text(
+                json.dumps(
+                    {
+                        "status": "done",
+                        "question_answered": "yes",
+                        "answer": "bounded answer",
+                        "evidence_refs": ["src/lib/existing.dart:1"],
+                        "changed_files": [],
+                        "verification_commands": [],
+                        "verification_results": [],
+                        "merge_ready": "yes",
+                        "blockers": [],
+                        "notes": "",
+                        "recommended_next_action": "proceed_to_writer",
+                        "impact_analysis": {
+                            "affected_scope": ["scope"],
+                            "contract_impact": [],
+                            "follow_up_actions": [],
+                            "residual_risks": [],
+                        },
+                        "issue_contract": {
+                            "classification": "defect_equivalent",
+                            "equivalence_assessment": "equivalent_fix",
+                            "reported_behavior": "broken",
+                            "expected_behavior": "fixed",
+                            "scope_in": ["scope"],
+                            "scope_out": [],
+                            "acceptance_checks": ["ac"],
+                            "spec_sync_targets": [],
+                            "wvp_required": "no",
+                            "wvp_status": "not_required",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stderr_path.write_text("", encoding="utf-8")
+
+            before_snapshot = self.dispatch.project_mutation_snapshot(tmp_path)
+            (src_dir / "leak.dart").write_text("class Leak {}\n", encoding="utf-8")
+
+            process = mock.Mock()
+            process.poll.return_value = 0
+            process.returncode = 0
+            process.wait.return_value = 0
+
+            launch = {
+                "process": process,
+                "stdout_handle": None,
+                "stderr_handle": None,
+                "task_id": "mobile-1ic.2",
+                "task_class": "analysis",
+                "subagent_name": "qwen_cli",
+                "prompt_file": prompt_file,
+                "output_file": output_file,
+                "stderr_path": stderr_path,
+                "workdir": tmp_path,
+                "route": {
+                    "task_class": "analysis",
+                    "dispatch_policy": {
+                        "direct_internal_bypass_forbidden": "no",
+                        "internal_escalation_allowed": "no",
+                        "internal_route_authorized": "no",
+                    },
+                    "analysis_plan": {"required": "no", "receipt_required": "no", "route_task_class": ""},
+                    "route_budget": {},
+                    "fallback_subagents": [],
+                },
+                "subagent_cfg": self.minimal_subagent_cfg(),
+                "dispatch_mode": "single",
+                "selected_model": None,
+                "domain_tags": ["vida_framework"],
+                "risk_class": "R1",
+                "max_runtime_seconds": 60,
+                "min_output_bytes": 50,
+                "run_id": "spr-test",
+                "ts_start": "2026-03-07T00:00:00Z",
+                "started": 0.0,
+                "framework_snapshot_before": None,
+                "project_snapshot_before": before_snapshot,
+            }
+
+            with mock.patch.object(self.dispatch, "ROOT_DIR", tmp_path), mock.patch.object(
+                self.dispatch,
+                "LOG_DIR",
+                log_dir,
+            ), mock.patch.object(self.dispatch, "RUN_LOG_PATH", run_log_path), mock.patch.object(
+                self.dispatch.time,
+                "monotonic",
+                return_value=1.0,
+            ):
+                payload = self.dispatch.finalize_subagent_process(launch)
+
+            self.assertEqual(payload["status"], "failure")
+            self.assertTrue(payload["project_boundary_violation"])
+            self.assertIn("src/lib/leak.dart", payload["project_boundary_violation_paths"])
+            self.assertIn("forbidden project mutation detected", payload["error"])
+
     def test_machine_readable_write_output_is_not_merge_ready_when_contract_is_invalid(self) -> None:
         prompt = """
 Runtime Role Packet:
@@ -417,10 +760,62 @@ Deliverable:
                 )
 
         self.assertFalse(payload["machine_readable_contract_required"])
+        self.assertEqual(payload["status"], "failure")
         self.assertFalse(payload["worker_output_valid"])
         self.assertFalse(payload["useful_progress"])
         self.assertFalse(payload["merge_ready"])
         self.assertTrue(payload["chatter_only"])
+        self.assertEqual(payload["output_quality_state"], "preamble_only_output")
+        self.assertEqual(payload["failure_reason"], "preamble_only_output")
+
+    def test_machine_readable_prompt_without_json_payload_fails_closed(self) -> None:
+        prompt = self.dispatch.analysis_prompt_text(
+            original_prompt="Task: classify issue contract",
+            writer_task_class="implementation",
+            analysis_task_class="analysis",
+        )
+        prose_only_output = "I reviewed the task and will prepare the normalized issue contract next."
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            prompt_file = tmp_path / "analysis.prompt.txt"
+            output_file = tmp_path / "analysis.output.txt"
+            stderr_file = tmp_path / "analysis.output.txt.stderr.log"
+            prompt_file.write_text(prompt, encoding="utf-8")
+            output_file.write_text(prose_only_output, encoding="utf-8")
+            stderr_file.write_text("", encoding="utf-8")
+
+            with mock.patch.object(self.dispatch, "append_jsonl"):
+                payload = self.dispatch.subagent_result_payload(
+                    task_id="unit-task",
+                    task_class="analysis",
+                    subagent_name="qwen_cli",
+                    selected_model=None,
+                    subagent_cfg=self.minimal_subagent_cfg(),
+                    dispatch_mode="single",
+                    risk_class="R1",
+                    domain_tags=["vida_framework"],
+                    max_runtime_seconds=60,
+                    min_output_bytes=1,
+                    output_file=output_file,
+                    stderr_path=stderr_file,
+                    workdir=ROOT_DIR,
+                    prompt_file=prompt_file,
+                    route=self.minimal_route(),
+                    run_id="spr-test",
+                    ts_start="2026-03-07T00:00:00Z",
+                    started=0.0,
+                    status="success",
+                    exit_code=0,
+                    error_text="",
+                )
+
+        self.assertEqual(payload["status"], "failure")
+        self.assertTrue(payload["machine_readable_contract_required"])
+        self.assertFalse(payload["worker_output_valid"])
+        self.assertFalse(payload["useful_progress"])
+        self.assertEqual(payload["output_quality_state"], "missing_machine_readable_payload")
+        self.assertEqual(payload["failure_reason"], "missing_machine_readable_payload")
 
     def test_arbitration_prompt_text_passes_worker_packet_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -700,6 +1095,17 @@ Deliverable:
                                 "equivalence_assessment": "equivalent_fix",
                                 "reported_behavior": "server errors degrade into false network errors",
                                 "expected_behavior": "server error context remains available",
+                                "reported_scope": ["api error handling stack", "dashboard quick stats symptom"],
+                                "proven_scope": ["error interceptor stack"],
+                                "symptoms": [
+                                    {
+                                        "id": "SYM-1",
+                                        "summary": "server errors lose response context",
+                                        "evidence_status": "red_test",
+                                        "disposition": "in_scope",
+                                        "evidence_refs": ["test/core/api/interceptors/error_interceptor_test.dart"],
+                                    }
+                                ],
                                 "scope_in": ["error interceptor stack"],
                                 "scope_out": ["drawer navigation"],
                                 "acceptance_checks": ["Errors retain actionable details"],
@@ -776,6 +1182,11 @@ Deliverable:
         self.assertEqual(exit_code, 0)
         self.assertEqual(prepare_manifest["status"], "analysis_ready")
         self.assertEqual(prepare_manifest["issue_contract"]["status"], "writer_ready")
+        self.assertEqual(
+            prepare_manifest["issue_contract"]["reported_scope"],
+            ["api error handling stack", "dashboard quick stats symptom"],
+        )
+        self.assertEqual(prepare_manifest["issue_contract"]["proven_scope"], ["error interceptor stack"])
         self.assertTrue(prepare_manifest["writer_authorized"])
         self.assertEqual(issue_contract["classification"], "defect_equivalent")
         self.assertEqual(issue_contract["equivalence_assessment"], "equivalent_fix")
@@ -819,6 +1230,24 @@ Deliverable:
                                 "equivalence_assessment": "spec_delta_required",
                                 "reported_behavior": "user expects direct navigation",
                                 "expected_behavior": "current behavior forces expand first",
+                                "reported_scope": ["drawer first-level module behavior", "navigation ownership"],
+                                "proven_scope": ["drawer first-level module behavior"],
+                                "symptoms": [
+                                    {
+                                        "id": "SYM-1",
+                                        "summary": "drawer first-level modules expand instead of navigate",
+                                        "evidence_status": "reproduced",
+                                        "disposition": "in_scope",
+                                        "evidence_refs": ["docs/specs/ui.md:10"],
+                                    },
+                                    {
+                                        "id": "SYM-2",
+                                        "summary": "navigation ownership drift",
+                                        "evidence_status": "unproven",
+                                        "disposition": "out_of_scope",
+                                        "evidence_refs": [],
+                                    }
+                                ],
                                 "scope_in": ["drawer first-level module behavior"],
                                 "scope_out": [],
                                 "acceptance_checks": ["spec updated before implementation"],
@@ -894,6 +1323,402 @@ Deliverable:
         self.assertEqual(prepare_manifest["status"], "issue_contract_blocked")
         self.assertEqual(prepare_manifest["issue_contract"]["status"], "spec_delta_required")
         self.assertFalse(prepare_manifest["writer_authorized"])
+
+    def test_prepare_execution_blocks_when_writer_ready_issue_contract_has_no_proven_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            original_receipt_dir = self.dispatch.ROUTE_RECEIPT_DIR
+            original_issue_dir = self.dispatch.ISSUE_CONTRACT_DIR
+            self.dispatch.ROUTE_RECEIPT_DIR = tmp_path / "route-receipts"
+            self.dispatch.ISSUE_CONTRACT_DIR = tmp_path / "issue-contracts"
+            try:
+                prompt_file = tmp_path / "implementation.prompt.txt"
+                prompt_file.write_text("Implement the reported bugfix scope.\n", encoding="utf-8")
+                analysis_output = tmp_path / "analysis.output.json"
+                analysis_output.write_text(
+                    json.dumps(
+                        {
+                            "status": "done",
+                            "question_answered": "yes",
+                            "answer": "scope not proven enough for writer",
+                            "evidence_refs": ["docs/specs/ui.md:10"],
+                            "changed_files": [],
+                            "verification_commands": [],
+                            "verification_results": [],
+                            "merge_ready": "yes",
+                            "blockers": [],
+                            "notes": "needs narrower executable proof",
+                            "recommended_next_action": "gather more evidence",
+                            "impact_analysis": {
+                                "affected_scope": ["docs/specs/ui.md"],
+                                "contract_impact": [],
+                                "follow_up_actions": ["prove executable surface before writer"],
+                                "residual_risks": [],
+                            },
+                            "issue_contract": {
+                                "classification": "defect_equivalent",
+                                "equivalence_assessment": "equivalent_fix",
+                                "reported_behavior": "module redirect is wrong",
+                                "expected_behavior": "current screen should persist",
+                                "reported_scope": ["router redirect", "locale remount", "account switch"],
+                                "proven_scope": [],
+                                "symptoms": [
+                                    {
+                                        "id": "SYM-1",
+                                        "summary": "router redirect",
+                                        "evidence_status": "reproduced",
+                                        "disposition": "in_scope",
+                                        "evidence_refs": ["docs/specs/ui.md:10"],
+                                    },
+                                    {
+                                        "id": "SYM-2",
+                                        "summary": "locale remount",
+                                        "evidence_status": "unproven",
+                                        "disposition": "in_scope",
+                                        "evidence_refs": [],
+                                    }
+                                ],
+                                "scope_in": [],
+                                "scope_out": [],
+                                "acceptance_checks": ["writer must stay inside proven scope"],
+                                "spec_sync_targets": [],
+                                "wvp_required": "no",
+                                "wvp_status": "not_required",
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                route = {
+                    "task_class": "implementation",
+                    "analysis_plan": {
+                        "required": "yes",
+                        "receipt_required": "yes",
+                        "route_task_class": "analysis",
+                        "fanout_subagents": ["qwen_cli"],
+                    },
+                    "verification_plan": {"required": "no"},
+                    "coach_plan": {"required": "no"},
+                    "dispatch_policy": {},
+                    "route_budget": {},
+                    "fallback_subagents": [],
+                }
+
+                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+                    manifest_path = Path(cmd[6]) / "manifest.json"
+                    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                    manifest_path.write_text(
+                        json.dumps(
+                            {
+                                "status": "completed",
+                                "phase": "completed",
+                                "synthesis_ready": True,
+                                "results": [
+                                    {
+                                        "subagent": "qwen_cli",
+                                        "status": "success",
+                                        "output_file": str(analysis_output),
+                                    }
+                                ],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    return self.dispatch.subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        stdout=str(manifest_path) + "\n",
+                        stderr="",
+                    )
+
+                with mock.patch.object(self.dispatch, "route_snapshot", return_value=({}, route)), \
+                    mock.patch.object(self.dispatch.subprocess, "run", side_effect=fake_subprocess_run):
+                    exit_code = self.dispatch.run_prepare_execution(
+                        [
+                            "subagent-dispatch.py",
+                            "prepare-execution",
+                            "unit-task",
+                            "implementation",
+                            str(prompt_file),
+                            str(tmp_path / "prepare"),
+                            str(ROOT_DIR),
+                        ]
+                    )
+                prepare_manifest = json.loads((tmp_path / "prepare" / "prepare-execution.json").read_text(encoding="utf-8"))
+            finally:
+                self.dispatch.ROUTE_RECEIPT_DIR = original_receipt_dir
+                self.dispatch.ISSUE_CONTRACT_DIR = original_issue_dir
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(prepare_manifest["status"], "issue_contract_blocked")
+        self.assertEqual(prepare_manifest["issue_contract_error"], "missing_proven_scope")
+        self.assertFalse(prepare_manifest["writer_authorized"])
+
+    def test_prepare_execution_blocks_when_multi_symptom_issue_has_unproven_in_scope_symptom(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            original_receipt_dir = self.dispatch.ROUTE_RECEIPT_DIR
+            original_issue_dir = self.dispatch.ISSUE_CONTRACT_DIR
+            self.dispatch.ROUTE_RECEIPT_DIR = tmp_path / "route-receipts"
+            self.dispatch.ISSUE_CONTRACT_DIR = tmp_path / "issue-contracts"
+            try:
+                prompt_file = tmp_path / "implementation.prompt.txt"
+                prompt_file.write_text("Implement the reported bugfix scope.\n", encoding="utf-8")
+                analysis_output = tmp_path / "analysis.output.json"
+                analysis_output.write_text(
+                    json.dumps(
+                        {
+                            "status": "done",
+                            "question_answered": "yes",
+                            "answer": "one symptom proven, one still unproven",
+                            "evidence_refs": ["docs/specs/ui.md:10"],
+                            "changed_files": [],
+                            "verification_commands": [],
+                            "verification_results": [],
+                            "merge_ready": "yes",
+                            "blockers": [],
+                            "notes": "multi-symptom issue still ambiguous",
+                            "recommended_next_action": "gather more evidence",
+                            "impact_analysis": {
+                                "affected_scope": ["docs/specs/ui.md"],
+                                "contract_impact": [],
+                                "follow_up_actions": ["prove second symptom or split scope"],
+                                "residual_risks": [],
+                            },
+                            "issue_contract": {
+                                "classification": "defect_equivalent",
+                                "equivalence_assessment": "equivalent_fix",
+                                "reported_behavior": "two navigation symptoms reported together",
+                                "expected_behavior": "navigation remains stable",
+                                "reported_scope": ["router redirect", "locale remount"],
+                                "proven_scope": ["router redirect"],
+                                "symptoms": [
+                                    {
+                                        "id": "SYM-1",
+                                        "summary": "router redirect",
+                                        "evidence_status": "red_test",
+                                        "disposition": "in_scope",
+                                        "evidence_refs": ["test/navigation/router_test.dart"],
+                                    },
+                                    {
+                                        "id": "SYM-2",
+                                        "summary": "locale remount",
+                                        "evidence_status": "unproven",
+                                        "disposition": "in_scope",
+                                        "evidence_refs": [],
+                                    }
+                                ],
+                                "scope_in": ["router redirect"],
+                                "scope_out": [],
+                                "acceptance_checks": ["writer must not run while second symptom is unproven"],
+                                "spec_sync_targets": [],
+                                "wvp_required": "no",
+                                "wvp_status": "not_required",
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                route = {
+                    "task_class": "implementation",
+                    "analysis_plan": {
+                        "required": "yes",
+                        "receipt_required": "yes",
+                        "route_task_class": "analysis",
+                        "fanout_subagents": ["qwen_cli"],
+                    },
+                    "verification_plan": {"required": "no"},
+                    "coach_plan": {"required": "no"},
+                    "dispatch_policy": {},
+                    "route_budget": {},
+                    "fallback_subagents": [],
+                }
+
+                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+                    manifest_path = Path(cmd[6]) / "manifest.json"
+                    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                    manifest_path.write_text(
+                        json.dumps(
+                            {
+                                "status": "completed",
+                                "phase": "completed",
+                                "synthesis_ready": True,
+                                "results": [
+                                    {
+                                        "subagent": "qwen_cli",
+                                        "status": "success",
+                                        "output_file": str(analysis_output),
+                                    }
+                                ],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    return self.dispatch.subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        stdout=str(manifest_path) + "\n",
+                        stderr="",
+                    )
+
+                with mock.patch.object(self.dispatch, "route_snapshot", return_value=({}, route)), \
+                    mock.patch.object(self.dispatch.subprocess, "run", side_effect=fake_subprocess_run):
+                    exit_code = self.dispatch.run_prepare_execution(
+                        [
+                            "subagent-dispatch.py",
+                            "prepare-execution",
+                            "unit-task",
+                            "implementation",
+                            str(prompt_file),
+                            str(tmp_path / "prepare"),
+                            str(ROOT_DIR),
+                        ]
+                    )
+                prepare_manifest = json.loads((tmp_path / "prepare" / "prepare-execution.json").read_text(encoding="utf-8"))
+            finally:
+                self.dispatch.ROUTE_RECEIPT_DIR = original_receipt_dir
+                self.dispatch.ISSUE_CONTRACT_DIR = original_issue_dir
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(prepare_manifest["status"], "issue_contract_blocked")
+        self.assertEqual(prepare_manifest["issue_contract_error"], "unproven_symptoms:SYM-2")
+        self.assertFalse(prepare_manifest["writer_authorized"])
+
+    def test_prepare_execution_writes_issue_split_artifact_for_mixed_issue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            original_receipt_dir = self.dispatch.ROUTE_RECEIPT_DIR
+            original_issue_dir = self.dispatch.ISSUE_CONTRACT_DIR
+            original_split_dir = self.dispatch.ISSUE_SPLIT_DIR
+            self.dispatch.ROUTE_RECEIPT_DIR = tmp_path / "route-receipts"
+            self.dispatch.ISSUE_CONTRACT_DIR = tmp_path / "issue-contracts"
+            self.dispatch.ISSUE_SPLIT_DIR = tmp_path / "issue-splits"
+            try:
+                prompt_file = tmp_path / "implementation.prompt.txt"
+                prompt_file.write_text("Implement the reported bugfix scope.\n", encoding="utf-8")
+                analysis_output = tmp_path / "analysis.output.json"
+                analysis_output.write_text(
+                    json.dumps(
+                        {
+                            "status": "done",
+                            "question_answered": "yes",
+                            "answer": "primary symptom is proven; secondary symptom should be deferred",
+                            "evidence_refs": ["test/navigation/router_test.dart"],
+                            "changed_files": [],
+                            "verification_commands": [],
+                            "verification_results": [],
+                            "merge_ready": "yes",
+                            "blockers": [],
+                            "notes": "safe to route writer only through primary slice",
+                            "recommended_next_action": "proceed_to_writer",
+                            "impact_analysis": {
+                                "affected_scope": ["router redirect"],
+                                "contract_impact": [],
+                                "follow_up_actions": ["split locale remount into follow-up"],
+                                "residual_risks": [],
+                            },
+                            "issue_contract": {
+                                "classification": "defect_equivalent",
+                                "equivalence_assessment": "equivalent_fix",
+                                "reported_behavior": "router redirect and locale remount were reported together",
+                                "expected_behavior": "router redirect is fixed without widening into locale work",
+                                "reported_scope": ["router redirect", "locale remount"],
+                                "proven_scope": ["router redirect"],
+                                "symptoms": [
+                                    {
+                                        "id": "SYM-1",
+                                        "summary": "router redirect",
+                                        "evidence_status": "red_test",
+                                        "disposition": "in_scope",
+                                        "evidence_refs": ["test/navigation/router_test.dart"],
+                                    },
+                                    {
+                                        "id": "SYM-2",
+                                        "summary": "locale remount",
+                                        "evidence_status": "unproven",
+                                        "disposition": "out_of_scope",
+                                        "evidence_refs": [],
+                                    }
+                                ],
+                                "scope_in": ["router redirect"],
+                                "scope_out": [],
+                                "acceptance_checks": ["writer stays on primary slice only"],
+                                "spec_sync_targets": [],
+                                "wvp_required": "no",
+                                "wvp_status": "not_required",
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                route = {
+                    "task_class": "implementation",
+                    "analysis_plan": {
+                        "required": "yes",
+                        "receipt_required": "yes",
+                        "route_task_class": "analysis",
+                        "fanout_subagents": ["qwen_cli"],
+                    },
+                    "verification_plan": {"required": "no"},
+                    "coach_plan": {"required": "no"},
+                    "dispatch_policy": {},
+                    "route_budget": {},
+                    "fallback_subagents": [],
+                }
+
+                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+                    manifest_path = Path(cmd[6]) / "manifest.json"
+                    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                    manifest_path.write_text(
+                        json.dumps(
+                            {
+                                "status": "completed",
+                                "phase": "completed",
+                                "synthesis_ready": True,
+                                "results": [
+                                    {
+                                        "subagent": "qwen_cli",
+                                        "status": "success",
+                                        "output_file": str(analysis_output),
+                                    }
+                                ],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    return self.dispatch.subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        stdout=str(manifest_path) + "\n",
+                        stderr="",
+                    )
+
+                with mock.patch.object(self.dispatch, "route_snapshot", return_value=({}, route)), \
+                    mock.patch.object(self.dispatch.subprocess, "run", side_effect=fake_subprocess_run):
+                    exit_code = self.dispatch.run_prepare_execution(
+                        [
+                            "subagent-dispatch.py",
+                            "prepare-execution",
+                            "unit-task",
+                            "implementation",
+                            str(prompt_file),
+                            str(tmp_path / "prepare"),
+                            str(ROOT_DIR),
+                        ]
+                    )
+
+                prepare_manifest = json.loads((tmp_path / "prepare" / "prepare-execution.json").read_text(encoding="utf-8"))
+                split_payload = json.loads((tmp_path / "issue-splits" / "unit-task.json").read_text(encoding="utf-8"))
+            finally:
+                self.dispatch.ROUTE_RECEIPT_DIR = original_receipt_dir
+                self.dispatch.ISSUE_CONTRACT_DIR = original_issue_dir
+                self.dispatch.ISSUE_SPLIT_DIR = original_split_dir
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(prepare_manifest["status"], "analysis_ready")
+        self.assertEqual(split_payload["status"], "mixed_issue_split_detected")
+        self.assertEqual(split_payload["primary_executable_slice"]["symptom_ids"], ["SYM-1"])
+        self.assertEqual(split_payload["secondary_unresolved_slice"]["symptom_ids"], ["SYM-2"])
 
     def test_parse_coach_decision_detects_return_for_rework(self) -> None:
         output = """

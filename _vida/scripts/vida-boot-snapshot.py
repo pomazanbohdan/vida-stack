@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import subprocess
@@ -15,6 +16,7 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent.parent
 BR_SAFE = SCRIPT_DIR / "br-safe.sh"
+VIDA_CONFIG = SCRIPT_DIR / "vida-config.py"
 
 
 def now_utc() -> str:
@@ -45,6 +47,24 @@ def run_br_json(*args: str) -> list[dict[str, Any]]:
     if not isinstance(data, list):
         raise SystemExit(f"[vida-boot-snapshot] Unexpected br payload type for: {' '.join(args)}")
     return data
+
+
+def load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def framework_self_diagnosis_config() -> dict[str, Any]:
+    try:
+        vida_config = load_module("vida_boot_snapshot_config", VIDA_CONFIG)
+        cfg = vida_config.load_validated_config()
+    except Exception:
+        return {}
+    payload = cfg.get("framework_self_diagnosis")
+    return payload if isinstance(payload, dict) else {}
 
 
 def show_issue(issue_id: str) -> dict[str, Any]:
@@ -185,6 +205,7 @@ def build_snapshot(top_limit: int, ready_limit: int, subtasks_limit: int) -> dic
         if issue_mode(row) == "decision_required"
     ]
 
+    framework_diag = framework_self_diagnosis_config()
     return {
         "generated_at": now_utc(),
         "execution_continue_default": {
@@ -207,6 +228,21 @@ def build_snapshot(top_limit: int, ready_limit: int, subtasks_limit: int) -> dic
             "ready_total": len(top_ready),
             "ready_open": len(top_ready_open),
             "ready_in_progress": len(top_ready_in_progress),
+        },
+        "framework_self_diagnosis": {
+            "enabled": bool(framework_diag.get("enabled", False)),
+            "silent_mode": bool(framework_diag.get("silent_mode", False)),
+            "auto_capture_bugs": bool(framework_diag.get("auto_capture_bugs", False)),
+            "parent_issue": str(framework_diag.get("parent_issue", "")).strip(),
+            "defer_fix_until_task_boundary": bool(framework_diag.get("defer_fix_until_task_boundary", False)),
+            "session_reflection_required": bool(framework_diag.get("session_reflection_required", False)),
+            "platform_direction": str(framework_diag.get("platform_direction", "")).strip(),
+            "quality_token_efficiency": str(framework_diag.get("quality_token_efficiency", "")).strip(),
+            "session_reflection_criteria": [
+                str(item).strip()
+                for item in (framework_diag.get("session_reflection_criteria") or [])
+                if str(item).strip()
+            ],
         },
         "in_progress": in_progress,
         "ready_head": ready_head,
@@ -238,6 +274,7 @@ def render_section(lines: list[str], name: str, items: list[dict[str, Any]]) -> 
 
 def render_text(snapshot: dict[str, Any]) -> str:
     summary = snapshot["summary"]
+    framework_diag = snapshot.get("framework_self_diagnosis", {})
     lines = [
         "VIDA BOOT SNAPSHOT",
         f"execution_continue_default: {snapshot['execution_continue_default']['summary']}",
@@ -252,6 +289,15 @@ def render_text(snapshot: dict[str, Any]) -> str:
             f"ready_open={summary['ready_open']}"
         ),
     ]
+    if framework_diag.get("enabled"):
+        lines.append(
+            "framework_self_diagnosis: "
+            f"silent_mode={framework_diag.get('silent_mode')} "
+            f"auto_capture_bugs={framework_diag.get('auto_capture_bugs')} "
+            f"defer_fix_until_task_boundary={framework_diag.get('defer_fix_until_task_boundary')} "
+            f"platform_direction={framework_diag.get('platform_direction') or '-'} "
+            f"quality_token_efficiency={framework_diag.get('quality_token_efficiency') or '-'}"
+        )
     render_section(lines, "in_progress", snapshot["in_progress"])
     render_section(lines, "ready_head", snapshot["ready_head"])
     if snapshot["decision_required"]:

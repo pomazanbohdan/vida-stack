@@ -26,6 +26,7 @@ Framework template:
 1. framework-owned starter template lives at `_vida/templates/vida.config.yaml.template`,
 2. template is canonical for scaffold/default structure,
 3. instantiated root `vida.config.yaml` remains project-owned data.
+4. project docs referenced from `project_bootstrap` remain project-owned runbooks; framework runtime law must stay in `AGENTS.md` and `_vida/*`, not be synchronized into `docs/*`.
 
 ## Language Policy
 
@@ -200,6 +201,7 @@ Common repeated-scalar examples:
 6. route `fanout_subagents`
 7. subagent `dispatch.static_args`
 8. subagent `dispatch.pre_static_args`
+9. `framework_self_diagnosis.session_reflection_criteria`
 
 Supported routing-level keys:
 
@@ -237,6 +239,7 @@ Validation scope:
 4. subagent `dispatch` requirements for enabled `external_cli` subagents,
 5. route/subagent consistency checks such as `default_profile in profiles` and `fanout_min_results <= fanout_subagents`,
 6. web-search capability consistency between `capability_band` and dispatch wiring.
+7. silent framework diagnosis overlay schema when present.
 
 Availability-state contract:
 

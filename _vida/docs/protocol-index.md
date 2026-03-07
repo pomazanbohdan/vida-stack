@@ -14,6 +14,7 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Boot packet runtime artifact | `_vida/docs/boot-packet-protocol.md` | `_vida/scripts/boot-packet.py`, `_vida/scripts/boot-profile.sh`, `AGENTS.md`, `_vida/docs/ORCHESTRATOR-ENTRY.MD`, `_vida/docs/SUBAGENT-ENTRY.MD` |
 | Project bootstrap/self-reproduction | `_vida/docs/project-bootstrap-protocol.md` | `_vida/scripts/project-bootstrap.py`, `_vida/templates/vida.config.yaml.template`, `vida.config.yaml` |
 | VIDA framework self-analysis | `_vida/docs/framework-self-analysis-protocol.md` | `_vida/docs/framework-map-protocol.md`, `_vida/docs/self-reflection-protocol.md` |
+| Silent framework diagnosis | `_vida/docs/silent-framework-diagnosis-protocol.md` | `_vida/scripts/vida-silent-diagnosis.py`, `vida.config.yaml`, `_vida/docs/framework-self-analysis-protocol.md` |
 | Core bootstrap router | `AGENTS.md` | `_vida/docs/ORCHESTRATOR-ENTRY.MD`, `_vida/docs/SUBAGENT-ENTRY.MD`, `_vida/docs/SUBAGENT-THINKING.MD`, `_vida/docs/README.md`, `docs/README.md` |
 | Orchestrator entry contract | `_vida/docs/ORCHESTRATOR-ENTRY.MD` | `AGENTS.md`, `_vida/docs/orchestration-protocol.md`, `_vida/docs/use-case-packs.md` |
 | Thinking algorithms | `_vida/docs/thinking-protocol.md` | `_vida/docs/algorithms-one-screen.md`, `_vida/docs/algorithms-quick-reference.md` |
@@ -21,6 +22,7 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Change-impact reconciliation (absorbed cascade) | `_vida/docs/use-case-packs.md` | `_vida/docs/form-task-protocol.md`, `_vida/docs/implement-execution-protocol.md`, `_vida/commands/vida-spec.md` |
 | Task state (SSOT) | `_vida/docs/beads-protocol.md` | `_vida/docs/todo-protocol.md` |
 | Framework wave starter | `_vida/scripts/framework-wave-start.sh` | `_vida/docs/framework-self-analysis-protocol.md`, `_vida/docs/todo-protocol.md`, `_vida/scripts/vida-pack-helper.sh`, `_vida/scripts/boot-profile.sh` |
+| Product/framework proving packs | `_vida/docs/product-proving-packs-protocol.md` | `_vida/scripts/proving-pack.py` |
 | Shared reference catalog (non-runtime) | `docs/**` | `_vida/docs/beads-protocol.md` |
 | Execution pipelines | `_vida/docs/pipelines.md` | `_vida/scripts/quality-health-check.sh`, `_vida/scripts/framework-boundary-check.sh` |
 | Use-case routing | `_vida/docs/use-case-packs.md` | `_vida/scripts/vida-pack-router.sh`, `_vida/scripts/vida-pack-helper.sh` |

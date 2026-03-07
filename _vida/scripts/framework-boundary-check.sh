@@ -17,6 +17,8 @@ Checks framework/project boundary violations in framework-owned space:
   - hardcoded project planning paths from _vida/scripts/*
   - L0 orchestrator identity leakage outside AGENTS.md
   - orchestration-only section duplication outside orchestration-protocol.md
+  - task-local runtime artifacts leaked into _vida/docs
+  - framework runtime-law leakage into project-owned docs/*
 EOF
 }
 
@@ -63,6 +65,18 @@ orchestration_section_hits="$(rg -n --glob '!_vida/docs/orchestration-protocol.m
 if [[ -n "$orchestration_section_hits" ]]; then
   findings+=("orchestration_section_duplication")
   echo "$orchestration_section_hits" >&2
+fi
+
+task_local_artifact_hits="$(rg -n --files _vida/docs 2>/dev/null | rg '/[A-Za-z0-9._-]*[a-z]+-[0-9][A-Za-z0-9._-]*\\.(json|txt|ya?ml)$' || true)"
+if [[ -n "$task_local_artifact_hits" ]]; then
+  findings+=("task_local_framework_artifacts")
+  echo "$task_local_artifact_hits" >&2
+fi
+
+project_runtime_rule_hits="$(rg -n 'read-only lanes must not mutate framework files, project docs/scripts/config roots, or product source trees' docs 2>/dev/null || true)"
+if [[ -n "$project_runtime_rule_hits" ]]; then
+  findings+=("framework_runtime_rule_leak_to_project_docs")
+  echo "$project_runtime_rule_hits" >&2
 fi
 
 if [[ "${#findings[@]}" -eq 0 ]]; then

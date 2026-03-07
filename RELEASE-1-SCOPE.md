@@ -180,12 +180,14 @@ Release 1 should provide:
 8. context capsules for restore after compaction
 9. quality gates before close or handoff
 10. explicit separation between lifecycle state and execution telemetry
+11. queue-backed single-writer serialization for mutating task-state commands under concurrent orchestration
 
 Implementation audit:
 
 - [x] Single authoritative task state exists.
 - [x] TODO lifecycle commands and validation exist.
 - [x] Context capsules and quality gates exist.
+- [x] Queue-backed single-writer task-state mutation now exists for canonical mutating `br` and `beads_mutate` paths.
 - [ ] Not every lifecycle guarantee is yet proven as an always-on invariant for every execution path.
 
 ### 4. Use-Case Packs
@@ -198,6 +200,7 @@ Release 1 should provide complete pack execution for:
 4. `dev-pack`
 5. `bug-pool-pack`
 6. `reflection-pack`
+7. reusable proving-pack templates for product and framework regression surfaces
 
 Each pack should support:
 
@@ -213,6 +216,7 @@ Implementation audit:
 - [x] Canonical pack catalog exists.
 - [x] Pack helper and scaffold flow exist.
 - [x] Reflection-pack change-impact handling exists.
+- [x] Reusable proving-pack templates now exist for product and framework proving surfaces.
 - [ ] Full end-to-end proof for every pack remains incomplete.
 
 ### 4.1 Planning and Reasoning Methods
@@ -263,6 +267,7 @@ Release 1 should provide:
 13. bounded ensemble lease artifacts with conflict visibility for overlapping orchestration lanes
 14. subagent-first analysis and review behavior in supported `native|hybrid|disabled` runtime modes while keeping final synthesis under the orchestrator
 15. explicit budget-policy routing and internal-escalation metadata for lawful cheap, bridge, and internal lanes
+16. reusable leased subagent-pool borrowing and release helpers for bounded lane reuse
 
 Implementation audit:
 
@@ -275,6 +280,7 @@ Implementation audit:
 - [x] Subagent-first analysis/review behavior is now codified as the default supported-mode fabric while final user-facing synthesis stays orchestrator-owned.
 - [x] Development execution is now documented as orchestration-first when subagent mode is active.
 - [x] Budget-policy routing metadata now distinguishes local allowance, required dispatch path, lawful escalation, and bypass violations.
+- [x] Reusable leased subagent-pool helpers now exist on top of canonical lease primitives.
 - [ ] Task/block/file-scope ownership beyond ensemble dispatch leases is still incomplete.
 
 ### 5.1 Multi-Agent Role Architecture
@@ -342,6 +348,7 @@ Release 1 should provide:
 17. explicit dispatch-policy and budget-policy telemetry in canonical run artifacts
 18. machine-readable route receipts for canonical dispatch authorization and artifact correlation
 19. fail-closed rejection of illegal single-lane paths when route law requires fanout and synthesis
+20. fail-closed rejection of low-signal cheap-lane outputs such as preamble-only or machine-readable-missing responses
 
 Implementation audit:
 
@@ -357,6 +364,7 @@ Implementation audit:
 - [x] Canonical run logs now include budget-policy, cheap-lane, fallback, and internal-escalation telemetry.
 - [x] Canonical route receipts now exist for dispatch authorization, hash validation, and run-artifact correlation.
 - [x] Illegal `single` dispatch now fails fast when route law requires `fanout_then_synthesize`.
+- [x] Cheap analysis/review/coach lanes now fail closed on preamble-only and machine-readable-missing outputs.
 - [ ] Some merge/readiness heuristics are still heuristic rather than final Release 1-stable policy.
 
 ### 7. Review and Verification Fabric
@@ -378,6 +386,7 @@ Required capabilities:
 11. orchestrator-owned default user reporting that hides explicit subagent/process sections unless inspection is requested
 12. independent verification as a first-class routed artifact with explicit blocking semantics before final synthesis
 13. completion semantics that distinguish `decision_ready` from `synthesis_ready`
+14. mixed-issue split artifacts that preserve unresolved secondary symptoms without widening the current writer scope
 
 Target review-state vocabulary for Release 1:
 
@@ -398,6 +407,7 @@ Implementation audit:
 - [x] Ensemble manifests now persist a dedicated `verification` result block for independent verifier routing.
 - [x] Verification-required ensembles now remain blocked or `verification_pending` until synthesis is actually cleared.
 - [x] Runtime completion now distinguishes `decision_ready` from final `synthesis_ready`.
+- [x] Issue-driven execution now persists mixed-issue split artifacts so secondary unresolved symptoms remain explicit follow-up work.
 - [ ] The full target review vocabulary is not yet fully implemented end to end.
 - [ ] Policy-aware close/handoff semantics are not yet complete across all execution classes.
 
@@ -559,6 +569,7 @@ Release 1 should provide:
 12. operator-visible recovery, timeout-instability, and lease-conflict summaries
 13. operator-visible budget-policy and escalation summaries
 14. operator-visible route-law and verification-state summaries tied to canonical run artifacts
+15. lane-fitness telemetry that penalizes repeated low-signal cheap-lane behavior
 
 Implementation audit:
 
@@ -570,6 +581,7 @@ Implementation audit:
 - [x] Operator status now exposes timeout-instability classes and recent lease-conflict summaries.
 - [x] Operator status and health checks now surface budget-policy violations, escalation receipts, and diagnostic cost-class state.
 - [x] Route/run artifacts now expose `route_law_summary`, `route_receipt`, and dedicated verification blocks for operator inspection.
+- [x] Runtime scoring now persists and penalizes repeated low-fitness cheap-lane outputs.
 - [ ] Full drift visibility remains incomplete.
 
 ### 13.1 Drift Detection
@@ -628,6 +640,7 @@ Release 1 should provide early but real improvement mechanics:
 5. bounded framework diagnosis flows
 6. evidence-backed improvement of routing and fallback behavior
 7. a base for future prompt/policy revision loops
+8. silent framework diagnosis as a background capture mode with deferred framework bug follow-up
 
 Implementation audit:
 
@@ -635,6 +648,7 @@ Implementation audit:
 - [x] Evaluation packs exist.
 - [x] Provider score learning exists.
 - [x] Framework self-analysis path exists.
+- [x] Silent framework diagnosis now exists as a background capture and reflection surface.
 - [ ] Distilled lesson and memory update flow remain incomplete.
 
 ### 14.1 Continuous Learning Pipeline
@@ -772,10 +786,12 @@ Implementation audit:
   - [x] TODO block lifecycle scripts and validation utilities exist.
   - [x] Compact and delta runtime views exist.
   - [x] Quality gates and context checkpoints are wired into the task flow.
+  - [x] Queue-backed single-writer mutation now exists for canonical task-state writes.
 - [ ] **Partial: Use-Case Packs**
   - [x] Canonical pack routing exists for research, spec, work-pool, dev, bug-fix, and reflection flows.
   - [x] Pack helpers and TODO scaffolding are implemented.
   - [x] Reflection-pack is wired into documentation and framework self-analysis flows.
+  - [x] Product/framework proving-pack templates now exist as reusable proving surfaces.
   - [ ] Full end-to-end completion proof for every pack is not yet established inside this repository.
 - [ ] **Partial: Subagent System and Dispatch**
   - [x] Provider detection, requested/effective mode calculation, and route snapshots exist.
@@ -786,10 +802,12 @@ Implementation audit:
   - [x] Recovery helpers, subagent suppression, active-subagent visibility, and richer scorecards now exist.
   - [x] Phase-aware timeout controls and live route refresh now exist.
   - [x] Ensemble lease acquisition, release, conflict blocking, and lease-history diagnostics now exist.
+  - [x] Reusable leased subagent-pool helpers now exist on top of the lease runtime.
   - [x] Worker packets now use explicit machine-readable return fields for question-driven execution.
   - [x] Route outputs now expose budget-policy metadata and lawful internal-escalation constraints.
   - [x] Route-law summaries and canonical route receipts now exist in the dispatch runtime.
   - [x] Illegal single-lane dispatch now fails closed when route law requires fanout and synthesis.
+  - [x] Cheap lanes now fail closed on low-signal outputs instead of being counted as successful progress.
   - [ ] Broader task/block/file-scope ownership contracts are not yet fully materialized as runtime-enforced stateful contracts.
 - [ ] **Partial: Review and Verification Fabric**
   - [x] Route artifacts now expose `review_state`.
@@ -800,6 +818,7 @@ Implementation audit:
   - [x] Independent verification now persists as a dedicated manifest block.
   - [x] Completion now distinguishes `decision_ready` from `synthesis_ready`.
   - [x] Verification-required ensembles now remain blocked until verifier routing clears synthesis.
+  - [x] Mixed-issue split artifacts now preserve unresolved secondary symptoms as follow-up work instead of widening the current writer lane.
   - [ ] The full target review-state vocabulary is not yet demonstrated end to end.
   - [ ] Policy-aware close and handoff behavior is not yet fully proven across all task classes.
 - [ ] **Partial: Risk and Governance**
@@ -818,6 +837,7 @@ Implementation audit:
   - [x] Framework/project boundary documentation is established.
   - [x] Release-target documents are synchronized with the current framework shape.
   - [x] Bootstrap split and bounded log-read policy are now reflected in framework docs.
+  - [x] Silent diagnosis and proving-pack protocol docs now exist in the canonical framework map.
   - [ ] Document lifecycle and freshness enforcement are not yet complete at the full Release 1 level.
 - [ ] **Partial: Telemetry and Evaluation**
   - [x] Eval-pack and subagent evaluation scripts exist.
@@ -826,10 +846,12 @@ Implementation audit:
   - [x] Lease conflict and recent recovery summaries are now visible in operator surfaces.
   - [x] Budget-policy telemetry and escalation diagnostics now exist in operator-facing surfaces.
   - [x] Route-law summaries, route receipts, and verification blocks now exist in canonical run telemetry.
+  - [x] Low-fitness cheap-lane penalties now persist in routing and score telemetry.
   - [ ] Drift and anomaly visibility are not yet at the full target Release 1 maturity level.
 - [ ] **Partial: Learning and Improvement Loop**
   - [x] Reflection, eval-pack, and scorecard-driven routing adaptation exist.
   - [x] Provider promotion, demotion, cooldown, and recovery flows are implemented.
+  - [x] Silent diagnosis now captures deferred framework bugs and session reflections.
   - [ ] Distilled lesson/memory update flow is not yet a full first-class runtime subsystem.
 - [ ] **Partial: Project Overlay and Portability**
   - [x] Validated overlay template exists.

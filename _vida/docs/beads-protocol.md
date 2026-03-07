@@ -44,6 +44,7 @@ Wrapper rule:
 
 1. `_vida/*` wrappers operate in JSONL-first mode while `beads_mutate` owns task writes.
 2. Direct `br`/SQLite usage is diagnostic-only until the mutator path is fully retired.
+3. All mutating task-state writes must pass through one queue-backed single-writer path; concurrent callers may enqueue but must not mutate task state outside that serialized path.
 
 ## 3) Daily Core Commands
 
@@ -53,6 +54,12 @@ br update <id> --status in_progress
 br close <id> --reason "All ACs met"
 br sync --flush-only
 ```
+
+Mutation serialization rule:
+
+1. Read-only `br` commands may execute directly through the safe wrapper.
+2. Mutating `br` commands (`create|update|close|link|unlink|sync`) and JSONL mutator writes must run through the queue-backed writer path owned by `_vida/scripts/beads-runtime.sh`.
+3. If queue execution fails, stop with a blocker instead of retrying ad hoc from multiple lanes.
 
 Status snapshots:
 

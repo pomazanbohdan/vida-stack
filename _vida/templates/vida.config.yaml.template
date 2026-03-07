@@ -25,6 +25,21 @@ language_policy:
 protocol_activation:
   agent_system: false
 
+framework_self_diagnosis:
+  enabled: false
+  silent_mode: true
+  auto_capture_bugs: true
+  parent_issue: ""
+  defer_fix_until_task_boundary: true
+  session_reflection_required: true
+  platform_direction: agentic_engineering_platform
+  quality_token_efficiency: equal_weight
+  session_reflection_criteria:
+    - architecture_cleanliness
+    - completeness
+    - token_efficiency
+    - orchestration_efficiency
+
 pack_router_keywords:
   research: research
   spec: spec
@@ -336,7 +351,7 @@ pack_router_keywords:
 #       max_budget_units: 4
 #       max_cli_subagent_calls: 5
 #       max_verification_passes: 1
-#       max_fallback_hops: 1
+#       max_fallback_hops: 2
 #       max_total_runtime_seconds: 420
 #       dispatch_required: external_first_when_eligible
 #       external_first_required: yes
@@ -417,6 +432,38 @@ pack_router_keywords:
 #       bridge_fallback_subagent: codex_cli
 #       internal_escalation_trigger: semantic_conflict_without_majority
 #       verification_route_task_class: verification_ensemble
+#       independent_verification_required: no
+#     read_only_prep:
+#       subagents:
+#         - qwen_cli
+#         - kilo_cli
+#         - codex_cli
+#         - internal_subagents
+#       fanout_subagents:
+#         - qwen_cli
+#         - kilo_cli
+#       fanout_min_results: 1
+#       merge_policy: consensus_with_conflict_flag
+#       write_scope: none
+#       verification_gate: source_backed_summary
+#       max_runtime_seconds: 150
+#       min_output_bytes: 220
+#       graph_strategy: deterministic_then_escalate
+#       deterministic_first: yes
+#       budget_policy: strict
+#       max_budget_units: 1
+#       max_cli_subagent_calls: 2
+#       max_verification_passes: 0
+#       max_fallback_hops: 1
+#       max_total_runtime_seconds: 240
+#       dispatch_required: fanout_then_synthesize
+#       external_first_required: yes
+#       local_execution_allowed: no
+#       local_execution_preferred: no
+#       cli_dispatch_required_if_delegating: yes
+#       direct_internal_bypass_forbidden: yes
+#       bridge_fallback_subagent: codex_cli
+#       internal_escalation_trigger: subagent_exhausted_or_quality_gap
 #       independent_verification_required: no
 #     meta_analysis:
 #       subagents:

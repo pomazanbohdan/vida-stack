@@ -30,6 +30,7 @@ The analysis lane must classify each issue as one of:
 Canonical runtime artifact:
 
 1. `.vida/logs/issue-contracts/<task_id>.json`
+2. `.vida/logs/issue-splits/<task_id>.json` when a mixed issue contains both an executable primary slice and unresolved secondary symptoms
 
 Minimum fields:
 
@@ -37,14 +38,16 @@ Minimum fields:
 2. `equivalence_assessment`
 3. `reported_behavior`
 4. `expected_behavior`
-5. `scope_in`
-6. `scope_out`
-7. `acceptance_checks`
-8. `spec_sync_targets`
-9. `wvp_required`
-10. `wvp_status`
-11. `status`
-12. `resolution_path`
+5. `reported_scope`
+6. `proven_scope`
+7. `symptoms` for multi-symptom issues
+8. `scope_out`
+9. `acceptance_checks`
+10. `spec_sync_targets`
+11. `wvp_required`
+12. `wvp_status`
+13. `status`
+14. `resolution_path`
 
 ## Status Mapping
 
@@ -65,9 +68,48 @@ Before writer authorization:
 
 1. analysis receipt must exist when the route requires analysis,
 2. `issue_contract` must exist,
-3. `issue_contract.status` must be `writer_ready`.
+3. `issue_contract.status` must be `writer_ready`,
+4. `issue_contract.proven_scope` must be non-empty.
 
 If any item fails, writer authorization is blocked.
+
+## Scope Split Rule
+
+Each `issue_contract` must separate:
+
+1. `reported_scope`
+   - the full symptom surface from intake or analysis,
+2. `proven_scope`
+   - the narrowed executable surface supported by current evidence.
+
+Writer authorization binds only to `proven_scope`.
+
+Unproven claims must stay in `reported_scope` until they are either:
+
+1. reproduced/proven,
+2. moved into a later slice,
+3. routed to spec/issue reconciliation.
+
+## Symptom Evidence Rule
+
+For multi-symptom issues:
+
+1. each symptom must be represented in `issue_contract.symptoms`,
+2. each in-scope symptom must have `evidence_status` in `reproduced|red_test|live_evidence`,
+3. symptoms without evidence must be explicitly marked `disposition=out_of_scope` before writer authorization,
+4. otherwise `writer_ready` is invalid and must fail closed.
+
+## Mixed-Issue Split Rule
+
+If one issue contains:
+
+1. a proven in-scope executable slice, and
+2. secondary unresolved or explicitly out-of-scope symptoms,
+
+the runtime should emit an `issue-split` artifact that preserves:
+
+1. the primary executable slice the writer may implement now,
+2. the secondary unresolved slice that should become follow-up work instead of silently re-expanding the current fix.
 
 ## WVP / Internet Validation
 

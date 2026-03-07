@@ -753,6 +753,9 @@ def score_defaults() -> dict[str, Any]:
             "state": "normal",
             "useful_progress_count": 0,
             "chatter_only_count": 0,
+            "preamble_only_output_count": 0,
+            "missing_machine_readable_payload_count": 0,
+            "low_signal_output_count": 0,
             "timeout_after_progress_count": 0,
             "startup_timeout_count": 0,
             "no_output_timeout_count": 0,
@@ -843,6 +846,9 @@ def lane_lifecycle_stage_for(
 
 def should_degrade_for_chatter(bucket: dict[str, Any]) -> bool:
     chatter_only_count = int(bucket.get("chatter_only_count", 0) or 0)
+    preamble_only_count = int(bucket.get("preamble_only_output_count", 0) or 0)
+    missing_machine_readable_payload_count = int(bucket.get("missing_machine_readable_payload_count", 0) or 0)
+    low_signal_output_count = int(bucket.get("low_signal_output_count", 0) or 0)
     useful_progress_count = int(bucket.get("useful_progress_count", 0) or 0)
     success_count = int(bucket.get("success_count", 0) or 0)
     useful_progress_rate = float(bucket.get("useful_progress_rate", 0) or 0)
@@ -859,7 +865,12 @@ def should_degrade_for_chatter(bucket: dict[str, Any]) -> bool:
     }:
         return False
     return (
-        chatter_only_count >= 2
+        (
+            chatter_only_count >= 2
+            or preamble_only_count >= 2
+            or missing_machine_readable_payload_count >= 2
+            or low_signal_output_count >= 3
+        )
         and useful_progress_count == 0
         and success_count == 0
         and useful_progress_rate <= 0
@@ -870,7 +881,14 @@ def apply_behavioral_degradation(bucket: dict[str, Any]) -> None:
     if not should_degrade_for_chatter(bucket):
         return
     bucket["subagent_state"] = "degraded"
-    bucket["failure_reason"] = "repeated_chatter_only"
+    if int(bucket.get("missing_machine_readable_payload_count", 0) or 0) >= 2:
+        bucket["failure_reason"] = "repeated_machine_readable_missing"
+    elif int(bucket.get("preamble_only_output_count", 0) or 0) >= 2:
+        bucket["failure_reason"] = "repeated_preamble_only_output"
+    elif int(bucket.get("low_signal_output_count", 0) or 0) >= 3:
+        bucket["failure_reason"] = "repeated_low_signal_output"
+    else:
+        bucket["failure_reason"] = "repeated_chatter_only"
     bucket["cooldown_until"] = future_utc_iso(minutes=30)
     bucket["probe_required"] = True
 
@@ -1614,6 +1632,19 @@ def adaptive_runtime_seconds(
     chatter_only_count = int(
         task_card.get("chatter_only_count", global_card.get("chatter_only_count", 0)) or 0
     )
+    preamble_only_output_count = int(
+        task_card.get("preamble_only_output_count", global_card.get("preamble_only_output_count", 0)) or 0
+    )
+    missing_machine_readable_payload_count = int(
+        task_card.get(
+            "missing_machine_readable_payload_count",
+            global_card.get("missing_machine_readable_payload_count", 0),
+        )
+        or 0
+    )
+    low_signal_output_count = int(
+        task_card.get("low_signal_output_count", global_card.get("low_signal_output_count", 0)) or 0
+    )
     timeout_after_progress_count = int(
         task_card.get("timeout_after_progress_count", global_card.get("timeout_after_progress_count", 0)) or 0
     )
@@ -1686,6 +1717,7 @@ def task_class_fit_bonus(task_class: str, subagent_cfg: dict[str, Any]) -> tuple
 
     direct_specialty_map = {
         "analysis": {"review", "research", "planning", "spec"},
+        "read_only_prep": {"review", "research", "planning", "spec"},
         "coach": {"review", "planning", "spec", "architecture"},
         "review": {"review", "deep_review"},
         "research": {"research", "long_context"},
@@ -1696,6 +1728,7 @@ def task_class_fit_bonus(task_class: str, subagent_cfg: dict[str, Any]) -> tuple
     }
     direct_capability_map = {
         "analysis": {"read_only", "review_safe"},
+        "read_only_prep": {"read_only", "review_safe"},
         "coach": {"read_only", "review_safe"},
         "review": {"review_safe"},
         "research": {"read_only"},
@@ -2259,6 +2292,19 @@ def route_candidate_context(
             continue
         useful_progress_rate = float(task_card.get("useful_progress_rate", global_card.get("useful_progress_rate", 0)) or 0)
         chatter_only_count = int(task_card.get("chatter_only_count", global_card.get("chatter_only_count", 0)) or 0)
+        preamble_only_output_count = int(
+            task_card.get("preamble_only_output_count", global_card.get("preamble_only_output_count", 0)) or 0
+        )
+        missing_machine_readable_payload_count = int(
+            task_card.get(
+                "missing_machine_readable_payload_count",
+                global_card.get("missing_machine_readable_payload_count", 0),
+            )
+            or 0
+        )
+        low_signal_output_count = int(
+            task_card.get("low_signal_output_count", global_card.get("low_signal_output_count", 0)) or 0
+        )
         timeout_after_progress_count = int(
             task_card.get("timeout_after_progress_count", global_card.get("timeout_after_progress_count", 0)) or 0
         )
@@ -2291,6 +2337,12 @@ def route_candidate_context(
         priority_bonus = max(0, 30 - (idx * 10))
         progress_bonus = int(round(useful_progress_rate * 20))
         chatter_penalty = min(20, chatter_only_count * 10)
+        quality_penalty = min(
+            24,
+            (preamble_only_output_count * 8)
+            + (missing_machine_readable_payload_count * 9)
+            + (low_signal_output_count * 6),
+        )
         timeout_penalty = min(15, timeout_after_progress_count * 8)
         timeout_instability_penalty = min(
             18,
@@ -2307,6 +2359,7 @@ def route_candidate_context(
             + recovery_adjustment
             + budget_adjustment
             - chatter_penalty
+            - quality_penalty
             - timeout_penalty
             - timeout_instability_penalty
         )
@@ -2353,6 +2406,9 @@ def route_candidate_context(
                 "cost_priority": payload.get("cost_priority", "normal"),
                 "useful_progress_rate": useful_progress_rate,
                 "chatter_only_count": chatter_only_count,
+                "preamble_only_output_count": preamble_only_output_count,
+                "missing_machine_readable_payload_count": missing_machine_readable_payload_count,
+                "low_signal_output_count": low_signal_output_count,
                 "timeout_after_progress_count": timeout_after_progress_count,
                 "startup_timeout_count": startup_timeout_count,
                 "no_output_timeout_count": no_output_timeout_count,
@@ -3130,6 +3186,7 @@ def update_score(
     useful_progress = bool(metrics.get("useful_progress", False))
     timeout_after_progress = bool(metrics.get("timeout_after_progress", False))
     chatter_only = bool(metrics.get("chatter_only", False))
+    output_quality_state = policy_value(metrics.get("output_quality_state"), "")
     time_to_first_useful_output_ms = metrics.get("time_to_first_useful_output_ms")
     failure_reason = policy_value(metrics.get("failure_reason"), "")
     verification_role = policy_value(metrics.get("verification_role"), "")
@@ -3187,6 +3244,14 @@ def update_score(
             bucket["useful_progress_count"] = int(bucket.get("useful_progress_count", 0)) + 1
         if chatter_only:
             bucket["chatter_only_count"] = int(bucket.get("chatter_only_count", 0)) + 1
+        if output_quality_state == "preamble_only_output":
+            bucket["preamble_only_output_count"] = int(bucket.get("preamble_only_output_count", 0)) + 1
+        if output_quality_state == "missing_machine_readable_payload":
+            bucket["missing_machine_readable_payload_count"] = int(
+                bucket.get("missing_machine_readable_payload_count", 0)
+            ) + 1
+        if output_quality_state == "low_signal_output":
+            bucket["low_signal_output_count"] = int(bucket.get("low_signal_output_count", 0)) + 1
         if timeout_after_progress:
             bucket["timeout_after_progress_count"] = int(bucket.get("timeout_after_progress_count", 0)) + 1
         if failure_reason == "startup_timeout":
