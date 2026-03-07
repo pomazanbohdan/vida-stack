@@ -69,6 +69,10 @@ DISPATCH_KEYS = {
     "probe_prompt",
     "probe_expect_substring",
     "probe_timeout_seconds",
+    "startup_timeout_seconds",
+    "no_output_timeout_seconds",
+    "progress_idle_timeout_seconds",
+    "max_runtime_extension_seconds",
 }
 DISPATCH_OUTPUT_MODES = {"stdout", "file"}
 DISPATCH_PROMPT_MODES = {"positional", "flag"}
@@ -431,6 +435,20 @@ def _validate_dispatch(subagent_name: str, dispatch_cfg: dict[str, Any], errors:
     for key in {"workdir_flag", "model_flag"}:
         if key in dispatch_cfg:
             _validate_string_field(dispatch_cfg, key, path, errors)
+    for key in {
+        "probe_timeout_seconds",
+        "startup_timeout_seconds",
+        "no_output_timeout_seconds",
+        "progress_idle_timeout_seconds",
+        "max_runtime_extension_seconds",
+    }:
+        if key in dispatch_cfg:
+            _validate_int_field(dispatch_cfg, key, path, errors, min_value=1)
+    for key in {"probe_prompt", "probe_expect_substring"}:
+        if key in dispatch_cfg:
+            _validate_string_field(dispatch_cfg, key, path, errors)
+    if "probe_static_args" in dispatch_cfg:
+        _validate_repeated_string_field(dispatch_cfg, "probe_static_args", path, errors)
 
 
 def _validate_subagent(subagent_name: str, subagent_cfg: dict[str, Any], errors: list[str]) -> None:

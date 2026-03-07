@@ -83,6 +83,7 @@ Release 1 should be delivered through these phases:
   - [x] External-first fanout, fallback, arbitration, and live ensemble visibility are implemented.
   - [x] Worker-entry and worker-thinking contracts are separated from orchestrator logic.
   - [x] Degraded CLI subagent recovery helpers now exist.
+  - [x] Phase-aware timeout controls and live route refresh now exist.
   - [ ] Explicit lease and ownership runtime enforcement is not yet fully complete.
 - [ ] **Partial: Phase C — Verification, Review, and Risk Gates**
   - [x] Route and run artifacts expose `risk_class`.
@@ -93,12 +94,12 @@ Release 1 should be delivered through these phases:
 - [ ] **Partial: Phase D — Telemetry, Scorecards, and Drift Awareness**
   - [x] Eval-pack and subagent evaluation scripts exist.
   - [x] Scorecards track useful-progress rate, timeout-after-progress count, and time-to-first-useful-output.
-  - [x] Operator status exposes preferred task classes and current subagent health state.
+  - [x] Operator status exposes task-class fit, recovery history, and current subagent health state.
   - [ ] Drift and anomaly handling are not yet complete at the intended Release 1 maturity level.
 - [ ] **Partial: Phase E — Documentation Contract and Protocol Runtime Alignment**
   - [x] Release-target documents, protocol index, worker contracts, and changelog are in place.
   - [x] Canonical runtime vocabulary was pushed further toward `cli subagent` terminology.
-  - [x] Provider templates now mirror the real subagent runtime contract.
+  - [x] Provider templates now mirror the real subagent runtime contract, including phase-aware timeout controls.
   - [ ] Full document freshness and lifecycle enforcement are not yet complete.
 - [ ] **Partial: Phase F — Extraction Readiness and Standalone Framework Preparation**
   - [x] A bash installer exists for framework payload installation.
@@ -195,6 +196,8 @@ Implementation audit:
 - [x] Fanout, fallback, and bounded arbitration exist.
 - [x] Worker-entry separation exists.
 - [x] Live phase and progress visibility exist.
+- [x] Phase-aware timeout policy exists.
+- [x] Lane-aware demotion suppression exists for analysis fanout.
 - [ ] Explicit lease/ownership enforcement remains incomplete.
 
 ## Phase C: Verification, Review, and Risk Gates
@@ -280,6 +283,7 @@ Implementation audit:
 - [x] Dynamic scorecards exist.
 - [x] Strategy snapshots exist.
 - [x] Useful-progress and time-to-first-useful-output metrics exist.
+- [x] Recovery history and task-class lane-readiness visibility now exist in operator surfaces.
 - [ ] Drift/anomaly handling is still incomplete.
 
 ## Phase E: Documentation Contract and Protocol Runtime Alignment
@@ -324,6 +328,7 @@ Implementation audit:
 - [x] Top-level release documents exist and are maintained.
 - [x] `protocol-index.md` is synchronized as a canonical map.
 - [x] Worker contracts and subagent protocol docs are in place.
+- [x] Protocol docs now describe recovery history, lane-aware demotion, and phase-aware timeout behavior.
 - [ ] Full document freshness/lifecycle enforcement is still incomplete.
 
 ## Phase F: Extraction Readiness and Standalone Framework Preparation

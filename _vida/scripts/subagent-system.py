@@ -105,6 +105,10 @@ def migrate_legacy_runtime_state(snapshot: dict[str, Any]) -> dict[str, Any]:
 def runtime_snapshot(task_id: str | None = None) -> dict[str, Any]:
     snapshot = migrate_legacy_runtime_state(load_json(INIT_PATH, {}))
     if snapshot.get("subagents"):
+        config = vida_config.load_validated_config()
+        current_subagents = detect_subagents(config)
+        scoring_cfg = thresholds(config)
+        mode, reasons = effective_mode(config, current_subagents)
         scorecards = load_json(SCORECARD_PATH, {"subagents": {}})
         if isinstance(scorecards, dict):
             if "subagents" not in scorecards and isinstance(scorecards.get("providers"), dict):
@@ -118,6 +122,21 @@ def runtime_snapshot(task_id: str | None = None) -> dict[str, Any]:
                 for bucket in (card.get("by_domain", {}) or {}).values():
                     migrate_scorecard_bucket(bucket)
             snapshot["scorecards"] = scorecards.get("subagents", snapshot.get("scorecards", {}))
+        snapshot["config_path"] = str(vida_config.CONFIG_PATH) if vida_config.CONFIG_PATH.exists() else ""
+        snapshot["protocol_activation"] = {
+            "agent_system": bool(vida_config.dotted_get(config, "protocol_activation.agent_system", False)),
+        }
+        snapshot["agent_system"] = {
+            "init_on_boot": bool(vida_config.dotted_get(config, "agent_system.init_on_boot", False)),
+            "requested_mode": str(vida_config.dotted_get(config, "agent_system.mode", "native")),
+            "effective_mode": mode,
+            "state_owner": str(vida_config.dotted_get(config, "agent_system.state_owner", "orchestrator_only")),
+            "max_parallel_agents": int(vida_config.dotted_get(config, "agent_system.max_parallel_agents", 1)),
+            "scoring": scoring_cfg,
+            "reasons": reasons,
+        }
+        snapshot["subagents"] = current_subagents
+        snapshot["task_id"] = task_id or snapshot.get("task_id")
         return snapshot
     return init_snapshot(task_id)
 
@@ -288,6 +307,10 @@ def score_defaults() -> dict[str, Any]:
             "cooldown_until": "",
             "probe_required": False,
             "last_quota_exhausted_at": "",
+            "recovery_attempt_count": 0,
+            "recovery_success_count": 0,
+            "last_recovery_at": "",
+            "last_recovery_status": "",
         },
         "by_task_class": {},
         "by_domain": {},
@@ -388,7 +411,14 @@ def apply_availability_metrics(bucket: dict[str, Any], result: str, metrics: dic
     normalize_availability_bucket(bucket)
 
 
-def update_subagent_availability(subagent: str, metrics: dict[str, Any], note: str = "") -> dict[str, Any]:
+def update_subagent_availability(
+    subagent: str,
+    metrics: dict[str, Any],
+    note: str = "",
+    *,
+    recovery_attempted: bool = False,
+    recovery_success: bool = False,
+) -> dict[str, Any]:
     snapshot = runtime_snapshot()
     scorecards = load_json(SCORECARD_PATH, {"subagents": {}})
     subagent_cards = scorecards.setdefault("subagents", {})
@@ -397,6 +427,12 @@ def update_subagent_availability(subagent: str, metrics: dict[str, Any], note: s
     apply_availability_metrics(global_card, "success" if metrics.get("subagent_state") == "active" else "failure", metrics)
     global_card["last_probe_note"] = note
     global_card["last_probe_at"] = now_utc()
+    if recovery_attempted:
+        global_card["recovery_attempt_count"] = int(global_card.get("recovery_attempt_count", 0)) + 1
+        global_card["last_recovery_at"] = now_utc()
+        global_card["last_recovery_status"] = "success" if recovery_success else "failure"
+        if recovery_success:
+            global_card["recovery_success_count"] = int(global_card.get("recovery_success_count", 0)) + 1
     save_json(SCORECARD_PATH, scorecards)
     snapshot["scorecards"] = scorecards["subagents"]
     snapshot["written_at"] = now_utc()
@@ -423,12 +459,23 @@ def subagent_operator_status() -> dict[str, Any]:
         failure_count = int(global_card.get("failure_count", 0))
         chatter_only_count = int(global_card.get("chatter_only_count", 0))
         useful_progress_rate = float(global_card.get("useful_progress_rate", 0) or 0)
+        recovery_attempt_count = int(global_card.get("recovery_attempt_count", 0) or 0)
+        recovery_success_count = int(global_card.get("recovery_success_count", 0) or 0)
         task_class_cards = subagent_scorecard.get("by_task_class", {}) or {}
         preferred_task_classes = sorted(
             [
                 task_class
                 for task_class, bucket in task_class_cards.items()
                 if isinstance(bucket, dict) and policy_value(bucket.get("state"), "normal") == "preferred"
+            ]
+        )
+        eligible_task_classes = sorted(
+            [
+                task_class
+                for task_class, bucket in task_class_cards.items()
+                if isinstance(bucket, dict)
+                and policy_value(bucket.get("state"), "normal") != "demoted"
+                and int(bucket.get("score", 50) or 50) >= 60
             ]
         )
         row = {
@@ -444,9 +491,14 @@ def subagent_operator_status() -> dict[str, Any]:
             "failure_count": failure_count,
             "chatter_only_count": chatter_only_count,
             "useful_progress_rate": useful_progress_rate,
+            "recovery_attempt_count": recovery_attempt_count,
+            "recovery_success_count": recovery_success_count,
+            "last_recovery_status": policy_value(global_card.get("last_recovery_status"), ""),
+            "last_recovery_at": policy_value(global_card.get("last_recovery_at"), ""),
             "quality_tier": policy_value(subagent_cfg.get("quality_tier"), "unknown"),
             "billing_tier": policy_value(subagent_cfg.get("billing_tier"), "unknown"),
             "preferred_task_classes": preferred_task_classes,
+            "eligible_task_classes": eligible_task_classes,
             "recommended_action": (
                 "wait_for_cooldown"
                 if cooldown_until
@@ -481,6 +533,8 @@ def subagent_operator_status() -> dict[str, Any]:
             "probe_required": sum(1 for row in rows if row["probe_required"]),
             "degraded": sum(1 for row in rows if row["subagent_state"] == "degraded"),
             "quota_exhausted": sum(1 for row in rows if row["subagent_state"] == "quota_exhausted"),
+            "preferred": sum(1 for row in rows if row["state"] == "preferred"),
+            "demoted": sum(1 for row in rows if row["state"] == "demoted"),
         },
     }
 
@@ -596,7 +650,13 @@ def probe_subagent(subagent: str) -> dict[str, Any]:
         success = completed.returncode == 0 and (not expect_substring or expect_substring in stdout_text or expect_substring in stderr_text)
         metrics = availability_signal_for_probe("success" if success else "failure", "\n".join([stdout_text, stderr_text]))
         note = f"probe exit={completed.returncode}; expect={expect_substring or '<non-empty/zero-exit>'}"
-        result = update_subagent_availability(subagent, metrics, note)
+        result = update_subagent_availability(
+            subagent,
+            metrics,
+            note,
+            recovery_attempted=True,
+            recovery_success=success,
+        )
         result["probe"] = {
             "command": cmd,
             "timeout_seconds": timeout_seconds,
@@ -609,7 +669,13 @@ def probe_subagent(subagent: str) -> dict[str, Any]:
         stdout_path.write_text("", encoding="utf-8")
         stderr_path.write_text(f"subagent probe timed out after {timeout_seconds}s\n", encoding="utf-8")
         metrics = availability_signal_for_probe("failure", "subagent probe timed out")
-        result = update_subagent_availability(subagent, metrics, f"probe timeout after {timeout_seconds}s")
+        result = update_subagent_availability(
+            subagent,
+            metrics,
+            f"probe timeout after {timeout_seconds}s",
+            recovery_attempted=True,
+            recovery_success=False,
+        )
         result["probe"] = {
             "command": cmd,
             "timeout_seconds": timeout_seconds,
@@ -938,6 +1004,18 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         task_card = card.get("by_task_class", {}).get(task_class, {})
         learned_score = int(task_card.get("score", card.get("global", {}).get("score", 50)))
         global_score = int(global_card.get("score", 50))
+        task_state = policy_value(task_card.get("state"), "")
+        global_state = policy_value(global_card.get("state"), "normal")
+        if task_state == "demoted":
+            suppressed_subagents.append({"subagent": subagent, "reason": "task_class_demoted"})
+            continue
+        if (
+            global_state == "demoted"
+            and task_state != "preferred"
+            and subagent not in {bridge_fallback_subagent, "internal_subagents"}
+        ):
+            suppressed_subagents.append({"subagent": subagent, "reason": "globally_demoted"})
+            continue
         useful_progress_rate = float(
             task_card.get("useful_progress_rate", global_card.get("useful_progress_rate", 0)) or 0
         )
@@ -947,7 +1025,7 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         timeout_after_progress_count = int(
             task_card.get("timeout_after_progress_count", global_card.get("timeout_after_progress_count", 0)) or 0
         )
-        state = task_card.get("state", card.get("global", {}).get("state", "normal"))
+        state = task_state or global_state
         subagent_state = policy_value(global_card.get("subagent_state"), "active")
         consecutive = int(task_card.get("consecutive_failures", card.get("global", {}).get("consecutive_failures", 0)))
         if state == "demoted" and consecutive >= int(scoring_cfg["consecutive_failure_limit"]):
@@ -967,6 +1045,9 @@ def route_subagent(task_class: str) -> dict[str, Any]:
             global_card,
             effective_score,
         )
+        startup_timeout_seconds = max(5, policy_int(payload.get("dispatch", {}).get("startup_timeout_seconds"), 45))
+        no_output_timeout_seconds = max(5, policy_int(payload.get("dispatch", {}).get("no_output_timeout_seconds"), 120))
+        progress_idle_timeout_seconds = max(5, policy_int(payload.get("dispatch", {}).get("progress_idle_timeout_seconds"), 90))
         candidates.append(
             {
                 "effective_score": effective_score,
@@ -982,6 +1063,9 @@ def route_subagent(task_class: str) -> dict[str, Any]:
                 "selected_profile": selected_profile,
                 "selected_profile_source": profile_source,
                 "max_runtime_seconds": candidate_runtime,
+                "startup_timeout_seconds": startup_timeout_seconds,
+                "no_output_timeout_seconds": no_output_timeout_seconds,
+                "progress_idle_timeout_seconds": progress_idle_timeout_seconds,
                 "subagent_backend_class": payload.get("subagent_backend_class"),
                 "subagent_state": subagent_state,
                 "capability_band": payload.get("capability_band", []),
@@ -1068,6 +1152,9 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         "verification_gate": verification_gate,
         "risk_class": risk_class,
         "max_runtime_seconds": selected["max_runtime_seconds"],
+        "startup_timeout_seconds": selected["startup_timeout_seconds"],
+        "no_output_timeout_seconds": selected["no_output_timeout_seconds"],
+        "progress_idle_timeout_seconds": selected["progress_idle_timeout_seconds"],
         "min_output_bytes": min_output_bytes,
         "fanout_subagents": fanout_subagents,
         "fanout_min_results": fanout_min_results,
@@ -1092,6 +1179,9 @@ def route_subagent(task_class: str) -> dict[str, Any]:
                 "selected_profile": item["selected_profile"],
                 "selected_profile_source": item["selected_profile_source"],
                 "max_runtime_seconds": item["max_runtime_seconds"],
+                "startup_timeout_seconds": item["startup_timeout_seconds"],
+                "no_output_timeout_seconds": item["no_output_timeout_seconds"],
+                "progress_idle_timeout_seconds": item["progress_idle_timeout_seconds"],
                 "subagent_state": item["subagent_state"],
                 "orchestration_tier": item["orchestration_tier"],
                 "cost_priority": item["cost_priority"],

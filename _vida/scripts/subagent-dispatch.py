@@ -218,6 +218,13 @@ def route_min_output_bytes(route: dict[str, Any], subagent_cfg: dict[str, Any]) 
     return route_min or subagent_min or 220
 
 
+def dispatch_timeout_seconds(subagent_cfg: dict[str, Any], key: str, default: int) -> int:
+    dispatch_cfg = subagent_cfg.get("dispatch", {})
+    if not isinstance(dispatch_cfg, dict):
+        return default
+    return max(5, policy_int(dispatch_cfg.get(key), default))
+
+
 def route_risk_class(route: dict[str, Any]) -> str:
     value = str(route.get("risk_class", "R0")).strip().upper()
     return value if value in {"R0", "R1", "R2", "R3", "R4"} else "R0"
@@ -355,6 +362,10 @@ def manifest_active_subagents(launches: dict[str, dict[str, Any]]) -> list[dict[
                 "effective_runtime_seconds": int(launch.get("effective_runtime_seconds", launch.get("max_runtime_seconds", 0)) or 0),
                 "useful_progress": bool(launch.get("useful_progress", False)),
                 "first_useful_output_ms": launch.get("first_useful_output_ms"),
+                "startup_timeout_seconds": int(launch.get("startup_timeout_seconds", 0) or 0),
+                "no_output_timeout_seconds": int(launch.get("no_output_timeout_seconds", 0) or 0),
+                "progress_idle_timeout_seconds": int(launch.get("progress_idle_timeout_seconds", 0) or 0),
+                "idle_seconds": int(launch.get("last_idle_seconds", 0) or 0),
             }
         )
     return items
@@ -419,6 +430,10 @@ def subagent_result_payload(
         "domain_tags": domain_tags,
         "max_runtime_seconds": max_runtime_seconds,
         "min_output_bytes": min_output_bytes,
+        "startup_timeout_seconds": dispatch_timeout_seconds(subagent_cfg, "startup_timeout_seconds", 45),
+        "no_output_timeout_seconds": dispatch_timeout_seconds(subagent_cfg, "no_output_timeout_seconds", 120),
+        "progress_idle_timeout_seconds": dispatch_timeout_seconds(subagent_cfg, "progress_idle_timeout_seconds", 90),
+        "max_runtime_extension_seconds": dispatch_timeout_seconds(subagent_cfg, "max_runtime_extension_seconds", 90),
         "output_file": str(output_file),
         "stderr_file": str(stderr_path),
         "output_bytes": output_size(output_file),
@@ -529,6 +544,30 @@ def subagent_availability_signal(
             "last_quota_exhausted_at": "",
         }
     if status == "timeout":
+        if "startup timeout without output" in combined:
+            return {
+                "subagent_state": "degraded",
+                "failure_reason": "startup_timeout",
+                "cooldown_until": subagent_system.future_utc_iso(minutes=30),
+                "probe_required": True,
+                "last_quota_exhausted_at": "",
+            }
+        if "no-output timeout without useful progress" in combined:
+            return {
+                "subagent_state": "degraded",
+                "failure_reason": "no_output_timeout",
+                "cooldown_until": subagent_system.future_utc_iso(minutes=30),
+                "probe_required": True,
+                "last_quota_exhausted_at": "",
+            }
+        if "stalled after useful progress" in combined:
+            return {
+                "subagent_state": "degraded",
+                "failure_reason": "stalled_after_progress",
+                "cooldown_until": subagent_system.future_utc_iso(minutes=20),
+                "probe_required": True,
+                "last_quota_exhausted_at": "",
+            }
         return {
             "subagent_state": "degraded",
             "failure_reason": "runtime_unstable",
@@ -579,11 +618,13 @@ def launch_progress_snapshot(launch: dict[str, Any]) -> dict[str, Any]:
         launch["first_useful_output_ms"] = int((now_mono - float(launch["started"])) * 1000)
     launch["useful_progress"] = useful_progress
     launch["last_progress_check_at"] = now_mono
+    launch["last_idle_seconds"] = int(now_mono - float(launch.get("last_activity_at", launch["started"])))
     return {
         "output_bytes": output_bytes,
         "stderr_bytes": stderr_bytes,
         "useful_progress": useful_progress,
         "grew": grew,
+        "observed_output": (output_bytes + stderr_bytes) > 0,
         "first_useful_output_ms": launch.get("first_useful_output_ms"),
         "idle_seconds": int(now_mono - float(launch.get("last_activity_at", launch["started"]))),
     }
@@ -593,8 +634,13 @@ def runtime_extension_seconds(launch: dict[str, Any]) -> int:
     base_limit = int(launch["max_runtime_seconds"])
     quality_tier = str(launch["subagent_cfg"].get("quality_tier", "medium"))
     if quality_tier == "high":
-        return min(90, max(30, base_limit // 2))
-    return min(60, max(20, base_limit // 3))
+        extension = min(90, max(30, base_limit // 2))
+    else:
+        extension = min(60, max(20, base_limit // 3))
+    cap = int(launch.get("max_runtime_extension_seconds", 0) or 0)
+    if cap > 0:
+        extension = min(extension, cap)
+    return extension
 
 
 def run_subagent(
@@ -623,6 +669,10 @@ def run_subagent(
         subagent_cfg,
     )
     min_output_bytes = route_min_output_bytes(route, subagent_cfg)
+    startup_timeout_seconds = dispatch_timeout_seconds(subagent_cfg, "startup_timeout_seconds", 45)
+    no_output_timeout_seconds = dispatch_timeout_seconds(subagent_cfg, "no_output_timeout_seconds", 120)
+    progress_idle_timeout_seconds = dispatch_timeout_seconds(subagent_cfg, "progress_idle_timeout_seconds", 90)
+    max_runtime_extension_seconds = dispatch_timeout_seconds(subagent_cfg, "max_runtime_extension_seconds", 90)
     run_id = f"spr-{uuid.uuid4().hex[:12]}"
     ts_start = now_utc()
     started = time.monotonic()
@@ -749,6 +799,10 @@ def start_subagent_process(
         subagent_cfg,
     )
     min_output_bytes = route_min_output_bytes(route, subagent_cfg)
+    startup_timeout_seconds = dispatch_timeout_seconds(subagent_cfg, "startup_timeout_seconds", 45)
+    no_output_timeout_seconds = dispatch_timeout_seconds(subagent_cfg, "no_output_timeout_seconds", 120)
+    progress_idle_timeout_seconds = dispatch_timeout_seconds(subagent_cfg, "progress_idle_timeout_seconds", 90)
+    max_runtime_extension_seconds = dispatch_timeout_seconds(subagent_cfg, "max_runtime_extension_seconds", 90)
     run_id = f"spr-{uuid.uuid4().hex[:12]}"
     ts_start = now_utc()
     started = time.monotonic()
@@ -813,6 +867,10 @@ def start_subagent_process(
             "risk_class": risk_class,
             "max_runtime_seconds": max_runtime_seconds,
             "min_output_bytes": min_output_bytes,
+            "startup_timeout_seconds": startup_timeout_seconds,
+            "no_output_timeout_seconds": no_output_timeout_seconds,
+            "progress_idle_timeout_seconds": progress_idle_timeout_seconds,
+            "max_runtime_extension_seconds": max_runtime_extension_seconds,
             "run_id": run_id,
             "ts_start": ts_start,
             "started": started,
@@ -1692,6 +1750,38 @@ def run_ensemble(argv: list[str]) -> int:
             effective_runtime_seconds = int(launch.get("effective_runtime_seconds", launch["max_runtime_seconds"]))
             if (
                 process.poll() is None
+                and not progress.get("observed_output")
+                and elapsed > int(launch.get("startup_timeout_seconds", 45))
+            ):
+                results.append(
+                    terminate_subagent_process(
+                        launch,
+                        f"cli subagent hit startup timeout without output ({launch.get('startup_timeout_seconds', 45)}s)",
+                        status_override="timeout",
+                        exit_code_override=124,
+                    )
+                )
+                completed_subagents.append(subagent_name)
+                loop_progress = True
+                continue
+            if (
+                process.poll() is None
+                and not progress.get("useful_progress")
+                and int(progress.get("idle_seconds", 0)) > int(launch.get("no_output_timeout_seconds", 120))
+            ):
+                results.append(
+                    terminate_subagent_process(
+                        launch,
+                        f"cli subagent hit no-output timeout without useful progress ({launch.get('no_output_timeout_seconds', 120)}s)",
+                        status_override="timeout",
+                        exit_code_override=124,
+                    )
+                )
+                completed_subagents.append(subagent_name)
+                loop_progress = True
+                continue
+            if (
+                process.poll() is None
                 and elapsed > effective_runtime_seconds
                 and launch.get("runtime_extension_applied") is not True
                 and progress.get("useful_progress")
@@ -1707,6 +1797,22 @@ def run_ensemble(argv: list[str]) -> int:
                     terminate_subagent_process(
                         launch,
                         f"cli subagent exceeded runtime limit ({launch.get('effective_runtime_seconds', launch['max_runtime_seconds'])}s)",
+                        status_override="timeout",
+                        exit_code_override=124,
+                    )
+                )
+                completed_subagents.append(subagent_name)
+                loop_progress = True
+                continue
+            if (
+                process.poll() is None
+                and progress.get("useful_progress")
+                and int(progress.get("idle_seconds", 0)) > int(launch.get("progress_idle_timeout_seconds", 90))
+            ):
+                results.append(
+                    terminate_subagent_process(
+                        launch,
+                        f"cli subagent stalled after useful progress ({launch.get('progress_idle_timeout_seconds', 90)}s idle)",
                         status_override="timeout",
                         exit_code_override=124,
                     )

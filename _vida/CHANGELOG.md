@@ -8,27 +8,29 @@ Rules:
 4. Group updates under fixed headings when applicable: `Added`, `Changed`, `Fixed`, `Protocol`.
 5. Keep this file limited to VIDA framework/runtime changes, not project feature work.
 
-## 2026-03-07 06:35
+## 2026-03-07 06:40
+
+Added:
+
+1. Phase-aware cli-subagent timeout controls were added to runtime/config surface: `startup_timeout_seconds`, `no_output_timeout_seconds`, `progress_idle_timeout_seconds`, and `max_runtime_extension_seconds`.
+2. Operator status now exposes recovery history fields and lane-readiness visibility through `eligible_task_classes`, `recovery_attempt_count`, `recovery_success_count`, and last recovery status/timestamp.
 
 Changed:
 
-1. `RELEASE-1-SCOPE.md` now includes lower-level implementation audit checklists under major capability sections instead of relying only on the top summary block.
-2. `RELEASE-1-IMPLEMENTATION-ROADMAP.md` now includes lower-level implementation audit checklists under each delivery phase.
+1. `subagent-dispatch.py` now enforces phase-aware timeout behavior instead of relying only on a single wall-clock budget.
+2. `subagent-system.py` now refreshes live runtime/config state before routing, so route outputs reflect current overlay knobs instead of stale init snapshots.
+3. Analysis routing now suppresses task-class-demoted cli subagents from core fanout while keeping explicit bridge and internal lanes available.
+4. `vida.config.yaml` and `_vida/templates/vida.config.yaml.template` now include per-cli-subagent timeout profiles aligned with observed runtime behavior, including a longer profile for `gemini_cli`.
+
+Fixed:
+
+1. Config validation in `vida-config.py` now accepts the new dispatch timeout knobs as canonical schema.
+2. Live ensemble manifests now carry timeout-policy metadata and expose phase-aware runtime behavior as part of the canonical run artifact.
+3. `r30` proved the new runtime path end-to-end with `gemini_cli`, `kilo_cli`, and `qwen_cli` reaching semantic consensus and `review_state=promotion_ready` without bridge fallback.
 
 Protocol:
 
-1. Release-target documents now treat detailed capability and phase audits as checklist-backed evidence, not only high-level status summaries.
-
-## 2026-03-07 06:31
-
-Changed:
-
-1. `RELEASE-1-SCOPE.md` implementation audit now uses explicit `Done`, `Partial`, and `Not Done` status groups with checklist evidence instead of coarse summary labels.
-2. `RELEASE-1-IMPLEMENTATION-ROADMAP.md` implementation audit now tracks completed and missing work through checklist subitems rather than broad one-line status statements.
-
-Protocol:
-
-1. Release-target documentation status now distinguishes fully implemented items from partially implemented areas with concrete completed sub-capabilities.
+1. `subagent-system-protocol.md` now defines phase-aware timeout policy, recovery-history visibility, and lane-aware demotion semantics as part of the canonical cli-subagent runtime contract.
 
 ## 2026-03-07 06:05
 

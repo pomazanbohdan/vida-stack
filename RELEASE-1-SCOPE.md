@@ -254,6 +254,8 @@ Implementation audit:
 - [x] Provider detection and runtime snapshots exist.
 - [x] Hybrid mode and external-first routing exist.
 - [x] Dynamic scorecards and strategy snapshots exist.
+- [x] Live runtime/config refresh now updates route decisions instead of relying only on stale init snapshots.
+- [x] Analysis routing now suppresses task-class-demoted CLI subagents from core fanout while keeping bridge/internal lanes available.
 - [ ] Ownership/lease mechanics are not yet fully runtime-enforced.
 
 ### 5.1 Multi-Agent Role Architecture
@@ -321,6 +323,8 @@ Implementation audit:
 - [x] Fanout, fallback, and arbitration exist.
 - [x] Machine-readable run artifacts and manifests exist.
 - [x] Progress-aware dispatch state exists.
+- [x] Phase-aware timeout controls now exist for startup, no-output, progress-idle, and bounded runtime extension behavior.
+- [x] Live ensemble manifests expose `active_subagents`, `active_count`, and timeout-policy metadata.
 - [ ] Some merge/readiness heuristics are still heuristic rather than final Release 1-stable policy.
 
 ### 7. Review and Verification Fabric
@@ -519,6 +523,7 @@ Implementation audit:
 - [x] Eval-pack generation exists.
 - [x] Scorecards and strategy snapshots exist.
 - [x] Review/risk/progress visibility exist.
+- [x] Operator status exposes preferred or eligible task-class fit and recovery history visibility.
 - [ ] Full drift visibility remains incomplete.
 
 ### 13.1 Drift Detection
@@ -636,6 +641,7 @@ Implementation audit:
 - [x] Overlay activation and schema validation exist.
 - [x] Provider/route configuration lives in overlay data.
 - [x] Runtime budget and dispatch environment settings exist in the template/runtime.
+- [x] Phase-aware timeout knobs now exist in config schema and overlay template, including longer Gemini-oriented runtime profiles.
 - [x] Project bootstrap contract exists.
 - [ ] Full standalone portability is not yet complete.
 
@@ -720,6 +726,7 @@ Implementation audit:
   - [x] External-first fanout, deterministic fallback, and bounded arbitration are implemented.
   - [x] Worker-entry and worker-thinking contracts are separated from orchestrator governance.
   - [x] Recovery helpers, subagent suppression, active-subagent visibility, and richer scorecards now exist.
+  - [x] Phase-aware timeout controls and live route refresh now exist.
   - [ ] Lease and ownership mechanics are not yet fully materialized as runtime-enforced stateful contracts.
 - [ ] **Partial: Review and Verification Fabric**
   - [x] Route artifacts now expose `review_state`.
@@ -746,7 +753,7 @@ Implementation audit:
 - [ ] **Partial: Telemetry and Evaluation**
   - [x] Eval-pack and subagent evaluation scripts exist.
   - [x] Scorecards now track useful-progress and time-to-first-useful-output metrics.
-  - [x] Operator status exposes preferred task classes and degraded subagent visibility.
+  - [x] Operator status exposes task-class fit, recovery history, and degraded subagent visibility.
   - [ ] Drift and anomaly visibility are not yet at the full target Release 1 maturity level.
 - [ ] **Partial: Learning and Improvement Loop**
   - [x] Reflection, eval-pack, and scorecard-driven routing adaptation exist.
@@ -755,6 +762,7 @@ Implementation audit:
 - [ ] **Partial: Project Overlay and Portability**
   - [x] Validated overlay template exists.
   - [x] The provider template now mirrors the canonical VIDA subagent stack instead of abstract placeholders.
+  - [x] Phase-aware timeout profiles now exist in the overlay template and config schema.
   - [x] Bash installer and framework-only release packaging exist.
   - [ ] Production-ready standalone extraction discipline is not yet fully complete.
 - [ ] **Not Done: Cost and Efficiency Model**

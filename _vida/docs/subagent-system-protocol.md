@@ -214,6 +214,28 @@ Progress taxonomy:
 5. `chatter_only`
    - verbose planning/process narration without findings, evidence, or synthesis-ready content.
 
+Phase-aware timeout policy:
+
+1. `startup_timeout_seconds`
+   - maximum time with no output at all after process launch,
+2. `no_output_timeout_seconds`
+   - maximum idle/no-progress time before useful progress appears,
+3. `progress_idle_timeout_seconds`
+   - maximum idle time after useful progress has already appeared,
+4. `max_runtime_extension_seconds`
+   - one bounded extension cap when useful progress is still active near the wall-clock limit.
+
+Default timeout behavior:
+
+1. cut startup-stalled cli subagents before the full runtime budget is burned,
+2. cut no-output/no-progress cli subagents before bridge fallback is delayed unnecessarily,
+3. allow one bounded extension only for evidence-bearing runs,
+4. emit distinct failure reasons for:
+   - `startup_timeout`
+   - `no_output_timeout`
+   - `stalled_after_progress`
+   - `runtime_unstable`
+
 Behavioral guard:
 
 1. repeated `chatter_only` without any useful progress should degrade the cli subagent for critical lanes,
@@ -241,6 +263,7 @@ Minimum availability contract:
 9. `auth_invalid` and `interactive_blocked` should suppress the cli subagent from routing until explicit repair and successful recovery.
 10. routing should expose `suppressed_subagents` with reasons when availability rules filter candidates out.
 11. operator status should expose actionable remediation hints, not only raw degraded state.
+12. operator status should expose recovery history and task-class readiness, not only global score.
 
 Failure-reason examples:
 
@@ -269,8 +292,18 @@ Scorecards should evolve toward:
 4. timeout-after-progress rate,
 5. fallback dependence rate,
 6. chatter-only rate,
-7. subagent-availability stability.
-6. per-domain usefulness.
+7. subagent-availability stability,
+8. recovery attempts/successes,
+9. per-domain usefulness.
+
+Lane-aware promotion/demotion rule:
+
+1. demotion may apply globally or per task class,
+2. a cli subagent demoted for the active task class should be suppressed from that lane even if its global score is still acceptable,
+3. globally demoted cli subagents should stay out of core fanout unless they are:
+   - the explicit bridge fallback,
+   - the internal senior lane,
+   - or later re-promoted by evidence.
 
 ## Escalation And Adaptation
 

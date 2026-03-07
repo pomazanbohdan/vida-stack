@@ -114,6 +114,10 @@ pack_router_keywords:
 #         output_mode: file
 #         output_flag: -o
 #         prompt_mode: positional
+#         startup_timeout_seconds: 90
+#         no_output_timeout_seconds: 240
+#         progress_idle_timeout_seconds: 120
+#         max_runtime_extension_seconds: 90
 #     qwen_cli:
 #       enabled: true
 #       subagent_backend_class: external_cli
@@ -144,6 +148,10 @@ pack_router_keywords:
 #         workdir_flag: --workdir
 #         output_mode: stdout
 #         prompt_mode: positional
+#         startup_timeout_seconds: 90
+#         no_output_timeout_seconds: 240
+#         progress_idle_timeout_seconds: 120
+#         max_runtime_extension_seconds: 90
 #     gemini_cli:
 #       enabled: true
 #       subagent_backend_class: external_cli
@@ -155,7 +163,7 @@ pack_router_keywords:
 #         - read_only
 #         - review_safe
 #       write_scope: none
-#       max_runtime_seconds: 180
+#       max_runtime_seconds: 240
 #       min_output_bytes: 260
 #       billing_tier: free
 #       speed_tier: medium
@@ -182,6 +190,10 @@ pack_router_keywords:
 #         output_mode: stdout
 #         prompt_mode: flag
 #         prompt_flag: -p
+#         startup_timeout_seconds: 120
+#         no_output_timeout_seconds: 300
+#         progress_idle_timeout_seconds: 150
+#         max_runtime_extension_seconds: 120
 #     kilo_cli:
 #       enabled: true
 #       subagent_backend_class: external_cli
@@ -216,6 +228,10 @@ pack_router_keywords:
 #         model_flag: -m
 #         output_mode: stdout
 #         prompt_mode: positional
+#         startup_timeout_seconds: 60
+#         no_output_timeout_seconds: 180
+#         progress_idle_timeout_seconds: 105
+#         max_runtime_extension_seconds: 75
 #     opencode_cli:
 #       enabled: true
 #       subagent_backend_class: external_cli
@@ -250,6 +266,10 @@ pack_router_keywords:
 #         model_flag: -m
 #         output_mode: stdout
 #         prompt_mode: positional
+#         startup_timeout_seconds: 60
+#         no_output_timeout_seconds: 180
+#         progress_idle_timeout_seconds: 105
+#         max_runtime_extension_seconds: 75
 #     vibe_cli:
 #       enabled: true
 #       subagent_backend_class: external_cli
@@ -276,6 +296,10 @@ pack_router_keywords:
 #         output_mode: stdout
 #         prompt_mode: flag
 #         prompt_flag: -p
+#         startup_timeout_seconds: 45
+#         no_output_timeout_seconds: 120
+#         progress_idle_timeout_seconds: 90
+#         max_runtime_extension_seconds: 60
 #   routing:
 #     default:
 #       subagents:
