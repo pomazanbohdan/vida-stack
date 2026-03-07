@@ -525,6 +525,24 @@ Release 1 should provide a compact but complete execution surface:
 8. eval commands
 9. project bootstrap commands
 
+
+## Поточний статус реалізації (аудит кодової бази)
+
+- [x] **Boot and Runtime Activation**
+- [x] **Problem Framing and Routing**
+- [x] **Task and Execution State**
+- [x] **Use-Case Packs (базовий набір)**
+- [x] **Subagent System / Dispatch (базовий контур)**
+- [ ] **Review and Verification Fabric (цільовий рівень Release 1)**
+- [ ] **Risk and Governance (повна machine-visible модель)**
+- [x] **Execution Environment**
+- [x] **Documentation and Contract Sync (базовий контур)**
+- [ ] **Telemetry and Evaluation (повний цільовий рівень)**
+- [ ] **Learning and Improvement Loop (повний цільовий рівень)**
+- [ ] **Project Overlay and Portability (production-ready extraction level)**
+- [ ] **Cost and Efficiency Model (compiled-policy рівень)**
+- [ ] **Release 1 Exit Criteria (ще не повністю досягнуті)**
+
 ## Release 1 Capability Matrix
 
 Release 1 should be able to support the following classes of work end to end:
