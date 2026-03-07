@@ -1,0 +1,1 @@
+{"task_id":"unit-task","task_class":"analysis","status":"completed","review_state":"promotion_ready","route_law_summary":{"fanout_then_synthesize":true,"independent_verification":true,"external_first":true},"verification":{"required":true,"status":"completed"}}

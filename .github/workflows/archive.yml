@@ -39,9 +39,10 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           rm -rf dist/package
-          mkdir -p dist/package/_vida
+          mkdir -p dist/package/_vida dist/package/.vida
           cp AGENTS.md dist/package/AGENTS.md
           cp -R _vida/. dist/package/_vida/
+          cp -R .vida/. dist/package/.vida/
           rm -f dist/package/_vida/CHANGELOG.md
           find dist/package/_vida -type d -name '__pycache__' -prune -exec rm -rf {} +
           find dist/package/_vida -type f -name '*.pyc' -delete
@@ -52,14 +53,14 @@ jobs:
           set -euo pipefail
           (
             cd dist/package
-            zip -qr "../${ARCHIVE_BASE}.zip" AGENTS.md _vida
+            zip -qr "../${ARCHIVE_BASE}.zip" AGENTS.md _vida .vida
           )
 
       - name: Build tar.gz archive
         shell: bash
         run: |
           set -euo pipefail
-          tar -czf "dist/${ARCHIVE_BASE}.tar.gz" -C dist/package AGENTS.md _vida
+          tar -czf "dist/${ARCHIVE_BASE}.tar.gz" -C dist/package AGENTS.md _vida .vida
 
       - name: Build release notes from changelog
         shell: bash

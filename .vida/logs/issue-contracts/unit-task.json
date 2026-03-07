@@ -1,0 +1,25 @@
+{
+  "status": "writer_ready",
+  "classification": "defect_equivalent",
+  "equivalence_assessment": "equivalent_fix",
+  "reported_behavior": "framework runtime accepted issue-driven execution without a normalized issue contract artifact",
+  "expected_behavior": "issue-driven execution should route through a machine-readable issue contract before writer authorization",
+  "scope_in": [
+    "issue-driven implementation authorization",
+    "canonical issue contract artifact flow"
+  ],
+  "scope_out": [
+    "host-project product behavior",
+    "non-issue-based execution flows"
+  ],
+  "acceptance_checks": [
+    "issue contract artifact exists under .vida/logs/issue-contracts/",
+    "writer routing can reference a normalized issue contract"
+  ],
+  "spec_sync_targets": [
+    "_vida/docs/issue-contract-protocol.md"
+  ],
+  "wvp_required": "no",
+  "wvp_status": "not_required",
+  "resolution_path": "writer_authorized"
+}
