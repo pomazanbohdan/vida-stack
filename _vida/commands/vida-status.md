@@ -28,6 +28,12 @@ Canonical source: `_vida/docs/command-layer-protocol.md`
 bash _vida/scripts/vida-status.sh
 ```
 
+Compact boot-time companion:
+
+```bash
+python3 _vida/scripts/vida-boot-snapshot.py
+```
+
 ## Output Sections
 
 1. `Summary`:
@@ -50,3 +56,4 @@ bash _vida/scripts/vida-status.sh
 1. No writes to `br`.
 2. No non-canonical state model usage.
 3. No separate sync-command integration.
+4. For boot-time development context, prefer the compact boot snapshot over the full dashboard when it already answers the question.

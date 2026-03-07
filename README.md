@@ -56,7 +56,9 @@ Vida Stack is still in active development, but it can already be used as a worki
 
 - automatic work with tasks, epics, queues, and execution state
 - request-intent classification into answer, artifact, execution, and mixed flows before heavy runtime engagement
+- compact boot snapshots and low-cost status diagnostics before broader task or log discovery
 - orchestration of bounded subagents with routing, fallback, lease-aware dispatch, and review-aware control
+- subagent-first development execution in supported active modes with orchestrator-owned synthesis
 - research flows with structured evidence gathering and validation
 - planning and decomposition of work into executable slices
 - formation and refinement of specifications and technical contracts
@@ -181,7 +183,7 @@ Right now, the framework is implemented through a practical stack of:
 - `br` plus TODO telemetry for execution state
 - external-first subagent routing with verification and fallback logic
 
-Recent runtime work has also hardened the framework with a bootstrap split between orchestrator and worker lanes, request-intent gating before `br` and pack machinery, subagent-first analysis/review behavior in supported modes, question-driven worker packets with stricter return contracts, hard bounded log-read rules for `.vida/*` surfaces, stronger semantic merge behavior, richer runtime maturity scorecards, target review-state visibility before dispatch, ensemble lease diagnostics with conflict history, and cleaner framework-generic operator surfaces.
+Recent runtime work has also hardened the framework with a bootstrap split between orchestrator and worker lanes, compact boot snapshots for dev-oriented context, request-intent gating before `br` and pack machinery, subagent-first analysis/review and development execution in supported modes, budget-aware route and escalation metadata, question-driven worker packets with stricter return contracts and non-`STC` impact tails, hard bounded log-read rules for `.vida/*` surfaces, target review-state visibility before dispatch, ensemble lease diagnostics with conflict history, and orchestrator-synthesized user reporting that keeps subagent process details hidden by default.
 
 This phase matters because the objective is to finish the mechanics end-to-end before extracting and replatforming the system.
 

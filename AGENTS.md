@@ -50,6 +50,7 @@ These rules apply across all lanes unless a more specific worker rule narrows be
 8. **[MUST]** Never widen scope silently when user intent, ownership layer, or risk posture changes materially.
 9. **[MUST]** Before conclusions that depend on live server/API behavior, validate with real requests and actual payloads.
 10. **[MUST]** Respect LEGACY-ZERO: no obsolete aliases, dual-paths, or compatibility leftovers unless the user explicitly asks for a migration window.
+11. **[MUST]** Explicit VIDA framework self-diagnosis is an orchestrator-only exception path: run it directly in the main orchestrator lane, outside TODO/`br` flow, unless the user explicitly requests task tracking.
 
 Reporting prefix:
 1. Start reports with `Thinking mode: <STC|PR-CoT|MAR|5-SOL|META>.`

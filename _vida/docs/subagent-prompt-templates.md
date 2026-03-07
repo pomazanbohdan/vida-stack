@@ -31,6 +31,8 @@ Runtime Role Packet:
 - orchestrator_entry_fallback: _vida/docs/ORCHESTRATOR-ENTRY.MD
 - worker_entry: _vida/docs/SUBAGENT-ENTRY.MD
 - worker_thinking: _vida/docs/SUBAGENT-THINKING.MD
+- impact_tail_policy: required_for_non_stc
+- impact_analysis_scope: bounded_to_assigned_scope
 ```
 
 Fallback rule:
@@ -46,6 +48,8 @@ Runtime Role Packet:
 - orchestrator_entry_fallback: _vida/docs/ORCHESTRATOR-ENTRY.MD
 - worker_entry: _vida/docs/SUBAGENT-ENTRY.MD
 - worker_thinking: _vida/docs/SUBAGENT-THINKING.MD
+- impact_tail_policy: required_for_non_stc
+- impact_analysis_scope: bounded_to_assigned_scope
 Worker Entry Contract:
 - You are a bounded worker, not the orchestrator.
 - Follow _vida/docs/SUBAGENT-ENTRY.MD.
@@ -67,6 +71,7 @@ Verification:
 - Provide command outputs used as evidence.
 Deliverable:
 - Bullet list: answer, evidence refs, findings, risks, recommended fixes.
+- If you use PR-CoT or MAR, end with a bounded impact analysis tail for your assigned scope.
 ```
 
 ## 2) Implementation (Codex 5.3)
@@ -78,6 +83,8 @@ Runtime Role Packet:
 - orchestrator_entry_fallback: _vida/docs/ORCHESTRATOR-ENTRY.MD
 - worker_entry: _vida/docs/SUBAGENT-ENTRY.MD
 - worker_thinking: _vida/docs/SUBAGENT-THINKING.MD
+- impact_tail_policy: required_for_non_stc
+- impact_analysis_scope: bounded_to_assigned_scope
 Worker Entry Contract:
 - You are a bounded worker, not the orchestrator.
 - Follow _vida/docs/SUBAGENT-ENTRY.MD.
@@ -99,6 +106,7 @@ Verification:
 - [exact commands], expected: exit code 0.
 Deliverable:
 - Summary of answer, changes, evidence refs, and verification evidence.
+- If you use PR-CoT or MAR, include bounded impact analysis for the changed scope.
 ```
 
 ## 3) Complex Decision (Codex 5.2)
@@ -110,6 +118,8 @@ Runtime Role Packet:
 - orchestrator_entry_fallback: _vida/docs/ORCHESTRATOR-ENTRY.MD
 - worker_entry: _vida/docs/SUBAGENT-ENTRY.MD
 - worker_thinking: _vida/docs/SUBAGENT-THINKING.MD
+- impact_tail_policy: required_for_non_stc
+- impact_analysis_scope: bounded_to_assigned_scope
 Worker Entry Contract:
 - You are a bounded worker, not the orchestrator.
 - Follow _vida/docs/SUBAGENT-ENTRY.MD.
@@ -131,6 +141,7 @@ Verification:
 - Evidence references (files/commands).
 Deliverable:
 - Decision answer + evidence refs + actionable implementation steps.
+- Always include bounded impact analysis for the requested slice.
 ```
 
 ## 4) Small Patch (Codex mini)
@@ -142,6 +153,8 @@ Runtime Role Packet:
 - orchestrator_entry_fallback: _vida/docs/ORCHESTRATOR-ENTRY.MD
 - worker_entry: _vida/docs/SUBAGENT-ENTRY.MD
 - worker_thinking: _vida/docs/SUBAGENT-THINKING.MD
+- impact_tail_policy: required_for_non_stc
+- impact_analysis_scope: bounded_to_assigned_scope
 Worker Entry Contract:
 - You are a bounded worker, not the orchestrator.
 - Follow _vida/docs/SUBAGENT-ENTRY.MD.
@@ -162,4 +175,5 @@ Verification:
 - [exact command], expected: pass.
 Deliverable:
 - Patch answer + evidence refs + verification line.
+- If you use PR-CoT or MAR, include bounded impact analysis for the isolated patch scope.
 ```

@@ -17,6 +17,7 @@ Behavior:
   - Validates canonical read-set for selected boot profile.
   - Runs hydrate-minimal via context capsule when task_id is provided.
   - Writes machine-readable boot receipt under `.vida/logs/boot-receipts/`.
+  - Writes a compact boot snapshot artifact for dev-oriented boots.
   - Exits non-zero if required files are missing or hydration fails.
 EOF
 }
@@ -65,6 +66,8 @@ if latest_file.exists():
         pass
 
 for path in receipt_dir.glob(f"{safe_subject}-*.json"):
+    if path.name.endswith(".boot-packet.json") or path.name.endswith(".boot-snapshot.json"):
+        continue
     try:
         payload = json.loads(path.read_text())
         candidates.append((payload.get("written_at") or "", path))
@@ -85,12 +88,13 @@ write_receipt() {
   local non_dev="$3"
   local capsule_status="$4"
   local status="$5"
-  shift 5
+  local boot_snapshot_file="$6"
+  shift 6
   local read_contract=("$@")
 
   mkdir -p "$receipt_dir"
 
-  local subject timestamp safe_subject latest_file archive_file packet_file packet_latest
+  local subject timestamp safe_subject latest_file archive_file packet_file packet_latest snapshot_file snapshot_latest
   subject="${task_id:-session}"
   safe_subject="${subject//[^A-Za-z0-9._-]/_}"
   timestamp="$(date -u +"%Y%m%dT%H%M%SZ")"
@@ -98,6 +102,8 @@ write_receipt() {
   archive_file="$receipt_dir/${safe_subject}-${timestamp}.json"
   packet_file="$receipt_dir/${safe_subject}-${timestamp}.boot-packet.json"
   packet_latest="$receipt_dir/${safe_subject}.latest.boot-packet.json"
+  snapshot_file="$receipt_dir/${safe_subject}-${timestamp}.boot-snapshot.json"
+  snapshot_latest="$receipt_dir/${safe_subject}.latest.boot-snapshot.json"
 
   if [[ "$non_dev" == "yes" ]]; then
     python3 _vida/scripts/boot-packet.py "$profile" --non-dev >"$packet_file"
@@ -106,14 +112,20 @@ write_receipt() {
   fi
   cp "$packet_file" "$packet_latest"
 
-  python - "$profile" "$task_id" "$non_dev" "$capsule_status" "$status" "$latest_file" "$archive_file" "$packet_file" "${read_contract[@]}" <<'PY'
+  if [[ -n "$boot_snapshot_file" && -f "$boot_snapshot_file" ]]; then
+    cp "$boot_snapshot_file" "$snapshot_file"
+    cp "$boot_snapshot_file" "$snapshot_latest"
+    boot_snapshot_file="$snapshot_file"
+  fi
+
+  python - "$profile" "$task_id" "$non_dev" "$capsule_status" "$status" "$latest_file" "$archive_file" "$packet_file" "$boot_snapshot_file" "${read_contract[@]}" <<'PY'
 import json
 import hashlib
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-profile, task_id, non_dev, capsule_status, status, latest_file, archive_file, packet_file, *read_contract = sys.argv[1:]
+profile, task_id, non_dev, capsule_status, status, latest_file, archive_file, packet_file, boot_snapshot_file, *read_contract = sys.argv[1:]
 contract_files = []
 for entry in read_contract:
     target = entry.split("#", 1)[0]
@@ -134,10 +146,23 @@ payload = {
     "read_contract": read_contract,
     "contract_files": contract_files,
     "boot_packet_file": packet_file,
+    "boot_snapshot_file": boot_snapshot_file or None,
 }
 for target in (Path(latest_file), Path(archive_file)):
     target.write_text(json.dumps(payload, indent=2) + "\n")
 PY
+}
+
+generate_boot_snapshot() {
+  local profile="$1"
+  local non_dev="$2"
+  local snapshot_path="$3"
+
+  if [[ "$non_dev" == "yes" ]]; then
+    return 0
+  fi
+
+  python3 _vida/scripts/vida-boot-snapshot.py --json >"$snapshot_path"
 }
 
 run_checks() {
@@ -161,7 +186,7 @@ run_checks() {
 
   if [[ -n "$task_id" ]]; then
     if ! bash _vida/scripts/context-capsule.sh hydrate "$task_id" >/dev/null 2>&1; then
-      write_receipt "$profile" "$task_id" "$non_dev" "missing" "blocked" "${read_contract[@]}"
+      write_receipt "$profile" "$task_id" "$non_dev" "missing" "blocked" "" "${read_contract[@]}"
       vida_status_line blocked "[boot-profile] BLK_CONTEXT_NOT_HYDRATED task=${task_id}" >&2
       return 1
     fi
@@ -177,7 +202,16 @@ run_checks() {
     fi
   fi
 
-  write_receipt "$profile" "$task_id" "$non_dev" "present" "ok" "${read_contract[@]}"
+  local temp_snapshot
+  temp_snapshot="$(mktemp)"
+  if ! generate_boot_snapshot "$profile" "$non_dev" "$temp_snapshot"; then
+    rm -f "$temp_snapshot"
+    vida_status_line fail "[boot-profile] Failed to generate compact boot snapshot" >&2
+    return 1
+  fi
+
+  write_receipt "$profile" "$task_id" "$non_dev" "present" "ok" "$temp_snapshot" "${read_contract[@]}"
+  rm -f "$temp_snapshot"
   vida_status_line ok "boot_profile=${profile} task=${task_id:-none} non_dev=${non_dev} capsule=present status=ok"
 }
 
@@ -225,8 +259,14 @@ if boot_packet.get("profile") != payload.get("profile"):
         file=sys.stderr,
     )
     raise SystemExit(1)
+boot_snapshot_file = payload.get("boot_snapshot_file")
+if boot_snapshot_file:
+    boot_snapshot_path = Path(boot_snapshot_file)
+    if not boot_snapshot_path.exists():
+        print(f"[boot-profile] Boot snapshot missing: {boot_snapshot_path}", file=sys.stderr)
+        raise SystemExit(1)
 print(
-    f"✅ boot_receipt={path.name} subject={payload.get('subject')} profile={payload.get('profile')} status={payload.get('status')} contract_files={len(payload.get('contract_files') or [])} boot_packet={boot_packet_path.name}"
+    f"✅ boot_receipt={path.name} subject={payload.get('subject')} profile={payload.get('profile')} status={payload.get('status')} contract_files={len(payload.get('contract_files') or [])} boot_packet={boot_packet_path.name} boot_snapshot={'present' if boot_snapshot_file else 'skipped'}"
 )
 PY
 

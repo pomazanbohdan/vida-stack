@@ -16,10 +16,12 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent.parent
 STATE_DIR = ROOT_DIR / ".vida" / "state"
+LOG_DIR = ROOT_DIR / ".vida" / "logs"
 INIT_PATH = STATE_DIR / "subagent-init.json"
 SCORECARD_PATH = STATE_DIR / "subagent-scorecards.json"
 STRATEGY_PATH = STATE_DIR / "subagent-strategy.json"
 LEASE_PATH = STATE_DIR / "subagent-leases.json"
+RUN_LOG_PATH = LOG_DIR / "subagent-runs.jsonl"
 
 VIDA_CONFIG_PATH = SCRIPT_DIR / "vida-config.py"
 VIDA_CONFIG_SPEC = importlib.util.spec_from_file_location("vida_config_runtime", VIDA_CONFIG_PATH)
@@ -477,6 +479,87 @@ def split_csv(value: Any) -> list[str]:
                 out.append(text)
         return out
     return []
+
+
+def cost_class_for_units(units: Any) -> str:
+    value = policy_int(units, 0)
+    if value <= 0:
+        return "free"
+    if value <= 2:
+        return "cheap"
+    if value <= 6:
+        return "paid"
+    return "expensive"
+
+
+def route_allowed_internal_reasons(task_route_cfg: dict[str, Any], internal_escalation_trigger: str) -> list[str]:
+    configured = split_csv(task_route_cfg.get("allowed_internal_reasons"))
+    if configured:
+        return configured
+    if internal_escalation_trigger:
+        return [internal_escalation_trigger]
+    return []
+
+
+def route_required_dispatch_path(
+    *,
+    local_execution_allowed: str,
+    external_first_required: str,
+    bridge_fallback_subagent: str,
+    internal_escalation_allowed: str,
+) -> list[str]:
+    path: list[str] = []
+    if local_execution_allowed == "yes":
+        path.append("local_or_external_free")
+    elif external_first_required == "yes":
+        path.append("external_free")
+    else:
+        path.append("route_selected")
+    if bridge_fallback_subagent:
+        path.append("bridge_fallback")
+    if internal_escalation_allowed == "yes":
+        path.append("internal_escalation")
+    return path
+
+
+def budget_policy_summary_from_runs(task_class: str | None = None) -> dict[str, Any]:
+    summary = {
+        "run_count": 0,
+        "cheap_lane_attempted": 0,
+        "bridge_fallback_used": 0,
+        "authorized_internal_escalations": 0,
+        "internal_escalations_without_receipt": 0,
+        "policy_bypass_count": 0,
+        "budget_violation_count": 0,
+    }
+    if not RUN_LOG_PATH.exists():
+        return summary
+    for line in RUN_LOG_PATH.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict) or payload.get("type") != "subagent_run":
+            continue
+        if task_class and policy_value(payload.get("task_class"), "") != task_class:
+            continue
+        summary["run_count"] += 1
+        if bool(payload.get("cheap_lane_attempted", False)):
+            summary["cheap_lane_attempted"] += 1
+        if bool(payload.get("bridge_fallback_used", False)):
+            summary["bridge_fallback_used"] += 1
+        if bool(payload.get("internal_escalation_used", False)):
+            summary["authorized_internal_escalations"] += 1
+            receipt = payload.get("internal_escalation_receipt", {})
+            if not isinstance(receipt, dict) or not receipt:
+                summary["internal_escalations_without_receipt"] += 1
+        if bool(payload.get("policy_bypass", False)):
+            summary["policy_bypass_count"] += 1
+        if bool(payload.get("budget_violation", False)):
+            summary["budget_violation_count"] += 1
+    return summary
 
 
 def models_hint_for_subagent(subagent_name: str, subagent_cfg: dict[str, Any]) -> list[str]:
@@ -1015,6 +1098,7 @@ def subagent_operator_status() -> dict[str, Any]:
             "verification_route_task_class": route.get("verification_route_task_class", ""),
             "verification_plan": route.get("verification_plan", {}),
             "route_budget": route.get("route_budget", {}),
+            "dispatch_policy": route.get("dispatch_policy", {}),
             "route_graph": route.get("route_graph", {}),
         }
     return {
@@ -1024,6 +1108,7 @@ def subagent_operator_status() -> dict[str, Any]:
         "unstable_by_timeout_class": unstable_by_timeout_class,
         "review_targets": review_targets,
         "leases": lease_status.get("summary", {}),
+        "budget_policy": budget_policy_summary_from_runs(),
         "summary": {
             "probation": sum(1 for row in rows if row["lifecycle_stage"] == "probation"),
             "promoted": sum(1 for row in rows if row["lifecycle_stage"] == "promoted"),
@@ -1109,6 +1194,7 @@ def subagent_diagnosis(task_class: str | None = None) -> dict[str, Any]:
     diagnosis = {
         "generated_at": now_utc(),
         "summary": status.get("summary", {}),
+        "budget_policy": budget_policy_summary_from_runs(task_class),
         "alerts": alerts,
         "recommended_actions": recommended_actions[:8],
         "unstable_by_timeout_class": unstable[:5],
@@ -1663,8 +1749,9 @@ def subagent_budget_cost_units(payload: dict[str, Any]) -> int:
 
 
 def route_budget_limits(task_route_cfg: dict[str, Any], write_scope: str, dispatch_required: str) -> dict[str, int | str]:
-    max_budget_units = max(0, policy_int(task_route_cfg.get("max_budget_units"), 0))
-    if max_budget_units <= 0:
+    raw_max_budget_units = task_route_cfg.get("max_budget_units")
+    max_budget_units = max(0, policy_int(raw_max_budget_units, 0))
+    if raw_max_budget_units is None:
         max_budget_units = 2 if write_scope == "none" else 6
         if "fanout" in dispatch_required:
             max_budget_units += 2
@@ -1685,6 +1772,7 @@ def route_budget_limits(task_route_cfg: dict[str, Any], write_scope: str, dispat
         "max_verification_passes": max_verification_passes,
         "max_fallback_hops": max_fallback_hops,
         "max_total_runtime_seconds": max_total_runtime_seconds,
+        "max_budget_cost_class": cost_class_for_units(max_budget_units),
     }
 
 
@@ -1857,6 +1945,8 @@ def build_route_budget(
         "estimated_fallback_hops": fallback_hops,
         "estimated_selected_cost_units": selected_cost_units,
         "estimated_route_cost_units": estimated_units,
+        "estimated_selected_cost_class": cost_class_for_units(selected_cost_units),
+        "estimated_route_cost_class": cost_class_for_units(estimated_units),
     }
 
 
@@ -1892,6 +1982,27 @@ def route_candidate_context(
     graph_strategy = policy_value(task_route_cfg.get("graph_strategy"), "deterministic_then_escalate")
     deterministic_first = policy_value(task_route_cfg.get("deterministic_first"), "yes" if external_first_required == "yes" else "no")
     budget_limits = route_budget_limits(task_route_cfg, write_scope, dispatch_required)
+    local_execution_allowed = policy_value(task_route_cfg.get("local_execution_allowed"), "no")
+    local_execution_preferred = policy_value(
+        task_route_cfg.get("local_execution_preferred"),
+        "yes" if local_execution_allowed == "yes" and write_scope == "none" else "no",
+    )
+    direct_internal_bypass_forbidden = policy_value(
+        task_route_cfg.get("direct_internal_bypass_forbidden"),
+        "yes" if external_first_required == "yes" else "no",
+    )
+    allowed_internal_reasons = route_allowed_internal_reasons(task_route_cfg, internal_escalation_trigger)
+    internal_escalation_allowed = "yes" if allowed_internal_reasons else "no"
+    cli_dispatch_required_if_delegating = policy_value(
+        task_route_cfg.get("cli_dispatch_required_if_delegating"),
+        "yes" if write_scope == "none" and external_first_required == "yes" else "no",
+    )
+    required_dispatch_path = route_required_dispatch_path(
+        local_execution_allowed=local_execution_allowed,
+        external_first_required=external_first_required,
+        bridge_fallback_subagent=bridge_fallback_subagent,
+        internal_escalation_allowed=internal_escalation_allowed,
+    )
     verification_route_task_class = policy_value(
         task_route_cfg.get("verification_route_task_class"),
         verification_task_class_for(task_class, write_scope),
@@ -2077,6 +2188,13 @@ def route_candidate_context(
         "budget_limits": budget_limits,
         "verification_route_task_class": verification_route_task_class,
         "independent_verification_required": independent_verification_required,
+        "local_execution_allowed": local_execution_allowed,
+        "local_execution_preferred": local_execution_preferred,
+        "direct_internal_bypass_forbidden": direct_internal_bypass_forbidden,
+        "internal_escalation_allowed": internal_escalation_allowed,
+        "allowed_internal_reasons": allowed_internal_reasons,
+        "cli_dispatch_required_if_delegating": cli_dispatch_required_if_delegating,
+        "required_dispatch_path": required_dispatch_path,
     }
 
 
@@ -2196,6 +2314,13 @@ def route_subagent(task_class: str) -> dict[str, Any]:
     budget_limits = context["budget_limits"]
     verification_route_task_class = context["verification_route_task_class"]
     independent_verification_required = context["independent_verification_required"]
+    local_execution_allowed = context["local_execution_allowed"]
+    local_execution_preferred = context["local_execution_preferred"]
+    direct_internal_bypass_forbidden = context["direct_internal_bypass_forbidden"]
+    internal_escalation_allowed = context["internal_escalation_allowed"]
+    allowed_internal_reasons = context["allowed_internal_reasons"]
+    cli_dispatch_required_if_delegating = context["cli_dispatch_required_if_delegating"]
+    required_dispatch_path = context["required_dispatch_path"]
 
     if not candidates:
         return {
@@ -2225,6 +2350,16 @@ def route_subagent(task_class: str) -> dict[str, Any]:
             "graph_strategy": graph_strategy,
             "deterministic_first": deterministic_first,
             "route_budget": budget_limits,
+            "dispatch_policy": {
+                "local_execution_allowed": local_execution_allowed,
+                "local_execution_preferred": local_execution_preferred,
+                "cli_dispatch_required_if_delegating": cli_dispatch_required_if_delegating,
+                "direct_internal_bypass_forbidden": direct_internal_bypass_forbidden,
+                "internal_route_authorized": "no",
+                "internal_escalation_allowed": internal_escalation_allowed,
+                "allowed_internal_reasons": allowed_internal_reasons,
+                "required_dispatch_path": required_dispatch_path,
+            },
             "route_graph": {
                 "graph_strategy": graph_strategy,
                 "deterministic_first": deterministic_first,
@@ -2246,6 +2381,14 @@ def route_subagent(task_class: str) -> dict[str, Any]:
             "max_parallel_agents": max_parallel_agents,
             "state_owner": state_owner,
             "suppressed_subagents": suppressed_subagents,
+            "local_execution_allowed": local_execution_allowed,
+            "local_execution_preferred": local_execution_preferred,
+            "cli_dispatch_required_if_delegating": cli_dispatch_required_if_delegating,
+            "direct_internal_bypass_forbidden": direct_internal_bypass_forbidden,
+            "internal_route_authorized": "no",
+            "internal_escalation_allowed": internal_escalation_allowed,
+            "allowed_internal_reasons": allowed_internal_reasons,
+            "required_dispatch_path": required_dispatch_path,
         }
 
     candidates.sort(key=lambda item: int(item["effective_score"]), reverse=True)
@@ -2299,6 +2442,25 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         internal_escalation_trigger=internal_escalation_trigger,
         budget=route_budget,
     )
+    internal_route_authorized = (
+        "yes"
+        if (
+            snapshot.get("agent_system", {}).get("effective_mode") == "native"
+            or selected["subagent"] == "internal_subagents"
+            or internal_escalation_allowed == "yes"
+        )
+        else "no"
+    )
+    dispatch_policy = {
+        "local_execution_allowed": local_execution_allowed,
+        "local_execution_preferred": local_execution_preferred,
+        "cli_dispatch_required_if_delegating": cli_dispatch_required_if_delegating,
+        "direct_internal_bypass_forbidden": direct_internal_bypass_forbidden,
+        "internal_route_authorized": internal_route_authorized,
+        "internal_escalation_allowed": internal_escalation_allowed,
+        "allowed_internal_reasons": allowed_internal_reasons,
+        "required_dispatch_path": required_dispatch_path,
+    }
     return {
         "task_class": task_class,
         "selected_subagent": selected["subagent"],
@@ -2343,6 +2505,7 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         "graph_strategy": graph_strategy,
         "deterministic_first": deterministic_first,
         "route_budget": route_budget,
+        "dispatch_policy": dispatch_policy,
         "route_graph": route_graph,
         "verification_route_task_class": verification_route_task_class,
         "independent_verification_required": independent_verification_required,
@@ -2350,6 +2513,14 @@ def route_subagent(task_class: str) -> dict[str, Any]:
         "max_parallel_agents": max_parallel_agents,
         "state_owner": state_owner,
         "suppressed_subagents": suppressed_subagents,
+        "local_execution_allowed": local_execution_allowed,
+        "local_execution_preferred": local_execution_preferred,
+        "cli_dispatch_required_if_delegating": cli_dispatch_required_if_delegating,
+        "direct_internal_bypass_forbidden": direct_internal_bypass_forbidden,
+        "internal_route_authorized": internal_route_authorized,
+        "internal_escalation_allowed": internal_escalation_allowed,
+        "allowed_internal_reasons": allowed_internal_reasons,
+        "required_dispatch_path": required_dispatch_path,
         "fallback_subagents": [
             {
                 "subagent": item["subagent"],

@@ -230,6 +230,72 @@ def route_risk_class(route: dict[str, Any]) -> str:
     return value if value in {"R0", "R1", "R2", "R3", "R4"} else "R0"
 
 
+def route_dispatch_policy(route: dict[str, Any]) -> dict[str, Any]:
+    policy = route.get("dispatch_policy", {})
+    return policy if isinstance(policy, dict) else {}
+
+
+def route_budget_policy(route: dict[str, Any]) -> dict[str, Any]:
+    budget = route.get("route_budget", {})
+    return budget if isinstance(budget, dict) else {}
+
+
+def route_policy_payload(
+    route: dict[str, Any],
+    subagent_name: str,
+    subagent_cfg: dict[str, Any],
+    dispatch_mode: str,
+) -> dict[str, Any]:
+    dispatch_policy = route_dispatch_policy(route)
+    route_budget = route_budget_policy(route)
+    selected_budget_units = int(subagent_cfg.get("budget_cost_units", 0) or 0)
+    selected_cost_class = subagent_system.cost_class_for_units(selected_budget_units)
+    internal_escalation_used = subagent_name == "internal_subagents" and dispatch_mode in {"fallback", "arbitration"}
+    internal_authorized = (
+        dispatch_policy.get("internal_route_authorized") == "yes"
+        or route.get("internal_route_authorized") == "yes"
+        or route.get("selected_subagent") == "internal_subagents"
+    )
+    bridge_fallback_used = dispatch_mode == "fallback" and subagent_name == route.get("bridge_fallback_subagent")
+    cheap_lane_attempted = (
+        dispatch_mode in {"fanout", "single", "fallback"}
+        and policy_value(subagent_cfg.get("billing_tier"), "unknown") in {"free", "low"}
+    )
+    max_budget_units = int(route_budget.get("max_budget_units", 0) or 0)
+    budget_violation = max_budget_units > 0 and selected_budget_units > max_budget_units
+    cost_escalation_trigger = ""
+    if bridge_fallback_used:
+        cost_escalation_trigger = "bridge_fallback"
+    if internal_escalation_used:
+        cost_escalation_trigger = policy_value(route.get("internal_escalation_trigger"), "internal_escalation")
+    internal_escalation_receipt: dict[str, Any] = {}
+    if internal_escalation_used:
+        internal_escalation_receipt = {
+            "trigger": cost_escalation_trigger,
+            "allowed_reasons": dispatch_policy.get("allowed_internal_reasons", []),
+            "required_dispatch_path": dispatch_policy.get("required_dispatch_path", []),
+        }
+    policy_bypass = False
+    if subagent_name == "internal_subagents" and dispatch_policy.get("direct_internal_bypass_forbidden") == "yes" and not internal_authorized:
+        policy_bypass = True
+    return {
+        "selected_budget_units": selected_budget_units,
+        "selected_cost_class": selected_cost_class,
+        "route_budget_policy": policy_value(route_budget.get("budget_policy"), "balanced"),
+        "route_budget_max_units": max_budget_units,
+        "route_budget_max_cost_class": policy_value(route_budget.get("max_budget_cost_class"), "free"),
+        "route_estimated_cost_class": policy_value(route_budget.get("estimated_route_cost_class"), "free"),
+        "cheap_lane_attempted": cheap_lane_attempted,
+        "bridge_fallback_used": bridge_fallback_used,
+        "internal_escalation_used": internal_escalation_used,
+        "internal_route_authorized": internal_authorized,
+        "policy_bypass": policy_bypass,
+        "budget_violation": budget_violation,
+        "cost_escalation_trigger": cost_escalation_trigger,
+        "internal_escalation_receipt": internal_escalation_receipt,
+    }
+
+
 def review_state_for(status: str, merge_ready: bool, risk_class: str) -> str:
     if status != "success":
         return "review_failed"
@@ -393,6 +459,7 @@ def subagent_result_payload(
     target_review_state = subagent_system.target_review_state_for(risk_class)
     target_manifest_review_state = subagent_system.target_manifest_review_state_for(risk_class)
     availability = subagent_availability_signal(status, error_text, output_text, stderr_text)
+    route_policy = route_policy_payload(route, subagent_name, subagent_cfg, dispatch_mode)
     payload = {
         "ts": now_utc(),
         "type": "subagent_run",
@@ -442,6 +509,20 @@ def subagent_result_payload(
         "verification_gate": route.get("verification_gate"),
         "merge_policy": route.get("merge_policy"),
         "error": error_text,
+        "selected_budget_units": route_policy["selected_budget_units"],
+        "selected_cost_class": route_policy["selected_cost_class"],
+        "route_budget_policy": route_policy["route_budget_policy"],
+        "route_budget_max_units": route_policy["route_budget_max_units"],
+        "route_budget_max_cost_class": route_policy["route_budget_max_cost_class"],
+        "route_estimated_cost_class": route_policy["route_estimated_cost_class"],
+        "cheap_lane_attempted": route_policy["cheap_lane_attempted"],
+        "bridge_fallback_used": route_policy["bridge_fallback_used"],
+        "internal_escalation_used": route_policy["internal_escalation_used"],
+        "internal_route_authorized": route_policy["internal_route_authorized"],
+        "policy_bypass": route_policy["policy_bypass"],
+        "budget_violation": route_policy["budget_violation"],
+        "cost_escalation_trigger": route_policy["cost_escalation_trigger"],
+        "internal_escalation_receipt": route_policy["internal_escalation_receipt"],
     }
     append_jsonl(RUN_LOG_PATH, payload)
     return payload

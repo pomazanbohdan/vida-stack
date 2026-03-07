@@ -46,6 +46,7 @@ Classify user requests before task resolution:
 Default rule:
 1. Questions and consultations stay `answer_only` unless the request clearly asks for execution or artifact production.
 2. Non-trivial does not automatically mean `br`/TODO.
+3. Explicit VIDA/framework self-diagnosis requests are a special execution-in-chat path: execute the diagnosis now, but keep it outside TODO/`br` unless the user explicitly asks for tracked task flow.
 
 ## TODO Engagement Gate
 
@@ -61,6 +62,11 @@ TODO/`br` flow is forbidden by default when all are true:
 3. no formal artifact is requested,
 4. chat response is the intended deliverable.
 
+TODO/`br` flow is also forbidden for explicit VIDA/framework self-diagnosis by default when all are true:
+1. the user is asking for direct framework/runtime diagnosis,
+2. the deliverable is a chat report,
+3. no explicit task-tracking request was made.
+
 ## Subagent-First Orchestration
 
 When the subagent system is active, the orchestrator is not the default primary analyst.
@@ -68,10 +74,10 @@ When the subagent system is active, the orchestrator is not the default primary 
 Mode-synced rule:
 1. `native`
    - use internal subagents only,
-   - internal subagents become the first analysis/review lane for eligible work.
+   - internal subagents become the first orchestration lane for eligible work, including development-support analysis/review and authorized bounded execution.
 2. `hybrid`
    - use external and internal providers under routing policy,
-   - external-first read-only fanout is the default lane for eligible work.
+   - external-first orchestration is the default lane for eligible work, with bridge fallback and internal escalation only under route policy.
 3. `disabled`
    - do not use the subagent system,
    - orchestrator may analyze locally, but must still obey the log-read budget and bounded-read rules.
@@ -89,7 +95,13 @@ Required behavior:
 2. separate authorship and verification lanes when route metadata requires it,
 3. stop local deep reading once subagent evidence is sufficient for synthesis or mutation prep,
 4. keep mutation ownership under the orchestrator unless bounded write scope is explicitly granted,
-5. keep user-facing reporting ownership under the orchestrator; do not expose raw subagent reports unless the user explicitly asks to inspect them.
+5. for `execution_flow` development work, when `protocol_activation.agent_system=true` and the effective subagent mode is not `disabled`, route execution through orchestration-first subagent lanes and do not default to local orchestrator-first development,
+6. in `hybrid`, honor route dispatch policy before any local-first or direct-internal path; external-first routing, bridge fallback, and lawful internal escalation must remain inspectable,
+7. keep user-facing reporting ownership under the orchestrator; do not expose raw subagent reports unless the user explicitly asks to inspect them.
+
+Exception:
+1. explicit VIDA/framework self-diagnosis runs in the main orchestrator lane by default,
+2. do not delegate FSAP-first diagnosis to subagents unless the user explicitly asks for delegated verification or the orchestrator is blocked on a narrow secondary question.
 
 ## Blocking-Question Dispatch Rule
 
@@ -112,8 +124,9 @@ Each delegated lane should return:
 User-facing reporting rule:
 1. Treat subagent returns as internal evidence for orchestrator synthesis by default.
 2. Present the orchestrator's own integrated answer to the user, not the raw subagent report.
-3. Quote or summarize subagent findings only as supporting evidence when necessary.
-4. Surface raw subagent output only when the user explicitly requests it or when unresolved conflict remains decision-relevant.
+3. Do not add explicit user-facing subagent/process sections by default; subagent participation remains an internal execution mechanism.
+4. Quote or summarize subagent findings only as supporting evidence when necessary.
+5. Surface raw subagent output only when the user explicitly requests it or when unresolved conflict remains decision-relevant.
 
 ## Log-Read Budget
 
@@ -141,8 +154,12 @@ Use for routine execution and token-efficient continuation.
 
 1. Read `AGENTS.md`.
 2. Read this file.
-3. Hydrate active context capsule when task context exists.
-4. Read required thinking protocol sections:
+3. If the request is development-related (`execution_flow` or dev-oriented `answer_only`), capture a compact task-state snapshot first:
+   - `python3 _vida/scripts/vida-boot-snapshot.py`
+   - default target: top-level `in_progress`, `ready_head`, and open/in-progress subtask tree
+   - if the snapshot answers the request, stop there and avoid wider status discovery
+4. Hydrate active context capsule when task context exists.
+5. Read required thinking protocol sections:
    - `_vida/docs/thinking-protocol.md#section-algorithm-selector`
    - `_vida/docs/thinking-protocol.md#section-stc`
    - `_vida/docs/thinking-protocol.md#section-pr-cot`
@@ -152,11 +169,11 @@ Use for routine execution and token-efficient continuation.
    - `_vida/docs/thinking-protocol.md#section-bug-reasoning`
    - `_vida/docs/thinking-protocol.md#section-web-search`
    - `_vida/docs/thinking-protocol.md#section-reasoning-modules`
-5. Read `_vida/docs/web-validation-protocol.md`.
-6. Read `_vida/docs/project-overlay-protocol.md`.
-7. Read `vida.config.yaml` when present.
-8. If `protocol_activation.agent_system=true`, read `_vida/docs/subagent-system-protocol.md`.
-9. Read `_vida/docs/beads-protocol.md` only if the request is not `answer_only`.
+6. Read `_vida/docs/web-validation-protocol.md`.
+7. Read `_vida/docs/project-overlay-protocol.md`.
+8. Read `vida.config.yaml` when present.
+9. If `protocol_activation.agent_system=true`, read `_vida/docs/subagent-system-protocol.md`.
+10. Read `_vida/docs/beads-protocol.md` only if the request is not `answer_only` and the compact snapshot is insufficient.
 
 ### Standard Boot
 
@@ -190,17 +207,17 @@ Use when at least one is true:
 5. Route all framework-owned changes to `AGENTS.md` and `_vida/*`.
 6. Use `br ready`, `br update`, and `br close` only when task flow is engaged.
 7. During active task execution, use TODO blocks and keep near-term planning lean.
+8. Explicit VIDA/framework self-diagnosis is executed directly by the main orchestrator and bypasses TODO/`br`/pack flow by default.
 
 ## Output Contract
 
 For non-trivial orchestrator reports, default order:
 1. `Problem Framing`
 2. `Assumptions / Constraints`
-3. `Agent Orchestration Summary`
-4. `Integrated Analysis`
-5. `Recommended Solution`
-6. `Risks / Trade-offs`
-7. `Next Actions`
+3. `Integrated Analysis`
+4. `Recommended Solution`
+5. `Risks / Trade-offs`
+6. `Next Actions`
 
 ## References
 

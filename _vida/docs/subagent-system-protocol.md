@@ -36,9 +36,9 @@ Supported system modes:
 
 Mode-synced execution rule:
 1. `native`
-   - internal subagents are the first eligible analysis/review lane.
+   - internal subagents are the first eligible analysis/review lane and the first authorized development-support orchestration lane.
 2. `hybrid`
-   - external-first routing remains the default for eligible read-only work.
+   - external-first routing remains the default for eligible read-only work and the default first hop for development orchestration whenever route policy requires subagent-first execution.
 3. `disabled`
    - no subagent-first requirement; the orchestrator may execute locally.
 
@@ -129,6 +129,15 @@ Routing output:
 20. optional deterministic-route and FinOps metadata:
    - `route_graph`
    - `route_budget`
+21. optional dispatch-policy metadata:
+   - `dispatch_policy.local_execution_allowed`
+   - `dispatch_policy.local_execution_preferred`
+   - `dispatch_policy.cli_dispatch_required_if_delegating`
+   - `dispatch_policy.direct_internal_bypass_forbidden`
+   - `dispatch_policy.internal_route_authorized`
+   - `dispatch_policy.internal_escalation_allowed`
+   - `dispatch_policy.allowed_internal_reasons`
+   - `dispatch_policy.required_dispatch_path`
 
 Ensemble rule:
 
@@ -139,7 +148,27 @@ Ensemble rule:
 5. Internal subagents are the senior lane for arbitration, architecture, and mutation-owning work; they are not the default cheap first pass for eligible read-only classes.
 6. When `independent_verification_required=yes`, the runtime should choose a distinct eligible cli subagent or verification ensemble for validation before orchestrator synthesis whenever such a verifier exists.
 7. When mode is not `disabled`, eligible non-trivial read-heavy analysis should go to subagent lanes first; the orchestrator is the synthesizer and mutation owner, not the default primary analyst.
-8. Raw subagent returns belong to the evidence layer; the default user-facing output is the orchestrator's synthesized conclusion.
+8. When mode is not `disabled`, development execution should be orchestrator-managed through the routed subagent system; local orchestrator-first development is not the default path.
+9. Raw subagent returns belong to the evidence layer; the default user-facing output is the orchestrator's synthesized conclusion.
+
+## Internal Escalation Boundary
+
+Internal-subagent availability does not automatically authorize direct internal use.
+
+Required distinctions:
+
+1. `internal_primary`
+   - route-selected primary use, valid in `native` and in task classes that explicitly authorize internal as primary.
+2. `internal_escalation`
+   - route-authorized escalation after external/bridge steps or other declared policy conditions.
+3. `internal_bypass`
+   - direct internal invocation outside the declared route authorization boundary.
+
+Hybrid-mode rule:
+
+1. when `external_first_required=yes`, direct internal bypass is forbidden when `dispatch_policy.direct_internal_bypass_forbidden=yes`,
+2. internal escalation remains allowed when route metadata exposes `internal_escalation_allowed=yes`,
+3. lawful internal escalation must carry a concise escalation receipt in run artifacts/logs.
 
 ## Independent Verification Contract
 
@@ -225,6 +254,12 @@ Minimum contract:
 6. `route_budget.max_total_runtime_seconds` should cap the whole route, not only individual subagents,
 7. route selection should prefer lower-cost eligible cli subagents when quality signals are near-equivalent,
 8. route selection may still escalate above budget when policy explicitly requires bridge/internal escalation for safety or verification.
+
+Budget-observability minimum:
+
+1. run artifacts should distinguish cheap-lane attempts, bridge fallback, lawful internal escalation, and policy bypass,
+2. lawful internal escalation should record a structured escalation trigger/receipt,
+3. diagnostics should expose budget violations and internal-escalation receipts separately from normal provider failures.
 
 ## Bounded Arbitration Lane
 

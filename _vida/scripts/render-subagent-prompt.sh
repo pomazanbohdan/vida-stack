@@ -113,7 +113,13 @@ json_contract=$(cat <<'EOF'
   "merge_ready": "yes|no",
   "blockers": [],
   "notes": "short note",
-  "recommended_next_action": "concise next step"
+  "recommended_next_action": "concise next step",
+  "impact_analysis": {
+    "affected_scope": ["bounded files/modules"],
+    "contract_impact": ["impact or none"],
+    "follow_up_actions": ["follow-up or none"],
+    "residual_risks": ["risk or none"]
+  }
 }
 EOF
 )
@@ -142,6 +148,8 @@ Runtime Role Packet:
 - orchestrator_entry_fallback: _vida/docs/ORCHESTRATOR-ENTRY.MD
 - worker_entry: $SUBAGENT_ENTRY_DOC
 - worker_thinking: $SUBAGENT_THINKING_DOC
+- impact_tail_policy: required_for_non_stc
+- impact_analysis_scope: bounded_to_assigned_scope
 Worker Entry Contract:
 - You are a bounded worker, not the orchestrator.
 - Follow $SUBAGENT_ENTRY_DOC as the worker-level entry contract.
@@ -192,6 +200,7 @@ Must do:
 - Distinguish confirmed facts from assumptions.
 - Return findings directly; do not restate framework orchestration policy.
 - Do not perform broad .vida/logs, .vida/state, or .beads sweeps unless the task packet explicitly escalates to them.
+- If you use PR-CoT or MAR, end with a bounded impact analysis tail for the assigned scope.
 $extra_line
 Verification:
 - $verification
@@ -214,6 +223,7 @@ Constraints:
 - Do not widen task ownership or rewrite orchestration decisions.
 - Answer the blocking question directly before optional context.
 - Do not perform broad .vida/logs, .vida/state, or .beads sweeps unless the task packet explicitly escalates to them.
+- If you use PR-CoT or MAR, include `impact_analysis` in the machine-readable summary.
 $(optional_lines "" "$extra_line")
 Verification:
 - $verification
@@ -240,6 +250,7 @@ Must do:
 - Keep the decision scoped to the requested slice; do not assume orchestrator ownership.
 - Answer the blocking question directly before optional context.
 - Do not perform broad .vida/logs, .vida/state, or .beads sweeps unless the task packet explicitly escalates to them.
+- Include bounded impact analysis for the requested scope before finishing.
 $extra_line
 Verification:
 - $verification
@@ -263,6 +274,7 @@ Must do:
 - Do not widen scope beyond the isolated patch.
 - Answer the blocking question directly before optional context.
 - Do not perform broad .vida/logs, .vida/state, or .beads sweeps unless the task packet explicitly escalates to them.
+- If you use PR-CoT or MAR, include `impact_analysis` in the machine-readable summary.
 $(optional_lines "" "$extra_line")
 Verification:
 - $verification

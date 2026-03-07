@@ -113,6 +113,7 @@ Release 1 should provide:
 7. bootstrap validation before non-trivial execution
 8. fail-fast behavior when critical runtime prerequisites are missing
 9. bootstrap routing between orchestrator and worker lane entry contracts
+10. compact boot snapshots for development-related context questions before broader task-state discovery
 
 Implementation audit:
 
@@ -120,6 +121,7 @@ Implementation audit:
 - [x] Context hydration gates exist.
 - [x] Fail-fast behavior exists in boot/runtime scripts.
 - [x] `AGENTS.md` now routes between split orchestrator and worker entry contracts instead of carrying one monolithic lane contract.
+- [x] Compact boot snapshots now exist for bounded development-status reads before wider queue discovery.
 - [ ] `micro` and `swarm` are not yet established as fully proven runtime profiles at the same maturity as `lean|standard|full`.
 
 ### 2. Problem Framing and Routing
@@ -241,22 +243,24 @@ Release 1 should provide:
 5. external-first orchestration for eligible read-heavy work
 6. deterministic bridge fallback before internal escalation
 7. bounded internal senior lane for arbitration and mutation-heavy work
-8. fanout metadata:
+8. orchestration-first development execution when the subagent system is active and not `disabled`
+9. fanout metadata:
    - providers
    - minimum result threshold
    - merge policy
-9. route-level execution hints:
+10. route-level execution hints:
    - write scope
    - verification gate
    - runtime timeout
    - output-quality threshold
-10. dynamic scorecards by:
+11. dynamic scorecards by:
    - global provider behavior
    - task class
    - inferred domain
-11. strategy snapshots generated from observed runs
-12. bounded ensemble lease artifacts with conflict visibility for overlapping orchestration lanes
-13. subagent-first analysis and review behavior in supported `native|hybrid|disabled` runtime modes while keeping final synthesis under the orchestrator
+12. strategy snapshots generated from observed runs
+13. bounded ensemble lease artifacts with conflict visibility for overlapping orchestration lanes
+14. subagent-first analysis and review behavior in supported `native|hybrid|disabled` runtime modes while keeping final synthesis under the orchestrator
+15. explicit budget-policy routing and internal-escalation metadata for lawful cheap, bridge, and internal lanes
 
 Implementation audit:
 
@@ -267,6 +271,8 @@ Implementation audit:
 - [x] Analysis routing now suppresses task-class-demoted CLI subagents from core fanout while keeping bridge/internal lanes available.
 - [x] Ensemble lease acquisition, release, and conflict blocking now exist with operator-visible lease history.
 - [x] Subagent-first analysis/review behavior is now codified as the default supported-mode fabric while final user-facing synthesis stays orchestrator-owned.
+- [x] Development execution is now documented as orchestration-first when subagent mode is active.
+- [x] Budget-policy routing metadata now distinguishes local allowance, required dispatch path, lawful escalation, and bypass violations.
 - [ ] Task/block/file-scope ownership beyond ensemble dispatch leases is still incomplete.
 
 ### 5.1 Multi-Agent Role Architecture
@@ -330,6 +336,8 @@ Release 1 should provide:
 13. progress-aware dispatch state such as useful-progress tracking and visible run phases during fanout, fallback, merge, and arbitration
 14. phase-aware timeout parity between ensemble fanout and single-run dispatch lanes
 15. question-driven worker packets with machine-readable answer contracts
+16. bounded impact-analysis tails for non-`STC` worker reasoning when the packet requires it
+17. explicit dispatch-policy and budget-policy telemetry in canonical run artifacts
 
 Implementation audit:
 
@@ -341,6 +349,8 @@ Implementation audit:
 - [x] Single-provider dispatch now has phase-aware timeout parity with ensemble execution instead of one coarse wall-clock timeout.
 - [x] Live ensemble manifests expose `active_subagents`, `active_count`, and timeout-policy metadata.
 - [x] Worker prompts now carry explicit question/answer/evidence/next-action return fields instead of a looser partial summary contract.
+- [x] Non-`STC` worker packets can now require bounded impact-analysis tails.
+- [x] Canonical run logs now include budget-policy, cheap-lane, fallback, and internal-escalation telemetry.
 - [ ] Some merge/readiness heuristics are still heuristic rather than final Release 1-stable policy.
 
 ### 7. Review and Verification Fabric
@@ -359,6 +369,7 @@ Required capabilities:
 8. regression verification for bug-fix flows
 9. source-backed verification for research/review flows
 10. required evidence capture in logs and artifacts
+11. orchestrator-owned default user reporting that hides explicit subagent/process sections unless inspection is requested
 
 Target review-state vocabulary for Release 1:
 
@@ -375,6 +386,7 @@ Implementation audit:
 - [x] Route and eval artifacts now expose target per-run and manifest review-state intent before dispatch.
 - [x] Health and verification scripts exist.
 - [x] Merge-readiness is distinguished from raw command success.
+- [x] Default user-facing reporting is now explicitly orchestrator-synthesized instead of exposing raw subagent/process sections.
 - [ ] The full target review vocabulary is not yet fully implemented end to end.
 - [ ] Policy-aware close/handoff semantics are not yet complete across all execution classes.
 
@@ -534,6 +546,7 @@ Release 1 should provide:
 10. progress visibility across dispatch phases
 11. a baseline for future drift detection
 12. operator-visible recovery, timeout-instability, and lease-conflict summaries
+13. operator-visible budget-policy and escalation summaries
 
 Implementation audit:
 
@@ -543,6 +556,7 @@ Implementation audit:
 - [x] Review/risk/progress visibility exist.
 - [x] Operator status exposes preferred or eligible task-class fit and recovery history visibility.
 - [x] Operator status now exposes timeout-instability classes and recent lease-conflict summaries.
+- [x] Operator status and health checks now surface budget-policy violations, escalation receipts, and diagnostic cost-class state.
 - [ ] Full drift visibility remains incomplete.
 
 ### 13.1 Drift Detection
@@ -714,12 +728,14 @@ Release 1 should provide a compact but complete execution surface:
 8. eval commands
 9. project bootstrap commands
 10. bootstrap/session-entry commands and helpers for lighter framework startup
+11. compact status-diagnostic commands for low-cost runtime inspection
 
 Implementation audit:
 
 - [x] Command-layer protocol map exists.
 - [x] Pack helper, routing, status, verification, eval, and bootstrap commands exist.
 - [x] Bootstrap/session-start helper surfaces now exist for the lighter entry topology.
+- [x] Compact boot/status snapshot surfaces now exist for bounded diagnostics.
 
 
 ## Current Implementation Status (Codebase Audit)
@@ -730,12 +746,14 @@ Implementation audit:
   - [x] Post-compaction restore flow exists through `beads-compact.sh`.
   - [x] Boot packet artifacts now exist and are linked from protocol docs.
   - [x] `AGENTS.md` now acts as a bootstrap router over split orchestrator and worker entry contracts.
+  - [x] Compact boot snapshots now exist for development-oriented status reads.
 - [x] **Done: Problem Framing and Routing**
   - [x] Pack detection exists through `vida-pack-router.sh` and `vida-pack-helper.sh detect`.
   - [x] Non-dev pack initialization exists through `nondev-pack-init.sh`.
   - [x] Execution mode routing exists through `task-execution-mode.sh`.
   - [x] Reflection-pack routing exists for drift and framework self-analysis flows.
   - [x] Request-intent classification now exists before engaging heavy execution machinery.
+  - [x] `status_diagnostic` now exists as a dedicated low-cost routing class.
 - [x] **Done: Task and Execution State**
   - [x] `br` remains the authoritative task-state path.
   - [x] TODO block lifecycle scripts and validation utilities exist.
@@ -751,16 +769,19 @@ Implementation audit:
   - [x] External-first fanout, deterministic fallback, and bounded arbitration are implemented.
   - [x] Worker-entry and worker-thinking contracts are separated from orchestrator governance.
   - [x] Supported-mode subagent-first analysis/review behavior is now codified while synthesis and mutation ownership remain orchestrator-owned.
+  - [x] Active-mode development execution is now documented as orchestration-first rather than local-first.
   - [x] Recovery helpers, subagent suppression, active-subagent visibility, and richer scorecards now exist.
   - [x] Phase-aware timeout controls and live route refresh now exist.
   - [x] Ensemble lease acquisition, release, conflict blocking, and lease-history diagnostics now exist.
   - [x] Worker packets now use explicit machine-readable return fields for question-driven execution.
+  - [x] Route outputs now expose budget-policy metadata and lawful internal-escalation constraints.
   - [ ] Broader task/block/file-scope ownership contracts are not yet fully materialized as runtime-enforced stateful contracts.
 - [ ] **Partial: Review and Verification Fabric**
   - [x] Route artifacts now expose `review_state`.
   - [x] Route and eval artifacts now expose `target_review_state` and `target_manifest_review_state`.
   - [x] Verification and health-check scripts are implemented.
   - [x] `quality-health-check.sh` reads canonical subagent run logs.
+  - [x] Default user-facing reports now hide explicit subagent/process sections unless inspection is requested.
   - [ ] The full target review-state vocabulary is not yet demonstrated end to end.
   - [ ] Policy-aware close and handoff behavior is not yet fully proven across all task classes.
 - [ ] **Partial: Risk and Governance**
@@ -785,6 +806,7 @@ Implementation audit:
   - [x] Scorecards now track useful-progress and time-to-first-useful-output metrics.
   - [x] Operator status exposes task-class fit, recovery history, degraded subagent visibility, and timeout-instability summaries.
   - [x] Lease conflict and recent recovery summaries are now visible in operator surfaces.
+  - [x] Budget-policy telemetry and escalation diagnostics now exist in operator-facing surfaces.
   - [ ] Drift and anomaly visibility are not yet at the full target Release 1 maturity level.
 - [ ] **Partial: Learning and Improvement Loop**
   - [x] Reflection, eval-pack, and scorecard-driven routing adaptation exist.

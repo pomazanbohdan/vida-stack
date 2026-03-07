@@ -102,6 +102,11 @@ ROUTING_KEYS = {
     "max_verification_passes",
     "max_fallback_hops",
     "max_total_runtime_seconds",
+    "local_execution_allowed",
+    "local_execution_preferred",
+    "cli_dispatch_required_if_delegating",
+    "direct_internal_bypass_forbidden",
+    "allowed_internal_reasons",
 }
 SCORING_KEYS = {
     "consecutive_failure_limit",
@@ -517,6 +522,10 @@ def _validate_routing(route_name: str, route_cfg: dict[str, Any], errors: list[s
         "merge_policy",
         "dispatch_required",
         "external_first_required",
+        "local_execution_allowed",
+        "local_execution_preferred",
+        "cli_dispatch_required_if_delegating",
+        "direct_internal_bypass_forbidden",
         "bridge_fallback_subagent",
         "internal_escalation_trigger",
         "verification_route_task_class",
@@ -539,6 +548,8 @@ def _validate_routing(route_name: str, route_cfg: dict[str, Any], errors: list[s
         if key in route_cfg:
             _validate_int_field(route_cfg, key, path, errors, min_value=0)
     fanout = _validate_repeated_string_field(route_cfg, "fanout_subagents", path, errors) if "fanout_subagents" in route_cfg else None
+    if "allowed_internal_reasons" in route_cfg:
+        _validate_repeated_string_field(route_cfg, "allowed_internal_reasons", path, errors)
     fanout_min = _validate_int_field(route_cfg, "fanout_min_results", path, errors, min_value=0) if "fanout_min_results" in route_cfg else None
     if fanout is not None and fanout_min is not None and fanout_min > len(fanout):
         errors.append(f"{path}.fanout_min_results: must be <= number of fanout_subagents")

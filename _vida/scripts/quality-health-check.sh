@@ -274,6 +274,41 @@ if [[ -n "$TASK_ID" ]]; then
       exit 4
     fi
 
+    if [[ "$subagent_run_count" -gt 0 && -f ".vida/logs/subagent-runs.jsonl" ]]; then
+      budget_policy_summary="$(jq -sr --arg task "$TASK_ID" '
+        reduce .[] as $item (
+          {
+            bypass: 0,
+            budget_violation: 0,
+            internal_escalation: 0,
+            internal_missing_receipt: 0
+          };
+          if (($item.task_id // "") == $task and ($item.type // "") == "subagent_run") then
+            .bypass += (if ($item.policy_bypass // false) then 1 else 0 end)
+            | .budget_violation += (if ($item.budget_violation // false) then 1 else 0 end)
+            | .internal_escalation += (if ($item.internal_escalation_used // false) then 1 else 0 end)
+            | .internal_missing_receipt += (
+                if ($item.internal_escalation_used // false) and (((($item.internal_escalation_receipt // {}) | type) != "object") or (($item.internal_escalation_receipt // {}) == {}))
+                then 1 else 0 end
+              )
+          else . end
+        )
+      ' .vida/logs/subagent-runs.jsonl 2>/dev/null)"
+      bypass_count="$(jq -r '.bypass // 0' <<<"$budget_policy_summary" 2>/dev/null)"
+      budget_violation_count="$(jq -r '.budget_violation // 0' <<<"$budget_policy_summary" 2>/dev/null)"
+      internal_escalation_count="$(jq -r '.internal_escalation // 0' <<<"$budget_policy_summary" 2>/dev/null)"
+      internal_missing_receipt_count="$(jq -r '.internal_missing_receipt // 0' <<<"$budget_policy_summary" 2>/dev/null)"
+      if [[ "${bypass_count:-0}" -gt 0 ]]; then
+        vida_status_line warn "[health] WARN: subagent routing bypass detected for $TASK_ID (policy_bypass=${bypass_count})"
+      fi
+      if [[ "${budget_violation_count:-0}" -gt 0 ]]; then
+        vida_status_line warn "[health] WARN: budget policy violations detected for $TASK_ID (${budget_violation_count})"
+      fi
+      if [[ "${internal_missing_receipt_count:-0}" -gt 0 ]]; then
+        vida_status_line warn "[health] WARN: internal escalations without receipt detected for $TASK_ID (${internal_missing_receipt_count}/${internal_escalation_count})"
+      fi
+    fi
+
     wvp_event_text="$(jq -r --arg task "$TASK_ID" '
       select((.task_id // "") == $task and ((.type // "") == "block_end" or (.type // "") == "self_reflection" or (.type // "") == "pack_end"))
       | [(.goal // ""), (.summary // ""), (.actions // ""), (.constraints // ""), (.decision // ""), (.risks // ""), (.evidence // ""), (.evidence_ref // ""), (.assumptions // "")]

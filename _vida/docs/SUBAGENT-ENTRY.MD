@@ -36,6 +36,7 @@ Worker-lane confirmation rule:
 6. Stop once the bounded result is produced.
 7. Use the worker-safe thinking subset from `_vida/docs/SUBAGENT-THINKING.MD`.
 8. Answer the packet's blocking question directly before adding optional context.
+9. When the packet marks `impact_tail_policy: required_for_non_stc` and your selected worker mode is `PR-CoT` or `MAR`, return a bounded impact analysis tail before finishing.
 
 ## Must Not Do
 
@@ -82,6 +83,13 @@ Return:
 6. blockers,
 7. merge-ready verdict when requested,
 8. recommended next action when work remains.
+
+When `impact_tail_policy: required_for_non_stc` applies, also return:
+
+1. affected scope inside your assigned slice,
+2. contract/dependency impact inside that slice,
+3. required follow-up actions,
+4. residual risks.
 
 If the packet defines a machine-readable schema, use that schema exactly.
 

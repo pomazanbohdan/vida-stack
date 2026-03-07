@@ -43,6 +43,7 @@ Use:
 3. Distinguish confirmed facts from assumptions.
 4. Do not narrate internal process unless the deliverable requires it.
 5. Do not expand into architecture-wide orchestration unless the packet explicitly asks for that slice.
+6. If the packet marks `impact_tail_policy: required_for_non_stc`, then every `PR-CoT` or `MAR` result must end with a bounded impact analysis covering scope impact, contract/dependency impact, follow-up actions, and residual risks.
 
 ## Worker Output Rules
 
@@ -51,6 +52,8 @@ Use:
 3. If the packet requests machine-readable output, obey that schema exactly.
 4. Answer the packet's blocking question before adding optional context.
 5. Stop once the blocking question is answered with bounded evidence.
+6. `STC` may stop at the direct bounded answer.
+7. `PR-CoT` and `MAR` must append the required impact analysis tail when the packet requires it.
 
 ## Forbidden Escalation
 

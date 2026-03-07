@@ -331,8 +331,53 @@ pack_router_keywords:
 #       max_total_runtime_seconds: 420
 #       dispatch_required: external_first_when_eligible
 #       external_first_required: yes
+#       local_execution_allowed: no
+#       local_execution_preferred: no
+#       cli_dispatch_required_if_delegating: yes
+#       direct_internal_bypass_forbidden: yes
 #       bridge_fallback_subagent: codex_cli
 #       internal_escalation_trigger: write_scope_or_tie_break
+#       independent_verification_required: no
+#     status_diagnostic:
+#       subagents:
+#         - qwen_cli
+#         - gemini_cli
+#         - kilo_cli
+#         - opencode_cli
+#         - vibe_cli
+#         - codex_cli
+#         - internal_subagents
+#       fanout_subagents:
+#         - qwen_cli
+#         - gemini_cli
+#         - kilo_cli
+#       fanout_min_results: 1
+#       merge_policy: consensus_with_conflict_flag
+#       write_scope: none
+#       verification_gate: source_backed_summary
+#       max_runtime_seconds: 120
+#       min_output_bytes: 180
+#       graph_strategy: deterministic_then_escalate
+#       deterministic_first: yes
+#       budget_policy: strict
+#       max_budget_units: 0
+#       max_cli_subagent_calls: 2
+#       max_verification_passes: 0
+#       max_fallback_hops: 1
+#       max_total_runtime_seconds: 180
+#       dispatch_required: local_or_external_first
+#       external_first_required: yes
+#       local_execution_allowed: yes
+#       local_execution_preferred: yes
+#       cli_dispatch_required_if_delegating: yes
+#       direct_internal_bypass_forbidden: yes
+#       bridge_fallback_subagent: codex_cli
+#       internal_escalation_trigger: provider_exhausted_or_decision_conflict
+#       allowed_internal_reasons:
+#         - provider_exhausted
+#         - quality_gap
+#         - semantic_conflict_without_majority
+#         - provider_exhausted_or_decision_conflict
 #       independent_verification_required: no
 #     analysis:
 #       subagents:

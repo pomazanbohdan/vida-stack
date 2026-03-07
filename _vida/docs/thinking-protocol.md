@@ -52,6 +52,7 @@ YOU_MUST:
   - Compute complexity score for non-override paths.
   - Route to the correct algorithm.
   - Execute selected algorithm fully.
+  - Run mandatory post-analysis impact analysis for every non-STC algorithm before final output.
   - Trigger web search in mandatory scenarios.
   - Use root-cause-first policy for bugs.
   - Pass PRE_OUTPUT_GATE before responding.
@@ -147,6 +148,7 @@ FLOW:
   - Pass 1: 4 independent perspectives (logical, data, arch, alternatives)
   - Build consensus packet (agreements/divergences/key signal)
   - Pass 2: each perspective revises against consensus
+  - Run Impact Analysis Checklist on the selected action/recommendation
   - Final issue count -> proceed/revise/escalate
 
 ESCALATION:
@@ -161,6 +163,7 @@ FLOW:
   - Evaluator uses adaptive rubrics (RRD)
   - Reflector carries knowledge list across rounds (TRT)
   - Actor must avoid known-failed approaches
+  - Run Impact Analysis Checklist on the accepted best solution before output
 
 EXIT:
   score >= 8/10: accept
@@ -177,6 +180,7 @@ FLOW:
   - Build PACER consensus packet R1->R2
   - Round 2: 5 NEW options conditioned on packet + HYBRID R2
   - Final hybrid: compare R1 vs R2, resolve conflicts
+  - Run Impact Analysis Checklist on the final hybrid before output
 
 RULES:
   - Never <5 options in R1
@@ -206,7 +210,7 @@ TRT_LOOP:
   action: rerun divergent algorithm(s) with shared knowledge packet
 
 EXIT:
-  confidence >= 80% -> synthesize
+  confidence >= 80% -> synthesize + run Impact Analysis Checklist
   still <80% after 2 loops -> cautious synthesis or user decision
 ```
 
@@ -281,12 +285,57 @@ CHECKLIST:
   - [ ] Bug fixes followed root-cause pipeline (if bug task)
   - [ ] Required rounds/passes completed
   - [ ] Confidence is evidence-based (no fabrication)
+  - [ ] Non-STC outputs include completed Impact Analysis Checklist
   - [ ] Output format matches mode (silent/trace)
 
 FAIL_ACTION:
   - Stop
   - Complete missing steps
   - Re-run gate
+```
+
+---
+
+## IMPACT_ANALYSIS_CHECKLIST (⛔ MANDATORY FOR NON-STC)
+
+```yaml
+APPLIES_TO:
+  - PR-CoT
+  - MAR
+  - 5-SOL
+  - META
+
+SKIP_FOR:
+  - STC
+
+PURPOSE:
+  - extend analysis beyond the immediate conclusion,
+  - force explicit downstream impact review before reporting,
+  - surface required follow-up in docs, contracts, task flow, and verification.
+
+CHECKLIST:
+  - [ ] affected_scope identified (files/modules/services/runtime areas)
+  - [ ] contract_and_dependency impact assessed
+  - [ ] user_or_operator impact assessed when relevant
+  - [ ] verification_and_regression impact assessed
+  - [ ] docs_protocol_spec_pool impact assessed
+  - [ ] required follow-up actions listed
+  - [ ] residual risks listed
+  - [ ] if impact is "none", the no-impact verdict is stated explicitly
+
+MINIMUM_OUTPUT_FIELDS:
+  affected_scope:
+    - files or modules touched
+    - adjacent layers or owners affected
+  contract_impact:
+    - api/data/schema/protocol/task-contract changes
+    - dependency or routing implications
+  operational_impact:
+    - user, operator, runtime, rollout, or support impact
+  follow_up:
+    - docs/spec/reflection/work-pool/verification actions required
+  residual_risks:
+    - unresolved risks or explicit "none"
 ```
 
 ---
@@ -775,6 +824,13 @@ PASS_2:
 🔀 Alternatives: {confirmed | revised | dropped}
 
 **Final Issues:** {count} → **Action:** {proceed|revise|escalate}
+
+### Impact Analysis
+**Affected Scope:** {files/modules/layers}
+**Contract Impact:** {api/data/protocol/dependency impact or "None"}
+**Operational Impact:** {user/operator/runtime impact or "None"}
+**Follow-up:** {docs/spec/reflection/pool/verification actions or "None"}
+**Residual Risks:** {list or "None"}
 ```
 
 ---
@@ -935,6 +991,34 @@ SCORING:
   round_progression:
     expected: "R1: 5-6 → R2: 7-8 → R3: 8-9"
     stagnation: "If R(N) score == R(N-1) score → Reflector must change strategy"
+```
+
+---
+
+## Output Format
+
+```markdown
+## MAR: {Problem}
+
+### Rounds
+**R1:** {score}/10 | {key critique}
+**R2:** {score}/10 | {key improvement}
+**R3:** {score}/10 | {accepted best solution}
+
+### Knowledge List
+**Avoid:** {items}
+**Keep:** {items}
+
+### Decision
+**Best Solution:** {summary}
+**Action:** {accept|escalate}
+
+### Impact Analysis
+**Affected Scope:** {files/modules/layers}
+**Contract Impact:** {api/data/protocol/dependency impact or "None"}
+**Operational Impact:** {user/operator/runtime impact or "None"}
+**Follow-up:** {docs/spec/reflection/pool/verification actions or "None"}
+**Residual Risks:** {list or "None"}
 ```
 
 ---
@@ -1152,6 +1236,13 @@ confidence[4]{agreement,percent}:
 **FINAL HYBRID:** {description}
 **Confidence:** {XX}%
 **Files:** {affected} | **Order:** {sequence}
+
+### Impact Analysis
+**Affected Scope:** {files/modules/layers}
+**Contract Impact:** {api/data/protocol/dependency impact or "None"}
+**Operational Impact:** {user/operator/runtime impact or "None"}
+**Follow-up:** {docs/spec/reflection/pool/verification actions or "None"}
+**Residual Risks:** {list or "None"}
 ```
 
 ---
@@ -1362,6 +1453,13 @@ CONFIDENCE:
 ### FINAL DECISION
 {synthesized decision}
 **Files:** {list} | **Risks:** {from PR-CoT} | **Trade-offs:** {from 5-SOL}
+
+### Impact Analysis
+**Affected Scope:** {files/modules/layers}
+**Contract Impact:** {api/data/protocol/dependency impact or "None"}
+**Operational Impact:** {user/operator/runtime impact or "None"}
+**Follow-up:** {docs/spec/reflection/pool/verification actions or "None"}
+**Residual Risks:** {list or "None"}
 ```
 
 ---

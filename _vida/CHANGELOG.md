@@ -8,6 +8,76 @@ Rules:
 4. Group updates under fixed headings when applicable: `Added`, `Changed`, `Fixed`, `Protocol`.
 5. Keep this file limited to VIDA framework/runtime changes, not project feature work.
 
+## 2026-03-07 11:00
+
+Changed:
+
+1. `thinking-protocol.md` now requires a mandatory `Impact Analysis Checklist` before output for every non-`STC` algorithm, so `PR-CoT`, `MAR`, `5-SOL`, and `META` must carry analysis through downstream scope, contract, operational, follow-up, and residual-risk review.
+2. User-facing framework report contracts no longer include explicit subagent/process sections by default; subagent participation stays an internal execution mechanism unless the user explicitly asks to inspect it.
+
+Protocol:
+
+1. `SUBAGENT-ENTRY.MD`, `SUBAGENT-THINKING.MD`, `subagents.md`, `subagent-prompt-templates.md`, and `render-subagent-prompt.sh` now synchronize `impact_tail_policy: required_for_non_stc` and bounded `impact_analysis` return fields for worker lanes.
+2. Orchestrator reporting contracts now explicitly keep subagent execution hidden from default visual output while still allowing internal evidence synthesis.
+
+## 2026-03-07 10:53
+
+Changed:
+
+1. `ORCHESTRATOR-ENTRY.MD` now makes orchestration-first execution mandatory for development `execution_flow` when `protocol_activation.agent_system=true` and the effective subagent mode is not `disabled`.
+2. `orchestration-protocol.md` now routes development execution through the active subagent system before local implementation and preserves explicit mode distinctions for `native`, `hybrid`, and `disabled`.
+
+Protocol:
+
+1. `subagent-system-protocol.md` now explicitly states that development execution is orchestrator-managed through routed subagent lanes by default when subagent mode is active.
+2. Hybrid-mode development is now documented as route-policy-first orchestration with external-first dispatch, bridge fallback, and lawful internal escalation instead of an implicit local-first path.
+
+## 2026-03-07 08:43
+
+Added:
+
+1. Introduced `status_diagnostic` as a dedicated low-cost routing class for compact state/status diagnostics with `local_or_external_first` semantics.
+2. Added explicit dispatch-policy metadata to route outputs: `local_execution_allowed`, `local_execution_preferred`, `cli_dispatch_required_if_delegating`, `direct_internal_bypass_forbidden`, `internal_escalation_allowed`, `allowed_internal_reasons`, and `required_dispatch_path`.
+3. Added budget-policy telemetry to canonical subagent run logs, including `selected_cost_class`, `selected_budget_units`, `cheap_lane_attempted`, `bridge_fallback_used`, `internal_escalation_used`, `policy_bypass`, `budget_violation`, `cost_escalation_trigger`, and `internal_escalation_receipt`.
+
+Changed:
+
+1. Route budgets now expose explicit cost classes alongside normalized budget units so operator tooling can distinguish `free`, `cheap`, `paid`, and `expensive` lanes.
+2. Subagent diagnosis/operator status now surfaces budget-policy summaries in addition to provider health, route graphs, and review targets.
+3. The canonical overlay template now mirrors the live budget-policy routing fields from the active project config.
+
+Fixed:
+
+1. `vida-config.py` schema validation now accepts the new routing policy fields used for local-first cheap diagnostics and internal-escalation authorization.
+2. `route_budget_limits()` now treats `max_budget_units: 0` as an intentional hard cap instead of silently replacing it with a fallback default.
+3. `quality-health-check.sh` now warns when task-scoped canonical subagent runs show routing bypass, budget violations, or internal escalations without receipts.
+
+Protocol:
+
+1. `subagent-system-protocol.md` now explicitly distinguishes `internal_primary`, lawful `internal_escalation`, and forbidden `internal_bypass` for hybrid budget-aware routing.
+
+## 2026-03-07 08:25
+
+Added:
+
+1. `_vida/scripts/vida-boot-snapshot.py` as a compact dev-boot status surface that renders top-level active work, `ready_head`, `decision_required`, and open/in-progress `parent-child` subtask trees.
+2. Boot receipts now persist a sibling `boot-snapshot` artifact for dev-oriented boots alongside the existing boot packet.
+
+Changed:
+
+1. `boot-profile.sh` now generates compact boot snapshots during dev-oriented boot runs and treats them as first-class receipt-linked runtime artifacts.
+2. `boot-packet.py` now exposes runtime hints for compact snapshot access so boot consumers can prefer bounded task-state reads over broad queue discovery.
+3. Lean/dev boot guidance in `ORCHESTRATOR-ENTRY.MD`, `orchestration-protocol.md`, `framework-self-analysis-protocol.md`, `boot-packet-protocol.md`, and `/vida-status` now prefers the compact boot snapshot before wider `br` or repo discovery for development-related context questions.
+
+Fixed:
+
+1. Compact subtask trees now resolve through targeted `br show <id>` reads instead of relying on `br list --json` payloads that omit `parent` metadata for child issues.
+2. `boot-profile.sh verify-receipt` now ignores archived `.boot-packet.json` and `.boot-snapshot.json` files when selecting the latest canonical receipt.
+
+Protocol:
+
+1. Development-related `answer_only` and `execution_flow` boot paths now formally prefer one bounded task-state snapshot over broad discovery whenever that snapshot is sufficient to answer the request.
+
 ## 2026-03-07 07:50
 
 Added:

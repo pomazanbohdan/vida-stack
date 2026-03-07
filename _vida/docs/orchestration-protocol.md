@@ -72,57 +72,63 @@ Before routing work, normalize the request into:
 
 1. Frame the problem.
 2. Determine request intent class and active orchestration lens.
-3. Apply TODO engagement gate:
+3. For `execution_flow` and development-related `answer_only`, capture a compact boot snapshot first:
+   - `python3 _vida/scripts/vida-boot-snapshot.py`
+   - prefer this snapshot over broad `br`/repo discovery for task-state questions and boot-time context
+4. Apply TODO engagement gate:
    - `answer_only` -> stay outside `br`/TODO/pack flow,
    - `artifact_flow` and `execution_flow` -> task flow required,
    - `mixed` -> start answer path first and enter task flow only when execution becomes required.
-4. Resolve active task only when task flow is required:
+5. Resolve active task only when task flow is required:
    - if `task_id` is provided, use it;
    - else prefer active `in_progress` task from `br`;
    - else pick first `ready` task or create one when the request is net-new framework/project work.
-5. Detect pack only when task flow is required:
+6. Detect pack only when task flow is required:
    - `bash _vida/scripts/vida-pack-helper.sh detect "<request>"`.
-6. Select execution mode/profile:
+7. Select execution mode/profile:
    - task execution mode via `_vida/scripts/task-execution-mode.sh`,
    - boot profile via `_vida/scripts/boot-profile.sh`,
    - META / FSAP / SCP / WVP when triggers fire.
-7. Select orchestration hierarchy:
+8. Select orchestration hierarchy:
    - default to free external read-only fanout for eligible non-trivial analysis/research/review/verification work,
    - use the configured bridge fallback subagent before internal escalation,
    - reserve internal subagents for senior arbitration, architecture-heavy synthesis, and mutation-owning execution.
-8. Decompose the work into layers:
+9. For `execution_flow` when `protocol_activation.agent_system=true` and effective mode is not `disabled`, resolve the orchestration-first execution path before local implementation:
+   - decompose the task into subagent lanes first whenever route policy requires orchestration,
+   - forbid local orchestrator-first development as the default path,
+   - keep the orchestrator as the single writer unless bounded write scope is explicitly granted,
+   - preserve mode distinction: `native` = internal-first authorized lanes, `hybrid` = external-first routing with bridge fallback and lawful internal escalation.
+10. Decompose the work into layers:
    - analysis,
    - design/contract,
    - implementation/materialization,
    - validation,
    - governance/documentation,
    - delivery/handoff.
-9. Decide dependency order:
+11. Decide dependency order:
    - parallel only for independent read-only or isolated-scope steps,
    - otherwise keep a single writer lane on `track_id=main`.
-10. Inject expert agents only when needed:
-   - missing domain expertise,
-   - risk cannot be assessed confidently,
-   - cross-functional consequences require additional lenses,
-   - conflict arbitration or critique is needed,
-   - read-only ensemble fanout is available and materially reduces risk.
-10.1. For eligible non-trivial work, prefer separate cli-subagent lanes for authorship and verification:
+12. For `execution_flow` under active subagent mode, treat orchestration-first dispatch as the default execution posture rather than optional expert injection:
+   - dispatch analysis, review, verification, and other eligible pre-write work through the routing system first,
+   - use additional expert lanes when domain specialization, conflict arbitration, or risk requires it,
+   - do not bypass the routing layer into local-first development unless the active mode is `disabled` or route policy explicitly authorizes the exception.
+12.1. For eligible non-trivial work, prefer separate cli-subagent lanes for authorship and verification:
    - one cli subagent or cli-subagent ensemble produces the primary analysis/recommendation,
    - another eligible cli subagent (or verification ensemble) validates it independently when route policy requires it,
    - the orchestrator owns synthesis, escalation, and mutation-only control.
-11. Start pack session only when task flow is required:
+13. Start pack session only when task flow is required:
    - `bash _vida/scripts/vida-pack-helper.sh start <task_id> <pack_id> "<goal>" [constraints]`.
    - optional shortcut for standard non-dev flows:
      `bash _vida/scripts/nondev-pack-init.sh <task_id> <pack_id> "<goal>" [constraints]`.
-12. Pre-register execution blocks only when task flow is required:
+14. Pre-register execution blocks only when task flow is required:
    - `bash _vida/scripts/vida-pack-helper.sh scaffold <task_id> <pack_id>`.
-13. Execute via TODO lifecycle only when task flow is engaged:
+15. Execute via TODO lifecycle only when task flow is engaged:
    - `block-plan -> block-start -> block-end -> reflect -> verify`.
-14. Synthesize results:
+16. Synthesize results:
    - integrate business, product, architecture, implementation, and verification outputs,
    - resolve conflicts before reporting,
    - convert the result into an execution-ready artifact when appropriate.
-15. End pack session only when task flow was engaged:
+17. End pack session only when task flow was engaged:
    - `bash _vida/scripts/vida-pack-helper.sh end <task_id> <pack_id> <done|partial|failed> "<summary>" [next_step]`.
 
 ## Dynamic Expert Injection
@@ -141,11 +147,12 @@ Routing rule:
 1. Use `_vida/docs/subagent-system-protocol.md` + project overlay for subagent choice.
 2. Use `_vida/docs/subagents.md` for dispatch contract.
 3. For eligible non-trivial read-heavy work, prefer subagent-first execution whenever the active subagent mode is not `disabled`.
-4. In `hybrid`, prefer external free fanout first, then the configured bridge fallback, then internal senior escalation only when route policy or evidence requires it.
-5. In `native`, prefer internal subagents as the first analysis/review lane.
-6. In `disabled`, keep analysis local and obey bounded-read policy.
-7. Keep writer ownership singular under the orchestrator even when read-only fanout is active.
-8. Prefer independent verification by a different cli subagent when route metadata marks independent verification as required and a distinct eligible verifier exists.
+4. For `execution_flow` under active subagent mode, orchestration-first routing is mandatory; do not treat subagents as optional helpers around an otherwise local-first development path.
+5. In `hybrid`, prefer external free fanout first, then the configured bridge fallback, then internal senior escalation only when route policy or evidence requires it.
+6. In `native`, prefer internal subagents as the first analysis/review lane and the first authorized development-support orchestration lane.
+7. In `disabled`, keep analysis local and obey bounded-read policy.
+8. Keep writer ownership singular under the orchestrator even when read-only fanout is active.
+9. Prefer independent verification by a different cli subagent when route metadata marks independent verification as required and a distinct eligible verifier exists.
 
 ## Conflict Resolution
 
@@ -162,9 +169,10 @@ When subagents participate in the flow:
 
 1. treat subagent outputs as internal evidence unless the user explicitly asks to inspect them,
 2. present one orchestrator-synthesized answer in chat,
-3. do not stream or paste raw subagent reports into the final user response by default,
-4. reference subagent findings only through synthesized conclusions, evidence refs, or clearly marked supporting summaries,
-5. expose raw subagent disagreement only when it remains decision-relevant after synthesis.
+3. do not add explicit visual subagent/process sections in the default user-facing report,
+4. do not stream or paste raw subagent reports into the final user response by default,
+5. reference subagent findings only through synthesized conclusions, evidence refs, or clearly marked supporting summaries,
+6. expose raw subagent disagreement only when it remains decision-relevant after synthesis.
 
 ## Delivery Alignment
 
@@ -199,7 +207,7 @@ Do not finalize until the orchestrator can answer yes to all:
 4. implementation -> `dev-pack` (`/vida-implement`).
 5. bug investigation/fix -> `bug-pool-pack` (`/vida-bug-fix`).
 6. docs/protocol synchronization or change-impact reconciliation -> `reflection-pack`.
-7. explicit VIDA/framework self-analysis request -> `reflection-pack` + `_vida/docs/framework-self-analysis-protocol.md`.
+7. explicit VIDA/framework self-analysis request -> run `_vida/docs/framework-self-analysis-protocol.md` directly in orchestrator chat mode by default; use `reflection-pack` only when the user explicitly requests tracked task flow or a formal artifact.
 
 Change-impact triggers routed to `reflection-pack`:
 
@@ -216,7 +224,6 @@ Change-impact triggers routed to `reflection-pack`:
 5. For non-trivial reports, default report order:
    - `Problem Framing`
    - `Assumptions / Constraints`
-   - `Agent Orchestration Summary`
    - `Integrated Analysis`
    - `Recommended Solution`
    - `Risks / Trade-offs`
@@ -233,6 +240,8 @@ Change-impact triggers routed to `reflection-pack`:
 5. Do not use multiple writer lanes without explicit scope isolation.
 6. Do not replace synthesis with unintegrated agent fragments.
 7. Do not expose raw subagent reports as the default user-facing deliverable.
+8. Do not route explicit VIDA/framework self-analysis through TODO/`br`/pack flow unless the user explicitly asks for tracked execution.
+9. Do not start dev-related boot with broad repo or `br` sweeps when the compact boot snapshot is sufficient.
 
 ## Related
 

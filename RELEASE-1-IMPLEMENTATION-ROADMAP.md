@@ -79,21 +79,25 @@ Release 1 should be delivered through these phases:
   - [x] Boot profile execution and receipt validation exist.
   - [x] Health-check and finish-gate tooling exist.
   - [x] `AGENTS.md` now routes into split orchestrator and worker boot contracts.
+  - [x] Compact boot snapshots now exist for bounded development-status reads.
 - [ ] **Partial: Phase B — Orchestration and Subagent Reliability**
   - [x] Route snapshots, requested/effective mode selection, and provider scoring are implemented.
   - [x] External-first fanout, fallback, arbitration, and live ensemble visibility are implemented.
   - [x] Worker-entry and worker-thinking contracts are separated from orchestrator logic.
   - [x] Subagent-first analysis/review behavior is now codified for supported runtime modes.
+  - [x] Active-mode development execution is now orchestration-first rather than local-first.
   - [x] Degraded CLI subagent recovery helpers now exist.
   - [x] Phase-aware timeout controls and live route refresh now exist.
   - [x] Ensemble lease acquisition, release, and conflict history now exist as runtime-enforced orchestration mechanics.
   - [x] Worker packets now use explicit machine-readable return fields for question-driven execution.
+  - [x] Budget-policy routing and escalation metadata now exist in route/run surfaces.
   - [ ] Broader task/block/file-scope ownership enforcement is not yet fully complete.
 - [ ] **Partial: Phase C — Verification, Review, and Risk Gates**
   - [x] Route and run artifacts expose `risk_class`.
   - [x] Route and run artifacts expose `review_state`.
   - [x] Route and eval artifacts now expose target review-state intent before dispatch.
   - [x] Health-check tooling reads canonical subagent run logs and surfaces degraded lanes.
+  - [x] Default user-facing reporting now stays orchestrator-synthesized instead of exposing subagent/process sections by default.
   - [ ] Full review-state progression is not yet complete across the full target vocabulary.
   - [ ] Human approval and higher-risk escalation boundaries are not yet fully materialized.
 - [ ] **Partial: Phase D — Telemetry, Scorecards, and Drift Awareness**
@@ -101,6 +105,7 @@ Release 1 should be delivered through these phases:
   - [x] Scorecards track useful-progress rate, timeout-after-progress count, and time-to-first-useful-output.
   - [x] Operator status exposes task-class fit, recovery history, timeout-instability classes, and current subagent health state.
   - [x] Lease-conflict and recent recovery summaries are now visible in operator surfaces.
+  - [x] Budget-policy and escalation diagnostics are now visible in run logs and health surfaces.
   - [ ] Drift and anomaly handling are not yet complete at the intended Release 1 maturity level.
 - [ ] **Partial: Phase E — Documentation Contract and Protocol Runtime Alignment**
   - [x] Release-target documents, protocol index, orchestrator/worker contracts, and changelog are in place.
@@ -155,6 +160,7 @@ Implementation audit:
 - [x] Compact restore and hydration gates exist.
 - [x] Boot-profile validation exists.
 - [x] `AGENTS.md` now routes into split orchestrator and worker boot contracts.
+- [x] Compact boot snapshots now exist for bounded development-status reads.
 - [ ] Full proof that all non-trivial work always stays inside active block lifecycle still depends on operational discipline, not only static runtime enforcement.
 
 ## Phase B: Orchestration and Subagent Reliability
@@ -185,6 +191,7 @@ Priority work:
 7. introduce explicit task, block, and mutation-scope ownership where parallel work is allowed
 8. separate orchestrator-entry from worker-entry semantics in subagent execution
 9. improve runtime phase visibility and useful-progress tracking during fanout, fallback, merge, and arbitration
+10. keep active-mode development execution orchestration-first and budget-policy-legible under `native|hybrid|disabled`
 
 Exit criteria:
 
@@ -205,12 +212,14 @@ Implementation audit:
 - [x] Fanout, fallback, and bounded arbitration exist.
 - [x] Worker-entry separation exists.
 - [x] Supported-mode subagent-first analysis/review behavior is codified.
+- [x] Active-mode development execution is now documented as orchestration-first.
 - [x] Live phase and progress visibility exist.
 - [x] Phase-aware timeout policy exists.
 - [x] Single-run dispatch now has phase-aware timeout parity with ensemble execution.
 - [x] Lane-aware demotion suppression exists for analysis fanout.
 - [x] Ensemble lease acquisition, release, and conflict-history enforcement now exist.
 - [x] Worker packets now use explicit machine-readable return contracts.
+- [x] Budget-policy routing and escalation metadata now exist in route/run artifacts.
 - [ ] Broader task/block/file-scope ownership enforcement remains incomplete.
 
 ## Phase C: Verification, Review, and Risk Gates
@@ -253,6 +262,7 @@ Implementation audit:
 - [x] `risk_class` exists in route/run artifacts.
 - [x] Target review-state intent now exists in route/eval artifacts.
 - [x] Health tooling surfaces degraded lanes and verification state.
+- [x] Default user-facing reporting stays orchestrator-synthesized unless explicit subagent inspection is requested.
 - [ ] Full target review vocabulary is not yet complete in runtime behavior.
 - [ ] Human approval boundaries are still incomplete.
 
@@ -299,6 +309,7 @@ Implementation audit:
 - [x] Useful-progress and time-to-first-useful-output metrics exist.
 - [x] Recovery history and task-class lane-readiness visibility now exist in operator surfaces.
 - [x] Timeout-instability counters and lease-conflict summaries now exist in operator surfaces.
+- [x] Budget-policy and escalation diagnostics now exist in health and run artifacts.
 - [ ] Drift/anomaly handling is still incomplete.
 
 ## Phase E: Documentation Contract and Protocol Runtime Alignment

@@ -46,7 +46,10 @@ Before dispatch:
 11. Include worker-lane confirmation markers in the packet:
    - `worker_lane_confirmed: true`
    - `worker_role: subagent`
-12. Treat the worker response as internal evidence for orchestrator synthesis unless the user explicitly asked to inspect the raw worker report.
+12. Include impact-tail policy in the packet when non-STC workers must finish with bounded downstream analysis:
+   - `impact_tail_policy: required_for_non_stc`
+   - `impact_analysis_scope: bounded_to_assigned_scope`
+13. Treat the worker response as internal evidence for orchestrator synthesis unless the user explicitly asked to inspect the raw worker report.
 
 ## Mandatory Return Contract
 
@@ -65,6 +68,7 @@ Required fields:
 9. `blockers` — empty list or concrete blocker list
 10. `notes` — optional concise integration notes
 11. `recommended_next_action` — concise next step when relevant
+12. `impact_analysis` — required when packet policy marks `impact_tail_policy: required_for_non_stc` and the worker used `PR-CoT` or `MAR`
 
 Preferred format:
 
@@ -80,7 +84,13 @@ Preferred format:
   "merge_ready": "yes",
   "blockers": [],
   "notes": "short note",
-  "recommended_next_action": "integrate patch and run focused verify"
+  "recommended_next_action": "integrate patch and run focused verify",
+  "impact_analysis": {
+    "affected_scope": ["path/a", "module:b"],
+    "contract_impact": ["protocol impact or none"],
+    "follow_up_actions": ["targeted follow-up or none"],
+    "residual_risks": ["risk or none"]
+  }
 }
 ```
 

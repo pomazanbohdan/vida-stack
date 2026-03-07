@@ -86,6 +86,18 @@ def packet_for(profile: str, non_dev: bool) -> dict[str, Any]:
             "execute only through TODO blocks",
             "external-first fanout for eligible read-only work",
         ],
+        "runtime_hints": {
+            "compact_boot_snapshot_command": (
+                ""
+                if non_dev
+                else "python3 _vida/scripts/vida-boot-snapshot.py --json"
+            ),
+            "compact_boot_snapshot_scope": (
+                "top-level in-progress tasks, ready head, and open subtask tree"
+                if not non_dev
+                else "disabled for non-dev boot"
+            ),
+        },
     }
 
 
@@ -136,6 +148,7 @@ def main(argv: list[str]) -> int:
                     "read_contract_count": len(payload.get("read_contract") or []),
                     "invariants_count": len(payload.get("invariants") or []),
                     "protocol_activation": payload.get("protocol_activation", {}),
+                    "runtime_hints": payload.get("runtime_hints", {}),
                 },
                 indent=2,
                 sort_keys=True,

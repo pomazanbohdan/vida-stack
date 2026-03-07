@@ -25,7 +25,8 @@ Boot packet should expose:
 3. active `language_policy`,
 4. active `protocol_activation`,
 5. compact `read_contract`,
-6. compact invariant list.
+6. compact invariant list,
+7. runtime hints for compact boot-time status access.
 
 ## Integration With Boot Receipts
 
@@ -33,9 +34,11 @@ When boot is executed through `_vida/scripts/boot-profile.sh`:
 
 1. a boot packet should be written next to the receipt,
 2. receipt should record `boot_packet_file`,
-3. `verify-receipt` should fail if the referenced boot packet is missing,
-4. `verify-receipt` should fail if receipt profile and boot packet profile diverge,
-5. task-scoped health checks should verify the latest receipt and referenced boot packet before close/readiness checks pass.
+3. dev-oriented boots should also write a compact boot snapshot artifact next to the receipt,
+4. `verify-receipt` should fail if the referenced boot packet is missing,
+5. `verify-receipt` should fail if receipt profile and boot packet profile diverge,
+6. if receipt references a boot snapshot artifact, `verify-receipt` should fail when it is missing,
+7. task-scoped health checks should verify the latest receipt and referenced boot packet before close/readiness checks pass.
 
 ## Scope
 
@@ -59,4 +62,5 @@ Characteristics:
 3. integrated with boot receipts and receipt verification,
 4. `boot-profile.sh` should consume boot-packet read-contract output instead of duplicating profile file lists,
 5. health/verification flows may consume packet summaries as a compact proof surface,
-6. intended as the first step toward lighter compiled boot contracts.
+6. dev-oriented boot receipts may include a compact task-state snapshot artifact,
+7. intended as the first step toward lighter compiled boot contracts.
