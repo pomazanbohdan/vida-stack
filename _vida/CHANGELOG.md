@@ -12,10 +12,10 @@ Rules:
 
 Added:
 
-1. Added queue-backed single-writer task-state mutation path through [br-mutation-queue.py](/home/unnamed/project/mobile-odoo/_vida/scripts/br-mutation-queue.py) and wired mutating `br`/`beads_mutate` calls through the canonical serialized runtime path.
-2. Added silent VIDA framework self-diagnosis mode with root overlay support, boot visibility, deferred framework bug capture, and session reflection via [vida-silent-diagnosis.py](/home/unnamed/project/mobile-odoo/_vida/scripts/vida-silent-diagnosis.py).
-3. Added reusable leased subagent pool helper in [subagent-pool.py](/home/unnamed/project/mobile-odoo/_vida/scripts/subagent-pool.py).
-4. Added reusable product/framework proving-pack templates in [proving-pack.py](/home/unnamed/project/mobile-odoo/_vida/scripts/proving-pack.py).
+1. Added queue-backed single-writer task-state mutation path through `br-mutation-queue.py` and wired mutating `br`/`beads_mutate` calls through the canonical serialized runtime path.
+2. Added silent VIDA framework self-diagnosis mode with root overlay support, boot visibility, deferred framework bug capture, and session reflection via `vida-silent-diagnosis.py`.
+3. Added reusable leased subagent pool helper in `subagent-pool.py`.
+4. Added reusable product/framework proving-pack templates in `proving-pack.py`.
 5. Added mixed-issue split artifacts under `.vida/logs/issue-splits/<task_id>.json` so one bug can preserve a primary executable slice and a secondary unresolved slice without widening the writer lane.
 
 Changed:
