@@ -8,15 +8,141 @@ Rules:
 4. Group updates under fixed headings when applicable: `Added`, `Changed`, `Fixed`, `Protocol`.
 5. Keep this file limited to VIDA framework/runtime changes, not project feature work.
 
+## 2026-03-08 18:30
+
+Changed:
+
+1. Recalibrated the canonical selector bands in [thinking-protocol.md](/home/unnamed/project/vida-stack/_vida/docs/thinking-protocol.md) to `STC <=12`, `PR-CoT 13-22`, `MAR 23-32`, `5-SOL 33-42`, and `META >42`, so medium/high-governance work escalates earlier without making `META` the default for simple execution.
+2. Added explicit `META` routing overrides in [thinking-protocol.md](/home/unnamed/project/vida-stack/_vida/docs/thinking-protocol.md) for framework-owned behavior changes, protocol conflicts, execution gate mismatch, fail-closed law risk, and tracked writer `no_eligible_*` routing gaps.
+3. Added canonical `RISK_ESCALATORS` and `RETROSPECTIVE_ESCALATION` rules in [thinking-protocol.md](/home/unnamed/project/vida-stack/_vida/docs/thinking-protocol.md), including confirmed `STC` misfire handling so the same task class does not silently repeat under too-weak routing.
+4. Synced the operational summary in [algorithms-quick-reference.md](/home/unnamed/project/vida-stack/_vida/docs/algorithms-quick-reference.md) to the new selector bands and escalation rules.
+5. `execution-auth-gate.py` now treats explicit `no_eligible_verifier` as a lawful verification-ready state and adds a framework-only structured execution-auth override path for tracked `no_eligible_analysis_lane` cases instead of forcing unsynchronized local writer fallback.
+6. Added focused regression coverage in [test_execution_auth_gate.py](/home/unnamed/project/vida-stack/_vida/tests/test_execution_auth_gate.py) and clarified the fail-closed exception in [implement-execution-protocol.md](/home/unnamed/project/vida-stack/_vida/docs/implement-execution-protocol.md).
+7. Tightened `execution-auth-gate.py` so structured execution-auth overrides are fail-fast and limited to framework-labeled `no_eligible_analysis_lane` cases, and synced the compact matrix in [algorithms-one-screen.md](/home/unnamed/project/vida-stack/_vida/docs/algorithms-one-screen.md).
+
+## 2026-03-08 02:11
+
+Fixed:
+
+1. [quality-health-check.sh](/home/unnamed/project/mobile-odoo/_vida/scripts/quality-health-check.sh) now runs execution-auth validation only for real `dev-pack` implementation context, not for reflection/docs tasks that merely share writer-like block ids or retain stray implementation receipts.
+2. Added regression coverage in [test_beads_runtime.py](/home/unnamed/project/mobile-odoo/_vida/tests/test_beads_runtime.py) so this health-check classification path stays pinned to execution context instead of block-id or receipt-only heuristics.
+
+Changed:
+
+1. Closed the stale `mobile-1j1*` coach-pipeline backlog after reconciling it against implemented runtime surfaces, later proving waves, and template/runtime sync work already landed elsewhere in VIDA.
+
+## 2026-03-08 00:41
+
+Added:
+
+1. Added [instruction-activation-protocol.md](/home/unnamed/project/mobile-odoo/_vida/docs/instruction-activation-protocol.md) as the canonical framework surface for phase-based instruction loading, trigger-only protocol activation, naming guidance, and instruction-layer decomposition rules.
+
+Changed:
+
+1. [AGENTS.md](/home/unnamed/project/mobile-odoo/AGENTS.md) now points to the instruction activation protocol instead of silently treating bootstrap text as the place to restate deeper activation policy.
+2. [ORCHESTRATOR-ENTRY.MD](/home/unnamed/project/mobile-odoo/_vida/docs/ORCHESTRATOR-ENTRY.MD) now treats instruction loading as a triggered decision bound to the new activation protocol instead of broadening the boot read-set by implication.
+3. [protocol-index.md](/home/unnamed/project/mobile-odoo/_vida/docs/protocol-index.md) now indexes instruction activation/decomposition as a canonical framework domain.
+
+## 2026-03-08 00:35
+
+Fixed:
+
+1. `beads-workflow.sh` now probes bootstrap context hydration with `VIDA_CONTEXT_HYDRATE_ALLOW_MISSING=1`, so the first context-capsule bootstrap no longer emits a false `context_hydration_failed` before the capsule exists.
+2. Added regression coverage in [test_beads_runtime.py](/home/unnamed/project/mobile-odoo/_vida/tests/test_beads_runtime.py) for the pending-capable bootstrap hydration contract.
+3. `framework-operator-status.py` now reconciles closed framework bugs out of the rendered silent-diagnosis backlog, keeping the operator surface consistent with `vida-silent-diagnosis.py status`.
+4. Added task-state reconciliation via [task-state-reconciliation-protocol.md](/home/unnamed/project/mobile-odoo/_vida/docs/task-state-reconciliation-protocol.md) and [task-state-reconcile.py](/home/unnamed/project/mobile-odoo/_vida/scripts/task-state-reconcile.py), and surfaced the derived classification in health/operator/boot flows.
+
+## 2026-03-07 21:34
+
+Added:
+
+1. Added local trace-grading protocol and helper via [trace-eval-protocol.md](/home/unnamed/project/mobile-odoo/_vida/docs/trace-eval-protocol.md) and [trace-eval.py](/home/unnamed/project/mobile-odoo/_vida/scripts/trace-eval.py).
+2. Added focused regression coverage for trace grading and dataset export in [test_trace_eval.py](/home/unnamed/project/mobile-odoo/_vida/tests/test_trace_eval.py).
+3. Added typed capability registry protocol and helper via [capability-registry-protocol.md](/home/unnamed/project/mobile-odoo/_vida/docs/capability-registry-protocol.md) and [capability-registry.py](/home/unnamed/project/mobile-odoo/_vida/scripts/capability-registry.py).
+
+Changed:
+
+1. `subagent-eval-pack.py` now emits a compact `trace_eval` summary alongside the existing `eval_pack`, so post-task strategy refresh can bind to first-class local trace grading instead of only task-close metrics.
+2. `protocol-index.md` and `quality-health-check.sh` now treat local trace grading as a canonical framework surface.
+3. `subagent-eval-pack.py` now also emits a compact `trace_dataset` export reference in `subagent-review-<task_id>.json`, and `pipelines.md` now treats trace eval + dataset artifacts as part of the normal telemetry improvement loop.
+4. `subagent-system.py` now applies a typed capability gate before candidate scoring, so capability-incompatible lanes are suppressed instead of merely being down-ranked heuristically.
+
+## 2026-03-07 21:12
+
+Added:
+
+1. Added durable run-graph protocol and helper via [run-graph-protocol.md](/home/unnamed/project/mobile-odoo/_vida/docs/run-graph-protocol.md) and [run-graph.py](/home/unnamed/project/mobile-odoo/_vida/scripts/run-graph.py) so routed execution now has a canonical node-level resumability ledger under `.vida/state/run-graphs/`.
+
+Changed:
+
+1. `subagent-dispatch.py` now updates the run-graph ledger for `analysis`, `writer`, `coach`, `verifier`, `approval`, and `synthesis` transitions instead of keeping routed progress implicit in manifests alone.
+2. `vida-boot-snapshot.py` now surfaces compact run-graph resume hints for active tasks, so compact recovery can see the next resumable node without broad state inspection.
+3. `framework-operator-status.py` now summarizes active run-graphs and their next resumable nodes as part of the operator surface.
+4. `quality-health-check.sh` now treats the durable run-graph protocol/helper as required framework files.
+
+Fixed:
+
+1. Routed execution after compact or lane failure no longer depends only on TODO or manifest inference to find the next resumable orchestration stage.
+
+## 2026-03-07 21:12
+
+Changed:
+
+1. `execution-auth-gate.py` and `subagent-dispatch.py` no longer treat `draft_execution_spec` as a direct implementation authorization substitute for a missing `issue_contract`; draft execution-spec now remains a pre-launch review artifact instead of an execution bypass.
+2. Runtime validators in `subagent-dispatch.py` now reuse the canonical helper schemas from `spec-intake.py`, `spec-delta.py`, and `draft-execution-spec.py` instead of checking only a shallow field subset.
+3. `writer_prompt_text` no longer injects stale `draft_execution_spec` content into issue-contract-driven writer prompts, removing a contradiction path between pre-launch spec review artifacts and normalized issue contracts.
+4. `spec-intake-protocol.md`, `spec-delta-protocol.md`, `issue-contract-protocol.md`, `implement-execution-protocol.md`, and `spec-contract-artifacts.md` now define deterministic next-hop semantics for spec intake, spec delta, issue contract readiness, and draft execution-spec handoff.
+
+Fixed:
+
+1. Added regression coverage to prove that missing `issue_contract` stays blocked even when a `draft_execution_spec` exists, while helper-level schema regressions for `spec_intake`, `spec_delta`, and `draft_execution_spec` now fail the focused suite.
+
+## 2026-03-07 20:48
+
+Added:
+
+1. Added [spec-intake-protocol.md](/home/unnamed/project/mobile-odoo/_vida/docs/spec-intake-protocol.md) and [spec-intake.py](/home/unnamed/project/mobile-odoo/_vida/scripts/spec-intake.py) as the new compact normalization layer for mixed research, issue/release signals, and user-scope negotiation before SCP/ICP/FTP.
+2. Added focused tests for the new intake helper in [test_spec_intake.py](/home/unnamed/project/mobile-odoo/_vida/tests/test_spec_intake.py).
+3. Added [spec-delta-protocol.md](/home/unnamed/project/mobile-odoo/_vida/docs/spec-delta-protocol.md), [spec-delta.py](/home/unnamed/project/mobile-odoo/_vida/scripts/spec-delta.py), and focused tests in [test_spec_delta.py](/home/unnamed/project/mobile-odoo/_vida/tests/test_spec_delta.py) for explicit non-equivalent contract reconciliation.
+
+Changed:
+
+1. `spec-contract-protocol.md`, `issue-contract-protocol.md`, `form-task-protocol.md`, and `implement-execution-protocol.md` now require normalized `spec_intake` when raw upstream inputs are still mixed or scope-bearing instead of letting downstream formation start from raw text.
+2. `protocol-index.md` now maps spec-intake normalization as a canonical framework protocol surface.
+3. `bug-fix-protocol.md`, `issue-contract-protocol.md`, and `form-task-protocol.md` now require explicit `spec_delta` materialization instead of treating non-equivalent reconciliation as an implicit side note.
+4. `spec-contract-protocol.md`, `form-task-protocol.md`, `spec-contract-artifacts.md`, and `/vida-spec` now require a compact draft execution-spec so user review and task formation happen from a bounded execution contract instead of broad prose.
+5. Added [draft-execution-spec.py](/home/unnamed/project/mobile-odoo/_vida/scripts/draft-execution-spec.py) and focused tests in [test_draft_execution_spec.py](/home/unnamed/project/mobile-odoo/_vida/tests/test_draft_execution_spec.py) so the draft execution-spec contract has a canonical helper surface instead of living only in prose.
+
+## 2026-03-07 20:42
+
+Added:
+
+1. Added [future.md](/home/unnamed/project/mobile-odoo/_vida/docs/future.md) to separate out-of-environment platform roadmap items from locally remaining non-Rust VIDA work.
+
+Changed:
+
+1. `protocol-index.md` now maps `future.md` explicitly as a non-canonical framework reference surface so future alignment notes do not become stray undocumented docs.
+
+## 2026-03-07 20:33
+
+Changed:
+
+1. `project-overlay-protocol.md` and `AGENTS.md` now define the canonical no-overlay execution rule explicitly: without `vida.config.yaml`, VIDA may use only framework-owned wrappers/commands and must not infer a host-project runbook.
+2. `subagent-system-protocol.md` now defines explicit omission semantics for law-bearing route fields: config may omit them before derivation, but effective route receipts must materialize them before authorization or the route fails closed.
+3. `problem-party-protocol.md` now uses an explicit entry/escalation decision matrix instead of heuristic trigger language.
+4. `human-approval-protocol.md` now declares canonical runtime review-state names and marks older aliases as legacy/reference-only terminology.
+5. `protocol-index.md` now indexes `tooling.md`, clarifies the no-overlay command path for project operations, and adds an explicit completeness rule for framework-owned protocol mapping.
+6. `ORCHESTRATOR-ENTRY.MD`, `subagent-system-protocol.md`, and `silent-framework-diagnosis-protocol.md` now use stricter algorithmic wording in previously heuristic law-bearing sections.
+
 ## 2026-03-07 19:45
 
 Added:
 
-1. Added first-class human approval receipt helper via [human-approval-gate.py](_vida/scripts/human-approval-gate.py).
-2. Added canonical approval governance protocol via [human-approval-protocol.md](_vida/docs/human-approval-protocol.md).
-3. Added framework memory ledger via [framework-memory.py](_vida/scripts/framework-memory.py) and [framework-memory-protocol.md](_vida/docs/framework-memory-protocol.md).
-4. Added document lifecycle ledger and validator via [doc-lifecycle.py](_vida/scripts/doc-lifecycle.py) and [document-lifecycle-protocol.md](_vida/docs/document-lifecycle-protocol.md).
-5. Added aggregated operator visibility surface via [framework-operator-status.py](_vida/scripts/framework-operator-status.py).
+1. Added first-class human approval receipt helper via [human-approval-gate.py](/home/unnamed/project/mobile-odoo/_vida/scripts/human-approval-gate.py).
+2. Added canonical approval governance protocol via [human-approval-protocol.md](/home/unnamed/project/mobile-odoo/_vida/docs/human-approval-protocol.md).
+3. Added framework memory ledger via [framework-memory.py](/home/unnamed/project/mobile-odoo/_vida/scripts/framework-memory.py) and [framework-memory-protocol.md](/home/unnamed/project/mobile-odoo/_vida/docs/framework-memory-protocol.md).
+4. Added document lifecycle ledger and validator via [doc-lifecycle.py](/home/unnamed/project/mobile-odoo/_vida/scripts/doc-lifecycle.py) and [document-lifecycle-protocol.md](/home/unnamed/project/mobile-odoo/_vida/docs/document-lifecycle-protocol.md).
+5. Added aggregated operator visibility surface via [framework-operator-status.py](/home/unnamed/project/mobile-odoo/_vida/scripts/framework-operator-status.py).
 
 Changed:
 
@@ -34,7 +160,7 @@ Protocol:
 
 Added:
 
-1. Added bounded `problem-party` protocol and helper for optional multi-role conflict discussion via [problem-party-protocol.md](_vida/docs/problem-party-protocol.md) and [problem-party.py](_vida/scripts/problem-party.py).
+1. Added bounded `problem-party` protocol and helper for optional multi-role conflict discussion via [problem-party-protocol.md](/home/unnamed/project/mobile-odoo/_vida/docs/problem-party-protocol.md) and [problem-party.py](/home/unnamed/project/mobile-odoo/_vida/scripts/problem-party.py).
 
 Changed:
 
@@ -51,7 +177,7 @@ Added:
 
 1. Added automatic follow-up task creation for unresolved secondary slices emitted by `issue-split` artifacts.
 2. Added config-driven live web-search probe support, including `subagent-system.py web-probe <subagent>`.
-3. Added declarative framework wave task-state reconciliation through [framework-task-sync.py](_vida/scripts/framework-task-sync.py).
+3. Added declarative framework wave task-state reconciliation through [framework-task-sync.py](/home/unnamed/project/mobile-odoo/_vida/scripts/framework-task-sync.py).
 
 Changed:
 
@@ -86,10 +212,10 @@ Protocol:
 
 Added:
 
-1. Added queue-backed single-writer task-state mutation path through [br-mutation-queue.py](_vida/scripts/br-mutation-queue.py) and wired mutating `br`/`beads_mutate` calls through the canonical serialized runtime path.
-2. Added silent VIDA framework self-diagnosis mode with root overlay support, boot visibility, deferred framework bug capture, and session reflection via [vida-silent-diagnosis.py](_vida/scripts/vida-silent-diagnosis.py).
-3. Added reusable leased subagent pool helper in [subagent-pool.py](_vida/scripts/subagent-pool.py).
-4. Added reusable product/framework proving-pack templates in [proving-pack.py](_vida/scripts/proving-pack.py).
+1. Added queue-backed single-writer task-state mutation path through [br-mutation-queue.py](/home/unnamed/project/mobile-odoo/_vida/scripts/br-mutation-queue.py) and wired mutating `br`/`beads_mutate` calls through the canonical serialized runtime path.
+2. Added silent VIDA framework self-diagnosis mode with root overlay support, boot visibility, deferred framework bug capture, and session reflection via [vida-silent-diagnosis.py](/home/unnamed/project/mobile-odoo/_vida/scripts/vida-silent-diagnosis.py).
+3. Added reusable leased subagent pool helper in [subagent-pool.py](/home/unnamed/project/mobile-odoo/_vida/scripts/subagent-pool.py).
+4. Added reusable product/framework proving-pack templates in [proving-pack.py](/home/unnamed/project/mobile-odoo/_vida/scripts/proving-pack.py).
 5. Added mixed-issue split artifacts under `.vida/logs/issue-splits/<task_id>.json` so one bug can preserve a primary executable slice and a secondary unresolved slice without widening the writer lane.
 
 Changed:
@@ -408,3 +534,18 @@ Changed:
 Protocol:
 
 1. Updated subagent-system protocol to distinguish worker-entry, useful-progress, and merge-ready runtime states.
+# 2026-03-07
+
+- Added context governance ledger and protocol to classify local/runtime/web-validated sources with freshness and provenance metadata.
+- Wired `prepare-execution` to emit context governance summaries and persist them into `.vida/state/context-governance.json`.
+- Extended framework operator status and health checks to include context governance surfaces.
+- Promoted `problem-party` into the run-graph model: receipts now mark `problem_party` completed and can advance `writer` to `ready`.
+## 2026-03-07
+
+1. Fixed [quality-health-check.sh](/home/unnamed/project/mobile-odoo/_vida/scripts/quality-health-check.sh) so execution-auth validation runs only for real `dev-pack` implementation context, not for reflection/docs tasks that merely share block ids or stray implementation receipts.
+1. Expanded [framework-operator-status.py](/home/unnamed/project/mobile-odoo/_vida/scripts/framework-operator-status.py) to surface route rationale, estimated route cost classes, silent-diagnosis backlog, recent framework reflections, anomaly clusters, and suspicious run-graph artifacts.
+2. Updated [framework-memory-protocol.md](/home/unnamed/project/mobile-odoo/_vida/docs/framework-memory-protocol.md), [context-governance-protocol.md](/home/unnamed/project/mobile-odoo/_vida/docs/context-governance-protocol.md), and [run-graph-protocol.md](/home/unnamed/project/mobile-odoo/_vida/docs/run-graph-protocol.md) to align canonical ledgers with the richer operator surface.
+3. Added env-driven run-graph state-dir resolution in [run-graph.py](/home/unnamed/project/mobile-odoo/_vida/scripts/run-graph.py) and switched focused tests to explicit isolated overrides so run-graph tests no longer pollute real `.vida/state/run-graphs`.
+4. Hardened [framework-wave-start.sh](/home/unnamed/project/mobile-odoo/_vida/scripts/framework-wave-start.sh) and [quality-health-check.sh](/home/unnamed/project/mobile-odoo/_vida/scripts/quality-health-check.sh) with JSONL-safe task label fallback when `br show` is degraded by malformed SQLite state.
+5. Hardened [beads-workflow.sh](/home/unnamed/project/mobile-odoo/_vida/scripts/beads-workflow.sh) with named optional tail flags for `block-end` and `block-finish`, plus a `parse-block-tail` diagnostic command, so telemetry fields no longer depend on brittle positional shifting.
+6. Tightened subagent-first orchestration law in [AGENTS.md](/home/unnamed/project/mobile-odoo/AGENTS.md), [ORCHESTRATOR-ENTRY.MD](/home/unnamed/project/mobile-odoo/_vida/docs/ORCHESTRATOR-ENTRY.MD), and [subagent-system-protocol.md](/home/unnamed/project/mobile-odoo/_vida/docs/subagent-system-protocol.md): agent/thread saturation now requires `reuse existing eligible agents first` before local-only continuation.

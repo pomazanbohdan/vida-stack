@@ -15,6 +15,22 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent.parent
 ROUTE_RECEIPT_DIR = ROOT_DIR / ".vida" / "logs" / "route-receipts"
+OVERRIDE_DIR = ROOT_DIR / ".vida" / "logs" / "execution-auth-overrides"
+FRAMEWORK_OVERRIDE_LABELS = {
+    "framework",
+    "agent-system",
+    "fsap",
+    "vida-stack",
+    "local-platform-alignment",
+    "registry",
+    "evals",
+    "context",
+    "operator-surface",
+    "durability",
+}
+ALLOWED_OVERRIDE_REASONS = {
+    "no_eligible_analysis_lane",
+}
 
 
 def load_module(name: str, path: Path) -> Any:
@@ -34,7 +50,8 @@ def usage() -> int:
         "Usage:\n"
         "  python3 _vida/scripts/execution-auth-gate.py check <task_id> <task_class> [--local-write] [--block-id <id>]\n"
         "  python3 _vida/scripts/execution-auth-gate.py authorize-local <task_id> <task_class> <reason> <scope> <notes> [evidence] [actor]\n"
-        "  python3 _vida/scripts/execution-auth-gate.py authorize-internal <task_id> <task_class> <reason> <scope> <notes> [evidence] [actor]",
+        "  python3 _vida/scripts/execution-auth-gate.py authorize-internal <task_id> <task_class> <reason> <scope> <notes> [evidence] [actor]\n"
+        "  python3 _vida/scripts/execution-auth-gate.py authorize-skip <task_id> <task_class> <reason> <notes> [evidence] [actor]",
         file=sys.stderr,
     )
     return 1
@@ -66,6 +83,12 @@ def execution_auth_receipt_path(task_id: str, task_class: str) -> Path:
     return ROUTE_RECEIPT_DIR / f"{safe_task_id}.{safe_task_class}.execution-auth.json"
 
 
+def override_receipt_path(task_id: str, task_class: str) -> Path:
+    safe_task_id = safe_name(task_id, "task")
+    safe_task_class = safe_name(task_class, "task_class")
+    return OVERRIDE_DIR / f"{safe_task_id}.{safe_task_class}.json"
+
+
 def load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -74,6 +97,44 @@ def load_json(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def load_issue_metadata(task_id: str) -> dict[str, Any]:
+    issues_path = ROOT_DIR / ".beads" / "issues.jsonl"
+    if not issues_path.exists():
+        return {}
+    try:
+        lines = issues_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("id", "")).strip() == task_id:
+            return payload
+    return {}
+
+
+def task_is_issue_driven(task_id: str) -> bool:
+    payload = load_issue_metadata(task_id)
+    if not payload:
+        return True
+    issue_type = str(payload.get("issue_type", "")).strip().casefold()
+    labels = {str(item).strip().casefold() for item in payload.get("labels", []) if str(item).strip()}
+    return issue_type == "bug" or "bug" in labels
+
+
+def task_allows_structured_unavailability_override(task_id: str) -> bool:
+    payload = load_issue_metadata(task_id)
+    labels = {str(item).strip().casefold() for item in payload.get("labels", []) if str(item).strip()}
+    return bool(labels & FRAMEWORK_OVERRIDE_LABELS)
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> Path:
@@ -100,7 +161,11 @@ def validate_analysis_blocker(
     if not str(receipt.get("reason", "")).strip():
         return False, receipt, "missing_analysis_blocker_reason"
 
-    if str(receipt.get("status", "")).strip() not in {"analysis_failed", "blocked_missing_analysis_route"}:
+    status = str(receipt.get("status", "")).strip()
+    if status == "blocked_missing_analysis_route":
+        return False, receipt, "analysis_route_not_ready"
+
+    if status != "analysis_failed":
         return False, receipt, "invalid_analysis_blocker_status"
 
     route_hash = dispatch_runtime.route_receipt_hash(route)
@@ -108,6 +173,19 @@ def validate_analysis_blocker(
         return False, receipt, "stale_analysis_blocker"
 
     return True, receipt, ""
+
+
+def should_require_issue_contract(
+    task_id: str,
+    task_class: str,
+    *,
+    draft_execution_spec_present: bool,
+) -> bool:
+    if task_class != "implementation":
+        return False
+    if draft_execution_spec_present:
+        return False
+    return task_is_issue_driven(task_id)
 
 
 def validate_local_execution_receipt(
@@ -132,6 +210,70 @@ def validate_local_execution_receipt(
         return False, receipt, "stale_local_execution_receipt"
 
     return True, receipt, ""
+
+
+def validate_structured_override_receipt(
+    task_id: str,
+    task_class: str,
+    route: dict[str, Any],
+    *,
+    expected_reason: str,
+) -> tuple[bool, dict[str, Any], str]:
+    receipt_path = override_receipt_path(task_id, task_class)
+    receipt = load_json(receipt_path)
+    if not receipt:
+        return False, {}, "missing_execution_auth_override"
+
+    if not task_allows_structured_unavailability_override(task_id):
+        return False, receipt, "execution_auth_override_not_allowed"
+
+    reason = str(receipt.get("reason", "")).strip()
+    if reason not in ALLOWED_OVERRIDE_REASONS:
+        return False, receipt, "invalid_execution_auth_override_reason"
+    if reason != expected_reason:
+        return False, receipt, "mismatched_execution_auth_override_reason"
+    if not str(receipt.get("notes", "")).strip():
+        return False, receipt, "missing_execution_auth_override_notes"
+
+    route_hash = json_hash(dispatch_runtime.route_receipt_payload(route))
+    if receipt.get("route_receipt_hash") != route_hash:
+        return False, receipt, "stale_execution_auth_override"
+
+    return True, receipt, ""
+
+
+def verification_prereq_state(verification_plan: dict[str, Any]) -> tuple[bool, str]:
+    if verification_plan.get("required") != "yes":
+        return True, "not_required"
+    if verification_plan.get("selected_subagent"):
+        return True, "verifier_selected"
+    if str(verification_plan.get("reason", "")).strip() == "no_eligible_verifier":
+        return True, "no_eligible_verifier"
+    return False, "missing_verifier_plan"
+
+
+def write_override_receipt(
+    task_id: str,
+    task_class: str,
+    reason: str,
+    notes: str,
+    *,
+    evidence: str = "",
+    actor: str = "",
+) -> Path:
+    normalized_reason = reason.strip()
+    if normalized_reason not in ALLOWED_OVERRIDE_REASONS:
+        raise ValueError(f"unsupported override reason: {normalized_reason}")
+    payload = {
+        "ts": now_utc(),
+        "task_id": task_id,
+        "task_class": task_class,
+        "reason": normalized_reason,
+        "notes": notes.strip(),
+        "evidence": evidence.strip(),
+        "actor": actor.strip(),
+    }
+    return write_json(override_receipt_path(task_id, task_class), payload)
 
 
 def check_gate(
@@ -160,8 +302,11 @@ def check_gate(
     issue_contract_ok, issue_contract, issue_contract_error = dispatch_runtime.validate_issue_contract(task_id, task_class, route)
     local_receipt_ok = False
     local_receipt, local_receipt_error = {}, ""
+    override_receipt_ok = False
+    override_receipt, override_receipt_error = {}, ""
     local_allowed_by_route = dispatch_policy.get("local_execution_allowed") == "yes"
     analysis_prereq_via = "not_required"
+    verification_prereq_via = "not_required"
 
     blockers: list[str] = []
     if analysis_plan.get("required") == "yes" and analysis_plan.get("receipt_required") == "yes":
@@ -174,8 +319,11 @@ def check_gate(
             else:
                 blockers.append(analysis_blocker_error or "missing_analysis_receipt")
 
-    if verification_plan.get("required") == "yes" and not verification_plan.get("selected_subagent"):
-        blockers.append("missing_verifier_plan")
+    verification_ok, verification_error = verification_prereq_state(verification_plan)
+    if verification_ok:
+        verification_prereq_via = verification_error
+    else:
+        blockers.append(verification_error)
 
     if not spec_intake_ok:
         blockers.append(spec_intake_error or "invalid_spec_intake")
@@ -183,15 +331,37 @@ def check_gate(
         blockers.append(spec_delta_error or "invalid_spec_delta")
     if not draft_execution_spec_ok:
         blockers.append(draft_execution_spec_error or "invalid_draft_execution_spec")
-    if not issue_contract_ok:
+    issue_contract_required = should_require_issue_contract(
+        task_id,
+        task_class,
+        draft_execution_spec_present=bool(draft_execution_spec) and draft_execution_spec_ok,
+    )
+    if issue_contract_required and not issue_contract_ok:
         blockers.append(issue_contract_error or "missing_issue_contract")
 
     if local_write and not local_allowed_by_route:
-        local_receipt_ok, local_receipt, local_receipt_error = validate_local_execution_receipt(task_id, task_class, route)
-        if not local_receipt_ok:
-            blockers.append(local_receipt_error)
+        expected_override_reason = ""
+        if analysis_blocker_ok:
+            blocker_reason = str(analysis_blocker.get("reason", "")).strip()
+            if blocker_reason in ALLOWED_OVERRIDE_REASONS:
+                expected_override_reason = blocker_reason
+        if expected_override_reason:
+            override_receipt_ok, override_receipt, override_receipt_error = validate_structured_override_receipt(
+                task_id,
+                task_class,
+                route,
+                expected_reason=expected_override_reason,
+            )
+            if not override_receipt_ok:
+                blockers.append(override_receipt_error)
+        else:
+            local_receipt_ok, local_receipt, local_receipt_error = validate_local_execution_receipt(task_id, task_class, route)
+            if not local_receipt_ok:
+                blockers.append(local_receipt_error)
 
-    authorized_via = "route_local_execution" if local_allowed_by_route else ("local_emergency_override" if local_receipt_ok else "")
+    authorized_via = "route_local_execution" if local_allowed_by_route else (
+        "structured_unavailability_override" if override_receipt_ok else ("local_emergency_override" if local_receipt_ok else "")
+    )
     payload = {
         "ts": now_utc(),
         "task_id": task_id,
@@ -205,8 +375,10 @@ def check_gate(
         "analysis_blocker_path": str(dispatch_runtime.analysis_blocker_path(task_id, task_class)),
         "analysis_blocker_present": bool(analysis_blocker),
         "analysis_prereq_via": analysis_prereq_via,
+        "verification_prereq_via": verification_prereq_via,
         "issue_contract_path": str(dispatch_runtime.issue_contract_path(task_id)),
         "issue_contract_present": bool(issue_contract),
+        "issue_contract_required": issue_contract_required,
         "issue_contract": issue_contract if issue_contract_ok else issue_contract,
         "spec_intake_path": str(dispatch_runtime.spec_intake_path(task_id)),
         "spec_intake_present": bool(spec_intake),
@@ -218,13 +390,15 @@ def check_gate(
         "draft_execution_spec_present": bool(draft_execution_spec),
         "draft_execution_spec": draft_execution_spec if draft_execution_spec_ok else draft_execution_spec,
         "local_execution_receipt_path": str(local_execution_receipt_path(task_id, task_class)),
+        "execution_auth_override_path": str(override_receipt_path(task_id, task_class)),
         "local_execution_allowed": local_allowed_by_route,
-        "local_execution_authorized": local_allowed_by_route or local_receipt_ok,
+        "local_execution_authorized": local_allowed_by_route or local_receipt_ok or override_receipt_ok,
         "authorized_via": authorized_via,
         "required_dispatch_path": dispatch_policy.get("required_dispatch_path", []),
         "route_receipt": route_payload,
         "analysis_blocker": analysis_blocker if analysis_blocker_ok else {},
         "local_execution_receipt": local_receipt if local_receipt_ok else {},
+        "execution_auth_override_receipt": override_receipt if override_receipt_ok else override_receipt,
         "blockers": blockers,
     }
     write_json(execution_auth_receipt_path(task_id, task_class), payload)
@@ -257,6 +431,40 @@ def authorize_local(argv: list[str]) -> int:
         "analysis_receipt_present": bool(dispatch_runtime.load_analysis_receipt(task_id, task_class)),
     }
     path = write_json(local_execution_receipt_path(task_id, task_class), receipt_payload)
+    print(str(path))
+    return 0
+
+
+def authorize_skip(argv: list[str]) -> int:
+    if len(argv) < 6:
+        return usage()
+    task_id, task_class, reason, notes = argv[2:6]
+    evidence = argv[6] if len(argv) > 6 else ""
+    actor = argv[7] if len(argv) > 7 else "orchestrator"
+
+    route, route_receipt = route_context(task_id, task_class)
+    if not task_allows_structured_unavailability_override(task_id):
+        print("[execution-auth-gate] structured execution-auth override is allowed only for framework-labeled tasks", file=sys.stderr)
+        return 1
+    receipt_payload = {
+        "route_receipt_path": str(route_receipt),
+        "route_receipt_hash": json_hash(dispatch_runtime.route_receipt_payload(route)),
+    }
+    try:
+        path = write_override_receipt(
+            task_id,
+            task_class,
+            reason,
+            notes,
+            evidence=evidence,
+            actor=actor,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    payload = load_json(path)
+    payload.update(receipt_payload)
+    write_json(path, payload)
     print(str(path))
     return 0
 
@@ -301,6 +509,38 @@ def authorize_internal(argv: list[str]) -> int:
     return 0
 
 
+def record_analysis_blocker(argv: list[str]) -> int:
+    if len(argv) < 6:
+        return usage()
+    task_id, task_class, status, reason = argv[2:6]
+    actor = argv[6] if len(argv) > 6 else "orchestrator"
+
+    if status not in {"analysis_failed", "blocked_missing_analysis_route"}:
+        print(
+            "[execution-auth-gate] record-analysis-blocker status must be analysis_failed or blocked_missing_analysis_route",
+            file=sys.stderr,
+        )
+        return 1
+    route, _ = route_context(task_id, task_class)
+    prepare_manifest = {
+        "status": "framework_local_bootstrap",
+        "analysis_manifest_path": "",
+        "analysis_return_code": None,
+        "actor": actor,
+    }
+    path = dispatch_runtime.write_analysis_blocker(
+        task_id,
+        task_class,
+        route,
+        status=status,
+        reason=reason,
+        prepare_manifest=prepare_manifest,
+        analysis_manifest=None,
+    )
+    print(str(path))
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         return usage()
@@ -310,6 +550,10 @@ def main(argv: list[str]) -> int:
         return authorize_local(argv)
     if cmd == "authorize-internal":
         return authorize_internal(argv)
+    if cmd == "authorize-skip":
+        return authorize_skip(argv)
+    if cmd == "record-analysis-blocker":
+        return record_analysis_blocker(argv)
 
     if cmd != "check" or len(argv) < 4:
         return usage()

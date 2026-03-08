@@ -7,6 +7,8 @@ Scope:
 1. Command mode: `/vida-implement`.
 2. Applies to autonomous development execution for a ready task pool in `br`.
 3. Uses one canonical command (`/vida-implement`) and forbids historical split aliases as runtime path.
+4. When the user explicitly wants the agent to keep following a settled plan/spec/task pool to completion, activate `_vida/docs/autonomous-execution-protocol.md` as the trigger/stop doctrine layered on top of this protocol.
+5. When queue selection or reprioritization is ambiguous, activate `_vida/docs/execution-priority-protocol.md` before selecting the next writer task.
 
 ## Core Contract
 
@@ -57,12 +59,14 @@ Canonical layer source: `_vida/docs/command-layer-protocol.md`
 4. `IEP-2 Queue Intake`
    - select next `ready` task from `br`.
    - if none: move to `IEP-8 Pool Completion`.
+   - if multiple candidates remain after queue intake, apply `_vida/docs/execution-priority-protocol.md` and keep `_vida/docs/subagent-system-protocol.md` route law active while selecting the next writer task.
 5. `IEP-3 Skills Routing`
    - run dynamic skill selection for current task scope.
 6. `IEP-4 Preflight`
    - baseline checks, dependency readiness, risk scan.
 7. `IEP-4.2 Execution Authorization Gate`
    - confirm route receipt, analysis lane, analysis receipt (when required), `issue_contract` readiness when the task is issue-driven, non-empty `issue_contract.proven_scope`, symptom-level evidence for any multi-symptom issue, author lane, verifier lane (or explicit `no_eligible_verifier`), and writer ownership before deep local implementation prep.
+   - if analysis routing is unavailable because the route records explicit `no_eligible_analysis_lane`, remain fail-closed by default; only framework-owned tracked remediation may proceed via a structured execution-auth override receipt, never by silent local fallback.
    - if `issue_contract` emits a mixed-issue split artifact, keep writer ownership on the primary executable slice only and preserve the unresolved slice as follow-up work.
    - if local mutation is proposed under active subagent mode, require route authorization or lawful escalation receipt.
    - if the gate is not satisfied: `BLOCKED (BLK_EXECUTION_AUTH_MISSING)`.
@@ -88,7 +92,11 @@ Canonical layer source: `_vida/docs/command-layer-protocol.md`
    - missing approval receipt keeps the task in `approval_pending`,
    - rejection receipt blocks closure-ready state and feeds the next rework/escalation decision.
 12. `IEP-7 Close And Continue`
-   - close task in `br`, sync logs, auto-pick next `ready` task.
+   - close task in `br`, sync logs, auto-pick next `ready` task,
+   - before starting that next task, run the `_vida/docs/autonomous-execution-protocol.md` boundary step when continuous autonomy is active:
+     - inspect nearby specs/protocols and controlling code for the next slice,
+     - produce a brief implementation-plan report outside the next task's TODO gating,
+     - refresh dependent spec/task coverage if the boundary analysis discovers stale or missing ownership.
 13. `IEP-8 Pool Completion`
    - final summary, documentation/spec synchronization, completion verdict.
 
@@ -99,6 +107,7 @@ Layer boundary:
 2.1. `IEP-4.2` is the execution-authorization stop-gate between routing decisions and any local implementation prep.
 3. `CL4` owns implementation changes for the current ready task.
 4. `CL5` owns verification, closure, and queue handoff only.
+4.1. The task-boundary analysis/report step belongs to handoff, not to the next task's implementation loop.
 
 Hard law:
 
@@ -109,6 +118,8 @@ Hard law:
 5. Missing `IEP-4.2 Execution Authorization Gate` is a blocking protocol violation, not a soft warning.
 6. If an implementation action, fallback path, or local mutation step is not explicitly described by the active VIDA/project protocol stack or justified by an escalation receipt, it is forbidden by default.
 7. For write-producing routes in `hybrid`, the canonical default is `analysis -> writer -> coach -> review` when `coach_required=yes`; otherwise it remains `analysis -> writer -> review`. Bounded writer dispatch without the analysis receipt is invalid.
+8. Continuous autonomy does not authorize skipping the post-task boundary analysis/report step before the next task starts.
+9. Boundary-discovered spec/task drift must be reconciled before the next task is treated as lawfully executable.
 
 ## Change-Impact Gate (Absorbed Cascade)
 

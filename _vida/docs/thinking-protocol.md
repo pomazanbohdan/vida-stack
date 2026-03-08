@@ -30,11 +30,11 @@ Shared rules:
 
 ```toon
 selection[5]{score,algorithm,purpose}:
-  ≤15,STC,Step-critique (silent)
-  16-25,PR-CoT,4 perspectives validation
-  26-35,MAR,3 rounds × 4 agents
-  36-45,5-SOL,2 rounds × 5 options (alignment)
-  >45,META,Block composer for high-risk tasks
+  ≤12,STC,Step-critique (silent)
+  13-22,PR-CoT,4 perspectives validation
+  23-32,MAR,3 rounds × 4 agents
+  33-42,5-SOL,2 rounds × 5 options (alignment)
+  >42,META,Block composer for high-risk tasks
 ```
 
 ---
@@ -42,12 +42,17 @@ selection[5]{score,algorithm,purpose}:
 ## Overrides (Check First!)
 
 ```toon
-overrides[8]{scenario,algorithm}:
+overrides[12]{scenario,algorithm}:
   Bug / incident / regression,Error Search
   Security/Auth decision,META
   Database schema,META
   Foundation architecture,META
   Tech stack selection,META
+  Framework-owned behavior change,META
+  Protocol conflict / protocol mismatch,META
+  Execution gate mismatch,META
+  Fail-closed law risk,META
+  Tracked writer + no eligible lane,META
   DEC-XXX creation,MAR
   Multiple errors/issues,Error Search
   "Choose between X,Y,Z",5-SOL
@@ -93,6 +98,35 @@ SCORING_LAYERS:
     - "Admissibility gates override any raw numeric score"
 ```
 
+```yaml
+RISK_ESCALATORS:
+  purpose: "Raise routing class when governance risk exceeds apparent implementation complexity"
+  rules:
+    - "If protocol conflict, execution gate mismatch, or fail-closed policy ambiguity is present, route to META regardless of raw selector score"
+    - "If the task mutates framework-owned behavior or canonical routing rules, route to META regardless of raw selector score"
+    - "If tracked writer execution encounters no eligible analysis lane, no eligible verifier, or no eligible coach and a policy decision is needed, route to META"
+    - "If the task is mostly local implementation with no governance/policy ambiguity, keep the score-selected route"
+```
+
+```yaml
+RETROSPECTIVE_ESCALATION:
+  purpose: "Prevent repeated low-grade routing when STC already misclassified the task class"
+  confirmed_stc_misfire:
+    definition:
+      - "STC selected first"
+      - "review, gate, or later evidence proves the primary issue was protocol/policy/route design rather than local execution"
+      - "the task required substantive rework or route reinterpretation"
+    effect:
+      - "ban immediate re-selection of STC for the same task class in the current pass"
+      - "promote the next route to at least PR-CoT"
+      - "promote directly to META when the misfire involved protocol conflict, fail-closed law, tracked writer routing, or framework-owned behavior"
+  evidence:
+    - "review finding"
+    - "gate finding"
+    - "root-cause receipt"
+    - "tracked rework evidence"
+```
+
 ---
 
 ## Execution Protocol
@@ -101,12 +135,13 @@ SCORING_LAYERS:
 STEPS:
   1. Check bug-first and high-risk overrides
   2. Calculate score (C×2 + R×3 + S×3 + N×2 + F×1) if no override matched
-  3. Select the named flow template or bug lane
-  4. Execute internally:
+  3. Apply risk escalators and retrospective escalation rules before binding the final route
+  4. Select the named flow template or bug lane
+  5. Execute internally:
      - If META: assemble the smallest lawful block flow from the registry below
      - Named algorithms may be used inside META only as exact template shortcuts
-  5. If external facts affect the decision, delegate web validation to `_vida/docs/web-validation-protocol.md`
-  6. Preserve concise execution receipts: selected blocks, gates, and impact analysis
+  6. If external facts affect the decision, delegate web validation to `_vida/docs/web-validation-protocol.md`
+  7. Preserve concise execution receipts: selected blocks, gates, impact analysis, and any escalation reason
 ```
 
 ---
@@ -179,7 +214,7 @@ FLOW_TEMPLATES:
 > Internal step-check algorithm for low-complexity and local tasks.
 
 ```yaml
-PREREQ: _vida/docs/thinking-protocol.md#section-algorithm-selector  # Understand when STC applies (Score ≤15)
+PREREQ: _vida/docs/thinking-protocol.md#section-algorithm-selector  # Understand when STC applies (Score ≤12)
 ```
 
 
@@ -199,7 +234,7 @@ PREREQ: _vida/docs/thinking-protocol.md#section-algorithm-selector  # Understand
 
 ```toon
 triggers[4]{condition,mode}:
-  Score ≤ 15,MANDATORY
+  Score ≤ 12,MANDATORY
   local objective,CONDITION
   low blast radius,CONDITION
   bug/root-cause gate required,ESCALATE to Error Search
@@ -279,6 +314,8 @@ reporting[4]{state,action}:
 ESCALATE_IF:
   max_retries: 3
   on_fail: PR-CoT
+  protocol_or_route_ambiguity: META
+  confirmed_stc_misfire: PR-CoT_or_META_per_retrospective_escalation
   clarification_blocker: ask_user
   pass_context: knowledge_list (so PR-CoT sees what STC already tried)
 ```
@@ -288,10 +325,10 @@ ESCALATE_IF:
 
 # PR-CoT: Poly-Reflective Validation
 
-> 4-perspective validation plus consensus revision. Score 16-25. Escalate to MAR if issues >= 2.
+> 4-perspective validation plus consensus revision. Score 13-22. Escalate to MAR if issues >= 2.
 
 ```yaml
-PREREQ: _vida/docs/thinking-protocol.md#section-algorithm-selector  # Understand when PR-CoT applies (Score 16-25)
+PREREQ: _vida/docs/thinking-protocol.md#section-algorithm-selector  # Understand when PR-CoT applies (Score 13-22)
 ```
 
 
@@ -311,7 +348,7 @@ PREREQ: _vida/docs/thinking-protocol.md#section-algorithm-selector  # Understand
 
 ```toon
 triggers[4]{trigger,type}:
-  score 16-25,MANDATORY
+  score 13-22,MANDATORY
   medium-complexity decision,CONDITION
   multiple perspectives needed,CONDITION
   STC exhausted,ESCALATION
@@ -490,7 +527,7 @@ ESCALATE_TO_MAR:
 
 # MAR: Multi-Agent Reflexion
 
-> 3 rounds x 4 roles. Score 26-35. Escalate to META if final score < 8.
+> 3 rounds x 4 roles. Score 23-32. Escalate to META if final score < 8.
 
 ```yaml
 PREREQ: [_vida/docs/thinking-protocol.md#section-algorithm-selector, _vida/docs/thinking-protocol.md#section-pr-cot]  # MAR builds on PR-CoT
@@ -513,7 +550,7 @@ PREREQ: [_vida/docs/thinking-protocol.md#section-algorithm-selector, _vida/docs/
 
 ```toon
 triggers[5]{trigger}:
-  Score 26-35
+  Score 23-32
   DEC-XXX creation
   Complex trade-offs
   Novel solutions
@@ -705,7 +742,7 @@ ESCALATE_TO_META:
 
 # 5-SOL: 5-Solutions Algorithm
 
-> Alignment algorithm. Score 36-45. Generates 5 options x 2 rounds and synthesizes the best hybrid.
+> Alignment algorithm. Score 33-42. Generates 5 options x 2 rounds and synthesizes the best hybrid.
 
 ---
 
@@ -731,10 +768,10 @@ ESCALATE_TO_META:
 
 ```toon
 triggers[4]{type,condition}:
-  score,36-45
+  score,33-42
   keywords,"choose between | which approach | architecture alignment | tech stack | migration strategy"
   in_meta,Selected by META only when multiple viable directions remain
-  skip,Score ≤35 OR simple decisions
+  skip,Score ≤32 OR simple decisions
 ```
 
 ---
@@ -1032,7 +1069,7 @@ forbidden[6]{action,why,correct}:
 
 # META: Meta-Analysis
 
-> Block-level composer for high-risk tasks. Score >45. Builds the smallest lawful flow from reusable blocks, then synthesizes only admissible results.
+> Block-level composer for high-risk tasks. Score >42. Builds the smallest lawful flow from reusable blocks, then synthesizes only admissible results.
 
 ```yaml
 PREREQ: [_vida/docs/thinking-protocol.md#section-algorithm-selector, _vida/docs/thinking-protocol.md#section-reasoning-modules]  # META composes from the block registry and domain packets
@@ -1055,13 +1092,13 @@ PREREQ: [_vida/docs/thinking-protocol.md#section-algorithm-selector, _vida/docs/
 
 ```toon
 triggers[7]{type,condition}:
-  score,>45
+  score,>42
   override,Security/Auth decisions
   override,Database schema
   override,Foundation architecture
   override,Tech stack selection
   override,Explicit meta-analysis request
-  skip,Score ≤45 OR already inside META
+  skip,Score ≤42 OR already inside META
 ```
 
 ---
