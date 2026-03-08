@@ -12,6 +12,7 @@ Scope:
    - `reflection-pack`
 2. Excluded from direct development execution flow (`/vida-implement*`, `dev-pack`).
 3. Raw issue text for bugfix execution is normalized by `_vida/docs/issue-contract-protocol.md` instead of running full SCP by default.
+4. Raw research findings, release signals, and user clarification should first be normalized by `_vida/docs/spec-intake-protocol.md` when they are still ambiguous, mixed, or scope-bearing.
 
 ## Core Principle
 
@@ -28,6 +29,7 @@ Spec is a contract between:
 1. SCP remains the canonical contract path for non-development spec work.
 2. `issue_contract` is the narrow execution-side contract for bug/spec convergence when the incoming issue text is effectively the working spec.
 3. If issue analysis shows a non-equivalent change (`spec_delta_required`), route back into SCP/FTP reconciliation before implementation continues.
+4. `spec_intake` is the compact pre-contract normalization layer when the incoming material is still a mix of research, issue/release signal, or unresolved user negotiation.
 
 ## Command Layer Mapping
 
@@ -36,13 +38,16 @@ For `/vida-spec`, SCP layers map to CLP as follows:
 1. `CL1 Intake` -> `SCP-0 Intake`
 2. `CL2 Reality And Inputs` -> `SCP-1 Interactive Discovery` + `SCP-2 Conflict Check` + `SCP-3 External Reality Validation`
 3. `CL3 Contract And Decisions` -> `SCP-4 Design Contract` + `SCP-5 Technical Contract`
-4. `CL4 Materialization` -> `SCP-6 Skills Routing` + confidence/artifact assembly
+4. `CL4 Materialization` -> `SCP-6 Skills Routing` + `SCP-6.5 Draft Execution-Spec` + confidence/artifact assembly
 5. `CL5 Gates And Handoff` -> `SCP-7 Reassessment Gate` + `SCP-8 Ready Verdict` + `/vida-form-task` handoff
 
 Canonical layer source: `_vida/docs/command-layer-protocol.md`
 
 ## Protocol Flow
 
+0. `SCP-0 Pre-Intake Normalization`
+   - when raw inputs are still ambiguous or mixed, normalize them through `_vida/docs/spec-intake-protocol.md`,
+   - continue only after the intake artifact routes to `ready_for_scp`.
 1. `SCP-0 Intake`
    - Build `Spec Brief`: scope, business goal, constraints, out-of-scope.
 2. `SCP-1 Interactive Discovery`
@@ -62,9 +67,18 @@ Canonical layer source: `_vida/docs/command-layer-protocol.md`
 7. `SCP-6 Skills Routing`
    - Discover relevant skills dynamically for the current scope.
    - If missing capability exists, scaffold project skill candidate.
-8. `SCP-7 Reassessment Gate`
+8. `SCP-6.5 Draft Execution-Spec`
+   - Materialize one compact bounded execution contract before reassessment.
+   - Minimum fields:
+     - `scope_in`
+     - `scope_out`
+     - `acceptance_checks`
+     - `assumptions`
+     - `open_decisions`
+     - `recommended_next_path`
+9. `SCP-7 Reassessment Gate`
    - Show consolidated decisions/contracts to user and require explicit confirmation.
-9. `SCP-8 Ready Verdict`
+10. `SCP-8 Ready Verdict`
    - Mark spec ready only if all gates are satisfied.
 
 ## Mandatory Web Search and External Verification
@@ -146,6 +160,7 @@ Required handoff fields:
 4. `risk_policy` baseline (conservative/balanced/aggressive).
 5. `decision_conflicts` (must be empty for ready state).
 6. `external_contract_status` (`validated|conflicting|unknown`).
+7. `draft_execution_spec`.
 
 Handoff rule:
 
@@ -181,6 +196,7 @@ python3 _vida/scripts/skill-discovery.py scaffold <skill-name> "<description>"
 4. `Technical Contract` section
 5. `Skills Applied` section
 6. `Confidence Scorecard` (five weighted components + final score)
+7. `Draft Execution-Spec`
 
 Artifact templates: `_vida/docs/spec-contract-artifacts.md`
 
@@ -203,3 +219,4 @@ Spec is NOT ready if any is true:
 3. missing design states for critical flows,
 4. no explicit acceptance criteria,
 5. no user confirmation at reassessment gate.
+6. no draft execution-spec artifact for downstream review/handoff.

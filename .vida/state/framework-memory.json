@@ -19,10 +19,30 @@
       "source_task": "mobile-1ic.2",
       "summary": "cheap lane stalled",
       "ts": "2026-03-07T20:07:36Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T00:14:46Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T00:15:13Z"
     }
   ],
   "summary": {
-    "anomaly_count": 2,
+    "anomaly_count": 4,
     "correction_count": 0,
     "lesson_count": 0
   }

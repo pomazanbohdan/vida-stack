@@ -34,6 +34,21 @@ Policy precedence:
 3. when active VIDA route policy conflicts with a generic assistant default, obey VIDA route policy.
 4. when an execution behavior is not described or authorized by active VIDA/project protocols, treat it as forbidden rather than filling the gap with a generic assistant heuristic.
 
+Instruction conflict resolution order:
+1. `AGENTS.md`
+2. this file
+3. active canonical protocol named in `_vida/docs/protocol-index.md`
+4. validated overlay data from `vida.config.yaml`
+5. command docs and wrappers
+6. helper script behavior
+
+Drift rule:
+1. lower-precedence text or runtime behavior that conflicts with a higher-precedence source is drift to correct, not an alternate valid path.
+
+Instruction activation rule:
+1. use `_vida/docs/instruction-activation-protocol.md` as the canonical source for deciding which instruction surfaces are always-on, lane-entry, trigger-only, or closure-only,
+2. do not broaden the boot read-set or domain protocol set unless that protocol's trigger matrix authorizes it.
+
 ## Request Intent Gate
 
 Classify user requests before task resolution:
@@ -55,6 +70,11 @@ Default rule:
 1. Questions and consultations stay `answer_only` unless the request clearly asks for execution or artifact production.
 2. Non-trivial does not automatically mean `br`/TODO.
 3. Explicit VIDA/framework self-diagnosis requests are a special execution-in-chat path: execute the diagnosis now, but keep it outside TODO/`br` unless the user explicitly asks for tracked task flow.
+
+Tracked-flow boundary:
+1. route to tracked flow immediately when the deliverable requires any repository/runtime mutation, canonical artifact creation, or multi-step traceable execution,
+2. remain `answer_only` only when the deliverable is fully satisfied by chat and no canonical artifact or state mutation is required,
+3. if the request starts as diagnosis/recommendation and then gains a concrete mutation or artifact requirement, transition from `answer_only` to `artifact_flow` or `execution_flow` at that point; do not keep the request in chat mode by inertia.
 
 ## TODO Engagement Gate
 
@@ -88,7 +108,7 @@ Mode-synced rule:
    - external-first orchestration is the default lane for eligible work, with bridge fallback and internal escalation only under route policy.
 3. `disabled`
    - do not use the subagent system,
-   - orchestrator may analyze locally, but must still obey the log-read budget and bounded-read rules.
+   - orchestrator analyzes locally under the same log-read budget and bounded-read rules; this is the canonical mode-specific path, not a discretionary fallback.
 
 Eligible work:
 1. non-trivial read-heavy analysis,
@@ -106,6 +126,10 @@ Required behavior:
 5. for `execution_flow` development work, when `protocol_activation.agent_system=true` and the effective subagent mode is not `disabled`, route execution through orchestration-first subagent lanes and do not default to local orchestrator-first development,
 6. in `hybrid`, honor route dispatch policy before any local-first or direct-internal path; external-first routing, bridge fallback, and lawful internal escalation must remain inspectable,
 7. keep user-facing reporting ownership under the orchestrator; do not expose raw subagent reports unless the user explicitly asks to inspect them.
+8. if delegated lane creation fails because of internal agent/thread saturation, attempt `reuse existing eligible agents first` before any local-only continuation:
+   - reuse an existing relevant agent via queued `send_input` when context fit is acceptable,
+   - or close/resume idle agents and retry bounded delegation,
+   - only if neither path is available may the orchestrator continue locally, and that saturation blocker must be recorded as explicit orchestration evidence.
 
 Execution Authorization Gate:
 1. before any deep local implementation prep, local test-design loop, or write-producing analysis, confirm all are true:
@@ -129,6 +153,22 @@ Exception:
 1. explicit VIDA/framework self-diagnosis runs in the main orchestrator lane by default for direct chat diagnosis and tracked FSAP trigger framing,
 2. do not delegate FSAP-first diagnosis to subagents unless the user explicitly asks for delegated verification or the orchestrator is blocked on a narrow secondary question,
 3. once tracked FSAP/remediation flow is active, delegated verification or proving lanes become the default for closure-ready state; do not use the self-diagnosis exception to justify local-only repeated audits or closure without either a delegated verification artifact or a structured override receipt.
+
+Protocol-gap rule:
+1. discovering a missing process or underspecified protocol does not authorize inventing a new permanent behavior locally,
+2. the orchestrator may use only the smallest bounded workaround needed to complete the current task safely,
+3. when silent framework diagnosis is active, capture the gap through the canonical framework bug path before task closure unless an existing tracked framework task already covers it,
+4. permanent process changes must return through framework-owned tracked flow.
+
+Evidence hierarchy:
+1. live request/payload validation,
+2. canonical receipt or gate artifact,
+3. durable runtime state (`run-graph`, TODO evidence, context governance, framework memory),
+4. local code/config inference,
+5. chat assumption or recollection.
+
+Evidence rule:
+1. when evidence tiers conflict, resolve the decision using the highest available tier and treat lower-tier disagreement as a drift/debug signal.
 
 ## Blocking-Question Dispatch Rule
 
@@ -175,6 +215,14 @@ Escalation to wider reads is allowed only when:
 
 ## Boot Profiles
 
+Boot profile decision table:
+
+| Signal | Required profile |
+|---|---|
+| routine continuation, bounded scope, no cross-protocol uncertainty | `Lean` |
+| TODO/pack engagement, moderate cross-protocol impact, or uncertainty after Lean | `Standard` |
+| architecture/topology refactor, unknown root cause, security/data-safety decision, explicit meta-analysis, or confidence below 80% after Standard | `Full` |
+
 ### Lean Boot
 
 Use for routine execution and token-efficient continuation.
@@ -203,6 +251,7 @@ Use for routine execution and token-efficient continuation.
 10. If `protocol_activation.agent_system=true`, read `_vida/docs/subagent-system-protocol.md`.
 11. Read `_vida/docs/beads-protocol.md` only if the request is not `answer_only` and the compact snapshot is insufficient.
 12. If `framework_self_diagnosis.enabled=true`, read `_vida/docs/silent-framework-diagnosis-protocol.md` and keep the silent diagnosis contract active for the session.
+13. Apply `_vida/docs/instruction-activation-protocol.md` when deciding whether additional instruction/protocol files should be loaded beyond the lean set.
 
 ### Standard Boot
 
@@ -212,6 +261,7 @@ Use when the request has moderate cross-protocol impact or uncertainty after Lea
 2. Read `_vida/docs/todo-protocol.md` only if TODO engagement is required.
 3. Read `_vida/docs/use-case-packs.md` only if a pack path is required.
 4. Read `_vida/docs/implement-execution-protocol.md` only if implementation flow is in scope.
+5. Do not expand beyond route-triggered protocol surfaces; use `_vida/docs/instruction-activation-protocol.md` when in doubt.
 
 ### Full Boot
 
@@ -238,6 +288,7 @@ Use when at least one is true:
 7. During active task execution, use TODO blocks and keep near-term planning lean.
 8. Explicit VIDA/framework self-diagnosis is executed directly by the main orchestrator and bypasses TODO/`br`/pack flow by default only for untracked chat diagnosis.
 9. Tracked FSAP/remediation keeps orchestrator ownership for framing and synthesis, but closure-ready state requires delegated verification/proving or a structured override receipt.
+10. `problem-party` is a bounded escalation artifact, not a discretionary extra thinking pass; use it only when its protocol trigger matrix authorizes it.
 
 ## Output Contract
 

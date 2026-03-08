@@ -2,11 +2,13 @@
 
 [![Status: Active Development](https://img.shields.io/badge/Status-Active_Development-blue.svg)](#current-stage)
 [![Paradigm: Agentic Orchestration](https://img.shields.io/badge/Paradigm-Agentic_Orchestration-orange.svg)](#architecture-baseline)
-[![Future: Rust](https://img.shields.io/badge/Future-Rust-red.svg)](#phase-5-rust-reimplementation)
+[![Future: Self-Hosted_Binary](https://img.shields.io/badge/Future-Self--Hosted_Binary-red.svg)](#version-10-self-hosted-local-binary)
 
 > **Vida Stack** is an agentic engineering framework for building a highly autonomous product-development orchestrator. Developed with the help of OpenAI Codex, it serves as the active implementation and orchestration environment for the framework's real-world evolution.
 
 Its purpose is not to be *another* task tracker or prompt collection. The goal is to evolve a real **control plane for agent-driven product engineering**: planning, execution, verification, documentation sync, telemetry, learning loops, and multi-agent orchestration working as one coherent system.
+
+Core licensing is provided under **MPL-2.0**. See [LICENSE](LICENSE).
 
 ---
 
@@ -33,20 +35,27 @@ A framework optimized for real product delivery, not demos, that is:
 
 ## 🎯 Project Goal
 
-The long-term target is an optimized agentic product-engineering system with a clear control-plane architecture for autonomous product delivery.
+Vida Stack is being evolved from a script-based reference runtime into a self-hosted local control binary for agentic product engineering.
+
+The product direction is now explicit:
+
+- `0.1` completes the reference script runtime
+- `1.0` becomes the first full self-hosted local binary
+- `2.0` adds daemonized control-plane behavior
+- `3.0` opens plugins and marketplace-style extensibility
 
 That target shape includes:
 
-- a real agent control plane
-- durable workflow state
+- a real command-first control plane
+- durable workflow state and memory
 - explicit verification and review gates
 - structured subagent orchestration
-- memory and learning loops
-- documentation synchronization
+- versioned instruction runtime and migrations
+- documentation and framework knowledge moving out of markdown-first startup paths
 - telemetry, scorecards, and drift detection
 - efficient context handling with lower token burn
 
-In simpler terms: Vida Stack is being evolved toward a super-autonomous orchestrator for product development, continuously updated against real AI and software-engineering practice.
+In simpler terms: Vida Stack is moving toward a self-hosted product-engineering operating system that can eventually daemonize and then open an extension ecosystem without giving up strict runtime law.
 
 ---
 
@@ -206,7 +215,13 @@ The target architecture is organized around a small set of core subsystems worki
 <a id="current-stage"></a>
 ## 🚧 Current Stage
 
-Vida Stack is currently being hardened inside a real production-like project.
+Vida Stack is currently finishing **Version 0.1: the reference script runtime**.
+
+That means the project is still being hardened inside a real production-like environment, but the roadmap has shifted from an older phase-based story to a stricter versioned product path:
+
+- finish the script/runtime reference stack
+- freeze the semantics that matter
+- migrate into a self-hosted local binary for `1.0`
 
 This repository is not a toy example and not a detached greenfield framework experiment. The current phase is intentional:
 
@@ -229,9 +244,11 @@ Recent runtime work has also hardened the framework with a bootstrap split betwe
 
 The newest runtime layer also adds queue-backed single-writer task-state mutations for concurrent subagent flows, silent framework diagnosis as a background capture mode, reusable proving-pack templates for product and framework regression surfaces, reusable leased subagent-pool helpers with automatic borrow/release for eligible read-only lanes, fail-closed cheap-lane rejection for low-signal outputs, config-driven live web-search probes for provider-configured lanes, declarative framework-wave task reconciliation, bounded `problem_party` discussion boards for conflict-heavy decisions, explicit human approval receipts for gated closure, durable framework memory and anomaly ledgers, framework-owned document lifecycle validation with lifecycle/freshness state, aggregated operator status views for approvals and memory, and mixed-issue split artifacts that preserve unresolved secondary symptoms as follow-up work instead of widening the current writer lane.
 
-This phase matters because the objective is to finish the mechanics end-to-end before extracting and replatforming the system.
+This stage matters because `0.1` is no longer treated as a throwaway pre-product demo. It is the canonical behavior layer that the future binary must reproduce, compress, and eventually replace as the primary operating surface.
 
 Recent framework-level changes are tracked in [_vida/CHANGELOG.md](_vida/CHANGELOG.md).
+
+The versioned product path is defined in [VERSION-PLAN.md](VERSION-PLAN.md).
 
 ---
 
@@ -241,7 +258,14 @@ Vida Stack is not intended to remain a shell-and-markdown framework forever.
 
 The current repository is the proving ground where protocols, orchestration rules, task lifecycles, verification behavior, and subagent coordination are validated under real working conditions.
 
-The final target is a **Rust-based control plane** with **SurrealDB-backed state and memory**, where the current script runtime is replaced by a real daemonized orchestration kernel.
+The product target is now staged more explicitly:
+
+- `0.1` = reference script runtime
+- `1.0` = self-hosted local binary
+- `2.0` = daemonized control plane
+- `3.0` = plugins and marketplace
+
+The next major target is **not** a daemon-first rewrite. It is a **Rust-based local control binary** with **SurrealDB-backed state, memory, and instruction runtime**, where the current script stack is compressed into a command-first product surface.
 
 ### What Changes In The Final System
 
@@ -252,11 +276,12 @@ The current framework relies on:
 - file-based artifacts, logs, and snapshots
 - command-driven orchestration glue
 
-The final system is intended to replace that with:
+The `1.0` binary is intended to replace that with:
 
-- a Rust daemon as the orchestration kernel
-- SurrealDB as the operational state and memory backend
+- one local Rust binary as the primary operator surface
+- embedded SurrealDB as the operational state, memory, and instruction backend
 - compact typed control-plane commands instead of long script chains
+- versioned migrations for state and instruction updates across releases
 - memory-backed framework and project knowledge instead of `/docs/*` as the primary runtime source
 - structured agent interaction optimized for lower-friction execution
 
@@ -267,7 +292,7 @@ In the final system, agents and operators should work through optimized runtime 
 For example, a command such as:
 
 ```bash
-vs-task next
+vida task next
 ```
 
 should be enough to:
@@ -277,11 +302,11 @@ should be enough to:
 - open the next eligible task automatically
 - return a compact structured report explaining what was taken into progress, or why nothing could advance
 
-The goal is to reduce orchestration friction while keeping runtime state explicit and machine-verifiable.
+The goal is to reduce orchestration friction while keeping runtime state explicit, upgradeable, and machine-verifiable.
 
 ### Structured Interaction Format
 
-The final system is also expected to use a compact structured interaction format for agent/runtime exchange.
+The binary is also expected to use a compact structured interaction format for agent/runtime exchange.
 
 A strong candidate for this is [TOON](https://github.com/toon-format/toon), which is designed as a compact, schema-aware alternative to verbose JSON for LLM-facing workflows.
 
@@ -289,7 +314,7 @@ That would make command outputs, handoff packets, runtime summaries, and status 
 
 ### Memory-Backed Framework Runtime
 
-The final system is not intended to keep framework knowledge primarily in repository docs.
+The long-term runtime is not intended to keep framework knowledge primarily in repository docs.
 
 Instead, framework rules, project documentation, protocol contracts, and operational memory are expected to move into a memory-backed system similar to [memory-mcp-1file](https://github.com/pomazanbohdan/memory-mcp-1file), which already combines semantic memory, graph memory, code indexing, and a SurrealDB backend.
 
@@ -311,7 +336,7 @@ The final architecture pushes this further by replacing even that bootstrap-heav
 The repository should expose only a minimal bootstrap instruction in `AGENTS.md`, for example:
 
 ```bash
-vs-session start
+vida boot
 ```
 
 From that single entrypoint, the control plane should initialize the full working session automatically:
@@ -339,7 +364,7 @@ The result is a much smaller repository surface and a much more optimized develo
 
 Instead of manually reconstructing framework state from a monolithic bootloader and many framework docs, the user or agent starts a session once, and the system restores the correct working context automatically.
 
-In that final shape, the repository is only the bootstrap edge. The real framework lives in the control plane, memory layer, and persistent runtime state.
+In that final shape, the repository is only the bootstrap edge. The real framework lives in the binary control plane, the memory layer, and persistent runtime state.
 
 ---
 
@@ -464,43 +489,89 @@ Vida Stack is being developed with a few non-negotiable principles:
 
 ## 🗺️ Roadmap
 
-The roadmap is intentionally staged to evolve from a working concept to a high-performance system.
+Vida Stack now uses a versioned roadmap instead of the older `RELEASE-1` phase framing.
 
-- [x] **Phase 1: Real-Project Runtime Hardening**
-  Hardening inside a real production-like project. Validating algorithms, finding protocol mismatches, and refining fallback mechanics.
-- [ ] **Phase 2: Framework Extraction**
-  Separating framework from project-specific concerns, tightening machine-enforced contracts, and preparing a clean public surface.
-- [ ] **Phase 3: Daemonized Control Plane**
-  Background orchestration, reactive health monitoring, richer doc-sync workers, and stronger event-driven runtime behavior.
-- [ ] **Phase 4: Full Control Plane**
-  Durable workflow kernel, richer verification fabric, deeper telemetry and learning loops, and stronger ownership models for parallel agents.
-- [ ] **Phase 5: Rust Reimplementation**
-  The planned endgame. A full system in Rust for stronger runtime integrity, safer concurrency, and longer-running daemonized orchestration.
+- [x] **Version 0.1: Reference Script Runtime**
+  The current stack on shell, Python, docs, and runtime helpers acts as the canonical behavior layer. Its job is to prove orchestration, task-state, verification, memory, lifecycle, and operator mechanics on real work.
+- [ ] **Version 1.0: Self-Hosted Local Binary**
+  The first full product release: one local Rust binary, one embedded runtime backend, one command-first surface, and one self-hosted path for running VIDA through VIDA.
+- [ ] **Version 2.0: Daemonized Control Plane**
+  Long-lived local runtime services, background workers, richer observability, dashboards, and vector-search daemon integration when it is operationally justified.
+- [ ] **Version 3.0: Plugins and Marketplace**
+  Extension ecosystem after the binary kernel and daemon runtime are stable: plugins, marketplace delivery, flow packs such as `SDLC`, role protocol packs such as `PM`, `BA`, and `SA`, plus integrations, validators, and renderers.
 
-<a id="phase-5-rust-reimplementation"></a>
-### Phase 5: Rust Reimplementation
+<a id="version-10-self-hosted-local-binary"></a>
+### Version 1.0: Self-Hosted Local Binary
 
-The current shell, Python, and docs runtime is not wasted work. It is the proving ground that defines what the Rust system should actually implement.
+The current shell, Python, and docs runtime is not wasted work. It is the proving ground that defines what the binary must actually implement.
+
+What `1.0` should be:
+
+- one local Rust binary called `vida`
+- one embedded SurrealDB-backed runtime
+- one command-first operator surface
+- one self-hosted local operating path for developing VIDA itself
+
+Core command surface:
+
+- `vida boot`
+- `vida task ...`
+- `vida memory ...`
+- `vida status`
+- `vida doctor`
 
 Why Rust:
 
 - stronger runtime integrity
-- better performance for long-running orchestration services
-- safer concurrency for multi-agent and event-driven execution
-- more robust foundation for longer-running daemonized orchestration
+- faster local control-plane execution
+- safer concurrency and clearer typed runtime boundaries
+- more robust foundation for later daemonization
 
-Why SurrealDB:
+Why embedded SurrealDB:
 
-- one operational state backend for tasks, blocks, runs, leases, reviews, scorecards, and memory
-- queryable graph-friendly runtime model instead of scattered file artifacts
-- stronger recovery, telemetry, and orchestration-state persistence
+- one operational backend for task state, memory, instruction runtime, approvals, receipts, and lifecycle data
+- queryable graph-friendly data model instead of scattered file artifacts
+- stronger recovery and migration discipline across releases
+
+Why a versioned instruction runtime:
+
+- command behavior can be assembled from ordered instruction parts or capsules instead of one monolithic boot document
+- framework-owned instruction updates can ship with release migrations
+- project and user overlays can extend the runtime without weakening framework law
 
 What changes compared with the current runtime:
 
 - today's system proves the protocol and orchestration logic through scripts, docs, logs, and file artifacts
-- the final system should own that logic as a typed runtime kernel
-- current markdown-heavy framework knowledge should move into memory-backed runtime surfaces
-- current script chains should compress into optimized control-plane commands such as `vs-session start` and `vs-task next`
+- `1.0` should own that logic as a typed local binary runtime
+- framework knowledge should move into versioned instruction and memory layers instead of markdown-first startup
+- script chains should compress into optimized control-plane commands such as `vida boot` and `vida task next`
+- runtime upgrades should include explicit state and instruction migrations instead of implicit repo-level drift
+
+The full version path and internal `0.2 -> 0.9` transition milestones are defined in [VERSION-PLAN.md](VERSION-PLAN.md).
+
+---
+
+## 📘 Product Specs
+
+The roadmap is now backed by project-owned research and deeper product specs rather than only top-level narrative docs.
+
+Research:
+
+- [docs/research/vida-roadmap-reframe.md](docs/research/vida-roadmap-reframe.md)
+
+Core specs:
+
+- [docs/specs/vida-1.0-product-spec.md](docs/specs/vida-1.0-product-spec.md)
+- [docs/specs/vida-1.0-runtime-contract.md](docs/specs/vida-1.0-runtime-contract.md)
+- [docs/specs/vida-2.0-daemon-control-plane.md](docs/specs/vida-2.0-daemon-control-plane.md)
+- [docs/specs/vida-3.0-plugin-marketplace.md](docs/specs/vida-3.0-plugin-marketplace.md)
+
+These specs preserve the current design direction for:
+
+- the `1.0` self-hosted local binary
+- runtime state, memory, instruction, and migration law
+- the `2.0` daemonized control plane
+- the `3.0` plugin and marketplace model, including flow packs such as `SDLC` and role protocol packs such as `PM`, `BA`, and `SA`
 
 ---
 
@@ -570,8 +641,11 @@ Current repository layout:
 .
 ├── AGENTS.md
 ├── README.md
-├── RELEASE-1-IMPLEMENTATION-ROADMAP.md
-├── RELEASE-1-SCOPE.md
+├── VERSION-PLAN.md
+├── docs/
+│   ├── README.md
+│   ├── research/
+│   └── specs/
 └── _vida/
     ├── commands/
     ├── commands.md
@@ -591,8 +665,13 @@ Key runtime areas:
 
 - [AGENTS.md](AGENTS.md)
 - [README.md](README.md)
-- [RELEASE-1-SCOPE.md](RELEASE-1-SCOPE.md)
-- [RELEASE-1-IMPLEMENTATION-ROADMAP.md](RELEASE-1-IMPLEMENTATION-ROADMAP.md)
+- [VERSION-PLAN.md](VERSION-PLAN.md)
+- [docs/README.md](docs/README.md)
+- [docs/research/vida-roadmap-reframe.md](docs/research/vida-roadmap-reframe.md)
+- [docs/specs/vida-1.0-product-spec.md](docs/specs/vida-1.0-product-spec.md)
+- [docs/specs/vida-1.0-runtime-contract.md](docs/specs/vida-1.0-runtime-contract.md)
+- [docs/specs/vida-2.0-daemon-control-plane.md](docs/specs/vida-2.0-daemon-control-plane.md)
+- [docs/specs/vida-3.0-plugin-marketplace.md](docs/specs/vida-3.0-plugin-marketplace.md)
 - [_vida/commands](_vida/commands)
 - [_vida/commands.md](_vida/commands.md)
 - [_vida/docs/protocol-index.md](_vida/docs/protocol-index.md)
@@ -625,6 +704,7 @@ The future standalone repository should allow people to contribute in areas such
 - memory and learning loops
 - protocol compiler and runtime artifact generation
 - Rust control-plane implementation
+- future workflow and role-protocol packs such as `SDLC`, `PM`, `BA`, and `SA`
 
 ---
 
@@ -635,18 +715,18 @@ The future standalone repository should allow people to contribute in areas such
 - Vida Stack is an actively used framework layer inside a real project.
 - Many core mechanics already exist and are exercised daily.
 - Some parts are still markdown-heavy and script-heavy by design.
-- Several advanced control-plane ideas are still being validated, not productized.
+- The current line is best understood as `0.1`: a reference runtime that is being stabilized before binary productization.
 
 ### Future Vision
 
-- a polished standalone framework
+- a self-hosted local binary with embedded state, memory, and instruction runtime
 - stronger machine-enforced runtime contracts
-- durable orchestration and verification subsystems
-- a Rust-based implementation for the full system
+- a daemonized local control plane after the binary kernel is stable
+- plugin and marketplace extensibility only after the runtime model is stable
 - a contributor-friendly open-source control plane for agentic product engineering
 
 ---
 
 ## ⭐ North Star
 
-Build a complete, high-integrity, highly autonomous product-development orchestrator that can evolve with the state of AI while remaining grounded in real engineering work.
+Build a complete, high-integrity, self-hostable product-development control plane that proves itself on real work, productizes itself into a local binary, then grows into a daemonized and extensible ecosystem without losing deterministic runtime law.

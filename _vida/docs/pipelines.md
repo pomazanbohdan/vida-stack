@@ -200,7 +200,7 @@ bash _vida/scripts/eval-pack.sh run <task_id>
 python3 _vida/scripts/subagent-eval-pack.py run <task_id>
 ```
 
-Use generated scorecards (`.vida/logs/eval-pack-<task_id>.json`, `.vida/logs/subagent-review-<task_id>.json`) and strategy snapshot (`.vida/state/subagent-strategy.json`) for telemetry-driven improvement decisions.
+Use generated scorecards (`.vida/logs/eval-pack-<task_id>.json`, `.vida/logs/trace-evals/trace-eval-<task_id>.json`, `.vida/logs/trace-datasets/trace-dataset-<task_id>.json`, `.vida/logs/subagent-review-<task_id>.json`) and strategy snapshot (`.vida/state/subagent-strategy.json`) for telemetry-driven improvement decisions.
 
 ## GitHub Operations
 

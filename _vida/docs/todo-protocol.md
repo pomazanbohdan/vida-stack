@@ -10,6 +10,10 @@ Purpose: decompose user requests into executable step-level work while keeping `
 
 Rule: `br` tracks "what"; TODO tracks "how".
 
+Task-state truth rule:
+
+1. When task lifecycle state and execution telemetry appear out of sync, use `_vida/docs/task-state-reconciliation-protocol.md` as the canonical reconciliation layer before closing, reopening, or declaring the task stale.
+
 Hard rule:
 
 1. No execution without active TODO block.
@@ -237,6 +241,7 @@ UI sync rule:
 9. Response visibility rule: when reporting task/todo state to user, include IDs and concise descriptions (not IDs only).
 10. `quality-health-check` cadence: run on checkpoint boundaries, pre-handoff, and finish (not after every micro-step).
 11. Runtime scripts should be quiet-by-default for progress chatter; keep human-facing status output in `todo-tool current|list` and `quality-health-check`.
+12. Use `python3 _vida/scripts/task-state-reconcile.py status <task_id>` when a task looks done-but-open, stale-in-progress, or otherwise drifted between `br` and TODO.
 
 Background worker policy (token/cost aware):
 

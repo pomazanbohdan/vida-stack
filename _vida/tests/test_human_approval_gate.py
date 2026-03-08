@@ -26,8 +26,11 @@ class HumanApprovalGateTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.dispatch.ROUTE_RECEIPT_DIR = Path(self.temp_dir.name)
+        self.original_run_graph_dir = self.dispatch.run_graph_runtime.STATE_DIR
+        self.dispatch.run_graph_runtime.STATE_DIR = Path(self.temp_dir.name) / "run-graphs"
 
     def tearDown(self) -> None:
+        self.dispatch.run_graph_runtime.STATE_DIR = self.original_run_graph_dir
         self.temp_dir.cleanup()
 
     def test_validate_approval_receipt_not_required_for_promotion_ready(self) -> None:
@@ -130,6 +133,9 @@ class HumanApprovalGateTest(unittest.TestCase):
         self.assertFalse(gated["synthesis_ready"])
         self.assertEqual(gated["status"], "approval_pending")
         self.assertEqual(gated["approval"]["reason"], "missing_approval_receipt")
+        run_graph = self.dispatch.run_graph_runtime.load_graph("unit-task")
+        self.assertEqual(run_graph["nodes"]["approval"]["status"], "blocked")
+        self.assertEqual(run_graph["nodes"]["synthesis"]["status"], "blocked")
 
 
 class HumanApprovalScriptTest(unittest.TestCase):

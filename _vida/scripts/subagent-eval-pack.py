@@ -32,6 +32,7 @@ def load_module(name: str, path: Path) -> Any:
 
 subagent_system = load_module("subagent_system_runtime_eval", SCRIPT_DIR / "subagent-system.py")
 vida_config = load_module("vida_config_runtime_eval", SCRIPT_DIR / "vida-config.py")
+trace_eval = load_module("vida_trace_eval_runtime", SCRIPT_DIR / "trace-eval.py")
 
 
 def now_utc() -> str:
@@ -82,6 +83,21 @@ def ensure_eval_pack(task_id: str) -> dict[str, Any]:
     if completed.returncode != 0 and not out_path.exists():
         raise RuntimeError(completed.stderr.strip() or "eval-pack.sh failed")
     return load_json(out_path, {})
+
+
+def ensure_trace_eval(task_id: str) -> dict[str, Any]:
+    out_path = trace_eval.TRACE_EVAL_DIR / f"trace-eval-{task_id}.json"
+    payload = trace_eval.build_trace_eval(task_id)
+    save_json(out_path, payload)
+    return payload
+
+
+def ensure_trace_dataset(task_id: str, trace_eval_payload: dict[str, Any]) -> dict[str, Any]:
+    out_path = trace_eval.TRACE_DATASET_DIR / f"trace-dataset-{task_id}.json"
+    payload = trace_eval.build_trace_dataset(task_id, trace_eval_payload)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    trace_eval.save_json(out_path, payload)
+    return payload
 
 
 def task_closed(task_id: str) -> bool:
@@ -421,6 +437,8 @@ def refresh_strategy(task_id: str) -> dict[str, Any]:
 
 def run(task_id: str) -> int:
     eval_pack = ensure_eval_pack(task_id)
+    trace_eval_payload = ensure_trace_eval(task_id)
+    trace_dataset_payload = ensure_trace_dataset(task_id, trace_eval_payload)
     is_closed = task_closed(task_id)
     runs = [item for item in load_jsonl(RUN_LOG_PATH) if item.get("task_id") == task_id]
     processed = load_json(PROCESSED_PATH, {"processed_run_ids": []})
@@ -511,6 +529,15 @@ def run(task_id: str) -> int:
         "subagent_runs_seen": len(runs),
         "subagent_runs_processed": len(review_entries),
         "eval_pack": eval_pack,
+        "trace_eval": {
+            "overall_grade": trace_eval_payload.get("overall_grade"),
+            "grades": trace_eval_payload.get("grades", {}),
+            "path": str(trace_eval.TRACE_EVAL_DIR / f"trace-eval-{task_id}.json"),
+        },
+        "trace_dataset": {
+            "labels": trace_dataset_payload.get("labels", {}),
+            "path": str(trace_eval.TRACE_DATASET_DIR / f"trace-dataset-{task_id}.json"),
+        },
         "review_entries": review_entries,
         "strategy_path": str(STRATEGY_PATH),
         "strategy_snapshot": strategy,

@@ -52,7 +52,7 @@ Canonical layer source: `_vida/docs/command-layer-protocol.md`
 6. `BFP-5 Equivalence Gate`:
    - if `issue_contract.status=writer_ready`, continue to fix planning,
    - for multi-symptom issues, each in-scope symptom must already have repro/red-test/live evidence or be explicitly excluded,
-   - if `issue_contract.status=spec_delta_required`, stop and reconcile spec/product contract first,
+   - if `issue_contract.status=spec_delta_required`, materialize `spec_delta` and reconcile spec/product contract first,
    - if `issue_contract.status=issue_closed_no_fix`, close with rationale,
    - if `issue_contract.status=insufficient_evidence`, gather more evidence before implementation.
 7. `BFP-6 Root Cause & Fix Plan`:
@@ -78,9 +78,10 @@ Canonical layer source: `_vida/docs/command-layer-protocol.md`
 
 1. `Issue Matrix`: id, severity, source, status.
 2. `Issue Contract`: normalized equivalence decision and acceptance slice.
-3. `Root Cause Notes`: issue -> cause -> evidence.
-4. `Fix/Regression Matrix`: issue -> fix -> tests -> result.
-5. `Doc Sync List`: updated spec/docs/contracts.
+3. `Spec Delta`: mandatory when the issue is non-equivalent.
+4. `Root Cause Notes`: issue -> cause -> evidence.
+5. `Fix/Regression Matrix`: issue -> fix -> tests -> result.
+6. `Doc Sync List`: updated spec/docs/contracts.
 
 ## Gates
 

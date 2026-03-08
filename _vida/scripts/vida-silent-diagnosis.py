@@ -16,6 +16,7 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent.parent
 STATE_PATH = ROOT_DIR / ".vida" / "state" / "silent-framework-diagnosis.json"
+ISSUES_JSONL_PATH = ROOT_DIR / ".beads" / "issues.jsonl"
 QUEUE_RUNNER = SCRIPT_DIR / "br-mutation-queue.py"
 FRAMEWORK_MEMORY_MODULE = None
 
@@ -69,7 +70,57 @@ def load_state() -> dict[str, Any]:
     return payload
 
 
+def issue_status_map() -> dict[str, str]:
+    if not ISSUES_JSONL_PATH.exists():
+        return {}
+    statuses: dict[str, str] = {}
+    try:
+        lines = ISSUES_JSONL_PATH.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(item, dict):
+            continue
+        issue_id = str(item.get("id", "")).strip()
+        status = str(item.get("status", "")).strip()
+        if issue_id:
+            statuses[issue_id] = status
+    return statuses
+
+
+def reconcile_pending_framework_bugs(state: dict[str, Any]) -> dict[str, Any]:
+    pending = state.get("pending_framework_bugs", [])
+    if not isinstance(pending, list):
+        state["pending_framework_bugs"] = []
+        return state
+    statuses = issue_status_map()
+    if not statuses:
+        return state
+    filtered: list[dict[str, Any]] = []
+    changed = False
+    for item in pending:
+        if not isinstance(item, dict):
+            changed = True
+            continue
+        bug_id = str(item.get("bug_id", "")).strip()
+        if bug_id and statuses.get(bug_id) == "closed":
+            changed = True
+            continue
+        filtered.append(item)
+    if changed:
+        state["pending_framework_bugs"] = filtered
+    return state
+
+
 def save_state(payload: dict[str, Any]) -> None:
+    payload = reconcile_pending_framework_bugs(payload)
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -192,7 +243,7 @@ def record_session_reflection(current_task: str, criteria: list[str], gaps: list
 
 def build_status_payload() -> dict[str, Any]:
     cfg = diagnosis_config()
-    state = load_state()
+    state = reconcile_pending_framework_bugs(load_state())
     return {
         "generated_at": now_utc(),
         "enabled": bool(cfg.get("enabled", False)),

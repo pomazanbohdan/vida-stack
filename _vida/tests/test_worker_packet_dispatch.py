@@ -945,7 +945,15 @@ Deliverable:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             original_receipt_dir = self.dispatch.ROUTE_RECEIPT_DIR
+            original_spec_delta_dir = self.dispatch.SPEC_DELTA_DIR
+            original_spec_intake_dir = self.dispatch.SPEC_INTAKE_DIR
+            original_draft_dir = self.dispatch.DRAFT_EXECUTION_SPEC_DIR
+            original_run_graph_dir = self.dispatch.run_graph_runtime.STATE_DIR
             self.dispatch.ROUTE_RECEIPT_DIR = tmp_path
+            self.dispatch.SPEC_DELTA_DIR = tmp_path / "spec-deltas"
+            self.dispatch.SPEC_INTAKE_DIR = tmp_path / "spec-intake"
+            self.dispatch.DRAFT_EXECUTION_SPEC_DIR = tmp_path / "draft-execution-specs"
+            self.dispatch.run_graph_runtime.STATE_DIR = tmp_path / ".vida" / "state" / "run-graphs"
             try:
                 prompt_file = tmp_path / "implementation.prompt.txt"
                 prompt_file.write_text("Fix the validated bug scope for mobile-1ic.1.\n", encoding="utf-8")
@@ -1046,20 +1054,35 @@ Deliverable:
                         ]
                     )
                 prepare_manifest = json.loads((tmp_path / "prepare" / "prepare-execution.json").read_text(encoding="utf-8"))
+                run_graph = json.loads((tmp_path / ".vida" / "state" / "run-graphs" / "unit-task.json").read_text(encoding="utf-8"))
             finally:
                 self.dispatch.ROUTE_RECEIPT_DIR = original_receipt_dir
+                self.dispatch.SPEC_DELTA_DIR = original_spec_delta_dir
+                self.dispatch.SPEC_INTAKE_DIR = original_spec_intake_dir
+                self.dispatch.DRAFT_EXECUTION_SPEC_DIR = original_draft_dir
+                self.dispatch.run_graph_runtime.STATE_DIR = original_run_graph_dir
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(prepare_manifest["status"], "analysis_ready")
         self.assertTrue(bool(prepare_manifest["analysis_receipt_path"]))
+        self.assertEqual(run_graph["nodes"]["analysis"]["status"], "completed")
+        self.assertEqual(run_graph["nodes"]["writer"]["status"], "ready")
 
     def test_prepare_execution_writes_issue_contract_for_equivalent_fix(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             original_receipt_dir = self.dispatch.ROUTE_RECEIPT_DIR
             original_issue_dir = self.dispatch.ISSUE_CONTRACT_DIR
+            original_spec_delta_dir = self.dispatch.SPEC_DELTA_DIR
+            original_spec_intake_dir = self.dispatch.SPEC_INTAKE_DIR
+            original_draft_dir = self.dispatch.DRAFT_EXECUTION_SPEC_DIR
+            original_context_state_path = self.dispatch.context_governance_runtime.STATE_PATH
             self.dispatch.ROUTE_RECEIPT_DIR = tmp_path / "route-receipts"
             self.dispatch.ISSUE_CONTRACT_DIR = tmp_path / "issue-contracts"
+            self.dispatch.SPEC_DELTA_DIR = tmp_path / "spec-deltas"
+            self.dispatch.SPEC_INTAKE_DIR = tmp_path / "spec-intake"
+            self.dispatch.DRAFT_EXECUTION_SPEC_DIR = tmp_path / "draft-execution-specs"
+            self.dispatch.context_governance_runtime.STATE_PATH = tmp_path / "context-governance.json"
             try:
                 prompt_file = tmp_path / "implementation.prompt.txt"
                 prompt_file.write_text(
@@ -1178,6 +1201,10 @@ Deliverable:
             finally:
                 self.dispatch.ROUTE_RECEIPT_DIR = original_receipt_dir
                 self.dispatch.ISSUE_CONTRACT_DIR = original_issue_dir
+                self.dispatch.SPEC_DELTA_DIR = original_spec_delta_dir
+                self.dispatch.SPEC_INTAKE_DIR = original_spec_intake_dir
+                self.dispatch.DRAFT_EXECUTION_SPEC_DIR = original_draft_dir
+                self.dispatch.context_governance_runtime.STATE_PATH = original_context_state_path
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(prepare_manifest["status"], "analysis_ready")
@@ -1193,6 +1220,109 @@ Deliverable:
         self.assertEqual(self.packet_gate.validate_packet_text(writer_prompt_text), [])
         self.assertIn("Normalized issue contract:", writer_prompt_text)
         self.assertEqual(prepare_manifest["prompt_resolution"]["writer_packet_mode"], "issue_contract_rendered")
+        self.assertTrue(prepare_manifest["context_governance"]["valid"])
+        self.assertEqual(prepare_manifest["context_governance"]["summary"]["by_source_class"]["local_runtime"], 1)
+        self.assertNotIn("web_validated", prepare_manifest["context_governance"]["summary"]["by_source_class"])
+
+    def test_prepare_execution_blocks_when_spec_intake_requires_negotiation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            original_receipt_dir = self.dispatch.ROUTE_RECEIPT_DIR
+            original_issue_dir = self.dispatch.ISSUE_CONTRACT_DIR
+            original_spec_intake_dir = self.dispatch.SPEC_INTAKE_DIR
+            original_run_graph_dir = self.dispatch.run_graph_runtime.STATE_DIR
+            self.dispatch.ROUTE_RECEIPT_DIR = tmp_path / "route-receipts"
+            self.dispatch.ISSUE_CONTRACT_DIR = tmp_path / "issue-contracts"
+            self.dispatch.SPEC_INTAKE_DIR = tmp_path / "spec-intake"
+            self.dispatch.run_graph_runtime.STATE_DIR = tmp_path / ".vida" / "state" / "run-graphs"
+            try:
+                prompt_file = tmp_path / "implementation.prompt.txt"
+                prompt_file.write_text("Implement the reported bugfix scope.\n", encoding="utf-8")
+                (self.dispatch.SPEC_INTAKE_DIR).mkdir(parents=True, exist_ok=True)
+                (self.dispatch.SPEC_INTAKE_DIR / "unit-task.json").write_text(
+                    json.dumps(
+                        {
+                            "task_id": "unit-task",
+                            "intake_class": "mixed",
+                            "problem_statement": "mixed request",
+                            "requested_outcome": "clarify scope",
+                            "proposed_scope_in": ["settings flow"],
+                            "open_decisions": ["confirm desired settings behavior"],
+                            "recommended_contract_path": "user_negotiation",
+                            "status": "needs_user_negotiation",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                analysis_output = tmp_path / "analysis.output.json"
+                analysis_output.write_text(
+                    json.dumps(
+                        {
+                            "status": "done",
+                            "question_answered": "yes",
+                            "answer": "equivalent fix",
+                            "evidence_refs": ["x:1"],
+                            "changed_files": [],
+                            "verification_commands": [],
+                            "verification_results": [],
+                            "merge_ready": "yes",
+                            "blockers": [],
+                            "notes": "",
+                            "recommended_next_action": "proceed_to_writer",
+                            "impact_analysis": {"affected_scope": [], "contract_impact": [], "follow_up_actions": [], "residual_risks": []},
+                            "issue_contract": {
+                                "classification": "defect_equivalent",
+                                "equivalence_assessment": "equivalent_fix",
+                                "reported_behavior": "x",
+                                "expected_behavior": "y",
+                                "reported_scope": ["settings flow"],
+                                "proven_scope": ["settings flow"],
+                                "scope_in": ["settings flow"],
+                                "scope_out": [],
+                                "acceptance_checks": ["check"],
+                                "spec_sync_targets": [],
+                                "wvp_required": "no",
+                                "wvp_status": "not_required",
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                route = {
+                    "task_class": "implementation",
+                    "analysis_plan": {"required": "yes", "receipt_required": "yes", "route_task_class": "analysis", "fanout_subagents": ["qwen_cli"]},
+                    "verification_plan": {"required": "no"},
+                    "coach_plan": {"required": "no"},
+                    "dispatch_policy": {},
+                    "route_budget": {},
+                    "fallback_subagents": [],
+                }
+
+                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+                    manifest_path = Path(cmd[6]) / "manifest.json"
+                    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                    manifest_path.write_text(json.dumps({"status": "completed", "phase": "completed", "synthesis_ready": True, "results": [{"subagent": "qwen_cli", "status": "success", "output_file": str(analysis_output)}]}), encoding="utf-8")
+                    return self.dispatch.subprocess.CompletedProcess(cmd, 0, stdout=str(manifest_path) + "\n", stderr="")
+
+                with mock.patch.object(self.dispatch, "route_snapshot", return_value=({}, route)), \
+                    mock.patch.object(self.dispatch.subprocess, "run", side_effect=fake_subprocess_run):
+                    exit_code = self.dispatch.run_prepare_execution(
+                        ["subagent-dispatch.py", "prepare-execution", "unit-task", "implementation", str(prompt_file), str(tmp_path / "prepare"), str(ROOT_DIR)]
+                    )
+                prepare_manifest = json.loads((tmp_path / "prepare" / "prepare-execution.json").read_text(encoding="utf-8"))
+                run_graph = json.loads((tmp_path / ".vida" / "state" / "run-graphs" / "unit-task.json").read_text(encoding="utf-8"))
+            finally:
+                self.dispatch.ROUTE_RECEIPT_DIR = original_receipt_dir
+                self.dispatch.ISSUE_CONTRACT_DIR = original_issue_dir
+                self.dispatch.SPEC_INTAKE_DIR = original_spec_intake_dir
+                self.dispatch.run_graph_runtime.STATE_DIR = original_run_graph_dir
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(prepare_manifest["status"], "issue_contract_blocked")
+        self.assertEqual(prepare_manifest["spec_intake_error"], "spec_intake_needs_user_negotiation")
+        self.assertFalse(prepare_manifest["writer_authorized"])
+        self.assertEqual(run_graph["nodes"]["analysis"]["status"], "completed")
+        self.assertEqual(run_graph["nodes"]["writer"]["status"], "blocked")
 
     def test_prepare_execution_blocks_when_issue_contract_requires_spec_delta(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1323,6 +1453,242 @@ Deliverable:
         self.assertEqual(prepare_manifest["status"], "issue_contract_blocked")
         self.assertEqual(prepare_manifest["issue_contract"]["status"], "spec_delta_required")
         self.assertFalse(prepare_manifest["writer_authorized"])
+
+    def test_prepare_execution_blocks_existing_draft_execution_spec_when_issue_contract_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            original_receipt_dir = self.dispatch.ROUTE_RECEIPT_DIR
+            original_issue_dir = self.dispatch.ISSUE_CONTRACT_DIR
+            original_spec_intake_dir = self.dispatch.SPEC_INTAKE_DIR
+            original_spec_delta_dir = self.dispatch.SPEC_DELTA_DIR
+            original_draft_dir = self.dispatch.DRAFT_EXECUTION_SPEC_DIR
+            self.dispatch.ROUTE_RECEIPT_DIR = tmp_path / "route-receipts"
+            self.dispatch.ISSUE_CONTRACT_DIR = tmp_path / "issue-contracts"
+            self.dispatch.SPEC_INTAKE_DIR = tmp_path / "spec-intake"
+            self.dispatch.SPEC_DELTA_DIR = tmp_path / "spec-deltas"
+            self.dispatch.DRAFT_EXECUTION_SPEC_DIR = tmp_path / "draft-execution-specs"
+            try:
+                prompt_file = tmp_path / "implementation.prompt.txt"
+                prompt_file.write_text("Implement the approved execution spec.\n", encoding="utf-8")
+                self.dispatch.DRAFT_EXECUTION_SPEC_DIR.mkdir(parents=True, exist_ok=True)
+                (self.dispatch.DRAFT_EXECUTION_SPEC_DIR / "unit-task.json").write_text(
+                    json.dumps(
+                        {
+                            "task_id": "unit-task",
+                            "scope_in": ["settings flow"],
+                            "scope_out": ["drawer behavior"],
+                            "acceptance_checks": ["settings render correctly"],
+                            "assumptions": ["task came from approved SCP flow"],
+                            "open_decisions": [],
+                            "recommended_next_path": "/vida-form-task",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                analysis_output = tmp_path / "analysis.output.json"
+                analysis_output.write_text(
+                    json.dumps(
+                        {
+                            "status": "done",
+                            "question_answered": "yes",
+                            "answer": "spec-driven path is executable",
+                            "evidence_refs": ["docs/specs/ui.md:10"],
+                            "changed_files": [],
+                            "verification_commands": [],
+                            "verification_results": [],
+                            "merge_ready": "yes",
+                            "blockers": [],
+                            "notes": "",
+                            "recommended_next_action": "proceed_to_writer",
+                            "impact_analysis": {
+                                "affected_scope": ["settings flow"],
+                                "contract_impact": [],
+                                "follow_up_actions": [],
+                                "residual_risks": [],
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                route = {
+                    "task_class": "implementation",
+                    "analysis_plan": {"required": "yes", "receipt_required": "yes", "route_task_class": "analysis", "fanout_subagents": ["qwen_cli"]},
+                    "verification_plan": {"required": "no"},
+                    "coach_plan": {"required": "no"},
+                    "dispatch_policy": {},
+                    "route_budget": {},
+                    "fallback_subagents": [],
+                }
+
+                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+                    manifest_path = Path(cmd[6]) / "manifest.json"
+                    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                    manifest_path.write_text(
+                        json.dumps(
+                            {
+                                "status": "completed",
+                                "phase": "completed",
+                                "synthesis_ready": True,
+                                "results": [
+                                    {
+                                        "subagent": "qwen_cli",
+                                        "status": "success",
+                                        "output_file": str(analysis_output),
+                                    }
+                                ],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    return self.dispatch.subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        stdout=str(manifest_path) + "\n",
+                        stderr="",
+                    )
+
+                with mock.patch.object(self.dispatch, "route_snapshot", return_value=({}, route)), \
+                    mock.patch.object(self.dispatch.subprocess, "run", side_effect=fake_subprocess_run):
+                    exit_code = self.dispatch.run_prepare_execution(
+                        [
+                            "subagent-dispatch.py",
+                            "prepare-execution",
+                            "unit-task",
+                            "implementation",
+                            str(prompt_file),
+                            str(tmp_path / "prepare"),
+                            str(ROOT_DIR),
+                        ]
+                    )
+                prepare_manifest = json.loads((tmp_path / "prepare" / "prepare-execution.json").read_text(encoding="utf-8"))
+            finally:
+                self.dispatch.ROUTE_RECEIPT_DIR = original_receipt_dir
+                self.dispatch.ISSUE_CONTRACT_DIR = original_issue_dir
+                self.dispatch.SPEC_INTAKE_DIR = original_spec_intake_dir
+                self.dispatch.SPEC_DELTA_DIR = original_spec_delta_dir
+                self.dispatch.DRAFT_EXECUTION_SPEC_DIR = original_draft_dir
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(prepare_manifest["status"], "issue_contract_blocked")
+        self.assertEqual(prepare_manifest["issue_contract_error"], "missing_issue_contract")
+        self.assertFalse(prepare_manifest["writer_authorized"])
+
+    def test_prepare_execution_writes_spec_delta_artifact_for_spec_delta_issue(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            original_receipt_dir = self.dispatch.ROUTE_RECEIPT_DIR
+            original_issue_dir = self.dispatch.ISSUE_CONTRACT_DIR
+            original_spec_delta_dir = self.dispatch.SPEC_DELTA_DIR
+            self.dispatch.ROUTE_RECEIPT_DIR = tmp_path / "route-receipts"
+            self.dispatch.ISSUE_CONTRACT_DIR = tmp_path / "issue-contracts"
+            self.dispatch.SPEC_DELTA_DIR = tmp_path / "spec-deltas"
+            try:
+                prompt_file = tmp_path / "implementation.prompt.txt"
+                prompt_file.write_text("Implement the reported bugfix scope.\n", encoding="utf-8")
+                analysis_output = tmp_path / "analysis.output.json"
+                analysis_output.write_text(
+                    json.dumps(
+                        {
+                            "status": "done",
+                            "question_answered": "yes",
+                            "answer": "non-equivalent product change required",
+                            "evidence_refs": ["docs/specs/ui.md:10"],
+                            "changed_files": [],
+                            "verification_commands": [],
+                            "verification_results": [],
+                            "merge_ready": "yes",
+                            "blockers": [],
+                            "notes": "needs product contract update",
+                            "recommended_next_action": "route_to_spec_delta",
+                            "impact_analysis": {
+                                "affected_scope": ["docs/specs/ui.md"],
+                                "contract_impact": ["navigation behavior changes"],
+                                "follow_up_actions": ["update spec before writer"],
+                                "residual_risks": [],
+                            },
+                            "issue_contract": {
+                                "classification": "feature_delta",
+                                "equivalence_assessment": "spec_delta_required",
+                                "reported_behavior": "new behavior",
+                                "expected_behavior": "old behavior",
+                                "reported_scope": ["drawer first-level module behavior"],
+                                "proven_scope": ["drawer first-level module behavior"],
+                                "scope_in": ["drawer first-level module behavior"],
+                                "scope_out": [],
+                                "acceptance_checks": ["spec updated before implementation"],
+                                "spec_sync_targets": ["docs/specs/ui.md"],
+                                "wvp_required": "no",
+                                "wvp_status": "not_required",
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                route = {
+                    "task_class": "implementation",
+                    "analysis_plan": {
+                        "required": "yes",
+                        "receipt_required": "yes",
+                        "route_task_class": "analysis",
+                        "fanout_subagents": ["qwen_cli"],
+                    },
+                    "verification_plan": {"required": "no"},
+                    "coach_plan": {"required": "no"},
+                    "dispatch_policy": {},
+                    "route_budget": {},
+                    "fallback_subagents": [],
+                }
+
+                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+                    manifest_path = Path(cmd[6]) / "manifest.json"
+                    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                    manifest_path.write_text(
+                        json.dumps(
+                            {
+                                "status": "completed",
+                                "phase": "completed",
+                                "synthesis_ready": True,
+                                "results": [
+                                    {
+                                        "subagent": "qwen_cli",
+                                        "status": "success",
+                                        "output_file": str(analysis_output),
+                                    }
+                                ],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    return self.dispatch.subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        stdout=str(manifest_path) + "\n",
+                        stderr="",
+                    )
+
+                with mock.patch.object(self.dispatch, "route_snapshot", return_value=({}, route)), \
+                    mock.patch.object(self.dispatch.subprocess, "run", side_effect=fake_subprocess_run):
+                    exit_code = self.dispatch.run_prepare_execution(
+                        [
+                            "subagent-dispatch.py",
+                            "prepare-execution",
+                            "unit-task",
+                            "implementation",
+                            str(prompt_file),
+                            str(tmp_path / "prepare"),
+                            str(ROOT_DIR),
+                        ]
+                    )
+                prepare_manifest = json.loads((tmp_path / "prepare" / "prepare-execution.json").read_text(encoding="utf-8"))
+                spec_delta = json.loads((tmp_path / "spec-deltas" / "unit-task.json").read_text(encoding="utf-8"))
+            finally:
+                self.dispatch.ROUTE_RECEIPT_DIR = original_receipt_dir
+                self.dispatch.ISSUE_CONTRACT_DIR = original_issue_dir
+                self.dispatch.SPEC_DELTA_DIR = original_spec_delta_dir
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(prepare_manifest["spec_delta_error"], "spec_delta_needs_scp_reconciliation")
+        self.assertEqual(spec_delta["status"], "needs_scp_reconciliation")
 
     def test_prepare_execution_blocks_when_writer_ready_issue_contract_has_no_proven_scope(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1590,9 +1956,15 @@ Deliverable:
             original_receipt_dir = self.dispatch.ROUTE_RECEIPT_DIR
             original_issue_dir = self.dispatch.ISSUE_CONTRACT_DIR
             original_split_dir = self.dispatch.ISSUE_SPLIT_DIR
+            original_spec_delta_dir = self.dispatch.SPEC_DELTA_DIR
+            original_spec_intake_dir = self.dispatch.SPEC_INTAKE_DIR
+            original_draft_dir = self.dispatch.DRAFT_EXECUTION_SPEC_DIR
             self.dispatch.ROUTE_RECEIPT_DIR = tmp_path / "route-receipts"
             self.dispatch.ISSUE_CONTRACT_DIR = tmp_path / "issue-contracts"
             self.dispatch.ISSUE_SPLIT_DIR = tmp_path / "issue-splits"
+            self.dispatch.SPEC_DELTA_DIR = tmp_path / "spec-deltas"
+            self.dispatch.SPEC_INTAKE_DIR = tmp_path / "spec-intake"
+            self.dispatch.DRAFT_EXECUTION_SPEC_DIR = tmp_path / "draft-execution-specs"
             try:
                 prompt_file = tmp_path / "implementation.prompt.txt"
                 prompt_file.write_text("Implement the reported bugfix scope.\n", encoding="utf-8")
@@ -1722,6 +2094,9 @@ Deliverable:
                 self.dispatch.ROUTE_RECEIPT_DIR = original_receipt_dir
                 self.dispatch.ISSUE_CONTRACT_DIR = original_issue_dir
                 self.dispatch.ISSUE_SPLIT_DIR = original_split_dir
+                self.dispatch.SPEC_DELTA_DIR = original_spec_delta_dir
+                self.dispatch.SPEC_INTAKE_DIR = original_spec_intake_dir
+                self.dispatch.DRAFT_EXECUTION_SPEC_DIR = original_draft_dir
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(prepare_manifest["status"], "analysis_ready")
@@ -2697,6 +3072,106 @@ Coach had to print the final payload on stderr.
         self.assertEqual(manifest["status"], "coach_failed")
         self.assertEqual(decision["coach_decision"], "coach_failed")
         self.assertIn("insufficient_valid_coach_results:0/1", decision["invalid_reasons"])
+
+    def test_run_coach_ensemble_falls_back_to_route_selected_subagent_when_plan_candidates_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            prompt_file = tmp_path / "coach.prompt.txt"
+            prompt_file.write_text("Coach the implementation.\n", encoding="utf-8")
+            gemini_output = tmp_path / "gemini.txt"
+            gemini_output.write_text(
+                """
+{
+  "status": "done",
+  "question_answered": "yes",
+  "answer": "implementation is ready",
+  "evidence_refs": ["_vida/docs/issue-contract-protocol.md"],
+  "changed_files": [],
+  "verification_commands": [],
+  "verification_results": [],
+  "merge_ready": "yes",
+  "blockers": [],
+  "notes": "",
+  "recommended_next_action": "approve_for_independent_verification",
+  "impact_analysis": {
+    "affected_scope": ["_vida/scripts/subagent-dispatch.py"],
+    "contract_impact": [],
+    "follow_up_actions": [],
+    "residual_risks": []
+  },
+  "coach_decision": "approved",
+  "rework_required": "no",
+  "coach_feedback": "ready for verification"
+}
+""",
+                encoding="utf-8",
+            )
+            calls: list[tuple[str, str]] = []
+
+            def fake_run_subagent(task_id, task_class, subagent_name, prompt_file_arg, output_file, workdir, route, subagent_cfg, dispatch_mode):
+                calls.append((subagent_name, dispatch_mode))
+                return {
+                    "subagent": subagent_name,
+                    "status": "success",
+                    "output_file": str(gemini_output),
+                    "error_text": "",
+                }
+
+            with mock.patch.object(
+                self.dispatch.subagent_system,
+                "route_subagent",
+                return_value={
+                    "task_class": "coach",
+                    "selected_subagent": "gemini_cli",
+                    "fanout_subagents": ["gemini_cli", "kilo_cli"],
+                    "fallback_subagents": [{"subagent": "kilo_cli"}],
+                    "dispatch_policy": {
+                        "direct_internal_bypass_forbidden": "yes",
+                        "internal_escalation_allowed": "yes",
+                        "internal_route_authorized": "no",
+                    },
+                    "analysis_plan": {"required": "no", "receipt_required": "no", "route_task_class": ""},
+                    "route_budget": {},
+                },
+            ), mock.patch.object(self.dispatch, "run_subagent", side_effect=fake_run_subagent):
+                manifest_path, manifest, decision = self.dispatch.run_coach_ensemble(
+                    task_id="unit-task",
+                    writer_task_class="implementation",
+                    coach_task_class="coach",
+                    prompt_file=prompt_file,
+                    output_dir=tmp_path / "coach",
+                    workdir=ROOT_DIR,
+                    snapshot={
+                        "subagents": {
+                            "gemini_cli": {"dispatch": {"command": "gemini"}},
+                            "kilo_cli": {"dispatch": {"command": "kilo"}},
+                        }
+                    },
+                    route={"task_class": "implementation"},
+                    coach_plan={
+                        "selected_subagents": [],
+                        "fallback_subagents": [],
+                        "min_results": 1,
+                        "merge_policy": "unanimous_approve_rework_bias",
+                    },
+                )
+
+        self.assertEqual(manifest["manifest_path"], str(manifest_path))
+        self.assertEqual(calls, [("gemini_cli", "fanout")])
+        self.assertEqual(manifest["selected_subagents"], ["gemini_cli"])
+        self.assertEqual(decision["coach_decision"], "approved")
+        self.assertTrue(decision["approved"])
+
+    def test_coach_selected_subagents_ignores_none_values(self) -> None:
+        self.assertEqual(
+            self.dispatch.coach_selected_subagents(
+                {
+                    "selected_subagents": [None, "", "None"],
+                    "selected_subagent": None,
+                }
+            ),
+            [],
+        )
 
     def test_parse_arbitration_decision_prefers_last_json_object(self) -> None:
         text = """

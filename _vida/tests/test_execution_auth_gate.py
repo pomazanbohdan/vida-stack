@@ -45,6 +45,9 @@ class ExecutionAuthGateTest(unittest.TestCase):
         self.analysis_receipt_path = self.receipt_dir / f"{self.task_id}.{self.task_class}.analysis.json"
         self.analysis_blocker_path = self.receipt_dir / f"{self.task_id}.{self.task_class}.analysis-blocker.json"
         self.issue_contract_path = self.receipt_dir / "issue-contracts" / f"{self.task_id}.json"
+        self.spec_intake_path = self.receipt_dir / "spec-intake" / f"{self.task_id}.json"
+        self.spec_delta_path = self.receipt_dir / "spec-deltas" / f"{self.task_id}.json"
+        self.draft_execution_spec_path = self.receipt_dir / "draft-execution-specs" / f"{self.task_id}.json"
 
         def fake_write_route_receipt(task_id: str, task_class: str, route: dict):
             self.route_receipt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -69,11 +72,17 @@ class ExecutionAuthGateTest(unittest.TestCase):
                 side_effect=lambda task_id, task_class: self.module.load_json(self.analysis_blocker_path),
             ),
             mock.patch.object(self.module.dispatch_runtime, "issue_contract_path", return_value=self.issue_contract_path),
+            mock.patch.object(self.module.dispatch_runtime, "spec_intake_path", return_value=self.spec_intake_path),
+            mock.patch.object(self.module.dispatch_runtime, "spec_delta_path", return_value=self.spec_delta_path),
+            mock.patch.object(self.module.dispatch_runtime, "draft_execution_spec_path", return_value=self.draft_execution_spec_path),
             mock.patch.object(
                 self.module.dispatch_runtime,
                 "load_issue_contract",
                 side_effect=lambda task_id: self.module.load_json(self.issue_contract_path),
             ),
+            mock.patch.object(self.module.dispatch_runtime, "validate_spec_intake", return_value=(True, {}, "")),
+            mock.patch.object(self.module.dispatch_runtime, "validate_spec_delta", return_value=(True, {}, "")),
+            mock.patch.object(self.module.dispatch_runtime, "validate_draft_execution_spec", return_value=(True, {}, "")),
             mock.patch.object(
                 self.module.dispatch_runtime,
                 "validate_issue_contract",
@@ -194,6 +203,73 @@ class ExecutionAuthGateTest(unittest.TestCase):
 
         self.assertEqual(exit_code, 2)
         self.assertIn("missing_proven_scope", payload["blockers"])
+
+    def test_gate_blocks_when_spec_delta_is_open(self) -> None:
+        self.analysis_blocker_path.write_text(
+            json.dumps(
+                {
+                    "status": "analysis_failed",
+                    "reason": "fanout_min_results_not_met",
+                    "route_receipt_hash": self.module.json_hash(self.route_payload),
+                }
+            )
+        )
+        self._write_local_override_receipt()
+        self.issue_contract_path.parent.mkdir(parents=True, exist_ok=True)
+        self.issue_contract_path.write_text(json.dumps({"status": "writer_ready", "proven_scope": ["x"]}))
+
+        with mock.patch.object(
+            self.module.dispatch_runtime,
+            "validate_spec_delta",
+            return_value=(False, {"status": "needs_scp_reconciliation"}, "spec_delta_needs_scp_reconciliation"),
+        ):
+            exit_code, payload = self.module.check_gate(
+                self.task_id,
+                self.task_class,
+                local_write=True,
+                block_id="P02",
+            )
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("spec_delta_needs_scp_reconciliation", payload["blockers"])
+
+    def test_gate_blocks_spec_driven_path_when_issue_contract_is_missing(self) -> None:
+        self.analysis_blocker_path.write_text(
+            json.dumps(
+                {
+                    "status": "analysis_failed",
+                    "reason": "fanout_min_results_not_met",
+                    "route_receipt_hash": self.module.json_hash(self.route_payload),
+                }
+            )
+        )
+        self._write_local_override_receipt()
+
+        with mock.patch.object(
+            self.module.dispatch_runtime,
+            "validate_draft_execution_spec",
+            return_value=(
+                True,
+                {
+                    "task_id": self.task_id,
+                    "scope_in": ["settings flow"],
+                    "acceptance_checks": ["settings render correctly"],
+                    "recommended_next_path": "/vida-form-task",
+                },
+                "",
+            ),
+        ):
+            exit_code, payload = self.module.check_gate(
+                self.task_id,
+                self.task_class,
+                local_write=True,
+                block_id="P02",
+            )
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(payload["status"], "blocked")
+        self.assertIn("missing_issue_contract", payload["blockers"])
+        self.assertTrue(payload["draft_execution_spec_present"])
 
 
 if __name__ == "__main__":

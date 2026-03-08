@@ -60,6 +60,10 @@ required_files=(
   "_vida/docs/human-approval-protocol.md"
   "_vida/docs/framework-memory-protocol.md"
   "_vida/docs/document-lifecycle-protocol.md"
+  "_vida/docs/context-governance-protocol.md"
+  "_vida/docs/run-graph-protocol.md"
+  "_vida/docs/trace-eval-protocol.md"
+  "_vida/docs/capability-registry-protocol.md"
   "_vida/docs/subagent-system-protocol.md"
   "_vida/scripts/validate-skills.sh"
   "_vida/scripts/beads-workflow.sh"
@@ -92,7 +96,12 @@ required_files=(
   "_vida/scripts/human-approval-gate.py"
   "_vida/scripts/framework-memory.py"
   "_vida/scripts/doc-lifecycle.py"
+  "_vida/scripts/context-governance.py"
   "_vida/scripts/framework-operator-status.py"
+  "_vida/scripts/run-graph.py"
+  "_vida/scripts/trace-eval.py"
+  "_vida/scripts/capability-registry.py"
+  "_vida/scripts/task-state-reconcile.py"
 )
 
 vida_status_line info "[health] checking required files"
@@ -199,6 +208,66 @@ if [[ -f "vida.config.yaml" ]]; then
   fi
 fi
 
+resolve_task_labels() {
+  local issue_id="$1"
+  local labels
+  labels="$(
+    br show "$issue_id" --json 2>/dev/null \
+      | jq -r '.[0].labels // [] | join(" ")' 2>/dev/null || true
+  )"
+  if [[ -n "${labels// }" ]]; then
+    printf '%s\n' "$labels"
+    return 0
+  fi
+  python3 - "$issue_id" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+issue_id = sys.argv[1]
+issues_path = Path(".beads/issues.jsonl")
+if not issues_path.exists():
+    raise SystemExit(0)
+for line in issues_path.read_text(encoding="utf-8").splitlines():
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        item = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if str(item.get("id", "")).strip() != issue_id:
+        continue
+    labels = item.get("labels", [])
+    if isinstance(labels, list):
+        print(" ".join(str(label).strip() for label in labels if str(label).strip()))
+    break
+PY
+}
+
+task_has_open_pack() {
+  local issue_id="$1"
+  local pack_id="$2"
+  [[ -f ".vida/logs/beads-execution.jsonl" ]] || return 1
+
+  local balance
+  balance="$(
+    jq -sr --arg task "$issue_id" --arg pack "$pack_id" '
+      reduce .[] as $event (0;
+        if (($event.task_id // "") == $task and ($event.pack_id // "") == $pack) then
+          if ($event.type // "") == "pack_start" then . + 1
+          elif ($event.type // "") == "pack_end" then . - 1
+          else .
+          end
+        else .
+        end
+      )
+    ' .vida/logs/beads-execution.jsonl 2>/dev/null || echo 0
+  )"
+  [[ "${balance:-0}" =~ ^-?[0-9]+$ ]] || balance=0
+  (( balance > 0 ))
+}
+
 if [[ -n "$TASK_ID" ]]; then
   vida_status_line info "[health] boot receipt verification for task: $TASK_ID"
   if ! bash _vida/scripts/boot-profile.sh verify-receipt "$TASK_ID" >/dev/null; then
@@ -259,18 +328,23 @@ if [[ -n "$TASK_ID" ]]; then
     fi
   fi
 
+  if reconcile_json="$(python3 _vida/scripts/task-state-reconcile.py status "$TASK_ID" 2>/dev/null)"; then
+    reconcile_class="$(jq -r '.classification // ""' <<<"$reconcile_json" 2>/dev/null)"
+    if [[ -n "$reconcile_class" ]]; then
+      vida_status_line info "[health] task-state reconciliation: $reconcile_class"
+      if [[ "$MODE" == "strict-dev" && ( "$reconcile_class" == "drift_detected" || "$reconcile_class" == "invalid_state" ) ]]; then
+        vida_status_line fail "[health] FAIL: task-state reconciliation reported $reconcile_class for $TASK_ID" >&2
+        exit 10
+      fi
+    fi
+  fi
+
   if [[ -f ".vida/logs/beads-execution.jsonl" ]]; then
-    writer_block_started="$(
-      jq -sr --arg task "$TASK_ID" '
-        any(
-          .[];
-          (.task_id // "") == $task
-          and (.type // "") == "block_start"
-          and ((.block_id // "") == "P02" or (.block_id // "") == "IEP04" or (.block_id // "") == "CL4")
-        )
-      ' .vida/logs/beads-execution.jsonl 2>/dev/null || echo false
-    )"
-    if [[ "$writer_block_started" == "true" ]]; then
+    implementation_context_present="false"
+    if task_has_open_pack "$TASK_ID" "dev-pack"; then
+      implementation_context_present="true"
+    fi
+    if [[ "$implementation_context_present" == "true" ]]; then
       vida_status_line info "[health] execution authorization gate verification for task: $TASK_ID"
       if ! python3 _vida/scripts/execution-auth-gate.py check "$TASK_ID" implementation --local-write >/dev/null; then
         vida_status_line fail "[health] FAIL: execution authorization gate is blocked for task $TASK_ID" >&2
@@ -284,7 +358,7 @@ if [[ -n "$TASK_ID" ]]; then
       exit 4
     fi
 
-    task_labels="$(br show "$TASK_ID" --json 2>/dev/null | jq -r '.[0].labels // [] | join(" ")' 2>/dev/null || true)"
+    task_labels="$(resolve_task_labels "$TASK_ID")"
     task_scope_is_framework="no"
     if grep -Eq '(^| )(scope:framework|domain:framework|framework|fsap|agent-system|vida-stack)( |$)' <<<"$task_labels"; then
       task_scope_is_framework="yes"

@@ -1,8 +1,10 @@
 import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -13,6 +15,7 @@ def load_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -53,6 +56,70 @@ class SubagentSystemRuntimeTest(unittest.TestCase):
         self.assertIn("VIDA_WEB_SEARCH_OK", cmd[-1])
         self.assertEqual(timeout_seconds, 31)
         self.assertEqual(expect, "VIDA_WEB_SEARCH_OK")
+
+    def test_route_candidate_context_filters_capability_incompatible_lane_before_scoring(self) -> None:
+        snapshot = {
+            "subagents": {
+                "writer_cli": {
+                    "enabled": True,
+                    "available": True,
+                    "subagent_backend_class": "external_cli",
+                    "write_scope": "scoped_only",
+                    "capability_band": ["bounded_write_safe"],
+                    "dispatch": {"command": "writer"},
+                },
+                "review_cli": {
+                    "enabled": True,
+                    "available": True,
+                    "subagent_backend_class": "external_cli",
+                    "write_scope": "none",
+                    "capability_band": ["read_only", "review_safe"],
+                    "dispatch": {"command": "review"},
+                },
+            },
+            "scorecards": {},
+            "agent_system": {
+                "effective_mode": "hybrid",
+                "max_parallel_agents": 2,
+                "state_owner": "orchestrator_only",
+                "scoring": self.module.thresholds({}),
+            },
+        }
+        config = {
+            "agent_system": {
+                "routing": {
+                    "implementation": {
+                        "subagents": ["writer_cli", "review_cli"],
+                        "write_scope": "scoped_only",
+                        "dispatch_required": "optional",
+                        "external_first_required": "no",
+                    }
+                }
+            }
+        }
+
+        with mock.patch.object(self.module.capability_registry_runtime, "compatibility_for") as mocked_compatibility:
+            mocked_compatibility.side_effect = [
+                {
+                    "compatible": True,
+                    "reason": "ok",
+                    "task_class": "implementation",
+                    "subagent": "writer_cli",
+                },
+                {
+                    "compatible": False,
+                    "reason": "write_scope_mismatch,missing_required_capability_band",
+                    "task_class": "implementation",
+                    "subagent": "review_cli",
+                },
+            ]
+            payload = self.module.route_candidate_context("implementation", snapshot, config, {})
+
+        self.assertEqual([item["subagent"] for item in payload["candidates"]], ["writer_cli"])
+        self.assertEqual(
+            payload["suppressed_subagents"],
+            [{"subagent": "review_cli", "reason": "capability_incompatible:write_scope_mismatch,missing_required_capability_band"}],
+        )
 
 
 if __name__ == "__main__":

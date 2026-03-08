@@ -1,4 +1,5 @@
 import importlib.util
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -105,23 +106,31 @@ class BudgetEnforcementTest(unittest.TestCase):
             },
         }
 
-        with mock.patch.object(self.dispatch.subprocess, "run") as mocked_run:
-            result, synthesis_ready = self.dispatch.run_verification_phase(
-                task_id="unit-task",
-                task_class="implementation",
-                prompt_file=ROOT_DIR / "AGENTS.md",
-                output_dir=ROOT_DIR / "_temp" / "budget-test",
-                workdir=ROOT_DIR,
-                route=route,
-                merge_summary={},
-                post_arbitration_merge_summary={},
-                results=[],
-            )
+        with tempfile.TemporaryDirectory() as tmp:
+            original_run_graph_dir = self.dispatch.run_graph_runtime.STATE_DIR
+            self.dispatch.run_graph_runtime.STATE_DIR = Path(tmp) / "run-graphs"
+            try:
+                with mock.patch.object(self.dispatch.subprocess, "run") as mocked_run:
+                    result, synthesis_ready = self.dispatch.run_verification_phase(
+                        task_id="unit-task",
+                        task_class="implementation",
+                        prompt_file=ROOT_DIR / "AGENTS.md",
+                        output_dir=ROOT_DIR / "_temp" / "budget-test",
+                        workdir=ROOT_DIR,
+                        route=route,
+                        merge_summary={},
+                        post_arbitration_merge_summary={},
+                        results=[],
+                    )
+                run_graph = self.dispatch.run_graph_runtime.load_graph("unit-task")
+            finally:
+                self.dispatch.run_graph_runtime.STATE_DIR = original_run_graph_dir
 
         mocked_run.assert_not_called()
         self.assertFalse(synthesis_ready)
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["reason"], "verification_pass_cap_exceeded")
+        self.assertEqual(run_graph["nodes"]["verifier"]["status"], "blocked")
 
     def test_build_route_budget_uses_snapshot_subagent_configs_for_free_coaches(self) -> None:
         snapshot = {

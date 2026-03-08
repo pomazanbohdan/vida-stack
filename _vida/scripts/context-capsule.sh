@@ -114,6 +114,11 @@ hydrate_capsule() {
   local task_id="$1"
   local capsule_path="$CAPSULE_DIR/${task_id}.json"
   if [[ ! -f "$capsule_path" ]]; then
+    if [[ "${VIDA_CONTEXT_HYDRATE_ALLOW_MISSING:-0}" == "1" ]]; then
+      bash "$LOG_SCRIPT" op-event "$task_id" "context_hydration_pending" "reason=missing_capsule"
+      echo "[context-capsule] CONTEXT_HYDRATION_PENDING: missing capsule for $task_id" >&2
+      return 3
+    fi
     bash "$LOG_SCRIPT" op-event "$task_id" "context_hydration_failed" "reason=missing_capsule"
     echo "[context-capsule] BLK_CONTEXT_NOT_HYDRATED: missing capsule for $task_id" >&2
     return 2

@@ -44,7 +44,7 @@ class Step:
         if self.result == "redirected":
             return "superseded"
         if self.result == "partial":
-            return "todo"
+            return "partial"
         if self.ts_start and not self.ts_end:
             return "doing"
         return "todo"
@@ -117,7 +117,26 @@ def log_signature() -> str:
     if not LOG_FILE.exists():
         return "missing"
     st = LOG_FILE.stat()
-    return f"{int(st.st_mtime)}:{st.st_size}"
+    runtime_st = Path(__file__).stat()
+    return f"{int(st.st_mtime)}:{st.st_size}:{int(runtime_st.st_mtime)}:{runtime_st.st_size}"
+
+
+def propagate_unreachable_superseded_steps(by_block: dict[str, Step]) -> None:
+    changed = True
+    while changed:
+        changed = False
+        superseded_ids = {
+            block_id
+            for block_id, step in by_block.items()
+            if step.status() == "superseded"
+        }
+        for block_id, step in by_block.items():
+            if step.status() != "todo":
+                continue
+            depends_on = (step.depends_on or "").strip()
+            if depends_on and depends_on in superseded_ids:
+                step.result = "redirected"
+                changed = True
 
 
 def compute_steps(task_id: str) -> list[dict[str, Any]]:
@@ -157,6 +176,7 @@ def compute_steps(task_id: str) -> list[dict[str, Any]]:
             step.evidence_ref = e.get("evidence_ref", "")
             step.merge_ready = e.get("merge_ready", "")
             step.ts_end = e.get("ts_end") or e.get("ts", "")
+    propagate_unreachable_superseded_steps(by_block)
     return [by_block[key].to_json() for key in sorted(by_block)]
 
 
@@ -220,6 +240,7 @@ def cmd_board(task_id: str) -> int:
     steps = steps_json(task_id)
     print(f"TODO:    {group_ids(steps, 'todo')}")
     print(f"DOING:   {group_ids(steps, 'doing')}")
+    print(f"PARTIAL: {group_ids(steps, 'partial')}")
     print(f"DONE:    {group_ids(steps, 'done')}")
     print(f"BLOCKED: {group_ids(steps, 'blocked')}")
     print(f"SUPERSEDED: {group_ids(steps, 'superseded')}")
@@ -244,6 +265,7 @@ def cmd_compact(task_id: str, limit: int) -> int:
     steps = steps_json(task_id)
     print(compact_line(steps, "todo", limit))
     print(compact_line(steps, "doing", limit))
+    print(compact_line(steps, "partial", limit))
     print(compact_line(steps, "done", limit))
     print(compact_line(steps, "blocked", limit))
     print(compact_line(steps, "superseded", limit))
@@ -318,6 +340,7 @@ def cmd_sync(task_id: str, mode: str, stdout_only: bool, quiet: bool, max_items:
             steps = payload["steps"]
             print(compact_line(steps, "todo", max_items))
             print(compact_line(steps, "doing", max_items))
+            print(compact_line(steps, "partial", max_items))
             print(compact_line(steps, "done", max_items))
             print(compact_line(steps, "blocked", max_items))
             print(compact_line(steps, "superseded", max_items))
@@ -326,10 +349,17 @@ def cmd_sync(task_id: str, mode: str, stdout_only: bool, quiet: bool, max_items:
         state_out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
         return 0
 
-    if not quiet:
-        print(f"# TODO Sync Snapshot: {task_id}\n")
+        if not quiet:
+            print(f"# TODO Sync Snapshot: {task_id}\n")
         for step in sorted(payload["steps"], key=lambda s: s["block_id"]):
-            mark = "x" if step["status"] == "done" else "~" if step["status"] == "superseded" else " "
+            mark = (
+                "x" if step["status"] == "done"
+                else ">" if step["status"] == "doing"
+                else "~" if step["status"] in {"superseded", "partial"}
+                else "!"
+                if step["status"] == "blocked"
+                else " "
+            )
             print(f"- [{mark}] {step['block_id']} — {step.get('goal','-')} (status={step.get('status','todo')})")
         if not stdout_only:
             print(f"\nSnapshot JSON: {json_out}")

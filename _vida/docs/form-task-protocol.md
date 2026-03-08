@@ -36,8 +36,11 @@ Canonical layer source: `_vida/docs/command-layer-protocol.md`
 
 ## Mandatory Inputs
 
+1. Normalized `spec_intake` artifact when the upstream scope originated from mixed research, release signals, or unresolved user clarification.
 1. Spec scope and decisions.
 1.1. Equivalent bugfix paths may use approved `issue_contract` input from `_vida/docs/issue-contract-protocol.md` instead of a longer SCP artifact when the scope is already bounded.
+1.2. Non-equivalent issue/release paths must carry `spec_delta` reconciliation state before task materialization continues.
+1.3. SCP-driven paths must carry a compact `draft_execution_spec` artifact before task-pool build.
 2. SCP readiness/confidence evidence.
 3. Relevant research references.
 4. Feature checklist entries in scope.
@@ -54,6 +57,7 @@ Before task-pool build, FTP must produce and approve scope contract:
 3. explicit user approval for scope contract.
 
 No task materialization in `br` before scope contract approval.
+No task materialization in `br` from raw research/release/chat text without either normalized `spec_intake`, approved SCP artifact, or approved `issue_contract`.
 
 ## Question Card Protocol (Mandatory)
 
@@ -66,6 +70,7 @@ Card categories:
 3. `Q3 Dependency Strategy`: strict chain vs parallel-safe waves.
 4. `Q4 Risk Policy`: conservative vs balanced vs aggressive.
 5. `Q5 Launch Decision`: start `/vida-implement` now vs revise pool.
+6. `Q6 Draft Execution-Spec Review`: approve the bounded execution contract vs revise assumptions/scope first.
 
 Card rules:
 
@@ -81,8 +86,10 @@ Decision outputs from cards are mandatory inputs for TODO planning:
 3. `dependency_strategy` -> sequential chain vs parallel-safe waves.
 4. `risk_policy` -> conservative/balanced/aggressive verification depth.
 5. `launch_decision` -> start dev now or keep in revision loop.
+6. `draft_execution_spec_review` -> confirms the contract that task materialization may expand from.
 
 If any required decision is missing, task-pool build is blocked.
+If the draft execution-spec is not approved, task-pool build is blocked.
 
 ## Planning-to-TODO Mapping Contract
 
@@ -123,7 +130,7 @@ bash _vida/scripts/todo-plan-validate.sh <task_id> [--diff-aware]
 5. `FTP-2 Option Synthesis`:
    - build alternative task-scope strategies.
 6. `FTP-3 User Approval Questions`:
-   - run question cards and resolve conflicts.
+   - run question cards, review the draft execution-spec, and resolve conflicts.
 7. `FTP-4 Task Pool Build`:
    - create/update `br` tasks and metadata.
 8. `FTP-5 Dependency Graph + Track Routing`:

@@ -23,6 +23,8 @@ Scope:
 
 1. `br` active task/pool context.
 2. Approved spec and acceptance criteria, or approved `issue_contract` for equivalent bug paths.
+2.1. When the work originated from mixed research/release/user-negotiation inputs, a normalized `spec_intake` artifact must already have routed that work into SCP or ICP before launch.
+2.2. `draft_execution_spec` is a pre-launch review artifact only; it does not authorize `/vida-implement` by itself and must be absorbed by the canonical form-task launch path before writer execution.
 3. Research evidence relevant to scope.
 4. External API reality evidence (when integration exists).
 5. Decision log (`docs/decisions.md`) and feature checklist entries.

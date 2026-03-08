@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +15,7 @@ def load_module(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -97,30 +100,42 @@ class ProblemPartyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             self.module.ROUTE_RECEIPT_DIR = tmp_path / "route-receipts"
-            decision_path = tmp_path / "decision.json"
-            decision_path.write_text(
-                json.dumps(
-                    {
-                        "task_id": "mobile-2wy.4",
-                        "topic": "problem-party",
-                        "decision": "small board first",
-                        "next_execution_step": "record bounded receipt",
-                    }
-                ),
-                encoding="utf-8",
-            )
+            original_env = os.environ.get(self.module.run_graph_runtime.STATE_DIR_ENV)
+            os.environ[self.module.run_graph_runtime.STATE_DIR_ENV] = str(tmp_path / "run-graphs")
+            try:
+                decision_path = tmp_path / "decision.json"
+                decision_path.write_text(
+                    json.dumps(
+                        {
+                            "task_id": "mobile-2wy.4",
+                            "topic": "problem-party",
+                            "decision": "small board first",
+                            "next_execution_step": "record bounded receipt",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
 
-            receipt_path = self.module.write_decision_receipt(
-                task_id="mobile-2wy.4",
-                task_class="architecture",
-                topic="problem-party",
-                decision_artifact_path=decision_path,
-            )
-            payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+                receipt_path = self.module.write_decision_receipt(
+                    task_id="mobile-2wy.4",
+                    task_class="architecture",
+                    topic="problem-party",
+                    decision_artifact_path=decision_path,
+                )
+                payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+                state_dir = self.module.run_graph_runtime.resolve_state_dir()
+                run_graph = json.loads((state_dir / "mobile-2wy.4.json").read_text(encoding="utf-8"))
+            finally:
+                if original_env is None:
+                    os.environ.pop(self.module.run_graph_runtime.STATE_DIR_ENV, None)
+                else:
+                    os.environ[self.module.run_graph_runtime.STATE_DIR_ENV] = original_env
 
         self.assertEqual(payload["task_class"], "architecture")
         self.assertEqual(payload["decision"], "small board first")
         self.assertEqual(payload["status"], "problem_party_ready")
+        self.assertEqual(run_graph["nodes"]["problem_party"]["status"], "completed")
+        self.assertEqual(run_graph["nodes"]["writer"]["status"], "ready")
 
 
 if __name__ == "__main__":

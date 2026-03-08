@@ -38,7 +38,7 @@ Minimum shape:
 
 1. Silent framework diagnosis may record anomalies automatically when framework bugs are captured.
 2. Session reflection may record anomalies automatically for newly detected framework gaps.
-3. Later operator surfaces may summarize memory counts and recent entries, but the ledger itself remains the canonical store.
+3. Later operator surfaces may summarize memory counts, repeated anomaly clusters, task-level anomaly concentration, and recent entries, but the ledger itself remains the canonical store.
 
 ## Commands
 

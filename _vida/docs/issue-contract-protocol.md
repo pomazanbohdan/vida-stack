@@ -7,12 +7,15 @@ Scope:
 1. Canonical bridge for `bug-as-spec` style requests.
 2. Applies when the incoming issue text is the main spec input or when analysis must decide whether a reported bug is an equivalent fix versus a spec/product-contract delta.
 3. Works with `_vida/docs/bug-fix-protocol.md`, `_vida/docs/implement-execution-protocol.md`, and `_vida/docs/subagent-system-protocol.md`.
+4. Consumes `_vida/docs/spec-intake-protocol.md` when an incoming issue/release signal is still too mixed or scope-bearing for direct issue-contract narrowing.
 
 ## Core Principle
 
 Do not treat raw bug text as writer-ready by default.
 
-Normalize it into `issue_contract` first, then decide whether the writer may proceed.
+Normalize it into `issue_contract` first, then decide whether the work may proceed into the form-task/implementation launch path.
+
+If the incoming signal is still mixed with research findings, release pressure, or unresolved user negotiation, normalize it into `spec_intake` first and only then continue into `issue_contract` when `ready_for_issue_contract`.
 
 ## Intake Classes
 
@@ -55,7 +58,7 @@ Minimum fields:
 `issue_contract.status` must normalize to one of:
 
 1. `writer_ready`
-   - equivalent fix; writer may proceed.
+   - equivalent fix; the issue is eligible to continue through the canonical form-task/implementation launch gate.
 2. `spec_delta_required`
    - behavior/spec/product contract must be reconciled before the writer starts.
 3. `issue_closed_no_fix`
@@ -144,6 +147,8 @@ Spec synchronization happens in two distinct moments:
    - when `issue_contract.status=spec_delta_required`
 2. post-fix:
    - when a completed equivalent fix changes or clarifies the documented contract
+
+When `status=spec_delta_required`, materialize the delta via `_vida/docs/spec-delta-protocol.md` instead of leaving the reconciliation request implicit.
 
 ## Fail Conditions
 

@@ -151,6 +151,12 @@ def check_gate(
     analysis_receipt_path = dispatch_runtime.analysis_receipt_path(task_id, task_class)
     analysis_blocker_ok = False
     analysis_blocker, analysis_blocker_error = {}, ""
+    spec_intake_ok, spec_intake, spec_intake_error = dispatch_runtime.validate_spec_intake(task_id, task_class)
+    spec_delta_ok, spec_delta, spec_delta_error = dispatch_runtime.validate_spec_delta(task_id, task_class)
+    draft_execution_spec_ok, draft_execution_spec, draft_execution_spec_error = dispatch_runtime.validate_draft_execution_spec(
+        task_id,
+        task_class,
+    )
     issue_contract_ok, issue_contract, issue_contract_error = dispatch_runtime.validate_issue_contract(task_id, task_class, route)
     local_receipt_ok = False
     local_receipt, local_receipt_error = {}, ""
@@ -171,6 +177,12 @@ def check_gate(
     if verification_plan.get("required") == "yes" and not verification_plan.get("selected_subagent"):
         blockers.append("missing_verifier_plan")
 
+    if not spec_intake_ok:
+        blockers.append(spec_intake_error or "invalid_spec_intake")
+    if not spec_delta_ok:
+        blockers.append(spec_delta_error or "invalid_spec_delta")
+    if not draft_execution_spec_ok:
+        blockers.append(draft_execution_spec_error or "invalid_draft_execution_spec")
     if not issue_contract_ok:
         blockers.append(issue_contract_error or "missing_issue_contract")
 
@@ -196,6 +208,15 @@ def check_gate(
         "issue_contract_path": str(dispatch_runtime.issue_contract_path(task_id)),
         "issue_contract_present": bool(issue_contract),
         "issue_contract": issue_contract if issue_contract_ok else issue_contract,
+        "spec_intake_path": str(dispatch_runtime.spec_intake_path(task_id)),
+        "spec_intake_present": bool(spec_intake),
+        "spec_intake": spec_intake if spec_intake_ok else spec_intake,
+        "spec_delta_path": str(dispatch_runtime.spec_delta_path(task_id)),
+        "spec_delta_present": bool(spec_delta),
+        "spec_delta": spec_delta if spec_delta_ok else spec_delta,
+        "draft_execution_spec_path": str(dispatch_runtime.draft_execution_spec_path(task_id)),
+        "draft_execution_spec_present": bool(draft_execution_spec),
+        "draft_execution_spec": draft_execution_spec if draft_execution_spec_ok else draft_execution_spec,
         "local_execution_receipt_path": str(local_execution_receipt_path(task_id, task_class)),
         "local_execution_allowed": local_allowed_by_route,
         "local_execution_authorized": local_allowed_by_route or local_receipt_ok,

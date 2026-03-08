@@ -6,14 +6,28 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
+SCRIPT_DIR = Path(__file__).resolve().parent
 LOG_DIR = ROOT_DIR / ".vida" / "logs" / "problem-party"
 ROUTE_RECEIPT_DIR = ROOT_DIR / ".vida" / "logs" / "route-receipts"
+
+
+def load_module(name: str, path: Path) -> Any:
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load module: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+run_graph_runtime = load_module("vida_problem_party_run_graph_runtime", SCRIPT_DIR / "run-graph.py")
 
 BOARD_PRESETS: dict[str, dict[str, Any]] = {
     "small": {
@@ -202,7 +216,31 @@ def write_decision_receipt(
         "next_execution_step": str(decision_artifact.get("next_execution_step", "")).strip(),
         "confidence": str(decision_artifact.get("confidence", "")).strip(),
     }
-    return write_json(receipt_path, payload)
+    written = write_json(receipt_path, payload)
+    try:
+        run_graph_runtime.update_node(
+            task_id,
+            task_class,
+            "problem_party",
+            "completed",
+            route_task_class=task_class,
+            meta={
+                "receipt_path": str(receipt_path),
+                "decision_artifact_path": str(decision_artifact_path),
+                "decision": payload["decision"],
+            },
+        )
+        run_graph_runtime.update_node(
+            task_id,
+            task_class,
+            "writer",
+            "ready",
+            route_task_class=task_class,
+            meta={"reason": "problem_party_ready", "decision_receipt_path": str(receipt_path)},
+        )
+    except Exception:
+        pass
+    return written
 
 
 def parse_args() -> argparse.Namespace:

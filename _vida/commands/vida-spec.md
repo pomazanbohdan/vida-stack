@@ -66,10 +66,11 @@ Run full SCP contract flow:
 5. `SCP-4 Design Contract`: UX flow, states, components.
 6. `SCP-5 Technical Contract`: interfaces, data/error contracts, observability.
 7. `SCP-6 Skill Routing`: dynamic skill discovery + optional project skill scaffold.
-8. `Confidence`: calculate weighted SCP confidence.
-9. `SCP-7 Reassessment`: consolidated confirmation with user.
-10. `SCP-8 Ready Verdict`: ready/conditional/not-ready.
-11. Persist spec and update `br` docs anchor when needed.
+8. `SCP-6.5 Draft Execution-Spec`: compact bounded execution contract for downstream review.
+9. `Confidence`: calculate weighted SCP confidence.
+10. `SCP-7 Reassessment`: consolidated confirmation with user.
+11. `SCP-8 Ready Verdict`: ready/conditional/not-ready.
+12. Persist spec and update `br` docs anchor when needed.
 
 ### Internal Category Decomposition (Built-in)
 
@@ -195,7 +196,8 @@ Bands:
 7. Risks/compatibility/rollback
 8. Skills Applied + missing-skill plan
 9. Confidence Scorecard
-10. References (research/docs/API evidence links)
+10. Draft Execution-Spec
+11. References (research/docs/API evidence links)
 
 ## Pack Integration
 

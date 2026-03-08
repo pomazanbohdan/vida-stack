@@ -28,6 +28,7 @@ When active, the orchestrator must treat silent diagnosis as a background framew
 7. Closure-ready state for framework bug work still requires normal delegated verification/proving rules.
 8. When TODO/`br` flow is active, `_vida/docs/todo-protocol.md` is the canonical execution-layer contract for deferred capture, compact-safe persistence, and post-boundary follow-up routing.
 9. Durable lessons, corrections, and anomalies belong in `_vida/docs/framework-memory-protocol.md`, not only in chat or transient reflection output.
+10. Silent diagnosis must audit the instruction layer as well as runtime/task flow: `AGENTS.md`, lane entry contracts, and canonical framework protocols are valid diagnosis targets when they reduce quality, clarity, token efficiency, or determinism.
 
 ## Bug Capture Contract
 
@@ -63,12 +64,19 @@ This keeps product momentum while preserving framework integrity.
 
 ## Session Reflection
 
-If `framework_self_diagnosis.session_reflection_required: true`, the orchestrator should run a self-reflection pass near task/session completion against:
+If `framework_self_diagnosis.session_reflection_required: true`, the orchestrator must run a self-reflection pass near task/session completion against:
 
 1. architecture cleanliness,
 2. completeness,
 3. token efficiency,
-4. orchestration efficiency.
+4. orchestration efficiency,
+5. instruction clarity and determinism,
+6. instruction/runtime consistency.
 
 If new framework gaps are found, create follow-up framework tasks/bugs and route them through the normal VIDA framework workflow.
 Record durable anomalies or reusable lessons in framework memory when they should influence future framework work beyond the current session.
+
+Instruction reflection rule:
+
+1. Reflection must include whether `AGENTS.md`, lane entry contracts, and canonical protocols contain vague optionality, conflicting precedence, missing decision boundaries, or instruction drift relative to runtime behavior.
+2. When instruction-layer friction increases iterations, context rereads, or token spend, capture it as a framework issue even if runtime code still works.

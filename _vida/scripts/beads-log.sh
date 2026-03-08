@@ -132,7 +132,7 @@ update_todo_index_block_start() {
               status:(if (.result // "") == "done" then "done"
                       elif (.result // "") == "failed" then "blocked"
                       elif (.result // "") == "redirected" then "superseded"
-                      elif (.result // "") == "partial" then "todo"
+                      elif (.result // "") == "partial" then "partial"
                       elif ($ts_start != "" and ((.ts_end // "") == "")) then "doing"
                       else (.status // "todo") end)
             }
@@ -261,7 +261,7 @@ update_todo_index_block_end() {
               status:(if $result == "done" then "done"
                       elif $result == "failed" then "blocked"
                       elif $result == "redirected" then "superseded"
-                      elif $result == "partial" then "todo"
+                      elif $result == "partial" then "partial"
                       elif ((.ts_start // "") != "" and $ts_end == "") then "doing"
                       else "todo" end)
             }
@@ -279,7 +279,7 @@ update_todo_index_block_end() {
             status:(if $result == "done" then "done"
                     elif $result == "failed" then "blocked"
                     elif $result == "redirected" then "superseded"
-                    elif $result == "partial" then "todo"
+                    elif $result == "partial" then "partial"
                     else "todo" end)
           }]
         end

@@ -14,6 +14,12 @@ Purpose: define one canonical approval-receipt contract for review states that r
    - rejected receipts must block synthesis-ready state,
    - the rejection notes become follow-up guidance for rework or escalation.
 
+Vocabulary rule:
+
+1. `policy_gate_required`, `senior_review_required`, and `human_gate_required` are the canonical runtime review-state names.
+2. Older aliases such as `policy_check_pending`, `senior_review_pending`, and `requires_human` are legacy/reference terminology only and must not be emitted by new runtime artifacts, receipts, or protocol examples.
+3. When an external roadmap or release document still uses the older names, treat this protocol and the active runtime protocols as authoritative for execution behavior.
+
 ## Receipt Artifact
 
 Canonical artifact path:

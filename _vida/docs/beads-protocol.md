@@ -40,6 +40,10 @@ Autostart note:
 
 Rule: TODO is not a second task-state engine. It is execution telemetry only.
 
+Reconciliation rule:
+
+1. When `br` lifecycle state and TODO execution state diverge, use `_vida/docs/task-state-reconciliation-protocol.md` to classify the task before mutating lifecycle state.
+
 Wrapper rule:
 
 1. `_vida/*` wrappers operate in JSONL-first mode while `beads_mutate` owns task writes.
@@ -165,6 +169,7 @@ Finish gate:
 1. `finish` runs strict log checks.
 2. If critical contradictions exist, finish is blocked.
 3. At least one `self_reflection` entry is required in strict mode.
+4. When a task appears done-but-open or stale-in-progress, run `python3 _vida/scripts/task-state-reconcile.py status <task_id>` before closure or reopen decisions.
 
 ## 8) Files
 

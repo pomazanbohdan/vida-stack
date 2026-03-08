@@ -9,7 +9,9 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Framework topology map | `_vida/docs/framework-map-protocol.md` | `_vida/docs/protocol-index.md` |
 | Command layer matrix | `_vida/docs/command-layer-protocol.md` | `_vida/commands.md`, `_vida/commands/vida-*.md`, `_vida/docs/implement-execution-protocol.md`, `_vida/docs/bug-fix-protocol.md`, `_vida/docs/use-case-packs.md`, `_vida/docs/todo-protocol.md`, `_vida/docs/subagents.md`, `_vida/scripts/vida-command-audit.sh`, `_vida/scripts/render-subagent-prompt.sh`, `_vida/docs/framework-map-protocol.md` |
 | Runtime script architecture | `_vida/docs/script-runtime-architecture.md` | `_vida/docs/framework-map-protocol.md`, `_vida/scripts/*.sh`, `_vida/scripts/*.py` |
+| Tooling/search guide | `_vida/docs/tooling.md` | `_vida/docs/pipelines.md`, `AGENTS.md` |
 | Framework change log | `_vida/CHANGELOG.md` | `_vida/docs/protocol-index.md` |
+| Instruction activation and decomposition | `_vida/docs/instruction-activation-protocol.md` | `AGENTS.md`, `_vida/docs/ORCHESTRATOR-ENTRY.MD`, `_vida/docs/protocol-index.md` |
 | Project overlay activation | `_vida/docs/project-overlay-protocol.md` | `vida.config.yaml`, `_vida/templates/vida.config.yaml.template`, `AGENTS.md`, `_vida/scripts/vida-config.py`, `_vida/scripts/boot-profile.sh`, `_vida/scripts/quality-health-check.sh` |
 | Boot packet runtime artifact | `_vida/docs/boot-packet-protocol.md` | `_vida/scripts/boot-packet.py`, `_vida/scripts/boot-profile.sh`, `AGENTS.md`, `_vida/docs/ORCHESTRATOR-ENTRY.MD`, `_vida/docs/SUBAGENT-ENTRY.MD` |
 | Project bootstrap/self-reproduction | `_vida/docs/project-bootstrap-protocol.md` | `_vida/scripts/project-bootstrap.py`, `_vida/templates/vida.config.yaml.template`, `vida.config.yaml` |
@@ -18,7 +20,13 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Human approval lifecycle | `_vida/docs/human-approval-protocol.md` | `_vida/scripts/human-approval-gate.py`, `_vida/scripts/subagent-dispatch.py`, `_vida/docs/subagent-system-protocol.md`, `_vida/docs/implement-execution-protocol.md` |
 | Framework memory ledger | `_vida/docs/framework-memory-protocol.md` | `_vida/scripts/framework-memory.py`, `_vida/scripts/vida-silent-diagnosis.py`, `_vida/docs/silent-framework-diagnosis-protocol.md` |
 | Document lifecycle and freshness | `_vida/docs/document-lifecycle-protocol.md` | `_vida/scripts/doc-lifecycle.py`, `_vida/docs/project-overlay-protocol.md`, `_vida/docs/silent-framework-diagnosis-protocol.md` |
+| Context governance ledger | `_vida/docs/context-governance-protocol.md` | `_vida/scripts/context-governance.py`, `_vida/scripts/subagent-dispatch.py`, `_vida/scripts/framework-operator-status.py`, `_vida/docs/future.md` |
+| Durable run-graph ledger | `_vida/docs/run-graph-protocol.md` | `_vida/scripts/run-graph.py`, `_vida/docs/future.md`, `_vida/scripts/subagent-dispatch.py` |
+| Local trace grading and datasets | `_vida/docs/trace-eval-protocol.md` | `_vida/scripts/trace-eval.py`, `_vida/scripts/eval-pack.sh`, `_vida/scripts/subagent-eval-pack.py`, `_vida/docs/future.md` |
+| Typed capability registry | `_vida/docs/capability-registry-protocol.md` | `_vida/scripts/capability-registry.py`, `_vida/scripts/subagent-system.py`, `vida.config.yaml` |
+| Task-state reconciliation | `_vida/docs/task-state-reconciliation-protocol.md` | `_vida/scripts/task-state-reconcile.py`, `_vida/docs/todo-protocol.md`, `_vida/docs/beads-protocol.md`, `_vida/scripts/quality-health-check.sh` |
 | Problem-party discussion | `_vida/docs/problem-party-protocol.md` | `_vida/scripts/problem-party.py`, `_vida/docs/orchestration-protocol.md`, `_vida/docs/todo-protocol.md` |
+| Future platform alignment (non-canonical reference) | `_vida/docs/future.md` | `_vida/docs/protocol-index.md`, `_vida/CHANGELOG.md` |
 | Core bootstrap router | `AGENTS.md` | `_vida/docs/ORCHESTRATOR-ENTRY.MD`, `_vida/docs/SUBAGENT-ENTRY.MD`, `_vida/docs/SUBAGENT-THINKING.MD`, `_vida/docs/README.md`, `docs/README.md` |
 | Orchestrator entry contract | `_vida/docs/ORCHESTRATOR-ENTRY.MD` | `AGENTS.md`, `_vida/docs/orchestration-protocol.md`, `_vida/docs/use-case-packs.md` |
 | Thinking algorithms | `_vida/docs/thinking-protocol.md` | `_vida/docs/algorithms-one-screen.md`, `_vida/docs/algorithms-quick-reference.md` |
@@ -34,7 +42,10 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Bug-fix unified flow | `_vida/docs/bug-fix-protocol.md` | `_vida/commands/vida-bug-fix.md`, `_vida/docs/use-case-packs.md` |
 | Issue-as-contract bridge | `_vida/docs/issue-contract-protocol.md` | `_vida/docs/bug-fix-protocol.md`, `_vida/docs/implement-execution-protocol.md`, `_vida/scripts/subagent-dispatch.py`, `_vida/scripts/execution-auth-gate.py` |
 | Web/internet validation | `_vida/docs/web-validation-protocol.md` | `_vida/docs/thinking-protocol.md#section-web-search`, `_vida/docs/spec-contract-protocol.md` |
+| Spec intake normalization | `_vida/docs/spec-intake-protocol.md` | `_vida/scripts/spec-intake.py`, `_vida/docs/spec-contract-protocol.md`, `_vida/docs/issue-contract-protocol.md`, `_vida/docs/form-task-protocol.md` |
+| Spec delta reconciliation | `_vida/docs/spec-delta-protocol.md` | `_vida/scripts/spec-delta.py`, `_vida/docs/issue-contract-protocol.md`, `_vida/docs/bug-fix-protocol.md`, `_vida/docs/form-task-protocol.md` |
 | Spec contract (non-dev flows) | `_vida/docs/spec-contract-protocol.md` | `_vida/docs/spec-contract-artifacts.md`, `_vida/commands/vida-spec.md`, `_vida/scripts/skill-discovery.py`, `_vida/scripts/scp-confidence.py` |
+| Draft execution-spec helper | `_vida/docs/spec-contract-artifacts.md` | `_vida/scripts/draft-execution-spec.py`, `_vida/docs/spec-contract-protocol.md`, `_vida/docs/form-task-protocol.md` |
 | Form-task bridge (spec->dev) | `_vida/docs/form-task-protocol.md` | `_vida/commands/vida-form-task.md`, `_vida/docs/use-case-packs.md` |
 | Planning decomposition (Q-Gate -> TODO plan) | `_vida/docs/todo-protocol.md` | `_vida/docs/form-task-protocol.md`, `_vida/docs/silent-framework-diagnosis-protocol.md`, `_vida/scripts/todo-plan-validate.sh`, `_vida/scripts/stateful-sequence-check.sh` |
 | Implement execution (dev) | `_vida/docs/implement-execution-protocol.md` | `_vida/commands/vida-implement.md`, `_vida/docs/use-case-packs.md`, `_vida/docs/command-layer-protocol.md` |
@@ -46,7 +57,7 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Subagent dispatch | `_vida/docs/subagents.md` | `_vida/docs/SUBAGENT-ENTRY.MD`, `_vida/docs/SUBAGENT-THINKING.MD`, `_vida/docs/subagent-prompt-templates.md`, `_vida/scripts/render-subagent-prompt.sh` |
 | Runtime log policy | `_vida/docs/log-policy.md` | `.gitignore` |
 | TODO overhead diagnostics | `_vida/scripts/todo-overhead-report.sh` | `_vida/docs/todo-protocol.md` |
-| Project operations (build/run/observability/live checks) | host-project operations doc declared by project overlay | host-project scripts and runbooks |
+| Project operations (build/run/observability/live checks) | host-project operations doc declared by project overlay when overlay exists; otherwise framework-owned wrappers under `_vida/scripts/*` | host-project scripts and runbooks |
 | Environment/auth notes | `docs/environments.md` | - |
 | Skill catalog | `.agents/skills/` | - |
 | GitHub operations | `_vida/docs/pipelines.md` | `gh` CLI help |
@@ -87,3 +98,5 @@ When a protocol changes:
 1. Update the canonical file first.
 2. Update linked references in the same change.
 3. Keep this index synchronized.
+4. If a framework-owned `_vida/docs/*.md` file is referenced as a canonical, mandatory, or full operational guide anywhere else in framework docs, it must appear in this index before the change is considered complete.
+5. If a framework-owned document is intentionally excluded from this index, the excluding protocol must state that it is non-canonical reference material.

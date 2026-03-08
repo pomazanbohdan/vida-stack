@@ -1,0 +1,58 @@
+{
+  "nodes": {
+    "analysis": {
+      "attempts": 14,
+      "meta": {
+        "manifest_path": "/tmp/tmp7fe0wff3/prepare/analysis/manifest.json",
+        "receipt_path": "/tmp/tmp7fe0wff3/route-receipts/unit-task.implementation.analysis.json"
+      },
+      "status": "completed",
+      "updated_at": "2026-03-08T00:15:13Z"
+    },
+    "approval": {
+      "attempts": 0,
+      "meta": {},
+      "status": "pending",
+      "updated_at": "2026-03-08T00:14:46Z"
+    },
+    "coach": {
+      "attempts": 6,
+      "meta": {
+        "attempt_count": 1,
+        "reason": "execution gate still missing"
+      },
+      "status": "blocked",
+      "updated_at": "2026-03-08T00:15:13Z"
+    },
+    "problem_party": {
+      "attempts": 0,
+      "meta": {},
+      "status": "pending",
+      "updated_at": "2026-03-08T00:14:46Z"
+    },
+    "synthesis": {
+      "attempts": 0,
+      "meta": {},
+      "status": "pending",
+      "updated_at": "2026-03-08T00:14:46Z"
+    },
+    "verifier": {
+      "attempts": 0,
+      "meta": {},
+      "status": "pending",
+      "updated_at": "2026-03-08T00:14:46Z"
+    },
+    "writer": {
+      "attempts": 0,
+      "meta": {
+        "reason": "spec_delta_required"
+      },
+      "status": "blocked",
+      "updated_at": "2026-03-08T00:15:13Z"
+    }
+  },
+  "route_task_class": "coach",
+  "task_class": "implementation",
+  "task_id": "unit-task",
+  "updated_at": "2026-03-08T00:15:13Z"
+}

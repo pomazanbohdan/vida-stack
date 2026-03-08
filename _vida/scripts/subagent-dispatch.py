@@ -24,6 +24,10 @@ RUN_LOG_PATH = LOG_DIR / "subagent-runs.jsonl"
 ROUTE_RECEIPT_DIR = LOG_DIR / "route-receipts"
 ISSUE_CONTRACT_DIR = LOG_DIR / "issue-contracts"
 ISSUE_SPLIT_DIR = LOG_DIR / "issue-splits"
+SPEC_INTAKE_DIR = LOG_DIR / "spec-intake"
+SPEC_DELTA_DIR = LOG_DIR / "spec-deltas"
+DRAFT_EXECUTION_SPEC_DIR = LOG_DIR / "draft-execution-specs"
+RUN_GRAPH_STATE_DIR = ROOT_DIR / ".vida" / "state" / "run-graphs"
 FRAMEWORK_TASK_SYNC_STATE_PATH = ROOT_DIR / ".vida" / "state" / "framework-wave-task-sync.json"
 BR_MUTATION_QUEUE_SCRIPT = SCRIPT_DIR / "br-mutation-queue.py"
 FRAMEWORK_MUTATION_ROOTS = ("AGENTS.md", "_vida")
@@ -61,6 +65,8 @@ def load_module(name: str, path: Path) -> Any:
 vida_config = load_module("vida_config_runtime_dispatch", SCRIPT_DIR / "vida-config.py")
 subagent_system = load_module("subagent_system_runtime_dispatch", SCRIPT_DIR / "subagent-system.py")
 worker_packet_gate = load_module("worker_packet_gate_runtime_dispatch", SCRIPT_DIR / "worker-packet-gate.py")
+run_graph_runtime = load_module("vida_run_graph_runtime_dispatch", SCRIPT_DIR / "run-graph.py")
+context_governance_runtime = load_module("vida_context_governance_runtime_dispatch", SCRIPT_DIR / "context-governance.py")
 
 DEFAULT_PROJECT_PREFLIGHT_DOC = "docs/process/project-operations.md"
 WORKER_MACHINE_READABLE_TEMPLATE = {
@@ -118,6 +124,14 @@ ANALYSIS_MACHINE_READABLE_TEMPLATE = {
     **WORKER_MACHINE_READABLE_TEMPLATE,
     "recommended_next_action": "proceed_to_writer_or_route_to_spec_delta",
     "issue_contract": ISSUE_CONTRACT_TEMPLATE,
+}
+DRAFT_EXECUTION_SPEC_TEMPLATE = {
+    "scope_in": ["what may change"],
+    "scope_out": ["what must not change"],
+    "acceptance_checks": ["check #1"],
+    "assumptions": ["assumption #1"],
+    "open_decisions": [],
+    "recommended_next_path": "/vida-form-task|/vida-bug-fix|spec_delta|user_negotiation",
 }
 
 
@@ -770,6 +784,21 @@ def issue_split_path(task_id: str) -> Path:
     return ISSUE_SPLIT_DIR / f"{safe_task_id}.json"
 
 
+def spec_intake_path(task_id: str) -> Path:
+    safe_task_id = re.sub(r"[^A-Za-z0-9._-]+", "-", task_id.strip() or "task")
+    return SPEC_INTAKE_DIR / f"{safe_task_id}.json"
+
+
+def spec_delta_path(task_id: str) -> Path:
+    safe_task_id = re.sub(r"[^A-Za-z0-9._-]+", "-", task_id.strip() or "task")
+    return SPEC_DELTA_DIR / f"{safe_task_id}.json"
+
+
+def draft_execution_spec_path(task_id: str) -> Path:
+    safe_task_id = re.sub(r"[^A-Za-z0-9._-]+", "-", task_id.strip() or "task")
+    return DRAFT_EXECUTION_SPEC_DIR / f"{safe_task_id}.json"
+
+
 def route_receipt_hash(route: dict[str, Any]) -> str:
     return digest_text(json.dumps(route_receipt_payload(route), sort_keys=True))
 
@@ -894,6 +923,61 @@ def load_issue_contract(task_id: str) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def load_json_artifact(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def load_spec_intake(task_id: str) -> dict[str, Any]:
+    return load_json_artifact(spec_intake_path(task_id))
+
+
+def load_spec_delta(task_id: str) -> dict[str, Any]:
+    return load_json_artifact(spec_delta_path(task_id))
+
+
+def load_draft_execution_spec(task_id: str) -> dict[str, Any]:
+    return load_json_artifact(draft_execution_spec_path(task_id))
+
+
+def load_runtime_helper(name: str, filename: str) -> Any:
+    spec = importlib.util.spec_from_file_location(name, SCRIPT_DIR / filename)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load helper module: {filename}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+SPEC_INTAKE_RUNTIME = load_runtime_helper("vida_spec_intake_runtime", "spec-intake.py")
+SPEC_DELTA_RUNTIME = load_runtime_helper("vida_spec_delta_runtime", "spec-delta.py")
+DRAFT_EXECUTION_SPEC_RUNTIME = load_runtime_helper("vida_draft_execution_spec_runtime", "draft-execution-spec.py")
+
+
+def write_run_graph_node(
+    task_id: str,
+    task_class: str,
+    node: str,
+    status: str,
+    *,
+    route_task_class: str = "",
+    meta: dict[str, Any] | None = None,
+) -> Path:
+    return run_graph_runtime.update_node(
+        task_id,
+        task_class,
+        node,
+        status,
+        route_task_class=route_task_class,
+        meta=meta or {},
+    )
 
 
 def build_issue_split_artifact(issue_contract: dict[str, Any]) -> dict[str, Any]:
@@ -1275,6 +1359,16 @@ def write_issue_contract(task_id: str, payload: dict[str, Any]) -> Path:
     return path
 
 
+def write_json_artifact(path: Path, payload: dict[str, Any]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def write_spec_delta(task_id: str, payload: dict[str, Any]) -> Path:
+    return write_json_artifact(spec_delta_path(task_id), payload)
+
+
 def validate_issue_contract(
     task_id: str,
     task_class: str,
@@ -1314,6 +1408,128 @@ def validate_issue_contract(
     if status in {"spec_delta_required", "issue_closed_no_fix", "insufficient_evidence"}:
         return False, payload, status
     return False, payload, "invalid_issue_contract_status"
+
+
+def validate_spec_intake(task_id: str, task_class: str) -> tuple[bool, dict[str, Any], str]:
+    if task_class != "implementation":
+        return True, {}, ""
+    payload = load_spec_intake(task_id)
+    if not payload:
+        return True, {}, ""
+    payload = SPEC_INTAKE_RUNTIME.normalize_payload(task_id, payload)
+    helper_ok, helper_reason = SPEC_INTAKE_RUNTIME.validate_payload(payload, task_id)
+    if not helper_ok:
+        return False, payload, helper_reason
+    status = policy_value(payload.get("status"), "")
+    if not status:
+        return False, payload, "missing_spec_intake_status"
+    if status != "ready_for_issue_contract":
+        return False, payload, f"spec_intake_{status}"
+    if not normalized_string_list(payload.get("proposed_scope_in")):
+        return False, payload, "missing_spec_intake_scope"
+    return True, payload, ""
+
+
+def validate_spec_delta(task_id: str, task_class: str) -> tuple[bool, dict[str, Any], str]:
+    if task_class != "implementation":
+        return True, {}, ""
+    payload = load_spec_delta(task_id)
+    if not payload:
+        return True, {}, ""
+    payload = SPEC_DELTA_RUNTIME.normalize_payload(task_id, payload)
+    helper_ok, helper_reason = SPEC_DELTA_RUNTIME.validate_payload(payload, task_id)
+    if not helper_ok:
+        return False, payload, helper_reason
+    status = policy_value(payload.get("status"), "")
+    if not status:
+        return False, payload, "missing_spec_delta_status"
+    if status != "not_required":
+        return False, payload, f"spec_delta_{status}"
+    return True, payload, ""
+
+
+def prepare_execution_context_sources(
+    *,
+    task_id: str,
+    task_class: str,
+    spec_intake: dict[str, Any],
+    spec_delta: dict[str, Any],
+    issue_contract: dict[str, Any],
+) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = []
+    if spec_intake:
+        sources.append(
+            {
+                "source_class": "local_runtime",
+                "path": str(spec_intake_path(task_id)),
+                "freshness": "current",
+                "provenance": "spec_intake_artifact",
+                "role_scope": "orchestrator",
+                "notes": task_class,
+            }
+        )
+    if spec_delta:
+        sources.append(
+            {
+                "source_class": "local_runtime",
+                "path": str(spec_delta_path(task_id)),
+                "freshness": "current",
+                "provenance": "spec_delta_artifact",
+                "role_scope": "orchestrator",
+                "notes": task_class,
+            }
+        )
+    if issue_contract:
+        wvp_status = policy_value(issue_contract.get("wvp_status"), "unknown")
+        source_class = "web_validated" if wvp_status == "validated" else "local_runtime"
+        freshness = "validated" if source_class == "web_validated" else "current"
+        sources.append(
+            {
+                "source_class": source_class,
+                "path": str(issue_contract_path(task_id)),
+                "freshness": freshness,
+                "provenance": "issue_contract_artifact",
+                "role_scope": "orchestrator",
+                "notes": task_class,
+            }
+        )
+    return sources
+
+
+def validate_draft_execution_spec(task_id: str, task_class: str) -> tuple[bool, dict[str, Any], str]:
+    if task_class != "implementation":
+        return True, {}, ""
+    payload = load_draft_execution_spec(task_id)
+    if not payload:
+        return True, {}, ""
+    payload = DRAFT_EXECUTION_SPEC_RUNTIME.normalize_payload(task_id, payload)
+    helper_ok, helper_reason = DRAFT_EXECUTION_SPEC_RUNTIME.validate_payload(payload, task_id)
+    if not helper_ok:
+        return False, payload, helper_reason
+    return True, payload, ""
+
+
+def build_spec_delta_from_issue_contract(issue_contract: dict[str, Any]) -> dict[str, Any]:
+    if policy_value(issue_contract.get("status"), "") != "spec_delta_required":
+        return {}
+    return {
+        "task_id": policy_value(issue_contract.get("task_id"), ""),
+        "delta_source": "issue_contract",
+        "trigger_status": "spec_delta_required",
+        "current_contract": policy_value(issue_contract.get("expected_behavior"), ""),
+        "proposed_contract": policy_value(issue_contract.get("reported_behavior"), ""),
+        "delta_summary": "Issue requires non-equivalent contract reconciliation before writer execution.",
+        "behavior_change": "user_visible_or_contract_visible",
+        "scope_impact": deduped_strings(
+            [
+                *normalized_string_list(issue_contract.get("reported_scope")),
+                *normalized_string_list(issue_contract.get("proven_scope")),
+            ]
+        ),
+        "user_confirmation_required": "yes",
+        "reconciliation_targets": normalized_string_list(issue_contract.get("spec_sync_targets")),
+        "status": "needs_scp_reconciliation",
+    }
 
 
 def validate_internal_escalation_receipt(
@@ -1416,13 +1632,55 @@ def apply_manifest_approval_gate(
         "receipt": receipt,
     }
     if not approval_gate_required(target_review_state):
+        if gated.get("synthesis_ready") is True:
+            write_run_graph_node(
+                task_id,
+                task_class,
+                "synthesis",
+                "completed",
+                route_task_class=policy_value(route.get("task_class"), task_class),
+                meta={"reason": "approval_not_required"},
+            )
         return gated
     if receipt_ok:
+        write_run_graph_node(
+            task_id,
+            task_class,
+            "approval",
+            "completed",
+            route_task_class=policy_value(route.get("task_class"), task_class),
+            meta={"review_state": target_review_state},
+        )
+        if gated.get("synthesis_ready") is True:
+            write_run_graph_node(
+                task_id,
+                task_class,
+                "synthesis",
+                "completed",
+                route_task_class=policy_value(route.get("task_class"), task_class),
+                meta={"reason": "approval_granted"},
+            )
         return gated
     gated["synthesis_ready"] = False
     gated["verification_pending"] = False
     gated["status"] = "blocked" if receipt_error == "approval_rejected" else "approval_pending"
     gated["phase"] = gated["status"]
+    write_run_graph_node(
+        task_id,
+        task_class,
+        "approval",
+        "failed" if receipt_error == "approval_rejected" else "blocked",
+        route_task_class=policy_value(route.get("task_class"), task_class),
+        meta={"review_state": target_review_state, "reason": receipt_error},
+    )
+    write_run_graph_node(
+        task_id,
+        task_class,
+        "synthesis",
+        "blocked",
+        route_task_class=policy_value(route.get("task_class"), task_class),
+        meta={"reason": gated["status"]},
+    )
     return gated
 
 
@@ -1596,10 +1854,22 @@ def deduped_strings(items: list[str]) -> list[str]:
 
 
 def coach_selected_subagents(coach_plan: dict[str, Any]) -> list[str]:
-    names = [str(item).strip() for item in coach_plan.get("selected_subagents", []) if str(item).strip()]
+    names = []
+    for item in coach_plan.get("selected_subagents", []):
+        if item is None:
+            continue
+        text = str(item).strip()
+        if text and text.casefold() != "none":
+            names.append(text)
     if names:
         return deduped_strings(names)
-    selected = str(coach_plan.get("selected_subagent", "")).strip()
+    selected_raw = coach_plan.get("selected_subagent", "")
+    if selected_raw is None:
+        selected = ""
+    else:
+        selected = str(selected_raw).strip()
+        if selected.casefold() == "none":
+            selected = ""
     return [selected] if selected else []
 
 
@@ -4096,6 +4366,23 @@ def run_coach_ensemble(
     required_results = max(1, int(coach_plan.get("min_results", 0) or len(selected_subagents) or 1))
     merge_policy = policy_value(coach_plan.get("merge_policy"), "unanimous_approve_rework_bias")
     coach_dispatch_route = subagent_system.route_subagent(coach_task_class)
+    if not selected_subagents:
+        default_selected = str(coach_dispatch_route.get("selected_subagent", "")).strip()
+        default_fanout = deduped_strings(normalized_string_list(coach_dispatch_route.get("fanout_subagents")))
+        if default_selected:
+            selected_subagents = [default_selected]
+        elif default_fanout:
+            selected_subagents = [default_fanout[0]]
+        if not fallback_subagents:
+            route_fallback = [
+                str(item.get("subagent", "")).strip()
+                for item in coach_dispatch_route.get("fallback_subagents", [])
+                if isinstance(item, dict)
+            ]
+            if default_fanout:
+                route_fallback.extend(default_fanout[1:])
+            fallback_subagents = deduped_strings(route_fallback)
+        requested_subagents = deduped_strings([*selected_subagents, *fallback_subagents])
     coach_dispatch_route = {
         **coach_dispatch_route,
         "selected_subagent": selected_subagents[0] if selected_subagents else coach_dispatch_route.get("selected_subagent"),
@@ -4189,8 +4476,24 @@ def run_verification_phase(
     verification_plan = route.get("verification_plan") or {}
     route_budget = route_budget_policy(route)
     if route.get("independent_verification_required") != "yes":
+        write_run_graph_node(
+            task_id,
+            task_class,
+            "verifier",
+            "skipped",
+            route_task_class=task_class,
+            meta={"reason": "verification_not_required"},
+        )
         return {"required": False, "status": "not_required"}, True
     if int(route_budget.get("max_verification_passes", 0) or 0) <= 0:
+        write_run_graph_node(
+            task_id,
+            task_class,
+            "verifier",
+            "blocked",
+            route_task_class=task_class,
+            meta={"reason": "verification_pass_cap_exceeded"},
+        )
         return {
             "required": True,
             "status": "blocked",
@@ -4200,6 +4503,14 @@ def run_verification_phase(
     verification_task_class = str(verification_plan.get("route_task_class", "")).strip()
     selected_subagent = verification_plan.get("selected_subagent")
     if not verification_task_class or not selected_subagent:
+        write_run_graph_node(
+            task_id,
+            task_class,
+            "verifier",
+            "blocked",
+            route_task_class=task_class,
+            meta={"reason": "missing_verification_plan"},
+        )
         return {
             "required": True,
             "status": "blocked",
@@ -4210,6 +4521,14 @@ def run_verification_phase(
     verification_prompt_file = output_dir / "verification.prompt.txt"
     verification_output_dir = output_dir / "verification"
     verification_output_dir.mkdir(parents=True, exist_ok=True)
+    write_run_graph_node(
+        task_id,
+        task_class,
+        "verifier",
+        "running",
+        route_task_class=verification_task_class,
+        meta={"output_dir": str(verification_output_dir)},
+    )
     verification_prompt_file.write_text(
         verification_prompt_text(
             original_prompt=read_prompt(prompt_file),
@@ -4250,6 +4569,18 @@ def run_verification_phase(
     status = "completed" if synthesis_ready else "blocked"
     if completed.returncode == 3:
         status = "verification_pending"
+    write_run_graph_node(
+        task_id,
+        task_class,
+        "verifier",
+        (
+            "completed"
+            if synthesis_ready
+            else ("blocked" if status == "blocked" else "running")
+        ),
+        route_task_class=verification_task_class,
+        meta={"status": status, "manifest_path": str(manifest_path) if manifest_path else ""},
+    )
     return {
         "required": True,
         "status": status,
@@ -4958,12 +5289,32 @@ def run_prepare_execution(argv: list[str]) -> int:
         "analysis_receipt_path": str(analysis_receipt_path(task_id, writer_task_class)),
         "issue_contract_path": str(issue_contract_path(task_id)),
         "issue_split_path": str(issue_split_path(task_id)),
+        "spec_intake_path": str(spec_intake_path(task_id)),
+        "spec_delta_path": str(spec_delta_path(task_id)),
+        "draft_execution_spec_path": str(draft_execution_spec_path(task_id)),
+        "run_graph_path": str(run_graph_runtime.graph_path(task_id)),
         "writer_authorized": False,
         "status": "blocked",
     }
 
     if analysis_plan.get("required") != "yes":
         clear_analysis_blocker(task_id, writer_task_class)
+        write_run_graph_node(
+            task_id,
+            writer_task_class,
+            "analysis",
+            "skipped",
+            route_task_class=writer_task_class,
+            meta={"reason": "analysis_not_required"},
+        )
+        write_run_graph_node(
+            task_id,
+            writer_task_class,
+            "writer",
+            "ready",
+            route_task_class=writer_task_class,
+            meta={"reason": "ready_without_analysis"},
+        )
         manifest["writer_authorized"] = True
         manifest["status"] = "ready_without_analysis"
         write_manifest(manifest_path, manifest)
@@ -4972,6 +5323,14 @@ def run_prepare_execution(argv: list[str]) -> int:
 
     analysis_task_class = policy_value(analysis_plan.get("route_task_class"), "")
     if not analysis_task_class:
+        write_run_graph_node(
+            task_id,
+            writer_task_class,
+            "analysis",
+            "blocked",
+            route_task_class=writer_task_class,
+            meta={"reason": "missing_analysis_route_task_class"},
+        )
         manifest["status"] = "blocked_missing_analysis_route"
         manifest["analysis_blocker_path"] = str(
             write_analysis_blocker(
@@ -4986,6 +5345,14 @@ def run_prepare_execution(argv: list[str]) -> int:
         write_manifest(manifest_path, manifest)
         print(str(manifest_path))
         return 2
+    write_run_graph_node(
+        task_id,
+        writer_task_class,
+        "analysis",
+        "running",
+        route_task_class=analysis_task_class,
+        meta={"manifest_path": str(manifest_path), "phase": "prepare-execution"},
+    )
 
     analysis_dir = output_dir / "analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)
@@ -5031,9 +5398,26 @@ def run_prepare_execution(argv: list[str]) -> int:
     manifest["analysis_manifest"] = analysis_manifest
 
     if completed.returncode == 0 and analysis_manifest.get("synthesis_ready") is True:
+        write_run_graph_node(
+            task_id,
+            writer_task_class,
+            "analysis",
+            "completed",
+            route_task_class=analysis_task_class,
+            meta={"manifest_path": str(analysis_manifest_path), "receipt_path": str(analysis_receipt_path(task_id, writer_task_class))},
+        )
         receipt_path = write_analysis_receipt(task_id, writer_task_class, writer_route, analysis_manifest)
         manifest["analysis_receipt_path"] = str(receipt_path)
         manifest["analysis_blocker_path"] = str(analysis_blocker_path(task_id, writer_task_class))
+        spec_intake_ok, validated_spec_intake, spec_intake_error = validate_spec_intake(task_id, writer_task_class)
+        spec_delta_ok, validated_spec_delta, spec_delta_error = validate_spec_delta(task_id, writer_task_class)
+        draft_execution_spec_ok, validated_draft_execution_spec, draft_execution_spec_error = validate_draft_execution_spec(
+            task_id,
+            writer_task_class,
+        )
+        manifest["spec_intake"] = validated_spec_intake
+        manifest["spec_delta"] = validated_spec_delta
+        manifest["draft_execution_spec"] = validated_draft_execution_spec
         issue_contract, issue_contract_error = build_issue_contract_from_analysis_manifest(
             task_id,
             writer_task_class,
@@ -5044,6 +5428,13 @@ def run_prepare_execution(argv: list[str]) -> int:
         if issue_contract:
             issue_contract_file = write_issue_contract(task_id, issue_contract)
             manifest["issue_contract_path"] = str(issue_contract_file)
+            spec_delta = build_spec_delta_from_issue_contract(issue_contract)
+            if spec_delta:
+                spec_delta_file = write_spec_delta(task_id, spec_delta)
+                manifest["spec_delta"] = spec_delta
+                manifest["spec_delta_path"] = str(spec_delta_file)
+                spec_delta_ok = False
+                spec_delta_error = "spec_delta_needs_scp_reconciliation"
         issue_contract_ok, validated_issue_contract, issue_contract_validation_error = validate_issue_contract(
             task_id,
             writer_task_class,
@@ -5053,6 +5444,12 @@ def run_prepare_execution(argv: list[str]) -> int:
             manifest["issue_contract_error"] = issue_contract_error
         elif issue_contract_validation_error:
             manifest["issue_contract_error"] = issue_contract_validation_error
+        if spec_intake_error:
+            manifest["spec_intake_error"] = spec_intake_error
+        if spec_delta_error:
+            manifest["spec_delta_error"] = spec_delta_error
+        if draft_execution_spec_error:
+            manifest["draft_execution_spec_error"] = draft_execution_spec_error
         if validated_issue_contract:
             manifest["issue_contract"] = validated_issue_contract
             issue_split = build_issue_split_artifact(validated_issue_contract)
@@ -5066,7 +5463,23 @@ def run_prepare_execution(argv: list[str]) -> int:
                 manifest["issue_split"] = issue_split
                 manifest["issue_split_path"] = str(issue_split_path_value)
                 manifest["issue_split_follow_up"] = follow_up_sync
-        if issue_contract_ok:
+        context_sources = prepare_execution_context_sources(
+            task_id=task_id,
+            task_class=writer_task_class,
+            spec_intake=validated_spec_intake,
+            spec_delta=validated_spec_delta,
+            issue_contract=validated_issue_contract or issue_contract,
+        )
+        context_validation = context_governance_runtime.validate_sources(context_sources)
+        manifest["context_governance"] = context_validation
+        if context_validation.get("valid"):
+            context_governance_runtime.record_entry(
+                task_id=task_id,
+                phase="prepare_execution",
+                sources=context_validation.get("sources", []),
+                notes=writer_task_class,
+            )
+        if issue_contract_ok and spec_intake_ok and spec_delta_ok and draft_execution_spec_ok:
             existing_prompt_text = read_prompt(effective_prompt_file)
             if worker_packet_gate.validate_packet_text(existing_prompt_text):
                 rendered_writer_prompt = write_writer_issue_contract_prompt(
@@ -5091,15 +5504,39 @@ def run_prepare_execution(argv: list[str]) -> int:
                 manifest["prompt_resolution"] = prompt_resolution
             manifest["writer_authorized"] = True
             manifest["status"] = "analysis_ready"
+            write_run_graph_node(
+                task_id,
+                writer_task_class,
+                "writer",
+                "ready",
+                route_task_class=writer_task_class,
+                meta={"reason": "analysis_ready", "manifest_path": str(manifest_path)},
+            )
             write_manifest(manifest_path, manifest)
             print(str(manifest_path))
             return 0
         manifest["status"] = "issue_contract_blocked"
+        write_run_graph_node(
+            task_id,
+            writer_task_class,
+            "writer",
+            "blocked",
+            route_task_class=writer_task_class,
+            meta={"reason": manifest.get("issue_contract_error") or manifest.get("spec_delta_error") or manifest.get("spec_intake_error") or "issue_contract_blocked"},
+        )
         write_manifest(manifest_path, manifest)
         print(str(manifest_path))
         return 2
 
     manifest["status"] = "analysis_failed"
+    write_run_graph_node(
+        task_id,
+        writer_task_class,
+        "analysis",
+        "failed",
+        route_task_class=analysis_task_class,
+        meta={"return_code": completed.returncode, "manifest_path": str(analysis_manifest_path) if analysis_manifest_path else ""},
+    )
     blocker_reason = policy_value(
         ((analysis_manifest.get("post_arbitration_merge_summary") or {}).get("tie_break_reason")),
         policy_value(
@@ -5157,6 +5594,7 @@ def run_coach_review(argv: list[str]) -> int:
         "coach_receipt_path": str(coach_receipt_path(task_id, writer_task_class)),
         "coach_blocker_path": str(coach_blocker_path(task_id, writer_task_class)),
         "rework_handoff_path": str(rework_handoff_path(task_id, writer_task_class)),
+        "run_graph_path": str(run_graph_runtime.graph_path(task_id)),
         "attempt_count": attempt_count,
         "max_coach_passes": max_coach_passes,
         "writer_clear_to_verify": False,
@@ -5164,6 +5602,22 @@ def run_coach_review(argv: list[str]) -> int:
     }
 
     if coach_plan.get("required") != "yes":
+        write_run_graph_node(
+            task_id,
+            writer_task_class,
+            "coach",
+            "skipped",
+            route_task_class=writer_task_class,
+            meta={"reason": "coach_not_required"},
+        )
+        write_run_graph_node(
+            task_id,
+            writer_task_class,
+            "verifier",
+            "ready",
+            route_task_class=writer_task_class,
+            meta={"reason": "ready_without_coach"},
+        )
         manifest["writer_clear_to_verify"] = True
         manifest["status"] = "ready_without_coach"
         write_manifest(manifest_path, manifest)
@@ -5171,6 +5625,14 @@ def run_coach_review(argv: list[str]) -> int:
         return 0
 
     if max_coach_passes > 0 and attempt_count > max_coach_passes:
+        write_run_graph_node(
+            task_id,
+            writer_task_class,
+            "coach",
+            "blocked",
+            route_task_class=writer_task_class,
+            meta={"reason": "max_coach_passes_exceeded", "attempt_count": attempt_count},
+        )
         manifest["status"] = "coach_pass_cap_exceeded"
         manifest["coach_blocker_path"] = str(
             write_coach_blocker(
@@ -5188,6 +5650,14 @@ def run_coach_review(argv: list[str]) -> int:
 
     coach_task_class = policy_value(coach_plan.get("route_task_class"), "")
     if not coach_task_class:
+        write_run_graph_node(
+            task_id,
+            writer_task_class,
+            "coach",
+            "blocked",
+            route_task_class=writer_task_class,
+            meta={"reason": "missing_coach_route_task_class", "attempt_count": attempt_count},
+        )
         manifest["status"] = "blocked_missing_coach_route"
         manifest["coach_blocker_path"] = str(
             write_coach_blocker(
@@ -5202,6 +5672,14 @@ def run_coach_review(argv: list[str]) -> int:
         write_manifest(manifest_path, manifest)
         print(str(manifest_path))
         return 2
+    write_run_graph_node(
+        task_id,
+        writer_task_class,
+        "coach",
+        "running",
+        route_task_class=coach_task_class,
+        meta={"manifest_path": str(manifest_path), "attempt_count": attempt_count},
+    )
 
     coach_dir = output_dir / "coach"
     coach_dir.mkdir(parents=True, exist_ok=True)
@@ -5244,6 +5722,22 @@ def run_coach_review(argv: list[str]) -> int:
     manifest["coach_decision"] = coach_decision
 
     if coach_manifest.get("synthesis_ready") is True and coach_decision.get("approved") is True:
+        write_run_graph_node(
+            task_id,
+            writer_task_class,
+            "coach",
+            "completed",
+            route_task_class=coach_task_class,
+            meta={"manifest_path": str(coach_manifest_path), "attempt_count": attempt_count},
+        )
+        write_run_graph_node(
+            task_id,
+            writer_task_class,
+            "verifier",
+            "ready",
+            route_task_class=writer_task_class,
+            meta={"reason": "coach_approved"},
+        )
         receipt_path = write_coach_receipt(
             task_id,
             writer_task_class,
@@ -5282,6 +5776,14 @@ def run_coach_review(argv: list[str]) -> int:
             max_coach_passes=max_coach_passes,
         )
         manifest["rework_handoff_path"] = rework_payload["path"]
+    write_run_graph_node(
+        task_id,
+        writer_task_class,
+        "coach",
+        "blocked" if blocker_status == "return_for_rework" else "failed",
+        route_task_class=coach_task_class,
+        meta={"reason": blocker_reason, "attempt_count": attempt_count},
+    )
     manifest["status"] = blocker_status
     manifest["coach_blocker_path"] = str(
         write_coach_blocker(

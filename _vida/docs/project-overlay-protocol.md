@@ -9,6 +9,13 @@ Purpose: define how VIDA reads project-owned root configuration without losing f
 3. Overlay may activate framework protocol bundles, but may not weaken framework invariants.
 4. Overlay is project-owned data; framework-owned behavior stays in `AGENTS.md` and `_vida/*`.
 
+No-overlay execution rule:
+
+1. If `vida.config.yaml` is absent, VIDA must use only framework-owned canonical commands and wrappers declared in `AGENTS.md`, `_vida/docs/protocol-index.md`, and `_vida/scripts/*`.
+2. In no-overlay mode, host-project operations docs are not assumed to exist and must not be treated as the canonical command source.
+3. Project-specific commands become canonical only after an overlay resolves an explicit host-project operations doc.
+4. When neither overlay-resolved project operations nor framework-owned wrappers cover the requested action, the action is not implicitly authorized; the orchestrator must stop, ask the user, or route the gap through tracked framework/project clarification.
+
 ## Canonical Root File
 
 Root overlay file:

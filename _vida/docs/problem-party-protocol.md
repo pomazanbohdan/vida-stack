@@ -10,11 +10,11 @@ This protocol is optional and escalation-only. It is not the default path for ro
 2. It must stay bounded by explicit board size, round count, and token budget.
 3. It does not replace single-writer ownership, normal route receipts, or delegated verification.
 4. It must output a structured decision artifact, not free-form chat residue.
-5. It should be used only when the expected quality gain is worth the added orchestration cost.
+5. Triggering problem-party is rule-based, not discretionary prose judgment.
 
 ## Allowed Triggers
 
-Use problem-party only when at least one is true:
+Use problem-party only when at least one trigger row below evaluates to `yes` and no forbidden row blocks entry:
 
 1. analysis/coach/verifier outputs conflict materially,
 2. `merge_summary.conflict_flag=true` or `orchestrator_review_required=true`,
@@ -29,11 +29,42 @@ Forbidden as default when all are true:
 3. there is no material ambiguity or conflict,
 4. the likely output would only restate an already accepted plan.
 
+## Decision Matrix
+
+### Entry Decision
+
+Run `problem-party=small` when all are true:
+
+1. at least one allowed trigger is true,
+2. the active route is blocked on decision quality rather than missing raw evidence,
+3. no single bounded expert lane is sufficient,
+4. the problem can be framed as one bounded decision artifact.
+
+Do not run problem-party when any are true:
+
+1. the next correct action is simply "gather missing evidence",
+2. route law, issue-contract law, approval law, or budget law already determines the next step,
+3. a single verifier/coach/arbitration lane can resolve the issue without multi-role synthesis,
+4. the user asked for direct execution and no material conflict exists.
+
+Escalate from `small` to `large` only when all are true:
+
+1. a completed small-board artifact exists,
+2. the small-board artifact still leaves a material unresolved conflict,
+3. the unresolved conflict crosses at least two of these dimensions:
+   - architecture/runtime
+   - quality/verification
+   - delivery/cost
+   - product/scope
+   - security/safety
+   - data/contracts
+4. the next action still depends on a bounded decision artifact rather than raw evidence collection.
+
 ## Board Sizes
 
 ### Small Board
 
-Use for the normal escalation path.
+Use as the default problem-party board whenever the entry decision passes.
 
 1. roles:
    - `architect`
@@ -49,7 +80,7 @@ Use for the normal escalation path.
 
 ### Large Board
 
-Use only for genuinely multi-dimensional conflicts.
+Use only when the escalation conditions above are satisfied or the user explicitly requests a broader multi-role board for one bounded decision.
 
 1. roles:
    - `architect`
@@ -102,15 +133,16 @@ Required fields:
 5. Keep role prompts question-driven and bounded to one problem frame.
 6. Preserve single-writer semantics: problem-party is a decision layer, not a mutation layer.
 7. If compact/context compression is possible, persist the decision artifact before resuming the main task flow.
+8. When a problem-party decision receipt is written, runtime should update the run-graph so `problem_party` becomes a resumable node and the next writer step can become `ready` when the decision unblocks execution.
 
 ## Relationship To Existing VIDA Flow
 
 1. Problem-party is stronger than a single bounded arbitration lane, but lighter than unconstrained open-ended team chat.
-2. It can follow:
-   - issue-contract analysis,
-   - ensemble merge conflict,
-   - coach/verifier disagreement,
-   - framework self-diagnosis findings.
+2. It may be entered only from these bounded upstream states:
+   - issue-contract analysis that ended in bug/spec/contract ambiguity,
+   - ensemble merge with `merge_summary.conflict_flag=true`,
+   - verifier/coach path with `orchestrator_review_required=true`,
+   - framework self-diagnosis or remediation analysis with multiple plausible systemic fixes.
 3. It must not bypass:
    - route law,
    - budget blockers,

@@ -39,6 +39,8 @@ framework_self_diagnosis:
     - completeness
     - token_efficiency
     - orchestration_efficiency
+    - instruction_clarity
+    - instruction_runtime_consistency
 
 pack_router_keywords:
   research: research

@@ -11,7 +11,7 @@ project_bootstrap:
   process_root: docs/process
   research_root: docs/research
   readme_doc: README.md
-  architecture_doc: RELEASE-1-SCOPE.md
+  architecture_doc: VERSION-PLAN.md
   decisions_doc: docs/decisions.md
   environments_doc: docs/environments.md
   project_operations_doc: docs/process/project-operations.md

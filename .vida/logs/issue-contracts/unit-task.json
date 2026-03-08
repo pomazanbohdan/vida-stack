@@ -83,7 +83,7 @@
   ],
   "scope_out": [],
   "source_output_files": [
-    "/tmp/tmpgl62vew7/analysis.output.json"
+    "/tmp/tmpnu9ukeds/analysis.output.json"
   ],
   "source_subagents": [
     "qwen_cli"
@@ -93,7 +93,7 @@
   "symptoms": [],
   "task_class": "implementation",
   "task_id": "unit-task",
-  "ts": "2026-03-07T20:07:36Z",
+  "ts": "2026-03-08T00:15:13Z",
   "wvp_required": "no",
   "wvp_status": "not_required"
 }

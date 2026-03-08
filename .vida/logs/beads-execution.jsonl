@@ -1,0 +1,2 @@
+{"ts":"2026-03-08T00:14:45Z","type":"op_event","task_id":"unit-task","name":"context_hydration_pending","meta":"reason=missing_capsule"}
+{"ts":"2026-03-08T00:15:12Z","type":"op_event","task_id":"unit-task","name":"context_hydration_pending","meta":"reason=missing_capsule"}

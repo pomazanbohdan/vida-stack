@@ -1,0 +1,4 @@
+{"type":"mutation_queue","event":"queued","request_id":"mq-8cc1bbdb5175","backend":"mutator","args":["--help"],"queued_at":"2026-03-08T00:14:45.881979Z","pid":76854}
+{"type":"mutation_queue","event":"completed","request_id":"mq-8cc1bbdb5175","backend":"mutator","args":["--help"],"queued_at":"2026-03-08T00:14:45.881979Z","completed_at":"2026-03-08T00:14:45.925856Z","return_code":0}
+{"type":"mutation_queue","event":"queued","request_id":"mq-d180b7f97236","backend":"mutator","args":["--help"],"queued_at":"2026-03-08T00:15:12.664741Z","pid":77142}
+{"type":"mutation_queue","event":"completed","request_id":"mq-d180b7f97236","backend":"mutator","args":["--help"],"queued_at":"2026-03-08T00:15:12.664741Z","completed_at":"2026-03-08T00:15:12.701144Z","return_code":0}

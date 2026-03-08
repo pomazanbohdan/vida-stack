@@ -29,6 +29,12 @@ if VIDA_CONFIG_SPEC is None or VIDA_CONFIG_SPEC.loader is None:
     raise RuntimeError(f"Unable to load VIDA config helper: {VIDA_CONFIG_PATH}")
 vida_config = importlib.util.module_from_spec(VIDA_CONFIG_SPEC)
 VIDA_CONFIG_SPEC.loader.exec_module(vida_config)
+CAPABILITY_REGISTRY_PATH = SCRIPT_DIR / "capability-registry.py"
+CAPABILITY_REGISTRY_SPEC = importlib.util.spec_from_file_location("vida_capability_registry_runtime", CAPABILITY_REGISTRY_PATH)
+if CAPABILITY_REGISTRY_SPEC is None or CAPABILITY_REGISTRY_SPEC.loader is None:
+    raise RuntimeError(f"Unable to load capability registry helper: {CAPABILITY_REGISTRY_PATH}")
+capability_registry_runtime = importlib.util.module_from_spec(CAPABILITY_REGISTRY_SPEC)
+CAPABILITY_REGISTRY_SPEC.loader.exec_module(capability_registry_runtime)
 
 
 def now_utc() -> str:
@@ -2380,6 +2386,10 @@ def route_candidate_context(
             suppressed_subagents.append({"subagent": subagent, "reason": "excluded_for_independent_verification"})
             continue
         payload = subagents.get(subagent, {})
+        compatibility = capability_registry_runtime.compatibility_for(task_class, subagent)
+        if compatibility.get("compatible") is False:
+            suppressed_subagents.append({"subagent": subagent, "reason": f"capability_incompatible:{compatibility.get('reason', '')}"})
+            continue
         if not payload.get("enabled"):
             suppressed_subagents.append({"subagent": subagent, "reason": "disabled"})
             continue
@@ -2527,6 +2537,7 @@ def route_candidate_context(
                 "memory_adjustment": memory_adjustment,
                 "budget_adjustment": budget_adjustment,
                 "budget_cost_units": budget_cost_units,
+                "capability_compatibility": compatibility,
                 "success_count": int(task_card.get("success_count", global_card.get("success_count", 0)) or 0),
                 "selected_model": selected_model,
                 "selected_model_source": model_source,
@@ -2602,6 +2613,7 @@ def route_candidate_context(
         "allowed_internal_reasons": allowed_internal_reasons,
         "cli_dispatch_required_if_delegating": cli_dispatch_required_if_delegating,
         "required_dispatch_path": required_dispatch_path,
+        "capability_registry_path": str(capability_registry_runtime.REGISTRY_PATH),
     }
 
 

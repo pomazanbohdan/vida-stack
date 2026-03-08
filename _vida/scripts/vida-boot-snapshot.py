@@ -17,6 +17,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent.parent
 BR_SAFE = SCRIPT_DIR / "br-safe.sh"
 VIDA_CONFIG = SCRIPT_DIR / "vida-config.py"
+RUN_GRAPH = SCRIPT_DIR / "run-graph.py"
+TASK_STATE_RECONCILE = SCRIPT_DIR / "task-state-reconcile.py"
 
 
 def now_utc() -> str:
@@ -64,6 +66,24 @@ def framework_self_diagnosis_config() -> dict[str, Any]:
     except Exception:
         return {}
     payload = cfg.get("framework_self_diagnosis")
+    return payload if isinstance(payload, dict) else {}
+
+
+def run_graph_status(task_id: str) -> dict[str, Any]:
+    try:
+        run_graph = load_module("vida_boot_snapshot_run_graph", RUN_GRAPH)
+        payload = run_graph.status_payload(task_id)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def reconciliation_status(task_id: str) -> dict[str, Any]:
+    try:
+        reconcile = load_module("vida_boot_snapshot_task_reconcile", TASK_STATE_RECONCILE)
+        payload = reconcile.build_status_payload(task_id)
+    except Exception:
+        return {}
     return payload if isinstance(payload, dict) else {}
 
 
@@ -134,6 +154,9 @@ def unique_by_id(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def issue_entry(issue: dict[str, Any], subtasks: list[dict[str, Any]], subtasks_limit: int) -> dict[str, Any]:
     shown_subtasks = subtasks[:subtasks_limit]
+    issue_id = str(issue.get("id") or "")
+    run_graph = run_graph_status(issue_id) if issue_id else {}
+    reconciliation = reconciliation_status(issue_id) if issue_id else {}
     return {
         "id": issue.get("id"),
         "title": clean_text(issue.get("title")),
@@ -141,6 +164,14 @@ def issue_entry(issue: dict[str, Any], subtasks: list[dict[str, Any]], subtasks_
         "mode": issue_mode(issue),
         "priority": issue_priority(issue),
         "updated_at": issue.get("updated_at"),
+        "run_graph": {
+            "present": bool(run_graph.get("present", False)),
+            "resume_hint": run_graph.get("resume_hint", {}),
+        },
+        "reconciliation": {
+            "classification": str(reconciliation.get("classification", "")).strip(),
+            "allowed_actions": reconciliation.get("allowed_actions", []),
+        },
         "subtasks": [
             {
                 "id": child.get("id"),
@@ -206,6 +237,7 @@ def build_snapshot(top_limit: int, ready_limit: int, subtasks_limit: int) -> dic
     ]
 
     framework_diag = framework_self_diagnosis_config()
+    active_run_graphs = sum(1 for item in in_progress if item.get("run_graph", {}).get("present"))
     return {
         "generated_at": now_utc(),
         "execution_continue_default": {
@@ -228,6 +260,7 @@ def build_snapshot(top_limit: int, ready_limit: int, subtasks_limit: int) -> dic
             "ready_total": len(top_ready),
             "ready_open": len(top_ready_open),
             "ready_in_progress": len(top_ready_in_progress),
+            "active_run_graphs": active_run_graphs,
         },
         "framework_self_diagnosis": {
             "enabled": bool(framework_diag.get("enabled", False)),
@@ -265,6 +298,16 @@ def render_section(lines: list[str], name: str, items: list[dict[str, Any]]) -> 
         if item.get("mode") == "decision_required":
             suffix = "  [decision_required]"
         lines.append(f"- {item['id']}  {item['title']}{suffix}")
+        run_graph = item.get("run_graph") or {}
+        resume_hint = run_graph.get("resume_hint") if isinstance(run_graph, dict) else {}
+        if run_graph.get("present") and isinstance(resume_hint, dict):
+            next_node = str(resume_hint.get("next_node", "")).strip() or "-"
+            status = str(resume_hint.get("status", "")).strip() or "-"
+            reason = str(resume_hint.get("reason", "")).strip()
+            detail = f"  - run_graph: next={next_node} status={status}"
+            if reason:
+                detail += f" reason={reason}"
+            lines.append(detail)
         for child in item.get("subtasks", []):
             lines.append(f"  - [{child['status']}] {child['id']}  {child['title']}")
         hidden = int(item.get("hidden_subtasks") or 0)
@@ -286,7 +329,8 @@ def render_text(snapshot: dict[str, Any]) -> str:
             f"open={summary['top_level_open']} "
             f"blocked={summary['top_level_blocked']} "
             f"ready_total={summary['ready_total']} "
-            f"ready_open={summary['ready_open']}"
+            f"ready_open={summary['ready_open']} "
+            f"active_run_graphs={summary['active_run_graphs']}"
         ),
     ]
     if framework_diag.get("enabled"):

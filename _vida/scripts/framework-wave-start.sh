@@ -48,6 +48,43 @@ has_existing_plan() {
   (( count > 0 ))
 }
 
+resolve_task_labels() {
+  local issue_id="$1"
+  local labels
+  labels="$(
+    br show "$issue_id" --json 2>/dev/null \
+      | jq -r '.[0].labels // [] | join(" ")' 2>/dev/null || true
+  )"
+  if [[ -n "${labels// }" ]]; then
+    printf '%s\n' "$labels"
+    return 0
+  fi
+  python3 - "$issue_id" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+issue_id = sys.argv[1]
+issues_path = Path(".beads/issues.jsonl")
+if not issues_path.exists():
+    raise SystemExit(0)
+for line in issues_path.read_text(encoding="utf-8").splitlines():
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        item = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    if str(item.get("id", "")).strip() != issue_id:
+        continue
+    labels = item.get("labels", [])
+    if isinstance(labels, list):
+        print(" ".join(str(label).strip() for label in labels if str(label).strip()))
+    break
+PY
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --mode)
@@ -98,14 +135,11 @@ case "$pack_id" in
     ;;
 esac
 
-labels="$(
-  br show "$task_id" --json 2>/dev/null \
-    | jq -r '.[0].labels // [] | join(" ")' 2>/dev/null || true
-)"
+labels="$(resolve_task_labels "$task_id")"
 
-if ! grep -Eq '(^| )(framework|agent-system|fsap|vida-stack)( |$)' <<<"$labels"; then
+if ! grep -Eq '(^| )(framework|agent-system|fsap|vida-stack|local-platform-alignment|registry|evals|context|operator-surface|durability)( |$)' <<<"$labels"; then
   echo "[framework-wave-start] Refusing non-framework task: $task_id" >&2
-  echo "[framework-wave-start] Expected labels to include framework|agent-system|fsap|vida-stack" >&2
+  echo "[framework-wave-start] Expected labels to include framework|agent-system|fsap|vida-stack|local-platform-alignment|registry|evals|context|operator-surface|durability" >&2
   exit 1
 fi
 

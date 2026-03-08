@@ -118,3 +118,30 @@ Notes:
 - changed_in_spec: <what changed>
 - remaining_risks: <if any>
 ```
+
+## 7) Draft Execution-Spec Template
+
+```markdown
+## Draft Execution-Spec
+
+- scope_in:
+  - <what may change>
+- scope_out:
+  - <what must not change>
+- acceptance_checks:
+  - <check #1>
+  - <check #2>
+- assumptions:
+  - <assumption #1>
+- open_decisions:
+  - <decision or none>
+- recommended_next_path: /vida-form-task | /vida-bug-fix
+```
+
+Canonical helper:
+
+```bash
+python3 _vida/scripts/draft-execution-spec.py write <task_id> <input.json> [--output PATH]
+python3 _vida/scripts/draft-execution-spec.py validate <task_id> [--path PATH]
+python3 _vida/scripts/draft-execution-spec.py status <task_id> [--path PATH]
+```

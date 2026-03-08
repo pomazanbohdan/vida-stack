@@ -107,6 +107,100 @@ normalize_optional() {
   fi
 }
 
+parse_block_optional_tail() {
+  local mode="$1"
+  shift
+
+  BLOCK_ARTIFACTS="-"
+  BLOCK_RISKS="-"
+  BLOCK_ASSUMPTIONS="-"
+  BLOCK_EVIDENCE_REF="-"
+  BLOCK_CONFIDENCE=""
+  BLOCK_TRACK_ID="-"
+  BLOCK_OWNER="-"
+  BLOCK_MERGE_READY="-"
+
+  local named_mode="no"
+  for arg in "$@"; do
+    case "$arg" in
+      --artifacts|--risks|--assumptions|--evidence-ref|--confidence|--track-id|--owner|--merge-ready)
+        named_mode="yes"
+        break
+        ;;
+    esac
+  done
+
+  if [[ "$named_mode" == "yes" ]]; then
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --artifacts)
+          BLOCK_ARTIFACTS="${2:--}"
+          shift 2
+          ;;
+        --risks)
+          BLOCK_RISKS="${2:--}"
+          shift 2
+          ;;
+        --assumptions)
+          BLOCK_ASSUMPTIONS="${2:--}"
+          shift 2
+          ;;
+        --evidence-ref)
+          BLOCK_EVIDENCE_REF="${2:--}"
+          shift 2
+          ;;
+        --confidence)
+          BLOCK_CONFIDENCE="${2:-}"
+          shift 2
+          ;;
+        --track-id)
+          BLOCK_TRACK_ID="${2:--}"
+          shift 2
+          ;;
+        --owner)
+          BLOCK_OWNER="${2:--}"
+          shift 2
+          ;;
+        --merge-ready)
+          BLOCK_MERGE_READY="${2:--}"
+          shift 2
+          ;;
+        *)
+          echo "[beads-workflow] Unknown block tail argument: $1" >&2
+          exit 1
+          ;;
+      esac
+    done
+    return 0
+  fi
+
+  if [[ "$mode" == "block-end" ]]; then
+    BLOCK_ARTIFACTS="${1:--}"
+    BLOCK_RISKS="${2:--}"
+    BLOCK_ASSUMPTIONS="${3:--}"
+    BLOCK_EVIDENCE_REF="${4:--}"
+    BLOCK_TRACK_ID="${5:--}"
+    BLOCK_OWNER="${6:--}"
+    BLOCK_MERGE_READY="${7:--}"
+    return 0
+  fi
+
+  if [[ "$mode" == "block-finish" ]]; then
+    BLOCK_ARTIFACTS="${1:--}"
+    BLOCK_RISKS="${2:--}"
+    BLOCK_ASSUMPTIONS="${3:--}"
+    BLOCK_EVIDENCE_REF="${4:--}"
+    BLOCK_CONFIDENCE="${5:-85}"
+    BLOCK_TRACK_ID="${6:--}"
+    BLOCK_OWNER="${7:--}"
+    BLOCK_MERGE_READY="${8:--}"
+    return 0
+  fi
+
+  echo "[beads-workflow] Unsupported block tail mode: $mode" >&2
+  exit 1
+}
+
 todo_block_json() {
   local issue_id="$1"
   local block_id="$2"
@@ -120,7 +214,8 @@ ensure_context_capsule_bootstrap() {
   local next_step="${2:-planning}"
   local acceptance_slice="${3:-runtime-bootstrap}"
 
-  if bash "$CONTEXT_CAPSULE_SCRIPT" hydrate "$issue_id" >/dev/null 2>&1; then
+  if VIDA_CONTEXT_HYDRATE_ALLOW_MISSING=1 \
+    bash "$CONTEXT_CAPSULE_SCRIPT" hydrate "$issue_id" >/dev/null 2>&1; then
     return 0
   fi
 
@@ -344,7 +439,9 @@ Usage:
   bash _vida/scripts/beads-workflow.sh block-plan <id> <block_id> <goal> [track_id] [owner] [depends_on] [next_step]
   bash _vida/scripts/beads-workflow.sh block-start <id> <block_id> <goal> [track_id] [owner] [depends_on] [next_step]
   bash _vida/scripts/beads-workflow.sh block-end <id> <block_id> <done|partial|failed> <next_step> <actions> [artifacts] [risks] [assumptions] [evidence_ref] [track_id] [owner] [merge_ready]
+  bash _vida/scripts/beads-workflow.sh block-end <id> <block_id> <done|partial|failed> <next_step> <actions> [--artifacts <v>] [--risks <v>] [--assumptions <v>] [--evidence-ref <v>] [--track-id <v>] [--owner <v>] [--merge-ready <v>]
   bash _vida/scripts/beads-workflow.sh block-finish <id> <block_id> <done|partial|failed> <next_step> <actions> [artifacts] [risks] [assumptions] [evidence_ref] [confidence] [track_id] [owner] [merge_ready]
+  bash _vida/scripts/beads-workflow.sh block-finish <id> <block_id> <done|partial|failed> <next_step> <actions> [--artifacts <v>] [--risks <v>] [--assumptions <v>] [--evidence-ref <v>] [--confidence <v>] [--track-id <v>] [--owner <v>] [--merge-ready <v>]
   bash _vida/scripts/beads-workflow.sh pack-start <id> <pack_id> <goal> [constraints]
   bash _vida/scripts/beads-workflow.sh pack-end <id> <pack_id> <done|partial|failed> <summary> [next_step]
   bash _vida/scripts/beads-workflow.sh reflect <id> <goal> <constraints> <evidence> <decision> <risks> <next_step> [confidence]
@@ -352,6 +449,7 @@ Usage:
   bash _vida/scripts/beads-workflow.sh finish <id> <reason>
   bash _vida/scripts/beads-workflow.sh sync
   bash _vida/scripts/beads-workflow.sh status
+  bash _vida/scripts/beads-workflow.sh parse-block-tail <block-end|block-finish> ...
 
 Examples:
   bash _vida/scripts/beads-workflow.sh start bd-18gm
@@ -526,14 +624,16 @@ case "$cmd" in
     result="${4:-}"
     next_step="${5:-}"
     actions="${6:-}"
-    artifacts="${7:--}"
-    risks="${8:--}"
-    assumptions="${9:--}"
-    evidence_ref="${10:--}"
-    track_id="${11:--}"
-    owner="${12:--}"
-    merge_ready="${13:--}"
     [[ -n "$issue_id" && -n "$block_id" && -n "$result" && -n "$next_step" && -n "$actions" ]] || { usage; exit 1; }
+    shift 6
+    parse_block_optional_tail "block-end" "$@"
+    artifacts="$BLOCK_ARTIFACTS"
+    risks="$BLOCK_RISKS"
+    assumptions="$BLOCK_ASSUMPTIONS"
+    evidence_ref="$BLOCK_EVIDENCE_REF"
+    track_id="$BLOCK_TRACK_ID"
+    owner="$BLOCK_OWNER"
+    merge_ready="$BLOCK_MERGE_READY"
     bash "$LOG_SCRIPT" block-end "$issue_id" "$block_id" "$result" "$next_step" "$actions" "$artifacts" "$risks" "$assumptions" "$evidence_ref" "$track_id" "$owner" "$merge_ready"
     duration_ms="$(jq -r --arg t "$issue_id" --arg b "$block_id" 'select(.type=="block_end" and .task_id==$t and .block_id==$b) | .duration_ms // 0' .vida/logs/beads-execution.jsonl 2>/dev/null | tail -n1)"
     [[ -n "$duration_ms" ]] || duration_ms=0
@@ -547,15 +647,17 @@ case "$cmd" in
     result="${4:-}"
     next_step="${5:-}"
     actions="${6:-}"
-    artifacts="${7:--}"
-    risks="${8:--}"
-    assumptions="${9:--}"
-    evidence_ref="${10:--}"
-    confidence="${11:-85}"
-    track_id="${12:--}"
-    owner="${13:--}"
-    merge_ready="${14:--}"
     [[ -n "$issue_id" && -n "$block_id" && -n "$result" && -n "$next_step" && -n "$actions" ]] || { usage; exit 1; }
+    shift 6
+    parse_block_optional_tail "block-finish" "$@"
+    artifacts="$BLOCK_ARTIFACTS"
+    risks="$BLOCK_RISKS"
+    assumptions="$BLOCK_ASSUMPTIONS"
+    evidence_ref="$BLOCK_EVIDENCE_REF"
+    confidence="${BLOCK_CONFIDENCE:-85}"
+    track_id="$BLOCK_TRACK_ID"
+    owner="$BLOCK_OWNER"
+    merge_ready="$BLOCK_MERGE_READY"
 
     bash "$LOG_SCRIPT" block-end "$issue_id" "$block_id" "$result" "$next_step" "$actions" "$artifacts" "$risks" "$assumptions" "$evidence_ref" "$track_id" "$owner" "$merge_ready"
     auto_start_next_block "$issue_id" "$block_id" "$next_step" "$result"
@@ -669,6 +771,33 @@ case "$cmd" in
     ;;
   status)
     beads_br sync --status
+    ;;
+  parse-block-tail)
+    mode="${2:-}"
+    [[ -n "$mode" ]] || { usage; exit 1; }
+    shift 2
+    parse_block_optional_tail "$mode" "$@"
+    jq -cn \
+      --arg mode "$mode" \
+      --arg artifacts "$BLOCK_ARTIFACTS" \
+      --arg risks "$BLOCK_RISKS" \
+      --arg assumptions "$BLOCK_ASSUMPTIONS" \
+      --arg evidence_ref "$BLOCK_EVIDENCE_REF" \
+      --arg confidence "${BLOCK_CONFIDENCE:-}" \
+      --arg track_id "$BLOCK_TRACK_ID" \
+      --arg owner "$BLOCK_OWNER" \
+      --arg merge_ready "$BLOCK_MERGE_READY" \
+      '{
+        mode:$mode,
+        artifacts:$artifacts,
+        risks:$risks,
+        assumptions:$assumptions,
+        evidence_ref:$evidence_ref,
+        confidence:$confidence,
+        track_id:$track_id,
+        owner:$owner,
+        merge_ready:$merge_ready
+      }'
     ;;
   *)
     usage

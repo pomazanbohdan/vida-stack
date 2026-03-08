@@ -47,6 +47,7 @@ Do not use FSAP for product/codebase diagnosis unless the user explicitly asks a
    - default `META` for explicit self-analysis requests;
    - downgrade to `MAR` only for narrow single-script questions with low blast radius.
 5. Scope: `AGENTS.md`, `_vida/docs/*`, `_vida/scripts/*`, runtime logs, and only the project evidence that proves a framework-level friction point.
+6. Instruction-layer efficiency is in scope: FSAP must inspect `AGENTS.md`, lane entry contracts, and canonical protocols when instruction ambiguity or drift increases rereads, optionality, routing confusion, or token cost.
 
 When the user explicitly requests tracked execution, use `reflection-pack` and the dedicated FSAP chain:
 

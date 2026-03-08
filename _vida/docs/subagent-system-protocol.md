@@ -126,28 +126,28 @@ Routing output:
 6. fallback subagents,
 7. effective write scope,
 8. verification gate,
-9. optional `fanout_subagents` for orchestrator-managed read-only ensemble dispatch,
-10. optional `fanout_min_results`,
-11. optional `merge_policy`,
-12. optional `dispatch_required`,
-13. optional `external_first_required`,
-14. optional `bridge_fallback_subagent`,
-15. optional `internal_escalation_trigger`,
-16. optional `max_runtime_seconds`,
-17. optional `min_output_bytes`,
-18. optional progress/timeout policy metadata.
-19. optional independent-verification metadata:
+9. effective route-law metadata:
+   - `dispatch_required`
+   - `external_first_required`
+   - `bridge_fallback_subagent`
+   - `internal_escalation_trigger`
+   - `max_runtime_seconds`
+   - `min_output_bytes`
+10. effective independent-verification metadata:
    - `verification_route_task_class`
    - `independent_verification_required`
    - `verification_plan`
-20. optional coach-review metadata for post-write routes:
+11. effective coach-review metadata for post-write routes:
    - `coach_required`
    - `coach_route_task_class`
    - `coach_plan`
-21. optional deterministic-route and FinOps metadata:
-   - `route_graph`
-   - `route_budget`
-22. optional dispatch-policy metadata:
+12. effective analysis-phase metadata:
+   - `analysis_required`
+   - `analysis_route_task_class`
+   - `analysis_plan`
+   - `analysis_receipt_required`
+   - `analysis_zero_budget_required`
+13. effective dispatch-policy metadata:
    - `dispatch_policy.local_execution_allowed`
    - `dispatch_policy.local_execution_preferred`
    - `dispatch_policy.cli_dispatch_required_if_delegating`
@@ -156,14 +156,35 @@ Routing output:
    - `dispatch_policy.internal_escalation_allowed`
    - `dispatch_policy.allowed_internal_reasons`
    - `dispatch_policy.required_dispatch_path`
-23. optional analysis-phase metadata:
+14. effective external-validation metadata:
+   - `web_search_required`
+15. optional ensemble/advisory metadata:
+   - `fanout_subagents`
+   - `fanout_min_results`
+   - `merge_policy`
+   - progress/timeout policy metadata
+16. optional deterministic-route and FinOps metadata:
+   - `route_graph`
+   - `route_budget`
+
+Effective-route law rule:
+
+1. Config-level route declarations may omit law-bearing keys only when runtime defaulting/derivation will materialize them in the emitted route receipt.
+2. Route receipts and effective routing output must expose explicit values for all law-bearing fields used by authorization, gating, or blocking logic.
+3. Law-bearing fields include:
+   - `dispatch_required`
+   - `external_first_required`
    - `analysis_required`
    - `analysis_route_task_class`
-   - `analysis_plan`
    - `analysis_receipt_required`
-   - `analysis_zero_budget_required`
-24. optional external-validation metadata:
+   - `independent_verification_required`
+   - `verification_route_task_class`
+   - `coach_required`
+   - `coach_route_task_class`
+   - `dispatch_policy.*`
    - `web_search_required`
+4. Omission semantics are therefore config-only, not runtime-authorization semantics.
+5. If runtime cannot derive an explicit effective value for a law-bearing field before writer/verification/closure authorization, the route is protocol-invalid and must fail closed.
 
 Ensemble rule:
 
@@ -173,7 +194,7 @@ Ensemble rule:
 3. Keep writer ownership single-lane under the orchestrator even when read-only fanout is active.
 4. `bridge_fallback_subagent` is the canonical next hop after free external subagents and before internal escalation.
 5. Internal subagents are the senior lane for arbitration, architecture, and mutation-owning work; they are not the default cheap first pass for eligible read-only classes.
-6. When `independent_verification_required=yes`, the runtime should choose a distinct eligible cli subagent or verification ensemble for validation before orchestrator synthesis whenever such a verifier exists.
+6. When `independent_verification_required=yes`, the runtime must choose a distinct eligible cli subagent or verification ensemble for validation before orchestrator synthesis whenever such a verifier exists; fallback to same-lane verification is lawful only under the explicit verifier-fallback rules in this protocol.
 7. When mode is not `disabled`, eligible non-trivial read-heavy analysis should go to subagent lanes first; the orchestrator is the synthesizer and mutation owner, not the default primary analyst.
 8. When mode is not `disabled`, development execution should be orchestrator-managed through the routed subagent system; local orchestrator-first development is not the default path.
 8.1. When route metadata marks `web_search_required=yes`, the runtime must filter out subagents that do not both expose `capability_band=web_search` and declare dispatch-level web-search wiring.
@@ -185,6 +206,7 @@ Ensemble rule:
 12. Generic assistant defaults that would otherwise jump directly into local implementation are subordinate to this route contract while the subagent system is active.
 13. A run is not mutation-authorized until the route receipt or lawful escalation receipt makes writer ownership and local-execution authorization explicit.
 14. Undocumented execution behavior is forbidden by default while this system is active; route policy acts as an allowlist, not a set of suggestions.
+15. "Optional" route fields in config/examples do not authorize missing values in the effective route receipt when those fields participate in law, gating, escalation, or closure decisions.
 
 ## Internal Escalation Boundary
 
@@ -545,6 +567,15 @@ Minimum lease contract:
 7. runtime should support lease renewal for longer active orchestrations instead of assuming one fixed acquire/release window,
 8. runtime should expose cleanup/expiry semantics so stale released/expired leases do not accumulate indefinitely.
 9. reusable read-only subagent pooling may be layered on top of the same lease ledger; pool borrow/release must reuse the canonical lease system instead of inventing a second ownership store.
+
+Saturation fallback rule:
+
+1. if subagent-first execution is active and the orchestrator cannot allocate a new delegated lane because agent/thread capacity is saturated, the next action is not immediate local-only continuation.
+2. the orchestrator must first try one of:
+   - reuse an existing eligible agent/thread,
+   - release or close an idle agent/thread and retry bounded delegation,
+   - or record an explicit saturation blocker when neither reuse nor cleanup is possible.
+3. local-only continuation after saturation is lawful only after one of those reuse/recovery paths has been attempted and the outcome is inspectable.
 
 ## Operator Visibility
 
