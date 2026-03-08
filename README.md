@@ -198,17 +198,20 @@ In practice, `problem_party` is meant for architecture disputes, protocol/proces
 
 ## 🎯 Target System Shape
 
-The target architecture is organized around a small set of core subsystems working as one control plane rather than as disconnected scripts, prompts, and docs.
+The target architecture is no longer just a general control-plane idea. The `1.0` binary direction now centers on a small set of explicit runtime kernels that replace the current script-heavy startup surface.
 
-| Subsystem | Core Responsibilities |
+| Kernel / Subsystem | Core Responsibilities |
 | :--- | :--- |
-| 🎛️ **`VS-Control`** | Orchestration, decomposition, routing, and escalation. |
-| 💾 **`VS-State`** | Authoritative workflow state, execution history, capsules, and health. |
-| 🧠 **`VS-Memory`** | Durable operational memory and distilled lessons. |
+| 💾 **`State Kernel`** | Authoritative workflow state, task progression, blockers, dependencies, receipts, and operator-visible runtime position. |
+| 🧠 **`Memory Kernel`** | Durable framework memory, project memory, lessons, anomalies, corrections, and operational carry-over context. |
+| 📚 **`Instruction Kernel`** | Versioned framework instructions, command capsules, project overlays, and validated user extensions. |
+| ⚙️ **`Command Kernel`** | `vida boot`, `vida task`, `vida memory`, `vida status`, and `vida doctor` as the first-class operator surface. |
+| 🔁 **`Migration Kernel`** | Schema versioning, instruction upgrades, compatibility validation, and fail-closed startup migrations across releases. |
+| 🎛️ **`VS-Control`** | Orchestration, decomposition, routing, and escalation around those kernels. |
 | 🛡️ **`VS-Verify`** | Review, policy, test, and approval gates. |
 | 📊 **`VS-Observe`** | Telemetry, scorecards, and drift visibility. |
 | 🎓 **`VS-Learn`** | Reflection, evaluation, and improvement loops. |
-| 🔄 **`VS-DocSync`** | Documentation actualization and canonical-document promotion. |
+| 🔄 **`VS-DocSync`** | Documentation actualization and canonical-document promotion while the repo still remains part of the working surface. |
 
 ---
 
@@ -421,6 +424,7 @@ The longer-term runtime direction also includes:
 2. clear separation between workflow state, memory, documentation state, and telemetry
 3. protocol rules that exist as docs, machine-readable policy artifacts, and runtime enforcement
 4. compact context packets that reduce repeated rereads of large markdown surfaces
+5. a binary runtime built around explicit state, memory, instruction, command, and migration kernels rather than one large markdown-first startup contract
 
 ### Multi-Agent Model
 
@@ -577,7 +581,9 @@ These specs preserve the current design direction for:
 
 ## 📦 Installation
 
-The current installer is bash-only and is intended to install the framework payload into an existing repository.
+The current installer is bash-only and is intended to install the `0.1` reference-runtime framework payload into an existing repository.
+
+It is not the installer shape for the future `1.0` binary product.
 
 Quick install:
 
@@ -720,6 +726,7 @@ The future standalone repository should allow people to contribute in areas such
 ### Future Vision
 
 - a self-hosted local binary with embedded state, memory, and instruction runtime
+- explicit state, memory, instruction, command, and migration kernels as the product core
 - stronger machine-enforced runtime contracts
 - a daemonized local control plane after the binary kernel is stable
 - plugin and marketplace extensibility only after the runtime model is stable
