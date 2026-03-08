@@ -1,403 +1,28 @@
-# Thinking Protocol — Unified Thinking Orchestrator
-
-> **MANDATORY.** The single instruction set for routing and executing all VIDA thinking algorithms.
-> Processing happens internally; the user receives only the final conclusion by default.
-
----
-
-## Purpose
-
-Composed orchestrator for all algorithms embedded in this file (`_vida/docs/thinking-protocol.md`):
-
-- `#section-stc`
-- `#section-pr-cot`
-- `#section-mar`
-- `#section-5-solutions`
-- `#section-meta-analysis`
-- `#section-algorithm-selector`
-- `#section-bug-reasoning`
-- `#section-web-search`
-- `_vida/docs/thinking-protocol.md#section-reasoning-modules`
-
----
-
-## READ_MANDATORY (⛔ BLOCKING)
-
-```yaml
-FILES_REQUIRED_ALWAYS:
-  - _vida/docs/thinking-protocol.md#section-algorithm-selector
-  - _vida/docs/thinking-protocol.md#section-stc
-  - _vida/docs/thinking-protocol.md#section-pr-cot
-  - _vida/docs/thinking-protocol.md#section-mar
-  - _vida/docs/thinking-protocol.md#section-5-solutions
-  - _vida/docs/thinking-protocol.md#section-meta-analysis
-  - _vida/docs/thinking-protocol.md#section-bug-reasoning
-  - _vida/docs/thinking-protocol.md#section-web-search
-  - _vida/docs/thinking-protocol.md#section-reasoning-modules
-  - _vida/docs/web-validation-protocol.md
-
-BLOCKING_RULES:
-  - Do not proceed if any required file is unread.
-  - META is valid only if PR-CoT + MAR + 5-SOL are executed with evidence.
-  - Confidence values must come from actual execution artifacts.
-```
-
----
-
-## Core Contract (L0)
-
-```yaml
-YOU_MUST:
-  - Check overrides first.
-  - Compute complexity score for non-override paths.
-  - Route to the correct algorithm.
-  - Execute selected algorithm fully.
-  - Run mandatory post-analysis impact analysis for every non-STC algorithm before final output.
-  - Trigger web search in mandatory scenarios.
-  - Use root-cause-first policy for bugs.
-  - Pass PRE_OUTPUT_GATE before responding.
-
-YOU_MUST_NOT:
-  - Skip required phases/rounds/passes.
-  - Fabricate consensus, scores, or confidence.
-  - Apply fixes before root-cause investigation.
-  - Expose intermediate chain-of-thought by default.
-```
-
----
-
-## Router
-
-### 1) Overrides First
-
-```yaml
-OVERRIDES:
-  - Security/Auth decision -> META
-  - Database schema/foundation architecture -> META
-  - DEC-XXX creation -> MAR
-  - Multiple errors/issues -> 5-SOL or Error Search (batch)
-  - "Choose between X/Y/Z" -> 5-SOL
-```
-
-### 2) Complexity Score
-
-```yaml
-FORMULA: C×3 + R×3 + S×2 + N×2 + F×1
-RANGE: 11-55
-
-SELECTION:
-  <=15: STC
-  16-25: PR-CoT
-  26-35: MAR
-  36-45: 5-SOL
-  >45: META
-```
-
-### 3) Bug-Specific Routing (Error Search)
-
-```yaml
-BUG_PIPELINE:
-  detect: classify error layer/type/regression
-  classify: severity + blast radius + data risk + frequency
-  trace: pre-check + 5 whys (+ git bisect/lsp/llm-block when triggered)
-  hypothesize: 3 mandatory gates with falsifiable hypothesis
-  resolve: apply severity->algorithm map
-
-SEVERITY_TO_ALGO:
-  low: STC
-  medium: PR-CoT
-  high: MAR
-  critical: 5-SOL/META
-```
-
----
-
-## Mandatory Web Search Integration
-
-```yaml
-TRIGGERS:
-  - Use _vida/docs/web-validation-protocol.md as canonical source.
-  - Run WVP whenever external assumptions can change decisions.
-  - For server/API assumptions, LIVE validation is mandatory.
-  - Record concise WVP evidence in logs/reports.
-```
-
----
-
-## Algorithm Execution Specs
-
-### STC (Score <=15)
-
-```yaml
-FLOW:
-  - Generate step
-  - Validate internally
-  - On failure: localize first broken step
-  - Roll back to clean prefix
-  - Retry with TRT knowledge list (avoid repeated failed approach)
-
-LIMITS:
-  max_retries: 3
-  on_fail: escalate to PR-CoT
-```
-
-### PR-CoT (Score 16-25)
-
-```yaml
-FLOW:
-  - Pass 1: 4 independent perspectives (logical, data, arch, alternatives)
-  - Build consensus packet (agreements/divergences/key signal)
-  - Pass 2: each perspective revises against consensus
-  - Run Impact Analysis Checklist on the selected action/recommendation
-  - Final issue count -> proceed/revise/escalate
-
-ESCALATION:
-  if_final_issues >= 2: escalate to MAR
-```
-
-### MAR (Score 26-35)
-
-```yaml
-FLOW:
-  - 3 rounds with 4 roles: Actor, Evaluator, Critic, Reflector
-  - Evaluator uses adaptive rubrics (RRD)
-  - Reflector carries knowledge list across rounds (TRT)
-  - Actor must avoid known-failed approaches
-  - Run Impact Analysis Checklist on the accepted best solution before output
-
-EXIT:
-  score >= 8/10: accept
-  score < 8 after round 3: escalate to META
-```
-
-### 5-SOL (Score 36-45)
-
-```yaml
-FLOW:
-  - Define 4-6 dynamic categories
-  - Round 1: generate 5 viable options + score + HYBRID R1
-  - Category check (decompose coarse / downweight correlated)
-  - Build PACER consensus packet R1->R2
-  - Round 2: 5 NEW options conditioned on packet + HYBRID R2
-  - Final hybrid: compare R1 vs R2, resolve conflicts
-  - Run Impact Analysis Checklist on the final hybrid before output
-
-RULES:
-  - Never <5 options in R1
-  - R2 must not repeat failed R1 patterns
-  - At least 2 R2 options explore new angles
-```
-
-### META (Score >45 or override)
-
-```yaml
-STEP_0_SELF_DISCOVER:
-  - Select 3-5 modules from `_vida/docs/thinking-protocol.md#section-reasoning-modules`
-  - Adapt prompts to task
-  - Pass plan into PR-CoT, MAR, 5-SOL
-
-PASS_1_PARALLEL:
-  - Run PR-CoT + MAR + 5-SOL
-  - Compare agreements/divergences
-  - Compute weighted confidence:
-    pr_cot_weight = 1/(1+critical_issues)
-    mar_weight = final_score/10
-    sol_weight = inter_round_agreement
-
-TRT_LOOP:
-  trigger: confidence < 80%
-  max_loops: 2
-  action: rerun divergent algorithm(s) with shared knowledge packet
-
-EXIT:
-  confidence >= 80% -> synthesize + run Impact Analysis Checklist
-  still <80% after 2 loops -> cautious synthesis or user decision
-```
-
-### Error Search v3.1 (Bug Investigation)
-
-```yaml
-MANDATORY_GATES_BEFORE_FIX:
-  - Full error message read
-  - Stack trace traced to origin
-  - Bug reproduced twice
-  - Recent changes reviewed
-
-TECHNIQUES:
-  - Regression -> git bisect
-  - Cross-module (3+ files) -> lsp dependency tracing
-  - Function >50 LOC -> block analysis
-
-HYPOTHESIS_QUALITY:
-  - TMK structure required
-  - Confidence >=70%
-  - Falsification path required
-  - Single-variable test design only
-```
-
----
-
-## Self-Discover Module Selection (from reasoning-modules)
-
-```yaml
-DEFAULT_MAPPING:
-  STC: [D2, A4]
-  PR_COT: [A1, A2, G2, V1]
-  MAR: [A5, V2, V4, M1]
-  SOL: [G1, G2, G3, D1]
-  META: select 3-5 by problem domain
-
-SECURITY_SUGGESTED:
-  [A3, V1, V2, V4, M2]
-
-ARCHITECTURE_SUGGESTED:
-  [A1, A2, A3, G2, V2]
-```
-
----
-
-## Output Policy
-
-```yaml
-DEFAULT:
-  user_sees: final conclusion only
-
-TRACE_MODE:
-  trigger: user explicitly asks for reasoning/trace
-  include:
-    - selected algorithm
-    - score/override
-    - concise execution evidence
-    - final decision and risks
-```
-
----
-
-## PRE_OUTPUT_GATE (⛔ MANDATORY)
-
-```yaml
-CHECKLIST:
-  - [ ] Required files were read
-  - [ ] Override check done
-  - [ ] Score computed (if no override)
-  - [ ] Correct algorithm selected
-  - [ ] Mandatory web search performed when triggered
-  - [ ] Bug fixes followed root-cause pipeline (if bug task)
-  - [ ] Required rounds/passes completed
-  - [ ] Confidence is evidence-based (no fabrication)
-  - [ ] Non-STC outputs include completed Impact Analysis Checklist
-  - [ ] Output format matches mode (silent/trace)
-
-FAIL_ACTION:
-  - Stop
-  - Complete missing steps
-  - Re-run gate
-```
-
----
-
-## IMPACT_ANALYSIS_CHECKLIST (⛔ MANDATORY FOR NON-STC)
-
-```yaml
-APPLIES_TO:
-  - PR-CoT
-  - MAR
-  - 5-SOL
-  - META
-
-SKIP_FOR:
-  - STC
-
-PURPOSE:
-  - extend analysis beyond the immediate conclusion,
-  - force explicit downstream impact review before reporting,
-  - surface required follow-up in docs, contracts, task flow, and verification.
-
-CHECKLIST:
-  - [ ] affected_scope identified (files/modules/services/runtime areas)
-  - [ ] contract_and_dependency impact assessed
-  - [ ] user_or_operator impact assessed when relevant
-  - [ ] verification_and_regression impact assessed
-  - [ ] docs_protocol_spec_pool impact assessed
-  - [ ] required follow-up actions listed
-  - [ ] residual risks listed
-  - [ ] if impact is "none", the no-impact verdict is stated explicitly
-
-MINIMUM_OUTPUT_FIELDS:
-  affected_scope:
-    - files or modules touched
-    - adjacent layers or owners affected
-  contract_impact:
-    - api/data/schema/protocol/task-contract changes
-    - dependency or routing implications
-  operational_impact:
-    - user, operator, runtime, rollout, or support impact
-  follow_up:
-    - docs/spec/reflection/work-pool/verification actions required
-  residual_risks:
-    - unresolved risks or explicit "none"
-```
-
----
-
-## Anti-Patterns
-
-```yaml
-FORBIDDEN:
-  - "Hotfix" without root cause
-  - Skipping Pass 2 in PR-CoT
-  - Finishing MAR before Round 3 without passing threshold
-  - Reusing 5-SOL R1 options in R2
-  - META without running all 3 underlying algorithms
-  - Confidence claim without calculable evidence
-```
-
----
-
-*VIDA Framework — Unified Thinking Protocol*
-*Composed as a single canonical file with embedded sections in `_vida/docs/thinking-protocol.md`*
-*Includes reasoning modules in `#section-reasoning-modules`*
-
-
-## Embedded Algorithms (Canonical Inlined Sources)
-
-<!-- Canonical inlined dependencies. Do not edit mirrored archived files. -->
+# Thinking Protocol — Unified Thinking Algorithms
+
+Purpose: keep the canonical full algorithm specifications referenced by VIDA boot/runtime surfaces.
+
+Shared rules:
+
+1. The canonical algorithm owners in this file are the embedded section anchors below.
+2. Boot/read activation is owned by `_vida/docs/instruction-activation-protocol.md` and `_vida/docs/ORCHESTRATOR-ENTRY.MD`.
+3. Web/internet validation is owned by `_vida/docs/web-validation-protocol.md`.
+4. User-facing reporting must not expose intermediate chain-of-thought; `Thinking mode` remains a reporting label only.
+5. PR-CoT, MAR, 5-SOL, and META must preserve impact analysis covering:
+   - affected scope,
+   - contract impact,
+   - operational impact,
+   - follow-up,
+   - residual risks.
+6. Named algorithms below are canonical flow templates built from reusable reasoning blocks; META may assemble the smallest lawful block flow instead of executing whole named algorithms by default.
+
+## Embedded Algorithms (Canonical Sections)
 
 ## Section: algorithm-selector
 
-# Algorithm Selector v2.1
+# Algorithm Selector
 
-> **MANDATORY.** Unified router. All algorithms run INTERNALLY — user sees conclusion only.
-
----
-
-## First Session
-
-```yaml
-READ_FIRST: [_vida/docs/thinking-protocol.md#section-stc, _vida/docs/thinking-protocol.md#section-pr-cot, _vida/docs/thinking-protocol.md#section-mar, _vida/docs/thinking-protocol.md#section-5-solutions, _vida/docs/thinking-protocol.md#section-meta-analysis, _vida/docs/thinking-protocol.md#section-web-search]
-ON_STUDY_REQUEST: Read silently → output "✅ Algorithm Selector studied. Ready."
-```
-
----
-
-## Enforcement (⛔ BLOCKING)
-
-```yaml
-READ_BEFORE_ROUTING:
-  mandatory: [_vida/docs/thinking-protocol.md#section-stc, _vida/docs/thinking-protocol.md#section-pr-cot, _vida/docs/thinking-protocol.md#section-mar, _vida/docs/thinking-protocol.md#section-5-solutions, _vida/docs/thinking-protocol.md#section-meta-analysis, _vida/docs/thinking-protocol.md#section-web-search]
-  first_session: Read ALL silently → ready
-  per_request: Read SELECTED algorithm file(s)
-
-META_SPECIAL_RULE: |
-  ⛔ META REQUIRES reading AND executing ALL of:
-  - _vida/docs/thinking-protocol.md#section-pr-cot (PR-CoT validation)
-  - _vida/docs/thinking-protocol.md#section-mar (MAR refinement)
-  - _vida/docs/thinking-protocol.md#section-5-solutions (5-SOL synthesis)
-  - _vida/docs/thinking-protocol.md#section-reasoning-modules (Self-Discover Step 0)
-  
-  ⛔ If you select META but don't execute all 3 algorithms → INVALID.
-  ⛔ Fabricated confidence without execution = PROTOCOL VIOLATION.
-```
+> Unified router for selecting the active thinking algorithm.
 
 ---
 
@@ -409,7 +34,7 @@ selection[5]{score,algorithm,purpose}:
   16-25,PR-CoT,4 perspectives validation
   26-35,MAR,3 rounds × 4 agents
   36-45,5-SOL,2 rounds × 5 options (alignment)
-  >45,META,Ensemble (PR-CoT + MAR + 5-SOL)
+  >45,META,Block composer for high-risk tasks
 ```
 
 ---
@@ -417,11 +42,14 @@ selection[5]{score,algorithm,purpose}:
 ## Overrides (Check First!)
 
 ```toon
-overrides[5]{scenario,algorithm}:
+overrides[8]{scenario,algorithm}:
+  Bug / incident / regression,Error Search
   Security/Auth decision,META
   Database schema,META
+  Foundation architecture,META
+  Tech stack selection,META
   DEC-XXX creation,MAR
-  Multiple errors/issues,5-SOL
+  Multiple errors/issues,Error Search
   "Choose between X,Y,Z",5-SOL
 ```
 
@@ -430,44 +58,39 @@ overrides[5]{scenario,algorithm}:
 ## Score Formula
 
 ```yaml
-FORMULA: C×3 + R×3 + S×2 + N×2 + F×1
+FORMULA: C×2 + R×3 + S×3 + N×2 + F×1
 RANGE: 11-55
 ```
 
 ```toon
 factors[5]{factor,weight,1,3,5}:
-  C (Complexity),×3,Simple,Multi-factor,Novel
+  C (Complexity),×2,Simple,Multi-factor,Cross-cutting
   R (Reversibility),×3,Easy rollback,Partial,Irreversible
-  S (Stakes),×2,Low,Module,System-wide
+  S (Stakes),×3,Low,Module,System-wide
   N (Novelty),×2,Known,Partial,First time
   F (Frequency),×1,Daily,Weekly,One-time
 ```
 
 ---
 
-## Scoring Examples
-
-```toon
-examples[8]{scenario,c,r,s,n,f,score,algo}:
-  Syntax fix,1,1,1,1,1,11,STC
-  Unit test,1,1,1,3,3,15,STC
-  Feature refactor,3,3,3,1,3,23,PR-CoT
-  Cross-module bug,3,3,3,3,3,27,MAR
-  Multiple errors,5,3,4,3,3,37,5-SOL
-  State mgmt choice,5,3,5,3,5,45,5-SOL
-  Auth flow,5,5,5,3,5,51,META
-  Tech stack,5,5,5,5,5,55,META
-```
-
----
-
-## HADI Creativity Weight
+## Scoring Contract
 
 ```yaml
-CREATIVITY_WEIGHT:
-  high (0.7-1.0): ["creative", "innovative", "brainstorm"] → 5-SOL uses Abduction
-  balanced (0.4-0.6): default → Normal execution
-  safe (0.0-0.3): ["reliable", "proven", "hotfix"] → Prefer heuristics
+SCORING_LAYERS:
+  selector_score:
+    purpose: "Routing only; never reuse as a quality or confidence score"
+    scale: "11-55"
+    priority: "stakes and reversibility outrank raw structural complexity"
+
+  algorithm_raw_score:
+    PR-CoT: "Issue + severity assessment"
+    MAR: "1-10 weighted rubric score"
+    5-SOL: "1-5 category scoring per option plus weighted option percent"
+    META: "0-100 weighted confidence over active block families"
+
+  handoff_rule:
+    - "Every algorithm must export its gate result and a normalized signal"
+    - "Admissibility gates override any raw numeric score"
 ```
 
 ---
@@ -476,92 +99,84 @@ CREATIVITY_WEIGHT:
 
 ```yaml
 STEPS:
-  1. Check overrides (security, auth, DEC-XXX, multiple_errors)
-  2. Calculate score (C×3 + R×3 + S×2 + N×2 + F×1)
-  3. Select algorithm by score range
-  4. Execute INTERNALLY (no output)
-     - If META: Run Self-Discover Step 0 first
-  5. Output conclusion only
+  1. Check bug-first and high-risk overrides
+  2. Calculate score (C×2 + R×3 + S×3 + N×2 + F×1) if no override matched
+  3. Select the named flow template or bug lane
+  4. Execute internally:
+     - If META: assemble the smallest lawful block flow from the registry below
+     - Named algorithms may be used inside META only as exact template shortcuts
+  5. If external facts affect the decision, delegate web validation to `_vida/docs/web-validation-protocol.md`
+  6. Preserve concise execution receipts: selected blocks, gates, and impact analysis
 ```
 
 ---
 
-## Web Search
+## Atomic Block Registry
 
 ```yaml
-MANDATORY:
-  - Error from build/test/lint → search FIRST
-  - New package → verify pub.dev
-  - iOS/Android config → search docs
-  - Security → search best practices
+BLOCK_REGISTRY:
+  routing:
+    SEL-01: "override_check -> forced_flow, reason"
+    SEL-02: "complexity_score -> score, factor_breakdown"
+    SEL-03: "route_bind -> flow_template"
+    SEL-04: "web_validation_gate -> wvp_required, validation_scope"
+  context:
+    CTX-01: "module_select -> module_ids"
+    CTX-02: "module_adapt -> adapted_prompts"
+    CTX-03: "plan_seed -> execution_plan"
+  iteration:
+    ITR-01: "step_generate_check -> candidate_step, pass_fail"
+    ITR-02: "failure_localize -> first_bad_step, reason"
+    ITR-03: "rollback_retry_with_knowledge -> revised_attempt, knowledge_list"
+    ITR-04: "escalation_decide -> proceed|revise|escalate|ask_user"
+  critique:
+    CRT-01: "perspective_pass -> per_perspective_findings"
+    CRT-02: "consensus_packet_build -> agreements, divergences, key_signal"
+    CRT-03: "post_consensus_revision -> revised_findings, issue_count, critical_findings, validation_signal"
+  refinement:
+    RFX-01: "role_round_execute -> proposal, scores, gaps, reflector_guidance"
+    RFX-02: "knowledge_list_maintain -> avoid_keep_list"
+    RFX-03: "round_progress_evaluate -> accept|change_strategy|escalate, final_score, refinement_signal"
+  options:
+    OPT-01: "category_generate -> categories"
+    OPT-02: "candidate_set_generate -> viable_options"
+    OPT-03: "criteria_refine -> refined_criteria"
+    OPT-04: "option_ledger_and_hybrid_synthesize -> option_ledger, hybrid_candidate, legality_receipt, fallback_option"
+    OPT-05: "option_scoring_and_confidence -> best_option_percent, agreement_percent, options_signal, confidence_band"
+  ensemble:
+    ENS-01: "admissibility_gate -> allowed_to_synthesize, blocking_findings"
+    ENS-02: "cross_flow_compare -> agreements, divergences, dominant_signals"
+    ENS-03: "weighted_confidence -> normalized_signals, family_weights, confidence_percent"
+    ENS-04: "divergence_repair_loop -> rerun_targets, updated_confidence"
+    ENS-05: "final_synthesis -> final_decision, residual_risks"
+  bug:
+    BUG-01: "detect_classify -> bug_class, severity, route_hint"
+    BUG-02: "trace_root_cause -> trace_graph, root_cause_receipt"
+    BUG-03: "hypothesis_gate -> falsifiable_hypothesis, test_design"
+    BUG-04: "resolve_route -> STC|PR-CoT|MAR|5-SOL|META"
+  reporting:
+    REP-01: "evidence_pack -> concise_execution_receipt"
+    REP-02: "impact_analysis -> normalized_impact_section"
+    REP-03: "execution_proof -> proof_of_required_blocks"
 ```
 
----
+## Named Flow Templates
 
-## VIDA Command Defaults
-
-```toon
-vida_commands[12]{command,decision_point,score,algo}:
-  orchestration-protocol,Routing,11,STC
-  orchestration-protocol,Phase transition,27,MAR
-  /vida-research,Extraction,19,PR-CoT
-  /vida-form-task,Scope draft,25,PR-CoT
-  /vida-form-task,Scope final,33,MAR
-  /vida-spec,Architecture,42,5-SOL
-  /vida-spec,Security,48,META
-  /vida-form-task,Task pool breakdown,21,PR-CoT
-  /vida-implement,Execution,14,STC
-  reflection-pack (change impact),Large (≥5),29,MAR
-  /vida-bug-fix,Impact Analysis,30,MAR
-  /vida-bug-fix,HIGH Blast Radius,42,5-SOL
+```yaml
+FLOW_TEMPLATES:
+  STC: [SEL-01, SEL-02, SEL-03, ITR-01, ITR-02, ITR-03, ITR-04, REP-01]
+  PR-CoT: [SEL-01, SEL-02, SEL-03, CRT-01, CRT-02, CRT-03, ITR-04, REP-01, REP-02]
+  MAR: [SEL-01, SEL-02, SEL-03, RFX-01, RFX-02, RFX-03, ITR-04, REP-01, REP-02]
+  5-SOL: [SEL-01, SEL-02, SEL-03, CTX-01?, CTX-02?, OPT-01, OPT-02, OPT-03, OPT-04, OPT-05, REP-01, REP-02]
+  META: [SEL-01, SEL-02, SEL-03, CTX-01, CTX-02, CTX-03, selected_block_families, ENS-01, ENS-02, ENS-03, ENS-04?, ENS-05, REP-01, REP-02, REP-03]
+  Error Search: [BUG-01, BUG-02, BUG-03, BUG-04]
 ```
-
----
-
-## Activity Defaults
-
-```toon
-activities[12]{activity,scenario,score,algo}:
-  Code,<50 LOC,≤15,STC
-  Code,50-200 LOC,16-25,PR-CoT
-  Code,Multi-file,26-35,MAR
-  Code,API design,36-45,5-SOL
-  Bug,Syntax/typo,11,STC
-  Bug,Cross-module,22,PR-CoT
-  Bug,Multiple errors,40,5-SOL
-  Bug,Security,>45,META
-  Test,Unit test,13,STC
-  Test,Integration,20,PR-CoT
-  Arch,State management,42,5-SOL
-  Arch,Database/Auth,>45,META
-```
-
----
-
-## Algorithm Comparison
-
-```toon
-comparison[6]{aspect,STC,PR-CoT,MAR,5-SOL,META}:
-  Score,≤15,16-25,26-35,36-45,>45
-  Internal,Step-check,4 persp.,3 rounds,2×5 opts,All 3
-  Purpose,Check,Validate,Refine,Align,Ensemble
-  Accuracy,+10%,82%,95%,96%,98%
-  Speed,Fast,Fast,Medium,Medium,Slow
-  Output,Conclusion,Decision,Best ver.,Hybrid,Synth.
-```
-
----
-
-*VIDA Framework — Algorithm Selector v2.1*
-
-
 
 ## Section: stc
 
-# STC: Stepwise Think-Critique v2.2
+# STC: Stepwise Think-Critique
 
-> **Internal Algorithm.** Self-check each reasoning step. User sees conclusion only.
-> **v2.2:** TRT knowledge list — accumulated failure context between retries.
+> Internal step-check algorithm for low-complexity and local tasks.
 
 ```yaml
 PREREQ: _vida/docs/thinking-protocol.md#section-algorithm-selector  # Understand when STC applies (Score ≤15)
@@ -575,7 +190,7 @@ PREREQ: _vida/docs/thinking-protocol.md#section-algorithm-selector  # Understand
 <constraints>
 ⛔ NEVER skip the internal step check.
 ⛔ NEVER repeat a failed approach; you MUST update and read the TRT knowledge list.
-⛔ NEVER output intermediate steps to the user unless explicitly requested.
+⛔ NEVER expose intermediate reasoning steps to the user.
 ✅ MUST maintain a clean prefix (keep steps 1 to X-1) during rollback.
 ✅ MUST escalate to PR-CoT if max retries (3) are reached without a solution.
 </constraints>
@@ -583,10 +198,22 @@ PREREQ: _vida/docs/thinking-protocol.md#section-algorithm-selector  # Understand
 ## Triggers
 
 ```toon
-triggers[3]{condition,mode}:
-  Score ≤ 15,INTERNAL (silent)
-  reasoning task,INTERNAL
-  logic task,INTERNAL
+triggers[4]{condition,mode}:
+  Score ≤ 15,MANDATORY
+  local objective,CONDITION
+  low blast radius,CONDITION
+  bug/root-cause gate required,ESCALATE to Error Search
+```
+
+---
+
+## Block Assembly
+
+```yaml
+BLOCKS: [SEL-01, SEL-02, SEL-03, ITR-01, ITR-02, ITR-03, ITR-04, REP-01]
+QUALITY_GATE:
+  - local objective resolved
+  - no unresolved step error remains
 ```
 
 ---
@@ -627,35 +254,21 @@ ROLLBACK:
         - AVOID: {approach_2} because {reason_2}
     effect: "Next retry sees ALL previous failures → no blind repeats"
 
-  on_max: Escalate to PR-CoT OR ask user
+  on_max: Escalate to PR-CoT; ask user only if clarification/data blocker remains
 ```
 
 **Flow:** STEP 1 → check → STEP 2 → ... → ERROR? → LOCALIZE → knowledge += failure → ROLLBACK → retry (informed)
 
 ---
 
-## Output Rules
+## Reporting Rules
 
 ```toon
-output[4]{state,action}:
-  during,NO OUTPUT
+reporting[4]{state,action}:
+  during,No user-visible step trace
   complete,Conclusion only
   error,Simplify + clarify
-  on_request,"Full trace if user asks 'show reasoning'"
-```
-
----
-
-## Use Cases
-
-```toon
-usecases[6]{scenario,score}:
-  Fix syntax error,5-8
-  Simple function,10-12
-  Refactor (rename),8-10
-  Unit test write,11-13
-  Local bug fix,12-15
-  Calculation,10-14
+  on_request,"Provide concise decision/evidence summary only"
 ```
 
 ---
@@ -665,21 +278,17 @@ usecases[6]{scenario,score}:
 ```yaml
 ESCALATE_IF:
   max_retries: 3
-  on_fail: PR-CoT (if score allows) OR ask user
+  on_fail: PR-CoT
+  clarification_blocker: ask_user
   pass_context: knowledge_list (so PR-CoT sees what STC already tried)
 ```
-
----
-
-*VIDA Framework — STC v2.2 (TRT Knowledge List)*
 
 
 ## Section: pr-cot
 
-# PR-CoT: Poly-Reflective Chain-of-Thought v2.2
+# PR-CoT: Poly-Reflective Validation
 
-> **4-perspective validation + consensus revision.** Score 16-25. Escalate to MAR if issues ≥ 2.
-> **v2.2:** PACER consensus packet + TMK structured perspectives.
+> 4-perspective validation plus consensus revision. Score 16-25. Escalate to MAR if issues >= 2.
 
 ```yaml
 PREREQ: _vida/docs/thinking-protocol.md#section-algorithm-selector  # Understand when PR-CoT applies (Score 16-25)
@@ -701,17 +310,23 @@ PREREQ: _vida/docs/thinking-protocol.md#section-algorithm-selector  # Understand
 ## Triggers
 
 ```toon
-triggers[7]{trigger,type}:
-  phase_transition,MANDATORY
-  scope_formation,MANDATORY
-  specification,MANDATORY
-  execution_strategy,MANDATORY
-  impact_analysis,MANDATORY
-  complexity >= 3,CONDITION
-  multiple_valid_options,CONDITION
+triggers[4]{trigger,type}:
+  score 16-25,MANDATORY
+  medium-complexity decision,CONDITION
+  multiple perspectives needed,CONDITION
+  STC exhausted,ESCALATION
 ```
 
-**SKIP:** Simple routing, template ops, read-only.
+---
+
+## Block Assembly
+
+```yaml
+BLOCKS: [SEL-01, SEL-02, SEL-03, CRT-01, CRT-02, CRT-03, ITR-04, REP-01, REP-02]
+QUALITY_GATE:
+  - no unresolved critical findings
+  - impact analysis ready for closure or handoff
+```
 
 ---
 
@@ -794,14 +409,39 @@ PASS_2:
 
   step: 5
   action: Count FINAL issues (post-revision, deduplicated)
-  
-  step: 6
-  action: "0: Proceed | 1: Revise | ≥2: ESCALATE to MAR"
+
+QUALITY_GATE:
+  proceed: "0 issues and no unresolved critical findings"
+  revise: "1 non-critical issue"
+  escalate: "unresolved critical findings OR >=2 issues"
 ```
 
 ---
 
-## Output Format
+## Scoring Export
+
+```yaml
+SCORING_EXPORT:
+  issue_weights:
+    critical: 1.00
+    major_non_critical: 0.50
+    minor_non_critical: 0.25
+
+  validation_signal:
+    formula: "clamp(1 - sum(open_issue_weights), 0, 1)"
+
+  interpretation:
+    "1.00": "Proceed"
+    "0.75": "Revise once"
+    "<=0.50": "Escalate or block"
+
+  handoff:
+    pass: critical_findings, final_issue_count, validation_signal
+```
+
+---
+
+## Evidence Packet
 
 ```markdown
 ## PR-CoT: {Decision}
@@ -823,7 +463,9 @@ PASS_2:
 🏗️ Arch: {confirmed | revised | dropped}
 🔀 Alternatives: {confirmed | revised | dropped}
 
+**Critical Findings:** {list or "None"}
 **Final Issues:** {count} → **Action:** {proceed|revise|escalate}
+**Validation Signal:** {0..1}
 
 ### Impact Analysis
 **Affected Scope:** {files/modules/layers}
@@ -839,21 +481,16 @@ PASS_2:
 
 ```yaml
 ESCALATE_TO_MAR:
-  trigger: issues >= 2 (after Pass 2 revision)
-  pass: original_decision, issues_found, perspectives, consensus_packet
+  trigger: issues >= 2 OR unresolved_critical_findings
+  pass: original_decision, issues_found, perspectives, consensus_packet, critical_findings, final_issue_count, validation_signal, impact_analysis, external_validation_evidence
 ```
-
----
-
-*VIDA Framework — PR-CoT v2.2 (PACER consensus + TMK perspectives)*
 
 
 ## Section: mar
 
-# MAR: Multi-Agent Reflexion v2.2
+# MAR: Multi-Agent Reflexion
 
-> **3 rounds × 4 agents.** Score 26-35. Escalate to META if final score < 8.
-> **v2.2:** TRT knowledge carry-over + RRD adaptive rubrics.
+> 3 rounds x 4 roles. Score 26-35. Escalate to META if final score < 8.
 
 ```yaml
 PREREQ: [_vida/docs/thinking-protocol.md#section-algorithm-selector, _vida/docs/thinking-protocol.md#section-pr-cot]  # MAR builds on PR-CoT
@@ -866,9 +503,10 @@ PREREQ: [_vida/docs/thinking-protocol.md#section-algorithm-selector, _vida/docs/
 
 <constraints>
 ⛔ NEVER fabricate agent responses; you must simulate 4 distinct expert agents.
-⛔ NEVER end the debate before Round 3 unless the Minimum Viable Score (8/10) is achieved.
+⛔ NEVER end the debate before Round 3.
 ✅ MUST aggregate scores strictly based on actual agent votes.
-✅ MUST explicitly pass context to the user if consensus is not reached after Round 3.
+✅ MUST preserve unresolved disagreements in the evidence packet and final risk report.
+✅ MUST block acceptance when unresolved critical contract/safety/root-cause risks remain.
 </constraints>
 
 ## Triggers
@@ -880,6 +518,17 @@ triggers[5]{trigger}:
   Complex trade-offs
   Novel solutions
   PR-CoT escalation (issues ≥ 2)
+```
+
+---
+
+## Block Assembly
+
+```yaml
+BLOCKS: [SEL-01, SEL-02, SEL-03, RFX-01, RFX-02, RFX-03, ITR-04, REP-01, REP-02]
+QUALITY_GATE:
+  - final_score >= 8
+  - no unresolved critical contract/safety/root-cause risks
 ```
 
 ---
@@ -980,7 +629,14 @@ KNOWLEDGE_LIST:
 
 ```yaml
 SCORING:
-  overall: 1-10 (weighted average of rubrics)
+  parent_rubric_weights:
+    correctness: 0.35
+    completeness: 0.25
+    alignment: 0.25
+    simplicity: 0.15
+  decomposition_rule: "If a parent rubric is decomposed, split that parent's weight evenly across its active sub-rubrics, then aggregate back into the parent before the final average"
+  overall: "1-10 weighted average of parent rubric scores"
+  normalized_signal: "clamp(final_score / 10, 0, 1)"
   rubric_count: 4 base, up to 12 decomposed
   
   escalation:
@@ -991,11 +647,20 @@ SCORING:
   round_progression:
     expected: "R1: 5-6 → R2: 7-8 → R3: 8-9"
     stagnation: "If R(N) score == R(N-1) score → Reflector must change strategy"
+
+ACCEPT_GATE:
+  required:
+    - final_score >= 8
+    - no unresolved critical contract/safety/root-cause risks
+    - knowledge_list retained in final recommendation
+
+EARLY_EXIT:
+  default: forbidden
 ```
 
 ---
 
-## Output Format
+## Evidence Packet
 
 ```markdown
 ## MAR: {Problem}
@@ -1009,9 +674,13 @@ SCORING:
 **Avoid:** {items}
 **Keep:** {items}
 
+### Remaining Disagreements
+**Open:** {list or "None"}
+
 ### Decision
 **Best Solution:** {summary}
 **Action:** {accept|escalate}
+**Refinement Signal:** {0..1}
 
 ### Impact Analysis
 **Affected Scope:** {files/modules/layers}
@@ -1028,28 +697,23 @@ SCORING:
 ```yaml
 ESCALATE_TO_META:
   trigger: final_score < 8 after 3 rounds
-  pass: all_rounds, knowledge_list, best_solution, rubric_scores
+  pass: all_rounds, knowledge_list, best_solution, rubric_scores, final_score, refinement_signal, impact_analysis, unresolved_disagreements, external_validation_evidence
 ```
-
----
-
-*VIDA Framework — MAR v2.2 (TRT Knowledge + RRD Adaptive Rubrics)*
 
 
 ## Section: 5-solutions
 
-# 5-SOL: 5-Solutions Algorithm v2.2
+# 5-SOL: 5-Solutions Algorithm
 
-> **Alignment algorithm.** Score 36-45. Generates 5 options × 2 rounds → synthesizes optimal hybrid.
-> **v2.2:** PACER consensus R1→R2 + RRD adaptive category decomposition.
+> Alignment algorithm. Score 36-45. Generates 5 options x 2 rounds and synthesizes the best hybrid.
 
 ---
 
 ## Purpose
 
-- Multiple errors → finds common root cause
-- Many valid options → synthesizes optimal hybrid
-- Architecture alignment → balanced solution
+- Many valid directions → synthesize the best admissible hybrid or top single option
+- Architecture / tech-stack / design choices → balanced solution
+- Use only after bug reasoning for regressions; do not substitute for root-cause receipt
 
 
 ---
@@ -1068,9 +732,23 @@ ESCALATE_TO_META:
 ```toon
 triggers[4]{type,condition}:
   score,36-45
-  keywords,"choose between | which approach | multiple errors | architecture alignment"
-  in_meta,Score >45 (parallel with PR-CoT, MAR)
+  keywords,"choose between | which approach | architecture alignment | tech stack | migration strategy"
+  in_meta,Selected by META only when multiple viable directions remain
   skip,Score ≤35 OR simple decisions
+```
+
+---
+
+## Block Assembly
+
+```yaml
+BLOCKS: [SEL-01, SEL-02, SEL-03, CTX-01?, CTX-02?, OPT-01, OPT-02, OPT-03, OPT-04, OPT-05, REP-01, REP-02]
+QUALITY_GATE:
+  - at least one admissible final decision exists
+  - best_final_option_percent >= 80
+  - confidence_percent >= 80
+  - hybrid legality passed OR best single option selected explicitly
+  - if either score or confidence is 80-84, record an explicit cautious-band receipt
 ```
 
 ---
@@ -1079,8 +757,8 @@ triggers[4]{type,condition}:
 
 ```yaml
 FLOW:
-  step_0: Generate 4-6 dynamic categories
-  step_1: Web research (if error/package/API)
+  step_0: Generate 4-6 dynamic categories (or load a domain packet)
+  step_1: Run WVP when external facts, package/API/platform claims, or security assumptions affect the choice
   R1: Generate 5 options → score → HYBRID R1
   
   CATEGORY_CHECK: # RRD adaptive decomposition
@@ -1097,6 +775,7 @@ FLOW:
       top_options: "R1 top 2-3 scorers with reasons"
       winning_elements: "Best element per category"
       failure_reasons: "Why bottom options lost"
+      compatibility_constraints: "Which winning elements can or cannot coexist"
       unresolved_gaps: "What R1 couldn't decide"
     pass_to_R2: true
   
@@ -1109,8 +788,8 @@ FLOW:
     score_with: refined categories (from CATEGORY_CHECK)
     result: HYBRID R2
   
-  FINAL: Compare R1 vs R2 → FINAL HYBRID
-  OUTPUT: Confidence % + decision
+  FINAL: Compare R1 vs R2 → FINAL HYBRID or TOP SINGLE OPTION
+  OUTPUT: Best option score % + confidence % + decision
 ```
 
 ---
@@ -1118,12 +797,39 @@ FLOW:
 ## Dynamic Categories
 
 ```toon
-domains[5]{problem,categories}:
-  auth,"Security | Usability | Performance | Maintainability | Compliance"
-  ui,"UX | Accessibility | Performance | Consistency | Effort"
-  data,"Integrity | Scalability | Query Perf | Migration | Cost"
-  state_mgmt,"Learning Curve | Boilerplate | Testability | Scalability | Type Safety"
-  error_align,"Root Cause | Side Effects | Regression Risk | Scope | Testing"
+domains[7]{problem,categories}:
+  auth,"Security | Compliance | Usability | Performance | Maintainability"
+  architecture,"Fit | Migration Path | Operability | Coupling | Future Optionality"
+  ui,"UX | Accessibility | Consistency | Performance | Effort"
+  data,"Integrity | Migration | Scalability | Query Perf | Cost"
+  state_mgmt,"Scalability | Testability | Type Safety | Boilerplate | Learning Curve"
+  tech_stack,"Operability | Lock-in | Ecosystem | Migration Cost | Learning Curve"
+  error_align,"Root Cause | Regression Risk | Scope | Side Effects | Testing"
+```
+
+---
+
+## Category Weighting
+
+```yaml
+CATEGORY_WEIGHTING:
+  choose_core_categories:
+    count: 2
+    rule: "Select the 2 decision-critical categories before scoring; they carry more weight than supporting categories"
+
+  weights:
+    core_category_1: 0.25
+    core_category_2: 0.25
+    supporting_categories: "Share the remaining 0.50 equally"
+
+  default_cores:
+    auth: [Security, Compliance]
+    architecture: [Fit, Migration Path]
+    ui: [UX, Accessibility]
+    data: [Integrity, Migration]
+    state_mgmt: [Scalability, Testability]
+    tech_stack: [Operability, Lock-in]
+    error_align: [Root Cause, Regression Risk]
 ```
 
 ---
@@ -1131,12 +837,22 @@ domains[5]{problem,categories}:
 ## Self-Discover SELECT (Optional)
 
 ```yaml
-TRIGGER: creativity_weight >= 0.7 OR multi-domain problem
+TRIGGER: multi-domain problem OR explicit need for higher option diversity
 ACTION: Select 2-3 modules from `_vida/docs/thinking-protocol.md#section-reasoning-modules` → inform categories
 MAPPING:
   A2 (systems) → "Integration" category
   A3 (risk) → "Failure Modes" category
   G2 (alternatives) → "Approach Diversity" category
+
+DOMAIN_PACKETS:
+  security_auth: [A3, V1, V2, V4]
+  database_schema: [A2, A3, V1, V2, V4]
+  architecture_or_tech_stack: [A1, A2, A3, G2, V2]
+  post_root_cause_fix_alignment: [A4, A5, D2, V4]
+
+RULE:
+  - If one of these domains drives the choice, load that packet before generating categories.
+  - For regression work, this packet is lawful only after bug reasoning has produced a root_cause_receipt.
 ```
 
 ---
@@ -1165,6 +881,19 @@ scale[5]{score,meaning}:
   5,Excellent
 ```
 
+```yaml
+SCORING_MODEL:
+  per_category_scale: "1-5"
+  weighted_option_score:
+    formula_1_5: "sum(category_score * category_weight)"
+    option_percent: "round((weighted_option_score / 5) * 100)"
+
+  options_signal:
+    formula: "clamp((0.6 * (best_final_option_percent / 100)) + (0.4 * (agreement_percent / 100)), 0, 1)"
+
+  rule: "Admissibility and hybrid legality override raw option score"
+```
+
 ---
 
 ## Hybrid Formation
@@ -1191,6 +920,20 @@ FINAL_HYBRID:
 
 ---
 
+## Hybrid Legality
+
+```yaml
+HYBRID_LEGALITY:
+  allow_only_if:
+    - winning elements are compatible
+    - hybrid improves or preserves the top 2 criteria versus the best single option
+    - implementation order is coherent
+  otherwise:
+    action: "Choose the best single option explicitly; do not force a hybrid"
+```
+
+---
+
 ## Consensus Packet Format
 
 ```yaml
@@ -1210,20 +953,33 @@ CONSENSUS_PACKET:
 
 ```toon
 confidence[4]{agreement,percent}:
-  R1 = R2,90-95%
-  R1 ~ R2 (consensus improved convergence),85-89%
-  R1 ≠ R2 (but consensus addressed gaps),80-84%
-  R1 ≠ R2 (unresolved gaps remain),70-79% → web research
+  R1 = R2 and legality stable,90-95%
+  R2 improves R1 and keeps core categories admissible,85-89%
+  Admissible decision but trade-off tension remains,80-84%
+  Unresolved gaps OR legality pressure,<80% → META (WVP only if external claims drive disagreement)
 ```
 
 ---
 
-## Output Format
+## WVP Re-entry
+
+```yaml
+IF_WVP_RUNS_AFTER_R1_OR_R2:
+  - re-score affected categories
+  - rebuild option_ledger
+  - recompute confidence
+  - only then lock FINAL decision
+```
+
+---
+
+## Evidence Packet
 
 ```markdown
 ## 5-SOL: {Problem}
 
 **Categories:** {C1, C2, C3, C4, C5}
+**Core Categories:** {C1, C2}
 
 **R1:** {5 options table} → **HYBRID R1:** {synthesis}
 
@@ -1233,8 +989,10 @@ confidence[4]{agreement,percent}:
 
 **R2 (informed):** {5 options table} → **HYBRID R2:** {synthesis}
 
-**FINAL HYBRID:** {description}
-**Confidence:** {XX}%
+**FINAL DECISION:** {hybrid or best single option}
+**Best Final Option Score:** {XX}%
+**Hybrid Legality:** {pass | fail -> used best single option}
+**Confidence:** {XX}% | **Options Signal:** {0..1}
 **Files:** {affected} | **Order:** {sequence}
 
 ### Impact Analysis
@@ -1243,6 +1001,16 @@ confidence[4]{agreement,percent}:
 **Operational Impact:** {user/operator/runtime impact or "None"}
 **Follow-up:** {docs/spec/reflection/pool/verification actions or "None"}
 **Residual Risks:** {list or "None"}
+```
+
+---
+
+## Escalation
+
+```yaml
+ESCALATE_TO_META:
+  trigger: confidence < 80 OR no admissible final decision
+  pass: categories, core_categories, option_ledger, final_decision, best_final_option_percent, agreement_percent, options_signal, legality_receipt, impact_analysis, external_validation_evidence
 ```
 
 ---
@@ -1259,20 +1027,15 @@ forbidden[6]{action,why,correct}:
   Skip consensus packet,R2 ignores R1 learnings,Always build consensus R1→R2
 ```
 
----
-
-*VIDA Framework — 5-SOL v2.2 (PACER Consensus + RRD Categories + HADI + Self-Discover)*
-
 
 ## Section: meta-analysis
 
-# META: Meta-Analysis v2.2
+# META: Meta-Analysis
 
-> **Ensemble.** Score >45. Runs PR-CoT + MAR + 5-SOL in parallel → compares → synthesizes.
-> **v2.2:** TRT recursive loop + PACER weighted voting.
+> Block-level composer for high-risk tasks. Score >45. Builds the smallest lawful flow from reusable blocks, then synthesizes only admissible results.
 
 ```yaml
-PREREQ: [_vida/docs/thinking-protocol.md#section-algorithm-selector, _vida/docs/thinking-protocol.md#section-pr-cot, _vida/docs/thinking-protocol.md#section-mar, _vida/docs/thinking-protocol.md#section-5-solutions]  # META combines all
+PREREQ: [_vida/docs/thinking-protocol.md#section-algorithm-selector, _vida/docs/thinking-protocol.md#section-reasoning-modules]  # META composes from the block registry and domain packets
 ```
 
 
@@ -1281,49 +1044,136 @@ PREREQ: [_vida/docs/thinking-protocol.md#section-algorithm-selector, _vida/docs/
 ## Constraints (L1 - Algorithm Logic)
 
 <constraints>
-⛔ NEVER skip the execution of PR-CoT, MAR, or 5-SOL when required by complexity score.
-⛔ NEVER fabricate the "Confidence" score; it must be calculated from ACTUAL consensus among algorithms.
-✅ MUST perform Step 0 (Self-Discover) to load required architectural context.
-✅ MUST present a final conclusion based solely on the synthesis of the 3 underlying algorithms.
+⛔ NEVER default to whole PR-CoT, MAR, and 5-SOL execution when a smaller lawful block flow can answer the task.
+⛔ NEVER synthesize past unresolved critical findings, unresolved root cause, or failed hybrid legality.
+⛔ NEVER aggregate mixed confidence scales; normalize every active signal to 0..1 first.
+✅ MUST start with Step 0 domain classification + block selection.
+✅ MUST carry forward impact analysis from every active block family into final synthesis.
 </constraints>
 
 ## Triggers
 
 ```toon
-triggers[6]{type,condition}:
+triggers[7]{type,condition}:
   score,>45
   override,Security/Auth decisions
   override,Database schema
   override,Foundation architecture
   override,Tech stack selection
+  override,Explicit meta-analysis request
   skip,Score ≤45 OR already inside META
 ```
 
 ---
 
-## Step 0: Self-Discover
+## Step 0: Domain Classification And Block Selection
 
 ```yaml
-SELF_DISCOVER:
-  SELECT: Choose 3-5 modules from `_vida/docs/thinking-protocol.md#section-reasoning-modules`
-  ADAPT: Rephrase prompts for specific task
-  IMPLEMENT: Create reasoning plan → pass to parallel algorithms
-  
-  PASS_TO:
-    pr_cot: Perspective ordering
-    mar: Actor initialization
-    5_sol: Category generation
+STEP_0:
+  classify_task:
+    classes:
+      - security_auth
+      - database_schema
+      - foundation_architecture
+      - tech_stack_selection
+      - bug_root_cause
+      - multi_option_design
+      - general_high_risk
+
+  select_domain_packet:
+    security_auth: [A3, V1, V2, V4]
+    database_schema: [A2, A3, V1, V2, V4]
+    foundation_architecture: [A1, A2, A3, G2, V2]
+    tech_stack_selection: [A1, A2, A3, G2, V2]
+    bug_root_cause: [A4, A5, D2, V4]
+    multi_option_design: [A1, A2, G2, V2, M2]
+    general_high_risk: "Select 3-5 modules by fit"
+
+  choose_blocks:
+    always:
+      - CTX-01
+      - CTX-02
+      - CTX-03
+      - ENS-01
+      - ENS-02
+      - ENS-03
+      - ENS-05
+      - REP-01
+      - REP-02
+      - REP-03
+    add_if:
+      validation_or_assumption_risk: [CRT-01, CRT-02, CRT-03]
+      candidate_needs_refinement: [RFX-01, RFX-02, RFX-03]
+      multiple_viable_options: [OPT-01, OPT-02, OPT-03, OPT-04, OPT-05]
+      bug_or_regression_centered: [BUG-01, BUG-02, BUG-03, BUG-04]
+      active_family_divergence: [ENS-04]
+
+  shortcut_rule:
+    named_templates: "STC / PR-CoT / MAR / 5-SOL may be used only when their canonical block set exactly matches the chosen flow"
 ```
 
 ---
 
-## Parallel Execution
+## Family Weights
 
-```toon
-algorithms[3]{algo,role,purpose}:
-  PR-CoT,Validator,"4 perspectives → find issues (2-pass consensus)"
-  MAR,Refiner,"3 rounds × 4 agents → best version (knowledge carry-over)"
-  5-SOL,Synthesizer,"2×5 options → optimal hybrid (consensus R1→R2)"
+```yaml
+FAMILY_WEIGHTS:
+  default:
+    critique: 0.35
+    refinement: 0.30
+    options: 0.20
+    bug: 0.15
+
+  security_auth:
+    critique: 0.40
+    refinement: 0.30
+    options: 0.20
+    bug: 0.10
+
+  database_schema:
+    critique: 0.35
+    refinement: 0.30
+    options: 0.15
+    bug: 0.20
+
+  foundation_architecture:
+    critique: 0.25
+    refinement: 0.30
+    options: 0.35
+    bug: 0.10
+
+  tech_stack_selection:
+    critique: 0.20
+    refinement: 0.25
+    options: 0.45
+    bug: 0.10
+
+  bug_root_cause:
+    critique: 0.25
+    refinement: 0.20
+    options: 0.10
+    bug: 0.45
+
+  multi_option_design:
+    critique: 0.20
+    refinement: 0.25
+    options: 0.45
+    bug: 0.10
+
+  general_high_risk: default
+```
+
+---
+
+## Composer Law
+
+```yaml
+RULES:
+  1. Prefer the smallest block flow that can answer the task lawfully.
+  2. Validation blocks decide admissibility.
+  3. Refinement blocks improve candidate quality.
+  4. Option blocks are required only when 2+ viable directions exist.
+  5. Bug blocks are mandatory before any fix synthesis for bugs/incidents/regressions.
 ```
 
 ---
@@ -1333,66 +1183,75 @@ algorithms[3]{algo,role,purpose}:
 ```yaml
 PASS_1:
   step: 1
-  action: "Parallel: PR-CoT | MAR | 5-SOL"
+  action: "Execute selected blocks in order; independent families may run in parallel"
   
   step: 2
-  action: "Compare: agreements + divergences"
+  action: "Compare outputs from active block families"
   
   step: 3
-  action: "Web check (if weighted confidence <80% or critical divergence)"
+  action: "Run WVP when SEL-04 says unstable external claims affect the active flow"
 
-WEIGHTED_CONFIDENCE:
-  purpose: "Not all algorithms are equally reliable for every query"
-  
-  calculation:
-    pr_cot_weight:
-      formula: "1 / (1 + critical_issues_count)"
-      rationale: "Fewer critical issues → higher validator trust"
-    mar_weight:
-      formula: "final_score / 10"
-      rationale: "Higher evaluator score → higher refiner trust"
-    5_sol_weight:
-      formula: "inter_round_agreement"
-      rationale: "Higher R1-R2 agreement → more stable synthesizer"
-  
-  consensus: "weighted_average(pr_cot_weight, mar_weight, 5_sol_weight)"
-  
   step: 4
-  action: "Evaluate weighted confidence"
-  
-  step: 5
-  decision:
-    if_confidence >= 80%: "SYNTHESIZE final decision → done"
-    if_confidence < 80%: "TRT LOOP (see below)"
+  action: "If WVP changes assumptions, risks, or categories -> re-run only affected block families before synthesis"
 
-TRT_LOOP:
-  purpose: "Recursive improvement instead of immediate user escalation"
+ENS-01_ADMISSIBILITY_GATE:
+  block_synthesis_if:
+    - CRT-03 reports unresolved critical findings
+    - RFX-03 reports unresolved critical contract/safety/root-cause risks
+    - BUG-02 root_cause_receipt missing when bug blocks are active
+    - OPT-04 legality_receipt == fail and no fallback_option chosen
+  allowed_next_steps:
+    - revise flow
+    - add a missing block family
+    - run ENS-04 divergence repair
+    - return a cautious decision only with explicit residual-risk receipt
+
+ENS-03_WEIGHTED_CONFIDENCE:
+  normalize_to_0_1:
+    critique_signal: "validation_signal if CRT blocks are active, otherwise n/a"
+    refinement_signal: "clamp(final_score / 10, 0, 1)"
+    options_signal: "OPT-05 exported options_signal"
+    bug_signal: "1 if root_cause_receipt confirmed else 0"
+  aggregation:
+    family_profile: "Load weights from FAMILY_WEIGHTS for the Step 0 task class"
+    active_signals_only: true
+    renormalize_active_weights: true
+    formula: "round(100 * sum(active_signal * normalized_active_family_weight))"
+  decision_bands:
+    "85-100": "SYNTHESIZE"
+    "80-84": "SYNTHESIZE with caution + explicit residual risks"
+    "<80": "ENS-04 divergence repair"
+
+ENS-04_DIVERGENCE_REPAIR:
+  purpose: "Repair only the divergent part of the composer instead of restarting the whole flow"
   max_loops: 2
   
   on_each_loop:
-    1. ANALYZE divergences between algorithms:
-       - Which algorithm diverges most?
-       - What specific aspects differ?
+    1. ANALYZE divergences between active block families:
+       - Which family diverges most?
+       - What specific issue remains disputed?
        - Build knowledge_list: {what's agreed, what's disputed, why}
        
-    2. RE-RUN only DIVERGENT algorithm(s):
+    2. RE-RUN only the affected blocks/families:
        - Inject knowledge_list as extra context
-       - Knowledge includes findings from OTHER algorithms
-       - Algorithm runs with awareness of consensus
+       - Knowledge includes findings from OTHER active families
+       - Preserve existing admissible findings
        
     3. RE-COMPARE:
-       - Calculate new weighted confidence
-       - If >= 80%: SYNTHESIZE → done
-       - If < 80% and loops < 2: next TRT loop
-       - If < 80% and loops == 2: SYNTHESIZE with caution OR user decision
+       - Re-check ENS-01 admissibility gate
+       - Recalculate ENS-03 weighted confidence
+       - If >= 80% and admissible: SYNTHESIZE → done
+       - If < 80% and loops < 2: next repair loop
+       - If < 80% and loops == 2: choose best admissible non-hybrid option OR ask user to resolve the trade-off
   
   knowledge_format: |
     TRT CONTEXT (Loop {N}):
-      Agreed: {points all algorithms concur on}
+      Agreed: {points all active families concur on}
       Disputed: {specific disagreement}
-      PR-CoT says: {summary}
-      MAR says: {summary}
-      5-SOL says: {summary}
+      Validation says: {summary or n/a}
+      Refinement says: {summary or n/a}
+      Options says: {summary or n/a}
+      Bug says: {summary or n/a}
       YOUR TASK: Address {disputed points} specifically
 ```
 
@@ -1402,57 +1261,61 @@ TRT_LOOP:
 
 ```yaml
 CONFIDENCE:
-  all_agree_weighted_high:
-    range: 95-100%
-    action: Auto-proceed
+  admissible_and_high:
+    range: 85-100%
+    action: Proceed
     
-  mostly_agree:
-    range: 85-94%
-    action: Proceed + note divergences
-    
-  partial_agree:
+  admissible_but_cautious:
     range: 80-84%
-    action: Proceed with caution + flag risks
+    action: Proceed with caution + explicit residual risks
     
-  low_confidence_trt:
-    range: 70-79%
-    action: TRT loop (re-run divergent, max 2 loops)
-    
-  full_conflict:
-    range: <70%
-    action: TRT loop → if still <70% after 2 loops → user decision
+  repair_needed:
+    range: <80%
+    action: ENS-04 divergence repair
+  
+  inadmissible:
+    range: any
+    action: Block synthesis until ENS-01 passes
 ```
 
 ---
 
-## Output Format
+## Evidence Packet
 
 ```markdown
 ## META: {Decision}
 
-### PR-CoT (Validation)
-**Issues:** {list} | **Weight:** {X}
+### Step 0
+**Task Class:** {security_auth|database_schema|foundation_architecture|tech_stack_selection|bug_root_cause|multi_option_design|general_high_risk}
+**Selected Modules:** {A1, A2, ...}
+**Selected Blocks:** {CRT-01, CRT-02, RFX-01, OPT-04, ...}
+**Why This Flow:** {smallest lawful rationale}
 
-### MAR (Refinement)  
-**Score:** {X}/10 | **Knowledge:** {key items} | **Weight:** {X}
+### Active Families
+**Validation (CRT):** {issues or "not selected"} | **Signal:** {0..1 or "n/a"}
+**Refinement (RFX):** {score}/10 or "not selected" | **Signal:** {0..1 or "n/a"}
+**Options (OPT):** {hybrid or top single option or "not selected"} | **Legality:** {pass|fail|n/a} | **Signal:** {0..1 or "n/a"}
+**Bug (BUG):** {root cause receipt or "not selected"} | **Signal:** {0|1|n/a}
 
-### 5-SOL (Synthesis)
-**Hybrid:** {description} | **R1-R2 Agreement:** {X}% | **Weight:** {X}
+### Composer Gates
+**Admissibility:** {pass|fail}
+**Blocking Findings:** {list or "None"}
+**Weighted Confidence:** {XX}% from normalized signals {list} and active family weights {list}
 
-### Comparison
-| Aspect | PR-CoT | MAR | 5-SOL | Agree |
-|--------|--------|-----|-------|:-----:|
-| ... | ... | ... | ... | ✓/△/✗ |
-
-**Weighted Confidence:** {XX}%
-
-### TRT Loop (if triggered)
-**Loop {N}:** Re-ran {algorithm} with knowledge: {context}
-**Result:** Confidence {before}% → {after}%
+### Divergence Repair (if triggered)
+**Loop {N}:** Re-ran {blocks/family} with knowledge: {context}
+**Result:** Confidence {before}% → {after}% | **Admissibility:** {pass|fail}
 
 ### FINAL DECISION
 {synthesized decision}
-**Files:** {list} | **Risks:** {from PR-CoT} | **Trade-offs:** {from 5-SOL}
+**Flow Used:** {ordered block ids}
+**Files:** {list} | **Residual Risks:** {list}
+
+### Impact Carry-Forward
+**Validation Impact:** {how critique findings affected final decision or "n/a"}
+**Refinement Impact:** {how refinement changed the candidate or "n/a"}
+**Options Impact:** {which option trade-offs survived into final decision or "n/a"}
+**Bug Impact:** {how root cause evidence constrained the fix or "n/a"}
 
 ### Impact Analysis
 **Affected Scope:** {files/modules/layers}
@@ -1464,96 +1327,68 @@ CONFIDENCE:
 
 ---
 
-## Skip Rules
-
-```yaml
-DEFAULT: Run all 3
-SKIP_5SOL_IF: "Validate X" not "Choose/Design X"
-SKIP_MAR_IF: Already have 5+ external options
-NEVER_SKIP: PR-CoT (always validate)
-```
-
----
-
 ## Anti-Patterns
 
 ```toon
 forbidden[5]{action,why}:
-  META inside 5-SOL,Circular/token explosion
-  Skip PR-CoT,Misses validation
-  Ignore minority opinion,May have critical insight
-  Force at low confidence,TRT loop first then escalate
-  Skip TRT when divergent,Loses self-correction opportunity
+  Default to whole named algorithms,Defeats block-level optimization
+  Synthesize past critical findings,Unsafe and non-admissible
+  Build hybrid without legality,Produces mushy or incoherent result
+  Mix raw scales in confidence,Confidence becomes non-reproducible
+  Claim blocks ran without receipts,Fabrication
 ```
 
 ---
 
 ## Execution Proof (⛔ MANDATORY)
 
-> Before output, META must contain proof that each algorithm was executed:
+> Before synthesis, META must contain proof that the selected block flow actually ran:
 
 ```yaml
 PROOF_REQUIRED:
-  step_0_self_discover:
-    evidence: "Selected modules: {A1, A2, ...}"
-    
-  pr_cot_execution:
-    evidence: "Issues found: {count} — {list}. Weight: {X}"
-    
-  mar_execution:
-    evidence: "Final score: {X}/10 after {N} rounds. Knowledge: {items}. Weight: {X}"
-    
-  5_sol_execution:
-    evidence: "HYBRID R1: {...}, HYBRID R2: {...}. R1-R2 agreement: {X}%. Weight: {X}"
-    
-  weighted_confidence:
-    evidence: "Weighted: {X}% (PR-CoT: {w1}, MAR: {w2}, 5-SOL: {w3})"
-    
-  trt_loop:
-    evidence: "Loop {N}: re-ran {algo}, confidence {before}% → {after}%"
-    OR: "Not triggered (confidence >= 80%)"
-    
-  comparison:
-    evidence: "Consensus: {X}/Y agree on: {points}"
+  step_0_selection:
+    evidence: "Task class: {...}. Modules: {...}. Blocks: {...}. Why minimal: {...}"
 
-NO_PROOF_NO_OUTPUT: |
-  ⛔ If you cannot provide SPECIFIC evidence from each algorithm,
+  active_family_execution:
+    critique: "CRT-01/02/03 -> issues: {...} OR not selected"
+    refinement: "RFX-01/02/03 -> score: {...} OR not selected"
+    options: "OPT-01/02/03/04/05 -> final option: {...}, legality: {...} OR not selected"
+    bug: "BUG-01/02/03/04 -> root_cause_receipt: {...} OR not selected"
+
+  admissibility_gate:
+    evidence: "ENS-01 => pass/fail. Blocking findings: {...}"
+
+  weighted_confidence:
+    evidence: "ENS-03 normalized signals: critique={...}, refinement={...}, options={...}, bug={...}. Active family weights={...}. Weighted={...}%"
+
+  divergence_repair:
+    evidence: "Loop {N}: re-ran {blocks}, confidence {before}% → {after}%"
+    OR: "Not triggered (confidence >= 80%)"
+
+  impact_carry_forward:
+    evidence: "Validation impact={...}; Refinement impact={...}; Options impact={...}; Bug impact={...}"
+
+NO_PROOF_NO_SYNTHESIS: |
+  ⛔ If you cannot provide SPECIFIC evidence from each selected block family,
   you did NOT execute META correctly.
   
-  ⛔ Statements like "94% (3/3 agree)" without execution details = FABRICATION.
+  ⛔ Statements like "94% confident" without normalized signals and gate receipts = FABRICATION.
   ⛔ Fabrication = PROTOCOL VIOLATION → restart META properly.
   
 VALID_EXAMPLE: |
-  ✓ "PR-CoT: 3 issues (Logical: implicit prereqs, Data: no enforcement, Arch: missing gate). Weight: 0.67"
-  ✓ "MAR R3: 9/10, Knowledge: [AVOID LWW, KEEP field-merge]. Weight: 0.9"
-  ✓ "5-SOL HYBRID: Riverpod Notifier (R1 Signals gap resolved). R1-R2: 88%. Weight: 0.88"
-  ✓ "Weighted confidence: 87% → SYNTHESIZE"
+  ✓ "Task class: tech_stack_selection. Modules: [A1, A2, A3, G2, V2]. Blocks: [CTX-01, CTX-02, OPT-01..05, CRT-01..03, ENS-01..05]"
+  ✓ "CRT: 1 critical lock-in finding resolved after revision. critique_signal=0.5"
+  ✓ "OPT: top single option chosen because hybrid legality failed. options_signal=0.86"
+  ✓ "ENS-03: normalized average = 84% -> SYNTHESIZE with caution"
 ```
-
----
-
-*VIDA Framework — META v2.2 (TRT Recursive Loop + PACER Weighted Voting + Ensemble + Self-Discover)*
 
 
 ## Section: bug-reasoning
 
-# Error Search v3.1
+# Error Search
 
 > **MANDATORY.** Detect → Classify → Trace → Hypothesize → Resolve errors.
 > **Iron Law:** NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST.
-> **v3.1:** TMK-structured hypothesis formation in Phase 3.
-
----
-
-## What's New in v3.1
-
-| Feature | Trigger |
-|---------|---------|
-| Git Bisect Protocol | "Used to work" / regression |
-| LLM Block Analysis | Function >50 LOC, unclear bug |
-| Stricter Checkpoints | All bugs (3 mandatory gates) |
-| LSP Dependency Tracing | Cross-module bugs (3+ files) |
-| TMK Hypothesis (v3.1) | All bugs (Phase 3 Gate 2) |
 
 ---
 
@@ -1562,10 +1397,21 @@ VALID_EXAMPLE: |
 ```
 Phase 0: DETECT    → Layer, type, is_regression?
 Phase 1: CLASSIFY  → Severity, blast radius, technique triggers
-Phase 2: TRACE     → 5 Whys + Git Bisect + LSP
+Phase 2: TRACE     → 5 Whys + Git Bisect + dependency tracing
 Phase 3: HYPOTHESIZE → 3 gates, self-correction
 Phase 3.5: LLM BLOCK (if >50 LOC)
 Phase 4: RESOLVE   → Algorithm selection, fix
+```
+
+---
+
+## Block Assembly
+
+```yaml
+BLOCKS: [BUG-01, BUG-02, BUG-03, BUG-04]
+QUALITY_GATE:
+  - root_cause_receipt exists before Phase 4
+  - route is chosen from one canonical severity map
 ```
 
 ---
@@ -1601,11 +1447,15 @@ SEVERITY_MAP:
   sum 1-8: LOW → STC
   sum 9-12: MEDIUM → PR-CoT
   sum 13-16: HIGH → MAR
-  sum 17-20: CRITICAL → 5-SOL/META
+  sum 17-20: CRITICAL → META
+  multi_error_with_shared_root: 5-SOL
+
+PRIORITY_RULE:
+  if_critical_and_multi_error: "META first; 5-SOL only after root_cause_receipt when multiple admissible fixes remain"
 
 TECHNIQUE_TRIGGERS:
   git_bisect: is_regression == true
-  lsp_tracing: blast_radius >= 3
+  dependency_tracing: blast_radius >= 3
   llm_block: function LOC > 50
 ```
 
@@ -1622,7 +1472,7 @@ BEFORE_ANY_FIX:
   - Bug reproduced TWICE consistently
   - Recent changes reviewed (git log -5)
   - Regression? → Git Bisect first
-  - Cross-module? → LSP Tracing
+  - Cross-module? → dependency tracing
 ```
 
 ### Git Bisect (if regression)
@@ -1639,17 +1489,16 @@ PROTOCOL:
 SKIP_IF: No good version, no automated test, env-dependent bug
 ```
 
-### LSP Dependency Tracing (if cross-module)
+### Dependency Tracing (if cross-module)
 
 ```yaml
 PROTOCOL:
-  1. lsp_hover at error location → get type
-  2. lsp_goto_definition → find source
-  3. lsp_find_references → trace usages
-  4. Build graph: where value correct → where wrong
-  5. Transition point = ROOT CAUSE
+  1. Use available code navigation/search tools to inspect the failing symbol or data path
+  2. Trace definitions and references across module boundaries
+  3. Build graph: where value correct → where wrong
+  4. Transition point = ROOT CAUSE
 
-INTEGRATE_WITH_5_WHYS: Answer each "Why?" with lsp evidence
+INTEGRATE_WITH_5_WHYS: Answer each "Why?" with definition/reference evidence
 ```
 
 ### LLM Block Analysis (if function >50 LOC)
@@ -1672,7 +1521,21 @@ TEMPLATE:
   2. Why {cause_1}? → Because {cause_2} [file:line]
   3. Why {cause_2}? → Because {ROOT_CAUSE} [file:line]
 
-ENHANCED: Use lsp_find_references to VERIFY each answer
+ENHANCED: Use definition/reference tracing evidence to VERIFY each answer
+```
+
+### Root Cause Receipt (MANDATORY)
+
+```yaml
+ROOT_CAUSE_RECEIPT:
+  fields:
+    - symptom
+    - transition_point
+    - confirmed_root_cause
+    - evidence
+    - falsification
+    - remaining_unknowns
+  required_before: Phase 4
 ```
 
 ### Step Localization (Thought-ICS)
@@ -1700,7 +1563,7 @@ ON_HYPOTHESIS_FAIL:
 
 ## Phase 3: HYPOTHESIZE
 
-### 3 Mandatory Gates (v3.0)
+### 3 Mandatory Gates
 
 ```yaml
 GATE_1_INVESTIGATION:
@@ -1712,7 +1575,7 @@ GATE_1_INVESTIGATION:
   BLOCKING: Cannot form hypothesis until ALL pass
 
 GATE_2_HYPOTHESIS_QUALITY:
-  tmk_structure:  # TMK-enhanced (v3.1)
+  tmk_structure:
     task: "What is the root cause of {error_type} in {layer}?"
     method:
       step1: "Isolate: which component is under test?"
@@ -1754,7 +1617,7 @@ TRIGGER: Hypothesis test failed
 ```yaml
 3_FAILURES: → STOP, question architecture
 CONFIDENCE_STUCK_<70%: → Escalate to user
-DIFFERENT_MODULE_EACH_TIME: → Use LSP Tracing
+DIFFERENT_MODULE_EACH_TIME: → Use dependency tracing
 ```
 
 ---
@@ -1765,15 +1628,16 @@ DIFFERENT_MODULE_EACH_TIME: → Use LSP Tracing
 PRE_CHECK:
   - Phase 2 complete
   - Phase 3 gates passed
+  - Root cause receipt recorded
   - Confidence ≥70%
   - Fix addresses ROOT (not symptom)
 
 ALGORITHM_BY_SEVERITY:
-  LOW: STC (direct fix)
-  MEDIUM: PR-CoT (thinking protocol)
-  HIGH: MAR (/vida-bug-fix)
-  CRITICAL: META (/vida-bug-fix --meta)
-  MULTI_ERROR: 5-SOL (alignment)
+  LOW: STC
+  MEDIUM: PR-CoT
+  HIGH: MAR
+  CRITICAL: META
+  MULTI_ERROR: 5-SOL
 
 FAILURE_ESCALATION:
   trigger: 3+ fixes failed
@@ -1793,7 +1657,7 @@ forbidden[8]{action,correct}:
   "Just try X",Form hypothesis first
   3+ fixes without pause,STOP and question architecture
   Skip Git Bisect (regression),Binary search first
-  Skip LSP (cross-module),Use lsp_find_references
+  Skip dependency tracing (cross-module),Use available definition/reference tracing
   Analyze >50 LOC manually,Use LLM Block Analysis
 ```
 
@@ -1809,74 +1673,9 @@ forbidden[8]{action,correct}:
 
 ---
 
-## Codebase-Specific Search Patterns
-
-```toon
-search_patterns[4]{type,grep_pattern,files}:
-  API,"throw.*Api.*Exception|throw.*AccessDenied","api/**, adapters/*"
-  Connection,"Connection|VersionDetection","network/**, api/**"
-  Auth,"AuthError\(|AuthErrorType|SessionExpired","auth/**, security/**"
-  State,"StateError|DatabaseStateError|CacheStateError","state/**, data/**"
-```
-
----
-
-## Error Hierarchy (generic)
-
-```toon
-errors[8]{layer,exception}:
-  API,ApiException + AccessDenied + SessionExpired + RecordNotFound + Validation
-  Connection,ConnectionException + VersionDetection
-  Auth,AuthError (typed variants)
-  State,DatabaseStateError
-  Offline,OfflineOperation.failed
-  UI,User-facing error surface
-```
-
----
-
-## Quick Reference
-
-```toon
-error_to_algo[6]{type,algorithm}:
-  Syntax/Typo,STC
-  Single exception,STC → PR-CoT if unclear
-  State/API,PR-CoT → MAR if cross-module
-  Auth flow,META (always)
-  Data integrity,META (always)
-  Multiple errors,5-SOL (alignment)
-```
-
-```toon
-technique_selection[4]{trigger,technique}:
-  "Used to work",Git Bisect
-  Cross-module (3+ files),LSP Tracing
-  Function >50 LOC,LLM Block Analysis
-  All bugs,Stricter Checkpoints
-```
-
----
-
-## VIDA Integration
-
-```toon
-commands[5]{severity,command}:
-  LOW,Direct fix
-  MEDIUM,thinking protocol {error}
-  HIGH,/vida-bug-fix T-XX
-  CRITICAL,/vida-bug-fix --meta
-  MULTI,/vida-bug-fix --batch
-```
-
----
-
-*VIDA Framework — Error Search v3.1*
-*Git Bisect + LLM Block + LSP Tracing + Stricter Checkpoints + TMK Hypothesis*
-
-
 ## Section: web-search
 
-# Web Search Integration (Canonical via WVP)
+# Web Validation Integration
 
 > **⛔ MANDATORY.** Canonical web/internet validation rules live in `_vida/docs/web-validation-protocol.md`.
 
@@ -1901,32 +1700,19 @@ META:
   - Before synthesis, ensure WVP evidence exists for all external claims.
 ```
 
-## Command Integration
-
-```yaml
-COMMANDS:
-  /vida-research: WVP for external/domain evidence.
-  /vida-spec: WVP + API reality checks before technical contract freeze.
-  /vida-form-task: WVP for dependency/version assumptions in task pool.
-  /vida-implement: WVP on errors, package upgrades, platform and security decisions.
-  /vida-bug-fix: WVP when bug hypothesis relies on external contracts/known issues.
-```
-
 ## Log Requirement
 
 When WVP trigger fires, record concise WVP evidence in TODO logs/report.
 
-*VIDA Framework — Web Search Integration (delegated to WVP)*
-
 
 ## Section: reasoning-modules
 
-# Reasoning Modules Library v2.2
+# Reasoning Modules Library
 
 > **Source:** Self-Discover Framework (arXiv:2402.03620, Google DeepMind)  
 > **Purpose:** 20 curated atomic reasoning modules for VIDA thinking algorithms  
-> **Usage:** SELECT relevant modules during META Step 0 or 5-SOL category generation  
-> **v2.2:** TMK (Task-Method-Knowledge) structure added to modules. When using a module, apply its T/M/K scaffold for structured reasoning.
+> **Usage:** SELECT relevant modules during META Step 0 or 5-SOL category generation; domain packets below are the default composer presets  
+> **TMK:** when using a module, apply its T/M/K scaffold for structured reasoning.
 
 ---
 
@@ -2083,7 +1869,7 @@ GENERATION:
     use_when:
       - Feature ideation
       - UX exploration
-      - creativity_weight >= 0.7
+      - explicit need for higher option diversity
     vida_mapping: 5-SOL Round 1, HADI Abduction
     
   alternative_perspectives:
@@ -2197,6 +1983,22 @@ META_COGNITION:
 
 ## Selection Guide
 
+### Composer Domain Packets
+
+```yaml
+DOMAIN_PACKETS:
+  security_auth: [A3, V1, V2, V4]
+  database_schema: [A2, A3, V1, V2, V4]
+  foundation_architecture: [A1, A2, A3, G2, V2]
+  tech_stack_selection: [A1, A2, A3, G2, V2]
+  bug_root_cause: [A4, A5, D2, V4]
+  multi_option_design: [A1, A2, G2, V2, M2]
+
+RULE:
+  - Use these as Step 0 defaults for META and as category seeds for 5-SOL.
+  - Add or remove modules only with task-specific rationale.
+```
+
 ### By VIDA Algorithm
 
 toon[6]{algorithm,recommended_modules}:
@@ -2208,12 +2010,14 @@ toon[6]{algorithm,recommended_modules}:
 
 ### By Problem Type
 
-toon[5]{problem_type,recommended_modules}:
+toon[7]{problem_type,recommended_modules}:
   bug_fix,A4 + A5 + D2 + V4
   new_feature,D1 + G1 + G2 + V1 + M2
   refactoring,A2 + D3 + V2 + V3
   architecture,A1 + A2 + A3 + G2 + V2
-  security,A3 + V1 + V2 + V4
+  database_schema,A2 + A3 + V1 + V2 + V4
+  tech_stack,A1 + A2 + A3 + G2 + V2
+  security_auth,A3 + V1 + V2 + V4
 
 ---
 
@@ -2276,5 +2080,4 @@ WHEN_TO_USE_TMK:
 
 ---
 
-*VIDA Framework — Self-Discover Reasoning Modules v2.2*
 *20 curated from 39 original (arXiv:2402.03620) + TMK structured scaffolds*

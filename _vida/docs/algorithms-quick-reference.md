@@ -7,12 +7,20 @@ Purpose: compress the algorithm descriptions without losing their essence by kee
 | Algorithm | When To Use | Mandatory Steps (minimum) | Quality Gate | Escalation |
 |---|---|---|---|---|
 | STC | Low complexity, local tasks | Step -> check -> localize -> rollback -> retry (<=3) | No unresolved step errors remain | After 3 retries -> PR-CoT |
-| PR-CoT | Medium complexity, independent perspectives needed | Pass1 (4 perspectives) -> consensus -> Pass2 (revision) | Critical contradictions are closed | >=2 issues after Pass2 -> MAR |
-| MAR | Complex tasks with regression risk | 3 rounds (Actor/Evaluator/Critic/Reflector) | Score >= 8/10 | <8 after 3 rounds -> META |
-| 5-SOL | Choice between alternatives / design directions | R1: 5 options -> packet -> R2: 5 new options -> hybrid | Comparative choice with explicit trade-offs | Low agreement/confidence -> META |
-| META | High risk/uncertainty, security/auth, explicit meta-analysis | PR-CoT + MAR + 5-SOL + synthesis | Confidence >= 80% with evidence | If <80% after loop -> cautious synthesis/user decision |
-| Bug Reasoning | Bugs/incidents | classify -> trace -> hypothesis -> verify -> resolve | Root cause confirmed, not the symptom | High severity / wide blast radius -> MAR/5-SOL/META |
+| PR-CoT | Medium complexity, independent perspectives needed | Pass1 (4 perspectives) -> consensus -> Pass2 (revision) | No unresolved critical findings remain | Unresolved critical or >=2 issues after Pass2 -> MAR |
+| MAR | Complex tasks with regression risk | 3 rounds (Actor/Evaluator/Critic/Reflector) | Weighted rubric score >= 8/10 and no unresolved critical residual risk | <8 after 3 rounds -> META |
+| 5-SOL | Choice between alternatives / design directions | R1: 5 options -> weighted option ledger -> R2: 5 new options -> legal hybrid/top option | Admissible choice with weighted option score + confidence >= 80, or explicit cautious band | Low score/confidence or legality pressure -> META |
+| META | High risk/uncertainty, security/auth, explicit meta-analysis | Select domain packet -> choose blocks -> admissibility gate -> family-weighted confidence -> synthesize | Admissible result with confidence >= 80% and proof receipts | If <80% after repair loop -> best admissible option/user decision |
+| Bug Reasoning | Bugs/incidents | classify -> root-cause trace -> root-cause receipt -> falsifiable hypothesis -> verification | Root cause confirmed, not the symptom | High severity / wide blast radius -> route by severity map |
 | Web-Search Gate | Unstable external knowledge | detect trigger -> find sources -> reconcile | >=2 sources (>=3 for sec/arch) | If sources conflict -> escalate algorithm |
+
+## Unified Scoring Contract
+
+- `selector_score` is routing-only, stays on the `11-55` scale, and uses `C×2 + R×3 + S×3 + N×2 + F×1`.
+- `PR-CoT` exports a gate result plus `validation_signal` from issue severity.
+- `MAR` keeps the local `1-10` weighted rubric score and exports `refinement_signal`.
+- `5-SOL` keeps local `1-5` category scoring, exports `best option %`, `agreement %`, and `options_signal`.
+- `META` uses only normalized signals after admissibility gates and weights them by task class.
 
 ## Algorithm Cards
 
@@ -27,34 +35,38 @@ Purpose: compress the algorithm descriptions without losing their essence by kee
 - When: medium complexity with a need for independent validation.
 - Input: a task with multiple aspects (logic/data/architecture/alternatives).
 - Steps: 4 perspectives -> consensus packet -> revision by each perspective.
-- Success: aligned decision with no critical conflicts.
-- Escalation: unresolved critical contradictions.
+- Success: aligned decision with no unresolved critical findings.
+- Export: `validation_signal` from critical/major/minor issue weights.
+- Escalation: unresolved critical findings or >=2 issues.
 
 ### MAR
 - When: complex non-trivial decisions.
 - Input: a task with a high impact radius.
 - Steps: 3 role rounds + accumulated lessons learned.
-- Success: score >= 8/10.
+- Success: weighted rubric score >= 8/10 with no unresolved critical residual risk.
+- Rubric weights: correctness `0.35`, completeness `0.25`, alignment `0.25`, simplicity `0.15`.
 - Escalation: score < 8 after 3 rounds.
 
 ### 5-SOL
 - When: a justified choice between directions is needed.
 - Input: a task with alternatives and trade-offs.
-- Steps: 5 R1 options, 5 new R2 options, final hybrid choice.
-- Success: choice with transparent pros/cons.
-- Escalation: low agreement between rounds.
+- Steps: 5 R1 options, weighted option ledger, 5 new R2 options, legal hybrid or explicit top single option.
+- Success: admissible choice with transparent pros/cons, weighted option score, and confidence >= 80% or explicit cautious band.
+- Weighting: 2 core categories = `0.25` each; supporting categories share the remaining `0.50`.
+- Escalation: low score/confidence between rounds or failed legality.
 
 ### META
 - When: high-stakes decisions, security/auth, or an explicit meta-analysis request.
 - Input: a complex task with a high cost of error.
-- Steps: run PR-CoT, MAR, and 5-SOL separately -> synthesize -> confidence gate.
-- Success: confidence >= 80% with evidence artifacts.
+- Steps: select a domain packet, assemble the smallest lawful block flow, run admissibility gate, apply family weights, synthesize.
+- Success: admissible result with confidence >= 80% and proof artifacts.
+- Family weights: task-class dependent, with validation heavier for security/schema work and options heavier for architecture/tech-stack work.
 - Escalation: if confidence remains low.
 
 ### Bug Reasoning
 - When: bugs, incidents, regressions.
 - Input: a reproducible error.
-- Steps: classification -> root-cause trace -> falsifiable hypothesis -> verification.
+- Steps: classification -> root-cause trace -> root-cause receipt -> falsifiable hypothesis -> verification.
 - Success: root cause fixed, not just the symptom.
 - Escalation: wide blast radius or non-reproducibility.
 
