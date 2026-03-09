@@ -155,8 +155,7 @@ proc issueEntry(issue: JsonNode, subtasksLimit: int, stateDir: string): JsonNode
 
 proc buildSnapshot*(topLimit: int = 5, readyLimit: int = 3,
                     subtasksLimit: int = 5): JsonNode =
-  let rootDir = getCurrentDir()
-  let stateDir = rootDir / ".vida" / "state"
+  let stateDir = vidaWorkspacePath("state")
 
   let openRows = listIssues(status = "open")
   let doingRows = listIssues(status = "in_progress")

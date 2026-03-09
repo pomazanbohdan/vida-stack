@@ -10,7 +10,7 @@ suite "task":
   putEnv("VIDA_V0_TURSO_PYTHON", getCurrentDir() / ".venv" / "bin" / "python3")
 
   proc seedIssues(lines: seq[JsonNode]) =
-    let dbPath = root / ".vida" / "state" / "vida-v0.db"
+    let dbPath = root / ".vida" / "state" / "vida-legacy.db"
     let issuesPath = root / ".beads" / "issues.jsonl"
     if fileExists(dbPath):
       removeFile(dbPath)

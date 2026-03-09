@@ -69,6 +69,7 @@ Environment:
   VIDA_RUN_GRAPH_STATE_DIR Override run-graph state directory
 
 Current VIDA_ROOT: """ & vidaRoot() & """
+Current VIDA_WORKSPACE: """ & vidaWorkspaceDir() & """
 """
 
 # ─────────────────────────── Config ───────────────────────────
@@ -88,6 +89,7 @@ proc cmdConfig(args: seq[string]): int =
 proc cmdStatus(args: seq[string]): int =
   echo "VIDA v0 Runtime v" & Version
   echo "VIDA_ROOT: " & vidaRoot()
+  echo "VIDA_WORKSPACE: " & vidaWorkspaceDir()
   echo "Config: " & configPath()
   return 0
 

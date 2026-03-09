@@ -1,8 +1,0 @@
-{
-  "actor": "orchestrator",
-  "evidence": "_temp/vida-stack-2d9.8.2-coach/coach-review.json",
-  "notes": "No eligible coach lane produced a lawful machine-readable review artifact after bounded retries",
-  "reason": "no_eligible_coach",
-  "task_id": "vida-stack-2d9.8.2",
-  "ts": "2026-03-08T17:47:03Z"
-}

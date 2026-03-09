@@ -42,6 +42,16 @@ proc vidaRoot*(): string =
     return cwdRoot
   return CompileTimeRoot
 
+proc vidaWorkspaceDir*(): string =
+  ## Canonical runtime workspace directory for vida-v0 transitional state.
+  vidaRoot() / ".vida"
+
+proc vidaWorkspacePath*(parts: varargs[string]): string =
+  ## Join one or more path segments under the canonical `.vida` workspace.
+  result = vidaWorkspaceDir()
+  for part in parts:
+    result = result / part
+
 proc configPath*(): string =
   ## Resolve path to vida.config.yaml
   vidaRoot() / "vida.config.yaml"

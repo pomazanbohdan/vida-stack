@@ -7,6 +7,11 @@ Current status:
 - partial parity work only
 - build/test surface is still under active development
 
+Runtime workspace:
+- `vida-v0` uses `.vida/` as its canonical runtime workspace root
+- logs, state, receipts, and workspace-local execution artifacts belong under `.vida/`
+- old script-era snapshots/checkpoints should not be committed as durable repo content
+
 ## Збірка
 
 ```bash
@@ -128,7 +133,7 @@ $ vida beads verify --strict
 
 ### `task` — DB-backed task surface
 
-Runtime SSOT for this lane lives in `.vida/state/vida-v0.db`.
+Runtime SSOT for this lane lives in `.vida/state/vida-legacy.db`.
 `.beads/issues.jsonl` is treated as an ingest/bootstrap artifact, not the live read store.
 
 Output policy:
@@ -419,4 +424,4 @@ src/
 - Claims in the Python/shell framework remain canonical until a tracked parity migration explicitly replaces them.
 - task read surfaces now come from the DB-backed `vida-v0 task` store
 - Rust `vida` binary (`crates/vida/`) підтримує `--state-dir` / `VIDA_STATE_DIR`
-- `.beads/issues.jsonl` is an ingest/export artifact; primary task reads in this lane come from `.vida/state/vida-v0.db`
+- `.beads/issues.jsonl` is an ingest/export artifact; primary task reads in this lane come from `.vida/state/vida-legacy.db`

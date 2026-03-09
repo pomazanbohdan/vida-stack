@@ -111,7 +111,7 @@ proc buildDispatchCommand*(
 
   # 6. Workdir flag
   let workdirFlag = dottedGetStr(dispatch, "workdir_flag")
-  let actualWorkdir = if workdir.len > 0: workdir else: getCurrentDir()
+  let actualWorkdir = if workdir.len > 0: workdir else: vidaWorkspaceDir()
   if workdirFlag.len > 0:
     result.args.add(workdirFlag)
     result.args.add(actualWorkdir)

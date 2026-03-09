@@ -1,1 +1,0 @@
-{"updated_at":"2026-03-08T22:19:28Z","trace_id":"ctx-20260308221928","epic_id":"","epic_goal":"Unit Task","task_id":"unit-task","task_title":"Unit Task","task_role_in_epic":"runtime-bootstrap","done":"bootstrap","next":"planning","constraints":["legacy-zero,vida-legacy-task-store"],"open_risks":[],"acceptance_slice":"task-start","task_context":""}

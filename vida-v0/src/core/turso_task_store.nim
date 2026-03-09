@@ -5,7 +5,7 @@ const DefaultTursoPython = currentSourcePath().parentDir().parentDir().parentDir
 const HelperPath = currentSourcePath().parentDir().parentDir().parentDir() / "helpers" / "turso_task_store.py"
 
 proc v0TaskDbPath*(): string =
-  vidaRoot() / ".vida" / "state" / "vida-v0.db"
+  vidaRoot() / ".vida" / "state" / "vida-legacy.db"
 
 proc tursoPython*(): string =
   let overridePath = getEnv("VIDA_V0_TURSO_PYTHON")
