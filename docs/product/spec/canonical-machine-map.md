@@ -391,3 +391,15 @@ approval_lifecycle
 task_lifecycle
   -> closes only when downstream route/verification/approval/reconciliation inputs satisfy closure law
 ```
+
+-----
+artifact_path: product/spec/canonical-machine-map
+artifact_type: product_spec
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/product/spec/canonical-machine-map.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-09T20:28:59+02:00
+changelog_ref: canonical-machine-map.changelog.jsonl

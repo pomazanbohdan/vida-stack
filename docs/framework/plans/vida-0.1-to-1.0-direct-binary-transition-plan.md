@@ -71,11 +71,11 @@ Current shape:
 
 Local evidence:
 
-1. `docs/framework/script-runtime-architecture.md`
-2. `docs/framework/beads-protocol.md`
-3. `docs/framework/agent-system-protocol.md`
-4. `docs/framework/agent-definition-protocol.md`
-5. `docs/framework/protocol-index.md`
+1. `vida/config/instructions/system-maps.script-runtime-architecture.md`
+2. `vida/config/instructions/runtime-instructions.beads-protocol.md`
+3. `vida/config/instructions/instruction-contracts.agent-system-protocol.md`
+4. `vida/config/instructions/agent-definitions.protocol.md`
+5. `vida/config/instructions/system-maps.protocol-index.md`
 
 Current engine strengths:
 
@@ -202,7 +202,7 @@ Owns:
 This is directly aligned with the already-created local research and runtime contract:
 
 1. `docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md`
-2. `docs/framework/agent-definition-protocol.md`
+2. `vida/config/instructions/agent-definitions.protocol.md`
 3. `docs/framework/templates/instruction-contract.yaml`
 4. `docs/framework/templates/prompt-template-config.yaml`
 
@@ -301,11 +301,11 @@ Purpose:
 
 Consumes:
 
-1. `docs/framework/protocol-index.md`
-2. `docs/framework/beads-protocol.md`
-3. `docs/framework/todo-protocol.md`
-4. `docs/framework/agent-system-protocol.md`
-5. `docs/framework/agent-definition-protocol.md`
+1. `vida/config/instructions/system-maps.protocol-index.md`
+2. `vida/config/instructions/runtime-instructions.beads-protocol.md`
+3. `vida/config/instructions/runtime-instructions.taskflow-protocol.md`
+4. `vida/config/instructions/instruction-contracts.agent-system-protocol.md`
+5. `vida/config/instructions/agent-definitions.protocol.md`
 
 ### Spec B. Command Tree Spec
 
@@ -479,7 +479,7 @@ Allowed optimization themes:
 2. queue/lock/path correctness,
 3. boot/status speed,
 4. receipt correctness,
-5. TODO/beads robustness,
+5. TaskFlow/beads robustness,
 6. proof/export surfaces needed for parity harness,
 7. framework diagnostics that keep current development stable.
 
@@ -591,3 +591,16 @@ Architecturally, VIDA should take the faster and cleaner path:
 3. write the `1.0` binary around the target kernels directly,
 4. use semantic freeze plus conformance specs to keep the rewrite exact,
 5. optimize the old engine only where it preserves delivery speed, correctness, and migration confidence.
+
+-----
+artifact_path: framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:30:56+02:00
+changelog_ref: vida-0.1-to-1.0-direct-binary-transition-plan.changelog.jsonl
+P26-03-09T21: 44:13Z

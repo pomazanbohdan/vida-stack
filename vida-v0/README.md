@@ -62,8 +62,8 @@ $ vida-v0 boot run standard TASK-42
 
 $ vida-v0 boot read-contract lean
 AGENTS.md
-docs/framework/thinking-protocol.md#section-algorithm-selector
-docs/framework/thinking-protocol.md#section-stc
+vida/config/instructions/instruction-contracts.thinking-protocol.md#section-algorithm-selector
+vida/config/instructions/instruction-contracts.thinking-protocol.md#section-stc
 ...
 
 $ vida-v0 boot snapshot --json --top-limit 3
@@ -107,7 +107,7 @@ vida-v0 beads snapshot-age          # Вік snapshot (секунди)
 vida-v0 beads verify [--strict]     # Верифікація логів
 ```
 
-### `todo` — TODO views from beads execution log
+### `todo` — TaskFlow views from beads execution log
 
 ```bash
 vida-v0 todo ui-json <task_id>
@@ -189,7 +189,7 @@ $ vida system budget-summary implementation
 
 ```bash
 vida registry build
-vida registry check <task_class> <subagent>
+vida registry check <task_class> <agent_backend>
 ```
 
 Приклади:
@@ -202,7 +202,7 @@ $ vida registry check analysis claude_cli
   "compatible": true,
   "reason": "ok",
   "task_class": "analysis",
-  "subagent": "claude_cli",
+  "agent_backend": "claude_cli",
   "required_artifacts": ["analysis_receipt"]
 }
 
@@ -229,7 +229,7 @@ $ vida route resolve TASK-42 implementation --write-scope scoped_only
   "task_id": "TASK-42",
   "dispatch_policy": "external_first",
   "risk_class": "R2",
-  "selected_subagent": "claude_cli"
+  "selected_agent_backend": "claude_cli"
 }
 ```
 
@@ -244,7 +244,7 @@ vida lease list
 
 Приклади:
 ```bash
-$ vida lease acquire subagent_pool claude_cli orchestrator --ttl-seconds 1800
+$ vida lease acquire agent_backend_pool claude_cli orchestrator --ttl-seconds 1800
 { "status": "acquired", "lease": { "fencing_token": 1, ... } }
 
 $ vida lease list
@@ -253,15 +253,15 @@ $ vida lease list
   "summary": { "active": 1, "released": 0, "expired": 0 }
 }
 
-$ vida lease release subagent_pool claude_cli orchestrator
+$ vida lease release agent_backend_pool claude_cli orchestrator
 { "status": "released" }
 ```
 
-### `pool` — Пул субагентів
+### `pool` — Пул agent backend-ів
 
 ```bash
 vida pool borrow <task_class> <holder> [--ttl-seconds N]
-vida pool release <subagent> <holder>
+vida pool release <agent_backend> <holder>
 vida pool status
 ```
 
@@ -270,7 +270,7 @@ vida pool status
 $ vida pool borrow analysis orchestrator
 {
   "status": "acquired",
-  "selected_subagent": "claude_cli",
+  "selected_agent_backend": "claude_cli",
   "task_class": "analysis"
 }
 
@@ -278,7 +278,7 @@ $ vida pool status
 { "active_pool_leases": [...] }
 
 $ vida pool release claude_cli orchestrator
-{ "status": "released", "subagent": "claude_cli" }
+{ "status": "released", "agent_backend": "claude_cli" }
 ```
 
 ### `auth` — Авторизація виконання
@@ -404,10 +404,10 @@ src/
 │   ├── snapshot.nim   # Task state snapshot
 │   └── profile.nim    # Boot profile + receipt writer
 ├── agents/
-│   ├── system.nim     # Subagent detection, scoring, mode
+│   ├── system.nim     # Agent-backend detection, scoring, mode
 │   ├── registry.nim   # Capability registry
 │   ├── leases.nim     # Resource lease management
-│   ├── pool.nim       # Subagent pool (borrow/release)
+│   ├── pool.nim       # Agent-backend pool (borrow/release)
 │   └── route.nim      # Route resolution + receipts
 ├── gates/
 │   ├── execution_auth.nim  # Execution authorization gate
@@ -425,3 +425,15 @@ src/
 - task read surfaces now come from the DB-backed `vida-v0 task` store
 - Rust `vida` binary (`crates/vida/`) підтримує `--state-dir` / `VIDA_STATE_DIR`
 - `.beads/issues.jsonl` is an ingest/export artifact; primary task reads in this lane come from `.vida/state/vida-legacy.db`
+
+-----
+artifact_path: implementation/vida-v0/readme
+artifact_type: implementation_doc
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: vida-v0/README.md
+created_at: 2026-03-10T01:36:00+02:00
+updated_at: 2026-03-10T01:32:34+02:00
+changelog_ref: README.changelog.jsonl

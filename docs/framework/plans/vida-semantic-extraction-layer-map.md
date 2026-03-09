@@ -108,8 +108,8 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/instruction-activation-protocol.md`
-2. `docs/framework/ORCHESTRATOR-ENTRY.MD`
+1. `vida/config/instructions/instruction-contracts.instruction-activation-protocol.md`
+2. `vida/config/instructions/agent-definitions.orchestrator-entry.md`
 
 Target artifact:
 
@@ -124,7 +124,7 @@ Extract:
 2. `artifact_flow`
 3. `execution_flow`
 4. `mixed`
-5. TODO/pack engagement boundary
+5. TaskFlow/pack engagement boundary
 
 Do not carry forward:
 
@@ -132,8 +132,8 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/ORCHESTRATOR-ENTRY.MD`
-2. `docs/framework/orchestration-protocol.md`
+1. `vida/config/instructions/agent-definitions.orchestrator-entry.md`
+2. `vida/config/instructions/instruction-contracts.orchestration-protocol.md`
 
 Target artifact:
 
@@ -155,7 +155,7 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/project-overlay-protocol.md`
+1. `vida/config/instructions/runtime-instructions.project-overlay-protocol.md`
 2. `vida.config.yaml`
 
 Target artifact:
@@ -180,10 +180,10 @@ Do not carry forward:
 Current sources:
 
 1. `AGENTS.md`
-2. `docs/framework/command-layer-protocol.md`
-3. `docs/framework/orchestration-protocol.md`
-4. `docs/framework/beads-protocol.md`
-5. `docs/framework/protocol-index.md`
+2. `vida/config/instructions/command-instructions.command-layer-protocol.md`
+3. `vida/config/instructions/instruction-contracts.orchestration-protocol.md`
+4. `vida/config/instructions/runtime-instructions.beads-protocol.md`
+5. `vida/config/instructions/system-maps.protocol-index.md`
 
 Target artifact:
 
@@ -207,10 +207,10 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/beads-protocol.md`
-2. `docs/framework/todo-protocol.md`
-3. `docs/framework/human-approval-protocol.md`
-4. `docs/framework/agent-system-protocol.md`
+1. `vida/config/instructions/runtime-instructions.beads-protocol.md`
+2. `vida/config/instructions/runtime-instructions.taskflow-protocol.md`
+3. `vida/config/instructions/runtime-instructions.human-approval-protocol.md`
+4. `vida/config/instructions/instruction-contracts.agent-system-protocol.md`
 
 Target artifact:
 
@@ -233,9 +233,9 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/beads-protocol.md`
-2. `docs/framework/task-state-reconciliation-protocol.md`
-3. `docs/framework/todo-protocol.md`
+1. `vida/config/instructions/runtime-instructions.beads-protocol.md`
+2. `vida/config/instructions/runtime-instructions.task-state-reconciliation-protocol.md`
+3. `vida/config/instructions/runtime-instructions.taskflow-protocol.md`
 
 Target artifact:
 
@@ -260,12 +260,12 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/human-approval-protocol.md`
-2. `docs/framework/run-graph-protocol.md`
-3. `docs/framework/boot-packet-protocol.md`
-4. `docs/framework/context-governance-protocol.md`
-5. `docs/framework/beads-protocol.md`
-6. `docs/framework/agent-system-protocol.md`
+1. `vida/config/instructions/runtime-instructions.human-approval-protocol.md`
+2. `vida/config/instructions/runtime-instructions.run-graph-protocol.md`
+3. `vida/config/instructions/runtime-instructions.boot-packet-protocol.md`
+4. `vida/config/instructions/runtime-instructions.context-governance-protocol.md`
+5. `vida/config/instructions/runtime-instructions.beads-protocol.md`
+6. `vida/config/instructions/instruction-contracts.agent-system-protocol.md`
 
 Target artifact:
 
@@ -288,10 +288,10 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/agent-system-protocol.md`
-2. `docs/framework/ORCHESTRATOR-ENTRY.MD`
-3. `docs/framework/orchestration-protocol.md`
-4. `docs/framework/implement-execution-protocol.md`
+1. `vida/config/instructions/instruction-contracts.agent-system-protocol.md`
+2. `vida/config/instructions/agent-definitions.orchestrator-entry.md`
+3. `vida/config/instructions/instruction-contracts.orchestration-protocol.md`
+4. `vida/config/instructions/command-instructions.implement-execution-protocol.md`
 
 Target artifact:
 
@@ -314,10 +314,10 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/agent-system-protocol.md`
-2. `docs/framework/human-approval-protocol.md`
-3. `docs/framework/product-proving-packs-protocol.md`
-4. `docs/framework/trace-eval-protocol.md`
+1. `vida/config/instructions/instruction-contracts.agent-system-protocol.md`
+2. `vida/config/instructions/runtime-instructions.human-approval-protocol.md`
+3. `vida/config/instructions/diagnostic-instructions.product-proving-packs-protocol.md`
+4. `vida/config/instructions/runtime-instructions.trace-eval-protocol.md`
 
 Target artifact:
 
@@ -342,7 +342,7 @@ Do not carry forward:
 Current sources:
 
 1. `docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md`
-2. `docs/framework/agent-definition-protocol.md`
+2. `vida/config/instructions/agent-definitions.protocol.md`
 3. `docs/framework/templates/instruction-contract.yaml`
 4. `docs/framework/templates/prompt-template-config.yaml`
 
@@ -365,9 +365,9 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/worker-dispatch-protocol.md`
-2. `docs/framework/WORKER-ENTRY.MD`
-3. `docs/framework/WORKER-THINKING.MD`
+1. `vida/config/instructions/instruction-contracts.worker-dispatch-protocol.md`
+2. `vida/config/instructions/agent-definitions.worker-entry.md`
+3. `vida/config/instructions/instruction-contracts.worker-thinking.md`
 4. `docs/framework/history/research/2026-03-08-agentic-epic-slicing-agent-instruction.md`
 
 Target artifact:
@@ -391,9 +391,9 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/run-graph-protocol.md`
-2. `docs/framework/beads-protocol.md`
-3. `docs/framework/context-governance-protocol.md`
+1. `vida/config/instructions/runtime-instructions.run-graph-protocol.md`
+2. `vida/config/instructions/runtime-instructions.beads-protocol.md`
+3. `vida/config/instructions/runtime-instructions.context-governance-protocol.md`
 
 Target artifact:
 
@@ -415,9 +415,9 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/framework-memory-protocol.md`
-2. `docs/framework/document-lifecycle-protocol.md`
-3. `docs/framework/silent-framework-diagnosis-protocol.md`
+1. `vida/config/instructions/runtime-instructions.framework-memory-protocol.md`
+2. `vida/config/instructions/runtime-instructions.document-lifecycle-protocol.md`
+3. `vida/config/instructions/diagnostic-instructions.silent-framework-diagnosis-protocol.md`
 
 Target artifact:
 
@@ -440,7 +440,7 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/trace-eval-protocol.md`
+1. `vida/config/instructions/runtime-instructions.trace-eval-protocol.md`
 2. `docs/framework/history/research/2026-03-08-agentic-metric-glossary.md`
 3. `docs/framework/history/research/2026-03-08-agentic-proof-obligation-registry.md`
 
@@ -524,3 +524,15 @@ Use this layer map to drive the next spec family in this order:
 7. migration kernel spec
 8. route and receipt spec
 9. parity and conformance spec
+-----
+artifact_path: framework/plans/vida-semantic-extraction-layer-map
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-semantic-extraction-layer-map.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:12:03+02:00
+changelog_ref: vida-semantic-extraction-layer-map.changelog.jsonl
+P26-03-09T21: 44:13Z

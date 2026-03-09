@@ -11,29 +11,29 @@ import ../core/[utils, config, toon]
 
 const CommonReads* = @[
   "AGENTS.md",
-  "docs/framework/thinking-protocol.md#section-algorithm-selector",
-  "docs/framework/thinking-protocol.md#section-stc",
-  "docs/framework/thinking-protocol.md#section-pr-cot",
-  "docs/framework/thinking-protocol.md#section-mar",
-  "docs/framework/thinking-protocol.md#section-5-solutions",
-  "docs/framework/thinking-protocol.md#section-meta-analysis",
-  "docs/framework/thinking-protocol.md#section-bug-reasoning",
-  "docs/framework/thinking-protocol.md#section-web-search",
-  "docs/framework/thinking-protocol.md#section-reasoning-modules",
-  "docs/framework/web-validation-protocol.md",
-  "docs/framework/beads-protocol.md",
-  "docs/framework/project-overlay-protocol.md",
+  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-algorithm-selector",
+  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-stc",
+  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-pr-cot",
+  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-mar",
+  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-5-solutions",
+  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-meta-analysis",
+  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-bug-reasoning",
+  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-web-search",
+  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-reasoning-modules",
+  "vida/config/instructions/runtime-instructions.web-validation-protocol.md",
+  "vida/config/instructions/runtime-instructions.beads-protocol.md",
+  "vida/config/instructions/runtime-instructions.project-overlay-protocol.md",
 ]
 
 const StandardReads* = @[
-  "docs/framework/todo-protocol.md",
-  "docs/framework/implement-execution-protocol.md",
-  "docs/framework/use-case-packs.md",
+  "vida/config/instructions/runtime-instructions.todo-protocol.md",
+  "vida/config/instructions/command-instructions.implement-execution-protocol.md",
+  "vida/config/instructions/command-instructions.use-case-packs.md",
 ]
 
 const FullReads* = @[
-  "docs/framework/orchestration-protocol.md",
-  "docs/framework/pipelines.md",
+  "vida/config/instructions/instruction-contracts.orchestration-protocol.md",
+  "vida/config/instructions/command-instructions.pipelines.md",
 ]
 
 const Invariants* = @[
@@ -54,11 +54,11 @@ proc profileReads*(profile: string, nonDev: bool, agentSystemActive: bool,
   if profile == "full":
     result.add(FullReads)
   if nonDev:
-    result.add("docs/framework/spec-contract-protocol.md")
+    result.add("vida/config/instructions/runtime-instructions.spec-contract-protocol.md")
   if fileExists(rootDir / "vida.config.yaml"):
     result.add("vida.config.yaml")
   if agentSystemActive:
-    result.add("docs/framework/subagent-system-protocol.md")
+    result.add("vida/config/instructions/instruction-contracts.agent-system-protocol.md")
 
 # ─────────────────────────── Packet Builder ───────────────────────────
 

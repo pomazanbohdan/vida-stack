@@ -124,7 +124,7 @@ suite "config access helpers":
     check isProtocolActive(config, "agent_system") == true
     check isProtocolActive(config, "nonexistent") == false
 
-  test "getSubagents":
+  test "getAgentBackends":
     let config = parseJson("""{"agent_system": {"subagents": {"codex": {"enabled": true}}}}""")
-    let subagents = getSubagents(config)
+    let subagents = getAgentBackends(config)
     check subagents["codex"]["enabled"].getBool() == true

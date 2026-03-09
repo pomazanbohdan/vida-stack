@@ -158,3 +158,15 @@ The next lawful follow-through after this artifact is:
 1. update active specs that still speak about storage as open or backend-agnostic,
 2. remove lingering product-law ambiguity around `SQLite` and JSONL as future substrates,
 3. keep legacy mentions only where they are explicitly migration-input or bridge-only references.
+-----
+artifact_path: framework/plans/vida-0.3-storage-kernel-spec
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-0.3-storage-kernel-spec.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:12:03+02:00
+changelog_ref: vida-0.3-storage-kernel-spec.changelog.jsonl
+P26-03-09T21: 44:13Z

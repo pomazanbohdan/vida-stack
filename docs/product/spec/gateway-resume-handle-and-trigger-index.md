@@ -111,3 +111,15 @@ The kernel accepts as future direction:
 3. resume targeting must not silently degrade into broad scan as a default path
 4. handle consumption must be inspectable and receipt-backed when decision-relevant
 5. `coach`, `verification`, and `approval` remain separate even if all use resumable gateways
+
+-----
+artifact_path: product/spec/gateway-resume-handle-and-trigger-index
+artifact_type: product_spec
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/product/spec/gateway-resume-handle-and-trigger-index.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-09T20:28:59+02:00
+changelog_ref: gateway-resume-handle-and-trigger-index.changelog.jsonl

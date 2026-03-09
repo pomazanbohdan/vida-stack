@@ -8,7 +8,7 @@ Rule:
 
 1. `README.md` explains the product narrative and current direction.
 2. This file defines the versioned scope and transition path.
-3. Runtime protocol truth remains in `AGENTS.md` and `_vida/*`.
+3. Runtime bootstrap truth remains in `AGENTS.md`, active instruction canon lives in `vida/config/instructions/*`, and active framework program/research layers live in `docs/framework/{plans,research,history}/**`.
 
 Design assumptions:
 
@@ -45,9 +45,9 @@ It is the last large script/runtime line before binary productization.
 Core characteristics:
 
 1. shell and Python runtime adapters,
-2. protocol-driven execution through `AGENTS.md` and `_vida/*`,
+2. protocol-driven execution through `AGENTS.md`, `vida/config/instructions/*`, and framework plan/research evidence,
 3. bounded subagent orchestration,
-4. task-state through `br` and TODO flow,
+4. task-state through `br` and TaskFlow,
 5. review, approval, and route-law enforcement,
 6. framework memory, document lifecycle, and operator status as runtime surfaces,
 7. installer and framework-only release packaging.

@@ -7,22 +7,64 @@ rules:
   canonical_authoring_format: markdown_first
   machine_readable_projection_allowed: true
   duplicate_active_authority_forbidden: true
+  latest_markdown_revision_only: true
+  historical_markdown_copies_forbidden_in_active_tree: true
+  version_resolution_is_fail_closed: true
 families:
   agent_definitions:
-    authoring_home: vida/config/instructions/agent_definitions/
+    authoring_home: vida/config/instructions/
+    canonical_prefixes:
+      - agent-definitions.
     projection_forms:
       - yaml
       - json
   instruction_contracts:
-    authoring_home: vida/config/instructions/instruction_contracts/
+    authoring_home: vida/config/instructions/
+    canonical_prefixes:
+      - instruction-contracts.
     projection_forms:
       - yaml
       - json
   prompt_templates:
-    authoring_home: vida/config/instructions/prompt_templates/
+    authoring_home: vida/config/instructions/
+    canonical_prefixes:
+      - prompt-templates.
     projection_forms:
       - yaml
       - json
+  command_instructions:
+    authoring_home: vida/config/instructions/
+    canonical_prefixes:
+      - command-instructions.
+  runtime_instructions:
+    authoring_home: vida/config/instructions/
+    canonical_prefixes:
+      - runtime-instructions.
+  diagnostic_instructions:
+    authoring_home: vida/config/instructions/
+    canonical_prefixes:
+      - diagnostic-instructions.
+  system_maps:
+    authoring_home: vida/config/instructions/
+    canonical_prefixes:
+      - system-maps.
+  references:
+    authoring_home: vida/config/instructions/
+    canonical_prefixes:
+      - references.
+metadata_contract:
+  schema_version: 1
+  required_markdown_footer_fields:
+    - artifact_path
+    - artifact_type
+    - artifact_version
+    - artifact_revision
+    - schema_version
+    - status
+    - source_path
+    - created_at
+    - updated_at
+    - changelog_ref
 status_terms:
   - canonical
   - active_transitional

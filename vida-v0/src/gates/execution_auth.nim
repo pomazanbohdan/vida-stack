@@ -147,7 +147,7 @@ proc validateSpecDeltaReceipt*(taskId: string): tuple[ok: bool, receipt: JsonNod
 proc verificationPrereqState*(verificationPlan: JsonNode): tuple[ok: bool, via: string] =
   if policyValue(verificationPlan{"required"}, "no") != "yes":
     return (true, "not_required")
-  if policyValue(verificationPlan{"selected_subagent"}, "").len > 0:
+  if policyValue(verificationPlan{"selected_agent_backend"}, "").len > 0:
     return (true, "verifier_selected")
   if policyValue(verificationPlan{"reason"}, "") == "no_eligible_verifier":
     return (true, "no_eligible_verifier")

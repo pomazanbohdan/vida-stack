@@ -8,7 +8,7 @@
 
 **Architecture:** Build the system in layers. First establish canonical source refresh and the role/profile/instruction-definition contract. Then add routing, adaptive scaling, consensus, task packets, verification burden, OWASP mapping, and evaluation/trace surfaces. Only after the control plane is explicit should the project roll out task slicing, pilot runs, and epic-scale adoption.
 
-**Tech Stack:** Markdown protocols, instruction contracts, YAML templates/config, Python runtime helpers, shell wrappers, local execution receipts, web-search-based research refresh, `docs/framework/history/_vida-source/tests/*` proof surfaces, `br` task state, TODO telemetry.
+**Tech Stack:** Markdown protocols, instruction contracts, YAML templates/config, Python runtime helpers, shell wrappers, local execution receipts, web-search-based research refresh, `docs/framework/history/_vida-source/tests/*` proof surfaces, `br` task state, TaskFlow telemetry.
 
 **Parallelizable:** PARTIALLY. Foundation tasks are sequential. After the profile/routing contract is stable, verification/eval/security work can split into bounded parallel slices.
 
@@ -90,7 +90,7 @@ Create one new epic for implementation and slice it into these waves:
 
 ## Unified Task Reinforcement Bundle
 
-This bundle applies to **every one of Tasks 1-18 below**. When any task from this plan is converted into an epic child task, spec packet, or TODO execution packet, the child artifact must include this full reinforcement layer.
+This bundle applies to **every one of Tasks 1-18 below**. When any task from this plan is converted into an epic child task, spec packet, or TaskFlow execution packet, the child artifact must include this full reinforcement layer.
 
 Purpose:
 - prevent hidden assumptions
@@ -522,7 +522,7 @@ The bundle above is additive. It strengthens those sections and must be merged i
 
 **Files:**
 - Create: `/home/unnamed/project/mobile-odoo/docs/framework/adaptive-agent-count-protocol.md`
-- Modify: `/home/unnamed/project/mobile-odoo/docs/framework/agent-system-protocol.md`
+- Modify: `/home/unnamed/project/mobile-odoo/vida/config/instructions/instruction-contracts.agent-system-protocol.md`
 - Modify: `/home/unnamed/project/mobile-odoo/vida.config.yaml`
 - Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/tests/test_adaptive_agent_count.py`
 
@@ -755,7 +755,7 @@ The bundle above is additive. It strengthens those sections and must be merged i
 
 **Files:**
 - Create: `/home/unnamed/project/mobile-odoo/docs/framework/verification-burden-matrix.md`
-- Modify: `/home/unnamed/project/mobile-odoo/docs/framework/implement-execution-protocol.md`
+- Modify: `/home/unnamed/project/mobile-odoo/vida/config/instructions/command-instructions.implement-execution-protocol.md`
 
 **Autonomous packet must include:**
 - task class
@@ -851,7 +851,7 @@ The bundle above is additive. It strengthens those sections and must be merged i
 
 **Files:**
 - Create: `/home/unnamed/project/mobile-odoo/docs/framework/adaptive-orchestration-trace-schema.md`
-- Modify: `/home/unnamed/project/mobile-odoo/docs/framework/run-graph-protocol.md`
+- Modify: `/home/unnamed/project/mobile-odoo/vida/config/instructions/runtime-instructions.run-graph-protocol.md`
 - Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/tests/test_trace_schema.py`
 
 **Autonomous packet must include:**
@@ -1032,7 +1032,7 @@ The bundle above is additive. It strengthens those sections and must be merged i
 
 ---
 
-## Task 18: Prepare epic-slicing and TODO formation guidance
+## Task 18: Prepare epic-slicing and TaskFlow formation guidance
 
 **Files:**
 - Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-master-index.md`
@@ -1175,7 +1175,7 @@ This is a filled example for future slicing. Use it as the canonical sample when
    - Define and implement the policy that chooses single-agent, dual-lane, triad, quorum, or arbiter routing based on task score and prior effectiveness rather than a fixed agent minimum.
 2. `Files`
    - Create: `/home/unnamed/project/mobile-odoo/docs/framework/adaptive-agent-count-protocol.md`
-   - Modify: `/home/unnamed/project/mobile-odoo/docs/framework/agent-system-protocol.md`
+   - Modify: `/home/unnamed/project/mobile-odoo/vida/config/instructions/instruction-contracts.agent-system-protocol.md`
    - Modify: `/home/unnamed/project/mobile-odoo/vida.config.yaml`
    - Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/tests/test_adaptive_agent_count.py`
 3. `Research Refresh Gate`
@@ -1358,4 +1358,16 @@ These five tasks establish the contract that everything else depends on.
 - Tasks 11-13 establish compatibility, proof burden, and OWASP security spine.
 - Tasks 14-18 establish traces, evals, rollout, proving, and epic slicing.
 
-**Next:** Create the new epic and convert each task above into a tracked child task with explicit TODO blocks and proof surfaces.
+**Next:** Create the new epic and convert each task above into a tracked child task with explicit TaskFlow blocks and proof surfaces.
+-----
+artifact_path: framework/plans/vida-autonomous-role-profiles-and-adaptive-orchestration-plan
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-autonomous-role-profiles-and-adaptive-orchestration-plan.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:12:03+02:00
+changelog_ref: vida-autonomous-role-profiles-and-adaptive-orchestration-plan.changelog.jsonl
+P26-03-09T21: 44:13Z

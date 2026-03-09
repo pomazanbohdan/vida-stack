@@ -91,12 +91,14 @@ The executable law home for this model is `vida/config/instructions/**`.
 
 Target families:
 
-1. `agent_definitions/**`
-2. `instruction_contracts/**`
-3. `prompt_templates/**`
-4. `skills/**`
-5. `bundles/**`
-6. `activation/**`
+1. flat canonical Markdown authoring artifacts in `vida/config/instructions/*.md`
+2. projected machine-readable artifacts in `vida/config/instructions/{agent_definitions,instruction_contracts,prompt_templates,skills,bundles,activation}/**`
+
+Canonical flat naming rule:
+
+1. active Markdown instruction artifacts stay in the root of `vida/config/instructions/`,
+2. logical family placement is expressed by pseudo-directory prefixes in the filename and in `artifact_path`,
+3. example: `vida/config/instructions/agent-definitions.orchestrator-entry.md`
 
 ## 5.1 Authoring Format
 
@@ -108,6 +110,22 @@ Canonical authoring rule:
 4. YAML/JSON artifacts may exist as executable bridge or compiled runtime forms when the transitional runtime needs machine-readable loading.
 5. When both human-readable and machine-readable forms exist, the human-readable Markdown artifact is the canonical authoring surface unless a stricter runtime protocol explicitly promotes the machine-readable projection.
 
+## 5.2 Versioning And Latest-Revision Rule
+
+Canonical rule:
+
+1. until `vida 0.2.0` and `vida 1.0` consume the registry/runtime model directly, the repository keeps only the latest active Markdown revision for each canonical instruction artifact,
+2. historical states live in adjacent `*.changelog.jsonl` files and in Git history, not as parallel active Markdown copies,
+3. every canonical instruction artifact must carry explicit metadata for:
+   - `artifact_version`
+   - `artifact_revision`
+   - `schema_version`
+   - `status`
+4. `artifact_version` is the semantic version boundary of the artifact,
+5. `artifact_revision` identifies the current latest Markdown revision for that version,
+6. `schema_version` versions the footer/changelog metadata contract itself,
+7. runtime and migration logic must treat unresolved or incompatible version tuples as fail-closed conditions.
+
 ## 6. Historical Sources
 
 This spec absorbs and supersedes product-instruction semantics previously scattered across:
@@ -118,3 +136,15 @@ This spec absorbs and supersedes product-instruction semantics previously scatte
 4. `docs/framework/history/_vida-source/instructions/framework/prompt-template-config.md`
 5. `docs/framework/templates/instruction-contract.yaml`
 6. `docs/framework/templates/prompt-template-config.yaml`
+
+-----
+artifact_path: product/spec/instruction-artifact-model
+artifact_type: product_spec
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/product/spec/instruction-artifact-model.md
+created_at: 2026-03-09T20:28:59+02:00
+updated_at: 2026-03-09T22:51:59+02:00
+changelog_ref: instruction-artifact-model.changelog.jsonl

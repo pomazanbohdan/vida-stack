@@ -1,7 +1,7 @@
-## VIDA Subagent System — runtime snapshot, detection, scoring, mode computation.
+## VIDA Agent Backend System — runtime snapshot, detection, scoring, mode computation.
 ##
-## Decomposition of `subagent-system.py` (3567 lines → ~400 lines core).
-## Handles subagent detection, scorecard management, lifecycle stages,
+## Decomposition of the legacy agent-system script into a focused Nim core.
+## Handles agent-backend detection, scorecard management, lifecycle stages,
 ## effective mode computation, and runtime snapshots.
 
 import std/[json, os, strutils, tables, times, options]
@@ -58,7 +58,7 @@ proc scoreDefaults*(): JsonNode =
       "startup_timeout_count": 0, "no_output_timeout_count": 0,
       "stalled_after_progress_count": 0, "time_to_first_useful_output_samples": 0,
       "avg_time_to_first_useful_output_ms": 0, "useful_progress_rate": 0,
-      "subagent_state": "active", "failure_reason": "",
+      "agent_backend_state": "active", "failure_reason": "",
       "cooldown_until": "", "probe_required": false,
       "last_quota_exhausted_at": "", "recovery_attempt_count": 0,
       "recovery_success_count": 0, "last_recovery_at": "",
@@ -77,7 +77,7 @@ proc scoreDefaults*(): JsonNode =
 proc lifecycleStageFor*(subagentCfg, globalCard, scoringCfg: JsonNode): string =
   let enabled = dottedGetBool(subagentCfg, "enabled", false)
   let available = dottedGetBool(subagentCfg, "available", false)
-  let subagentState = dottedGetStr(globalCard, "subagent_state", "active")
+  let agentBackendState = dottedGetStr(globalCard, "agent_backend_state", "active")
   let scoreState = dottedGetStr(globalCard, "state", "normal")
   let successCount = policyInt(globalCard{"success_count"}, 0)
   let failureCount = policyInt(globalCard{"failure_count"}, 0)
@@ -85,13 +85,13 @@ proc lifecycleStageFor*(subagentCfg, globalCard, scoringCfg: JsonNode): string =
   let probationSuccessRuns = max(1, policyInt(scoringCfg{"probation_success_runs"}, 3))
   let retirementFailureLimit = max(1, policyInt(scoringCfg{"retirement_failure_limit"}, 12))
 
-  if not enabled or subagentState == "disabled_manual":
+  if not enabled or agentBackendState == "disabled_manual":
     return "retired"
   if failureCount >= retirementFailureLimit and successCount <= 0:
     return "retired"
   if cooldownUntil.isSome and cooldownUntil.get.toTime > getTime():
     return "cooldown"
-  if subagentState in ["degraded", "quota_exhausted"] or scoreState == "demoted":
+  if agentBackendState in ["degraded", "quota_exhausted"] or scoreState == "demoted":
     return "degraded"
   let lastRecoveryStatus = dottedGetStr(globalCard, "last_recovery_status")
   let lastRecoveryAt = dottedGetStr(globalCard, "last_recovery_at")
@@ -110,7 +110,7 @@ proc lifecycleStageFor*(subagentCfg, globalCard, scoringCfg: JsonNode): string =
 
 proc inferredRiskClass*(taskClass, writeScope, verificationGate: string): string =
   let scope = policyValue(%writeScope, "none")
-  let gate = policyValue(%verificationGate, "subagent_return_contract")
+  let gate = policyValue(%verificationGate, "agent_backend_return_contract")
   let task = policyValue(%taskClass, "default")
   if scope in ["orchestrator_native", "external_write", "repo_write"]: return "R3"
   if scope in ["scoped_only", "sandbox", "patch"]: return "R2"
@@ -133,10 +133,10 @@ proc analysisRouteTaskClassFor*(taskClass, writeScope: string): string =
   if taskClass == "architecture": return "meta_analysis"
   return "analysis"
 
-# ─────────────────────────── Subagent Detection ───────────────────────────
+# ─────────────────────────── Agent Backend Detection ───────────────────────────
 
-proc detectSubagents*(cfg: JsonNode): JsonNode =
-  let subagents = getSubagents(cfg)
+proc detectAgentBackends*(cfg: JsonNode): JsonNode =
+  let subagents = getAgentBackends(cfg)
   result = newJObject()
   if subagents.isNil or subagents.kind != JObject: return
 
@@ -177,16 +177,16 @@ proc detectSubagents*(cfg: JsonNode): JsonNode =
 
 # ─────────────────────────── Effective Mode ───────────────────────────
 
-proc effectiveMode*(cfg: JsonNode, subagents: JsonNode): tuple[mode: string, reasons: seq[string]] =
+proc effectiveMode*(cfg: JsonNode, agentBackends: JsonNode): tuple[mode: string, reasons: seq[string]] =
   let protocolActive = dottedGetBool(cfg, "protocol_activation.agent_system", false)
   if not protocolActive:
     return ("disabled", @["protocol_activation.agent_system=false"])
 
   let requested = dottedGetStr(cfg, "agent_system.mode", "native")
-  let hasInternal = subagents.hasKey("internal_subagents") and
-    dottedGetBool(subagents{"internal_subagents"}, "available", false)
+  let hasInternal = agentBackends.hasKey("internal_subagents") and
+    dottedGetBool(agentBackends{"internal_subagents"}, "available", false)
   var hasExternal = false
-  for name, payload in subagents:
+  for name, payload in agentBackends:
     if name != "internal_subagents" and dottedGetBool(payload, "available", false):
       hasExternal = true; break
 
@@ -194,21 +194,21 @@ proc effectiveMode*(cfg: JsonNode, subagents: JsonNode): tuple[mode: string, rea
   of "disabled": return ("disabled", @["requested_mode=disabled"])
   of "native":
     if hasInternal: return ("native", @["requested_mode=native"])
-    return ("disabled", @["requested_mode=native", "internal_subagents unavailable"])
+    return ("disabled", @["requested_mode=native", "internal agent backend unavailable"])
   of "hybrid":
     if hasInternal and hasExternal: return ("hybrid", @["requested_mode=hybrid"])
-    if hasInternal: return ("native", @["requested_mode=hybrid", "external subagents unavailable -> degrade_to=native"])
-    if hasExternal: return ("disabled", @["requested_mode=hybrid", "internal subagents unavailable -> degrade_to=disabled"])
-    return ("disabled", @["requested_mode=hybrid", "no subagents available"])
+    if hasInternal: return ("native", @["requested_mode=hybrid", "external agent backends unavailable -> degrade_to=native"])
+    if hasExternal: return ("disabled", @["requested_mode=hybrid", "internal agent backend unavailable -> degrade_to=disabled"])
+    return ("disabled", @["requested_mode=hybrid", "no agent backends available"])
   else: return ("disabled", @["unsupported requested_mode=" & requested])
 
 # ─────────────────────────── Runtime Snapshot ───────────────────────────
 
 proc runtimeSnapshot*(taskId: string = ""): JsonNode =
   let cfg = loadRawConfig()
-  let currentSubagents = detectSubagents(cfg)
+  let currentAgentBackends = detectAgentBackends(cfg)
   let scoringCfg = thresholds(cfg)
-  let (mode, reasons) = effectiveMode(cfg, currentSubagents)
+  let (mode, reasons) = effectiveMode(cfg, currentAgentBackends)
 
   result = %*{
     "generated_at": nowUtc(),
@@ -225,14 +225,14 @@ proc runtimeSnapshot*(taskId: string = ""): JsonNode =
       "scoring": scoringCfg,
       "reasons": reasons,
     },
-    "subagents": currentSubagents,
+    "agent_backends": currentAgentBackends,
     "task_id": (if taskId.len > 0: %taskId else: newJNull()),
   }
 
 # ─────────────────────────── Budget Policy Summary ───────────────────────────
 
 proc budgetPolicySummary*(taskClass: string = ""): JsonNode =
-  let runLogPath = vidaRoot() / ".vida" / "logs" / "subagent-runs.jsonl"
+  let runLogPath = vidaRoot() / ".vida" / "logs" / "agent-backend-runs.jsonl"
   result = %*{
     "run_count": 0, "cheap_lane_attempted": 0,
     "bridge_fallback_used": 0, "authorized_internal_escalations": 0,
@@ -244,7 +244,7 @@ proc budgetPolicySummary*(taskClass: string = ""): JsonNode =
     if line.strip().len == 0: continue
     try:
       let payload = parseJson(line)
-      if payload.kind != JObject or policyValue(payload{"type"}, "") != "subagent_run": continue
+      if payload.kind != JObject or policyValue(payload{"type"}, "") != "agent_backend_run": continue
       if taskClass.len > 0 and policyValue(payload{"task_class"}, "") != taskClass: continue
       result["run_count"] = %(result["run_count"].getInt() + 1)
       if dottedGetBool(payload, "cheap_lane_attempted", false):
@@ -307,7 +307,7 @@ proc cmdSystem*(args: seq[string]): int =
     return 0
   of "detect":
     let cfg = loadRawConfig()
-    let payload = normalizeJson(detectSubagents(cfg))
+    let payload = normalizeJson(detectAgentBackends(cfg))
     if "--json" in args:
       echo pretty(payload)
     else:
@@ -315,7 +315,7 @@ proc cmdSystem*(args: seq[string]): int =
     return 0
   of "mode":
     let cfg = loadRawConfig()
-    let subs = detectSubagents(cfg)
+    let subs = detectAgentBackends(cfg)
     let (mode, reasons) = effectiveMode(cfg, subs)
     let payload = normalizeJson(%*{"effective_mode": mode, "reasons": reasons})
     if "--json" in args:

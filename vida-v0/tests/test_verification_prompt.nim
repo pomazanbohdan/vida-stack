@@ -24,12 +24,12 @@ suite "verification prompt":
           "cluster_id": "def456",
           "sample": "worker packet gate should block invalid output contracts"
         },
-        "success_subagents": ["qwen_cli"],
+        "success_agent_backends": ["qwen_cli"],
         "open_conflicts": []
       },
       %*[
         {
-          "subagent": "qwen_cli",
+          "agent_backend": "qwen_cli",
           "status": "success",
           "output_file": outputFile
         }

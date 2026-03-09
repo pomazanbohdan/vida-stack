@@ -18,8 +18,8 @@ proc runtimeAgentType(subagentCfg: JsonNode): string =
   else:
     "llm_agent"
 
-proc detectOverlaySubagents(cfg: JsonNode): JsonNode =
-  let subagents = getSubagents(cfg)
+proc detectOverlayAgentBackends(cfg: JsonNode): JsonNode =
+  let subagents = getAgentBackends(cfg)
   result = newJObject()
   if subagents.kind != JObject:
     return
@@ -207,8 +207,8 @@ proc buildAgentEntry(name: string, subCfg, detected, groupsDoc, assignmentPolicy
 proc buildRuntimeAgentInventory*(cfg: JsonNode = loadRawConfig()): JsonNode =
   let groupsDoc = loadKernelArtifact("agents", "agent_groups")
   let assignmentPolicy = loadPolicySpec("assignment_policy")
-  let detected = detectOverlaySubagents(cfg)
-  let subagents = getSubagents(cfg)
+  let detected = detectOverlayAgentBackends(cfg)
+  let subagents = getAgentBackends(cfg)
   var agents: seq[JsonNode] = @[]
   if subagents.kind == JObject:
     for name, subCfg in subagents:

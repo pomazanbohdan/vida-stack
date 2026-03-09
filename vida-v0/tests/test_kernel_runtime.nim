@@ -53,7 +53,7 @@ suite "assignment engine":
     )
     check payload["ok"].getBool() == true
     check payload["lane"].getStr() == "writer_lane"
-    check payload["selected_subagent"].getStr() == "codex_cli"
+    check payload["selected_agent_backend"].getStr() == "codex_cli"
     check payload["inventory_source"].getStr() == "overlay_runtime"
 
   test "resolves verification lane independently from writer":
@@ -63,7 +63,7 @@ suite "assignment engine":
     )
     check payload["ok"].getBool() == true
     check payload["lane"].getStr() == "verification_lane"
-    check payload["selected_subagent"].getStr() in ["qwen_cli", "gemini_cli", "internal_subagents"]
+    check payload["selected_agent_backend"].getStr() in ["qwen_cli", "gemini_cli", "internal_subagents"]
 
   test "fails for unknown task class":
     let payload = resolveAssignmentForTaskClass("unknown_task_class")

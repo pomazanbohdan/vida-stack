@@ -237,10 +237,10 @@ This repository is not a toy example and not a detached greenfield framework exp
 Right now, the framework is implemented through a practical stack of:
 
 - `AGENTS.md` as a bootstrap router for orchestrator versus worker lane entry
-- `_vida/docs/ORCHESTRATOR-ENTRY.MD` and `_vida/docs/SUBAGENT-ENTRY.MD` as split lane contracts
-- `_vida/docs/*` for canonical protocols
-- `_vida/scripts/*` for runtime helpers and enforcement
-- `br` plus TODO telemetry for execution state
+- `vida/config/instructions/agent-definitions.orchestrator-entry.md` and `vida/config/instructions/agent-definitions.worker-entry.md` as split lane contracts
+- `vida/config/instructions/*.md` for active canonical instruction surfaces
+- `docs/framework/plans/**`, `docs/framework/research/**`, and `docs/framework/history/**` for program, research, and evidence layers
+- `br` plus TaskFlow telemetry for execution state
 - external-first subagent routing with verification, route receipts, and fallback logic
 
 Recent runtime work has also hardened the framework with a bootstrap split between orchestrator and worker lanes, compact boot snapshots for dev-oriented context, request-intent gating before `br` and pack machinery, subagent-first analysis/review and development execution in supported modes, budget-aware route and escalation metadata, question-driven worker packets with stricter return contracts and non-`STC` impact tails, hard bounded log-read rules for `.vida/*` surfaces, target review-state visibility before dispatch, ensemble lease diagnostics with conflict history, canonical `route_law_summary` and machine-readable `route_receipt` artifacts, verifier-gated `decision_ready` versus `synthesis_ready` completion, pool dependency-graph analysis before multi-task writer selection, explicit human-approval receipts for post-verification closure gates, and orchestrator-synthesized user reporting that keeps subagent process details hidden by default.
@@ -249,7 +249,7 @@ The newest runtime layer also adds queue-backed single-writer task-state mutatio
 
 This stage matters because `0.1` is no longer treated as a throwaway pre-product demo. It is the canonical behavior layer that the future binary must reproduce, compress, and eventually replace as the primary operating surface.
 
-Recent framework-level changes are tracked in [_vida/CHANGELOG.md](_vida/CHANGELOG.md).
+Recent framework-level architectural changes are tracked through `docs/framework/plans/**`, canonical document sidecars, and git history.
 
 The versioned product path is defined in [VERSION-PLAN.md](VERSION-PLAN.md).
 
@@ -332,7 +332,7 @@ That means the long-term runtime direction is:
 
 This transition has already started.
 
-Today, `AGENTS.md` is no longer the full monolithic framework contract. It now acts as a bootstrap router that selects the orchestrator or worker entry path, while the larger lane-specific contracts live in `_vida/docs/ORCHESTRATOR-ENTRY.MD`, `_vida/docs/SUBAGENT-ENTRY.MD`, and `_vida/docs/SUBAGENT-THINKING.MD`.
+Today, `AGENTS.md` is no longer the full monolithic framework contract. It now acts as a bootstrap router that selects the orchestrator or worker entry path, while the larger lane-specific contracts live in `vida/config/instructions/agent-definitions.orchestrator-entry.md`, `vida/config/instructions/agent-definitions.worker-entry.md`, and `vida/config/instructions/instruction-contracts.worker-thinking.md`.
 
 The final architecture pushes this further by replacing even that bootstrap-heavy repository model with a runtime-loaded session contract.
 
@@ -557,18 +557,20 @@ The full version path and internal `0.2 -> 0.9` transition milestones are define
 
 ## 📘 Product Specs
 
-The roadmap is now backed by project-owned research and deeper product specs rather than only top-level narrative docs.
+The roadmap is now backed by the promoted product spec lane and the project documentation system rather than only top-level narrative docs.
 
-Research:
+Product canon entrypoints:
 
-- [docs/research/vida-roadmap-reframe.md](docs/research/vida-roadmap-reframe.md)
+- [docs/product/index.md](docs/product/index.md)
+- [docs/product/spec/current-spec-map.md](docs/product/spec/current-spec-map.md)
+- [docs/product/spec/project-documentation-system.md](docs/product/spec/project-documentation-system.md)
 
 Core specs:
 
-- [docs/specs/vida-1.0-product-spec.md](docs/specs/vida-1.0-product-spec.md)
-- [docs/specs/vida-1.0-runtime-contract.md](docs/specs/vida-1.0-runtime-contract.md)
-- [docs/specs/vida-2.0-daemon-control-plane.md](docs/specs/vida-2.0-daemon-control-plane.md)
-- [docs/specs/vida-3.0-plugin-marketplace.md](docs/specs/vida-3.0-plugin-marketplace.md)
+- [docs/product/spec/partial-development-kernel-scope.md](docs/product/spec/partial-development-kernel-scope.md)
+- [docs/product/spec/canonical-machine-map.md](docs/product/spec/canonical-machine-map.md)
+- [docs/product/spec/instruction-artifact-model.md](docs/product/spec/instruction-artifact-model.md)
+- [docs/product/spec/skill-management-and-activation.md](docs/product/spec/skill-management-and-activation.md)
 
 These specs preserve the current design direction for:
 
@@ -604,7 +606,7 @@ Installer behavior:
 - installs only framework payload files
 - supports `init`, `upgrade`, and `doctor`
 - supports `--dry-run`, `--force`, `--dir`, and `--version`
-- `init` stops if `AGENTS.md` or `_vida/` already exists unless explicitly forced
+- `init` stops if `AGENTS.md` or `vida/config/instructions/` already exists unless explicitly forced
 - `upgrade` replaces existing framework payload and writes backups into `.vida-backups/<version>/`
 - installs from GitHub Release archives and supports explicit release tags through `--version`
 
@@ -647,24 +649,23 @@ Current repository layout:
 .
 ├── AGENTS.md
 ├── README.md
+├── CONTRIBUTING.md
 ├── VERSION-PLAN.md
+├── vida.config.yaml
 ├── docs/
-│   ├── README.md
-│   ├── research/
-│   └── specs/
-└── _vida/
-    ├── commands/
-    ├── commands.md
-    ├── constitution.md
-    ├── constraints.md
-    ├── docs/
-    ├── dual-model-protocol.md
-    ├── owasp-integration.md
-    ├── planning.md
-    ├── scripts/
-    ├── templates/
-    ├── transitions.md
-    └── workflow.md
+│   ├── framework/
+│   │   ├── plans/
+│   │   ├── research/
+│   │   └── history/
+│   ├── product/
+│   │   ├── spec/
+│   │   └── research/
+│   ├── process/
+│   └── project-memory/
+├── vida/
+│   └── config/
+│       └── instructions/
+└── vida-v0/
 ```
 
 Key runtime areas:
@@ -672,20 +673,17 @@ Key runtime areas:
 - [AGENTS.md](AGENTS.md)
 - [README.md](README.md)
 - [VERSION-PLAN.md](VERSION-PLAN.md)
-- [docs/README.md](docs/README.md)
-- [docs/research/vida-roadmap-reframe.md](docs/research/vida-roadmap-reframe.md)
-- [docs/specs/vida-1.0-product-spec.md](docs/specs/vida-1.0-product-spec.md)
-- [docs/specs/vida-1.0-runtime-contract.md](docs/specs/vida-1.0-runtime-contract.md)
-- [docs/specs/vida-2.0-daemon-control-plane.md](docs/specs/vida-2.0-daemon-control-plane.md)
-- [docs/specs/vida-3.0-plugin-marketplace.md](docs/specs/vida-3.0-plugin-marketplace.md)
-- [_vida/commands](_vida/commands)
-- [_vida/commands.md](_vida/commands.md)
-- [_vida/docs/protocol-index.md](_vida/docs/protocol-index.md)
-- [_vida/docs/SUBAGENT-ENTRY.MD](_vida/docs/SUBAGENT-ENTRY.MD)
-- [_vida/docs](_vida/docs)
-- [_vida/scripts](_vida/scripts)
-- [_vida/templates](_vida/templates)
-- [_vida/CHANGELOG.md](_vida/CHANGELOG.md)
+- [docs/product/index.md](docs/product/index.md)
+- [docs/product/spec/current-spec-map.md](docs/product/spec/current-spec-map.md)
+- [docs/product/spec/project-documentation-system.md](docs/product/spec/project-documentation-system.md)
+- [vida/config/instructions/system-maps.framework-map-protocol.md](vida/config/instructions/system-maps.framework-map-protocol.md)
+- [vida/config/instructions/system-maps.protocol-index.md](vida/config/instructions/system-maps.protocol-index.md)
+- [vida/config/instructions/agent-definitions.orchestrator-entry.md](vida/config/instructions/agent-definitions.orchestrator-entry.md)
+- [vida/config/instructions/agent-definitions.worker-entry.md](vida/config/instructions/agent-definitions.worker-entry.md)
+- [vida/config/instructions/instruction-contracts.worker-thinking.md](vida/config/instructions/instruction-contracts.worker-thinking.md)
+- [docs/framework/plans](docs/framework/plans)
+- [docs/framework/research](docs/framework/research)
+- [docs/framework/history](docs/framework/history)
 - [install/install.sh](install/install.sh)
 
 ---

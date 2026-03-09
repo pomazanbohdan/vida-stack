@@ -1,6 +1,6 @@
 ## VIDA Leases — distributed resource lease management.
 ##
-## Extracted from `subagent-system.py` (lines 239-472).
+## Extracted from the legacy agent-system script.
 ## Provides acquire/renew/release with fencing tokens,
 ## conflict detection, history tracking, and automatic expiration.
 
@@ -9,7 +9,7 @@ import ../core/[utils, config, toon]
 
 # ─────────────────────────── Paths ───────────────────────────
 
-proc leasePath*(): string = vidaRoot() / ".vida" / "state" / "subagent-leases.json"
+proc leasePath*(): string = vidaRoot() / ".vida" / "state" / "agent-backend-leases.json"
 
 # ─────────────────────────── Load / Save ───────────────────────────
 

@@ -333,3 +333,15 @@ Typical proof dependencies:
 1. `doctor_output`
 2. `migration_report`
 3. `policy_evaluation_snapshot`
+
+-----
+artifact_path: product/spec/receipt-proof-taxonomy
+artifact_type: product_spec
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/product/spec/receipt-proof-taxonomy.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-09T20:28:59+02:00
+changelog_ref: receipt-proof-taxonomy.changelog.jsonl

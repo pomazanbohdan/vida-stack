@@ -66,3 +66,15 @@ Each memory diff record must include:
 2. Superseded records remain inspectable as history.
 3. Deactivated or stale entries must not masquerade as current truth.
 4. Silent destructive overwrite is forbidden.
+-----
+artifact_path: framework/plans/vida-0.3-memory-diff-format-spec
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-0.3-memory-diff-format-spec.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:12:03+02:00
+changelog_ref: vida-0.3-memory-diff-format-spec.changelog.jsonl
+P26-03-09T21: 44:13Z

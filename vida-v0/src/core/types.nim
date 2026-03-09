@@ -164,8 +164,8 @@ type
 # ─────────────────────────── Config: Agent System ───────────────────────────
 
 type
-  ## Full dispatch config per subagent — matches all 20+ fields in vida.config.yaml
-  SubagentDispatchConfig* = object
+  ## Full dispatch config per agent backend — matches overlay fields in vida.config.yaml
+  AgentBackendDispatchConfig* = object
     command*: string
     preStaticArgs*: seq[string]
     subcommand*: string
@@ -197,7 +197,7 @@ type
     progressIdleTimeoutSeconds*: int
     maxRuntimeExtensionSeconds*: int
 
-  SubagentConfig* = object
+  AgentBackendConfig* = object
     enabled*: bool
     subagentBackendClass*: string   # "internal", "external_cli"
     detectCommand*: string
@@ -217,7 +217,7 @@ type
     speedTier*: string              # "fast", "medium"
     qualityTier*: string            # "high", "medium"
     specialties*: seq[string]
-    dispatch*: SubagentDispatchConfig
+    dispatch*: AgentBackendDispatchConfig
 
   ScoringConfig* = object
     consecutiveFailureLimit*: int
@@ -233,19 +233,19 @@ type
     stateOwner*: string             # "orchestrator_only"
     maxParallelAgents*: int
     scoring*: ScoringConfig
-    subagents*: OrderedTable[string, SubagentConfig]
+    agentBackends*: OrderedTable[string, AgentBackendConfig]
 
 # ─────────────────────────── Config: Routing ───────────────────────────
 
 type
   ## Full routing profile — matches all 35+ fields per route in vida.config.yaml
   RoutingProfile* = object
-    # Subagent selection
-    subagents*: seq[string]
-    models*: OrderedTable[string, string]      # per-subagent model override
-    profiles*: OrderedTable[string, string]     # per-subagent profile override
+    # Agent-backend selection
+    agentBackends*: seq[string]
+    models*: OrderedTable[string, string]      # per-agent-backend model override
+    profiles*: OrderedTable[string, string]    # per-agent-backend profile override
     # Fanout
-    fanoutSubagents*: seq[string]
+    fanoutAgentBackends*: seq[string]
     fanoutMinResults*: int
     mergePolicy*: string            # "consensus_with_conflict_flag", "unanimous_approve_rework_bias"
     # Scope & gates
@@ -258,7 +258,7 @@ type
     localExecutionPreferred*: bool
     cliDispatchRequiredIfDelegating*: bool
     directInternalBypassForbidden*: bool
-    bridgeFallbackSubagent*: string
+    bridgeFallbackAgentBackend*: string
     internalEscalationTrigger*: string
     allowedInternalReasons*: seq[string]
     # Web search
@@ -268,7 +268,7 @@ type
     deterministicFirst*: bool
     budgetPolicy*: string           # "balanced", "strict"
     maxBudgetUnits*: int
-    maxCliSubagentCalls*: int
+    maxCliAgentBackendCalls*: int
     maxCoachPasses*: int
     maxVerificationPasses*: int
     maxFallbackHops*: int
@@ -281,7 +281,7 @@ type
     # Analysis sub-flow
     analysisRequired*: bool
     analysisRouteTaskClass*: string
-    analysisFanoutSubagents*: seq[string]
+    analysisFanoutAgentBackends*: seq[string]
     analysisFanoutMinResults*: int
     analysisMergePolicy*: string
     analysisExternalFirstRequired*: bool
@@ -374,7 +374,7 @@ type
     timeToFirstUsefulOutputSamples*: int
     avgTimeToFirstUsefulOutputMs*: int
     usefulProgressRate*: int
-    subagentState*: string
+    agentBackendState*: string
     failureReason*: string
     cooldownUntil*: string
     probeRequired*: bool
@@ -445,8 +445,8 @@ type
 ## These types represent COMPUTED route results (not in YAML, built by route resolution)
 
 type
-  FallbackSubagent* = object
-    subagent*: string
+  FallbackAgentBackend* = object
+    agentBackend*: string
     model*: string
     profile*: string
     reason*: string
@@ -456,7 +456,7 @@ type
     maxBudgetUnits*: int
     maxBudgetCostClass*: string     # "free", "cheap", "paid"
     estimatedRouteCostClass*: string
-    maxCliSubagentCalls*: int
+    maxCliAgentBackendCalls*: int
     maxTotalRuntimeSeconds*: int
 
   ResolvedRoute* = object
@@ -467,13 +467,13 @@ type
     taskClass*: string
     routeTaskClass*: string
     generatedAt*: string
-    # Selected subagent (computed)
-    selectedSubagent*: string
+    # Selected agent backend (computed)
+    selectedAgentBackend*: string
     selectedModel*: string
     selectedProfile*: string
     available*: bool                  # detect_command check result
     # Fallback chain (computed)
-    fallbackSubagents*: seq[FallbackSubagent]
+    fallbackAgentBackends*: seq[FallbackAgentBackend]
     # Risk (inferred from write_scope + verification_gate)
     riskClass*: string                # "R0"-"R3"
     # Config pass-through
@@ -483,10 +483,10 @@ type
     externalFirstRequired*: bool
     webSearchRequired*: bool
     independentVerificationRequired*: bool
-    bridgeFallbackSubagent*: string
+    bridgeFallbackAgentBackend*: string
     internalEscalationTrigger*: string
     # Fanout (pass-through)
-    fanoutSubagents*: seq[string]
+    fanoutAgentBackends*: seq[string]
     fanoutMinResults*: int
     mergePolicy*: string
     # Budget (assembled from config fields)
@@ -507,7 +507,7 @@ type
     analysisRequired*: string
     localExecutionAllowed*: string
     externalFirstRequired*: string
-    bridgeFallbackSubagent*: string
+    bridgeFallbackAgentBackend*: string
     internalEscalationAllowed*: string
     internalEscalationTrigger*: string
     allowedInternalReasons*: seq[string]
@@ -518,7 +518,7 @@ type
     taskClass*: string
     routeTaskClass*: string
     generatedAt*: string
-    selectedSubagent*: string
+    selectedAgentBackend*: string
     riskClass*: string
     writeScope*: string
     verificationGate*: string

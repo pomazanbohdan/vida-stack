@@ -121,7 +121,7 @@ proc candidatePayload(
   selectionStrategy: string,
 ): JsonNode =
   %*{
-    "subagent": policyValue(agent{"id"}, ""),
+    "agent_backend": policyValue(agent{"id"}, ""),
     "compatible": true,
     "lane": lane,
     "task_class": taskClass,
@@ -153,7 +153,7 @@ proc compareCandidates(a, b: JsonNode): int =
   let loadB = policyInt(b{"load"}, 0)
   if loadA != loadB:
     return cmp(loadA, loadB)
-  return cmp(policyValue(a{"subagent"}, ""), policyValue(b{"subagent"}, ""))
+  return cmp(policyValue(a{"agent_backend"}, ""), policyValue(b{"agent_backend"}, ""))
 
 proc selectCandidate(candidates: seq[JsonNode], selectionStrategy: string, ctx: JsonNode): string =
   if candidates.len == 0:
@@ -165,14 +165,14 @@ proc selectCandidate(candidates: seq[JsonNode], selectionStrategy: string, ctx: 
     let pinned = policyValue(ctx{"pinned_agent"}, "")
     if pinned.len > 0:
       for candidate in candidates:
-        if policyValue(candidate{"subagent"}, "") == pinned:
+        if policyValue(candidate{"agent_backend"}, "") == pinned:
           return pinned
     for candidate in candidates:
       if policyValue(candidate{"agent_type"}, "") == "system_agent":
-        return policyValue(candidate{"subagent"}, "")
-    return policyValue(candidates[0]{"subagent"}, "")
+        return policyValue(candidate{"agent_backend"}, "")
+    return policyValue(candidates[0]{"agent_backend"}, "")
   else:
-    return policyValue(candidates[0]{"subagent"}, "")
+    return policyValue(candidates[0]{"agent_backend"}, "")
 
 proc resolveAssignmentForLane*(lane: string, ctx: JsonNode = newJObject()): JsonNode =
   let routeCatalog = loadRouteCatalog()
@@ -289,7 +289,7 @@ proc resolveAssignmentForLane*(lane: string, ctx: JsonNode = newJObject()): Json
     "assignment_mode": assignmentMode,
     "selection_strategy": selectionStrategy,
     "independence_class": independenceClass,
-    "selected_subagent": (if selected.len > 0: %selected else: newJNull()),
+    "selected_agent_backend": (if selected.len > 0: %selected else: newJNull()),
     "reason": reason,
     "candidates": candidates,
   }

@@ -130,7 +130,7 @@ Freeze:
 Do not freeze:
 
 1. current pack-start shell commands,
-2. current TODO helper names.
+2. current TaskFlow helper names.
 
 ### 4.3 Command Semantics
 
@@ -161,12 +161,12 @@ Freeze:
    - `in_progress`
    - `closed`
    - `deferred`
-2. TODO step states:
+2. TaskFlow step states:
    - `todo`
    - `doing`
    - `done`
    - `blocked`
-3. TODO block end-result surface:
+3. TaskFlow block end-result surface:
    - `done`
    - `partial`
    - `failed`
@@ -443,23 +443,23 @@ These are not blockers for semantic freeze, but they are blockers for later stri
 Primary local source basis used for this freeze:
 
 1. `AGENTS.md`
-2. `docs/framework/ORCHESTRATOR-ENTRY.MD`
-3. `docs/framework/instruction-activation-protocol.md`
-4. `docs/framework/project-overlay-protocol.md`
-5. `docs/framework/command-layer-protocol.md`
-6. `docs/framework/orchestration-protocol.md`
-7. `docs/framework/protocol-index.md`
-8. `docs/framework/beads-protocol.md`
-9. `docs/framework/todo-protocol.md`
-10. `docs/framework/task-state-reconciliation-protocol.md`
-11. `docs/framework/human-approval-protocol.md`
-12. `docs/framework/agent-system-protocol.md`
-13. `docs/framework/run-graph-protocol.md`
-14. `docs/framework/framework-memory-protocol.md`
-15. `docs/framework/silent-framework-diagnosis-protocol.md`
-16. `docs/framework/web-validation-protocol.md`
-17. `docs/framework/context-governance-protocol.md`
-18. `docs/framework/agent-definition-protocol.md`
+2. `vida/config/instructions/agent-definitions.orchestrator-entry.md`
+3. `vida/config/instructions/instruction-contracts.instruction-activation-protocol.md`
+4. `vida/config/instructions/runtime-instructions.project-overlay-protocol.md`
+5. `vida/config/instructions/command-instructions.command-layer-protocol.md`
+6. `vida/config/instructions/instruction-contracts.orchestration-protocol.md`
+7. `vida/config/instructions/system-maps.protocol-index.md`
+8. `vida/config/instructions/runtime-instructions.beads-protocol.md`
+9. `vida/config/instructions/runtime-instructions.taskflow-protocol.md`
+10. `vida/config/instructions/runtime-instructions.task-state-reconciliation-protocol.md`
+11. `vida/config/instructions/runtime-instructions.human-approval-protocol.md`
+12. `vida/config/instructions/instruction-contracts.agent-system-protocol.md`
+13. `vida/config/instructions/runtime-instructions.run-graph-protocol.md`
+14. `vida/config/instructions/runtime-instructions.framework-memory-protocol.md`
+15. `vida/config/instructions/diagnostic-instructions.silent-framework-diagnosis-protocol.md`
+16. `vida/config/instructions/runtime-instructions.web-validation-protocol.md`
+17. `vida/config/instructions/runtime-instructions.context-governance-protocol.md`
+18. `vida/config/instructions/agent-definitions.protocol.md`
 19. `docs/framework/templates/instruction-contract.yaml`
 20. `docs/framework/templates/prompt-template-config.yaml`
 21. `docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
@@ -490,3 +490,16 @@ If a `0.1` behavior cannot be described as:
 6. a proof or authorization rule,
 
 then it should not be frozen as a `1.0` semantic requirement.
+
+-----
+artifact_path: framework/plans/vida-0.2-semantic-freeze-spec
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-0.2-semantic-freeze-spec.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:30:56+02:00
+changelog_ref: vida-0.2-semantic-freeze-spec.changelog.jsonl
+P26-03-09T21: 44:13Z

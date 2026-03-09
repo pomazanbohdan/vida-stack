@@ -260,7 +260,7 @@ proc isProtocolActive*(config: JsonNode, protocol: string): bool =
 proc getAgentSystem*(config: JsonNode): JsonNode =
   dottedGet(config, "agent_system", newJObject())
 
-proc getSubagents*(config: JsonNode): JsonNode =
+proc getAgentBackends*(config: JsonNode): JsonNode =
   dottedGet(config, "agent_system.subagents", newJObject())
 
 proc getScoring*(config: JsonNode): JsonNode =
@@ -269,11 +269,11 @@ proc getScoring*(config: JsonNode): JsonNode =
 proc getFrameworkSelfDiagnosis*(config: JsonNode): JsonNode =
   dottedGet(config, "framework_self_diagnosis", newJObject())
 
-proc subagentHasWebSearchWiring*(subagentCfg: JsonNode): bool =
-  ## Check if a subagent has web search capability wired.
-  if subagentCfg.isNil or subagentCfg.kind != JObject:
+proc agentBackendHasWebSearchWiring*(agentBackendCfg: JsonNode): bool =
+  ## Check if an agent backend has web search capability wired.
+  if agentBackendCfg.isNil or agentBackendCfg.kind != JObject:
     return false
-  let dispatch = dottedGet(subagentCfg, "dispatch")
+  let dispatch = dottedGet(agentBackendCfg, "dispatch")
   if dispatch.kind != JObject:
     return false
   let webMode = dottedGetStr(dispatch, "web_search_mode")
@@ -320,20 +320,20 @@ proc getRoutingProfile*(config: JsonNode, taskClass: string): JsonNode =
     return routing["default"]
   return newJObject()
 
-proc getRouteSubagents*(config: JsonNode, taskClass: string): seq[string] =
-  ## Get ordered subagent list for a routing profile.
+proc getRouteAgentBackends*(config: JsonNode, taskClass: string): seq[string] =
+  ## Get ordered agent-backend list for a routing profile.
   let profile = getRoutingProfile(config, taskClass)
   splitCsv(dottedGet(profile, "subagents"))
 
-proc getRouteModelOverride*(config: JsonNode, taskClass, subagentName: string): string =
-  ## Get per-route model override for a specific subagent.
+proc getRouteModelOverride*(config: JsonNode, taskClass, agentBackendName: string): string =
+  ## Get per-route model override for a specific agent backend.
   let profile = getRoutingProfile(config, taskClass)
-  dottedGetStr(profile, "models." & subagentName)
+  dottedGetStr(profile, "models." & agentBackendName)
 
-proc getRouteProfileOverride*(config: JsonNode, taskClass, subagentName: string): string =
-  ## Get per-route profile override for a specific subagent.
+proc getRouteProfileOverride*(config: JsonNode, taskClass, agentBackendName: string): string =
+  ## Get per-route profile override for a specific agent backend.
   let profile = getRoutingProfile(config, taskClass)
-  dottedGetStr(profile, "profiles." & subagentName)
+  dottedGetStr(profile, "profiles." & agentBackendName)
 
 proc isExternalFirstRequired*(config: JsonNode, taskClass: string): bool =
   let profile = getRoutingProfile(config, taskClass)
@@ -367,7 +367,7 @@ proc getRouteBudgetUnits*(config: JsonNode, taskClass: string): int =
   let profile = getRoutingProfile(config, taskClass)
   dottedGetInt(profile, "max_budget_units", 4)
 
-proc getRouteFanoutSubagents*(config: JsonNode, taskClass: string): seq[string] =
+proc getRouteFanoutAgentBackends*(config: JsonNode, taskClass: string): seq[string] =
   let profile = getRoutingProfile(config, taskClass)
   splitCsv(dottedGet(profile, "fanout_subagents"))
 
@@ -379,43 +379,43 @@ proc getRouteMaxRuntimeSeconds*(config: JsonNode, taskClass: string): int =
   let profile = getRoutingProfile(config, taskClass)
   dottedGetInt(profile, "max_total_runtime_seconds", 420)
 
-# ─────────────────────────── Subagent Dispatch Config ───────────────────────────
+# ─────────────────────────── Agent Backend Dispatch Config ───────────────────────────
 
-proc getSubagentDispatch*(config: JsonNode, subagentName: string): JsonNode =
-  dottedGet(config, "agent_system.subagents." & subagentName & ".dispatch", newJObject())
+proc getAgentBackendDispatch*(config: JsonNode, agentBackendName: string): JsonNode =
+  dottedGet(config, "agent_system.subagents." & agentBackendName & ".dispatch", newJObject())
 
-proc getDispatchCommand*(config: JsonNode, subagentName: string): string =
-  dottedGetStr(getSubagentDispatch(config, subagentName), "command")
+proc getDispatchCommand*(config: JsonNode, agentBackendName: string): string =
+  dottedGetStr(getAgentBackendDispatch(config, agentBackendName), "command")
 
-proc getDispatchOutputMode*(config: JsonNode, subagentName: string): string =
-  dottedGetStr(getSubagentDispatch(config, subagentName), "output_mode", "stdout")
+proc getDispatchOutputMode*(config: JsonNode, agentBackendName: string): string =
+  dottedGetStr(getAgentBackendDispatch(config, agentBackendName), "output_mode", "stdout")
 
-proc getDispatchPromptMode*(config: JsonNode, subagentName: string): string =
-  dottedGetStr(getSubagentDispatch(config, subagentName), "prompt_mode", "positional")
+proc getDispatchPromptMode*(config: JsonNode, agentBackendName: string): string =
+  dottedGetStr(getAgentBackendDispatch(config, agentBackendName), "prompt_mode", "positional")
 
-proc getDispatchStartupTimeout*(config: JsonNode, subagentName: string): int =
-  dottedGetInt(getSubagentDispatch(config, subagentName), "startup_timeout_seconds", 60)
+proc getDispatchStartupTimeout*(config: JsonNode, agentBackendName: string): int =
+  dottedGetInt(getAgentBackendDispatch(config, agentBackendName), "startup_timeout_seconds", 60)
 
-proc isSubagentEnabled*(config: JsonNode, subagentName: string): bool =
-  dottedGetBool(config, "agent_system.subagents." & subagentName & ".enabled", false)
+proc isAgentBackendEnabled*(config: JsonNode, agentBackendName: string): bool =
+  dottedGetBool(config, "agent_system.subagents." & agentBackendName & ".enabled", false)
 
-proc getSubagentWriteScope*(config: JsonNode, subagentName: string): string =
-  dottedGetStr(config, "agent_system.subagents." & subagentName & ".write_scope", "none")
+proc getAgentBackendWriteScope*(config: JsonNode, agentBackendName: string): string =
+  dottedGetStr(config, "agent_system.subagents." & agentBackendName & ".write_scope", "none")
 
-proc getSubagentBillingTier*(config: JsonNode, subagentName: string): string =
-  dottedGetStr(config, "agent_system.subagents." & subagentName & ".billing_tier", "free")
+proc getAgentBackendBillingTier*(config: JsonNode, agentBackendName: string): string =
+  dottedGetStr(config, "agent_system.subagents." & agentBackendName & ".billing_tier", "free")
 
-proc getSubagentCostUnits*(config: JsonNode, subagentName: string): int =
-  dottedGetInt(config, "agent_system.subagents." & subagentName & ".budget_cost_units", 0)
+proc getAgentBackendCostUnits*(config: JsonNode, agentBackendName: string): int =
+  dottedGetInt(config, "agent_system.subagents." & agentBackendName & ".budget_cost_units", 0)
 
-proc getSubagentCapabilityBand*(config: JsonNode, subagentName: string): seq[string] =
-  splitCsv(dottedGet(config, "agent_system.subagents." & subagentName & ".capability_band"))
+proc getAgentBackendCapabilityBand*(config: JsonNode, agentBackendName: string): seq[string] =
+  splitCsv(dottedGet(config, "agent_system.subagents." & agentBackendName & ".capability_band"))
 
-proc getSubagentSpecialties*(config: JsonNode, subagentName: string): seq[string] =
-  splitCsv(dottedGet(config, "agent_system.subagents." & subagentName & ".specialties"))
+proc getAgentBackendSpecialties*(config: JsonNode, agentBackendName: string): seq[string] =
+  splitCsv(dottedGet(config, "agent_system.subagents." & agentBackendName & ".specialties"))
 
-proc getSubagentDetectCommand*(config: JsonNode, subagentName: string): string =
-  dottedGetStr(config, "agent_system.subagents." & subagentName & ".detect_command")
+proc getAgentBackendDetectCommand*(config: JsonNode, agentBackendName: string): string =
+  dottedGetStr(config, "agent_system.subagents." & agentBackendName & ".detect_command")
 
 proc getPackRouterKeywords*(config: JsonNode): JsonNode =
   dottedGet(config, "pack_router_keywords", newJObject())

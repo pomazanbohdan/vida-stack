@@ -13,12 +13,12 @@ scope_boundary:
     - return the exact deliverable format requested by the packet
   out_of_scope:
     - repository-wide orchestration
-    - TODO or route ownership
+    - TaskFlow or route ownership
     - silent scope expansion
 mandatory_reads:
   - AGENTS.md
-  - docs/framework/WORKER-ENTRY.MD
-  - docs/framework/WORKER-THINKING.MD
+  - vida/config/instructions/agent-definitions.worker-entry.md
+  - vida/config/instructions/instruction-contracts.worker-thinking.md
 input_contract:
   required_inputs:
     - worker_packet

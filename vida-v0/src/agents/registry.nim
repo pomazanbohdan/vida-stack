@@ -1,7 +1,7 @@
 ## VIDA Capability Registry — typed capability checks and task-class compatibility.
 ##
 ## Replaces `capability-registry.py` (138 lines).
-## Provides task-class → subagent compatibility validation
+## Provides task-class → agent-backend compatibility validation
 ## based on write_scope, capability_band, and forbidden capabilities.
 
 import std/[json, os, strutils, tables, sets, algorithm, sequtils]
@@ -40,7 +40,7 @@ let TaskClassRequirements* = {
 
 proc capabilityEntry(name: string, payload: JsonNode): JsonNode =
   %*{
-    "subagent": name,
+    "agent_backend": name,
     "backend_class": dottedGetStr(payload, "subagent_backend_class"),
     "role": dottedGetStr(payload, "role"),
     "write_scope": dottedGetStr(payload, "write_scope", "none"),
@@ -49,13 +49,13 @@ proc capabilityEntry(name: string, payload: JsonNode): JsonNode =
     "billing_tier": dottedGetStr(payload, "billing_tier"),
     "speed_tier": dottedGetStr(payload, "speed_tier"),
     "quality_tier": dottedGetStr(payload, "quality_tier"),
-    "web_search_wired": subagentHasWebSearchWiring(payload),
+    "web_search_wired": agentBackendHasWebSearchWiring(payload),
   }
 
 # ─────────────────────────── Registry Builder ───────────────────────────
 
 proc buildRegistry*(cfg: JsonNode): JsonNode =
-  let subagentsCfg = getSubagents(cfg)
+  let subagentsCfg = getAgentBackends(cfg)
   var subagents = newJObject()
   if subagentsCfg.kind == JObject:
     for name, payload in subagentsCfg:
@@ -73,7 +73,7 @@ proc buildRegistry*(cfg: JsonNode): JsonNode =
 
   result = %*{
     "generated_at": "runtime",
-    "subagents": subagents,
+    "agent_backends": subagents,
     "task_class_requirements": reqs,
   }
 
@@ -88,24 +88,24 @@ type CompatibilityResult* = object
   compatible*: bool
   reason*: string
   taskClass*: string
-  subagent*: string
+  agentBackend*: string
   requiredArtifacts*: seq[string]
 
-proc compatibilityFor*(taskClass, subagentName: string,
+proc compatibilityFor*(taskClass, agentBackendName: string,
                        registry: JsonNode = nil): CompatibilityResult =
   let reg = if registry.isNil: buildRegistry(loadRawConfig()) else: registry
-  let subagent = reg{"subagents"}{subagentName}
+  let agentBackend = reg{"agent_backends"}{agentBackendName}
   result.taskClass = taskClass
-  result.subagent = subagentName
+  result.agentBackend = agentBackendName
 
-  if subagent.isNil or subagent.kind != JObject:
+  if agentBackend.isNil or agentBackend.kind != JObject:
     result.compatible = false
-    result.reason = "unknown_subagent"
+    result.reason = "unknown_agent_backend"
     return
 
   let req = requirementFor(taskClass)
-  let capBand = splitCsv(subagent{"capability_band"}).mapIt(it.toLowerAscii).toHashSet
-  let writeScope = dottedGetStr(subagent, "write_scope", "none")
+  let capBand = splitCsv(agentBackend{"capability_band"}).mapIt(it.toLowerAscii).toHashSet
+  let writeScope = dottedGetStr(agentBackend, "write_scope", "none")
   var reasons: seq[string] = @[]
 
   if writeScope notin req.allowedWriteScopes:
@@ -129,7 +129,7 @@ proc compatibilityFor*(taskClass, subagentName: string,
 
 proc cmdRegistry*(args: seq[string]): int =
   if args.len == 0:
-    echo "Usage: vida-v0 registry <build|check <task_class> <subagent>>"
+    echo "Usage: vida-v0 registry <build|check <task_class> <agent_backend>>"
     return 2
 
   case args[0]
@@ -144,14 +144,14 @@ proc cmdRegistry*(args: seq[string]): int =
 
   of "check":
     if args.len < 3:
-      echo "Usage: vida-v0 registry check <task_class> <subagent>"
+      echo "Usage: vida-v0 registry check <task_class> <agent_backend>"
       return 2
     let cr = compatibilityFor(args[1], args[2])
     let payload = normalizeJson(%*{
       "compatible": cr.compatible,
       "reason": cr.reason,
       "task_class": cr.taskClass,
-      "subagent": cr.subagent,
+      "agent_backend": cr.agentBackend,
       "required_artifacts": cr.requiredArtifacts,
     })
     if "--json" in args: echo pretty(payload) else: echo renderToon(payload)

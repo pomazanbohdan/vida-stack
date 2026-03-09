@@ -167,10 +167,10 @@ proc deriveRuntimeSurface*(
 proc projectRoutePayload*(route: JsonNode): JsonNode =
   let routeLane = policyValue(route{"route_lane"}, "")
   let nextAction = routeNextAction(route)
-  let selectedSubagent = policyValue(route{"selected_subagent"}, "")
+  let selectedAgentBackend = policyValue(route{"selected_agent_backend"}, "")
 
   var intents: seq[string] = @["projection.refresh", "subscription.notify"]
-  if selectedSubagent.len > 0:
+  if selectedAgentBackend.len > 0:
     addUnique(intents, "dispatch.eligible")
   if nextAction.len > 0:
     addUnique(intents, "checkpoint.write")
@@ -182,7 +182,7 @@ proc projectRoutePayload*(route: JsonNode): JsonNode =
       "task_class": route{"task_class"},
       "task_id": route{"task_id"},
       "route_lane": route{"route_lane"},
-      "selected_subagent": route{"selected_subagent"},
+      "selected_agent_backend": route{"selected_agent_backend"},
       "risk_class": route{"risk_class"},
     },
     "checkpoint": {

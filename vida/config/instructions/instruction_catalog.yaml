@@ -8,12 +8,21 @@ canonical_source_refs:
   - docs/product/spec/instruction-artifact-model.md
   - vida.config.yaml
 artifact_families:
-  agent_definitions: agent_definitions/
-  instruction_contracts: instruction_contracts/
-  prompt_templates: prompt_templates/
+  agent_definitions: agent-definitions.*
+  instruction_contracts: instruction-contracts.*
+  prompt_templates: prompt-templates.*
+  command_instructions: command-instructions.*
+  runtime_instructions: runtime-instructions.*
+  diagnostic_instructions: diagnostic-instructions.*
+  system_maps: system-maps.*
+  references: references.*
   skills: skills/
   bundles: bundles/
   activation: activation/
+versioning_policy:
+  latest_markdown_revision_only: true
+  markdown_footer_schema_version: 1
+  unresolved_version_tuple_is_blocking: true
 composition_order:
   - system_base
   - machine_binding

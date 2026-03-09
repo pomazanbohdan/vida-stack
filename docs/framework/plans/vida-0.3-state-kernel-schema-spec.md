@@ -58,8 +58,8 @@ Without this artifact:
 Primary local source basis:
 
 1. `AGENTS.md`
-2. `docs/framework/ORCHESTRATOR-ENTRY.MD`
-3. `docs/framework/thinking-protocol.md`
+2. `vida/config/instructions/agent-definitions.orchestrator-entry.md`
+3. `vida/config/instructions/instruction-contracts.thinking-protocol.md`
 4. `vida.config.yaml`
 5. `docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
 6. `docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
@@ -67,14 +67,14 @@ Primary local source basis:
 8. `docs/framework/history/plans/2026-03-08-vida-0.2-bridge-policy.md`
 9. `docs/framework/history/plans/2026-03-08-vida-0.3-command-tree-spec.md`
 10. `docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
-11. `docs/framework/beads-protocol.md`
-12. `docs/framework/todo-protocol.md`
-13. `docs/framework/task-state-reconciliation-protocol.md`
-14. `docs/framework/run-graph-protocol.md`
-15. `docs/framework/human-approval-protocol.md`
-16. `docs/framework/agent-system-protocol.md`
-17. `docs/framework/framework-memory-protocol.md`
-18. `docs/framework/silent-framework-diagnosis-protocol.md`
+11. `vida/config/instructions/runtime-instructions.beads-protocol.md`
+12. `vida/config/instructions/runtime-instructions.taskflow-protocol.md`
+13. `vida/config/instructions/runtime-instructions.task-state-reconciliation-protocol.md`
+14. `vida/config/instructions/runtime-instructions.run-graph-protocol.md`
+15. `vida/config/instructions/runtime-instructions.human-approval-protocol.md`
+16. `vida/config/instructions/instruction-contracts.agent-system-protocol.md`
+17. `vida/config/instructions/runtime-instructions.framework-memory-protocol.md`
+18. `vida/config/instructions/diagnostic-instructions.silent-framework-diagnosis-protocol.md`
 
 Bounded explorer lanes used for synthesis:
 
@@ -195,7 +195,7 @@ Freeze rule:
 
 Purpose:
 
-1. preserve TODO execution semantics inside the future kernel,
+1. preserve TaskFlow execution semantics inside the future kernel,
 2. keep workflow execution progress distinct from task lifecycle state,
 3. provide canonical active/next-step visibility without creating a second queue state engine.
 
@@ -698,3 +698,15 @@ Reason:
 1. the command surface is frozen,
 2. the state model it operates on is now frozen,
 3. the next missing kernel law is the instruction hierarchy and effective instruction composition that will govern command behavior over this state.
+-----
+artifact_path: framework/plans/vida-0.3-state-kernel-schema-spec
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-0.3-state-kernel-schema-spec.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:12:03+02:00
+changelog_ref: vida-0.3-state-kernel-schema-spec.changelog.jsonl
+P26-03-09T21: 44:13Z

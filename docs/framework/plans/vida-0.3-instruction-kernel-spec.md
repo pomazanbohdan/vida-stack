@@ -66,8 +66,8 @@ Without this artifact:
 Primary local source basis:
 
 1. `AGENTS.md`
-2. `docs/framework/ORCHESTRATOR-ENTRY.MD`
-3. `docs/framework/thinking-protocol.md`
+2. `vida/config/instructions/agent-definitions.orchestrator-entry.md`
+3. `vida/config/instructions/instruction-contracts.thinking-protocol.md`
 4. `vida.config.yaml`
 5. `docs/framework/history/research/2026-03-08-agentic-master-index.md`
 6. `docs/framework/history/research/2026-03-08-vida-direct-1.0-next-agent-compact-instruction.md`
@@ -80,14 +80,14 @@ Primary local source basis:
 13. `docs/framework/history/plans/2026-03-08-vida-0.2-bridge-policy.md`
 14. `docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
 15. `docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md`
-16. `docs/framework/agent-definition-protocol.md`
+16. `vida/config/instructions/agent-definitions.protocol.md`
 17. `docs/framework/templates/instruction-contract.yaml`
 18. `docs/framework/templates/prompt-template-config.yaml`
-19. `docs/framework/project-overlay-protocol.md`
-20. `docs/framework/instruction-activation-protocol.md`
-21. `docs/framework/agent-system-protocol.md`
-22. `docs/framework/framework-memory-protocol.md`
-23. `docs/framework/silent-framework-diagnosis-protocol.md`
+19. `vida/config/instructions/runtime-instructions.project-overlay-protocol.md`
+20. `vida/config/instructions/instruction-contracts.instruction-activation-protocol.md`
+21. `vida/config/instructions/instruction-contracts.agent-system-protocol.md`
+22. `vida/config/instructions/runtime-instructions.framework-memory-protocol.md`
+23. `vida/config/instructions/diagnostic-instructions.silent-framework-diagnosis-protocol.md`
 
 Bounded explorer lanes used for synthesis:
 
@@ -656,3 +656,15 @@ Reason:
 2. the state model is frozen,
 3. the instruction hierarchy and composition law are now frozen,
 4. the next blocker is defining how `0.1` artifacts and versions migrate safely into direct `1.0` with fail-closed startup checks and bounded rollback law.
+-----
+artifact_path: framework/plans/vida-0.3-instruction-kernel-spec
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-0.3-instruction-kernel-spec.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:12:03+02:00
+changelog_ref: vida-0.3-instruction-kernel-spec.changelog.jsonl
+P26-03-09T21: 44:13Z

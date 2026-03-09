@@ -168,8 +168,8 @@ Because later development may happen in another environment, every continuation 
 Minimum continuation bundle:
 
 1. `AGENTS.md`
-2. `docs/framework/ORCHESTRATOR-ENTRY.MD`
-3. `docs/framework/thinking-protocol.md`
+2. `vida/config/instructions/agent-definitions.orchestrator-entry.md`
+3. `vida/config/instructions/instruction-contracts.thinking-protocol.md`
 4. `vida.config.yaml`
 5. `docs/framework/history/research/2026-03-08-agentic-master-index.md`
 6. this file
@@ -329,3 +329,15 @@ Deferral rule:
 1. The exact future memory-kernel and doctor-runtime contracts remain later artifacts and must not be improvised during route/parity slicing.
 2. The exact serialized parity fixture formats remain open until parity work is completed.
 3. A rolling active artifact-level next-step file is the current continuation strategy for the remaining route work; if later continuation proves this too ambiguous, it may be split into explicit per-slice next-step files through a future tracked update.
+-----
+artifact_path: framework/plans/vida-direct-1.0-compact-continuation-plan
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-direct-1.0-compact-continuation-plan.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:12:03+02:00
+changelog_ref: vida-direct-1.0-compact-continuation-plan.changelog.jsonl
+P26-03-09T21: 44:13Z

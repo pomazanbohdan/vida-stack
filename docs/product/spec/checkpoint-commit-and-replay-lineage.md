@@ -112,3 +112,15 @@ Replay runs should carry:
 3. replay/fork never rewrites canonical receipts
 4. grouped projection consistency must not collapse entity ownership
 5. duplicate delivery safety is mandatory once delayed checkpoint commits are introduced
+
+-----
+artifact_path: product/spec/checkpoint-commit-and-replay-lineage
+artifact_type: product_spec
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/product/spec/checkpoint-commit-and-replay-lineage.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-09T20:28:59+02:00
+changelog_ref: checkpoint-commit-and-replay-lineage.changelog.jsonl

@@ -185,3 +185,15 @@ Borrowed patterns must not violate these invariants:
 5. `approval` remains distinct from technical validation
 6. route/assignment decisions remain inspectable and receipt-backed
 7. vendor runtime checkpoints, threads, bookmarks, tokens, or middleware stacks must never become implicit root law
+
+-----
+artifact_path: product/spec/external-pattern-borrow-map
+artifact_type: product_spec
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/product/spec/external-pattern-borrow-map.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-09T20:28:59+02:00
+changelog_ref: external-pattern-borrow-map.changelog.jsonl

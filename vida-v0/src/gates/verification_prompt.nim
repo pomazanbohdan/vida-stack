@@ -40,7 +40,10 @@ proc verificationPromptText*(originalPrompt, taskClass, verificationTaskClass: s
   let dominant = effectiveSummary{"dominant_finding"}
   let dominantCluster = dottedGetStr(dominant, "cluster_id")
   let dominantSample = dottedGetStr(dominant, "sample")
-  let successSubagents = jsonStringList(effectiveSummary{"success_subagents"})
+  let successAgentBackends =
+    block:
+      let current = jsonStringList(effectiveSummary{"success_agent_backends"})
+      if current.len > 0: current else: jsonStringList(effectiveSummary{"success_subagents"})
   let conflictClusters =
     if effectiveSummary{"open_conflicts"}.kind == JArray:
       effectiveSummary{"open_conflicts"}
@@ -52,16 +55,16 @@ proc verificationPromptText*(originalPrompt, taskClass, verificationTaskClass: s
   var lines = @[
     "Runtime Role Packet:",
     "- worker_lane_confirmed: true",
-    "- worker_role: subagent",
-    "- orchestrator_entry_fallback: docs/framework/ORCHESTRATOR-ENTRY.MD",
-    "- worker_entry: " & $worker_packet.SubagentEntryDoc,
-    "- worker_thinking: " & $worker_packet.SubagentThinkingDoc,
+    "- worker_role: worker",
+    "- orchestrator_entry_fallback: vida/config/instructions/agent-definitions.orchestrator-entry.md",
+    "- worker_entry: " & $worker_packet.WorkerEntryDoc,
+    "- worker_thinking: " & $worker_packet.WorkerThinkingDoc,
     "- impact_tail_policy: required_for_non_stc",
     "- impact_analysis_scope: bounded_to_assigned_scope",
     "Worker Entry Contract:",
     "- You are a bounded worker, not the orchestrator.",
-    "- Follow " & $worker_packet.SubagentEntryDoc & " as the worker-level entry contract.",
-    "- Follow " & $worker_packet.SubagentThinkingDoc & " as the worker thinking subset.",
+    "- Follow " & $worker_packet.WorkerEntryDoc & " as the worker-level entry contract.",
+    "- Follow " & $worker_packet.WorkerThinkingDoc & " as the worker thinking subset.",
     "- Do not bootstrap repository-wide orchestration policy.",
     "- Stay inside the provided scope and return evidence in the requested format.",
     "- Prefer concrete findings over workflow narration.",
@@ -96,7 +99,7 @@ proc verificationPromptText*(originalPrompt, taskClass, verificationTaskClass: s
     "- decision_ready: " & $dottedGetBool(effectiveSummary, "decision_ready", false),
     "- dominant_cluster_id: " & (if dominantCluster.len > 0: dominantCluster else: "(none)"),
     "- dominant_sample: " & (if dominantSample.len > 0: dominantSample else: "(none)"),
-    "- success_subagents: " & (if successSubagents.len > 0: successSubagents.join(", ") else: "(none)"),
+    "- success_agent_backends: " & (if successAgentBackends.len > 0: successAgentBackends.join(", ") else: "(none)"),
     "- open_conflicts: " & $conflictClusters.len,
     "",
     "Success lane excerpts:",
@@ -112,7 +115,7 @@ proc verificationPromptText*(originalPrompt, taskClass, verificationTaskClass: s
       let excerpt = previewText(readFile(outputFile), 320)
       if excerpt.len == 0:
         continue
-      lines.add("- " & dottedGetStr(item, "subagent", "(unknown)") & ": " & excerpt)
+      lines.add("- " & dottedGetStr(item, "agent_backend", "(unknown)") & ": " & excerpt)
 
   if conflictClusters.len > 0:
     lines.add("")
@@ -120,10 +123,13 @@ proc verificationPromptText*(originalPrompt, taskClass, verificationTaskClass: s
     for cluster in conflictClusters:
       let clusterId = dottedGetStr(cluster, "cluster_id")
       let sample = dottedGetStr(cluster, "sample")
-      let subagentList = jsonStringList(cluster{"subagents"})
-      let subagents = if subagentList.len > 0: subagentList.join(", ") else: "(none)"
+      let agentBackendList =
+        block:
+          let current = jsonStringList(cluster{"agent_backends"})
+          if current.len > 0: current else: jsonStringList(cluster{"subagents"})
+      let agentBackends = if agentBackendList.len > 0: agentBackendList.join(", ") else: "(none)"
       lines.add("- " & (if clusterId.len > 0: clusterId else: "(none)") &
-        " | subagents=" & subagents &
+        " | agent_backends=" & agentBackends &
         " | sample=" & (if sample.len > 0: sample else: "(empty)"))
 
   lines.join("\n").strip() & "\n"

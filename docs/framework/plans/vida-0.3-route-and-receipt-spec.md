@@ -59,8 +59,8 @@ Without this artifact:
 Primary local source basis:
 
 1. `AGENTS.md`
-2. `docs/framework/ORCHESTRATOR-ENTRY.MD`
-3. `docs/framework/thinking-protocol.md`
+2. `vida/config/instructions/agent-definitions.orchestrator-entry.md`
+3. `vida/config/instructions/instruction-contracts.thinking-protocol.md`
 4. `vida.config.yaml`
 5. `docs/framework/history/research/2026-03-08-agentic-master-index.md`
 6. `docs/framework/history/research/2026-03-08-vida-direct-1.0-next-agent-compact-instruction.md`
@@ -73,8 +73,8 @@ Primary local source basis:
 13. `docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
 14. `docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
 15. `docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md`
-16. `docs/framework/agent-definition-protocol.md`
-17. `docs/framework/agent-system-protocol.md`
+16. `vida/config/instructions/agent-definitions.protocol.md`
+17. `vida/config/instructions/instruction-contracts.agent-system-protocol.md`
 
 Bounded explorer lanes used for synthesis:
 
@@ -673,3 +673,15 @@ Completing `Part B` unlocks:
 1. Exact receipt payload schemas and serialization formats remain open.
 2. Exact operator output rendering for `boot|status|doctor|task` remains open.
 3. Final parity thresholds and cutover gates remain downstream.
+-----
+artifact_path: framework/plans/vida-0.3-route-and-receipt-spec
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-0.3-route-and-receipt-spec.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:12:03+02:00
+changelog_ref: vida-0.3-route-and-receipt-spec.changelog.jsonl
+P26-03-09T21: 44:13Z

@@ -1,7 +1,7 @@
 ## VIDA v0 — Nim CLI entry point.
 ##
 ## Experimental Nim runtime for selected VIDA script surfaces.
-## Usage: vida-v0 <subcommand> [args...]
+## Usage: vida-v0 <command> [args...]
 
 import std/os
 import core/config
@@ -43,11 +43,11 @@ Commands:
   draft-execution-spec Draft execution spec validator
   spec-intake Spec intake validator
   spec-delta Spec delta validator
-  system    Subagent system runtime
+  system    Agent-backend system runtime
   registry  Capability registry
   route     Route resolution and receipts
   lease     Resource lease management
-  pool      Subagent pool (borrow/release)
+  pool      Agent-backend pool (borrow/release)
   auth      Execution authorization gate
   worker    Worker packet validation
   coach     Coach review gate

@@ -34,7 +34,7 @@ agent_system:
 
   test "implementation route respects config-driven scoped write policy":
     let (_, route) = routeSnapshot("implementation", "vida-route-1")
-    check route["selected_subagent"].getStr() == "codex_cli"
+    check route["selected_agent_backend"].getStr() == "codex_cli"
     check route["write_scope"].getStr() == "scoped_only"
     check route["risk_class"].getStr() == "R2"
     check route["dispatch_policy"]["local_execution_allowed"].getStr() == "no"
@@ -222,18 +222,18 @@ defaults:
     check route["assignment_source"].getStr() == "root_config"
     check route["inventory_source"].getStr() == "overlay_runtime"
     check route["route_lane"].getStr() == "writer_lane"
-    check route["selected_subagent"].getStr() == "codex_cli"
-    check route["coach_plan"]["selected_subagent"].getStr() == "qwen_cli"
-    check route["verification_plan"]["selected_subagent"].getStr() == "gemini_cli"
+    check route["selected_agent_backend"].getStr() == "codex_cli"
+    check route["coach_plan"]["selected_agent_backend"].getStr() == "qwen_cli"
+    check route["verification_plan"]["selected_agent_backend"].getStr() == "gemini_cli"
 
-  test "route receipt hash is stable and changes with selected subagent":
+  test "route receipt hash is stable and changes with selected agent backend":
     let (_, route) = routeSnapshot("implementation", "vida-route-root-2")
     let firstHash = routeReceiptHash(route)
     let secondHash = routeReceiptHash(route)
     check firstHash == secondHash
 
     var mutated = route
-    mutated["selected_subagent"] = %"internal_subagents"
+    mutated["selected_agent_backend"] = %"internal_subagents"
     check routeReceiptHash(mutated) != firstHash
 
   test "route projection emits checkpoint and listener intents":

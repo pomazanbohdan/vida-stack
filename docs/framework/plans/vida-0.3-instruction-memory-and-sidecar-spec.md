@@ -310,5 +310,17 @@ This spec constrains implementation to:
 The next lawful follow-through after this spec is:
 
 1. update instruction-kernel, storage-kernel, and migration-kernel specs to reference the three-slice model,
-2. add TODO tasks for instruction-memory runtime and sidecar runtime,
+2. add TaskFlow tasks for instruction-memory runtime and sidecar runtime,
 3. implement minimal instruction-slice boot/migration scaffolding in the Rust binary.
+-----
+artifact_path: framework/plans/vida-0.3-instruction-memory-and-sidecar-spec
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-0.3-instruction-memory-and-sidecar-spec.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:12:03+02:00
+changelog_ref: vida-0.3-instruction-memory-and-sidecar-spec.changelog.jsonl
+P26-03-09T21: 44:13Z

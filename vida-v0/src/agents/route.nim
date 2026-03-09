@@ -1,6 +1,6 @@
 ## VIDA Route Resolution — route snapshot, receipt writing, mutation tracking.
 ##
-## Extracted from `subagent-dispatch.py` (5835 lines → ~350 lines route core).
+## Extracted from the legacy dispatch script into a focused route core.
 ## Builds route snapshots, writes receipts, tracks framework/project mutations,
 ## and provides route receipt hashing.
 
@@ -15,7 +15,7 @@ proc issueContractDir*(): string = vidaRoot() / ".vida" / "logs" / "issue-contra
 proc specIntakeDir*(): string = vidaRoot() / ".vida" / "logs" / "spec-intake"
 proc specDeltaDir*(): string = vidaRoot() / ".vida" / "logs" / "spec-deltas"
 proc draftExecSpecDir*(): string = vidaRoot() / ".vida" / "logs" / "draft-execution-specs"
-proc runLogPath*(): string = vidaRoot() / ".vida" / "logs" / "subagent-runs.jsonl"
+proc runLogPath*(): string = vidaRoot() / ".vida" / "logs" / "agent-backend-runs.jsonl"
 
 proc routeReceiptPath*(taskId, taskClass: string): string =
   routeReceiptDir() / (safeName(taskId, "task") & "." & safeName(taskClass, "tc") & ".route.json")
@@ -117,20 +117,20 @@ proc assignmentContext(snapshot: JsonNode, taskClass: string, externalFirstRequi
 
 proc rootCandidates(payload: JsonNode): seq[JsonNode] =
   let items = payload{"candidates"}
-  let selected = policyValue(payload{"selected_subagent"}, "")
+  let selected = policyValue(payload{"selected_agent_backend"}, "")
   var preferred: seq[JsonNode] = @[]
   var remaining: seq[JsonNode] = @[]
   if items.kind == JArray:
     for item in items:
       if item.kind == JObject:
-        if selected.len > 0 and policyValue(item{"subagent"}, "") == selected:
+        if selected.len > 0 and policyValue(item{"agent_backend"}, "") == selected:
           preferred.add(item)
         else:
           remaining.add(item)
   result = preferred & remaining
 
 proc routeCandidatesFromOverlay(taskClass: string, cfg: JsonNode): seq[JsonNode] =
-  let subagents = getSubagents(cfg)
+  let subagents = getAgentBackends(cfg)
   let reg = buildRegistry(cfg)
   if not subagents.isNil and subagents.kind == JObject:
     for name, subCfg in subagents:
@@ -139,7 +139,7 @@ proc routeCandidatesFromOverlay(taskClass: string, cfg: JsonNode): seq[JsonNode]
       let compat = compatibilityFor(taskClass, name, reg)
       if compat.compatible:
         result.add(%*{
-          "subagent": name,
+          "agent_backend": name,
           "compatible": true,
           "billing_tier": dottedGetStr(subCfg, "billing_tier", "unknown"),
           "speed_tier": dottedGetStr(subCfg, "speed_tier", "unknown"),
@@ -157,7 +157,7 @@ proc addUniqueAgent(target: var seq[string], agentId: string) =
 proc routeReceiptPayload*(route: JsonNode): JsonNode =
   %*{
     "task_class": route{"task_class"},
-    "selected_subagent": route{"selected_subagent"},
+    "selected_agent_backend": route{"selected_agent_backend"},
     "risk_class": route{"risk_class"},
     "coach_required": route{"coach_required"},
     "verification_required": route{"verification_required"},
@@ -177,7 +177,7 @@ proc routeSnapshot*(taskClass: string, taskId: string = ""): tuple[snapshot: Jso
   ## Build runtime snapshot and resolve route for a task class.
   let snapshot = runtimeSnapshot(taskId)
   let cfg = loadRawConfig()
-  let preferredSubagents = getRouteSubagents(cfg, taskClass)
+  let preferredAgentBackends = getRouteAgentBackends(cfg, taskClass)
   let configuredWriteScope = getRouteWriteScope(cfg, taskClass)
   let configuredExternalFirst = isExternalFirstRequired(cfg, taskClass) or
     taskClassBindingBool(taskClass, "external_first_required", false)
@@ -195,24 +195,24 @@ proc routeSnapshot*(taskClass: string, taskId: string = ""): tuple[snapshot: Jso
   else:
     candidates = routeCandidatesFromOverlay(taskClass, cfg)
 
-  var selectedSubagent =
+  var selectedAgentBackend =
     if usedRootSelection:
-      policyValue(rootSelection{"selected_subagent"}, "")
+      policyValue(rootSelection{"selected_agent_backend"}, "")
     elif candidates.len > 0:
-      policyValue(candidates[0]{"subagent"}, "")
+      policyValue(candidates[0]{"agent_backend"}, "")
     else:
       ""
-  if not usedRootSelection and preferredSubagents.len > 0:
-    for preferred in preferredSubagents:
+  if not usedRootSelection and preferredAgentBackends.len > 0:
+    for preferred in preferredAgentBackends:
       for candidate in candidates:
-        if policyValue(candidate{"subagent"}, "") == preferred:
-          selectedSubagent = preferred
+        if policyValue(candidate{"agent_backend"}, "") == preferred:
+          selectedAgentBackend = preferred
           break
-      if selectedSubagent == preferred:
+      if selectedAgentBackend == preferred:
         break
   var candidateWriteScope = "none"
   for candidate in candidates:
-    if policyValue(candidate{"subagent"}, "") == selectedSubagent:
+    if policyValue(candidate{"agent_backend"}, "") == selectedAgentBackend:
       candidateWriteScope = policyValue(candidate{"write_scope"}, "none")
       break
   let effectiveWriteScope = if configuredWriteScope.len > 0 and configuredWriteScope != "none": configuredWriteScope else: candidateWriteScope
@@ -235,7 +235,7 @@ proc routeSnapshot*(taskClass: string, taskId: string = ""): tuple[snapshot: Jso
     if kernelAssignmentReady() and riskClass in ["R2", "R3"]:
       resolveAssignmentForTaskClass(
         "coach",
-        assignmentContext(snapshot, "coach", false, (if selectedSubagent.len > 0: @[selectedSubagent] else: @[])),
+        assignmentContext(snapshot, "coach", false, (if selectedAgentBackend.len > 0: @[selectedAgentBackend] else: @[])),
       )
     else:
       newJObject()
@@ -245,10 +245,10 @@ proc routeSnapshot*(taskClass: string, taskId: string = ""): tuple[snapshot: Jso
   let verificationIndependence =
     if verificationLane.len > 0: laneIndependenceClass(verificationLane) else: "none"
   var verificationExcluded: seq[string] = @[]
-  addUniqueAgent(verificationExcluded, selectedSubagent)
+  addUniqueAgent(verificationExcluded, selectedAgentBackend)
   if verificationIndependence == "not_same_route_chain":
-    addUniqueAgent(verificationExcluded, policyValue(analysisSelection{"selected_subagent"}, ""))
-    addUniqueAgent(verificationExcluded, policyValue(coachSelection{"selected_subagent"}, ""))
+    addUniqueAgent(verificationExcluded, policyValue(analysisSelection{"selected_agent_backend"}, ""))
+    addUniqueAgent(verificationExcluded, policyValue(coachSelection{"selected_agent_backend"}, ""))
   let verificationSelection =
     if kernelAssignmentReady() and verificationTaskClass.len > 0 and riskClass != "R0":
       resolveAssignmentForTaskClass(
@@ -261,7 +261,7 @@ proc routeSnapshot*(taskClass: string, taskId: string = ""): tuple[snapshot: Jso
   let route = %*{
     "task_class": taskClass,
     "task_id": taskId,
-    "selected_subagent": selectedSubagent,
+    "selected_agent_backend": selectedAgentBackend,
     "candidates": candidates,
     "risk_class": riskClass,
     "write_scope": effectiveWriteScope,
@@ -276,16 +276,16 @@ proc routeSnapshot*(taskClass: string, taskId: string = ""): tuple[snapshot: Jso
     "analysis_plan": {
       "required": (if analysisReq: "yes" else: "no"),
       "receipt_required": (if analysisReq: "yes" else: "no"),
-      "selected_subagent": analysisSelection{"selected_subagent"},
+      "selected_agent_backend": analysisSelection{"selected_agent_backend"},
       "reason": policyValue(analysisSelection{"reason"}, (if analysisReq: "analysis_phase_required" else: "analysis_not_required")),
     },
     "coach_plan": {
       "required": (if riskClass in ["R2", "R3"]: "yes" else: "no"),
       "route_task_class": "coach",
-      "selected_subagent": coachSelection{"selected_subagent"},
-      "selected_subagents":
-        (if policyValue(coachSelection{"selected_subagent"}, "").len > 0:
-          %(@[policyValue(coachSelection{"selected_subagent"}, "")])
+      "selected_agent_backend": coachSelection{"selected_agent_backend"},
+      "selected_agent_backends":
+        (if policyValue(coachSelection{"selected_agent_backend"}, "").len > 0:
+          %(@[policyValue(coachSelection{"selected_agent_backend"}, "")])
         else:
           %(@[])),
       "reason": policyValue(coachSelection{"reason"}, (if riskClass in ["R2", "R3"]: "no_eligible_coach" else: "coach_not_required")),
@@ -293,7 +293,7 @@ proc routeSnapshot*(taskClass: string, taskId: string = ""): tuple[snapshot: Jso
     "verification_plan": {
       "required": (if riskClass != "R0": "yes" else: "no"),
       "route_task_class": verificationTaskClass,
-      "selected_subagent": verificationSelection{"selected_subagent"},
+      "selected_agent_backend": verificationSelection{"selected_agent_backend"},
       "reason":
         (if riskClass != "R0":
           policyValue(verificationSelection{"reason"}, "no_eligible_verifier")
@@ -377,7 +377,7 @@ proc mutationSnapshot*(roots: seq[string], excludeSegments: seq[string] = @[]): 
 
 # ─────────────────────────── Ensemble ───────────────────────────
 
-proc ensembleSubagents*(route: JsonNode): seq[string] =
+proc ensembleAgentBackends*(route: JsonNode): seq[string] =
   var seen: seq[string] = @[]
   let fanout = route{"fanout_subagents"}
   if not fanout.isNil and fanout.kind == JArray:
@@ -385,7 +385,7 @@ proc ensembleSubagents*(route: JsonNode): seq[string] =
       let name = item.getStr()
       if name.len > 0 and name notin seen:
         seen.add(name)
-  let primary = policyValue(route{"selected_subagent"}, "")
+  let primary = policyValue(route{"selected_agent_backend"}, "")
   if primary.len > 0 and primary notin seen:
     seen.insert(primary, 0)
   return seen

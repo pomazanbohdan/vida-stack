@@ -53,8 +53,8 @@ proc coachFeedbackSummary(decisions: seq[JsonNode]): string =
     let selected = if feedback.len > 0: feedback elif fallbackReason.len > 0: fallbackReason else: fallbackAnswer
     if selected.len == 0:
       continue
-    let subagent = dottedGetStr(decision, "subagent")
-    let line = (if subagent.len > 0: "[" & subagent & "] " else: "") & selected
+    let agentBackend = dottedGetStr(decision, "agent_backend")
+    let line = (if agentBackend.len > 0: "[" & agentBackend & "] " else: "") & selected
     if line notin lines:
       lines.add(line)
   lines.join("\n")

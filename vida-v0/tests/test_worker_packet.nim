@@ -6,9 +6,9 @@ import ../src/gates/worker_packet
 const ValidPrompt = """
 Runtime Role Packet:
 - worker_lane_confirmed: true
-- worker_role: subagent
-- worker_entry: docs/framework/SUBAGENT-ENTRY.MD
-- worker_thinking: docs/framework/SUBAGENT-THINKING.MD
+- worker_role: worker
+- worker_entry: vida/config/instructions/agent-definitions.worker-entry.md
+- worker_thinking: vida/config/instructions/instruction-contracts.worker-thinking.md
 - impact_tail_policy: required_for_non_stc
 - impact_analysis_scope: bounded_to_assigned_scope
 Task: implement
@@ -52,9 +52,9 @@ suite "worker packet":
     let text = """
 Runtime Role Packet:
 - worker_lane_confirmed: true
-- worker_role: subagent
-- worker_entry: docs/framework/SUBAGENT-ENTRY.MD
-- worker_thinking: docs/framework/SUBAGENT-THINKING.MD
+- worker_role: worker
+- worker_entry: vida/config/instructions/agent-definitions.worker-entry.md
+- worker_thinking: vida/config/instructions/instruction-contracts.worker-thinking.md
 - impact_tail_policy: required_for_non_stc
 - impact_analysis_scope: bounded_to_assigned_scope
 Task: something
@@ -161,9 +161,9 @@ Trailing text after the payload.
     let text = """
 Runtime Role Packet:
 - worker_lane_confirmed: true
-- worker_role: subagent
-- worker_entry: docs/framework/SUBAGENT-ENTRY.MD
-- worker_thinking: docs/framework/SUBAGENT-THINKING.MD
+- worker_role: worker
+- worker_entry: vida/config/instructions/agent-definitions.worker-entry.md
+- worker_thinking: vida/config/instructions/instruction-contracts.worker-thinking.md
 - impact_tail_policy: required_for_non_stc
 - impact_analysis_scope: bounded_to_assigned_scope
 Task: mentions Scope: inline only

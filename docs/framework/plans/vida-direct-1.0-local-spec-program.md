@@ -461,3 +461,15 @@ Speed comes from:
 3. letting cheap agents implement bounded slices from packets,
 4. integrating through one strong verifier/integrator lane,
 5. testing the binary locally and cheaply at every layer.
+-----
+artifact_path: framework/plans/vida-direct-1.0-local-spec-program
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-direct-1.0-local-spec-program.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:12:03+02:00
+changelog_ref: vida-direct-1.0-local-spec-program.changelog.jsonl
+P26-03-09T21: 44:13Z

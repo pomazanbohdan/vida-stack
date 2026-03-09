@@ -63,20 +63,20 @@ Without this boundary, later kernel specs would risk freezing internal schemas b
 Local source basis:
 
 1. `AGENTS.md`
-2. `docs/framework/ORCHESTRATOR-ENTRY.MD`
-3. `docs/framework/command-layer-protocol.md`
-4. `docs/framework/orchestration-protocol.md`
-5. `docs/framework/protocol-index.md`
-6. `docs/framework/agent-definition-protocol.md`
-7. `docs/framework/framework-memory-protocol.md`
-8. `docs/framework/silent-framework-diagnosis-protocol.md`
-9. `docs/framework/commands.md`
-10. `docs/framework/commands/vida-research.md`
-11. `docs/framework/commands/vida-spec.md`
-12. `docs/framework/commands/vida-form-task.md`
-13. `docs/framework/commands/vida-implement.md`
-14. `docs/framework/commands/vida-bug-fix.md`
-15. `docs/framework/commands/vida-status.md`
+2. `vida/config/instructions/agent-definitions.orchestrator-entry.md`
+3. `vida/config/instructions/command-instructions.command-layer-protocol.md`
+4. `vida/config/instructions/instruction-contracts.orchestration-protocol.md`
+5. `vida/config/instructions/system-maps.protocol-index.md`
+6. `vida/config/instructions/agent-definitions.protocol.md`
+7. `vida/config/instructions/runtime-instructions.framework-memory-protocol.md`
+8. `vida/config/instructions/diagnostic-instructions.silent-framework-diagnosis-protocol.md`
+9. `vida/config/instructions/command-instructions.commands.md`
+10. `vida/config/instructions/command-instructions.vida-research.md`
+11. `vida/config/instructions/command-instructions.vida-spec.md`
+12. `vida/config/instructions/command-instructions.vida-form-task.md`
+13. `vida/config/instructions/command-instructions.vida-implement.md`
+14. `vida/config/instructions/command-instructions.vida-bug-fix.md`
+15. `vida/config/instructions/command-instructions.vida-status.md`
 16. `docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
 17. `docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
 18. `docs/framework/history/plans/2026-03-08-vida-0.2-semantic-freeze-spec.md`
@@ -337,7 +337,7 @@ Preserve:
 
 Do not freeze:
 
-1. `docs/framework/commands.md` or `docs/framework/commands/vida-*.md` as product command topology,
+1. `vida/config/instructions/command-instructions.commands.md` or `docs/framework/commands/vida-*.md` as product command topology,
 2. `bash docs/framework/history/_vida-source/scripts/...` or `python3 docs/framework/history/_vida-source/scripts/...` entrypoints,
 3. pack/helper verbs such as `detect|start|scaffold|end`,
 4. shell profiles such as `lean|standard|full`,
@@ -508,3 +508,15 @@ Reason:
 
 1. command semantics are now frozen at the operator boundary,
 2. the next blocker is the authoritative state vocabulary and mutation model that `vida task ...`, `vida status`, `vida boot`, and `vida doctor` must read or enforce.
+-----
+artifact_path: framework/plans/vida-0.3-command-tree-spec
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-0.3-command-tree-spec.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:12:03+02:00
+changelog_ref: vida-0.3-command-tree-spec.changelog.jsonl
+P26-03-09T21: 44:13Z

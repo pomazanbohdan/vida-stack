@@ -35,9 +35,9 @@ Local source basis:
 2. `docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
 3. `docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
 4. `docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
-5. `docs/framework/beads-protocol.md`
-6. `docs/framework/agent-system-protocol.md`
-7. `docs/framework/agent-definition-protocol.md`
+5. `vida/config/instructions/runtime-instructions.beads-protocol.md`
+6. `vida/config/instructions/instruction-contracts.agent-system-protocol.md`
+7. `vida/config/instructions/agent-definitions.protocol.md`
 8. `docs/framework/history/research/2026-03-08-agentic-cheap-worker-packet-system.md`
 9. `docs/framework/history/research/2026-03-08-agentic-proof-obligation-registry.md`
 
@@ -287,3 +287,15 @@ During the bridge era:
 1. `0.1` is optimized for correctness, speed, and exportability,
 2. `1.0` is optimized for direct productization,
 3. anything that would be implemented twice must be stopped and rerouted into the binary spec path.
+-----
+artifact_path: framework/plans/vida-0.2-bridge-policy
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-0.2-bridge-policy.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:12:03+02:00
+changelog_ref: vida-0.2-bridge-policy.changelog.jsonl
+P26-03-09T21: 44:13Z

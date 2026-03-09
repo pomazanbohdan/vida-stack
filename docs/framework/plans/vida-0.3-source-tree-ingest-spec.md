@@ -43,7 +43,7 @@ Boot-ingest rule:
 
 Runtime nuance:
 
-1. epic/task/TODO/tracing data belongs to `workflow_runtime` in the DB, not to any Git source tree,
+1. epic/task/TaskFlow/tracing data belongs to `workflow_runtime` in the DB, not to any Git source tree,
 2. worker operational data belongs to `worker_runtime` in the DB, not to the external sync trees.
 
 ---
@@ -146,3 +146,15 @@ This spec requires:
 2. boot-time ingest and migration receipts,
 3. schema support for source metadata and logical hierarchy,
 4. implementation tasks ahead of high-level protocol runtime completion.
+-----
+artifact_path: framework/plans/vida-0.3-source-tree-ingest-spec
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-0.3-source-tree-ingest-spec.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:12:03+02:00
+changelog_ref: vida-0.3-source-tree-ingest-spec.changelog.jsonl
+P26-03-09T21: 44:13Z

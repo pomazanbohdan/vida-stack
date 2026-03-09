@@ -59,8 +59,8 @@ Without this artifact:
 Primary local source basis:
 
 1. `AGENTS.md`
-2. `docs/framework/ORCHESTRATOR-ENTRY.MD`
-3. `docs/framework/thinking-protocol.md`
+2. `vida/config/instructions/agent-definitions.orchestrator-entry.md`
+3. `vida/config/instructions/instruction-contracts.thinking-protocol.md`
 4. `vida.config.yaml`
 5. `docs/framework/history/research/2026-03-08-agentic-master-index.md`
 6. `docs/framework/history/research/2026-03-08-vida-direct-1.0-next-agent-compact-instruction.md`
@@ -668,3 +668,15 @@ Completing parity/conformance unlocks:
 1. Exact instantiated tolerance values remain for later implementation/test policy.
 2. Exact fixture payload schemas and rendering remain implementation detail.
 3. Real binary promotion remains contingent on satisfying the frozen cutover gates with actual artifacts and tests.
+-----
+artifact_path: framework/plans/vida-0.3-parity-and-conformance-spec
+artifact_type: plan
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/framework/plans/vida-0.3-parity-and-conformance-spec.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-10T01:12:03+02:00
+changelog_ref: vida-0.3-parity-and-conformance-spec.changelog.jsonl
+P26-03-09T21: 44:13Z

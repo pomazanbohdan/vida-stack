@@ -1,38 +1,38 @@
-## VIDA Dispatch — CLI command assembly and subagent availability.
+## VIDA Dispatch — CLI command assembly and agent-backend availability.
 ##
 ## Closes GAPs D & E from config parameter analysis:
-## - GAP D: builds the full CLI command from SubagentDispatchConfig fields
-## - GAP E: checks subagent availability via detect_command → findExe
+## - GAP D: builds the full CLI command from dispatch config fields
+## - GAP E: checks agent-backend availability via detect_command → findExe
 ##
-## Replaces subagent-dispatch.py lines 429-510 (build_dispatch_command_line,
-## build_dispatch_env, check_subagent_available)
+## Replaces the legacy dispatch helper flow for command assembly,
+## environment projection, and availability checks.
 
 import std/[json, os, osproc, strutils, tables]
 import ./[utils, config]
 
-# ─────────────────────────── Subagent Availability (GAP E) ───────────────────────────
+# ─────────────────────────── Agent Backend Availability (GAP E) ───────────────────────────
 
-proc isSubagentAvailable*(cfg: JsonNode, subagentName: string): bool =
-  ## Check if a subagent's CLI command is available.
-  ## Replaces subagent-system.py's shutil.which(detect_command) pattern.
-  if not isSubagentEnabled(cfg, subagentName):
+proc isAgentBackendAvailable*(cfg: JsonNode, agentBackendName: string): bool =
+  ## Check if an agent backend's CLI command is available.
+  ## Replaces the legacy detect-command availability check pattern.
+  if not isAgentBackendEnabled(cfg, agentBackendName):
     return false
   let backendClass = dottedGetStr(cfg,
-    "agent_system.subagents." & subagentName & ".subagent_backend_class")
+    "agent_system.subagents." & agentBackendName & ".subagent_backend_class")
   if backendClass == "internal":
-    return true  # internal subagents are always available
-  let detectCmd = getSubagentDetectCommand(cfg, subagentName)
+    return true
+  let detectCmd = getAgentBackendDetectCommand(cfg, agentBackendName)
   if detectCmd.len == 0:
     return false
   return findExe(detectCmd).len > 0
 
-proc getAvailableSubagents*(cfg: JsonNode): seq[string] =
-  ## Get all available subagent names.
-  let subagents = getSubagents(cfg)
+proc getAvailableAgentBackends*(cfg: JsonNode): seq[string] =
+  ## Get all available agent-backend names.
+  let subagents = getAgentBackends(cfg)
   if subagents.kind != JObject:
     return @[]
   for name, _ in subagents:
-    if isSubagentAvailable(cfg, name):
+    if isAgentBackendAvailable(cfg, name):
       result.add(name)
 
 # ─────────────────────────── Dispatch Command Builder (GAP D) ───────────────────────────
@@ -46,7 +46,7 @@ type DispatchCommand* = object
 
 proc buildDispatchCommand*(
     cfg: JsonNode,
-    subagentName: string,
+    agentBackendName: string,
     prompt: string,
     model: string = "",
     workdir: string = "",
@@ -55,13 +55,13 @@ proc buildDispatchCommand*(
     outputFile: string = ""
   ): DispatchCommand =
   ## Build the full CLI command line from dispatch config.
-  ## Replaces subagent-dispatch.py build_dispatch_command_line (lines 429-480).
-  let dispatch = getSubagentDispatch(cfg, subagentName)
+  ## Replaces the legacy dispatch command assembly flow.
+  let dispatch = getAgentBackendDispatch(cfg, agentBackendName)
 
   # 1. Command
   let command = dottedGetStr(dispatch, "command")
   if command.len == 0:
-    raise newException(ValueError, "No dispatch.command for subagent: " & subagentName)
+    raise newException(ValueError, "No dispatch.command for agent backend: " & agentBackendName)
   result.args.add(command)
 
   # 2. Pre-static args (e.g. [-c, model_reasoning_effort="high", -a, never])
@@ -119,7 +119,7 @@ proc buildDispatchCommand*(
   # 7. Model flag
   let modelFlag = dottedGetStr(dispatch, "model_flag")
   let actualModel = if model.len > 0: model
-    else: dottedGetStr(cfg, "agent_system.subagents." & subagentName & ".default_model")
+    else: dottedGetStr(cfg, "agent_system.subagents." & agentBackendName & ".default_model")
   if modelFlag.len > 0 and actualModel.len > 0:
     result.args.add(modelFlag)
     result.args.add(actualModel)
@@ -129,7 +129,7 @@ proc buildDispatchCommand*(
   if result.outputMode == "file":
     let outFlag = dottedGetStr(dispatch, "output_flag")
     result.outputFile = if outputFile.len > 0: outputFile
-      else: getTempDir() / "vida-dispatch-" & subagentName & ".out"
+      else: getTempDir() / "vida-dispatch-" & agentBackendName & ".out"
     if outFlag.len > 0:
       result.args.add(outFlag)
       result.args.add(result.outputFile)
@@ -154,33 +154,33 @@ proc buildDispatchCommand*(
 
 # ─────────────────────────── Timeout Helpers ───────────────────────────
 
-proc getTimeout*(cfg: JsonNode, subagentName: string,
+proc getTimeout*(cfg: JsonNode, agentBackendName: string,
                  key: string, default: int): int =
   ## Get a timeout value from dispatch config with a floor of 5 seconds.
-  ## Replaces subagent-dispatch.py's _dispatch_timeout helper.
-  let dispatch = getSubagentDispatch(cfg, subagentName)
+  ## Replaces the legacy dispatch timeout helper.
+  let dispatch = getAgentBackendDispatch(cfg, agentBackendName)
   max(5, dottedGetInt(dispatch, key, default))
 
-proc startupTimeout*(cfg: JsonNode, subagentName: string): int =
-  getTimeout(cfg, subagentName, "startup_timeout_seconds", 60)
+proc startupTimeout*(cfg: JsonNode, agentBackendName: string): int =
+  getTimeout(cfg, agentBackendName, "startup_timeout_seconds", 60)
 
-proc noOutputTimeout*(cfg: JsonNode, subagentName: string): int =
-  getTimeout(cfg, subagentName, "no_output_timeout_seconds", 180)
+proc noOutputTimeout*(cfg: JsonNode, agentBackendName: string): int =
+  getTimeout(cfg, agentBackendName, "no_output_timeout_seconds", 180)
 
-proc progressIdleTimeout*(cfg: JsonNode, subagentName: string): int =
-  getTimeout(cfg, subagentName, "progress_idle_timeout_seconds", 120)
+proc progressIdleTimeout*(cfg: JsonNode, agentBackendName: string): int =
+  getTimeout(cfg, agentBackendName, "progress_idle_timeout_seconds", 120)
 
-proc maxRuntimeExtension*(cfg: JsonNode, subagentName: string): int =
-  getTimeout(cfg, subagentName, "max_runtime_extension_seconds", 90)
+proc maxRuntimeExtension*(cfg: JsonNode, agentBackendName: string): int =
+  getTimeout(cfg, agentBackendName, "max_runtime_extension_seconds", 90)
 
 # ─────────────────────────── Effective Config (Merged) ───────────────────────────
 
-proc effectiveRuntimeSeconds*(cfg: JsonNode, taskClass, subagentName: string): int =
-  ## Get the effective max runtime — max of route-level and subagent-level.
-  ## Replaces subagent-dispatch.py effective_runtime_limit (line 557-563).
+proc effectiveRuntimeSeconds*(cfg: JsonNode, taskClass, agentBackendName: string): int =
+  ## Get the effective max runtime — max of route-level and agent-backend level.
+  ## Replaces the legacy effective runtime limit helper.
   let routeLimit = getRouteMaxRuntimeSeconds(cfg, taskClass)
   let subagentLimit = dottedGetInt(cfg,
-    "agent_system.subagents." & subagentName & ".max_runtime_seconds", 0)
+    "agent_system.subagents." & agentBackendName & ".max_runtime_seconds", 0)
   if routeLimit > 0 and subagentLimit > 0:
     return max(routeLimit, subagentLimit)
   elif routeLimit > 0:
@@ -190,20 +190,20 @@ proc effectiveRuntimeSeconds*(cfg: JsonNode, taskClass, subagentName: string): i
   else:
     return 420  # default
 
-proc effectiveMinOutputBytes*(cfg: JsonNode, taskClass, subagentName: string): int =
-  ## Get effective min_output_bytes — max of route and subagent levels.
+proc effectiveMinOutputBytes*(cfg: JsonNode, taskClass, agentBackendName: string): int =
+  ## Get effective min_output_bytes — max of route and agent-backend levels.
   let profile = getRoutingProfile(cfg, taskClass)
   let routeMin = dottedGetInt(profile, "min_output_bytes", 0)
   let subagentMin = dottedGetInt(cfg,
-    "agent_system.subagents." & subagentName & ".min_output_bytes", 0)
+    "agent_system.subagents." & agentBackendName & ".min_output_bytes", 0)
   max(routeMin, subagentMin)
 
-proc effectiveOrchestrationTier*(cfg: JsonNode, taskClass, subagentName: string): string =
-  ## Get the effective orchestration tier — route-level override > subagent-level.
+proc effectiveOrchestrationTier*(cfg: JsonNode, taskClass, agentBackendName: string): string =
+  ## Get the effective orchestration tier — route-level override > agent-backend level.
   ## Closes GAP B: merged config overlays.
   let profile = getRoutingProfile(cfg, taskClass)
   let routeOverride = dottedGetStr(profile, "orchestration_tier")
   if routeOverride.len > 0:
     return routeOverride
   return dottedGetStr(cfg,
-    "agent_system.subagents." & subagentName & ".orchestration_tier", "standard")
+    "agent_system.subagents." & agentBackendName & ".orchestration_tier", "standard")

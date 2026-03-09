@@ -85,3 +85,15 @@ Future lint output should include:
 2. lint must fail closed on graph-invalid machine law
 3. lint may recommend refactors but must not mutate machine specs automatically
 4. lint must preserve frozen `task_lifecycle` and `route_progression` vocabularies
+
+-----
+artifact_path: product/spec/machine-definition-lint-law
+artifact_type: product_spec
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/product/spec/machine-definition-lint-law.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-09T20:28:59+02:00
+changelog_ref: machine-definition-lint-law.changelog.jsonl

@@ -1,0 +1,2 @@
+{"ts": "2026-03-10T00:00:00+02:00", "event": "artifact_initialized", "artifact_path": "process/readme", "artifact_type": "process_doc", "artifact_version": 1, "artifact_revision": "2026-03-10", "source_path": "docs/process/README.md"}
+{"ts": "2026-03-10T00:30:00+02:00", "event": "artifact_revision_updated", "artifact_path": "process/readme", "artifact_type": "process_doc", "artifact_version": 1, "artifact_revision": "2026-03-10", "source_path": "docs/process/README.md", "reason": "navigation_drift_corrected"}

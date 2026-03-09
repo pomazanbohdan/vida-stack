@@ -9,14 +9,14 @@ import ../core/[toon, utils]
 
 # ─────────────────────────── Constants ───────────────────────────
 
-const SubagentEntryDoc* = "docs/framework/SUBAGENT-ENTRY.MD"
-const SubagentThinkingDoc* = "docs/framework/SUBAGENT-THINKING.MD"
+const WorkerEntryDoc* = "vida/config/instructions/agent-definitions.worker-entry.md"
+const WorkerThinkingDoc* = "vida/config/instructions/instruction-contracts.worker-thinking.md"
 
 let RequiredPacketMarkers* = {
   "worker_lane_confirmed: true": "missing worker_lane_confirmed marker",
-  "worker_role: subagent": "missing worker_role marker",
-  "worker_entry: " & SubagentEntryDoc: "missing worker_entry marker",
-  "worker_thinking: " & SubagentThinkingDoc: "missing worker_thinking marker",
+  "worker_role: worker": "missing worker_role marker",
+  "worker_entry: " & WorkerEntryDoc: "missing worker_entry marker",
+  "worker_thinking: " & WorkerThinkingDoc: "missing worker_thinking marker",
   "impact_tail_policy: required_for_non_stc": "missing impact_tail_policy marker",
   "impact_analysis_scope: bounded_to_assigned_scope": "missing impact_analysis_scope marker",
 }.toTable

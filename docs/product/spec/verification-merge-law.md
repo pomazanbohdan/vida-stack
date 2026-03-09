@@ -86,3 +86,15 @@ If any admissibility rule fails, the system must not emit a normal merged pass.
 3. verification pass still does not close the task by itself
 4. policy must be inspectable and receipt-backed
 5. fallback to `manual_reconcile` is preferred over silent heuristic merge when evidence conflicts materially
+
+-----
+artifact_path: product/spec/verification-merge-law
+artifact_type: product_spec
+artifact_version: 1
+artifact_revision: 2026-03-10
+schema_version: 1
+status: canonical
+source_path: docs/product/spec/verification-merge-law.md
+created_at: 2026-03-09T12:00:46+02:00
+updated_at: 2026-03-09T20:28:59+02:00
+changelog_ref: verification-merge-law.changelog.jsonl
