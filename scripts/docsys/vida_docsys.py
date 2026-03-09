@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import re
 import sys
@@ -26,8 +27,9 @@ REQUIRED_FOOTER_FIELDS = (
     "changelog_ref",
 )
 ORDERED_FOOTER_FIELDS = REQUIRED_FOOTER_FIELDS
-FOOTER_OPTIONAL_FILES = {"AGENTS.md"}
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+POLICY_PATH = Path(__file__).resolve().with_name("docsys_policy.json")
 
 
 def now_iso() -> str:
@@ -43,6 +45,48 @@ def parse_ts(value: object) -> tuple[int, str]:
         return (1, datetime.fromisoformat(normalized).isoformat())
     except ValueError:
         return (0, text)
+
+
+def load_policy() -> dict[str, object]:
+    return json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+
+
+def match_policy_rule(markdown_file: Path, rule: dict[str, object]) -> bool:
+    target = markdown_file.resolve()
+    try:
+        rel = target.relative_to(REPO_ROOT)
+    except ValueError:
+        rel = Path(markdown_file.name)
+    scope = str(rule.get("scope", "any")).strip()
+    glob_pattern = str(rule.get("glob", "")).strip()
+    if not glob_pattern:
+        return False
+    rel_posix = rel.as_posix()
+    name = markdown_file.name
+    if scope == "repo_root":
+        return len(rel.parts) == 1 and fnmatch.fnmatch(name, glob_pattern)
+    if scope == "relative_path":
+        return fnmatch.fnmatch(rel_posix, glob_pattern)
+    if scope == "filename":
+        return fnmatch.fnmatch(name, glob_pattern)
+    return fnmatch.fnmatch(rel_posix, glob_pattern) or fnmatch.fnmatch(name, glob_pattern)
+
+
+def policy_reason(markdown_file: Path, policy_key: str) -> str:
+    policy = load_policy()
+    for rule in policy.get(policy_key, []):
+        if match_policy_rule(markdown_file, rule):
+            return str(rule.get("reason", "")).strip()
+    return ""
+
+
+def policy_allows(markdown_file: Path, policy_key: str) -> bool:
+    policy = load_policy()
+    return any(match_policy_rule(markdown_file, rule) for rule in policy.get(policy_key, []))
+
+
+def is_scan_ignored(markdown_file: Path) -> bool:
+    return policy_allows(markdown_file, "scan_ignored")
 
 
 def split_body_and_footer(text: str) -> tuple[str, dict[str, str]]:
@@ -101,12 +145,15 @@ def append_changelog_event(changelog_path: Path, event: dict[str, object]) -> No
 
 
 def is_footer_optional(markdown_file: Path) -> bool:
-    repo_root = Path(__file__).resolve().parents[2]
-    try:
-        rel = markdown_file.resolve().relative_to(repo_root)
-    except ValueError:
-        return markdown_file.name in FOOTER_OPTIONAL_FILES
-    return len(rel.parts) == 1 and markdown_file.suffix.lower() == ".md"
+    return policy_allows(markdown_file, "footer_optional")
+
+
+def is_changelog_only(markdown_file: Path) -> bool:
+    return policy_allows(markdown_file, "changelog_only")
+
+
+def is_mutation_disabled(markdown_file: Path) -> bool:
+    return policy_allows(markdown_file, "mutation_disabled")
 
 
 def bootstrap_optional_event(markdown_file: Path, args: argparse.Namespace, event_name: str, reason: str) -> dict[str, object]:
@@ -114,10 +161,10 @@ def bootstrap_optional_event(markdown_file: Path, args: argparse.Namespace, even
         "ts": now_iso(),
         "event": event_name,
         "artifact_path": f"project/repository/{markdown_file.stem.lower()}",
-        "artifact_type": "bootstrap_router",
+        "artifact_type": "bootstrap_doc",
         "artifact_version": "",
         "artifact_revision": "",
-        "source_path": markdown_file.relative_to(Path(__file__).resolve().parents[2]).as_posix(),
+        "source_path": markdown_file.relative_to(REPO_ROOT).as_posix(),
         "reason": reason,
         "task_id": getattr(args, "task_id", ""),
         "actor": getattr(args, "actor", "manual"),
@@ -176,7 +223,7 @@ def latest_changelog_row(changelog_path: Path) -> dict[str, object] | None:
 
 def iter_markdown_files(scan_root: Path):
     for path in sorted(scan_root.rglob("*")):
-        if path.is_file() and path.suffix.lower() == ".md":
+        if path.is_file() and path.suffix.lower() == ".md" and not is_scan_ignored(path):
             yield path
 
 
@@ -302,8 +349,7 @@ def validate_record(file_path: Path, record: dict[str, object]) -> list[str]:
 
 def validate_footer_consistency(markdown_file: Path, footer: dict[str, str]) -> list[str]:
     problems: list[str] = []
-    repo_root = Path(__file__).resolve().parents[2]
-    expected_source = relative_to_root(markdown_file, repo_root)
+    expected_source = relative_to_root(markdown_file, REPO_ROOT)
     if footer.get("source_path") and footer["source_path"] != expected_source:
         problems.append("source_path_mismatch")
     return problems
@@ -343,6 +389,15 @@ def collect_registry(repo_root: Path, scan_root: Path) -> list[dict[str, object]
         registry.append(row)
     registry.sort(key=lambda row: str(row.get("artifact", row["path"])))
     return registry
+
+
+def materialize_registry(scan_root: Path, output_path: Path) -> None:
+    rows = collect_registry(REPO_ROOT, scan_root.resolve())
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            row.pop("abs_path", None)
+            fh.write(json.dumps(row, ensure_ascii=True, separators=(",", ":")) + "\n")
 
 
 def run_quiet_check(scan_root: Path, paths: list[Path]) -> int:
@@ -428,12 +483,13 @@ def cmd_touch(args: argparse.Namespace) -> int:
     if not path.exists() or not path.is_file():
         print(f"markdown file not found: {path}", file=sys.stderr)
         return 2
-    if is_footer_optional(path):
+    if is_changelog_only(path):
         append_changelog_event(
             changelog_path_for(path),
             bootstrap_optional_event(path, args, args.event, args.change_note),
         )
-        set_result_note(args, f"{path.name} changelog updated; bootstrap file body left unchanged")
+        note = policy_reason(path, "changelog_only") or "bootstrap file body left unchanged"
+        set_result_note(args, f"{path.name} changelog updated; {note}")
         return 0
     _, body, footer = load_markdown(path)
     if not footer:
@@ -469,12 +525,13 @@ def cmd_finalize_edit(args: argparse.Namespace) -> int:
     if not path.exists() or not path.is_file():
         print(f"markdown file not found: {path}", file=sys.stderr)
         return 2
-    if is_footer_optional(path):
+    if is_changelog_only(path):
         append_changelog_event(
             changelog_path_for(path),
             bootstrap_optional_event(path, args, args.event, args.change_note),
         )
-        set_result_note(args, f"{path.name} finalized via changelog only; bootstrap file body left unchanged")
+        note = policy_reason(path, "changelog_only") or "bootstrap file body left unchanged"
+        set_result_note(args, f"{path.name} finalized via changelog only; {note}")
         return 0
     _, body, footer = load_markdown(path)
     if not footer:
@@ -565,8 +622,9 @@ def cmd_move(args: argparse.Namespace) -> int:
     if not src.exists() or not src.is_file():
         print(f"markdown file not found: {src}", file=sys.stderr)
         return 2
-    if is_footer_optional(src):
-        set_result_note(args, f"{src.name} skipped; bootstrap file mutation is disabled")
+    if is_mutation_disabled(src):
+        note = policy_reason(src, "mutation_disabled") or "bootstrap file mutation is disabled"
+        set_result_note(args, f"{src.name} skipped; {note}")
         return 0
     if dst.exists():
         print(f"destination already exists: {dst}", file=sys.stderr)
@@ -610,8 +668,9 @@ def cmd_rename_artifact(args: argparse.Namespace) -> int:
     if not path.exists() or not path.is_file():
         print(f"markdown file not found: {path}", file=sys.stderr)
         return 2
-    if is_footer_optional(path):
-        set_result_note(args, f"{path.name} skipped; bootstrap file mutation is disabled")
+    if is_mutation_disabled(path):
+        note = policy_reason(path, "mutation_disabled") or "bootstrap file mutation is disabled"
+        set_result_note(args, f"{path.name} skipped; {note}")
         return 0
     _, body, footer = load_markdown(path)
     if not footer:
@@ -794,14 +853,21 @@ def cmd_deps(args: argparse.Namespace) -> int:
 
 
 def cmd_registry(args: argparse.Namespace) -> int:
-    repo_root = Path(__file__).resolve().parents[2]
     scan_root = args.root.resolve()
     try:
-        for row in collect_registry(repo_root, scan_root):
+        for row in collect_registry(REPO_ROOT, scan_root):
             row.pop("abs_path", None)
             print(json.dumps(row, ensure_ascii=True, separators=(",", ":")))
     except BrokenPipeError:
         return 0
+    return 0
+
+
+def cmd_registry_write(args: argparse.Namespace) -> int:
+    scan_root = args.root.resolve()
+    output_path = args.output.resolve()
+    materialize_registry(scan_root, output_path)
+    set_result_note(args, f"wrote registry for {relative_to_root(scan_root, REPO_ROOT)} to {relative_to_root(output_path, REPO_ROOT)}")
     return 0
 
 
@@ -839,7 +905,7 @@ def cmd_migrate_links(args: argparse.Namespace) -> int:
     for file_path in files:
         if file_path.suffix.lower() != ".md":
             continue
-        if is_footer_optional(file_path):
+        if is_mutation_disabled(file_path):
             skipped_optional += 1
             continue
         _, body, footer = load_markdown(file_path)
@@ -880,15 +946,15 @@ def cmd_migrate_links(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    repo_root = Path(__file__).resolve().parents[2]
     scan_root = args.root.resolve()
     had_error = False
+    warning_count = 0
+    error_count = 0
     artifact_seen: dict[str, str] = {}
     changelog_seen: dict[str, str] = {}
     markdowns = list(iter_markdown_files(scan_root))
-    markdown_set = {path.resolve() for path in markdowns}
     for file_path in markdowns:
-        record = build_record(repo_root, scan_root, file_path)
+        record = build_record(REPO_ROOT, scan_root, file_path)
         problems = validate_record(file_path, record)
         _, body, footer = load_markdown(file_path)
         problems.extend(validate_footer_consistency(file_path, footer))
@@ -903,26 +969,48 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         changelog_ref = footer.get("changelog_ref", "")
         if changelog_ref:
             rel = file_path.relative_to(scan_root).as_posix()
-            owner = changelog_seen.get(changelog_ref)
+            changelog_rel = file_path.with_name(changelog_ref).relative_to(scan_root).as_posix()
+            owner = changelog_seen.get(changelog_rel)
             if owner and owner != rel:
-                problems.append(f"duplicate_changelog_ref:{changelog_ref}")
+                problems.append(f"duplicate_changelog_ref:{changelog_rel}")
             else:
-                changelog_seen[changelog_ref] = rel
+                changelog_seen[changelog_rel] = rel
             changelog_path = file_path.with_name(changelog_ref)
             latest_row = latest_changelog_row(changelog_path)
             if latest_row and latest_row.get("source_path") and str(latest_row["source_path"]) != footer.get("source_path", ""):
                 problems.append("latest_changelog_source_path_mismatch")
-        for link in extract_link_targets(file_path, body, repo_root):
+        for link in extract_link_targets(file_path, body, REPO_ROOT):
             if not link["exists"] and not str(link["target"]).startswith(("http://", "https://")):
                 problems.append(f"broken_link:{link['target']}")
+        warnings: list[str] = []
+        if is_footer_optional(file_path):
+            warnings.append("footer_optional_policy")
+        if is_changelog_only(file_path):
+            warnings.append("changelog_only_policy")
+        if is_mutation_disabled(file_path):
+            warnings.append("mutation_disabled_policy")
         if problems:
             had_error = True
-            print(json.dumps({"path": file_path.relative_to(scan_root).as_posix(), "issues": sorted(set(problems))}, ensure_ascii=True, separators=(",", ":")))
-    changelog_paths = {path.with_name(split_body_and_footer(path.read_text(encoding='utf-8'))[1].get("changelog_ref", "")) for path in markdowns if split_body_and_footer(path.read_text(encoding='utf-8'))[1].get("changelog_ref", "")}
+            error_count += len(set(problems))
+            print(json.dumps({"severity": "error", "path": file_path.relative_to(scan_root).as_posix(), "issues": sorted(set(problems))}, ensure_ascii=True, separators=(",", ":")))
+        elif args.show_warnings and warnings:
+            warning_count += len(set(warnings))
+            print(json.dumps({"severity": "warning", "path": file_path.relative_to(scan_root).as_posix(), "issues": sorted(set(warnings))}, ensure_ascii=True, separators=(",", ":")))
+    changelog_paths: set[Path] = set()
+    for path in markdowns:
+        try:
+            changelog_paths.add(changelog_path_for(path).resolve())
+        except ValueError:
+            continue
     for changelog_file in scan_root.rglob("*.changelog.jsonl"):
-        if changelog_file.resolve() not in {item.resolve() for item in changelog_paths}:
+        if is_scan_ignored(changelog_file):
+            continue
+        if changelog_file.resolve() not in changelog_paths:
             had_error = True
-            print(json.dumps({"path": changelog_file.relative_to(scan_root).as_posix(), "issues": ["orphan_changelog"]}, ensure_ascii=True, separators=(",", ":")))
+            error_count += 1
+            print(json.dumps({"severity": "error", "path": changelog_file.relative_to(scan_root).as_posix(), "issues": ["orphan_changelog"]}, ensure_ascii=True, separators=(",", ":")))
+    if had_error or (args.show_warnings and warning_count):
+        set_result_note(args, f"errors={error_count}, warnings={warning_count}")
     return 1 if had_error else 0
 
 
@@ -963,6 +1051,19 @@ def parse_args() -> argparse.Namespace:
     registry = sub.add_parser("registry", help="Emit one registry JSONL row per markdown file.")
     registry.add_argument("--root", type=Path, required=True, help="Root directory to scan.")
     registry.set_defaults(func=cmd_registry)
+
+    registry_write = sub.add_parser(
+        "registry-write",
+        help="Materialize a registry JSONL snapshot for one markdown scope.",
+    )
+    registry_write.add_argument("--root", type=Path, required=True, help="Root directory to scan.")
+    registry_write.add_argument(
+        "--output",
+        type=Path,
+        default=REPO_ROOT / "_temp" / "docsys-registry.jsonl",
+        help="Output JSONL path. Default: _temp/docsys-registry.jsonl",
+    )
+    registry_write.set_defaults(func=cmd_registry_write)
 
     touch = sub.add_parser("touch", help="Update updated_at and append a changelog event.")
     touch.add_argument("markdown_file", type=Path, help="Path to markdown file.")
@@ -1084,6 +1185,7 @@ def parse_args() -> argparse.Namespace:
 
     doctor = sub.add_parser("doctor", help="Run stronger consistency checks for markdown artifacts and changelogs.")
     doctor.add_argument("--root", type=Path, required=True, help="Root directory to scan.")
+    doctor.add_argument("--show-warnings", action="store_true", help="Also emit policy-warning rows for exception-based files.")
     doctor.set_defaults(func=cmd_doctor)
     return parser.parse_args()
 

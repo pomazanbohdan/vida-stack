@@ -61,17 +61,19 @@ Read/status commands:
    - compact totals by layer, owner, and status
 2. `registry --root <dir>`
    - one machine-readable row per markdown artifact
-3. `scan --root <dir> [--missing-only]`
+3. `registry-write --root <dir> [--output <file>]`
+   - materialize one registry snapshot for later automation or review
+4. `scan --root <dir> [--missing-only]`
    - per-file latest-state rows
-4. `changelog <file> [--limit N] [--newest-first]`
+5. `changelog <file> [--limit N] [--newest-first]`
    - one artifact history
-5. `changelog-task --root <dir> <task_id> [--limit N] [--newest-first]`
+6. `changelog-task --root <dir> <task_id> [--limit N] [--newest-first]`
    - all matching history rows for one task id
-6. `task-summary --root <dir> <task_id>`
+7. `task-summary --root <dir> <task_id>`
    - aggregate task-level history summary
-7. `deps <file>`
+8. `deps <file>`
    - direct footer refs, markdown links, and reverse mentions
-8. `links <file-or-dir>`
+9. `links <file-or-dir>`
    - markdown-link inventory for one file or a whole scope
 
 Mutation/finalization commands:
@@ -93,8 +95,8 @@ Validation commands:
 
 1. `check --root <dir> [files...]`
    - footer and sidecar health checks
-2. `doctor --root <dir>`
-   - stronger consistency checks for metadata, changelogs, and links
+2. `doctor --root <dir> [--show-warnings]`
+   - stronger consistency checks for metadata, changelogs, links, and policy exceptions
 
 Operational rule:
 

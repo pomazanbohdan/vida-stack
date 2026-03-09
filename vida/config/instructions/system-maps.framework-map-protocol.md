@@ -56,6 +56,7 @@ Default status reads:
 1. `python3 scripts/docsys/vida_docsys.py summary --root docs`
 2. `python3 scripts/docsys/vida_docsys.py summary --root vida`
 3. `python3 scripts/docsys/vida_docsys.py registry --root vida/config/instructions`
+4. `python3 scripts/docsys/vida_docsys.py registry-write --root vida/config/instructions --output _temp/docsys-instructions-registry.jsonl`
 
 Default targeted reads:
 
@@ -89,7 +90,8 @@ Root-bootstrap exception rule:
 
 1. root-level repository markdown files may temporarily use a bootstrap exception path where missing footer metadata is tolerated,
 2. this exception exists only to keep the current bootstrap surface workable during the pre-`1.0.0` phase,
-3. the exception must be removed by VIDA `1.0.0`, after which root-level markdown files must conform to the same metadata contract as the rest of the active canon unless replaced by a stricter bootstrap mechanism.
+3. the exception must be expressed through a canonical policy layer rather than hardcoded ad hoc logic,
+4. the exception must be removed by VIDA `1.0.0`, after which root-level markdown files must conform to the same metadata contract as the rest of the active canon unless replaced by a stricter bootstrap mechanism.
 
 Tooling detail rule:
 
@@ -374,5 +376,5 @@ schema_version: 1
 status: canonical
 source_path: vida/config/instructions/system-maps.framework-map-protocol.md
 created_at: 2026-03-06T22:42:30+02:00
-updated_at: 2026-03-10T01:22:20+02:00
+updated_at: 2026-03-10T01:41:07+02:00
 changelog_ref: system-maps.framework-map-protocol.changelog.jsonl

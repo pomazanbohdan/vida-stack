@@ -69,14 +69,16 @@ Required fields:
 2. The runtime-facing future model should resolve latest documentation from structured metadata and sidecar lineage, not from filename chronology.
 3. This rule allows the current repo to stay operational without introducing legacy duplicate files.
 4. Root-level repository markdown files may temporarily use a bootstrap exception path where missing footer metadata is tolerated and sidecar changelog handling remains available.
-5. This root-level metadata exception is transitional only and must be removed by VIDA `1.0.0`.
-6. By VIDA `1.0.0`, root-level markdown files must obey the same canonical metadata contract as the rest of the active documentation surface unless a stricter replacement bootstrap mechanism supersedes them.
+5. This root-level metadata exception must be carried through one canonical policy layer, not repeated as ad hoc hardcoded exceptions.
+6. This root-level metadata exception is transitional only and must be removed by VIDA `1.0.0`.
+7. By VIDA `1.0.0`, root-level markdown files must obey the same canonical metadata contract as the rest of the active documentation surface unless a stricter replacement bootstrap mechanism supersedes them.
 
 ## Initialization Rule
 
 1. Project initialization must begin with an automatic latest-state read of active project documentation and instruction canon before broad manual inspection.
 2. The canonical documentation system must provide:
    - current catalog/status summaries,
+   - materialized registry snapshots when downstream automation needs a frozen inventory,
    - per-artifact history reads,
    - task-scoped change aggregation,
    - link inventories and lawful link migration,
@@ -92,5 +94,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/spec/project-documentation-system.md
 created_at: 2026-03-10T00:00:00+02:00
-updated_at: 2026-03-10T01:03:20+02:00
+updated_at: 2026-03-10T01:41:07+02:00
 changelog_ref: project-documentation-system.changelog.jsonl

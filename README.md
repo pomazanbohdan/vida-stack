@@ -239,7 +239,7 @@ Right now, the framework is implemented through a practical stack of:
 - `AGENTS.md` as a bootstrap router for orchestrator versus worker lane entry
 - `vida/config/instructions/agent-definitions.orchestrator-entry.md` and `vida/config/instructions/agent-definitions.worker-entry.md` as split lane contracts
 - `vida/config/instructions/*.md` for active canonical instruction surfaces
-- `docs/framework/plans/**`, `docs/framework/research/**`, and `docs/framework/history/**` for program, research, and evidence layers
+- `docs/framework/plans/**` and `docs/framework/research/**` for active program and research layers, plus historical evidence referenced through canonical maps when needed
 - `br` plus TaskFlow telemetry for execution state
 - external-first subagent routing with verification, route receipts, and fallback logic
 
@@ -683,7 +683,7 @@ Key runtime areas:
 - [vida/config/instructions/instruction-contracts.worker-thinking.md](vida/config/instructions/instruction-contracts.worker-thinking.md)
 - [docs/framework/plans](docs/framework/plans)
 - [docs/framework/research](docs/framework/research)
-- [docs/framework/history](docs/framework/history)
+- [vida/config/instructions/system-maps.runtime-transition-map.md](vida/config/instructions/system-maps.runtime-transition-map.md)
 - [install/install.sh](install/install.sh)
 
 ---
