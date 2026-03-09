@@ -4,3 +4,4 @@ __pycache__/
 _vida/scripts-nim/vida-legacy
 target
 _temp
+.venv
