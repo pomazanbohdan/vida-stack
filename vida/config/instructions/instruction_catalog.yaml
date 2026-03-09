@@ -4,8 +4,16 @@ version: 1
 revision: 2026-03-09
 compatibility_class: direct_v1_kernel
 canonical_source_refs:
-  - _vida/docs/plans/2026-03-08-vida-0.3-instruction-kernel-spec.md
+  - docs/framework/history/plans/2026-03-08-vida-0.3-instruction-kernel-spec.md
+  - docs/product/spec/instruction-artifact-model.md
   - vida.config.yaml
+artifact_families:
+  agent_definitions: agent_definitions/
+  instruction_contracts: instruction_contracts/
+  prompt_templates: prompt_templates/
+  skills: skills/
+  bundles: bundles/
+  activation: activation/
 composition_order:
   - system_base
   - machine_binding
@@ -15,6 +23,11 @@ composition_order:
   - emergency_override
 project_overlay_ref: overlays/project_overlay.yaml
 default_bundle_ref: bundles/default_runtime.yaml
+default_activation_policy_ref: activation/default_policy.yaml
+packaging_policy:
+  packaged_artifacts_are_not_default_enabled: true
+  skills_require_explicit_enablement: true
+  runtime_inventory_is_distinct_from_binary_contents: true
 roles:
   orchestrator:
     mission: Own routing, synthesis, final quality gates, and lawful mutation orchestration.

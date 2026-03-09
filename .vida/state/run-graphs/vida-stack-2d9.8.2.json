@@ -1,0 +1,53 @@
+{
+  "nodes": {
+    "analysis": {
+      "attempts": 0,
+      "meta": {},
+      "status": "pending",
+      "updated_at": "2026-03-08T17:38:34Z"
+    },
+    "approval": {
+      "attempts": 0,
+      "meta": {},
+      "status": "pending",
+      "updated_at": "2026-03-08T17:38:34Z"
+    },
+    "coach": {
+      "attempts": 2,
+      "meta": {
+        "attempt_count": 3,
+        "reason": "max_coach_passes_exceeded"
+      },
+      "status": "blocked",
+      "updated_at": "2026-03-08T17:44:25Z"
+    },
+    "problem_party": {
+      "attempts": 0,
+      "meta": {},
+      "status": "pending",
+      "updated_at": "2026-03-08T17:38:34Z"
+    },
+    "synthesis": {
+      "attempts": 0,
+      "meta": {},
+      "status": "pending",
+      "updated_at": "2026-03-08T17:38:34Z"
+    },
+    "verifier": {
+      "attempts": 0,
+      "meta": {},
+      "status": "pending",
+      "updated_at": "2026-03-08T17:38:34Z"
+    },
+    "writer": {
+      "attempts": 0,
+      "meta": {},
+      "status": "pending",
+      "updated_at": "2026-03-08T17:38:34Z"
+    }
+  },
+  "route_task_class": "implementation",
+  "task_class": "implementation",
+  "task_id": "vida-stack-2d9.8.2",
+  "updated_at": "2026-03-08T17:44:25Z"
+}

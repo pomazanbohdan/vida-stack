@@ -1,0 +1,5 @@
+{
+  "notes": "framework-owned tracked remediation requires explicit execution-auth override",
+  "reason": "no_eligible_analysis_lane",
+  "route_receipt_hash": "stale-hash"
+}

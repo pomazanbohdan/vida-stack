@@ -1,0 +1,34 @@
+{
+  "steps": [
+    {
+      "actions": "Minimal authoritative state spine manifest is now materialized in SurrealDB and surfaced read-only through boot/status/doctor",
+      "block_id": "B01",
+      "evidence_ref": "Added state_spine_manifest seeding, summary readers, operator visibility, and smoke coverage",
+      "goal": "Reconcile current SurrealDB state substrate against Wave 2.1 minimal authoritative state spine scope",
+      "next_step": "-",
+      "owner": "orchestrator",
+      "result": "done",
+      "status": "done",
+      "task_id": "vida-stack-2d9.2.1",
+      "track_id": "main",
+      "ts_end": "2026-03-08T16:25:13Z",
+      "ts_start": "2026-03-08T16:20:38Z"
+    },
+    {
+      "actions": "Authoritative state spine manifest now preserves first initialization timestamp and fails closed on missing or malformed manifest state",
+      "block_id": "B02",
+      "depends_on": "B01",
+      "evidence_ref": "Applied catch-review findings, added reopen/missing-manifest tests, and kept proof green",
+      "goal": "Harden authoritative state spine manifest idempotency and fail-closed validation",
+      "next_step": "-",
+      "owner": "orchestrator",
+      "result": "done",
+      "status": "done",
+      "task_id": "vida-stack-2d9.2.1",
+      "track_id": "main",
+      "ts_end": "2026-03-08T16:28:52Z",
+      "ts_start": "2026-03-08T16:28:44Z"
+    }
+  ],
+  "task_id": "vida-stack-2d9.2.1"
+}

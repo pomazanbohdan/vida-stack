@@ -7,12 +7,12 @@ This file is the bootstrap and role-router contract.
 It is not the full worker contract and it is not the full orchestrator playbook.
 
 Instruction activation note:
-1. Use `_vida/docs/instruction-activation-protocol.md` as the canonical rule for when instruction surfaces are `always-on`, `lane-entry`, `triggered`, or `closure/reflection` only.
+1. Use `docs/framework/instruction-activation-protocol.md` as the canonical rule for when instruction surfaces are `always-on`, `lane-entry`, `triggered`, or `closure/reflection` only.
 
 Canonical role entries:
-1. Orchestrator entry: `_vida/docs/ORCHESTRATOR-ENTRY.MD`
-2. Worker entry: `_vida/docs/SUBAGENT-ENTRY.MD`
-3. Worker thinking subset: `_vida/docs/SUBAGENT-THINKING.MD`
+1. Orchestrator entry: `docs/framework/ORCHESTRATOR-ENTRY.MD`
+2. Worker entry: `docs/framework/SUBAGENT-ENTRY.MD`
+3. Worker thinking subset: `docs/framework/SUBAGENT-THINKING.MD`
 
 Language policy:
 1. Framework-owned files stay in English.
@@ -25,8 +25,8 @@ Language policy:
 
 Use this file only to determine which entry contract applies next.
 
-1. If the active task packet or runtime packet explicitly confirms worker lane semantics, follow `_vida/docs/SUBAGENT-ENTRY.MD`.
-2. If worker-lane confirmation is absent or ambiguous, follow `_vida/docs/ORCHESTRATOR-ENTRY.MD`.
+1. If the active task packet or runtime packet explicitly confirms worker lane semantics, follow `docs/framework/SUBAGENT-ENTRY.MD`.
+2. If worker-lane confirmation is absent or ambiguous, follow `docs/framework/ORCHESTRATOR-ENTRY.MD`.
 3. Worker-lane confirmation may come from:
    - rendered subagent prompt/runtime packet,
    - delegated/external worker packet,
@@ -46,9 +46,9 @@ These rules apply across all lanes unless a more specific worker rule narrows be
 1. **[MUST]** After any context compression/clearing, the first action must be to read `AGENTS.md`.
 2. **[MUST NOT]** Never auto-commit without explicit user permission.
 3. **[MUST]** Prefer root-cause, architecture-oriented fixes over hotfixes.
-4. **[MUST]** Read and apply `_vida/docs/thinking-protocol.md` algorithms before analysis/decisions in orchestrator lane.
-5. **[MUST]** If root `vida.config.yaml` exists, apply `_vida/docs/project-overlay-protocol.md`.
-6. **[MUST]** Keep framework-owned behavior in `AGENTS.md` and `_vida/*`; keep project-owned behavior in `docs/*` and `scripts/*`.
+4. **[MUST]** Read and apply `docs/framework/thinking-protocol.md` algorithms before analysis/decisions in orchestrator lane.
+5. **[MUST]** If root `vida.config.yaml` exists, apply `docs/framework/project-overlay-protocol.md`.
+6. **[MUST]** Keep framework-owned behavior in `AGENTS.md`, `docs/framework/*`, and `vida-v0/*`; keep project-owned behavior in `docs/product/*`, `docs/process/*`, and `scripts/*`.
 7. **[MUST]** Use `rg` as the primary cross-file search tool.
 8. **[MUST]** Never widen scope silently when user intent, ownership layer, or risk posture changes materially.
 9. **[MUST]** Before conclusions that depend on live server/API behavior, validate with real requests and actual payloads.
@@ -91,27 +91,27 @@ Reporting prefix:
 After context compression/clearing:
 1. Read `AGENTS.md`.
 2. Resolve lane:
-   - worker lane -> `_vida/docs/SUBAGENT-ENTRY.MD`
-   - orchestrator lane -> `_vida/docs/ORCHESTRATOR-ENTRY.MD`
+   - worker lane -> `docs/framework/SUBAGENT-ENTRY.MD`
+   - orchestrator lane -> `docs/framework/ORCHESTRATOR-ENTRY.MD`
 3. Complete the selected boot path before resuming work.
 
 ### Orchestrator Boot Pointer
 
-For orchestrator lane, use `_vida/docs/ORCHESTRATOR-ENTRY.MD` as the canonical source for:
+For orchestrator lane, use `docs/framework/ORCHESTRATOR-ENTRY.MD` as the canonical source for:
 1. L0 contract,
 2. request-intent gate,
 3. TODO engagement gate,
 4. subagent-first orchestration,
 5. boot profile read-set,
 6. runtime execution rules.
-7. instruction activation by phase via `_vida/docs/instruction-activation-protocol.md`.
+7. instruction activation by phase via `docs/framework/instruction-activation-protocol.md`.
 
 
 ### Worker Boot Pointer
 
 For worker lane, use:
-1. `_vida/docs/SUBAGENT-ENTRY.MD`
-2. `_vida/docs/SUBAGENT-THINKING.MD`
+1. `docs/framework/SUBAGENT-ENTRY.MD`
+2. `docs/framework/SUBAGENT-THINKING.MD`
 
 Workers must not bootstrap repository-wide orchestration policy unless the task packet explicitly asks for framework-lane audit behavior.
 
@@ -119,15 +119,15 @@ Workers must not bootstrap repository-wide orchestration policy unless the task 
 
 ## Minimal Runtime Rules
 
-1. Use canonical project commands from the active project operations runbook resolved by the project overlay; if no overlay exists, fall back only to framework-owned canonical wrappers and commands declared in `_vida/*`, never to inferred host-project runbooks.
+1. Use canonical project commands from the active project operations runbook resolved by the project overlay; if no overlay exists, fall back only to framework-owned canonical wrappers and commands declared in `docs/framework/*` or `vida-v0/*`, never to inferred host-project runbooks.
 2. Keep temporary artifacts in `_temp/`; large logs in `.vida/scratchpad/`.
 3. Prefer sparse, exact, bounded reads over broad context loading.
 4. Broad `.vida/logs`, `.vida/state`, or `.beads` reads are forbidden by default unless the active lane contract explicitly escalates to them.
 
 Instruction precedence:
 1. `AGENTS.md`
-2. lane entry contract (`_vida/docs/ORCHESTRATOR-ENTRY.MD` or `_vida/docs/SUBAGENT-ENTRY.MD`)
-3. canonical protocol for the active domain from `_vida/docs/protocol-index.md`
+2. lane entry contract (`docs/framework/ORCHESTRATOR-ENTRY.MD` or `docs/framework/SUBAGENT-ENTRY.MD`)
+3. canonical protocol for the active domain from `docs/framework/protocol-index.md`
 4. project overlay data (`vida.config.yaml`) without weakening framework invariants
 5. command doc / helper wrapper
 6. script implementation details
@@ -136,9 +136,9 @@ Conflict rule:
 1. If two sources disagree, obey the highest-precedence source and treat the lower one as drift to be corrected, not as a second valid option.
 
 Operational references:
-1. `_vida/docs/ORCHESTRATOR-ENTRY.MD`
-2. `_vida/docs/SUBAGENT-ENTRY.MD`
-3. `_vida/docs/SUBAGENT-THINKING.MD`
-4. `_vida/docs/framework-map-protocol.md`
-5. `_vida/docs/protocol-index.md`
-6. `_vida/docs/instruction-activation-protocol.md`
+1. `docs/framework/ORCHESTRATOR-ENTRY.MD`
+2. `docs/framework/SUBAGENT-ENTRY.MD`
+3. `docs/framework/SUBAGENT-THINKING.MD`
+4. `docs/framework/framework-map-protocol.md`
+5. `docs/framework/protocol-index.md`
+6. `docs/framework/instruction-activation-protocol.md`

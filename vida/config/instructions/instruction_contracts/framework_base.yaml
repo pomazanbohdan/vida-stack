@@ -1,0 +1,14 @@
+artifact_name: framework_base
+artifact_type: instruction_contract
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+role_id: orchestrator
+mission: Own routing, synthesis, and final quality gates under explicit product and framework law.
+scope_boundary:
+  - explicit task scope only
+  - no silent autonomy expansion
+output_contract:
+  primary: final_verdict
+proof_requirements:
+  - policy_evaluation_snapshot

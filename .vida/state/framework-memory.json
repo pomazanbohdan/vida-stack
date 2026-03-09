@@ -2,13 +2,49 @@
   "entries": [
     {
       "details": {
-        "bug_id": "mobile-1hv.99",
+        "criteria": [
+          "instruction_runtime_consistency"
+        ],
+        "source": "session_reflection"
+      },
+      "kind": "anomaly",
+      "source_task": "",
+      "summary": "Execution began before canonical TODO/`br` task/block lifecycle was established for the active VIDA 1.0 development flow.",
+      "ts": "2026-03-08T11:28:14Z"
+    },
+    {
+      "details": {
+        "criteria": [
+          "instruction_runtime_consistency"
+        ],
+        "source": "session_reflection"
+      },
+      "kind": "anomaly",
+      "source_task": "",
+      "summary": "Overlay-resolved project operations runbook path points to docs/process/project-operations.md, but that file is absent in this repository state.",
+      "ts": "2026-03-08T11:28:14Z"
+    },
+    {
+      "details": {
+        "criteria": [
+          "instruction_runtime_consistency"
+        ],
+        "source": "session_reflection"
+      },
+      "kind": "anomaly",
+      "source_task": "",
+      "summary": "Framework-owned TODO/beads protocol and scripts are present and can serve as the lawful tracked execution path once a `br` task context is established.",
+      "ts": "2026-03-08T11:28:14Z"
+    },
+    {
+      "details": {
+        "bug_id": "vida-stack-2d9.10",
         "source": "silent_framework_diagnosis"
       },
       "kind": "anomaly",
-      "source_task": "mobile-1ic.2",
-      "summary": "cheap lane stalled",
-      "ts": "2026-03-07T20:07:08Z"
+      "source_task": "vida-3nq",
+      "summary": "verification capture after parent drift fix",
+      "ts": "2026-03-08T11:49:06Z"
     },
     {
       "details": {
@@ -18,7 +54,7 @@
       "kind": "anomaly",
       "source_task": "mobile-1ic.2",
       "summary": "cheap lane stalled",
-      "ts": "2026-03-07T20:07:36Z"
+      "ts": "2026-03-08T21:09:55Z"
     },
     {
       "details": {
@@ -28,7 +64,7 @@
       "kind": "anomaly",
       "source_task": "mobile-1ic.2",
       "summary": "cheap lane stalled",
-      "ts": "2026-03-08T00:14:46Z"
+      "ts": "2026-03-08T21:17:03Z"
     },
     {
       "details": {
@@ -38,11 +74,351 @@
       "kind": "anomaly",
       "source_task": "mobile-1ic.2",
       "summary": "cheap lane stalled",
-      "ts": "2026-03-08T00:15:13Z"
+      "ts": "2026-03-08T21:17:22Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T21:18:48Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T21:21:35Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:04:46Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:07:32Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:11:57Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:14:01Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:29:14Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:29:43Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:30:16Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:30:53Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:31:34Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:32:37Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:34:01Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:34:40Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:35:10Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:38:07Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:38:40Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:38:42Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:39:19Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:41:18Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:44:31Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:44:59Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T22:47:18Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T23:04:11Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T23:05:21Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T23:15:43Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T23:18:50Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T23:20:21Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T23:22:32Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T23:25:42Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T23:27:26Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T23:36:01Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T23:47:07Z"
+    },
+    {
+      "details": {
+        "bug_id": "mobile-1hv.99",
+        "source": "silent_framework_diagnosis"
+      },
+      "kind": "anomaly",
+      "source_task": "mobile-1ic.2",
+      "summary": "cheap lane stalled",
+      "ts": "2026-03-08T23:51:36Z"
     }
   ],
   "summary": {
-    "anomaly_count": 4,
+    "anomaly_count": 41,
     "correction_count": 0,
     "lesson_count": 0
   }

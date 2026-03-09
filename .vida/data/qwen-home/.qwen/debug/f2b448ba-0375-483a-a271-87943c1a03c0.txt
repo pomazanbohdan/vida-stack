@@ -1,0 +1,52 @@
+2026-03-09T07:36:27.084Z [DEBUG] [QWEN_OAUTH] No refresh token available, proceeding with device flow
+2026-03-09T07:36:27.093Z [INFO] Config initialization started
+2026-03-09T07:36:27.094Z [INFO] [SKILL_MANAGER] Starting skill directory watchers...
+2026-03-09T07:36:27.094Z [DEBUG] Extension manager initialized
+2026-03-09T07:36:27.094Z [INFO] [SKILL_MANAGER] Refreshing skills cache...
+2026-03-09T07:36:27.094Z [DEBUG] [SKILL_MANAGER] Loading project level skills from: /home/unnamed/project/vida-stack/.qwen/skills
+2026-03-09T07:36:27.095Z [DEBUG] [SKILL_MANAGER] Loading skills from directory: /home/unnamed/project/vida-stack/.qwen/skills
+2026-03-09T07:36:27.095Z [DEBUG] [SKILL_MANAGER] Cannot read skills directory /home/unnamed/project/vida-stack/.qwen/skills: ENOENT: no such file or directory, scandir '/home/unnamed/project/vida-stack/.qwen/skills'
+2026-03-09T07:36:27.095Z [DEBUG] [SKILL_MANAGER] Loaded 0 project level skills
+2026-03-09T07:36:27.095Z [DEBUG] [SKILL_MANAGER] Loaded 0 project level skills
+2026-03-09T07:36:27.095Z [DEBUG] [SKILL_MANAGER] Loading user level skills from: /home/unnamed/project/vida-stack/.vida/data/qwen-home/.qwen/skills
+2026-03-09T07:36:27.095Z [DEBUG] [SKILL_MANAGER] Loading skills from directory: /home/unnamed/project/vida-stack/.vida/data/qwen-home/.qwen/skills
+2026-03-09T07:36:27.095Z [DEBUG] [SKILL_MANAGER] Found 0 entries in /home/unnamed/project/vida-stack/.vida/data/qwen-home/.qwen/skills
+2026-03-09T07:36:27.095Z [DEBUG] [SKILL_MANAGER] Loaded 0 user level skills
+2026-03-09T07:36:27.095Z [DEBUG] [SKILL_MANAGER] Loaded 0 user level skills
+2026-03-09T07:36:27.095Z [DEBUG] [SKILL_MANAGER] Loaded 0 extension-level skills from 0 extensions
+2026-03-09T07:36:27.095Z [DEBUG] [SKILL_MANAGER] Loaded 0 extension level skills
+2026-03-09T07:36:27.095Z [INFO] [SKILL_MANAGER] Skills cache refreshed: 0 total skills loaded
+2026-03-09T07:36:27.097Z [INFO] [SKILL_MANAGER] Skill directory watchers started
+2026-03-09T07:36:27.097Z [DEBUG] Skill manager initialized
+2026-03-09T07:36:27.097Z [DEBUG] [MEMORY_DISCOVERY] Loading server hierarchical memory for CWD: /home/unnamed/project/vida-stack (importFormat: tree)
+2026-03-09T07:36:27.098Z [DEBUG] [MEMORY_DISCOVERY] Searching for QWEN.md starting from CWD: /home/unnamed/project/vida-stack
+2026-03-09T07:36:27.099Z [DEBUG] [MEMORY_DISCOVERY] Determined project root: /home/unnamed/project/vida-stack
+2026-03-09T07:36:27.100Z [DEBUG] [MEMORY_DISCOVERY] Final ordered QWEN.md paths to read: ["/home/unnamed/project/vida-stack/.vida/data/qwen-home/.qwen/output-language.md"]
+2026-03-09T07:36:27.123Z [DEBUG] [MEMORY_DISCOVERY] Successfully read and processed imports: /home/unnamed/project/vida-stack/.vida/data/qwen-home/.qwen/output-language.md (Length: 812)
+2026-03-09T07:36:27.123Z [DEBUG] Hierarchical memory loaded
+2026-03-09T07:36:27.124Z [DEBUG] [SKILL_MANAGER] Using cached skills
+2026-03-09T07:36:27.124Z [DEBUG] [SKILL_MANAGER] Processing 0 user level skills
+2026-03-09T07:36:27.124Z [DEBUG] [SKILL_MANAGER] Processing 0 project level skills
+2026-03-09T07:36:27.124Z [DEBUG] [SKILL_MANAGER] Processing 0 extension level skills
+2026-03-09T07:36:27.124Z [DEBUG] [SKILL_MANAGER] Listing skills
+2026-03-09T07:36:27.124Z [INFO] [SKILL_MANAGER] Listed 0 unique skills
+2026-03-09T07:36:27.126Z [DEBUG] ToolRegistry created: ["task","skill","list_directory","read_file","grep_search","glob","edit","write_file","run_shell_command","save_memory","todo_write","exit_plan_mode","web_fetch","web_search"] (14 tools)
+2026-03-09T07:36:27.126Z [INFO] Tool registry initialized with 14 tools
+2026-03-09T07:36:27.137Z [INFO] Gemini client initialized
+2026-03-09T07:36:27.138Z [INFO] Config initialization completed
+2026-03-09T07:36:27.152Z [DEBUG] [QWEN_OAUTH] No refresh token available, proceeding with device flow
+2026-03-09T07:36:27.661Z [DEBUG] [QWEN_OAUTH] Device authorization result: {
+  device_code: 'VQ16vyxRsjabFJRY4uDiym84EnkssDisEvN1_ZZFZoo',
+  user_code: 'Y8UCKOV9',
+  verification_uri: 'https://chat.qwen.ai/authorize',
+  verification_uri_complete: 'https://chat.qwen.ai/authorize?user_code=Y8UCKOV9&client=qwen-code',
+  expires_in: 900
+}
+2026-03-09T07:36:27.670Z [DEBUG] [QWEN_OAUTH] Waiting for authorization...
+
+2026-03-09T07:36:27.670Z [DEBUG] [QWEN_OAUTH] polling for token...
+2026-03-09T07:36:29.929Z [DEBUG] [QWEN_OAUTH] polling for token...
+2026-03-09T07:36:32.186Z [DEBUG] [QWEN_OAUTH] polling for token...
+2026-03-09T07:36:34.437Z [DEBUG] [QWEN_OAUTH] polling for token...
+2026-03-09T07:36:34.725Z [DEBUG] [QWEN_OAUTH] Authentication successful! Access token obtained.
+2026-03-09T07:36:34.727Z [DEBUG] [STARTUP] Session ID: f2b448ba-0375-483a-a271-87943c1a03c0

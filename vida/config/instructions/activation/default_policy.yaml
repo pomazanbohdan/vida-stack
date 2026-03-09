@@ -1,0 +1,8 @@
+artifact_name: default_instruction_activation_policy
+artifact_type: instruction_activation_policy
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+defaults:
+  auto_enable_packaged_skills: false
+  require_explicit_skill_attachment: true

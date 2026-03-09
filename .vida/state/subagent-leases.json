@@ -1,0 +1,77 @@
+{
+  "history": [
+    {
+      "event": "lease_acquired",
+      "fencing_token": 1,
+      "holder": "vida-stack-2d9.8.2:coach:spr-979ae715e347",
+      "resource_id": "gemini_cli",
+      "resource_type": "subagent_pool",
+      "ts": "2026-03-08T17:38:34Z"
+    },
+    {
+      "event": "lease_released",
+      "fencing_token": 1,
+      "holder": "vida-stack-2d9.8.2:coach:spr-979ae715e347",
+      "resource_id": "gemini_cli",
+      "resource_type": "subagent_pool",
+      "ts": "2026-03-08T17:40:34Z"
+    },
+    {
+      "event": "lease_acquired",
+      "fencing_token": 2,
+      "holder": "vida-stack-2d9.8.2:coach:spr-bf2fd294682d",
+      "resource_id": "qwen_cli",
+      "resource_type": "subagent_pool",
+      "ts": "2026-03-08T17:40:35Z"
+    },
+    {
+      "event": "lease_released",
+      "fencing_token": 2,
+      "holder": "vida-stack-2d9.8.2:coach:spr-bf2fd294682d",
+      "resource_id": "qwen_cli",
+      "resource_type": "subagent_pool",
+      "ts": "2026-03-08T17:40:38Z"
+    },
+    {
+      "event": "lease_acquired",
+      "fencing_token": 3,
+      "holder": "vida-stack-2d9.8.2:coach:spr-43f47aa0ed91",
+      "resource_id": "qwen_cli",
+      "resource_type": "subagent_pool",
+      "ts": "2026-03-08T17:43:04Z"
+    },
+    {
+      "event": "lease_released",
+      "fencing_token": 3,
+      "holder": "vida-stack-2d9.8.2:coach:spr-43f47aa0ed91",
+      "resource_id": "qwen_cli",
+      "resource_type": "subagent_pool",
+      "ts": "2026-03-08T17:43:08Z"
+    }
+  ],
+  "leases": {
+    "subagent_pool:gemini_cli": {
+      "acquired_at": "2026-03-08T17:38:34Z",
+      "conflict_count": 0,
+      "expires_at": "2026-03-08T17:42:34Z",
+      "fencing_token": 1,
+      "holder": "vida-stack-2d9.8.2:coach:spr-979ae715e347",
+      "released_at": "2026-03-08T17:40:34Z",
+      "resource_id": "gemini_cli",
+      "resource_type": "subagent_pool",
+      "status": "released"
+    },
+    "subagent_pool:qwen_cli": {
+      "acquired_at": "2026-03-08T17:43:04Z",
+      "conflict_count": 0,
+      "expires_at": "2026-03-08T17:47:04Z",
+      "fencing_token": 3,
+      "holder": "vida-stack-2d9.8.2:coach:spr-43f47aa0ed91",
+      "released_at": "2026-03-08T17:43:08Z",
+      "resource_id": "qwen_cli",
+      "resource_type": "subagent_pool",
+      "status": "released"
+    }
+  },
+  "next_fencing_token": 4
+}

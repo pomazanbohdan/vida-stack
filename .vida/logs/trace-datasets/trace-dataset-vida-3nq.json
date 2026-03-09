@@ -1,0 +1,31 @@
+{
+  "artifacts": {
+    "eval_pack_path": "/home/unnamed/project/vida-stack/.vida/logs/eval-pack-vida-3nq.json",
+    "route_receipts": [
+      "/home/unnamed/project/vida-stack/.vida/logs/route-receipts/vida-3nq.implementation.execution-auth.json",
+      "/home/unnamed/project/vida-stack/.vida/logs/route-receipts/vida-3nq.implementation.route.json"
+    ],
+    "run_graph_path": "/home/unnamed/project/vida-stack/.vida/state/run-graphs/vida-3nq.json",
+    "trace_eval_path": "/home/unnamed/project/vida-stack/.vida/logs/trace-evals/trace-eval-vida-3nq.json"
+  },
+  "dataset_version": "v1",
+  "generated_at": "2026-03-08T11:49:29Z",
+  "labels": {
+    "approval_correctness": "partial",
+    "budget_correctness": "pass",
+    "fallback_correctness": "pass",
+    "overall_grade": "partial",
+    "route_correctness": "pass"
+  },
+  "summary": {
+    "eval_pack": {
+      "block_success_rate": 100.0,
+      "block_total": 3,
+      "compact_recovery_scenario": "not_applicable",
+      "task_status": "closed"
+    },
+    "resume_hint": {},
+    "route_receipt_count": 2
+  },
+  "task_id": "vida-3nq"
+}

@@ -1,0 +1,34 @@
+{
+  "steps": [
+    {
+      "block_id": "P01",
+      "goal": "Prepare context and change impact for continuous next-task analysis and spec/task refresh behavior",
+      "next_step": "P02",
+      "owner": "orchestrator",
+      "status": "doing",
+      "task_id": "vida-stack-2d9.8",
+      "track_id": "main",
+      "ts_start": "2026-03-08T17:21:36Z"
+    },
+    {
+      "block_id": "P02",
+      "depends_on": "P01",
+      "goal": "Implement_Changes_with_Tests",
+      "next_step": "P03",
+      "owner": "orchestrator",
+      "status": "todo",
+      "task_id": "vida-stack-2d9.8",
+      "track_id": "main"
+    },
+    {
+      "block_id": "P03",
+      "depends_on": "P02",
+      "goal": "Verify_Quality_and_Regressions",
+      "owner": "orchestrator",
+      "status": "todo",
+      "task_id": "vida-stack-2d9.8",
+      "track_id": "main"
+    }
+  ],
+  "task_id": "vida-stack-2d9.8"
+}

@@ -1,0 +1,31 @@
+{
+  "log_signature": "1772994664:396548:1772925820:21085",
+  "steps": [
+    {
+      "actions": "Added migration preflight runtime state and operator-visible boot/status/doctor surfaces for Wave 2.3",
+      "block_id": "B01",
+      "evidence_ref": "cargo test -p vida",
+      "goal": "Reconcile current compatibility surface against Wave 2.3 migration preflight and runner scope",
+      "next_step": "-",
+      "owner": "orchestrator",
+      "result": "done",
+      "status": "done",
+      "task_id": "vida-stack-2d9.2.3",
+      "track_id": "main",
+      "ts_end": "2026-03-08T17:10:50Z",
+      "ts_start": "2026-03-08T17:00:29Z"
+    },
+    {
+      "block_id": "B02",
+      "depends_on": "B01",
+      "goal": "Add migration receipt visibility and proof summary surfaces without starting migration application",
+      "owner": "orchestrator",
+      "status": "doing",
+      "task_id": "vida-stack-2d9.2.3",
+      "track_id": "main",
+      "ts_start": "2026-03-08T17:13:00Z"
+    }
+  ],
+  "task_id": "vida-stack-2d9.2.3",
+  "updated_at": "2026-03-08T20:52:51Z"
+}

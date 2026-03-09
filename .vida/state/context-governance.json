@@ -7,7 +7,65 @@
         {
           "freshness": "current",
           "notes": "implementation",
-          "path": "/tmp/tmp96_rurqi/issue-contracts/unit-task.json",
+          "path": "/home/unnamed/project/vida-stack/.vida/logs/issue-contracts/unit-live.json",
+          "provenance": "issue_contract_artifact",
+          "role_scope": "orchestrator",
+          "source_class": "local_runtime"
+        }
+      ],
+      "summary": {
+        "by_source_class": {
+          "local_runtime": 1
+        },
+        "freshness": {
+          "current": 1
+        },
+        "role_scopes": {
+          "orchestrator": 1
+        },
+        "source_count": 1,
+        "web_validated_count": 0
+      },
+      "task_id": "unit-live",
+      "ts": "2026-03-08T21:35:22Z"
+    },
+    {
+      "notes": "implementation",
+      "phase": "prepare_execution",
+      "sources": [
+        {
+          "freshness": "current",
+          "notes": "implementation",
+          "path": "/home/unnamed/project/vida-stack/.vida/logs/issue-contracts/unit-live.json",
+          "provenance": "issue_contract_artifact",
+          "role_scope": "orchestrator",
+          "source_class": "local_runtime"
+        }
+      ],
+      "summary": {
+        "by_source_class": {
+          "local_runtime": 1
+        },
+        "freshness": {
+          "current": 1
+        },
+        "role_scopes": {
+          "orchestrator": 1
+        },
+        "source_count": 1,
+        "web_validated_count": 0
+      },
+      "task_id": "unit-live",
+      "ts": "2026-03-08T21:35:38Z"
+    },
+    {
+      "notes": "implementation",
+      "phase": "prepare_execution",
+      "sources": [
+        {
+          "freshness": "current",
+          "notes": "implementation",
+          "path": "/tmp/tmp_1rvilgu/issue-contracts/unit-task.json",
           "provenance": "issue_contract_artifact",
           "role_scope": "orchestrator",
           "source_class": "local_runtime"
@@ -27,7 +85,65 @@
         "web_validated_count": 0
       },
       "task_id": "unit-task",
-      "ts": "2026-03-08T00:14:46Z"
+      "ts": "2026-03-08T22:07:21Z"
+    },
+    {
+      "notes": "implementation",
+      "phase": "prepare_execution",
+      "sources": [
+        {
+          "freshness": "current",
+          "notes": "implementation",
+          "path": "/tmp/tmp3f3n393y/issue-contracts/unit-task.json",
+          "provenance": "issue_contract_artifact",
+          "role_scope": "orchestrator",
+          "source_class": "local_runtime"
+        }
+      ],
+      "summary": {
+        "by_source_class": {
+          "local_runtime": 1
+        },
+        "freshness": {
+          "current": 1
+        },
+        "role_scopes": {
+          "orchestrator": 1
+        },
+        "source_count": 1,
+        "web_validated_count": 0
+      },
+      "task_id": "unit-task",
+      "ts": "2026-03-08T22:07:32Z"
+    },
+    {
+      "notes": "implementation",
+      "phase": "prepare_execution",
+      "sources": [
+        {
+          "freshness": "current",
+          "notes": "implementation",
+          "path": "/tmp/tmp4gsyzxc2/issue-contracts/unit-task.json",
+          "provenance": "issue_contract_artifact",
+          "role_scope": "orchestrator",
+          "source_class": "local_runtime"
+        }
+      ],
+      "summary": {
+        "by_source_class": {
+          "local_runtime": 1
+        },
+        "freshness": {
+          "current": 1
+        },
+        "role_scopes": {
+          "orchestrator": 1
+        },
+        "source_count": 1,
+        "web_validated_count": 0
+      },
+      "task_id": "unit-task",
+      "ts": "2026-03-08T23:53:24Z"
     },
     {
       "notes": "implementation",
@@ -44,7 +160,7 @@
         {
           "freshness": "current",
           "notes": "implementation",
-          "path": "/tmp/tmpsg_h78m2/issue-contracts/unit-task.json",
+          "path": "/tmp/tmpsm3zjr4s/issue-contracts/unit-task.json",
           "provenance": "issue_contract_artifact",
           "role_scope": "orchestrator",
           "source_class": "local_runtime"
@@ -64,7 +180,7 @@
         "web_validated_count": 0
       },
       "task_id": "unit-task",
-      "ts": "2026-03-08T00:14:46Z"
+      "ts": "2026-03-08T23:53:24Z"
     },
     {
       "notes": "implementation",
@@ -73,7 +189,7 @@
         {
           "freshness": "current",
           "notes": "implementation",
-          "path": "/tmp/tmp74l5ithd/spec-intake/unit-task.json",
+          "path": "/tmp/tmpa8n88i5f/spec-intake/unit-task.json",
           "provenance": "spec_intake_artifact",
           "role_scope": "orchestrator",
           "source_class": "local_runtime"
@@ -89,7 +205,7 @@
         {
           "freshness": "current",
           "notes": "implementation",
-          "path": "/tmp/tmp74l5ithd/issue-contracts/unit-task.json",
+          "path": "/tmp/tmpa8n88i5f/issue-contracts/unit-task.json",
           "provenance": "issue_contract_artifact",
           "role_scope": "orchestrator",
           "source_class": "local_runtime"
@@ -109,7 +225,7 @@
         "web_validated_count": 0
       },
       "task_id": "unit-task",
-      "ts": "2026-03-08T00:14:46Z"
+      "ts": "2026-03-08T23:53:24Z"
     },
     {
       "notes": "implementation",
@@ -126,7 +242,7 @@
         {
           "freshness": "current",
           "notes": "implementation",
-          "path": "/tmp/tmpaqddr8xr/issue-contracts/unit-task.json",
+          "path": "/tmp/tmpx1llq0wu/issue-contracts/unit-task.json",
           "provenance": "issue_contract_artifact",
           "role_scope": "orchestrator",
           "source_class": "local_runtime"
@@ -146,7 +262,7 @@
         "web_validated_count": 0
       },
       "task_id": "unit-task",
-      "ts": "2026-03-08T00:14:46Z"
+      "ts": "2026-03-08T23:53:24Z"
     },
     {
       "notes": "implementation",
@@ -175,7 +291,7 @@
         "web_validated_count": 0
       },
       "task_id": "unit-task",
-      "ts": "2026-03-08T00:14:46Z"
+      "ts": "2026-03-08T23:53:24Z"
     },
     {
       "notes": "implementation",
@@ -184,7 +300,7 @@
         {
           "freshness": "current",
           "notes": "implementation",
-          "path": "/tmp/tmp_7c8sqky/issue-contracts/unit-task.json",
+          "path": "/tmp/tmpq44g9fhv/issue-contracts/unit-task.json",
           "provenance": "issue_contract_artifact",
           "role_scope": "orchestrator",
           "source_class": "local_runtime"
@@ -204,7 +320,7 @@
         "web_validated_count": 0
       },
       "task_id": "unit-task",
-      "ts": "2026-03-08T00:14:46Z"
+      "ts": "2026-03-08T23:53:24Z"
     },
     {
       "notes": "implementation",
@@ -213,7 +329,7 @@
         {
           "freshness": "current",
           "notes": "implementation",
-          "path": "/tmp/tmpfcxvtfy3/issue-contracts/unit-task.json",
+          "path": "/tmp/tmpbs2g7xa9/issue-contracts/unit-task.json",
           "provenance": "issue_contract_artifact",
           "role_scope": "orchestrator",
           "source_class": "local_runtime"
@@ -233,258 +349,15 @@
         "web_validated_count": 0
       },
       "task_id": "unit-task",
-      "ts": "2026-03-08T00:14:46Z"
-    },
-    {
-      "notes": "implementation",
-      "phase": "prepare_execution",
-      "sources": [
-        {
-          "freshness": "current",
-          "notes": "implementation",
-          "path": "/home/unnamed/project/vida-stack/.vida/logs/spec-deltas/unit-task.json",
-          "provenance": "spec_delta_artifact",
-          "role_scope": "orchestrator",
-          "source_class": "local_runtime"
-        },
-        {
-          "freshness": "current",
-          "notes": "implementation",
-          "path": "/tmp/tmpr3wexi4o/issue-contracts/unit-task.json",
-          "provenance": "issue_contract_artifact",
-          "role_scope": "orchestrator",
-          "source_class": "local_runtime"
-        }
-      ],
-      "summary": {
-        "by_source_class": {
-          "local_runtime": 2
-        },
-        "freshness": {
-          "current": 2
-        },
-        "role_scopes": {
-          "orchestrator": 2
-        },
-        "source_count": 2,
-        "web_validated_count": 0
-      },
-      "task_id": "unit-task",
-      "ts": "2026-03-08T00:15:13Z"
-    },
-    {
-      "notes": "implementation",
-      "phase": "prepare_execution",
-      "sources": [
-        {
-          "freshness": "current",
-          "notes": "implementation",
-          "path": "/home/unnamed/project/vida-stack/.vida/logs/spec-deltas/unit-task.json",
-          "provenance": "spec_delta_artifact",
-          "role_scope": "orchestrator",
-          "source_class": "local_runtime"
-        },
-        {
-          "freshness": "current",
-          "notes": "implementation",
-          "path": "/tmp/tmpojji0xsp/issue-contracts/unit-task.json",
-          "provenance": "issue_contract_artifact",
-          "role_scope": "orchestrator",
-          "source_class": "local_runtime"
-        }
-      ],
-      "summary": {
-        "by_source_class": {
-          "local_runtime": 2
-        },
-        "freshness": {
-          "current": 2
-        },
-        "role_scopes": {
-          "orchestrator": 2
-        },
-        "source_count": 2,
-        "web_validated_count": 0
-      },
-      "task_id": "unit-task",
-      "ts": "2026-03-08T00:15:13Z"
-    },
-    {
-      "notes": "implementation",
-      "phase": "prepare_execution",
-      "sources": [
-        {
-          "freshness": "current",
-          "notes": "implementation",
-          "path": "/tmp/tmps_cu7dvt/spec-intake/unit-task.json",
-          "provenance": "spec_intake_artifact",
-          "role_scope": "orchestrator",
-          "source_class": "local_runtime"
-        },
-        {
-          "freshness": "current",
-          "notes": "implementation",
-          "path": "/home/unnamed/project/vida-stack/.vida/logs/spec-deltas/unit-task.json",
-          "provenance": "spec_delta_artifact",
-          "role_scope": "orchestrator",
-          "source_class": "local_runtime"
-        },
-        {
-          "freshness": "current",
-          "notes": "implementation",
-          "path": "/tmp/tmps_cu7dvt/issue-contracts/unit-task.json",
-          "provenance": "issue_contract_artifact",
-          "role_scope": "orchestrator",
-          "source_class": "local_runtime"
-        }
-      ],
-      "summary": {
-        "by_source_class": {
-          "local_runtime": 3
-        },
-        "freshness": {
-          "current": 3
-        },
-        "role_scopes": {
-          "orchestrator": 3
-        },
-        "source_count": 3,
-        "web_validated_count": 0
-      },
-      "task_id": "unit-task",
-      "ts": "2026-03-08T00:15:13Z"
-    },
-    {
-      "notes": "implementation",
-      "phase": "prepare_execution",
-      "sources": [
-        {
-          "freshness": "current",
-          "notes": "implementation",
-          "path": "/home/unnamed/project/vida-stack/.vida/logs/spec-deltas/unit-task.json",
-          "provenance": "spec_delta_artifact",
-          "role_scope": "orchestrator",
-          "source_class": "local_runtime"
-        },
-        {
-          "freshness": "current",
-          "notes": "implementation",
-          "path": "/tmp/tmp44jefe60/issue-contracts/unit-task.json",
-          "provenance": "issue_contract_artifact",
-          "role_scope": "orchestrator",
-          "source_class": "local_runtime"
-        }
-      ],
-      "summary": {
-        "by_source_class": {
-          "local_runtime": 2
-        },
-        "freshness": {
-          "current": 2
-        },
-        "role_scopes": {
-          "orchestrator": 2
-        },
-        "source_count": 2,
-        "web_validated_count": 0
-      },
-      "task_id": "unit-task",
-      "ts": "2026-03-08T00:15:13Z"
-    },
-    {
-      "notes": "implementation",
-      "phase": "prepare_execution",
-      "sources": [
-        {
-          "freshness": "current",
-          "notes": "implementation",
-          "path": "/home/unnamed/project/vida-stack/.vida/logs/issue-contracts/unit-task.json",
-          "provenance": "issue_contract_artifact",
-          "role_scope": "orchestrator",
-          "source_class": "local_runtime"
-        }
-      ],
-      "summary": {
-        "by_source_class": {
-          "local_runtime": 1
-        },
-        "freshness": {
-          "current": 1
-        },
-        "role_scopes": {
-          "orchestrator": 1
-        },
-        "source_count": 1,
-        "web_validated_count": 0
-      },
-      "task_id": "unit-task",
-      "ts": "2026-03-08T00:15:13Z"
-    },
-    {
-      "notes": "implementation",
-      "phase": "prepare_execution",
-      "sources": [
-        {
-          "freshness": "current",
-          "notes": "implementation",
-          "path": "/tmp/tmp_9dxm69z/issue-contracts/unit-task.json",
-          "provenance": "issue_contract_artifact",
-          "role_scope": "orchestrator",
-          "source_class": "local_runtime"
-        }
-      ],
-      "summary": {
-        "by_source_class": {
-          "local_runtime": 1
-        },
-        "freshness": {
-          "current": 1
-        },
-        "role_scopes": {
-          "orchestrator": 1
-        },
-        "source_count": 1,
-        "web_validated_count": 0
-      },
-      "task_id": "unit-task",
-      "ts": "2026-03-08T00:15:13Z"
-    },
-    {
-      "notes": "implementation",
-      "phase": "prepare_execution",
-      "sources": [
-        {
-          "freshness": "current",
-          "notes": "implementation",
-          "path": "/tmp/tmp7fe0wff3/issue-contracts/unit-task.json",
-          "provenance": "issue_contract_artifact",
-          "role_scope": "orchestrator",
-          "source_class": "local_runtime"
-        }
-      ],
-      "summary": {
-        "by_source_class": {
-          "local_runtime": 1
-        },
-        "freshness": {
-          "current": 1
-        },
-        "role_scopes": {
-          "orchestrator": 1
-        },
-        "source_count": 1,
-        "web_validated_count": 0
-      },
-      "task_id": "unit-task",
-      "ts": "2026-03-08T00:15:13Z"
+      "ts": "2026-03-08T23:53:24Z"
     }
   ],
   "summary": {
     "by_source_class": {
-      "local_runtime": 23
+      "local_runtime": 15
     },
-    "last_recorded_at": "2026-03-08T00:15:13Z",
-    "task_count": 1,
+    "last_recorded_at": "2026-03-08T23:53:24Z",
+    "task_count": 2,
     "web_validated_count": 0
   }
 }

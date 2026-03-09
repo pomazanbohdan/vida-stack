@@ -1,0 +1,11 @@
+{
+  "actor": "orchestrator",
+  "evidence": "execution-auth runtime fix landed with focused tests",
+  "notes": "framework-tracked remediation task requires structured execution-auth override after canonical no_eligible_analysis_lane route result",
+  "reason": "no_eligible_analysis_lane",
+  "route_receipt_hash": "d248b079cffdebb16c415687b1bc837ab3b10dae1f1a8212dee704c3eddca0dc",
+  "route_receipt_path": "/home/unnamed/project/vida-stack/.vida/logs/route-receipts/vida-stack-2d9.8.4.implementation.route.json",
+  "task_class": "implementation",
+  "task_id": "vida-stack-2d9.8.4",
+  "ts": "2026-03-08T18:24:58Z"
+}

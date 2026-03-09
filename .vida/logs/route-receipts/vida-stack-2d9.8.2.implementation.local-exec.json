@@ -1,0 +1,13 @@
+{
+  "actor": "framework-wave-start",
+  "analysis_receipt_present": false,
+  "evidence": "framework-wave-start",
+  "notes": "Initialized via framework-wave-start for framework-owned tracked work",
+  "reason": "emergency_override",
+  "route_receipt_hash": "82bf3a49fcce7d8629855602e0b8e79073ce9c9c96965cb5f821dcb607f9766a",
+  "route_receipt_path": "/home/unnamed/project/vida-stack/.vida/logs/route-receipts/vida-stack-2d9.8.2.implementation.route.json",
+  "scope": "framework_owned_dev_pack",
+  "task_class": "implementation",
+  "task_id": "vida-stack-2d9.8.2",
+  "ts": "2026-03-08T17:33:17Z"
+}

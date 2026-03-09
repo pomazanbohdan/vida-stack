@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "actions": "Three-slice memory model and line-oriented sidecar patch semantics frozen in active specs",
+      "block_id": "B01",
+      "evidence_ref": "Added canonical sidecar patch operations, anchor rules, revalidation-on-migration, and three-slice memory separation",
+      "goal": "Freeze three-slice memory model and line-oriented sidecar patch semantics",
+      "next_step": "B02",
+      "owner": "orchestrator",
+      "result": "done",
+      "status": "done",
+      "task_id": "vida-3ek",
+      "track_id": "main",
+      "ts_end": "2026-03-08T12:32:05Z",
+      "ts_start": "2026-03-08T12:31:09Z"
+    }
+  ],
+  "task_id": "vida-3ek"
+}

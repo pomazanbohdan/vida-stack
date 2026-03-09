@@ -1,0 +1,148 @@
+{
+  "decision_required": [],
+  "execution_continue_default": {
+    "compact_assumption": "compact_can_happen_any_time",
+    "mode": "route_then_external_analysis",
+    "prepare_execution_command": "python3 _vida/scripts/subagent-dispatch.py prepare-execution <task_id> <writer_task_class> <prompt_file> <output_dir> [workdir]",
+    "selection_policy": "prefer explicit priority first, then most recently updated work within the same priority band",
+    "summary": "For write-producing continuation work in hybrid mode, stop after compact task snapshot, build the route receipt, and obtain the external analysis receipt before writer dispatch."
+  },
+  "framework_self_diagnosis": {
+    "auto_capture_bugs": true,
+    "defer_fix_until_task_boundary": true,
+    "enabled": true,
+    "parent_issue": "mobile-1hv",
+    "platform_direction": "agentic_engineering_platform",
+    "quality_token_efficiency": "equal_weight",
+    "session_reflection_criteria": [
+      "architecture_cleanliness",
+      "completeness",
+      "token_efficiency",
+      "orchestration_efficiency",
+      "instruction_clarity",
+      "instruction_runtime_consistency"
+    ],
+    "session_reflection_required": true,
+    "silent_mode": true
+  },
+  "generated_at": "2026-03-08T11:37:35Z",
+  "in_progress": [
+    {
+      "hidden_subtasks": 0,
+      "id": "vida-stack-2d9.9",
+      "mode": "autonomous",
+      "priority": 1,
+      "reconciliation": {
+        "allowed_actions": [
+          "resume_next_block",
+          "or_reconcile_br"
+        ],
+        "classification": "stale_in_progress"
+      },
+      "run_graph": {
+        "present": false,
+        "resume_hint": {}
+      },
+      "status": "in_progress",
+      "subtasks": [],
+      "title": "Slice full VIDA 1.0 roadmap into executable br backlog",
+      "updated_at": "2026-03-08T11:37:32.155701Z"
+    },
+    {
+      "hidden_subtasks": 0,
+      "id": "vida-stack-2d9.1.1",
+      "mode": "auto",
+      "priority": 1,
+      "reconciliation": {
+        "allowed_actions": [
+          "continue_current_block"
+        ],
+        "classification": "active"
+      },
+      "run_graph": {
+        "present": false,
+        "resume_hint": {}
+      },
+      "status": "in_progress",
+      "subtasks": [],
+      "title": "Wave 1.1 - Minimal Rust workspace and bootable vida scaffold",
+      "updated_at": "2026-03-08T11:30:13.506347Z"
+    }
+  ],
+  "limits": {
+    "ready_head": 3,
+    "subtasks": 5,
+    "top_level": 5
+  },
+  "ready_head": [
+    {
+      "hidden_subtasks": 0,
+      "id": "vida-stack-2d9.8",
+      "mode": "auto",
+      "priority": 1,
+      "reconciliation": {
+        "allowed_actions": [
+          "continue"
+        ],
+        "classification": "open"
+      },
+      "run_graph": {
+        "present": false,
+        "resume_hint": {}
+      },
+      "status": "open",
+      "subtasks": [],
+      "title": "Framework execution efficiency and autonomous follow-through hardening",
+      "updated_at": "2026-03-08T11:33:37.394233158Z"
+    },
+    {
+      "hidden_subtasks": 0,
+      "id": "vida-stack-2d9.1.3",
+      "mode": "auto",
+      "priority": 1,
+      "reconciliation": {
+        "allowed_actions": [
+          "continue"
+        ],
+        "classification": "open"
+      },
+      "run_graph": {
+        "present": false,
+        "resume_hint": {}
+      },
+      "status": "open",
+      "subtasks": [],
+      "title": "Wave 1.3 - Fail-closed shell hardening",
+      "updated_at": "2026-03-08T11:30:00.540933741Z"
+    },
+    {
+      "hidden_subtasks": 0,
+      "id": "vida-stack-2d9.1.2",
+      "mode": "auto",
+      "priority": 1,
+      "reconciliation": {
+        "allowed_actions": [
+          "continue"
+        ],
+        "classification": "open"
+      },
+      "run_graph": {
+        "present": false,
+        "resume_hint": {}
+      },
+      "status": "open",
+      "subtasks": [],
+      "title": "Wave 1.2 - Cheap local proof loop for Binary Foundation",
+      "updated_at": "2026-03-08T11:30:00.377748884Z"
+    }
+  ],
+  "summary": {
+    "active_run_graphs": 0,
+    "ready_in_progress": 2,
+    "ready_open": 11,
+    "ready_total": 13,
+    "top_level_blocked": 0,
+    "top_level_in_progress": 2,
+    "top_level_open": 11
+  }
+}

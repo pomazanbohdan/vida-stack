@@ -4,8 +4,8 @@ version: 1
 revision: 2026-03-09
 compatibility_class: direct_v1_kernel
 canonical_source_refs:
-  - _vida/docs/plans/2026-03-08-vida-0.3-state-kernel-schema-spec.md
-  - _vida/docs/plans/2026-03-08-vida-0.3-route-and-receipt-spec.md
+  - docs/framework/history/plans/2026-03-08-vida-0.3-state-kernel-schema-spec.md
+  - docs/framework/history/plans/2026-03-08-vida-0.3-route-and-receipt-spec.md
   - vida.config.yaml
 kernel_rules:
   closure_ready:

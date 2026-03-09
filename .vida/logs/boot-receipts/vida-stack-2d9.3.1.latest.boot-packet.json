@@ -1,0 +1,43 @@
+{
+  "generated_at": "2026-03-08T15:39:04Z",
+  "invariants": [
+    "read AGENTS.md first after compression",
+    "apply thinking-protocol algorithms",
+    "task state lives in br",
+    "execute only through TODO blocks",
+    "external-first fanout for eligible read-only work"
+  ],
+  "language_policy": {
+    "documentation": "en",
+    "reasoning": "en",
+    "todo_protocol": "en",
+    "user_communication": "uk"
+  },
+  "non_dev": true,
+  "profile": "lean",
+  "protocol_activation": {
+    "agent_system": true
+  },
+  "read_contract": [
+    "AGENTS.md",
+    "_vida/docs/thinking-protocol.md#section-algorithm-selector",
+    "_vida/docs/thinking-protocol.md#section-stc",
+    "_vida/docs/thinking-protocol.md#section-pr-cot",
+    "_vida/docs/thinking-protocol.md#section-mar",
+    "_vida/docs/thinking-protocol.md#section-5-solutions",
+    "_vida/docs/thinking-protocol.md#section-meta-analysis",
+    "_vida/docs/thinking-protocol.md#section-bug-reasoning",
+    "_vida/docs/thinking-protocol.md#section-web-search",
+    "_vida/docs/thinking-protocol.md#section-reasoning-modules",
+    "_vida/docs/web-validation-protocol.md",
+    "_vida/docs/beads-protocol.md",
+    "_vida/docs/project-overlay-protocol.md",
+    "_vida/docs/spec-contract-protocol.md",
+    "vida.config.yaml",
+    "_vida/docs/subagent-system-protocol.md"
+  ],
+  "runtime_hints": {
+    "compact_boot_snapshot_command": "",
+    "compact_boot_snapshot_scope": "disabled for non-dev boot"
+  }
+}

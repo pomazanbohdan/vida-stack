@@ -1,0 +1,141 @@
+{
+  "written_at": "2026-03-08T17:58:49Z",
+  "profile": "standard",
+  "task_id": "vida-stack-2d9.8.4",
+  "subject": "vida-stack-2d9.8.4",
+  "non_dev": false,
+  "capsule_status": "present",
+  "status": "ok",
+  "read_contract": [
+    "AGENTS.md",
+    "_vida/docs/thinking-protocol.md#section-algorithm-selector",
+    "_vida/docs/thinking-protocol.md#section-stc",
+    "_vida/docs/thinking-protocol.md#section-pr-cot",
+    "_vida/docs/thinking-protocol.md#section-mar",
+    "_vida/docs/thinking-protocol.md#section-5-solutions",
+    "_vida/docs/thinking-protocol.md#section-meta-analysis",
+    "_vida/docs/thinking-protocol.md#section-bug-reasoning",
+    "_vida/docs/thinking-protocol.md#section-web-search",
+    "_vida/docs/thinking-protocol.md#section-reasoning-modules",
+    "_vida/docs/web-validation-protocol.md",
+    "_vida/docs/beads-protocol.md",
+    "_vida/docs/project-overlay-protocol.md",
+    "_vida/docs/todo-protocol.md",
+    "_vida/docs/implement-execution-protocol.md",
+    "_vida/docs/use-case-packs.md",
+    "vida.config.yaml",
+    "_vida/docs/subagent-system-protocol.md"
+  ],
+  "contract_files": [
+    {
+      "entry": "AGENTS.md",
+      "path": "AGENTS.md",
+      "exists": true,
+      "sha256": "9523263758d6acfc63ff8be92253c1001bbfaefeebd79bd03f868c846b3e80d1"
+    },
+    {
+      "entry": "_vida/docs/thinking-protocol.md#section-algorithm-selector",
+      "path": "_vida/docs/thinking-protocol.md",
+      "exists": true,
+      "sha256": "bc3569dede0fa3b98ade3e32151afe57dd79fc0463b96033ac9fb7d46f424c56"
+    },
+    {
+      "entry": "_vida/docs/thinking-protocol.md#section-stc",
+      "path": "_vida/docs/thinking-protocol.md",
+      "exists": true,
+      "sha256": "bc3569dede0fa3b98ade3e32151afe57dd79fc0463b96033ac9fb7d46f424c56"
+    },
+    {
+      "entry": "_vida/docs/thinking-protocol.md#section-pr-cot",
+      "path": "_vida/docs/thinking-protocol.md",
+      "exists": true,
+      "sha256": "bc3569dede0fa3b98ade3e32151afe57dd79fc0463b96033ac9fb7d46f424c56"
+    },
+    {
+      "entry": "_vida/docs/thinking-protocol.md#section-mar",
+      "path": "_vida/docs/thinking-protocol.md",
+      "exists": true,
+      "sha256": "bc3569dede0fa3b98ade3e32151afe57dd79fc0463b96033ac9fb7d46f424c56"
+    },
+    {
+      "entry": "_vida/docs/thinking-protocol.md#section-5-solutions",
+      "path": "_vida/docs/thinking-protocol.md",
+      "exists": true,
+      "sha256": "bc3569dede0fa3b98ade3e32151afe57dd79fc0463b96033ac9fb7d46f424c56"
+    },
+    {
+      "entry": "_vida/docs/thinking-protocol.md#section-meta-analysis",
+      "path": "_vida/docs/thinking-protocol.md",
+      "exists": true,
+      "sha256": "bc3569dede0fa3b98ade3e32151afe57dd79fc0463b96033ac9fb7d46f424c56"
+    },
+    {
+      "entry": "_vida/docs/thinking-protocol.md#section-bug-reasoning",
+      "path": "_vida/docs/thinking-protocol.md",
+      "exists": true,
+      "sha256": "bc3569dede0fa3b98ade3e32151afe57dd79fc0463b96033ac9fb7d46f424c56"
+    },
+    {
+      "entry": "_vida/docs/thinking-protocol.md#section-web-search",
+      "path": "_vida/docs/thinking-protocol.md",
+      "exists": true,
+      "sha256": "bc3569dede0fa3b98ade3e32151afe57dd79fc0463b96033ac9fb7d46f424c56"
+    },
+    {
+      "entry": "_vida/docs/thinking-protocol.md#section-reasoning-modules",
+      "path": "_vida/docs/thinking-protocol.md",
+      "exists": true,
+      "sha256": "bc3569dede0fa3b98ade3e32151afe57dd79fc0463b96033ac9fb7d46f424c56"
+    },
+    {
+      "entry": "_vida/docs/web-validation-protocol.md",
+      "path": "_vida/docs/web-validation-protocol.md",
+      "exists": true,
+      "sha256": "8b0648e64e7df4ac205f3f7845aaecf2d83d951349e960b3d287ad15850cc707"
+    },
+    {
+      "entry": "_vida/docs/beads-protocol.md",
+      "path": "_vida/docs/beads-protocol.md",
+      "exists": true,
+      "sha256": "66dd871c1c7c96cd8ad850411a20b930b05fac9c4dadeef244ea74b7cea96992"
+    },
+    {
+      "entry": "_vida/docs/project-overlay-protocol.md",
+      "path": "_vida/docs/project-overlay-protocol.md",
+      "exists": true,
+      "sha256": "63317705518a45717ba6b6ca3d4b2d314b6a44dd0982218e6bdb2284efd73179"
+    },
+    {
+      "entry": "_vida/docs/todo-protocol.md",
+      "path": "_vida/docs/todo-protocol.md",
+      "exists": true,
+      "sha256": "0a8b808f674e0b7f4281ba560d555ba00c5df6e23423e69638c2c9c8b7fb51d4"
+    },
+    {
+      "entry": "_vida/docs/implement-execution-protocol.md",
+      "path": "_vida/docs/implement-execution-protocol.md",
+      "exists": true,
+      "sha256": "a4574e2af2c0ffddf83468de42cfd0926d8232684b8cd4d9308e63b5c0a635c3"
+    },
+    {
+      "entry": "_vida/docs/use-case-packs.md",
+      "path": "_vida/docs/use-case-packs.md",
+      "exists": true,
+      "sha256": "6db9de7c9c430d8f7bb74f28199c8235cbc29d65395359472ba109ac82e7d839"
+    },
+    {
+      "entry": "vida.config.yaml",
+      "path": "vida.config.yaml",
+      "exists": true,
+      "sha256": "1a66f09f03ccbfcca5a2acd8597d508e730982bebc2e4000860738cc27b983fb"
+    },
+    {
+      "entry": "_vida/docs/subagent-system-protocol.md",
+      "path": "_vida/docs/subagent-system-protocol.md",
+      "exists": true,
+      "sha256": "8b9bec9a1b05ad685ff8e7c21315062d7678cf76555a990849a43a39d21da9b5"
+    }
+  ],
+  "boot_packet_file": "/home/unnamed/project/vida-stack/.vida/logs/boot-receipts/vida-stack-2d9.8.4-20260308T175849Z.boot-packet.json",
+  "boot_snapshot_file": "/home/unnamed/project/vida-stack/.vida/logs/boot-receipts/vida-stack-2d9.8.4-20260308T175849Z.boot-snapshot.json"
+}

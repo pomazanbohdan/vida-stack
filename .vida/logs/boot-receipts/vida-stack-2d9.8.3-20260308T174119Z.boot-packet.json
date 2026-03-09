@@ -1,0 +1,45 @@
+{
+  "generated_at": "2026-03-08T17:41:19Z",
+  "invariants": [
+    "read AGENTS.md first after compression",
+    "apply thinking-protocol algorithms",
+    "task state lives in br",
+    "execute only through TODO blocks",
+    "external-first fanout for eligible read-only work"
+  ],
+  "language_policy": {
+    "documentation": "en",
+    "reasoning": "en",
+    "todo_protocol": "en",
+    "user_communication": "uk"
+  },
+  "non_dev": false,
+  "profile": "standard",
+  "protocol_activation": {
+    "agent_system": true
+  },
+  "read_contract": [
+    "AGENTS.md",
+    "_vida/docs/thinking-protocol.md#section-algorithm-selector",
+    "_vida/docs/thinking-protocol.md#section-stc",
+    "_vida/docs/thinking-protocol.md#section-pr-cot",
+    "_vida/docs/thinking-protocol.md#section-mar",
+    "_vida/docs/thinking-protocol.md#section-5-solutions",
+    "_vida/docs/thinking-protocol.md#section-meta-analysis",
+    "_vida/docs/thinking-protocol.md#section-bug-reasoning",
+    "_vida/docs/thinking-protocol.md#section-web-search",
+    "_vida/docs/thinking-protocol.md#section-reasoning-modules",
+    "_vida/docs/web-validation-protocol.md",
+    "_vida/docs/beads-protocol.md",
+    "_vida/docs/project-overlay-protocol.md",
+    "_vida/docs/todo-protocol.md",
+    "_vida/docs/implement-execution-protocol.md",
+    "_vida/docs/use-case-packs.md",
+    "vida.config.yaml",
+    "_vida/docs/subagent-system-protocol.md"
+  ],
+  "runtime_hints": {
+    "compact_boot_snapshot_command": "python3 _vida/scripts/vida-boot-snapshot.py --json",
+    "compact_boot_snapshot_scope": "top-level in-progress tasks, ready head, and open subtask tree"
+  }
+}

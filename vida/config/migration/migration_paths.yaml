@@ -7,7 +7,7 @@ paths:
   - id: overlay_v1_to_root_config_v1
     source:
       - vida.config.yaml
-      - _vida/docs/plans/2026-03-08-vida-0.2-semantic-freeze-spec.md
+      - docs/framework/history/plans/2026-03-08-vida-0.2-semantic-freeze-spec.md
     target:
       - vida/config/instructions/overlays/project_overlay.yaml
       - vida/config/agents/agents.yaml
@@ -18,8 +18,8 @@ paths:
 
   - id: legacy_bridge_to_root_kernel_v1
     source:
-      - _vida/docs/plans/2026-03-08-vida-semantic-extraction-layer-map.md
-      - _vida/docs/plans/2026-03-08-vida-0.3-parity-and-conformance-spec.md
+      - docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md
+      - docs/framework/history/plans/2026-03-08-vida-0.3-parity-and-conformance-spec.md
     target:
       - vida/config/machines
       - vida/config/routes

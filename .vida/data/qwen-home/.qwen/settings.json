@@ -1,0 +1,6 @@
+{
+  "security": {
+    "auth": {}
+  },
+  "$version": 3
+}

@@ -1,0 +1,28 @@
+{
+  "pending_framework_bugs": [
+    {
+      "bug_id": "vida-stack-2d9.10",
+      "created_at": "2026-03-08T11:49:06Z",
+      "current_task": "vida-3nq",
+      "fingerprint": "verification capture after parent drift fix",
+      "status": "pending_follow_up",
+      "summary": "verification capture after parent drift fix",
+      "title": "VIDA silent diagnosis: verification capture after parent drift fix",
+      "workaround": "none"
+    }
+  ],
+  "session_reflections": [
+    {
+      "criteria": [
+        "instruction_runtime_consistency"
+      ],
+      "current_task": "",
+      "gaps": [
+        "Execution began before canonical TODO/`br` task/block lifecycle was established for the active VIDA 1.0 development flow.",
+        "Overlay-resolved project operations runbook path points to docs/process/project-operations.md, but that file is absent in this repository state.",
+        "Framework-owned TODO/beads protocol and scripts are present and can serve as the lawful tracked execution path once a `br` task context is established."
+      ],
+      "ts": "2026-03-08T11:28:14Z"
+    }
+  ]
+}

@@ -1,0 +1,224 @@
+{
+  "route_receipt": {
+    "analysis_default_in_boot": "yes",
+    "analysis_plan": {
+      "default_in_boot": "yes",
+      "external_first_required": "yes",
+      "fanout_min_results": 1,
+      "fanout_subagents": [
+        "qwen_cli",
+        "kilo_cli"
+      ],
+      "merge_policy": "consensus_with_conflict_flag",
+      "reason": "analysis_phase_required",
+      "receipt_required": "yes",
+      "required": "yes",
+      "route_task_class": "analysis",
+      "selected_subagent": "qwen_cli",
+      "zero_budget_required": "yes"
+    },
+    "analysis_receipt_required": "yes",
+    "analysis_required": "yes",
+    "analysis_route_task_class": "analysis",
+    "analysis_zero_budget_required": "yes",
+    "bridge_fallback_subagent": "codex_cli",
+    "coach_plan": {
+      "independent": true,
+      "max_passes": 2,
+      "merge_policy": "unanimous_approve_rework_bias",
+      "min_results": 2,
+      "reason": "independent_coach_ensemble_selected",
+      "required": "yes",
+      "route_task_class": "coach",
+      "selected_subagent": "gemini_cli",
+      "selected_subagents": [
+        "gemini_cli",
+        "kilo_cli"
+      ]
+    },
+    "coach_required": "yes",
+    "coach_route_task_class": "coach",
+    "dispatch_policy": {
+      "allowed_internal_reasons": [
+        "cross_module_or_architecture_shift"
+      ],
+      "cli_dispatch_required_if_delegating": "no",
+      "direct_internal_bypass_forbidden": "yes",
+      "internal_escalation_allowed": "yes",
+      "internal_route_authorized": "no",
+      "local_execution_allowed": "no",
+      "local_execution_preferred": "no",
+      "required_dispatch_path": [
+        "analysis_external_zero_budget",
+        "analysis_receipt",
+        "bridge_fallback",
+        "internal_escalation"
+      ]
+    },
+    "dispatch_required": "external_readonly_then_senior_writer",
+    "external_first_required": "no",
+    "fanout_min_results": 0,
+    "fanout_subagents": [],
+    "independent_verification_required": "yes",
+    "internal_escalation_trigger": "cross_module_or_architecture_shift",
+    "merge_policy": "single_subagent",
+    "route_budget": {
+      "budget_policy": "balanced",
+      "estimated_coach_calls": 2,
+      "estimated_coach_cost_units": 0,
+      "estimated_coach_selected_subagents": [
+        "gemini_cli",
+        "kilo_cli"
+      ],
+      "estimated_fallback_hops": 2,
+      "estimated_optional_fallback_cost_units": 1,
+      "estimated_optional_internal_escalation_cost_units": 10,
+      "estimated_primary_calls": 1,
+      "estimated_primary_cost_units": 1,
+      "estimated_route_cost_class": "cheap",
+      "estimated_route_cost_units": 1,
+      "estimated_selected_cost_class": "cheap",
+      "estimated_selected_cost_units": 1,
+      "estimated_verification_calls": 1,
+      "estimated_verification_cost_units": 0,
+      "max_budget_cost_class": "paid",
+      "max_budget_units": 5,
+      "max_cli_subagent_calls": 4,
+      "max_coach_passes": 2,
+      "max_fallback_hops": 2,
+      "max_total_runtime_seconds": 540,
+      "max_verification_passes": 1
+    },
+    "route_graph": {
+      "deterministic_first": "no",
+      "edges": [
+        {
+          "condition": "route_selected",
+          "from": "entry",
+          "to": "analysis"
+        },
+        {
+          "condition": "analysis_receipt_ready",
+          "from": "analysis",
+          "to": "writer"
+        },
+        {
+          "condition": "subagent_exhausted_or_quality_gap",
+          "from": "writer",
+          "to": "bridge_fallback"
+        },
+        {
+          "condition": "cross_module_or_architecture_shift",
+          "from": "bridge_fallback",
+          "to": "internal_escalation"
+        },
+        {
+          "condition": "writer_result_ready",
+          "from": "writer",
+          "to": "coach"
+        },
+        {
+          "condition": "coach_approved",
+          "from": "coach",
+          "to": "verification"
+        },
+        {
+          "condition": "verification_gate_passed_or_not_required",
+          "from": "verification",
+          "to": "synthesis"
+        }
+      ],
+      "graph_strategy": "deterministic_then_escalate",
+      "nodes": [
+        {
+          "id": "entry",
+          "label": "implementation",
+          "type": "entry"
+        },
+        {
+          "fanout_min_results": 1,
+          "fanout_subagents": [
+            "qwen_cli",
+            "kilo_cli"
+          ],
+          "id": "analysis",
+          "mode": "fanout",
+          "receipt_required": "yes",
+          "route_task_class": "analysis",
+          "selected_subagent": "qwen_cli",
+          "type": "analysis",
+          "zero_budget_required": "yes"
+        },
+        {
+          "fanout_subagents": [],
+          "id": "writer",
+          "mode": "single",
+          "selected_subagent": "codex_cli",
+          "type": "dispatch"
+        },
+        {
+          "condition": "primary_route_insufficient",
+          "id": "bridge_fallback",
+          "selected_subagent": "codex_cli",
+          "type": "fallback"
+        },
+        {
+          "condition": "cross_module_or_architecture_shift",
+          "id": "internal_escalation",
+          "selected_subagent": "internal_subagents",
+          "type": "escalation"
+        },
+        {
+          "id": "coach",
+          "independent": true,
+          "max_passes": 2,
+          "merge_policy": "unanimous_approve_rework_bias",
+          "min_results": 2,
+          "route_task_class": "coach",
+          "selected_subagent": "gemini_cli",
+          "selected_subagents": [
+            "gemini_cli",
+            "kilo_cli"
+          ],
+          "type": "coach"
+        },
+        {
+          "id": "verification",
+          "independent": true,
+          "route_task_class": "review_ensemble",
+          "selected_subagent": "gemini_cli",
+          "type": "verification"
+        },
+        {
+          "budget_policy": "balanced",
+          "id": "synthesis",
+          "owner": "orchestrator",
+          "type": "synthesis"
+        }
+      ],
+      "planned_path": [
+        "entry",
+        "analysis",
+        "writer",
+        "coach",
+        "verification",
+        "synthesis"
+      ],
+      "primary_mode": "single"
+    },
+    "task_class": "implementation",
+    "verification_plan": {
+      "independent": true,
+      "reason": "independent_verifier_selected",
+      "required": "yes",
+      "route_task_class": "review_ensemble",
+      "selected_subagent": "gemini_cli"
+    },
+    "verification_route_task_class": "review_ensemble",
+    "web_search_required": "no"
+  },
+  "status": "route_selected",
+  "task_class": "implementation",
+  "task_id": "vida-26v",
+  "ts": "2026-03-08T11:54:46Z"
+}

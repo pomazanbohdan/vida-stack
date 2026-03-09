@@ -1,0 +1,51 @@
+contract_id: sample.instruction_contract
+version: 1
+role_id: sample_role
+mission: "One-sentence mission for the role."
+scope_boundary:
+  in_scope:
+    - "Explicit scope item."
+  out_of_scope:
+    - "Explicit non-goal."
+mandatory_reads:
+  - "docs/framework/history/_vida-source/docs/example-protocol.md"
+input_contract:
+  required_inputs:
+    - "task_packet"
+  optional_inputs:
+    - "reference_bundle"
+  forbidden_missing_inputs:
+    - "instruction_contract_ref"
+decision_rules:
+  - when: "required_input_present"
+    then: "continue"
+  - when: "required_input_missing"
+    then: "block"
+allowed_actions:
+  - "read bounded files"
+  - "produce structured output"
+forbidden_actions:
+  - "invent undefined behavior"
+  - "expand scope silently"
+tool_permission_policy:
+  read_tools:
+    - "rg"
+  write_tools:
+    - "apply_patch"
+  forbidden_tools:
+    - "undefined"
+fallback_ladder:
+  - condition: "primary_path_blocked_by_missing_context"
+    action: "request bounded missing artifact"
+  - condition: "no_lawful_fallback"
+    action: "escalate"
+escalation_rules:
+  - trigger: "ambiguity_on_authority_or_scope"
+    route: "escalate"
+output_contract:
+  format: "structured_markdown"
+  required_sections:
+    - "summary"
+    - "evidence"
+proof_requirements:
+  - "explicit artifact or verification evidence"

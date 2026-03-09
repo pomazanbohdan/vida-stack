@@ -1,0 +1,23 @@
+{
+  "ts": "2026-03-08T21:35:38Z",
+  "task_id": "unit-live",
+  "task_class": "implementation",
+  "route_receipt": {
+    "task_class": "implementation",
+    "selected_subagent": "codex_cli",
+    "risk_class": "R2",
+    "coach_required": "yes",
+    "verification_required": "yes",
+    "analysis_required": "yes",
+    "dispatch_policy": {
+      "local_execution_allowed": "no",
+      "external_first_required": "yes",
+      "internal_escalation_allowed": "no",
+      "required_dispatch_path": [
+        "analysis_external_zero_budget",
+        "analysis_receipt"
+      ]
+    }
+  },
+  "route_receipt_hash": "b90e494e6faa1919"
+}

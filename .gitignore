@@ -2,3 +2,5 @@ __pycache__/
 *.py[cod]
 .code/agents
 _vida/scripts-nim/vida-legacy
+target
+_temp
