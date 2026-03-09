@@ -76,6 +76,7 @@ VIDA uses one normalized documentation/runtime stack:
 8. `Implementation Layer`
    - `vida-v0/**`
    - current transitional implementation
+   - future `vida 1.0` implementation must be a Rust workspace with reusable crates, not only one CLI-bound binary crate
 9. `History / Evidence Layer`
    - `docs/framework/history/**`
 
@@ -125,7 +126,7 @@ Use one normalized vocabulary.
 
 1. `strategic plan`
    - top-level direction-setting plan,
-   - current canonical source: `docs/framework/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
+   - current canonical source: `docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
 2. `execution-spec artifact`
    - detailed plan/spec artifact that concretizes the strategic plan,
    - current active home: `docs/framework/plans/**`
@@ -144,6 +145,15 @@ Use one normalized vocabulary.
    - bounded delegated executor posture
 5. `worker packet`
    - canonical dispatch artifact for a worker lane
+
+### 4.3 Binary Packaging Terms
+
+1. `workspace crate architecture`
+   - `vida 1.0` implementation is split into bounded Rust crates with explicit ownership
+2. `embeddable crate`
+   - a crate that can be consumed by another host program without depending on the full VIDA CLI binary
+3. `CLI shell`
+   - the standalone `vida` binary as one consumer of reusable VIDA crates, not the only runtime surface
 
 Normalization rule:
 
@@ -182,6 +192,12 @@ Current rule:
 2. they share one canonical runtime-spec foundation,
 3. they differ by implementation substrate and maturity, not by core runtime law.
 
+Packaging rule:
+
+1. `vida 1.0` must be implemented as a Rust workspace with explicit crate boundaries,
+2. the agent engine and other bounded runtime subsystems must be embeddable into other programs,
+3. the standalone CLI binary is one packaging target, not the sole integration surface.
+
 Implementation posture:
 
 1. `vida 0.2.0`
@@ -194,14 +210,14 @@ Implementation posture:
 
 Current shared runtime-spec sources:
 
-1. `docs/framework/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
+1. `docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
    - strategic master plan
-2. `docs/framework/plans/2026-03-08-vida-0.3-state-kernel-schema-spec.md`
-3. `docs/framework/plans/2026-03-08-vida-0.3-route-and-receipt-spec.md`
-4. `docs/framework/plans/2026-03-08-vida-0.3-instruction-kernel-spec.md`
-5. `docs/framework/plans/2026-03-08-vida-0.3-migration-kernel-spec.md`
-6. `docs/framework/plans/2026-03-08-vida-0.3-command-tree-spec.md`
-7. `docs/framework/plans/2026-03-08-vida-0.3-parity-and-conformance-spec.md`
+2. `docs/framework/plans/vida-0.3-state-kernel-schema-spec.md`
+3. `docs/framework/plans/vida-0.3-route-and-receipt-spec.md`
+4. `docs/framework/plans/vida-0.3-instruction-kernel-spec.md`
+5. `docs/framework/plans/vida-0.3-migration-kernel-spec.md`
+6. `docs/framework/plans/vida-0.3-command-tree-spec.md`
+7. `docs/framework/plans/vida-0.3-parity-and-conformance-spec.md`
 
 Promotion rule:
 

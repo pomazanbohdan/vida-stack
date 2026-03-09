@@ -228,6 +228,32 @@ Owns:
 4. startup fail-closed behavior,
 5. bridge from `0.1` artifacts/state into `1.0` runtime-owned storage.
 
+### 6.6 Binary Packaging And Embedding Rule
+
+`vida 1.0` must be built as a Rust workspace with explicit crate boundaries, not as one monolithic binary crate.
+
+Required architecture rule:
+
+1. the final `vida 1.0` binary is only one consumer shell over reusable internal crates,
+2. the agent engine must exist as an embeddable crate, not only as CLI-bound code,
+3. storage, instruction, routing, state, migration, and command surfaces should be separable into bounded crates where that separation preserves clean ownership,
+4. crate boundaries must allow another host program to embed:
+   - the agent engine by itself,
+   - the instruction/runtime kernel without the full CLI,
+   - other bounded VIDA subsystems when needed.
+
+Hard packaging rule:
+
+1. do not collapse `vida 1.0` into one inseparable application crate,
+2. do not make the CLI binary the only lawful integration surface,
+3. do treat reusable crate APIs as a first-class product requirement of the `1.0` architecture.
+
+Reason:
+
+1. VIDA is not only a standalone operator binary,
+2. its agent/runtime kernels should also be usable as embedded infrastructure inside other local products or tools,
+3. therefore crate design must preserve reuse, composition, and host-program embedding from the start rather than as a later refactor.
+
 ---
 
 ## 7. Semantic Transfer Rule
