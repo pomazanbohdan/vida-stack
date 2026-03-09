@@ -1,0 +1,19 @@
+artifact_name: boot_gates
+artifact_type: boot_gates
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+gates:
+  - config_schema_valid
+  - machine_catalog_present
+  - route_catalog_present
+  - instruction_catalog_present
+  - receipt_taxonomy_present
+  - compatibility_class_supported
+  - migration_requirements_satisfied
+  - doctor_verdict_non_blocking
+
+fail_closed_rules:
+  - missing_gate_result_blocks_boot
+  - unresolved_revision_blocks_boot
+  - missing_migration_proof_blocks_boot

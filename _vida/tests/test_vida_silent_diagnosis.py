@@ -39,8 +39,7 @@ class VidaSilentDiagnosisTest(unittest.TestCase):
             original_state_path = self.module.STATE_PATH
             self.module.STATE_PATH = state_path
             try:
-                completed = mock.Mock(returncode=0, stdout=json.dumps({"id": "mobile-1hv.99"}), stderr="")
-                with mock.patch.object(self.module.subprocess, "run", return_value=completed):
+                with mock.patch.object(self.module, "run_task_create", return_value={"task": {"id": "mobile-1hv.99"}}):
                     first = self.module.capture_bug(
                         summary="cheap lane stalled",
                         details="analysis lane returned only preamble",

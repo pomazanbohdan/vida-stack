@@ -1,0 +1,38 @@
+artifact_name: escalation_catalog
+artifact_type: escalation_catalog
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+policies:
+  no_eligible_writer:
+    initial_lane: writer_lane
+    receipt: assignment_exhausted_receipt
+    escalation_chain:
+      - escalation_lane
+      - manual_intervention_lane
+
+  no_eligible_coach:
+    initial_lane: coach_lane
+    receipt: assignment_exhausted_receipt
+    escalation_chain:
+      - escalation_lane
+      - manual_intervention_lane
+
+  no_eligible_verifier:
+    initial_lane: verification_lane
+    receipt: assignment_exhausted_receipt
+    escalation_chain:
+      - escalation_lane
+      - manual_intervention_lane
+
+  approval_sla_breach:
+    initial_lane: approval_lane
+    receipt: escalation_triggered_receipt
+    escalation_chain:
+      - manual_intervention_lane
+
+  boot_doctor_blocking:
+    initial_lane: escalation_lane
+    receipt: manual_intervention_required_receipt
+    escalation_chain:
+      - manual_intervention_lane

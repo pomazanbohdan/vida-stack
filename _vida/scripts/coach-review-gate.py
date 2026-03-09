@@ -7,6 +7,7 @@ import importlib.util
 import json
 import re
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,11 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent.parent
 ROUTE_RECEIPT_DIR = ROOT_DIR / ".vida" / "logs" / "route-receipts"
+OVERRIDE_DIR = ROOT_DIR / ".vida" / "logs" / "coach-review-overrides"
+ALLOWED_OVERRIDE_REASONS = {
+    "no_eligible_coach",
+    "runtime_blocker",
+}
 
 
 def load_module(name: str, path: Path) -> Any:
@@ -31,10 +37,15 @@ dispatch_runtime = load_module("vida_subagent_dispatch_runtime_coach_gate", SCRI
 def usage() -> int:
     print(
         "Usage:\n"
-        "  python3 _vida/scripts/coach-review-gate.py check <task_id>",
+        "  python3 _vida/scripts/coach-review-gate.py check <task_id>\n"
+        "  python3 _vida/scripts/coach-review-gate.py authorize-skip <task_id> <reason> <notes> [evidence] [actor]",
         file=sys.stderr,
     )
     return 1
+
+
+def now_utc() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def safe_name(value: str, fallback: str) -> str:
@@ -52,9 +63,41 @@ def load_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def write_json(path: Path, payload: dict[str, Any]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
 def route_receipt_files(task_id: str) -> list[Path]:
     task_prefix = safe_name(task_id, "task")
     return sorted(ROUTE_RECEIPT_DIR.glob(f"{task_prefix}.*.route.json"))
+
+
+def override_receipt_path(task_id: str) -> Path:
+    return OVERRIDE_DIR / f"{safe_name(task_id, 'task')}.json"
+
+
+def write_override_receipt(
+    task_id: str,
+    reason: str,
+    notes: str,
+    *,
+    evidence: str = "",
+    actor: str = "",
+) -> Path:
+    normalized_reason = reason.strip()
+    if normalized_reason not in ALLOWED_OVERRIDE_REASONS:
+        raise ValueError(f"unsupported override reason: {normalized_reason}")
+    payload = {
+        "task_id": task_id,
+        "reason": normalized_reason,
+        "notes": notes.strip(),
+        "evidence": evidence.strip(),
+        "actor": actor.strip(),
+        "ts": now_utc(),
+    }
+    return write_json(override_receipt_path(task_id), payload)
 
 
 def validate_coach_artifact(task_id: str, task_class: str, route_receipt: dict[str, Any]) -> dict[str, Any]:
@@ -122,21 +165,47 @@ def check_gate(task_id: str) -> tuple[int, dict[str, Any]]:
         evaluations.append(evaluation)
 
     blockers = [item for item in evaluations if item.get("status") != "ok"]
+    override_path = override_receipt_path(task_id)
+    override_payload = load_json(override_path)
+    override_reason = str(override_payload.get("reason", "") or "")
+    override_valid = bool(override_payload) and override_reason in ALLOWED_OVERRIDE_REASONS
     payload = {
         "task_id": task_id,
-        "status": "ok" if not blockers else "blocked",
+        "status": "ok" if (not blockers or override_valid) else "blocked",
+        "authorized_via": "structured_override" if blockers and override_valid else "",
         "required_routes": evaluations,
         "blockers": blockers,
+        "override_receipt_path": str(override_path),
+        "override_receipt_present": bool(override_payload),
+        "override_receipt": override_payload,
     }
-    return (0 if not blockers else 2), payload
+    return (0 if (not blockers or override_valid) else 2), payload
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 3 or argv[1] != "check":
+    if len(argv) < 3:
         return usage()
-    exit_code, payload = check_gate(argv[2])
-    print(json.dumps(payload, indent=2, sort_keys=True))
-    return exit_code
+    cmd = argv[1]
+    if cmd == "check":
+        exit_code, payload = check_gate(argv[2])
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return exit_code
+    if cmd == "authorize-skip":
+        if len(argv) < 5:
+            return usage()
+        task_id = argv[2]
+        reason = argv[3]
+        notes = argv[4]
+        evidence = argv[5] if len(argv) > 5 else ""
+        actor = argv[6] if len(argv) > 6 else ""
+        try:
+            path = write_override_receipt(task_id, reason, notes, evidence=evidence, actor=actor)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(path)
+        return 0
+    return usage()
 
 
 if __name__ == "__main__":

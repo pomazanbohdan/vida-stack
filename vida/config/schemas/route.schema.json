@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VIDA Route Catalog",
+  "type": "object",
+  "required": [
+    "artifact_name",
+    "artifact_type",
+    "version",
+    "revision",
+    "compatibility_class"
+  ],
+  "properties": {
+    "artifact_name": { "type": "string" },
+    "artifact_type": { "type": "string" },
+    "version": { "type": "integer", "minimum": 1 },
+    "revision": { "type": "string" },
+    "compatibility_class": { "type": "string" },
+    "routes": { "type": "object" }
+  },
+  "additionalProperties": true
+}

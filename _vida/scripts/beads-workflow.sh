@@ -3,32 +3,44 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/beads-runtime.sh"
-source "$SCRIPT_DIR/status-ui.sh"
 LOG_SCRIPT="$SCRIPT_DIR/beads-log.sh"
-VERIFY_SCRIPT="$SCRIPT_DIR/beads-verify-log.sh"
-TODO_SYNC_SCRIPT="$SCRIPT_DIR/todo-sync-plan.sh"
-CONTEXT_CAPSULE_SCRIPT="$SCRIPT_DIR/context-capsule.sh"
-CONTEXT_DRIFT_SCRIPT="$SCRIPT_DIR/context-drift-sentinel.sh"
-BG_SYNC_SCRIPT="$SCRIPT_DIR/beads-bg-sync.sh"
-STATEFUL_SEQUENCE_SCRIPT="$SCRIPT_DIR/stateful-sequence-check.sh"
-EVAL_PACK_SCRIPT="$SCRIPT_DIR/eval-pack.sh"
+TODO_RUNTIME_SCRIPT="$SCRIPT_DIR/todo-runtime.py"
+EVAL_PACK_SCRIPT="$SCRIPT_DIR/eval-pack.py"
 SUBAGENT_EVAL_SCRIPT="$SCRIPT_DIR/subagent-eval-pack.py"
 TODO_SYNC_STATE_DIR="$ROOT_DIR/.vida/logs/todo-sync-state"
 TODO_SYNC_DEBOUNCE_SEC="${TODO_SYNC_DEBOUNCE_SEC:-2}"
 TODO_AUTO_SYNC_LEVEL="${TODO_AUTO_SYNC_LEVEL:-lean}"
 VIDA_TODO_VERBOSE="${VIDA_TODO_VERBOSE:-0}"
-VIDA_BG_SYNC_AUTOSTART="${VIDA_BG_SYNC_AUTOSTART:-1}"
-VIDA_BG_SYNC_AUTOSTART_INTERVAL="${VIDA_BG_SYNC_AUTOSTART_INTERVAL:-600}"
 VIDA_STATEFUL_LOCK_TIMEOUT_SEC="${VIDA_STATEFUL_LOCK_TIMEOUT_SEC:-45}"
 STATEFUL_LOCK_FILE="$ROOT_DIR/.vida/locks/stateful-workflow.lock"
 STATEFUL_LOCK_HELD=0
 AUTO_STARTED_BLOCK=""
 AUTO_STARTED_GOAL=""
 AUTO_STARTED_STATUS="none"
+VIDA_LEGACY_BIN="$ROOT_DIR/_vida/scripts-nim/vida-legacy"
+TURSO_PYTHON="$ROOT_DIR/.venv/bin/python3"
 
 # Suppress noisy internal br info logs unless explicitly overridden.
 export RUST_LOG="${RUST_LOG:-error}"
+
+vida_icon() {
+  case "${1:-info}" in
+    ok) printf '✅' ;;
+    warn) printf '⚠️' ;;
+    fail) printf '❌' ;;
+    blocked) printf '⛔' ;;
+    info) printf 'ℹ️' ;;
+    sparkle) printf '✨' ;;
+    progress) printf '🔄' ;;
+    *) printf '•' ;;
+  esac
+}
+
+vida_status_line() {
+  local level="${1:-info}"
+  shift || true
+  printf '%s %s\n' "$(vida_icon "$level")" "$*"
+}
 
 cd "$ROOT_DIR"
 
@@ -56,6 +68,24 @@ is_stateful_cmd() {
       return 1
       ;;
   esac
+}
+
+assert_stateful_sequence_idle() {
+  local cmd="${1:-}"
+  if ! is_stateful_cmd "$cmd"; then
+    return 0
+  fi
+  if ! command -v flock >/dev/null 2>&1; then
+    vida_status_line fail "[beads-workflow] missing required command: flock"
+    exit 1
+  fi
+  mkdir -p "$(dirname "$STATEFUL_LOCK_FILE")"
+  exec 8>"$STATEFUL_LOCK_FILE"
+  if flock -n 8; then
+    flock -u 8 || true
+    return 0
+  fi
+  exit 42
 }
 
 release_stateful_lock() {
@@ -88,6 +118,76 @@ log_info() {
   if [[ "$VIDA_TODO_VERBOSE" == "1" ]]; then
     echo "$*" >&2
   fi
+}
+
+vida_legacy_task() {
+  if [[ ! -x "$VIDA_LEGACY_BIN" ]]; then
+    echo "[beads-workflow] Missing vida-legacy binary: $VIDA_LEGACY_BIN" >&2
+    exit 1
+  fi
+  VIDA_ROOT="${VIDA_ROOT:-$ROOT_DIR}" \
+  VIDA_LEGACY_TURSO_PYTHON="${VIDA_LEGACY_TURSO_PYTHON:-$TURSO_PYTHON}" \
+    "$VIDA_LEGACY_BIN" task "$@"
+}
+
+vida_legacy_context_capsule() {
+  if [[ ! -x "$VIDA_LEGACY_BIN" ]]; then
+    echo "[beads-workflow] Missing vida-legacy binary: $VIDA_LEGACY_BIN" >&2
+    exit 1
+  fi
+  VIDA_ROOT="${VIDA_ROOT:-$ROOT_DIR}" \
+  VIDA_LEGACY_TURSO_PYTHON="${VIDA_LEGACY_TURSO_PYTHON:-$TURSO_PYTHON}" \
+    "$VIDA_LEGACY_BIN" context-capsule "$@"
+}
+
+vida_legacy_beads_verify() {
+  if [[ ! -x "$VIDA_LEGACY_BIN" ]]; then
+    echo "[beads-workflow] Missing vida-legacy binary: $VIDA_LEGACY_BIN" >&2
+    exit 1
+  fi
+  VIDA_ROOT="${VIDA_ROOT:-$ROOT_DIR}" \
+  VIDA_LEGACY_TURSO_PYTHON="${VIDA_LEGACY_TURSO_PYTHON:-$TURSO_PYTHON}" \
+    "$VIDA_LEGACY_BIN" beads verify "$@"
+}
+
+check_context_drift() {
+  local task_id="$1"
+  local strict="${2:-}"
+  local capsule="$ROOT_DIR/.vida/logs/context-capsules/${task_id}.json"
+
+  if [[ ! -f "$capsule" ]]; then
+    bash "$LOG_SCRIPT" op-event "$task_id" "context_drift_detected" "reason=missing_capsule"
+    echo "drift=yes reason=missing_capsule task=$task_id"
+    [[ "$strict" == "--strict" ]] && return 2 || return 0
+  fi
+
+  local cap_task cap_next known_next
+  cap_task="$(jq -r '.task_id // ""' "$capsule")"
+  cap_next="$(jq -r '.next // ""' "$capsule")"
+
+  local reasons=()
+  if [[ "$cap_task" != "$task_id" ]]; then
+    reasons+=("task_mismatch")
+  fi
+
+  if [[ -n "$cap_next" && "$cap_next" != "-" ]]; then
+    known_next="$(python3 _vida/scripts/todo-runtime.py ui-json "$task_id" | jq -r --arg n "$cap_next" 'if ([.steps[]? | select(.block_id==$n)] | length) > 0 then "yes" else "no" end')"
+    if [[ "$known_next" != "yes" ]]; then
+      reasons+=("next_step_unknown")
+    fi
+  fi
+
+  if [[ ${#reasons[@]} -gt 0 ]]; then
+    local reason_joined
+    reason_joined="$(IFS=','; echo "${reasons[*]}")"
+    bash "$LOG_SCRIPT" op-event "$task_id" "context_drift_detected" "reason=${reason_joined};next=${cap_next}"
+    echo "drift=yes reason=${reason_joined} task=$task_id"
+    [[ "$strict" == "--strict" ]] && return 2 || return 0
+  fi
+
+  bash "$LOG_SCRIPT" op-event "$task_id" "context_drift_checked" "status=ok;next=${cap_next}"
+  echo "drift=no task=$task_id next=${cap_next}"
+  return 0
 }
 
 run_quiet_or_verbose() {
@@ -204,7 +304,7 @@ parse_block_optional_tail() {
 todo_block_json() {
   local issue_id="$1"
   local block_id="$2"
-  bash "$SCRIPT_DIR/todo-tool.sh" ui-json "$issue_id" \
+  python3 "$TODO_RUNTIME_SCRIPT" ui-json "$issue_id" \
     | jq -c --arg bid "$block_id" '.steps[]? | select(.block_id==$bid)' \
     | head -n1
 }
@@ -214,39 +314,18 @@ ensure_context_capsule_bootstrap() {
   local next_step="${2:-planning}"
   local acceptance_slice="${3:-runtime-bootstrap}"
 
-  if VIDA_CONTEXT_HYDRATE_ALLOW_MISSING=1 \
-    bash "$CONTEXT_CAPSULE_SCRIPT" hydrate "$issue_id" >/dev/null 2>&1; then
+  if VIDA_CONTEXT_HYDRATE_ALLOW_MISSING=1 vida_legacy_context_capsule hydrate "$issue_id" --json >/dev/null 2>&1; then
     return 0
   fi
 
-  bash "$CONTEXT_CAPSULE_SCRIPT" write \
+  vida_legacy_context_capsule write \
     "$issue_id" \
     "bootstrap" \
     "${next_step:-planning}" \
     "-" \
     "$acceptance_slice" \
-    "legacy-zero,br-ssot" \
+    "legacy-zero,vida-legacy-task-store" \
     "runtime-bootstrap" >/dev/null 2>&1 || true
-}
-
-ensure_bg_sync_autostart() {
-  [[ "$VIDA_BG_SYNC_AUTOSTART" == "1" ]] || return 0
-  [[ -f "$BG_SYNC_SCRIPT" ]] || return 0
-  command -v tmux >/dev/null 2>&1 || return 0
-
-  local status_line running interval
-  status_line="$(bash "$BG_SYNC_SCRIPT" status 2>/dev/null || true)"
-  running="$(echo "$status_line" | sed -n 's/.*running=\([a-z]*\).*/\1/p' | head -n1)"
-  if [[ "$running" == "yes" ]]; then
-    return 0
-  fi
-
-  interval="$VIDA_BG_SYNC_AUTOSTART_INTERVAL"
-  if ! [[ "$interval" =~ ^[0-9]+$ ]] || (( interval < 120 )); then
-    interval=600
-  fi
-
-  bash "$BG_SYNC_SCRIPT" start --interval "$interval" >/dev/null 2>&1 || true
 }
 
 auto_start_next_block() {
@@ -264,23 +343,23 @@ auto_start_next_block() {
 
   # Only auto-start when next_step points to an existing block_id for this task.
   local target
-  target="$(bash "$SCRIPT_DIR/todo-tool.sh" ui-json "$issue_id" \
+  target="$(python3 "$TODO_RUNTIME_SCRIPT" ui-json "$issue_id" \
     | jq -r --arg ns "$next_step" '.steps[]? | select(.block_id==$ns) | .block_id' \
     | head -n 1)"
 
   [[ -n "$target" ]] || return 0
 
   local source_track target_goal target_status target_track
-  source_track="$(bash "$SCRIPT_DIR/todo-tool.sh" ui-json "$issue_id" \
+  source_track="$(python3 "$TODO_RUNTIME_SCRIPT" ui-json "$issue_id" \
     | jq -r --arg bid "$source_block_id" '.steps[]? | select(.block_id==$bid) | .track_id // "main"' \
     | head -n 1)"
-  target_goal="$(bash "$SCRIPT_DIR/todo-tool.sh" ui-json "$issue_id" \
+  target_goal="$(python3 "$TODO_RUNTIME_SCRIPT" ui-json "$issue_id" \
     | jq -r --arg bid "$target" '.steps[]? | select(.block_id==$bid) | .goal // ""' \
     | head -n 1)"
-  target_status="$(bash "$SCRIPT_DIR/todo-tool.sh" ui-json "$issue_id" \
+  target_status="$(python3 "$TODO_RUNTIME_SCRIPT" ui-json "$issue_id" \
     | jq -r --arg bid "$target" '.steps[]? | select(.block_id==$bid) | .status // ""' \
     | head -n 1)"
-  target_track="$(bash "$SCRIPT_DIR/todo-tool.sh" ui-json "$issue_id" \
+  target_track="$(python3 "$TODO_RUNTIME_SCRIPT" ui-json "$issue_id" \
     | jq -r --arg bid "$target" '.steps[]? | select(.block_id==$bid) | .track_id // "main"' \
     | head -n 1)"
 
@@ -305,7 +384,7 @@ auto_start_next_block() {
 auto_sync_todo() {
   local issue_id="$1"
   local force_sync="${2:-no}"
-  if [[ -z "$issue_id" || ! -f "$TODO_SYNC_SCRIPT" ]]; then
+  if [[ -z "$issue_id" || ! -f "$TODO_RUNTIME_SCRIPT" ]]; then
     return
   fi
 
@@ -324,7 +403,7 @@ auto_sync_todo() {
     fi
   fi
 
-  bash "$TODO_SYNC_SCRIPT" "$issue_id" --mode json-only --quiet >/dev/null 2>&1 || true
+  python3 "$TODO_RUNTIME_SCRIPT" sync "$issue_id" --mode json-only --quiet >/dev/null 2>&1 || true
   printf '%s\n' "$now_ts" > "$stamp_file"
 }
 
@@ -470,13 +549,11 @@ EOF
 cmd="${1:-}"
 
 if [[ "$cmd" != "" && "$cmd" != "-h" && "$cmd" != "--help" && "$cmd" != "help" ]]; then
-  ensure_bg_sync_autostart
+  :
 fi
 
 if is_stateful_cmd "$cmd"; then
-  if [[ -x "$STATEFUL_SEQUENCE_SCRIPT" ]]; then
-    bash "$STATEFUL_SEQUENCE_SCRIPT" assert "$cmd" --quiet || exit 42
-  fi
+  assert_stateful_sequence_idle "$cmd"
   acquire_stateful_lock "$cmd"
   trap release_stateful_lock EXIT
 fi
@@ -487,21 +564,21 @@ case "$cmd" in
     exit 0
     ;;
   ready)
-    beads_br ready
+    vida_legacy_task ready
     ;;
   show)
     issue_id="${2:-}"
     [[ -n "$issue_id" ]] || { usage; exit 1; }
-    beads_br show "$issue_id"
+    vida_legacy_task show "$issue_id"
     ;;
   start)
     issue_id="${2:-}"
     [[ -n "$issue_id" ]] || { usage; exit 1; }
-    run_quiet_or_verbose beads_mutate update "$issue_id" --status in_progress
+    run_quiet_or_verbose vida_legacy_task update "$issue_id" --status in_progress
     ensure_context_capsule_bootstrap "$issue_id" "planning" "task-start"
     log_info "[beads-workflow] issue $issue_id -> in_progress"
     if [[ "$VIDA_TODO_VERBOSE" == "1" ]]; then
-      beads_br show "$issue_id"
+      vida_legacy_task show "$issue_id"
     fi
     bash "$LOG_SCRIPT" telemetry-event "$issue_id" - orchestrator task_start 0 started true
     maybe_auto_sync_todo "$issue_id" start force
@@ -513,7 +590,7 @@ case "$cmd" in
     risk_text="${5:-none}"
     [[ -n "$issue_id" && -n "$done_text" && -n "$next_text" ]] || { usage; exit 1; }
     note="compact-checkpoint: done=${done_text}; next=${next_text}; risk=${risk_text}"
-    run_quiet_or_verbose beads_mutate update "$issue_id" --notes "$note"
+    run_quiet_or_verbose vida_legacy_task update "$issue_id" --notes "$note"
     log_info "[beads-workflow] checkpoint saved for $issue_id"
     maybe_auto_sync_todo "$issue_id" checkpoint force
     ;;
@@ -678,14 +755,14 @@ case "$cmd" in
     fi
 
     bash "$LOG_SCRIPT" self-reflection "$issue_id" "$reflect_goal" "$reflect_constraints" "$reflect_evidence" "$reflect_decision" "$reflect_risks" "$next_step" "$confidence"
-    bash "$CONTEXT_CAPSULE_SCRIPT" write "$issue_id" "$actions" "$next_step" "$risks" "block:${block_id}" "track:${track_id:-main}" "execution-step"
-    bash "$CONTEXT_DRIFT_SCRIPT" check "$issue_id" >/dev/null || true
-    bash "$VERIFY_SCRIPT" --task "$issue_id"
+    vida_legacy_context_capsule write "$issue_id" "$actions" "$next_step" "$risks" "block:${block_id}" "track:${track_id:-main}" "execution-step"
+    check_context_drift "$issue_id" >/dev/null || true
+    vida_legacy_beads_verify --task "$issue_id"
 
     maybe_auto_sync_todo "$issue_id" block-end force
 
     if command -v bash >/dev/null 2>&1; then
-      bash "$SCRIPT_DIR/todo-sync-plan.sh" "$issue_id" --mode compact --max-items 2 --quiet >/dev/null 2>&1 || true
+      python3 "$TODO_RUNTIME_SCRIPT" sync "$issue_id" --mode compact --max-items 2 --quiet >/dev/null 2>&1 || true
     fi
 
     if [[ "$result" == "done" ]]; then
@@ -726,7 +803,7 @@ case "$cmd" in
   verify)
     issue_id="${2:-}"
     [[ -n "$issue_id" ]] || { usage; exit 1; }
-    bash "$VERIFY_SCRIPT" --task "$issue_id"
+    vida_legacy_beads_verify --task "$issue_id"
     ;;
   reflect)
     issue_id="${2:-}"
@@ -746,31 +823,35 @@ case "$cmd" in
     reason="${3:-}"
     [[ -n "$issue_id" && -n "$reason" ]] || { usage; exit 1; }
 
-    if ! bash "$VERIFY_SCRIPT" --task "$issue_id" --strict; then
+    if ! vida_legacy_beads_verify --task "$issue_id" --strict; then
       echo "[beads-workflow] Refusing to close $issue_id: log verification failed" >&2
       exit 2
     fi
 
-    run_quiet_or_verbose beads_mutate close "$issue_id" --reason "$reason"
-    run_quiet_or_verbose beads_br sync --flush-only
-    run_quiet_or_verbose beads_br sync --status
+    run_quiet_or_verbose vida_legacy_task close "$issue_id" --reason "$reason"
     if [[ -f "$EVAL_PACK_SCRIPT" ]]; then
-      run_quiet_or_verbose bash "$EVAL_PACK_SCRIPT" run "$issue_id"
+      run_quiet_or_verbose python3 "$EVAL_PACK_SCRIPT" run "$issue_id"
     fi
     if [[ -f "$SUBAGENT_EVAL_SCRIPT" ]]; then
       run_quiet_or_verbose python3 "$SUBAGENT_EVAL_SCRIPT" run "$issue_id"
-      bash "$LOG_SCRIPT" op-event "$issue_id" subagent_review_completed ".vida/logs/subagent-review-$issue_id.json"
+      review_path=".vida/logs/subagent-review-$issue_id.json"
+      review_status="$(jq -r '.status // ""' "$review_path" 2>/dev/null || true)"
+      review_processed="$(jq -r '.subagent_runs_processed // 0' "$review_path" 2>/dev/null || echo 0)"
+      if [[ "$review_processed" =~ ^[0-9]+$ ]] && (( review_processed > 0 )); then
+        bash "$LOG_SCRIPT" op-event "$issue_id" subagent_review_completed "path=$review_path;status=${review_status:-delegated_review_ready};processed=$review_processed"
+      else
+        bash "$LOG_SCRIPT" op-event "$issue_id" subagent_review_empty "path=$review_path;status=${review_status:-no_review_entries};processed=${review_processed:-0}"
+      fi
     fi
     bash "$LOG_SCRIPT" telemetry-event "$issue_id" - orchestrator task_finish 0 closed true
     maybe_auto_sync_todo "$issue_id" finish
     log_info "[beads-workflow] issue $issue_id closed and synced"
     ;;
   sync)
-    beads_br sync --flush-only
-    beads_br sync --status
+    :
     ;;
   status)
-    beads_br sync --status
+    :
     ;;
   parse-block-tail)
     mode="${2:-}"

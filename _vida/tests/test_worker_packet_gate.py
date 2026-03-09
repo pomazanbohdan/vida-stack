@@ -7,7 +7,6 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT_DIR / "_vida" / "scripts" / "worker-packet-gate.py"
-RENDER_SCRIPT = ROOT_DIR / "_vida" / "scripts" / "render-subagent-prompt.sh"
 
 
 def load_gate_module():
@@ -59,54 +58,6 @@ Deliverable:
 
         self.assertIn("machine-readable contract missing key: merge_ready", errors)
         self.assertIn("machine-readable contract missing key: verification_results", errors)
-
-    def test_rendered_implementation_prompt_passes_validation(self) -> None:
-        proc = subprocess.run(
-            [
-                "bash",
-                str(RENDER_SCRIPT),
-                "implementation",
-                "--task",
-                "Implement worker packet gate",
-                "--scope",
-                "_vida/scripts,_vida/tests",
-                "--verification",
-                "python3 -m unittest _vida.tests.test_worker_packet_gate",
-                "--question",
-                "What is the minimal runtime validator needed for worker packet integrity?",
-            ],
-            cwd=ROOT_DIR,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-
-        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertEqual(self.module.validate_packet_text(proc.stdout), [])
-
-    def test_rendered_audit_prompt_passes_validation(self) -> None:
-        proc = subprocess.run(
-            [
-                "bash",
-                str(RENDER_SCRIPT),
-                "audit",
-                "--task",
-                "Audit worker packet markers",
-                "--scope",
-                "_vida/scripts/render-subagent-prompt.sh",
-                "--verification",
-                "rg -n \"worker_lane_confirmed|worker_role\" _vida/scripts/render-subagent-prompt.sh",
-                "--question",
-                "Which required packet markers are present?",
-            ],
-            cwd=ROOT_DIR,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-
-        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertEqual(self.module.validate_packet_text(proc.stdout), [])
 
     def test_output_contract_validation_requires_machine_readable_keys_when_prompt_demands_it(self) -> None:
         prompt = """

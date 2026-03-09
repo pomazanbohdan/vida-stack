@@ -82,7 +82,7 @@ def packet_for(profile: str, non_dev: bool) -> dict[str, Any]:
         "invariants": [
             "read AGENTS.md first after compression",
             "apply thinking-protocol algorithms",
-            "task state lives in br",
+            "task state lives in vida-legacy task store",
             "execute only through TODO blocks",
             "external-first fanout for eligible read-only work",
         ],
@@ -90,7 +90,7 @@ def packet_for(profile: str, non_dev: bool) -> dict[str, Any]:
             "compact_boot_snapshot_command": (
                 ""
                 if non_dev
-                else "python3 _vida/scripts/vida-boot-snapshot.py --json"
+                else "VIDA_ROOT=$PWD _vida/scripts-nim/vida-legacy boot snapshot --json"
             ),
             "compact_boot_snapshot_scope": (
                 "top-level in-progress tasks, ready head, and open subtask tree"

@@ -1,0 +1,61 @@
+artifact_name: agent_classes
+artifact_type: agent_classes
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+runtime_inventory_source: vida.config.yaml
+classes:
+  internal_system:
+    agent_types:
+      - system_agent
+    intended_roles:
+      - analyst
+      - writer
+      - coach
+      - verifier
+      - synthesizer
+    notes:
+      - Runtime inventory derives concrete members from overlay subagents with backend class `internal`.
+
+  llm_read_only:
+    agent_types:
+      - llm_agent
+    intended_roles:
+      - analyst
+      - coach
+      - verifier
+    required_traits:
+      capability_band_any:
+        - read_only
+        - review_safe
+
+  llm_bounded_writer:
+    agent_types:
+      - llm_agent
+    intended_roles:
+      - writer
+      - coach
+      - verifier
+    required_traits:
+      capability_band_any:
+        - bounded_write_safe
+        - implementation_safe
+      write_scopes_any:
+        - scoped_only
+        - sandbox
+        - patch
+        - external_write
+        - repo_write
+
+  human_gate:
+    agent_types:
+      - human_agent
+    intended_roles:
+      - approver
+
+  service_gate:
+    agent_types:
+      - service_agent
+    intended_roles:
+      - approver
+      - verifier

@@ -1,0 +1,23 @@
+artifact_name: approval_policy
+artifact_type: policy
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+rules:
+  approver_types_allowed:
+    - human_agent
+    - service_agent
+
+  default_expiry_seconds: 86400
+
+  escalation_allowed_when:
+    any_of:
+      - approval_expired
+      - approval_sla_breached
+
+  approval_invalidated_when:
+    any_of:
+      - superseding_change_detected
+      - verification_superseded
+
+  closure_reads_approval_state: true

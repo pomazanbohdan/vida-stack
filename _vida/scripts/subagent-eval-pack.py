@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -19,6 +20,8 @@ STATE_DIR = ROOT_DIR / ".vida" / "state"
 RUN_LOG_PATH = LOG_DIR / "subagent-runs.jsonl"
 PROCESSED_PATH = STATE_DIR / "subagent-eval-processed.json"
 STRATEGY_PATH = STATE_DIR / "subagent-strategy.json"
+VIDA_LEGACY_BIN = ROOT_DIR / "_vida" / "scripts-nim" / "vida-legacy"
+TURSO_PYTHON = str(ROOT_DIR / ".venv" / "bin" / "python3")
 
 
 def load_module(name: str, path: Path) -> Any:
@@ -73,7 +76,7 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
 def ensure_eval_pack(task_id: str) -> dict[str, Any]:
     out_path = LOG_DIR / f"eval-pack-{task_id}.json"
     completed = subprocess.run(
-        ["bash", "_vida/scripts/eval-pack.sh", "run", task_id],
+        ["python3", "_vida/scripts/eval-pack.py", "run", task_id],
         cwd=str(ROOT_DIR),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -81,7 +84,7 @@ def ensure_eval_pack(task_id: str) -> dict[str, Any]:
         check=False,
     )
     if completed.returncode != 0 and not out_path.exists():
-        raise RuntimeError(completed.stderr.strip() or "eval-pack.sh failed")
+        raise RuntimeError(completed.stderr.strip() or "eval-pack.py failed")
     return load_json(out_path, {})
 
 
@@ -95,15 +98,18 @@ def ensure_trace_eval(task_id: str) -> dict[str, Any]:
 def ensure_trace_dataset(task_id: str, trace_eval_payload: dict[str, Any]) -> dict[str, Any]:
     out_path = trace_eval.TRACE_DATASET_DIR / f"trace-dataset-{task_id}.json"
     payload = trace_eval.build_trace_dataset(task_id, trace_eval_payload)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
     trace_eval.save_json(out_path, payload)
     return payload
 
 
 def task_closed(task_id: str) -> bool:
+    env = dict(os.environ)
+    env.setdefault("VIDA_ROOT", str(ROOT_DIR))
+    env.setdefault("VIDA_LEGACY_TURSO_PYTHON", TURSO_PYTHON)
     completed = subprocess.run(
-        ["br", "show", task_id, "--json"],
+        [str(VIDA_LEGACY_BIN), "task", "show", task_id, "--json"],
         cwd=str(ROOT_DIR),
+        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -112,12 +118,7 @@ def task_closed(task_id: str) -> bool:
     if completed.returncode != 0:
         return False
     payload = json.loads(completed.stdout)
-    if isinstance(payload, list) and payload:
-        status = payload[0].get("status")
-    elif isinstance(payload, dict):
-        status = payload.get("status")
-    else:
-        status = None
+    status = payload.get("status") if isinstance(payload, dict) else None
     return status == "closed"
 
 
@@ -522,10 +523,18 @@ def run(task_id: str) -> int:
     processed["processed_run_ids"] = sorted(processed_ids)
     save_json(PROCESSED_PATH, processed)
     strategy = refresh_strategy(task_id)
+    if review_entries:
+        review_status = "delegated_review_ready"
+    elif runs:
+        review_status = "no_review_entries"
+    else:
+        review_status = "no_subagent_runs"
     review_payload = {
         "generated_at": now_utc(),
         "task_id": task_id,
         "task_closed": is_closed,
+        "status": review_status,
+        "review_evidence_present": bool(review_entries),
         "subagent_runs_seen": len(runs),
         "subagent_runs_processed": len(review_entries),
         "eval_pack": eval_pack,

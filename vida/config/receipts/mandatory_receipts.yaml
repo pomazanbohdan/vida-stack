@@ -1,0 +1,37 @@
+artifact_name: mandatory_receipts
+artifact_type: mandatory_receipts
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+common_fields:
+  - receipt_id
+  - receipt_type
+  - entity_type
+  - entity_id
+  - machine
+  - event
+  - actor
+  - timestamp
+  - config_artifact
+  - config_revision
+  - prior_state
+  - new_state
+
+assignment_fields:
+  - required_role
+  - required_capability
+  - selection_strategy
+  - chosen_agent
+  - independence_check
+  - lease_terms
+
+verification_fields:
+  - verifier_set
+  - aggregation_policy
+  - proof_category_coverage
+  - verdict
+
+approval_fields:
+  - approver_identity_or_class
+  - approval_disposition
+  - expiry_metadata

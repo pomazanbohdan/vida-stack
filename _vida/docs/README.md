@@ -27,6 +27,12 @@ Canonical split:
 3. `docs/process/` -> canonical project operational runbooks.
 4. `scripts/` -> executable project operations referenced by `docs/process/`.
 
+Reasoning docs:
+
+1. Canonical deep spec: `_vida/docs/thinking-protocol.md`
+2. One-screen reference: `_vida/docs/algorithms-one-screen.md`
+3. Operational quick reference: `_vida/docs/algorithms-quick-reference.md`
+
 Migration policy:
 
 1. New framework/runtime docs belong in `_vida/docs/`.

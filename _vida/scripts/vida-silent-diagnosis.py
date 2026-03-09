@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -17,8 +18,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent.parent
 STATE_PATH = ROOT_DIR / ".vida" / "state" / "silent-framework-diagnosis.json"
 ISSUES_JSONL_PATH = ROOT_DIR / ".beads" / "issues.jsonl"
-QUEUE_RUNNER = SCRIPT_DIR / "br-mutation-queue.py"
 FRAMEWORK_MEMORY_MODULE = None
+VIDA_LEGACY_BIN = ROOT_DIR / "_vida" / "scripts-nim" / "vida-legacy"
+TURSO_PYTHON = str(ROOT_DIR / ".venv" / "bin" / "python3")
 
 
 def now_utc() -> str:
@@ -71,21 +73,27 @@ def load_state() -> dict[str, Any]:
 
 
 def issue_status_map() -> dict[str, str]:
-    if not ISSUES_JSONL_PATH.exists():
+    if not VIDA_LEGACY_BIN.exists():
+        return {}
+    env = os.environ.copy()
+    env.setdefault("VIDA_ROOT", str(ROOT_DIR))
+    env.setdefault("VIDA_LEGACY_TURSO_PYTHON", TURSO_PYTHON)
+    completed = subprocess.run(
+        [str(VIDA_LEGACY_BIN), "task", "list", "--all", "--json"],
+        cwd=str(ROOT_DIR),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return {}
+    try:
+        payload = json.loads((completed.stdout or "").strip())
+    except json.JSONDecodeError:
         return {}
     statuses: dict[str, str] = {}
-    try:
-        lines = ISSUES_JSONL_PATH.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return {}
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    for item in payload if isinstance(payload, list) else []:
         if not isinstance(item, dict):
             continue
         issue_id = str(item.get("id", "")).strip()
@@ -93,6 +101,50 @@ def issue_status_map() -> dict[str, str]:
         if issue_id:
             statuses[issue_id] = status
     return statuses
+
+
+def run_task_read(task_id: str) -> dict[str, Any]:
+    if not VIDA_LEGACY_BIN.exists():
+        raise RuntimeError(f"vida-legacy binary is missing: {VIDA_LEGACY_BIN}")
+    env = os.environ.copy()
+    env.setdefault("VIDA_ROOT", str(ROOT_DIR))
+    env.setdefault("VIDA_LEGACY_TURSO_PYTHON", TURSO_PYTHON)
+    completed = subprocess.run(
+        [str(VIDA_LEGACY_BIN), "task", "show", task_id, "--json"],
+        cwd=str(ROOT_DIR),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError((completed.stderr or completed.stdout or "vida-legacy task show failed").strip())
+    payload = json.loads((completed.stdout or "").strip())
+    if not isinstance(payload, dict):
+        raise RuntimeError("vida-legacy task show returned non-object payload")
+    return payload
+
+
+def run_task_create(args: list[str]) -> dict[str, Any]:
+    if not VIDA_LEGACY_BIN.exists():
+        raise RuntimeError(f"vida-legacy binary is missing: {VIDA_LEGACY_BIN}")
+    env = os.environ.copy()
+    env.setdefault("VIDA_ROOT", str(ROOT_DIR))
+    env.setdefault("VIDA_LEGACY_TURSO_PYTHON", TURSO_PYTHON)
+    completed = subprocess.run(
+        [str(VIDA_LEGACY_BIN), "task", "create", *args, "--json"],
+        cwd=str(ROOT_DIR),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError((completed.stderr or completed.stdout or "vida-legacy task create failed").strip())
+    payload = json.loads((completed.stdout or "").strip())
+    if not isinstance(payload, dict):
+        raise RuntimeError("vida-legacy task create returned non-object payload")
+    return payload
 
 
 def reconcile_pending_framework_bugs(state: dict[str, Any]) -> dict[str, Any]:
@@ -164,38 +216,28 @@ def capture_bug(
             "5. resume product work after framework closure.",
         ]
     )
+    parent_issue = parent_issue.strip()
+    if parent_issue:
+        try:
+            run_task_read(parent_issue)
+        except Exception:
+            parent_issue = ""
+
     command = [
-        sys.executable,
-        str(QUEUE_RUNNER),
-        "br",
-        "--",
-        "create",
         title,
-        "--type",
-        "bug",
-        "--priority",
-        "1",
-        "--labels",
-        "framework,vida-silent-diagnosis,mode:autonomous",
-        "--description",
-        "\n".join(description_lines),
-        "--parent",
-        parent_issue,
-        "--no-db",
-        "--json",
+        "--type", "bug",
+        "--priority", "1",
+        "--description", "\n".join(description_lines),
+        "--labels", "framework",
+        "--labels", "vida-silent-diagnosis",
+        "--labels", "mode:autonomous",
     ]
-    completed = subprocess.run(
-        command,
-        cwd=str(ROOT_DIR),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise SystemExit((completed.stderr or completed.stdout).strip() or "failed to create framework bug")
-    payload = json.loads((completed.stdout or "{}").strip() or "{}")
+    if parent_issue:
+        command.extend(["--parent-id", parent_issue, "--auto-display-from", parent_issue])
+    payload = run_task_create(command)
+    task_payload = payload.get("task", {}) if isinstance(payload, dict) else {}
     entry = {
-        "bug_id": str(payload.get("id", "")).strip(),
+        "bug_id": str(task_payload.get("id", "")).strip(),
         "title": title,
         "summary": summary.strip(),
         "fingerprint": fingerprint,

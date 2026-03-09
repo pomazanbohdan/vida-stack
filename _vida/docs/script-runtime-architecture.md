@@ -58,7 +58,6 @@ Shell-first runtime adapters that remain shell-owned:
 1. `_vida/scripts/beads-workflow.sh`
 2. `_vida/scripts/quality-health-check.sh`
 3. `_vida/scripts/beads-bg-sync.sh`
-4. `_vida/scripts/br-safe.sh`
 
 Rule:
 

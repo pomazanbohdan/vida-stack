@@ -29,6 +29,7 @@ When active, the orchestrator must treat silent diagnosis as a background framew
 8. When TODO/`br` flow is active, `_vida/docs/todo-protocol.md` is the canonical execution-layer contract for deferred capture, compact-safe persistence, and post-boundary follow-up routing.
 9. Durable lessons, corrections, and anomalies belong in `_vida/docs/framework-memory-protocol.md`, not only in chat or transient reflection output.
 10. Silent diagnosis must audit the instruction layer as well as runtime/task flow: `AGENTS.md`, lane entry contracts, and canonical framework protocols are valid diagnosis targets when they reduce quality, clarity, token efficiency, or determinism.
+11. Silent diagnosis must also audit protocol execution drift using `_vida/docs/protocol-self-diagnosis-protocol.md` when reporting barriers, missing task coverage, skipped catch-review, or route drift are observed.
 
 ## Bug Capture Contract
 

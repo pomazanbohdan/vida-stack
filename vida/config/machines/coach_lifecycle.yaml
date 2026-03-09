@@ -1,0 +1,116 @@
+artifact_name: coach_lifecycle
+artifact_type: machine
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+entity_type: CoachReview
+canonical_source_refs:
+  - _vida/docs/plans/2026-03-08-vida-0.3-route-and-receipt-spec.md
+  - vida/docs/spec/canonical-machine-map.md
+purpose: Post-write formative review loop, distinct from verification.
+initial_state: not_requested
+states:
+  - not_requested
+  - requested
+  - assigned
+  - in_review
+  - feedback_issued
+  - rework_required
+  - accepted
+  - dismissed
+  - closed
+terminal_states:
+  - closed
+events:
+  - coach_requested
+  - coach_assigned
+  - coach_started
+  - coach_feedback_issued
+  - coach_rework_required
+  - coach_feedback_accepted
+  - coach_feedback_dismissed
+  - coach_closed
+guards_catalog:
+  - coach_required_or_explicitly_not_required
+  - coach_independent_from_writer
+  - coach_feedback_present
+  - rework_payload_present
+transitions:
+  - name: request_coach
+    command: coach.request
+    from:
+      - not_requested
+    to: requested
+    guards:
+      all_of:
+        - coach_required_or_explicitly_not_required
+    receipts:
+      - coach_requested_receipt
+
+  - name: assign_coach
+    command: coach.assign
+    from:
+      - requested
+    to: assigned
+    guards:
+      all_of:
+        - coach_independent_from_writer
+    receipts:
+      - agent_assigned_receipt
+
+  - name: start_coach
+    command: coach.start
+    from:
+      - assigned
+    to: in_review
+    guards:
+      all_of:
+        - coach_independent_from_writer
+    receipts:
+      - coach_state_changed_receipt
+
+  - name: issue_feedback
+    command: coach.feedback
+    from:
+      - in_review
+    to: feedback_issued
+    guards:
+      all_of:
+        - coach_feedback_present
+    receipts:
+      - coach_feedback_issued_receipt
+
+  - name: require_rework
+    command: coach.rework
+    from:
+      - feedback_issued
+    to: rework_required
+    guards:
+      all_of:
+        - rework_payload_present
+    receipts:
+      - coach_rework_receipt
+
+  - name: accept_feedback
+    command: coach.accept
+    from:
+      - feedback_issued
+      - rework_required
+    to: accepted
+    guards:
+      all_of:
+        - coach_feedback_present
+    receipts:
+      - coach_state_changed_receipt
+
+  - name: close_coach
+    command: coach.close
+    from:
+      - accepted
+      - dismissed
+    to: closed
+    guards:
+      all_of:
+        - coach_feedback_present
+    receipts:
+      - coach_state_changed_receipt

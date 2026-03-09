@@ -3,10 +3,78 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-source "$SCRIPT_DIR/beads-runtime.sh"
-source "$SCRIPT_DIR/status-ui.sh"
+VIDA_LEGACY_BIN="$ROOT_DIR/_vida/scripts-nim/vida-legacy"
+TURSO_PYTHON="$ROOT_DIR/.venv/bin/python3"
 
 cd "$ROOT_DIR"
+
+vida_icon() {
+  case "${1:-info}" in
+    ok) printf '✅' ;;
+    warn) printf '⚠️' ;;
+    fail) printf '❌' ;;
+    blocked) printf '⛔' ;;
+    info) printf 'ℹ️' ;;
+    sparkle) printf '✨' ;;
+    progress) printf '🔄' ;;
+    *) printf '•' ;;
+  esac
+}
+
+vida_status_line() {
+  local level="${1:-info}"
+  shift || true
+  printf '%s %s\n' "$(vida_icon "$level")" "$*"
+}
+
+jsonl_stats() {
+  local issues_jsonl="$ROOT_DIR/.beads/issues.jsonl"
+  if [[ ! -f "$issues_jsonl" ]]; then
+    echo '{"path":"","total":0,"unique":0,"duplicates":0}'
+    return 0
+  fi
+  jq -sc --arg path "$issues_jsonl" '
+    def ids: map(.id // "");
+    {
+      path:$path,
+      total:length,
+      unique:(ids | unique | length),
+      duplicates:(length - (ids | unique | length))
+    }
+  ' "$issues_jsonl"
+}
+
+validate_required_skills() {
+  local -a required_skills=("plan" "skill-creator" "skill-installer")
+  local -a search_roots=(
+    "$ROOT_DIR/.agents/skills"
+    "$HOME/.agents/skills"
+    "$HOME/.code/skills"
+  )
+  local missing=0
+  local skill root found_path
+  declare -A discovered_skills=()
+
+  for root in "${search_roots[@]}"; do
+    [[ -d "$root" ]] || continue
+    while IFS= read -r candidate; do
+      skill_name="$(basename "$(dirname "$candidate")")"
+      [[ -n "$skill_name" ]] || continue
+      if [[ -z "${discovered_skills[$skill_name]:-}" ]]; then
+        discovered_skills["$skill_name"]="$candidate"
+      fi
+    done < <(find "$root" -type f -name SKILL.md 2>/dev/null)
+  done
+
+  for skill in "${required_skills[@]}"; do
+    found_path="${discovered_skills[$skill]:-}"
+    if [[ -z "$found_path" ]]; then
+      echo "[MISSING] $skill" >&2
+      missing=$((missing + 1))
+    fi
+  done
+  return "$missing"
+}
 
 TASK_ID=""
 MODE="full"
@@ -65,26 +133,13 @@ required_files=(
   "_vida/docs/trace-eval-protocol.md"
   "_vida/docs/capability-registry-protocol.md"
   "_vida/docs/subagent-system-protocol.md"
-  "_vida/scripts/validate-skills.sh"
   "_vida/scripts/beads-workflow.sh"
   "_vida/scripts/boot-profile.sh"
-  "_vida/scripts/beads-bg-sync.sh"
-  "_vida/scripts/tool-capability.sh"
-  "_vida/scripts/context-drift-sentinel.sh"
-  "_vida/scripts/eval-pack.sh"
-  "_vida/scripts/beads-compact.sh"
+  "_vida/scripts/eval-pack.py"
   "_vida/scripts/beads-log.sh"
-  "_vida/scripts/beads-verify-log.sh"
-  "_vida/scripts/todo-tool.sh"
-  "_vida/scripts/todo-sync-plan.sh"
-  "_vida/scripts/todo-plan-validate.sh"
-  "_vida/scripts/stateful-sequence-check.sh"
+  "_vida/scripts-nim/src/state/beads.nim"
+  "_vida/scripts/todo-runtime.py"
   "_vida/scripts/framework-boundary-check.sh"
-  "_vida/scripts/framework-self-check.sh"
-  "_vida/scripts/vida-pack-router.sh"
-  "_vida/scripts/vida-pack-helper.sh"
-  "_vida/scripts/nondev-pack-init.sh"
-  "_vida/scripts/wvp-evidence.sh"
   "_vida/scripts/project-bootstrap.py"
   "_vida/scripts/skill-discovery.py"
   "_vida/scripts/scp-confidence.py"
@@ -113,40 +168,26 @@ for f in "${required_files[@]}"; do
 done
 
 vida_status_line info "[health] skills"
-bash _vida/scripts/validate-skills.sh
+if ! validate_required_skills; then
+  vida_status_line fail "[health] FAIL: required skills missing" >&2
+  exit 2
+fi
 bash _vida/scripts/framework-boundary-check.sh --strict >/dev/null
 
-mode="$(beads_mode)"
-jsonl_stats="$(beads_jsonl_stats)"
+jsonl_stats="$(jsonl_stats)"
 jsonl_duplicates="$(jq -r '.duplicates' <<<"$jsonl_stats")"
-snapshot_age_sec="$(beads_snapshot_age_seconds)"
 
 if [[ "$jsonl_duplicates" != "0" ]]; then
-  vida_status_line fail "[health] FAIL: duplicate issue ids detected in issues.jsonl ($jsonl_duplicates)" >&2
-  exit 5
-fi
-
-if [[ "$snapshot_age_sec" -lt 0 ]]; then
-  vida_status_line fail "[health] FAIL: latest JSONL snapshot is missing" >&2
-  exit 5
-fi
-
-if (( snapshot_age_sec > 1800 )); then
-  vida_status_line fail "[health] FAIL: latest JSONL snapshot too old (${snapshot_age_sec}s)" >&2
+  vida_status_line fail "[health] FAIL: duplicate task ids detected in legacy JSONL snapshot ($jsonl_duplicates)" >&2
   exit 5
 fi
 
 runtime_scripts=(
   "_vida/scripts/beads-workflow.sh"
-  "_vida/scripts/beads-bg-sync.sh"
   "_vida/scripts/quality-health-check.sh"
-  "_vida/scripts/beads-verify-log.sh"
-  "_vida/scripts/br-db-quarantine.sh"
-  "_vida/scripts/vida-status.sh"
-  "_vida/scripts/context-capsule.sh"
-  "_vida/scripts/beads-compact.sh"
-  "_vida/scripts/eval-pack.sh"
-  "_vida/scripts/task-execution-mode.sh"
+  "_vida/scripts-nim/src/vida"
+  "_vida/scripts-nim/src/state/context_capsule.nim"
+  "_vida/scripts/eval-pack.py"
 )
 
 raw_br_hits="$(rg -n --pcre2 '^(?!\\s*#).*?\\bbr (?=(ready|show|update|close|sync|list|create|dep|init)\\b)' "${runtime_scripts[@]}" 2>/dev/null || true)"
@@ -158,21 +199,8 @@ fi
 
 vida_status_line info "[health] beads status"
 if ! bash _vida/scripts/beads-workflow.sh status >/dev/null; then
-  vida_status_line fail "[health] FAIL: beads-workflow status failed in mode=$mode" >&2
+  vida_status_line fail "[health] FAIL: beads-workflow status failed" >&2
   exit 7
-fi
-
-bg_status="$(bash _vida/scripts/beads-bg-sync.sh status)"
-bg_running="$(sed -n 's/.*running=\([a-z]*\).*/\1/p' <<<"$bg_status" | head -n1)"
-bg_role="$(sed -n 's/.*role=\([^ ]*\).*/\1/p' <<<"$bg_status" | head -n1)"
-if [[ "$bg_running" == "yes" && "$bg_role" != "backup_only" ]]; then
-  vida_status_line fail "[health] FAIL: background worker is not in backup_only mode" >&2
-  exit 8
-fi
-
-if ! rg -q 'beads-bg-sync\.sh.*stop|beads-bg-sync\.sh" stop|BG_SYNC.*stop' _vida/scripts/br-db-quarantine.sh; then
-  vida_status_line fail "[health] FAIL: quarantine script does not stop background worker" >&2
-  exit 9
 fi
 
 if command -v gh >/dev/null 2>&1; then
@@ -212,37 +240,16 @@ resolve_task_labels() {
   local issue_id="$1"
   local labels
   labels="$(
-    br show "$issue_id" --json 2>/dev/null \
-      | jq -r '.[0].labels // [] | join(" ")' 2>/dev/null || true
+    VIDA_ROOT="$ROOT_DIR" \
+    VIDA_LEGACY_TURSO_PYTHON="${VIDA_LEGACY_TURSO_PYTHON:-$TURSO_PYTHON}" \
+      "$VIDA_LEGACY_BIN" task show "$issue_id" --json 2>/dev/null \
+      | jq -r '.labels // [] | join(" ")' 2>/dev/null || true
   )"
   if [[ -n "${labels// }" ]]; then
     printf '%s\n' "$labels"
     return 0
   fi
-  python3 - "$issue_id" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-issue_id = sys.argv[1]
-issues_path = Path(".beads/issues.jsonl")
-if not issues_path.exists():
-    raise SystemExit(0)
-for line in issues_path.read_text(encoding="utf-8").splitlines():
-    line = line.strip()
-    if not line:
-        continue
-    try:
-        item = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-    if str(item.get("id", "")).strip() != issue_id:
-        continue
-    labels = item.get("labels", [])
-    if isinstance(labels, list):
-        print(" ".join(str(label).strip() for label in labels if str(label).strip()))
-    break
-PY
+  return 0
 }
 
 task_has_open_pack() {
@@ -277,16 +284,16 @@ if [[ -n "$TASK_ID" ]]; then
 
   if [[ "$MODE" == "full" || "$MODE" == "strict-dev" ]]; then
     vida_status_line info "[health] strict log verify for task: $TASK_ID"
-    bash _vida/scripts/beads-verify-log.sh --task "$TASK_ID" --strict
+    VIDA_ROOT="${VIDA_ROOT:-$ROOT_DIR}" VIDA_LEGACY_TURSO_PYTHON="${VIDA_LEGACY_TURSO_PYTHON:-$ROOT_DIR/.venv/bin/python3}" _vida/scripts-nim/src/vida beads verify --task "$TASK_ID" --strict
 
     vida_status_line info "[health] todo sync snapshot for task: $TASK_ID"
-    bash _vida/scripts/todo-sync-plan.sh "$TASK_ID" --mode json-only --quiet >/dev/null
+    python3 _vida/scripts/todo-runtime.py sync "$TASK_ID" --mode json-only --quiet >/dev/null
 
     vida_status_line info "[health] todo board render for task: $TASK_ID"
-    bash _vida/scripts/todo-tool.sh board "$TASK_ID" >/dev/null
+    python3 _vida/scripts/todo-runtime.py board "$TASK_ID" >/dev/null
 
     vida_status_line info "[health] todo plan integrity for task: $TASK_ID"
-    if ! bash _vida/scripts/todo-plan-validate.sh "$TASK_ID" --quiet >/dev/null 2>&1; then
+    if ! python3 _vida/scripts/todo-runtime.py validate "$TASK_ID" --quiet >/dev/null 2>&1; then
       vida_status_line fail "[health] FAIL: TODO plan integrity check failed for task $TASK_ID" >&2
       exit 4
     fi
@@ -321,8 +328,8 @@ if [[ -n "$TASK_ID" ]]; then
     fi
   else
     vida_status_line info "[health] quick mode: non-strict task checks for $TASK_ID"
-    bash _vida/scripts/beads-verify-log.sh --task "$TASK_ID" >/dev/null
-    if ! bash _vida/scripts/todo-plan-validate.sh "$TASK_ID" --quiet >/dev/null 2>&1; then
+    VIDA_ROOT="${VIDA_ROOT:-$ROOT_DIR}" VIDA_LEGACY_TURSO_PYTHON="${VIDA_LEGACY_TURSO_PYTHON:-$ROOT_DIR/.venv/bin/python3}" _vida/scripts-nim/src/vida beads verify --task "$TASK_ID" >/dev/null
+    if ! python3 _vida/scripts/todo-runtime.py validate "$TASK_ID" --quiet >/dev/null 2>&1; then
       vida_status_line fail "[health] FAIL: TODO plan integrity check failed for task $TASK_ID" >&2
       exit 4
     fi
@@ -477,4 +484,4 @@ else
   vida_status_line info "[health] no task id provided, skip strict task log verification"
 fi
 
-vida_status_line ok "[health] OK mode=$mode backup_age=${snapshot_age_sec}s bg=$bg_role"
+vida_status_line ok "[health] OK legacy_jsonl_duplicates=${jsonl_duplicates}"

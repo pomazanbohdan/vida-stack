@@ -132,6 +132,8 @@ def check_gate(task_id: str) -> tuple[int, dict[str, Any]]:
         "blockers": [],
         "review_path": str(review_path),
         "review_present": bool(review_payload),
+        "review_status": str(review_payload.get("status", "") or ""),
+        "review_evidence_present": bool(review_payload.get("review_evidence_present", False)),
         "review_subagent_runs_seen": review_runs_seen,
         "review_subagent_runs_processed": review_runs_processed,
         "override_receipt_path": str(override_path),

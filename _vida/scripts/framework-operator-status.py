@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +18,9 @@ FRAMEWORK_MEMORY_PATH = ROOT_DIR / ".vida" / "state" / "framework-memory.json"
 CONTEXT_GOVERNANCE_PATH = ROOT_DIR / ".vida" / "state" / "context-governance.json"
 SILENT_DIAGNOSIS_PATH = ROOT_DIR / ".vida" / "state" / "silent-framework-diagnosis.json"
 ISSUES_JSONL_PATH = ROOT_DIR / ".beads" / "issues.jsonl"
+DEFAULT_ISSUES_JSONL_PATH = ISSUES_JSONL_PATH
+VIDA_LEGACY_BIN = ROOT_DIR / "_vida" / "scripts-nim" / "vida-legacy"
+TURSO_PYTHON = str(ROOT_DIR / ".venv" / "bin" / "python3")
 ROUTE_RECEIPT_DIR = ROOT_DIR / ".vida" / "logs" / "route-receipts"
 RUN_GRAPH_DIR = ROOT_DIR / ".vida" / "state" / "run-graphs"
 TASK_STATE_RECONCILE = SCRIPT_DIR / "task-state-reconcile.py"
@@ -44,48 +49,65 @@ def load_module(name: str, path: Path):
     return module
 
 
-def issue_status_map() -> dict[str, str]:
-    if not ISSUES_JSONL_PATH.exists():
-        return {}
-    statuses: dict[str, str] = {}
+def issue_rows() -> list[dict[str, Any]]:
+    if ISSUES_JSONL_PATH != DEFAULT_ISSUES_JSONL_PATH:
+        if not ISSUES_JSONL_PATH.exists():
+            return []
+        rows: list[dict[str, Any]] = []
+        try:
+            for raw_line in ISSUES_JSONL_PATH.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                payload = json.loads(line)
+                if isinstance(payload, dict):
+                    rows.append(payload)
+        except (OSError, json.JSONDecodeError):
+            return []
+        return rows
+    if not VIDA_LEGACY_BIN.exists():
+        return []
+    completed = subprocess.run(
+        [str(VIDA_LEGACY_BIN), "task", "list", "--all", "--json"],
+        cwd=ROOT_DIR,
+        env={
+            **os.environ,
+            "VIDA_ROOT": str(ROOT_DIR),
+            "VIDA_LEGACY_TURSO_PYTHON": TURSO_PYTHON,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return []
     try:
-        for raw_line in ISSUES_JSONL_PATH.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            payload = json.loads(line)
-            if not isinstance(payload, dict):
-                continue
-            issue_id = str(payload.get("id", "")).strip()
-            status = str(payload.get("status", "")).strip()
-            if issue_id:
-                statuses[issue_id] = status
-    except (OSError, json.JSONDecodeError):
-        return {}
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return []
+    return [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+
+
+def issue_status_map() -> dict[str, str]:
+    statuses: dict[str, str] = {}
+    for payload in issue_rows():
+        issue_id = str(payload.get("id", "")).strip()
+        status = str(payload.get("status", "")).strip()
+        if issue_id:
+            statuses[issue_id] = status
     return statuses
 
 
 def framework_issue_rows() -> list[dict[str, Any]]:
-    if not ISSUES_JSONL_PATH.exists():
-        return []
     rows: list[dict[str, Any]] = []
-    try:
-        for raw_line in ISSUES_JSONL_PATH.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            payload = json.loads(line)
-            if not isinstance(payload, dict):
-                continue
-            status = str(payload.get("status", "")).strip()
-            if status not in {"open", "in_progress"}:
-                continue
-            issue_id = str(payload.get("id", "")).strip()
-            labels = payload.get("labels", []) or []
-            if "framework" in labels or issue_id.startswith("mobile-1j1") or issue_id.startswith("mobile-2bi") or issue_id.startswith("mobile-3rf"):
-                rows.append(payload)
-    except (OSError, json.JSONDecodeError):
-        return []
+    for payload in issue_rows():
+        status = str(payload.get("status", "")).strip()
+        if status not in {"open", "in_progress"}:
+            continue
+        issue_id = str(payload.get("id", "")).strip()
+        labels = payload.get("labels", []) or []
+        if "framework" in labels or issue_id.startswith("mobile-1j1") or issue_id.startswith("mobile-2bi") or issue_id.startswith("mobile-3rf"):
+            rows.append(payload)
     return rows
 
 

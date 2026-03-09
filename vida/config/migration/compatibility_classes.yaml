@@ -1,0 +1,17 @@
+artifact_name: compatibility_classes
+artifact_type: migration_policy
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+classes:
+  - compatible
+  - compatible_with_migration_required
+  - incompatible
+  - insufficient_evidence
+
+input_families:
+  - command_semantics
+  - state_semantics
+  - instruction_semantics
+  - bridge_export
+  - migration_kernel

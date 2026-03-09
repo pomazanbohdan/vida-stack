@@ -243,6 +243,38 @@ class VidaConfigValidationTest(unittest.TestCase):
             errors,
         )
 
+    def test_autonomous_execution_cannot_disable_internal_boundary_analysis(self) -> None:
+        cfg = self._base_config()
+        cfg["autonomous_execution"] = {
+            "next_task_boundary_analysis": False,
+            "next_task_boundary_report": "brief_plan",
+            "next_task_boundary_report_gating": False,
+            "dependent_coverage_autoupdate": True,
+        }
+
+        errors = self.module.validate_config(cfg)
+
+        self.assertIn(
+            "autonomous_execution.next_task_boundary_analysis: may not be false because internal boundary analysis is framework-required",
+            errors,
+        )
+
+    def test_autonomous_execution_report_off_forbids_report_gating(self) -> None:
+        cfg = self._base_config()
+        cfg["autonomous_execution"] = {
+            "next_task_boundary_analysis": True,
+            "next_task_boundary_report": "off",
+            "next_task_boundary_report_gating": True,
+            "dependent_coverage_autoupdate": True,
+        }
+
+        errors = self.module.validate_config(cfg)
+
+        self.assertIn(
+            "autonomous_execution.next_task_boundary_report_gating: must be false when next_task_boundary_report=off",
+            errors,
+        )
+
     def test_route_cross_references_unknown_subagents_and_routes_fail_validation(self) -> None:
         cfg = self._base_config()
         cfg["agent_system"]["routing"]["analysis"] = {
@@ -412,9 +444,11 @@ class VidaConfigValidationTest(unittest.TestCase):
 
         qwen_dispatch = cfg["agent_system"]["subagents"]["qwen_cli"]["dispatch"]
         static_args = qwen_dispatch.get("static_args", [])
+        env = qwen_dispatch.get("env", {})
 
         self.assertNotIn("--sandbox", static_args)
         self.assertEqual(static_args, ["-y", "-o", "text"])
+        self.assertEqual(env.get("HOME"), "/home/unnamed/project/vida-stack/.vida/data/qwen-home")
         self.assertEqual(qwen_dispatch.get("web_search_mode"), "provider_configured")
 
     def test_repository_gemini_overlay_does_not_force_sandbox(self) -> None:
@@ -451,6 +485,25 @@ class VidaConfigValidationTest(unittest.TestCase):
         self.assertEqual(route["independent_verification_required"], "no")
         self.assertEqual(route["local_execution_allowed"], "no")
 
+    def test_repository_overlay_prefers_qwen_and_codex_for_coach_review(self) -> None:
+        cfg = self.module.load_config(validate=False)
+
+        route = cfg["agent_system"]["routing"]["coach"]
+
+        self.assertEqual(route["subagents"], "codex_cli,internal_subagents")
+        self.assertEqual(route["fanout_subagents"], "codex_cli")
+        self.assertEqual(route["fanout_min_results"], 1)
+
+    def test_repository_overlay_declares_autonomous_boundary_defaults(self) -> None:
+        cfg = self.module.load_config(validate=False)
+
+        autonomous_execution = cfg["autonomous_execution"]
+
+        self.assertTrue(autonomous_execution["next_task_boundary_analysis"])
+        self.assertEqual(autonomous_execution["next_task_boundary_report"], "brief_plan")
+        self.assertFalse(autonomous_execution["next_task_boundary_report_gating"])
+        self.assertTrue(autonomous_execution["dependent_coverage_autoupdate"])
+
     def test_qwen_template_example_does_not_force_sandbox(self) -> None:
         template = CONFIG_TEMPLATE_PATH.read_text(encoding="utf-8")
         qwen_block = template.split("#     qwen_cli:", 1)[1].split("#     gemini_cli:", 1)[0]
@@ -459,6 +512,15 @@ class VidaConfigValidationTest(unittest.TestCase):
         self.assertIn("#           - -y", qwen_block)
         self.assertNotIn("#           - --sandbox", qwen_block)
         self.assertIn("#         web_search_mode: provider_configured", qwen_block)
+
+    def test_template_declares_autonomous_boundary_defaults(self) -> None:
+        template = CONFIG_TEMPLATE_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("autonomous_execution:", template)
+        self.assertIn("next_task_boundary_analysis: true", template)
+        self.assertIn("next_task_boundary_report: brief_plan", template)
+        self.assertIn("next_task_boundary_report_gating: false", template)
+        self.assertIn("dependent_coverage_autoupdate: true", template)
 
     def test_gemini_template_example_does_not_force_sandbox(self) -> None:
         template = CONFIG_TEMPLATE_PATH.read_text(encoding="utf-8")

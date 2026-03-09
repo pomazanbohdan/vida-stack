@@ -319,6 +319,15 @@ normalize_optional() {
   fi
 }
 
+normalize_next_step() {
+  local value="${1:-}"
+  if [[ "$value" == "--" ]]; then
+    echo ""
+  else
+    echo "$value"
+  fi
+}
+
 cmd="${1:-}"
 
 case "$cmd" in
@@ -329,7 +338,7 @@ case "$cmd" in
     track_id="$(normalize_optional "${5:--}")"
     owner="$(normalize_optional "${6:--}")"
     depends_on="$(normalize_optional "${7:--}")"
-    next_step="$(normalize_optional "${8:--}")"
+    next_step="$(normalize_next_step "${8:--}")"
     [[ -n "$task_id" && -n "$block_id" && -n "$goal" ]] || { usage; exit 1; }
 
     payload="$(jq -cn \
@@ -355,7 +364,7 @@ case "$cmd" in
     track_id="$(normalize_optional "${5:--}")"
     owner="$(normalize_optional "${6:--}")"
     depends_on="$(normalize_optional "${7:--}")"
-    next_step="$(normalize_optional "${8:--}")"
+    next_step="$(normalize_next_step "${8:--}")"
     [[ -n "$task_id" && -n "$block_id" && -n "$goal" ]] || { usage; exit 1; }
 
     payload="$(jq -cn \
@@ -398,7 +407,7 @@ case "$cmd" in
     pack_id="${3:-}"
     result="${4:-}"
     summary="${5:-}"
-    next_step="$(normalize_optional "${6:--}")"
+    next_step="$(normalize_next_step "${6:--}")"
     [[ -n "$task_id" && -n "$pack_id" && -n "$result" && -n "$summary" ]] || { usage; exit 1; }
 
     payload="$(jq -cn \

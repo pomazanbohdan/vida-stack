@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VIDA Entity Record",
+  "type": "object",
+  "required": [
+    "id",
+    "entity_type",
+    "revision"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "entity_type": { "type": "string" },
+    "revision": { "type": "string" },
+    "receipt_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "proof_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

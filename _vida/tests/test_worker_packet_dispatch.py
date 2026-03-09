@@ -719,7 +719,7 @@ Task: audit prompt flow
 Scope: _vida/scripts
 Blocking Question: What broke?
 Verification:
-- rg -n "worker_lane_confirmed" _vida/scripts/render-subagent-prompt.sh
+- rg -n "worker_lane_confirmed" _vida/scripts/worker-packet-gate.py
 Deliverable:
 - Bullet list: findings, risks, recommended fixes.
 """
@@ -1009,7 +1009,7 @@ Deliverable:
                     "fallback_subagents": [],
                 }
 
-                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False, env=None):
                     analysis_prompt_file = Path(cmd[5])
                     self.assertNotEqual(analysis_prompt_file, prompt_file)
                     prompt_text = analysis_prompt_file.read_text(encoding="utf-8")
@@ -1155,7 +1155,7 @@ Deliverable:
                     "fallback_subagents": [],
                 }
 
-                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False, env=None):
                     manifest_path = Path(cmd[6]) / "manifest.json"
                     manifest_path.parent.mkdir(parents=True, exist_ok=True)
                     manifest_path.write_text(
@@ -1298,7 +1298,7 @@ Deliverable:
                     "fallback_subagents": [],
                 }
 
-                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False, env=None):
                     manifest_path = Path(cmd[6]) / "manifest.json"
                     manifest_path.parent.mkdir(parents=True, exist_ok=True)
                     manifest_path.write_text(json.dumps({"status": "completed", "phase": "completed", "synthesis_ready": True, "results": [{"subagent": "qwen_cli", "status": "success", "output_file": str(analysis_output)}]}), encoding="utf-8")
@@ -1404,7 +1404,7 @@ Deliverable:
                     "fallback_subagents": [],
                 }
 
-                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False, env=None):
                     manifest_path = Path(cmd[6]) / "manifest.json"
                     manifest_path.parent.mkdir(parents=True, exist_ok=True)
                     manifest_path.write_text(
@@ -1520,7 +1520,7 @@ Deliverable:
                     "fallback_subagents": [],
                 }
 
-                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False, env=None):
                     manifest_path = Path(cmd[6]) / "manifest.json"
                     manifest_path.parent.mkdir(parents=True, exist_ok=True)
                     manifest_path.write_text(
@@ -1639,7 +1639,7 @@ Deliverable:
                     "fallback_subagents": [],
                 }
 
-                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False, env=None):
                     manifest_path = Path(cmd[6]) / "manifest.json"
                     manifest_path.parent.mkdir(parents=True, exist_ok=True)
                     manifest_path.write_text(
@@ -1770,7 +1770,7 @@ Deliverable:
                     "fallback_subagents": [],
                 }
 
-                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False, env=None):
                     manifest_path = Path(cmd[6]) / "manifest.json"
                     manifest_path.parent.mkdir(parents=True, exist_ok=True)
                     manifest_path.write_text(
@@ -1900,7 +1900,7 @@ Deliverable:
                     "fallback_subagents": [],
                 }
 
-                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False, env=None):
                     manifest_path = Path(cmd[6]) / "manifest.json"
                     manifest_path.parent.mkdir(parents=True, exist_ok=True)
                     manifest_path.write_text(
@@ -2038,7 +2038,7 @@ Deliverable:
                     "fallback_subagents": [],
                 }
 
-                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False):
+                def fake_subprocess_run(cmd, cwd=None, capture_output=False, text=False, check=False, env=None):
                     if "ensemble" in cmd:
                         manifest_path = Path(cmd[6]) / "manifest.json"
                         manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2069,7 +2069,7 @@ Deliverable:
                         return self.dispatch.subprocess.CompletedProcess(
                             cmd,
                             0,
-                            stdout=json.dumps({"id": "unit-task.1"}) + "\n",
+                            stdout=json.dumps({"task": {"id": "unit-task.1"}}) + "\n",
                             stderr="",
                         )
                     raise AssertionError(f"unexpected subprocess command: {cmd}")

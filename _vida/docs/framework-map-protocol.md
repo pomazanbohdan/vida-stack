@@ -59,6 +59,7 @@ L0c Worker      : _vida/docs/SUBAGENT-ENTRY.MD + _vida/docs/SUBAGENT-THINKING.MD
 L1 Routing      : _vida/docs/orchestration-protocol.md + _vida/docs/use-case-packs.md
 L2 Command Map  : _vida/commands/*.md + _vida/docs/command-layer-protocol.md
 L3 Reasoning    : _vida/docs/thinking-protocol.md + _vida/docs/web-validation-protocol.md
+                  support refs: _vida/docs/algorithms-one-screen.md, _vida/docs/algorithms-quick-reference.md
 L4 Contracts    : _vida/docs/spec-contract-protocol.md + _vida/docs/form-task-protocol.md
 L5 Execution    : _vida/docs/implement-execution-protocol.md + _vida/docs/bug-fix-protocol.md
 L6 State/Logs   : _vida/docs/beads-protocol.md + _vida/docs/todo-protocol.md + _vida/docs/log-policy.md

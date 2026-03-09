@@ -25,6 +25,12 @@ language_policy:
 protocol_activation:
   agent_system: false
 
+autonomous_execution:
+  next_task_boundary_analysis: true
+  next_task_boundary_report: brief_plan
+  next_task_boundary_report_gating: false
+  dependent_coverage_autoupdate: true
+
 framework_self_diagnosis:
   enabled: false
   silent_mode: true
@@ -182,6 +188,8 @@ pack_router_keywords:
 #           - -y
 #           - -o
 #           - text
+#         env:
+#           HOME: /home/unnamed/project/vida-stack/.vida/data/qwen-home
 #         web_search_mode: provider_configured
 #         web_probe_prompt: Use web search for one current public source and return exactly one line: VIDA_WEB_SEARCH_OK <url>
 #         web_probe_expect_substring: VIDA_WEB_SEARCH_OK
@@ -547,10 +555,11 @@ pack_router_keywords:
 #       models:
 #         codex_cli: gpt-5.1-codex-mini
 #       fanout_subagents:
+#         - qwen_cli
+#         - codex_cli
 #         - gemini_cli
 #         - kilo_cli
 #         - opencode_cli
-#         - qwen_cli
 #         - vibe_cli
 #       fanout_min_results: 2
 #       merge_policy: consensus_with_conflict_flag

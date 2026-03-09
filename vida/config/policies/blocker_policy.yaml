@@ -1,0 +1,31 @@
+artifact_name: blocker_policy
+artifact_type: policy
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+blocker_codes:
+  - dependency_missing
+  - review_pending
+  - approval_pending
+  - external_system_unavailable
+  - insufficient_context
+  - failed_verification
+  - route_unresolved
+  - lease_expired
+  - migration_required
+  - doctor_blocking
+rules:
+  blocker_reason_present:
+    all_of:
+      - blocker_code_known
+      - blocker_message_present
+
+  route_fail_closed:
+    all_of:
+      - route_metadata_present
+      - instruction_bundle_present
+
+  boot_fail_closed:
+    all_of:
+      - compatibility_checked
+      - doctor_verdict_present

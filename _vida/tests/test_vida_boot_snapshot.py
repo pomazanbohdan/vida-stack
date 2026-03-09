@@ -33,8 +33,8 @@ class VidaBootSnapshotTest(unittest.TestCase):
         }
         with mock.patch.object(
             self.module,
-            "run_br_json",
-            side_effect=[[issue], [issue], [], [issue], [{"id": "mobile-q5b"}]],
+            "run_vida_legacy_json",
+            side_effect=[[issue], [issue]],
         ), mock.patch.object(self.module, "child_entries_for", return_value=[]), mock.patch.object(
             self.module, "framework_self_diagnosis_config", return_value={}
         ), mock.patch.object(

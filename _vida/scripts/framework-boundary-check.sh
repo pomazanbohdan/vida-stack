@@ -3,9 +3,27 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-source "$SCRIPT_DIR/status-ui.sh"
 
 STRICT=0
+
+vida_icon() {
+  case "${1:-info}" in
+    ok) printf '✅' ;;
+    warn) printf '⚠️' ;;
+    fail) printf '❌' ;;
+    blocked) printf '⛔' ;;
+    info) printf 'ℹ️' ;;
+    sparkle) printf '✨' ;;
+    progress) printf '🔄' ;;
+    *) printf '•' ;;
+  esac
+}
+
+vida_status_line() {
+  local level="${1:-info}"
+  shift || true
+  printf '%s %s\n' "$(vida_icon "$level")" "$*"
+}
 
 usage() {
   cat <<'EOF'

@@ -1,0 +1,3205 @@
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde_json::Deserializer;
+use surrealdb::engine::local::{Db, SurrealKv};
+use surrealdb::types::SurrealValue;
+use surrealdb::Surreal;
+
+const DEFAULT_STATE_DIR: &str = ".vida/data/state";
+pub const STATE_NAMESPACE: &str = "vida";
+pub const STATE_DATABASE: &str = "primary";
+pub const DEFAULT_INSTRUCTION_SOURCE_ROOT: &str = "_vida/instructions";
+pub const DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT: &str = "_vida/framework-memory";
+const REPO_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+const STATE_SCHEMA: &str = r#"
+DEFINE TABLE task SCHEMALESS;
+DEFINE TABLE task_dependency SCHEMALESS;
+DEFINE TABLE task_blocker SCHEMALESS;
+DEFINE TABLE execution_plan_state SCHEMALESS;
+DEFINE TABLE routed_run_state SCHEMALESS;
+DEFINE TABLE governance_state SCHEMALESS;
+DEFINE TABLE resumability_capsule SCHEMALESS;
+DEFINE TABLE task_reconciliation_summary SCHEMALESS;
+DEFINE TABLE state_spine_manifest SCHEMALESS;
+DEFINE TABLE boot_compatibility_state SCHEMALESS;
+DEFINE TABLE migration_runtime_state SCHEMALESS;
+DEFINE TABLE migration_compatibility_receipt SCHEMALESS;
+DEFINE TABLE migration_application_receipt SCHEMALESS;
+DEFINE TABLE migration_verification_receipt SCHEMALESS;
+DEFINE TABLE migration_cutover_readiness_receipt SCHEMALESS;
+DEFINE TABLE migration_rollback_note SCHEMALESS;
+DEFINE TABLE storage_meta SCHEMALESS;
+UPSERT storage_meta:primary CONTENT {
+  engine: 'surrealdb',
+  backend: 'kv-surrealkv',
+  namespace: 'vida',
+  database: 'primary',
+  state_schema_version: 1,
+  instruction_schema_version: 1
+};
+
+DEFINE TABLE instruction_artifact SCHEMALESS;
+DEFINE TABLE instruction_dependency_edge SCHEMALESS;
+DEFINE TABLE instruction_sidecar SCHEMALESS;
+DEFINE TABLE instruction_diff_patch SCHEMALESS;
+DEFINE TABLE instruction_migration_receipt SCHEMALESS;
+DEFINE TABLE instruction_projection_receipt SCHEMALESS;
+DEFINE TABLE effective_instruction_bundle_receipt SCHEMALESS;
+DEFINE TABLE instruction_runtime_state SCHEMALESS;
+DEFINE TABLE instruction_source_artifact SCHEMALESS;
+DEFINE TABLE instruction_ingest_receipt SCHEMALESS;
+DEFINE TABLE source_tree_config SCHEMALESS;
+"#;
+
+#[derive(Debug)]
+pub struct StateStore {
+    db: Surreal<Db>,
+    root: PathBuf,
+}
+
+impl StateStore {
+    pub async fn open(root: PathBuf) -> Result<Self, StateStoreError> {
+        fs::create_dir_all(&root)?;
+
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(root.clone()).await?;
+        db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
+        db.query(STATE_SCHEMA).await?;
+
+        let store = Self { db, root };
+        store.ensure_minimal_authoritative_state_spine().await?;
+        Ok(store)
+    }
+
+    pub async fn open_existing(root: PathBuf) -> Result<Self, StateStoreError> {
+        if !root.exists() {
+            return Err(StateStoreError::MissingStateDir(root));
+        }
+
+        let db: Surreal<Db> = Surreal::new::<SurrealKv>(root.clone()).await?;
+        db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
+
+        Ok(Self { db, root })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub async fn backend_summary(&self) -> Result<String, StateStoreError> {
+        let row: Option<StorageMetaRow> = self.db.select(("storage_meta", "primary")).await?;
+        let row = row.ok_or(StateStoreError::MissingMetadata)?;
+        Ok(format!(
+            "{} state-v{} instruction-v{}",
+            row.backend, row.state_schema_version, row.instruction_schema_version
+        ))
+    }
+
+    pub async fn ensure_minimal_authoritative_state_spine(&self) -> Result<(), StateStoreError> {
+        let existing: Option<StateSpineManifestContent> =
+            self.db.select(("state_spine_manifest", "primary")).await?;
+        let initialized_at = existing
+            .map(|row| row.initialized_at)
+            .unwrap_or_else(|| unix_timestamp_nanos().to_string());
+
+        let content = StateSpineManifestContent {
+            manifest_id: "primary".to_string(),
+            state_schema_version: 1,
+            authoritative_mutation_root: "vida task".to_string(),
+            entity_surfaces: vec![
+                "task".to_string(),
+                "task_dependency".to_string(),
+                "task_blocker".to_string(),
+                "execution_plan_state".to_string(),
+                "routed_run_state".to_string(),
+                "governance_state".to_string(),
+                "resumability_capsule".to_string(),
+                "task_reconciliation_summary".to_string(),
+            ],
+            initialized_at,
+        };
+
+        let _: Option<StateSpineManifestContent> = self
+            .db
+            .upsert(("state_spine_manifest", "primary"))
+            .content(content)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn state_spine_summary(&self) -> Result<StateSpineSummary, StateStoreError> {
+        let row: Option<StateSpineManifestContent> =
+            self.db.select(("state_spine_manifest", "primary")).await?;
+        let row = row.ok_or(StateStoreError::MissingStateSpineManifest)?;
+        if row.authoritative_mutation_root.trim().is_empty() {
+            return Err(StateStoreError::InvalidStateSpineManifest {
+                reason: "authoritative mutation root is empty".to_string(),
+            });
+        }
+        if row.entity_surfaces.is_empty() {
+            return Err(StateStoreError::InvalidStateSpineManifest {
+                reason: "entity surface list is empty".to_string(),
+            });
+        }
+        Ok(StateSpineSummary {
+            authoritative_mutation_root: row.authoritative_mutation_root,
+            entity_surface_count: row.entity_surfaces.len(),
+            state_schema_version: row.state_schema_version,
+        })
+    }
+
+    pub async fn import_tasks_from_jsonl(
+        &self,
+        source_path: &Path,
+    ) -> Result<TaskImportSummary, StateStoreError> {
+        let raw = fs::read_to_string(source_path)?;
+        let mut imported = 0usize;
+        let mut unchanged = 0usize;
+        let mut updated = 0usize;
+
+        for (index, record) in Deserializer::from_str(&raw)
+            .into_iter::<TaskJsonlRecord>()
+            .enumerate()
+        {
+            let record = record.map_err(|error| StateStoreError::InvalidTaskJsonLine {
+                line: index + 1,
+                reason: error.to_string(),
+            })?;
+            let task_id = record.id.trim().to_string();
+            if task_id.is_empty() {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!("line {} is missing task id", index + 1),
+                });
+            }
+
+            let content = TaskContent::from(record);
+            let existing: Option<TaskRecord> = self.db.select(("task", task_id.as_str())).await?;
+            match existing {
+                None => imported += 1,
+                Some(current) if current == TaskRecord::from(content.clone()) => unchanged += 1,
+                Some(_) => updated += 1,
+            }
+
+            let _: Option<TaskContent> = self
+                .db
+                .upsert(("task", task_id.as_str()))
+                .content(content.clone())
+                .await?;
+
+            let _ = self
+                .db
+                .query(format!(
+                    "DELETE task_dependency WHERE issue_id = '{}';",
+                    escape_surql_literal(&task_id)
+                ))
+                .await?;
+
+            for dependency in &content.dependencies {
+                let dep_id = format!(
+                    "{}--{}--{}",
+                    sanitize_record_id(&task_id),
+                    sanitize_record_id(&dependency.depends_on_id),
+                    sanitize_record_id(&dependency.edge_type)
+                );
+                let _: Option<TaskDependencyRecord> = self
+                    .db
+                    .upsert(("task_dependency", dep_id.as_str()))
+                    .content(dependency.clone())
+                    .await?;
+            }
+        }
+
+        Ok(TaskImportSummary {
+            source_path: source_path.display().to_string(),
+            imported_count: imported,
+            unchanged_count: unchanged,
+            updated_count: updated,
+        })
+    }
+
+    pub async fn list_tasks(
+        &self,
+        status: Option<&str>,
+        include_closed: bool,
+    ) -> Result<Vec<TaskRecord>, StateStoreError> {
+        let mut rows = self.all_tasks().await?;
+        rows.retain(|task| {
+            if !include_closed && task.status == "closed" {
+                return false;
+            }
+            match status {
+                Some(expected) => task.status == expected,
+                None => true,
+            }
+        });
+        rows.sort_by(task_sort_key);
+        Ok(rows)
+    }
+
+    pub async fn show_task(&self, task_id: &str) -> Result<TaskRecord, StateStoreError> {
+        let row: Option<TaskRecord> = self.db.select(("task", task_id)).await?;
+        row.ok_or_else(|| StateStoreError::MissingTask {
+            task_id: task_id.to_string(),
+        })
+    }
+
+    pub async fn ready_tasks(&self) -> Result<Vec<TaskRecord>, StateStoreError> {
+        let mut rows = self.all_tasks().await?;
+        rows.sort_by(task_sort_key);
+
+        let by_id = rows
+            .iter()
+            .map(|task| (task.id.clone(), task.status.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        let mut ready = rows
+            .into_iter()
+            .filter(|task| task.status == "open" || task.status == "in_progress")
+            .filter(|task| task.issue_type != "epic")
+            .filter(|task| {
+                task.dependencies.iter().all(|dependency| {
+                    if dependency.edge_type == "parent-child" {
+                        return true;
+                    }
+                    matches!(
+                        by_id.get(&dependency.depends_on_id).map(String::as_str),
+                        Some("closed")
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+
+        ready.sort_by(task_ready_sort_key);
+        Ok(ready)
+    }
+
+    async fn all_tasks(&self) -> Result<Vec<TaskRecord>, StateStoreError> {
+        let mut query = self
+            .db
+            .query("SELECT * FROM task ORDER BY priority ASC, id ASC;")
+            .await?;
+        let rows: Vec<TaskRecord> = query.take(0)?;
+        Ok(rows)
+    }
+
+    pub async fn evaluate_boot_compatibility(
+        &self,
+    ) -> Result<BootCompatibilitySummary, StateStoreError> {
+        let mut reasons = Vec::new();
+        let mut hard_failures = 0usize;
+
+        if self.backend_summary().await.is_err() {
+            reasons.push("storage metadata missing".to_string());
+            hard_failures += 1;
+        }
+        if self.state_spine_summary().await.is_err() {
+            reasons.push("authoritative state spine missing".to_string());
+            hard_failures += 1;
+        }
+        let active_root = match self.active_instruction_root().await {
+            Ok(value) => Some(value),
+            Err(_) => {
+                reasons.push("instruction runtime state missing".to_string());
+                hard_failures += 1;
+                None
+            }
+        };
+        if let Some(root_artifact_id) = active_root.as_deref() {
+            if self
+                .inspect_effective_instruction_bundle(root_artifact_id)
+                .await
+                .is_err()
+            {
+                reasons.push("effective instruction bundle unresolved".to_string());
+                hard_failures += 1;
+            }
+        }
+
+        let classification = if reasons.is_empty() {
+            "compatible"
+        } else if hard_failures > 0 {
+            "incompatible"
+        } else {
+            "insufficient_evidence"
+        };
+
+        let summary = BootCompatibilitySummary {
+            classification: classification.to_string(),
+            reasons,
+            next_step: if classification == "compatible" {
+                "normal_boot_allowed".to_string()
+            } else {
+                "stop_and_repair_prerequisites".to_string()
+            },
+        };
+
+        let _: Option<BootCompatibilityStateRow> = self
+            .db
+            .upsert(("boot_compatibility_state", "primary"))
+            .content(BootCompatibilityStateRow {
+                state_id: "primary".to_string(),
+                classification: summary.classification.clone(),
+                reasons: summary.reasons.clone(),
+                next_step: summary.next_step.clone(),
+                evaluated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await?;
+
+        Ok(summary)
+    }
+
+    pub async fn latest_boot_compatibility_summary(
+        &self,
+    ) -> Result<Option<BootCompatibilitySummary>, StateStoreError> {
+        let row: Option<BootCompatibilityStateRow> = self
+            .db
+            .select(("boot_compatibility_state", "primary"))
+            .await?;
+        Ok(row.map(|row| BootCompatibilitySummary {
+            classification: row.classification,
+            reasons: row.reasons,
+            next_step: row.next_step,
+        }))
+    }
+
+    pub async fn evaluate_migration_preflight(
+        &self,
+    ) -> Result<MigrationPreflightSummary, StateStoreError> {
+        let mut blockers = Vec::new();
+        let source_version_tuple = match self.active_instruction_root().await {
+            Ok(root_artifact_id) => match self
+                .inspect_effective_instruction_bundle(&root_artifact_id)
+                .await
+            {
+                Ok(bundle) => bundle.source_version_tuple,
+                Err(error) => {
+                    blockers.push(format!("effective instruction bundle unresolved: {error}"));
+                    Vec::new()
+                }
+            },
+            Err(error) => {
+                blockers.push(format!("instruction runtime root unresolved: {error}"));
+                Vec::new()
+            }
+        };
+
+        let compatibility_classification = if blockers.is_empty() {
+            "compatible"
+        } else {
+            "incompatible"
+        };
+        let migration_state = if blockers.is_empty() {
+            "no_migration_required"
+        } else {
+            "migration_blocked"
+        };
+        let next_step = if blockers.is_empty() {
+            "normal_boot_allowed"
+        } else {
+            "stop_and_repair_migration_inputs"
+        };
+
+        let summary = MigrationPreflightSummary {
+            compatibility_classification: compatibility_classification.to_string(),
+            migration_state: migration_state.to_string(),
+            blockers,
+            source_version_tuple,
+            next_step: next_step.to_string(),
+        };
+
+        let _: Option<MigrationRuntimeStateRow> = self
+            .db
+            .upsert(("migration_runtime_state", "primary"))
+            .content(MigrationRuntimeStateRow {
+                state_id: "primary".to_string(),
+                migration_state: summary.migration_state.clone(),
+                compatibility_classification: summary.compatibility_classification.clone(),
+                blockers: summary.blockers.clone(),
+                source_version_tuple: summary.source_version_tuple.clone(),
+                next_step: summary.next_step.clone(),
+                evaluated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await?;
+
+        let _: Option<MigrationCompatibilityReceiptRow> = self
+            .db
+            .upsert(("migration_compatibility_receipt", "primary"))
+            .content(MigrationCompatibilityReceiptRow {
+                receipt_id: "primary".to_string(),
+                compatibility_classification: summary.compatibility_classification.clone(),
+                migration_state: summary.migration_state.clone(),
+                blockers: summary.blockers.clone(),
+                source_version_tuple: summary.source_version_tuple.clone(),
+                next_step: summary.next_step.clone(),
+                evaluated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await?;
+
+        Ok(summary)
+    }
+
+    pub async fn latest_migration_preflight_summary(
+        &self,
+    ) -> Result<Option<MigrationPreflightSummary>, StateStoreError> {
+        let row: Option<MigrationRuntimeStateRow> = self
+            .db
+            .select(("migration_runtime_state", "primary"))
+            .await?;
+        Ok(row.map(|row| MigrationPreflightSummary {
+            compatibility_classification: row.compatibility_classification,
+            migration_state: row.migration_state,
+            blockers: row.blockers,
+            source_version_tuple: row.source_version_tuple,
+            next_step: row.next_step,
+        }))
+    }
+
+    pub async fn migration_receipt_summary(
+        &self,
+    ) -> Result<MigrationReceiptSummary, StateStoreError> {
+        Ok(MigrationReceiptSummary {
+            compatibility_receipts: self
+                .count_table_rows("migration_compatibility_receipt")
+                .await?,
+            application_receipts: self
+                .count_table_rows("migration_application_receipt")
+                .await?,
+            verification_receipts: self
+                .count_table_rows("migration_verification_receipt")
+                .await?,
+            cutover_readiness_receipts: self
+                .count_table_rows("migration_cutover_readiness_receipt")
+                .await?,
+            rollback_notes: self.count_table_rows("migration_rollback_note").await?,
+        })
+    }
+
+    pub async fn latest_effective_bundle_receipt_summary(
+        &self,
+    ) -> Result<Option<EffectiveBundleReceiptSummary>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT receipt_id, root_artifact_id, artifact_count FROM effective_instruction_bundle_receipt ORDER BY receipt_id DESC LIMIT 1;",
+            )
+            .await?;
+        let rows: Vec<EffectiveBundleReceiptSummary> = query.take(0)?;
+        Ok(rows.into_iter().next())
+    }
+
+    async fn count_table_rows(&self, table: &str) -> Result<usize, StateStoreError> {
+        let query = format!("SELECT count() AS total FROM {table} GROUP ALL;");
+        let mut response = self.db.query(query).await?;
+        let rows: Vec<CountRow> = response.take(0)?;
+        Ok(rows.into_iter().next().map(|row| row.total).unwrap_or(0))
+    }
+
+    pub async fn seed_framework_instruction_bundle(&self) -> Result<(), StateStoreError> {
+        let existing_runtime_state: Option<InstructionRuntimeStateRow> = self
+            .db
+            .select(("instruction_runtime_state", "primary"))
+            .await?;
+        let active_root_artifact_id = existing_runtime_state
+            .as_ref()
+            .map(|row| row.active_root_artifact_id.clone())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "framework-agent-definition".to_string());
+        let runtime_mode = existing_runtime_state
+            .as_ref()
+            .map(|row| row.runtime_mode.clone())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "framework_seed".to_string());
+
+        let query = r#"
+UPSERT instruction_artifact:framework-agent-definition CONTENT {
+  artifact_id: 'framework-agent-definition',
+  artifact_kind: 'agent_definition',
+  version: 1,
+  ownership_class: 'framework',
+  mutability_class: 'immutable',
+  source_hash: 'seed-framework-agent-definition-v1',
+  activation_class: 'always_on',
+  required_follow_on: ['framework-instruction-contract', 'framework-prompt-template-config']
+};
+
+UPSERT instruction_artifact:framework-instruction-contract CONTENT {
+  artifact_id: 'framework-instruction-contract',
+  artifact_kind: 'instruction_contract',
+  version: 1,
+  ownership_class: 'framework',
+  mutability_class: 'immutable',
+  source_hash: 'seed-framework-instruction-contract-v1',
+  activation_class: 'always_on',
+  required_follow_on: []
+};
+
+UPSERT instruction_artifact:framework-prompt-template-config CONTENT {
+  artifact_id: 'framework-prompt-template-config',
+  artifact_kind: 'prompt_template_configuration',
+  version: 1,
+  ownership_class: 'framework',
+  mutability_class: 'immutable',
+  source_hash: 'seed-framework-prompt-template-config-v1',
+  activation_class: 'always_on',
+  required_follow_on: []
+};
+
+UPSERT instruction_dependency_edge:framework-agent-definition__framework-instruction-contract CONTENT {
+  from_artifact: 'framework-agent-definition',
+  to_artifact: 'framework-instruction-contract',
+  edge_kind: 'mandatory_follow_on'
+};
+
+UPSERT instruction_dependency_edge:framework-agent-definition__framework-prompt-template-config CONTENT {
+  from_artifact: 'framework-agent-definition',
+  to_artifact: 'framework-prompt-template-config',
+  edge_kind: 'mandatory_follow_on'
+};
+
+UPSERT instruction_migration_receipt:framework-bundle-v1 CONTENT {
+  receipt_id: 'framework-bundle-v1',
+  bundle_version: 1,
+  state_schema_version: 1,
+  instruction_schema_version: 1,
+  receipt_kind: 'seed',
+  applied: true
+};
+
+UPSERT instruction_sidecar:framework-sidecar-substrate CONTENT {
+  sidecar_id: 'framework-sidecar-substrate',
+  target_artifact_id: 'framework-instruction-contract',
+  patch_format: 'structured_diff',
+  active: false,
+  sidecar_kind: 'seed_substrate'
+};
+
+UPSERT instruction_diff_patch:framework-diff-substrate CONTENT {
+  patch_id: 'framework-diff-substrate',
+  target_artifact_id: 'framework-instruction-contract',
+  active: false,
+  patch_kind: 'seed_substrate',
+  operations: []
+};
+
+UPSERT source_tree_config:instruction CONTENT {
+  slice: 'instruction_memory',
+  source_root: '_vida/instructions',
+  ingest_kind: 'git_tree',
+  runtime_owner: 'db_mirror',
+  nested_directories_supported: true,
+  markdown_supported: true
+};
+
+UPSERT source_tree_config:project CONTENT {
+  slice: 'project_memory',
+  source_root: 'docs/project-memory',
+  ingest_kind: 'git_tree',
+  runtime_owner: 'db_mirror',
+  nested_directories_supported: true,
+  markdown_supported: true
+};
+
+UPSERT source_tree_config:framework CONTENT {
+  slice: 'framework_memory',
+  source_root: '_vida/framework-memory',
+  ingest_kind: 'git_tree',
+  runtime_owner: 'db_mirror',
+  nested_directories_supported: true,
+  markdown_supported: true
+};
+
+UPSERT instruction_source_artifact:framework-agent-definition-source CONTENT {
+  source_artifact_id: 'framework-agent-definition-source',
+  artifact_id: 'framework-agent-definition',
+  slice: 'instruction_memory',
+  source_root: '_vida/instructions',
+  source_path: '_vida/instructions/framework/agent-definition.md',
+  content_hash: 'seed-framework-agent-definition-v1',
+  ingest_status: 'seeded',
+  hierarchy: ['framework']
+};
+
+UPSERT instruction_source_artifact:framework-instruction-contract-source CONTENT {
+  source_artifact_id: 'framework-instruction-contract-source',
+  artifact_id: 'framework-instruction-contract',
+  slice: 'instruction_memory',
+  source_root: '_vida/instructions',
+  source_path: '_vida/instructions/framework/instruction-contract.md',
+  content_hash: 'seed-framework-instruction-contract-v1',
+  ingest_status: 'seeded',
+  hierarchy: ['framework']
+};
+
+UPSERT instruction_source_artifact:framework-prompt-template-config-source CONTENT {
+  source_artifact_id: 'framework-prompt-template-config-source',
+  artifact_id: 'framework-prompt-template-config',
+  slice: 'instruction_memory',
+  source_root: '_vida/instructions',
+  source_path: '_vida/instructions/framework/prompt-template-config.md',
+  content_hash: 'seed-framework-prompt-template-config-v1',
+  ingest_status: 'seeded',
+  hierarchy: ['framework']
+};
+
+UPSERT instruction_ingest_receipt:framework-bundle-seed CONTENT {
+  receipt_id: 'framework-bundle-seed',
+  source_root: '_vida/instructions',
+  product_version: '0.1.0',
+  ingest_kind: 'seed',
+  applied: true
+};
+
+"#;
+
+        self.db.query(query).await?;
+        let _: Option<InstructionRuntimeStateRow> = self
+            .db
+            .upsert(("instruction_runtime_state", "primary"))
+            .content(InstructionRuntimeStateRow {
+                state_id: "primary".to_string(),
+                active_root_artifact_id,
+                runtime_mode,
+            })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn source_tree_summary(&self) -> Result<String, StateStoreError> {
+        let row: Option<SourceTreeConfigRow> = self
+            .db
+            .select(("source_tree_config", "instruction"))
+            .await?;
+        let row = row.ok_or(StateStoreError::MissingSourceTreeConfig)?;
+        Ok(format!("{} -> {}", row.source_root, row.slice))
+    }
+
+    pub async fn active_instruction_root(&self) -> Result<String, StateStoreError> {
+        let row: Option<InstructionRuntimeStateRow> = self
+            .db
+            .select(("instruction_runtime_state", "primary"))
+            .await?;
+        let row = row.ok_or(StateStoreError::MissingInstructionRuntimeState)?;
+        if row.active_root_artifact_id.trim().is_empty() {
+            return Err(StateStoreError::InvalidInstructionRuntimeState {
+                reason: "active root artifact id is empty".to_string(),
+            });
+        }
+        Ok(row.active_root_artifact_id)
+    }
+
+    pub async fn ingest_instruction_source_tree(
+        &self,
+        source_root: &str,
+    ) -> Result<InstructionIngestSummary, StateStoreError> {
+        self.ingest_tree("instruction_memory", source_root).await
+    }
+
+    pub async fn ingest_framework_memory_source_tree(
+        &self,
+        source_root: &str,
+    ) -> Result<InstructionIngestSummary, StateStoreError> {
+        self.ingest_tree("framework_memory", source_root).await
+    }
+
+    async fn ingest_tree(
+        &self,
+        slice: &str,
+        source_root: &str,
+    ) -> Result<InstructionIngestSummary, StateStoreError> {
+        let root = repo_root().join(source_root);
+        if !root.exists() {
+            return Err(StateStoreError::MissingSourceRoot {
+                slice: slice.to_string(),
+                path: root,
+            });
+        }
+
+        let files = collect_markdown_files(&root)?;
+        let mut imported = 0usize;
+        let mut unchanged = 0usize;
+        let mut updated = 0usize;
+
+        for path in files {
+            let relative = path
+                .strip_prefix(&root)
+                .map_err(|_| StateStoreError::InvalidSourcePath(path.clone()))?;
+            let body = fs::read_to_string(&path)?;
+            let hash = blake3::hash(body.as_bytes()).to_hex().to_string();
+            let metadata = parse_source_metadata(&body);
+            let artifact_id = metadata
+                .artifact_id
+                .clone()
+                .unwrap_or_else(|| artifact_id_from_path(relative));
+            let hierarchy = if metadata.hierarchy.is_empty() {
+                hierarchy_from_path(relative)
+            } else {
+                metadata.hierarchy.clone()
+            };
+            let artifact_kind = metadata
+                .artifact_kind
+                .clone()
+                .unwrap_or_else(|| infer_artifact_kind(slice, relative));
+            let version = metadata.version.unwrap_or(1);
+            let ownership_class = metadata
+                .ownership_class
+                .clone()
+                .unwrap_or_else(|| infer_ownership_class(slice).to_string());
+            let mutability_class = metadata
+                .mutability_class
+                .clone()
+                .unwrap_or_else(|| infer_mutability_class(slice).to_string());
+            let activation_class = metadata.activation_class.clone().unwrap_or_default();
+            let source_record_id = record_id_for_slice_source(slice, relative);
+
+            let existing: Option<SourceArtifactRow> = self
+                .db
+                .select(("instruction_source_artifact", source_record_id.as_str()))
+                .await?;
+
+            let status = match existing {
+                Some(existing_row) if existing_row.content_hash == hash => {
+                    unchanged += 1;
+                    "unchanged"
+                }
+                Some(_) => {
+                    updated += 1;
+                    "updated"
+                }
+                None => {
+                    imported += 1;
+                    "imported"
+                }
+            };
+
+            let _: Option<SourceArtifactContent> = self
+                .db
+                .upsert(("instruction_source_artifact", source_record_id.as_str()))
+                .content(SourceArtifactContent {
+                    source_artifact_id: source_record_id.clone(),
+                    artifact_id: artifact_id.clone(),
+                    artifact_kind: artifact_kind.clone(),
+                    version,
+                    ownership_class: ownership_class.clone(),
+                    mutability_class: mutability_class.clone(),
+                    slice: slice.to_string(),
+                    source_root: source_root.to_string(),
+                    source_path: normalize_path(path.as_path()),
+                    content_hash: hash.clone(),
+                    ingest_status: status.to_string(),
+                    hierarchy: hierarchy.clone(),
+                })
+                .await?;
+
+            let _: Option<InstructionArtifactContent> = self
+                .db
+                .upsert(("instruction_artifact", artifact_id.as_str()))
+                .content(InstructionArtifactContent {
+                    artifact_id: artifact_id.clone(),
+                    artifact_kind: artifact_kind.clone(),
+                    version,
+                    ownership_class: ownership_class.clone(),
+                    mutability_class: mutability_class.clone(),
+                    activation_class,
+                    source_hash: hash,
+                    body: body.clone(),
+                    hierarchy: hierarchy.clone(),
+                    required_follow_on: metadata.required_follow_on.clone(),
+                })
+                .await?;
+
+            self.replace_dependency_edges(&artifact_id, &metadata.required_follow_on)
+                .await?;
+        }
+
+        let receipt_id = format!("{}-ingest-{}", slice, unix_timestamp());
+        let _: Option<InstructionIngestReceiptContent> = self
+            .db
+            .upsert(("instruction_ingest_receipt", receipt_id.as_str()))
+            .content(InstructionIngestReceiptContent {
+                receipt_id,
+                slice: slice.to_string(),
+                source_root: source_root.to_string(),
+                product_version: "0.1.0".to_string(),
+                ingest_kind: "scan".to_string(),
+                applied: true,
+                imported_count: imported,
+                unchanged_count: unchanged,
+                updated_count: updated,
+            })
+            .await?;
+
+        Ok(InstructionIngestSummary {
+            source_root: source_root.to_string(),
+            imported_count: imported,
+            unchanged_count: unchanged,
+            updated_count: updated,
+        })
+    }
+
+    async fn replace_dependency_edges(
+        &self,
+        artifact_id: &str,
+        required_follow_on: &[String],
+    ) -> Result<(), StateStoreError> {
+        self.db
+            .query(format!(
+                "DELETE instruction_dependency_edge WHERE from_artifact = '{}';",
+                artifact_id
+            ))
+            .await?;
+
+        for target in required_follow_on {
+            let edge_id = format!("{}__{}", artifact_id, target);
+            let _: Option<InstructionDependencyEdgeContent> = self
+                .db
+                .upsert(("instruction_dependency_edge", edge_id.as_str()))
+                .content(InstructionDependencyEdgeContent {
+                    from_artifact: artifact_id.to_string(),
+                    to_artifact: target.clone(),
+                    edge_kind: "mandatory_follow_on".to_string(),
+                })
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub async fn project_instruction_artifact(
+        &self,
+        artifact_id: &str,
+    ) -> Result<InstructionProjection, StateStoreError> {
+        self.project_instruction_artifact_internal(artifact_id, true)
+            .await
+    }
+
+    #[allow(dead_code)]
+    pub async fn inspect_instruction_artifact(
+        &self,
+        artifact_id: &str,
+    ) -> Result<InstructionProjection, StateStoreError> {
+        self.project_instruction_artifact_internal(artifact_id, false)
+            .await
+    }
+
+    async fn project_instruction_artifact_internal(
+        &self,
+        artifact_id: &str,
+        persist_receipt: bool,
+    ) -> Result<InstructionProjection, StateStoreError> {
+        let base: Option<InstructionArtifactRow> = self
+            .db
+            .select(("instruction_artifact", artifact_id))
+            .await?;
+        let base = base.ok_or_else(|| StateStoreError::MissingInstructionArtifact {
+            artifact_id: artifact_id.to_string(),
+        })?;
+
+        let mut sidecar_query = self
+            .db
+            .query(format!(
+                "SELECT * FROM instruction_diff_patch WHERE target_artifact_id = '{}' AND active = true ORDER BY patch_precedence ASC, patch_id ASC;",
+                artifact_id
+            ))
+            .await?;
+        let patches: Vec<InstructionDiffPatchRow> = sidecar_query.take(0)?;
+
+        if let Err(error) = validate_patch_bindings(&base, &patches) {
+            if persist_receipt {
+                self.write_projection_receipt(
+                    artifact_id,
+                    &base,
+                    &base.body,
+                    &[],
+                    collect_patch_ids(&patches),
+                    error.to_string(),
+                )
+                .await?;
+            }
+            return Err(error);
+        }
+        if let Err(error) = validate_patch_conflicts(&patches) {
+            if persist_receipt {
+                self.write_projection_receipt(
+                    artifact_id,
+                    &base,
+                    &base.body,
+                    &[],
+                    collect_patch_ids(&patches),
+                    error.to_string(),
+                )
+                .await?;
+            }
+            return Err(error);
+        }
+
+        let mut lines = split_lines(&base.body);
+        let mut applied_patch_ids = Vec::new();
+        let mut skipped_patch_ids = Vec::new();
+        let mut failed_reason = String::new();
+
+        for (index, patch) in patches.iter().enumerate() {
+            for operation in &patch.operations {
+                if let Err(error) = apply_patch_operation(&mut lines, operation) {
+                    failed_reason = error.to_string();
+                    skipped_patch_ids.extend(
+                        patches
+                            .iter()
+                            .skip(index)
+                            .map(|remaining| remaining.patch_id.clone()),
+                    );
+
+                    let projected_body = join_lines(&lines);
+                    if persist_receipt {
+                        self.write_projection_receipt(
+                            artifact_id,
+                            &base,
+                            &projected_body,
+                            &applied_patch_ids,
+                            skipped_patch_ids.clone(),
+                            failed_reason,
+                        )
+                        .await?;
+                    }
+
+                    return Err(error);
+                }
+            }
+            applied_patch_ids.push(patch.patch_id.clone());
+        }
+
+        let projected_body = join_lines(&lines);
+        let projection_hash = if persist_receipt {
+            self.write_projection_receipt(
+                artifact_id,
+                &base,
+                &projected_body,
+                &applied_patch_ids,
+                skipped_patch_ids.clone(),
+                failed_reason,
+            )
+            .await?
+        } else {
+            blake3::hash(projected_body.as_bytes()).to_hex().to_string()
+        };
+
+        Ok(InstructionProjection {
+            artifact_id: artifact_id.to_string(),
+            body: projected_body,
+            projected_hash: projection_hash,
+            applied_patch_ids,
+            skipped_patch_ids,
+        })
+    }
+
+    #[allow(dead_code)]
+    pub async fn upsert_instruction_diff_patch(
+        &self,
+        patch: InstructionDiffPatchContent,
+    ) -> Result<(), StateStoreError> {
+        let _: Option<InstructionDiffPatchContent> = self
+            .db
+            .upsert(("instruction_diff_patch", patch.patch_id.as_str()))
+            .content(patch)
+            .await?;
+        Ok(())
+    }
+
+    async fn write_projection_receipt(
+        &self,
+        artifact_id: &str,
+        base: &InstructionArtifactRow,
+        projected_body: &str,
+        applied_patch_ids: &[String],
+        skipped_patch_ids: Vec<String>,
+        failed_reason: String,
+    ) -> Result<String, StateStoreError> {
+        let projected_hash = blake3::hash(projected_body.as_bytes()).to_hex().to_string();
+        let receipt_id = format!("projection-{}-{}", artifact_id, unix_timestamp());
+
+        let _: Option<InstructionProjectionReceiptContent> = self
+            .db
+            .upsert(("instruction_projection_receipt", receipt_id.as_str()))
+            .content(InstructionProjectionReceiptContent {
+                receipt_id,
+                artifact_id: artifact_id.to_string(),
+                base_version: base.version,
+                base_hash: base.source_hash.clone(),
+                projected_hash: projected_hash.clone(),
+                applied_patch_ids: applied_patch_ids.to_vec(),
+                skipped_patch_ids,
+                failed_reason,
+                line_count: split_lines(projected_body).len(),
+            })
+            .await?;
+
+        Ok(projected_hash)
+    }
+
+    #[allow(dead_code)]
+    pub async fn resolve_effective_instruction_bundle(
+        &self,
+        root_artifact_id: &str,
+    ) -> Result<EffectiveInstructionBundle, StateStoreError> {
+        self.resolve_effective_instruction_bundle_internal(root_artifact_id, true)
+            .await
+    }
+
+    #[allow(dead_code)]
+    pub async fn inspect_effective_instruction_bundle(
+        &self,
+        root_artifact_id: &str,
+    ) -> Result<EffectiveInstructionBundle, StateStoreError> {
+        self.resolve_effective_instruction_bundle_internal(root_artifact_id, false)
+            .await
+    }
+
+    async fn resolve_effective_instruction_bundle_internal(
+        &self,
+        root_artifact_id: &str,
+        persist_receipt: bool,
+    ) -> Result<EffectiveInstructionBundle, StateStoreError> {
+        let ordered_ids = self.resolve_mandatory_chain(root_artifact_id).await?;
+        let mut projected_artifacts = Vec::new();
+        let mut source_version_tuple = Vec::new();
+
+        for artifact_id in &ordered_ids {
+            let projection = if persist_receipt {
+                self.project_instruction_artifact(artifact_id).await?
+            } else {
+                self.inspect_instruction_artifact(artifact_id).await?
+            };
+            let base: Option<InstructionArtifactRow> = self
+                .db
+                .select(("instruction_artifact", artifact_id.as_str()))
+                .await?;
+            let base = base.ok_or_else(|| StateStoreError::MissingInstructionArtifact {
+                artifact_id: artifact_id.clone(),
+            })?;
+
+            projected_artifacts.push(EffectiveInstructionArtifact {
+                artifact_id: artifact_id.clone(),
+                version: base.version,
+                source_hash: base.source_hash,
+                projected_hash: projection.projected_hash,
+                body: projection.body,
+            });
+            source_version_tuple.push(format!("{}@v{}", artifact_id, base.version));
+        }
+
+        let receipt_id = if persist_receipt {
+            let receipt_id = format!(
+                "effective-bundle-{}-{}",
+                root_artifact_id,
+                unix_timestamp_nanos()
+            );
+            let _: Option<EffectiveInstructionBundleReceiptContent> = self
+                .db
+                .upsert(("effective_instruction_bundle_receipt", receipt_id.as_str()))
+                .content(EffectiveInstructionBundleReceiptContent {
+                    receipt_id: receipt_id.clone(),
+                    root_artifact_id: root_artifact_id.to_string(),
+                    mandatory_chain_order: ordered_ids.clone(),
+                    source_version_tuple: source_version_tuple.clone(),
+                    // Reserved for later trigger-matrix runtime work; B04/B05 keeps this explicit and empty.
+                    optional_triggered_reads: Vec::new(),
+                    artifact_count: projected_artifacts.len(),
+                })
+                .await?;
+            receipt_id
+        } else {
+            "not-persisted".to_string()
+        };
+
+        Ok(EffectiveInstructionBundle {
+            root_artifact_id: root_artifact_id.to_string(),
+            mandatory_chain_order: ordered_ids,
+            source_version_tuple,
+            projected_artifacts,
+            receipt_id,
+        })
+    }
+
+    async fn resolve_mandatory_chain(
+        &self,
+        root_artifact_id: &str,
+    ) -> Result<Vec<String>, StateStoreError> {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let root_exists: Option<InstructionArtifactRow> = self
+            .db
+            .select(("instruction_artifact", root_artifact_id))
+            .await?;
+        if root_exists.is_none() {
+            return Err(StateStoreError::MissingInstructionArtifact {
+                artifact_id: root_artifact_id.to_string(),
+            });
+        }
+
+        let mut reachable = BTreeSet::new();
+        let mut frontier = vec![root_artifact_id.to_string()];
+
+        while let Some(current) = frontier.pop() {
+            if !reachable.insert(current.clone()) {
+                continue;
+            }
+
+            let mut query = self
+                .db
+                .query(format!(
+                    "SELECT to_artifact, edge_kind FROM instruction_dependency_edge WHERE from_artifact = '{}' ORDER BY to_artifact ASC;",
+                    current
+                ))
+                .await?;
+            let edges: Vec<InstructionDependencyEdgeRow> = query.take(0)?;
+            for edge in edges {
+                if edge.edge_kind == "mandatory_follow_on" {
+                    let target_exists: Option<InstructionArtifactRow> = self
+                        .db
+                        .select(("instruction_artifact", edge.to_artifact.as_str()))
+                        .await?;
+                    if target_exists.is_none() {
+                        return Err(StateStoreError::MissingInstructionArtifact {
+                            artifact_id: edge.to_artifact,
+                        });
+                    }
+                    frontier.push(edge.to_artifact);
+                }
+            }
+        }
+
+        let mut indegree: BTreeMap<String, usize> =
+            reachable.iter().map(|id| (id.clone(), 0usize)).collect();
+        let mut adjacency: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+        for from in &reachable {
+            let mut query = self
+                .db
+                .query(format!(
+                    "SELECT to_artifact, edge_kind FROM instruction_dependency_edge WHERE from_artifact = '{}' ORDER BY to_artifact ASC;",
+                    from
+                ))
+                .await?;
+            let edges: Vec<InstructionDependencyEdgeRow> = query.take(0)?;
+            for edge in edges {
+                if edge.edge_kind == "mandatory_follow_on" && reachable.contains(&edge.to_artifact)
+                {
+                    adjacency
+                        .entry(from.clone())
+                        .or_default()
+                        .push(edge.to_artifact.clone());
+                    *indegree.entry(edge.to_artifact).or_default() += 1;
+                }
+            }
+        }
+
+        let mut ready: Vec<String> = indegree
+            .iter()
+            .filter(|(_, degree)| **degree == 0)
+            .map(|(id, _)| id.clone())
+            .collect();
+        ready.sort();
+
+        let mut ordered = Vec::new();
+        while let Some(current) = ready.first().cloned() {
+            ready.remove(0);
+            ordered.push(current.clone());
+
+            if let Some(neighbors) = adjacency.get(&current) {
+                for neighbor in neighbors {
+                    if let Some(degree) = indegree.get_mut(neighbor) {
+                        *degree -= 1;
+                        if *degree == 0 {
+                            ready.push(neighbor.clone());
+                        }
+                    }
+                }
+                ready.sort();
+            }
+        }
+
+        if ordered.len() != reachable.len() {
+            let cycle_nodes: Vec<String> = indegree
+                .into_iter()
+                .filter_map(|(id, degree)| if degree > 0 { Some(id) } else { None })
+                .collect();
+            return Err(StateStoreError::InstructionDependencyCycle {
+                cycle_path: cycle_nodes.join(" -> "),
+            });
+        }
+
+        Ok(ordered)
+    }
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct StorageMetaRow {
+    backend: String,
+    state_schema_version: u32,
+    instruction_schema_version: u32,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TaskJsonlRecord {
+    id: String,
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    priority: u32,
+    #[serde(default)]
+    issue_type: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    created_by: String,
+    #[serde(default)]
+    updated_at: String,
+    #[serde(default)]
+    closed_at: Option<String>,
+    #[serde(default)]
+    close_reason: Option<String>,
+    #[serde(default)]
+    source_repo: String,
+    #[serde(default)]
+    compaction_level: u32,
+    #[serde(default)]
+    original_size: u32,
+    #[serde(default)]
+    notes: Option<String>,
+    #[serde(default)]
+    labels: Vec<String>,
+    #[serde(default)]
+    dependencies: Vec<TaskDependencyJsonlRecord>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TaskDependencyJsonlRecord {
+    issue_id: String,
+    depends_on_id: String,
+    #[serde(rename = "type")]
+    edge_type: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    created_by: String,
+    #[serde(default)]
+    metadata: String,
+    #[serde(default)]
+    thread_id: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, Clone, PartialEq, Eq)]
+pub struct TaskDependencyRecord {
+    pub issue_id: String,
+    pub depends_on_id: String,
+    pub edge_type: String,
+    pub created_at: String,
+    pub created_by: String,
+    pub metadata: String,
+    pub thread_id: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, Clone)]
+struct TaskContent {
+    id: String,
+    title: String,
+    description: String,
+    status: String,
+    priority: u32,
+    issue_type: String,
+    created_at: String,
+    created_by: String,
+    updated_at: String,
+    closed_at: Option<String>,
+    close_reason: Option<String>,
+    source_repo: String,
+    compaction_level: u32,
+    original_size: u32,
+    notes: Option<String>,
+    labels: Vec<String>,
+    dependencies: Vec<TaskDependencyRecord>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, Clone, PartialEq, Eq)]
+pub struct TaskRecord {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub priority: u32,
+    pub issue_type: String,
+    pub created_at: String,
+    pub created_by: String,
+    pub updated_at: String,
+    pub closed_at: Option<String>,
+    pub close_reason: Option<String>,
+    pub source_repo: String,
+    pub compaction_level: u32,
+    pub original_size: u32,
+    pub notes: Option<String>,
+    pub labels: Vec<String>,
+    pub dependencies: Vec<TaskDependencyRecord>,
+}
+
+#[derive(Debug)]
+pub struct TaskImportSummary {
+    pub source_path: String,
+    pub imported_count: usize,
+    pub unchanged_count: usize,
+    pub updated_count: usize,
+}
+
+impl TaskImportSummary {
+    pub fn as_display(&self) -> String {
+        format!(
+            "{} imported, {} unchanged, {} updated from {}",
+            self.imported_count, self.unchanged_count, self.updated_count, self.source_path
+        )
+    }
+}
+
+impl From<TaskJsonlRecord> for TaskContent {
+    fn from(value: TaskJsonlRecord) -> Self {
+        Self {
+            id: value.id,
+            title: value.title,
+            description: value.description,
+            status: value.status,
+            priority: value.priority,
+            issue_type: value.issue_type,
+            created_at: value.created_at,
+            created_by: value.created_by,
+            updated_at: value.updated_at,
+            closed_at: value.closed_at,
+            close_reason: value.close_reason,
+            source_repo: value.source_repo,
+            compaction_level: value.compaction_level,
+            original_size: value.original_size,
+            notes: value.notes,
+            labels: value.labels,
+            dependencies: value
+                .dependencies
+                .into_iter()
+                .map(TaskDependencyRecord::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<TaskContent> for TaskRecord {
+    fn from(value: TaskContent) -> Self {
+        Self {
+            id: value.id,
+            title: value.title,
+            description: value.description,
+            status: value.status,
+            priority: value.priority,
+            issue_type: value.issue_type,
+            created_at: value.created_at,
+            created_by: value.created_by,
+            updated_at: value.updated_at,
+            closed_at: value.closed_at,
+            close_reason: value.close_reason,
+            source_repo: value.source_repo,
+            compaction_level: value.compaction_level,
+            original_size: value.original_size,
+            notes: value.notes,
+            labels: value.labels,
+            dependencies: value.dependencies,
+        }
+    }
+}
+
+impl From<TaskDependencyJsonlRecord> for TaskDependencyRecord {
+    fn from(value: TaskDependencyJsonlRecord) -> Self {
+        Self {
+            issue_id: value.issue_id,
+            depends_on_id: value.depends_on_id,
+            edge_type: value.edge_type,
+            created_at: value.created_at,
+            created_by: value.created_by,
+            metadata: value.metadata,
+            thread_id: value.thread_id,
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct SourceTreeConfigRow {
+    slice: String,
+    source_root: String,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct SourceArtifactRow {
+    content_hash: String,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+#[allow(dead_code)]
+struct InstructionArtifactRow {
+    artifact_id: String,
+    version: u32,
+    source_hash: String,
+    body: String,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue, Clone)]
+#[allow(dead_code)]
+struct InstructionDiffPatchRow {
+    patch_id: String,
+    target_artifact_id: String,
+    target_artifact_version: u32,
+    target_artifact_hash: String,
+    patch_precedence: u32,
+    active: bool,
+    operations: Vec<InstructionPatchOperation>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct InstructionDependencyEdgeRow {
+    to_artifact: String,
+    edge_kind: String,
+}
+
+#[derive(Debug, serde::Serialize, SurrealValue)]
+struct SourceArtifactContent {
+    source_artifact_id: String,
+    artifact_id: String,
+    artifact_kind: String,
+    version: u32,
+    ownership_class: String,
+    mutability_class: String,
+    slice: String,
+    source_root: String,
+    source_path: String,
+    content_hash: String,
+    ingest_status: String,
+    hierarchy: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize, SurrealValue)]
+struct InstructionArtifactContent {
+    artifact_id: String,
+    artifact_kind: String,
+    version: u32,
+    ownership_class: String,
+    mutability_class: String,
+    activation_class: String,
+    source_hash: String,
+    body: String,
+    hierarchy: Vec<String>,
+    required_follow_on: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize, SurrealValue)]
+struct InstructionIngestReceiptContent {
+    receipt_id: String,
+    slice: String,
+    source_root: String,
+    product_version: String,
+    ingest_kind: String,
+    applied: bool,
+    imported_count: usize,
+    unchanged_count: usize,
+    updated_count: usize,
+}
+
+#[derive(Debug, serde::Serialize, SurrealValue)]
+struct InstructionDependencyEdgeContent {
+    from_artifact: String,
+    to_artifact: String,
+    edge_kind: String,
+}
+
+#[derive(Debug, serde::Serialize, SurrealValue, Clone)]
+#[allow(dead_code)]
+pub struct InstructionDiffPatchContent {
+    pub patch_id: String,
+    pub target_artifact_id: String,
+    pub target_artifact_version: u32,
+    pub target_artifact_hash: String,
+    pub patch_precedence: u32,
+    pub author_class: String,
+    pub applies_if: String,
+    pub created_at: String,
+    pub active: bool,
+    pub operations: Vec<InstructionPatchOperation>,
+}
+
+#[derive(Debug, serde::Serialize, SurrealValue)]
+#[allow(dead_code)]
+struct InstructionProjectionReceiptContent {
+    receipt_id: String,
+    artifact_id: String,
+    base_version: u32,
+    base_hash: String,
+    projected_hash: String,
+    applied_patch_ids: Vec<String>,
+    skipped_patch_ids: Vec<String>,
+    failed_reason: String,
+    line_count: usize,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
+#[allow(dead_code)]
+pub struct InstructionPatchOperation {
+    pub op: String,
+    pub target_mode: String,
+    pub target: String,
+    pub with_lines: Vec<String>,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct InstructionProjection {
+    pub artifact_id: String,
+    pub body: String,
+    pub projected_hash: String,
+    pub applied_patch_ids: Vec<String>,
+    pub skipped_patch_ids: Vec<String>,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct EffectiveInstructionBundle {
+    pub root_artifact_id: String,
+    pub mandatory_chain_order: Vec<String>,
+    pub source_version_tuple: Vec<String>,
+    pub projected_artifacts: Vec<EffectiveInstructionArtifact>,
+    pub receipt_id: String,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct EffectiveInstructionArtifact {
+    pub artifact_id: String,
+    pub version: u32,
+    pub source_hash: String,
+    pub projected_hash: String,
+    pub body: String,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct EffectiveInstructionBundleReceiptContent {
+    receipt_id: String,
+    root_artifact_id: String,
+    mandatory_chain_order: Vec<String>,
+    source_version_tuple: Vec<String>,
+    optional_triggered_reads: Vec<String>,
+    artifact_count: usize,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub struct EffectiveBundleReceiptSummary {
+    pub receipt_id: String,
+    pub root_artifact_id: String,
+    pub artifact_count: usize,
+}
+
+#[derive(Debug)]
+pub struct InstructionIngestSummary {
+    source_root: String,
+    imported_count: usize,
+    unchanged_count: usize,
+    updated_count: usize,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct StateSpineManifestContent {
+    manifest_id: String,
+    state_schema_version: u32,
+    authoritative_mutation_root: String,
+    entity_surfaces: Vec<String>,
+    initialized_at: String,
+}
+
+#[derive(Debug)]
+pub struct StateSpineSummary {
+    pub authoritative_mutation_root: String,
+    pub entity_surface_count: usize,
+    pub state_schema_version: u32,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct InstructionRuntimeStateRow {
+    state_id: String,
+    active_root_artifact_id: String,
+    runtime_mode: String,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct BootCompatibilityStateRow {
+    state_id: String,
+    classification: String,
+    reasons: Vec<String>,
+    next_step: String,
+    evaluated_at: String,
+}
+
+#[derive(Debug)]
+pub struct BootCompatibilitySummary {
+    pub classification: String,
+    pub reasons: Vec<String>,
+    pub next_step: String,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct MigrationRuntimeStateRow {
+    state_id: String,
+    migration_state: String,
+    compatibility_classification: String,
+    blockers: Vec<String>,
+    source_version_tuple: Vec<String>,
+    next_step: String,
+    evaluated_at: String,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct MigrationCompatibilityReceiptRow {
+    receipt_id: String,
+    compatibility_classification: String,
+    migration_state: String,
+    blockers: Vec<String>,
+    source_version_tuple: Vec<String>,
+    next_step: String,
+    evaluated_at: String,
+}
+
+#[derive(Debug)]
+pub struct MigrationPreflightSummary {
+    pub compatibility_classification: String,
+    pub migration_state: String,
+    pub blockers: Vec<String>,
+    pub source_version_tuple: Vec<String>,
+    pub next_step: String,
+}
+
+#[derive(Debug)]
+pub struct MigrationReceiptSummary {
+    pub compatibility_receipts: usize,
+    pub application_receipts: usize,
+    pub verification_receipts: usize,
+    pub cutover_readiness_receipts: usize,
+    pub rollback_notes: usize,
+}
+
+impl MigrationReceiptSummary {
+    pub fn as_display(&self) -> String {
+        format!(
+            "compatibility={}, application={}, verification={}, cutover={}, rollback={}",
+            self.compatibility_receipts,
+            self.application_receipts,
+            self.verification_receipts,
+            self.cutover_readiness_receipts,
+            self.rollback_notes
+        )
+    }
+}
+
+#[derive(Debug, serde::Deserialize, SurrealValue)]
+struct CountRow {
+    total: usize,
+}
+
+impl InstructionIngestSummary {
+    pub fn as_display(&self) -> String {
+        format!(
+            "{} imported, {} unchanged, {} updated from {}",
+            self.imported_count, self.unchanged_count, self.updated_count, self.source_root
+        )
+    }
+}
+
+#[derive(Debug)]
+pub enum StateStoreError {
+    Io(io::Error),
+    Db(surrealdb::Error),
+    MissingStateDir(PathBuf),
+    InvalidSourcePath(PathBuf),
+    MissingMetadata,
+    MissingTask {
+        task_id: String,
+    },
+    InvalidTaskJsonLine {
+        line: usize,
+        reason: String,
+    },
+    InvalidTaskRecord {
+        reason: String,
+    },
+    MissingSourceTreeConfig,
+    MissingStateSpineManifest,
+    InvalidStateSpineManifest {
+        reason: String,
+    },
+    MissingInstructionRuntimeState,
+    InvalidInstructionRuntimeState {
+        reason: String,
+    },
+    MissingSourceRoot {
+        slice: String,
+        path: PathBuf,
+    },
+    #[allow(dead_code)]
+    MissingInstructionArtifact {
+        artifact_id: String,
+    },
+    #[allow(dead_code)]
+    InvalidPatchOperation {
+        reason: String,
+    },
+    #[allow(dead_code)]
+    PatchConflict {
+        reason: String,
+    },
+    #[allow(dead_code)]
+    InstructionDependencyCycle {
+        cycle_path: String,
+    },
+}
+
+impl std::fmt::Display for StateStoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => write!(f, "{error}"),
+            Self::Db(error) => write!(f, "{error}"),
+            Self::MissingStateDir(path) => {
+                write!(
+                    f,
+                    "authoritative state directory is missing: {}",
+                    path.display()
+                )
+            }
+            Self::InvalidSourcePath(path) => {
+                write!(
+                    f,
+                    "invalid source path outside instruction root: {}",
+                    path.display()
+                )
+            }
+            Self::MissingMetadata => write!(f, "storage metadata record is missing"),
+            Self::MissingTask { task_id } => write!(f, "task is missing: {task_id}"),
+            Self::InvalidTaskJsonLine { line, reason } => {
+                write!(f, "invalid task JSONL at line {line}: {reason}")
+            }
+            Self::InvalidTaskRecord { reason } => write!(f, "invalid task record: {reason}"),
+            Self::MissingSourceTreeConfig => write!(f, "source tree config record is missing"),
+            Self::MissingStateSpineManifest => {
+                write!(f, "authoritative state spine manifest is missing")
+            }
+            Self::InvalidStateSpineManifest { reason } => {
+                write!(f, "authoritative state spine manifest is invalid: {reason}")
+            }
+            Self::MissingInstructionRuntimeState => {
+                write!(f, "instruction runtime state record is missing")
+            }
+            Self::InvalidInstructionRuntimeState { reason } => {
+                write!(f, "instruction runtime state is invalid: {reason}")
+            }
+            Self::MissingSourceRoot { slice, path } => {
+                write!(f, "source root for {slice} is missing: {}", path.display())
+            }
+            Self::MissingInstructionArtifact { artifact_id } => {
+                write!(f, "instruction artifact is missing: {artifact_id}")
+            }
+            Self::InvalidPatchOperation { reason } => {
+                write!(f, "invalid patch operation: {reason}")
+            }
+            Self::PatchConflict { reason } => write!(f, "patch conflict: {reason}"),
+            Self::InstructionDependencyCycle { cycle_path } => {
+                write!(f, "instruction dependency cycle detected: {cycle_path}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StateStoreError {}
+
+impl From<io::Error> for StateStoreError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<surrealdb::Error> for StateStoreError {
+    fn from(error: surrealdb::Error) -> Self {
+        Self::Db(error)
+    }
+}
+
+fn collect_markdown_files(root: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    collect_markdown_files_inner(root, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+fn collect_markdown_files_inner(root: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_markdown_files_inner(&path, files)?;
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("md") {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn artifact_id_from_path(relative: &Path) -> String {
+    relative
+        .with_extension("")
+        .to_string_lossy()
+        .replace(['/', '\\'], "-")
+}
+
+fn escape_surql_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+fn sanitize_record_id(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+fn task_sort_key(left: &TaskRecord, right: &TaskRecord) -> std::cmp::Ordering {
+    left.priority
+        .cmp(&right.priority)
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn task_ready_sort_key(left: &TaskRecord, right: &TaskRecord) -> std::cmp::Ordering {
+    let left_rank = if left.status == "in_progress" {
+        0u8
+    } else {
+        1u8
+    };
+    let right_rank = if right.status == "in_progress" {
+        0u8
+    } else {
+        1u8
+    };
+    left_rank
+        .cmp(&right_rank)
+        .then_with(|| left.priority.cmp(&right.priority))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+#[derive(Default)]
+struct SourceMetadata {
+    artifact_id: Option<String>,
+    artifact_kind: Option<String>,
+    version: Option<u32>,
+    ownership_class: Option<String>,
+    mutability_class: Option<String>,
+    activation_class: Option<String>,
+    required_follow_on: Vec<String>,
+    hierarchy: Vec<String>,
+}
+
+fn parse_source_metadata(body: &str) -> SourceMetadata {
+    let mut metadata = SourceMetadata::default();
+    for line in body.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim().to_string();
+        match key.trim() {
+            "artifact_id" => metadata.artifact_id = Some(value),
+            "artifact_kind" => metadata.artifact_kind = Some(value),
+            "version" => metadata.version = value.parse::<u32>().ok(),
+            "ownership_class" => metadata.ownership_class = Some(value),
+            "mutability_class" => metadata.mutability_class = Some(value),
+            "activation_class" => metadata.activation_class = Some(value),
+            "required_follow_on" => {
+                metadata.required_follow_on = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .map(ToString::to_string)
+                    .collect();
+            }
+            "hierarchy" => {
+                metadata.hierarchy = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .map(ToString::to_string)
+                    .collect();
+            }
+            _ => {}
+        }
+    }
+    metadata
+}
+
+fn infer_artifact_kind(slice: &str, relative: &Path) -> String {
+    if slice == "framework_memory" {
+        return "framework_memory_entry".to_string();
+    }
+
+    let normalized = relative.with_extension("").to_string_lossy().to_string();
+    if normalized.ends_with("agent-definition") {
+        "agent_definition".to_string()
+    } else if normalized.ends_with("instruction-contract") {
+        "instruction_contract".to_string()
+    } else if normalized.ends_with("prompt-template-config") {
+        "prompt_template_configuration".to_string()
+    } else {
+        "instruction_source".to_string()
+    }
+}
+
+fn infer_ownership_class(slice: &str) -> &'static str {
+    match slice {
+        "framework_memory" => "framework",
+        "instruction_memory" => "framework",
+        _ => "project",
+    }
+}
+
+fn infer_mutability_class(slice: &str) -> &'static str {
+    match slice {
+        "instruction_memory" => "immutable",
+        "framework_memory" => "mutable",
+        _ => "mutable",
+    }
+}
+
+fn record_id_for_slice_source(slice: &str, relative: &Path) -> String {
+    format!("{}-{}-source", slice, artifact_id_from_path(relative))
+}
+
+fn hierarchy_from_path(relative: &Path) -> Vec<String> {
+    relative
+        .parent()
+        .map(|parent| {
+            parent
+                .iter()
+                .map(|part| part.to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn normalize_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+pub fn default_state_dir() -> PathBuf {
+    PathBuf::from(DEFAULT_STATE_DIR)
+}
+
+pub fn repo_root() -> PathBuf {
+    PathBuf::from(REPO_ROOT)
+}
+
+fn unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn unix_timestamp_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
+}
+
+#[allow(dead_code)]
+fn split_lines(body: &str) -> Vec<String> {
+    body.lines().map(|line| line.to_string()).collect()
+}
+
+#[allow(dead_code)]
+fn join_lines(lines: &[String]) -> String {
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", lines.join("\n"))
+    }
+}
+
+#[allow(dead_code)]
+fn apply_patch_operation(
+    lines: &mut Vec<String>,
+    operation: &InstructionPatchOperation,
+) -> Result<(), StateStoreError> {
+    let index = resolve_operation_target(lines, operation)?;
+
+    match operation.op.as_str() {
+        "replace_range" => {
+            lines.splice(index..=index, operation.with_lines.clone());
+        }
+        "replace_with_many" => {
+            lines.splice(index..=index, operation.with_lines.clone());
+        }
+        "delete_range" => {
+            lines.remove(index);
+        }
+        "insert_before" => {
+            lines.splice(index..index, operation.with_lines.clone());
+        }
+        "insert_after" => {
+            lines.splice(index + 1..index + 1, operation.with_lines.clone());
+        }
+        "append_block" => {
+            lines.extend(operation.with_lines.clone());
+        }
+        other => {
+            return Err(StateStoreError::InvalidPatchOperation {
+                reason: format!("unsupported op: {other}"),
+            })
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_operation_target(
+    lines: &[String],
+    operation: &InstructionPatchOperation,
+) -> Result<usize, StateStoreError> {
+    match operation.target_mode.as_str() {
+        "exact_text" => lines
+            .iter()
+            .position(|line| line == &operation.target)
+            .ok_or_else(|| StateStoreError::InvalidPatchOperation {
+                reason: format!(
+                    "anchor not found for op {}: {}",
+                    operation.op, operation.target
+                ),
+            }),
+        "line_span" => {
+            let line_number = operation.target.parse::<usize>().map_err(|_| {
+                StateStoreError::InvalidPatchOperation {
+                    reason: format!("invalid line_span target: {}", operation.target),
+                }
+            })?;
+            if line_number == 0 || line_number > lines.len() {
+                return Err(StateStoreError::InvalidPatchOperation {
+                    reason: format!("line_span out of bounds: {}", operation.target),
+                });
+            }
+            Ok(line_number - 1)
+        }
+        "anchor_hash" => {
+            let target_hash = operation.target.strip_prefix("blake3:").ok_or_else(|| {
+                StateStoreError::InvalidPatchOperation {
+                    reason: format!("invalid anchor_hash target format: {}", operation.target),
+                }
+            })?;
+
+            lines
+                .iter()
+                .position(|line| blake3::hash(line.as_bytes()).to_hex().as_str() == target_hash)
+                .ok_or_else(|| StateStoreError::InvalidPatchOperation {
+                    reason: format!("anchor hash not found for op {}", operation.op),
+                })
+        }
+        other => Err(StateStoreError::InvalidPatchOperation {
+            reason: format!("unsupported target_mode: {other}"),
+        }),
+    }
+}
+
+fn validate_patch_conflicts(patches: &[InstructionDiffPatchRow]) -> Result<(), StateStoreError> {
+    use std::collections::HashMap;
+
+    let mut claimed: HashMap<(String, String), (u32, String)> = HashMap::new();
+
+    for patch in patches {
+        for operation in &patch.operations {
+            if matches!(
+                operation.op.as_str(),
+                "replace_range" | "replace_with_many" | "delete_range"
+            ) {
+                let key = (operation.target_mode.clone(), operation.target.clone());
+                if let Some((existing_precedence, existing_patch_id)) = claimed.get(&key) {
+                    if *existing_precedence == patch.patch_precedence {
+                        return Err(StateStoreError::PatchConflict {
+                            reason: format!(
+                                "patches {} and {} target the same anchor with equal precedence",
+                                existing_patch_id, patch.patch_id
+                            ),
+                        });
+                    }
+                } else {
+                    claimed.insert(key, (patch.patch_precedence, patch.patch_id.clone()));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_patch_bindings(
+    base: &InstructionArtifactRow,
+    patches: &[InstructionDiffPatchRow],
+) -> Result<(), StateStoreError> {
+    for patch in patches {
+        if patch.target_artifact_version != base.version {
+            return Err(StateStoreError::InvalidPatchOperation {
+                reason: format!(
+                    "patch {} targets artifact version {} but base version is {}",
+                    patch.patch_id, patch.target_artifact_version, base.version
+                ),
+            });
+        }
+
+        if patch.target_artifact_hash != base.source_hash {
+            return Err(StateStoreError::InvalidPatchOperation {
+                reason: format!(
+                    "patch {} targets artifact hash {} but base hash is {}",
+                    patch.patch_id, patch.target_artifact_hash, base.source_hash
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_patch_ids(patches: &[InstructionDiffPatchRow]) -> Vec<String> {
+    patches.iter().map(|patch| patch.patch_id.clone()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_tasks_jsonl() -> String {
+        [
+            r#"{"id":"vida-root","title":"Root epic","description":"epic","status":"open","priority":1,"issue_type":"epic","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","source_repo":".","compaction_level":0,"original_size":0,"labels":["wave"],"dependencies":[]}"#,
+            r#"{"id":"vida-a","title":"Task A","description":"first","status":"open","priority":2,"issue_type":"task","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","source_repo":".","compaction_level":0,"original_size":0,"labels":["framework"],"dependencies":[{"issue_id":"vida-a","depends_on_id":"vida-root","type":"parent-child","created_at":"2026-03-08T00:00:00Z","created_by":"tester","metadata":"{}","thread_id":""}]}"#,
+            r#"{"id":"vida-b","title":"Task B","description":"second","status":"open","priority":3,"issue_type":"task","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","source_repo":".","compaction_level":0,"original_size":0,"labels":["framework"],"dependencies":[{"issue_id":"vida-b","depends_on_id":"vida-a","type":"blocks","created_at":"2026-03-08T00:00:00Z","created_by":"tester","metadata":"{}","thread_id":""}]}"#,
+            r#"{"id":"vida-c","title":"Task C","description":"active","status":"in_progress","priority":4,"issue_type":"task","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","source_repo":".","compaction_level":0,"original_size":0,"labels":["framework"],"dependencies":[]}"#,
+            r#"{"id":"vida-d","title":"Task D","description":"done","status":"closed","priority":5,"issue_type":"task","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","closed_at":"2026-03-08T00:10:00Z","close_reason":"done","source_repo":".","compaction_level":0,"original_size":0,"labels":["framework"],"dependencies":[]}"#,
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn parse_source_metadata_extracts_extended_fields() {
+        let body = r#"
+artifact_id: sample-artifact
+artifact_kind: instruction_contract
+version: 7
+ownership_class: framework
+mutability_class: immutable
+activation_class: always_on
+required_follow_on: next-one,next-two
+hierarchy: framework,contracts
+"#;
+
+        let metadata = parse_source_metadata(body);
+        assert_eq!(metadata.artifact_id.as_deref(), Some("sample-artifact"));
+        assert_eq!(
+            metadata.artifact_kind.as_deref(),
+            Some("instruction_contract")
+        );
+        assert_eq!(metadata.version, Some(7));
+        assert_eq!(metadata.activation_class.as_deref(), Some("always_on"));
+        assert_eq!(metadata.required_follow_on, vec!["next-one", "next-two"]);
+        assert_eq!(metadata.hierarchy, vec!["framework", "contracts"]);
+    }
+
+    #[tokio::test]
+    async fn task_import_and_ready_surface_work_from_jsonl() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root =
+            std::env::temp_dir().join(format!("vida-task-import-{}-{}", std::process::id(), nanos));
+        let source = root.join("issues.jsonl");
+        fs::create_dir_all(&root).expect("create temp dir");
+        fs::write(&source, sample_tasks_jsonl()).expect("write sample jsonl");
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let summary = store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("import tasks");
+        assert_eq!(summary.imported_count, 5);
+        assert_eq!(summary.updated_count, 0);
+
+        let listed = store.list_tasks(None, false).await.expect("list tasks");
+        assert_eq!(listed.len(), 4);
+        assert_eq!(
+            listed.first().map(|task| task.id.as_str()),
+            Some("vida-root")
+        );
+
+        let shown = store.show_task("vida-b").await.expect("show task");
+        assert_eq!(shown.dependencies.len(), 1);
+        assert_eq!(shown.dependencies[0].depends_on_id, "vida-a");
+
+        let ready = store.ready_tasks().await.expect("ready tasks");
+        let ready_ids = ready.into_iter().map(|task| task.id).collect::<Vec<_>>();
+        assert_eq!(ready_ids, vec!["vida-c", "vida-a"]);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn ingest_is_idempotent_within_same_store() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-store-idempotent-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("seed bundle");
+        let first = store
+            .ingest_instruction_source_tree(DEFAULT_INSTRUCTION_SOURCE_ROOT)
+            .await
+            .expect("first ingest");
+        assert_eq!(first.imported_count, 3);
+
+        let mut count_query = store
+            .db
+            .query("SELECT count() AS count FROM instruction_source_artifact GROUP ALL;")
+            .await
+            .expect("count source artifacts");
+        #[derive(Debug, serde::Deserialize, SurrealValue)]
+        struct CountRow {
+            count: i64,
+        }
+        let count_rows: Vec<CountRow> = count_query.take(0).expect("take count rows");
+        assert_eq!(count_rows.first().map(|row| row.count), Some(3));
+
+        let one: Option<SourceArtifactRow> = store
+            .db
+            .select((
+                "instruction_source_artifact",
+                "instruction_memory-framework-agent-definition-source",
+            ))
+            .await
+            .expect("select one source artifact");
+        assert!(one.is_some());
+
+        let second = store
+            .ingest_instruction_source_tree(DEFAULT_INSTRUCTION_SOURCE_ROOT)
+            .await
+            .expect("second ingest");
+        assert_eq!(second.imported_count, 0);
+        assert_eq!(second.unchanged_count, 3);
+        assert_eq!(second.updated_count, 0);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn state_spine_manifest_is_idempotent_across_reopen() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-spine-idempotent-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let first: Option<StateSpineManifestContent> = store
+            .db
+            .select(("state_spine_manifest", "primary"))
+            .await
+            .expect("select first manifest");
+        let first = first.expect("first manifest should exist");
+
+        store
+            .ensure_minimal_authoritative_state_spine()
+            .await
+            .expect("repeat ensure should succeed");
+        let second: Option<StateSpineManifestContent> = store
+            .db
+            .select(("state_spine_manifest", "primary"))
+            .await
+            .expect("select second manifest");
+        let second = second.expect("second manifest should exist");
+
+        assert_eq!(first.initialized_at, second.initialized_at);
+
+        drop(store);
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+        let existing = StateStore::open_existing(root.clone())
+            .await
+            .expect("open existing store");
+        let summary = existing
+            .state_spine_summary()
+            .await
+            .expect("state spine summary should load from existing store");
+        assert_eq!(summary.entity_surface_count, 8);
+        assert_eq!(summary.authoritative_mutation_root, "vida task");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn state_spine_summary_fails_closed_on_missing_manifest() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-spine-missing-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _: Option<StateSpineManifestContent> = store
+            .db
+            .delete(("state_spine_manifest", "primary"))
+            .await
+            .expect("delete manifest");
+
+        let error = store
+            .state_spine_summary()
+            .await
+            .expect_err("missing manifest should fail");
+        assert!(matches!(error, StateStoreError::MissingStateSpineManifest));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn active_instruction_root_loads_from_runtime_state() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-instruction-runtime-state-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("seed framework bundle");
+
+        let active_root = store
+            .active_instruction_root()
+            .await
+            .expect("active root should load");
+        assert_eq!(active_root, "framework-agent-definition");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn boot_compatibility_is_incompatible_when_runtime_state_is_missing() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-boot-compatibility-missing-runtime-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("seed framework bundle");
+        store
+            .ingest_instruction_source_tree(DEFAULT_INSTRUCTION_SOURCE_ROOT)
+            .await
+            .expect("ingest source tree");
+        let _: Option<InstructionRuntimeStateRow> = store
+            .db
+            .delete(("instruction_runtime_state", "primary"))
+            .await
+            .expect("delete runtime state");
+
+        let compatibility = store
+            .evaluate_boot_compatibility()
+            .await
+            .expect("compatibility evaluation should succeed");
+        assert_eq!(compatibility.classification, "incompatible");
+        assert!(compatibility
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("instruction runtime state missing")));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn migration_preflight_reports_no_migration_required_for_seeded_runtime() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-migration-preflight-seeded-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("seed framework bundle");
+        store
+            .ingest_instruction_source_tree(DEFAULT_INSTRUCTION_SOURCE_ROOT)
+            .await
+            .expect("ingest source tree");
+
+        let summary = store
+            .evaluate_migration_preflight()
+            .await
+            .expect("migration preflight should succeed");
+        assert_eq!(summary.compatibility_classification, "compatible");
+        assert_eq!(summary.migration_state, "no_migration_required");
+        assert!(summary.blockers.is_empty());
+        assert_eq!(
+            summary.source_version_tuple,
+            vec![
+                "framework-agent-definition@v1".to_string(),
+                "framework-instruction-contract@v1".to_string(),
+                "framework-prompt-template-config@v1".to_string()
+            ]
+        );
+        let receipt_summary = store
+            .migration_receipt_summary()
+            .await
+            .expect("migration receipt summary should load");
+        assert_eq!(receipt_summary.compatibility_receipts, 1);
+        assert_eq!(receipt_summary.application_receipts, 0);
+        assert_eq!(receipt_summary.verification_receipts, 0);
+        assert_eq!(receipt_summary.cutover_readiness_receipts, 0);
+        assert_eq!(receipt_summary.rollback_notes, 0);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn migration_preflight_blocks_when_runtime_root_is_missing() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-migration-preflight-missing-runtime-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("seed framework bundle");
+        store
+            .ingest_instruction_source_tree(DEFAULT_INSTRUCTION_SOURCE_ROOT)
+            .await
+            .expect("ingest source tree");
+        let _: Option<InstructionRuntimeStateRow> = store
+            .db
+            .delete(("instruction_runtime_state", "primary"))
+            .await
+            .expect("delete runtime state");
+
+        let summary = store
+            .evaluate_migration_preflight()
+            .await
+            .expect("migration preflight should succeed");
+        assert_eq!(summary.compatibility_classification, "incompatible");
+        assert_eq!(summary.migration_state, "migration_blocked");
+        assert!(summary
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("instruction runtime root unresolved")));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn seed_framework_instruction_bundle_preserves_existing_active_root() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-instruction-runtime-preserve-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("initial seed should succeed");
+
+        let _: Option<InstructionRuntimeStateRow> = store
+            .db
+            .upsert(("instruction_runtime_state", "primary"))
+            .content(InstructionRuntimeStateRow {
+                state_id: "primary".to_string(),
+                active_root_artifact_id: "custom-root".to_string(),
+                runtime_mode: "test_override".to_string(),
+            })
+            .await
+            .expect("override runtime state");
+
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("reseed should preserve runtime state");
+
+        let row: Option<InstructionRuntimeStateRow> = store
+            .db
+            .select(("instruction_runtime_state", "primary"))
+            .await
+            .expect("select runtime state");
+        let row = row.expect("runtime state should exist");
+        assert_eq!(row.active_root_artifact_id, "custom-root");
+        assert_eq!(row.runtime_mode, "test_override");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn project_instruction_artifact_applies_minimal_sidecar_ops() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-projection-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("seed bundle");
+        store
+            .ingest_instruction_source_tree(DEFAULT_INSTRUCTION_SOURCE_ROOT)
+            .await
+            .expect("ingest source tree");
+
+        store
+            .upsert_instruction_diff_patch(InstructionDiffPatchContent {
+                patch_id: "test-projection-patch".to_string(),
+                target_artifact_id: "framework-instruction-contract".to_string(),
+                target_artifact_version: 1,
+                target_artifact_hash: blake3::hash(
+                    fs::read_to_string(
+                        repo_root()
+                            .join(DEFAULT_INSTRUCTION_SOURCE_ROOT)
+                            .join("framework/instruction-contract.md"),
+                    )
+                    .expect("read instruction contract source")
+                    .as_bytes(),
+                )
+                .to_hex()
+                .to_string(),
+                patch_precedence: 10,
+                author_class: "test".to_string(),
+                applies_if: "always".to_string(),
+                created_at: "2026-03-08T00:00:00Z".to_string(),
+                active: true,
+                operations: vec![
+                    InstructionPatchOperation {
+                        op: "replace_range".to_string(),
+                        target_mode: "exact_text".to_string(),
+                        target: "artifact_kind: instruction_contract".to_string(),
+                        with_lines: vec!["artifact_kind: instruction_contract_patched".to_string()],
+                    },
+                    InstructionPatchOperation {
+                        op: "insert_after".to_string(),
+                        target_mode: "exact_text".to_string(),
+                        target: "ownership_class: framework".to_string(),
+                        with_lines: vec!["clarification: sidecar-added-line".to_string()],
+                    },
+                    InstructionPatchOperation {
+                        op: "delete_range".to_string(),
+                        target_mode: "exact_text".to_string(),
+                        target: "hierarchy: framework".to_string(),
+                        with_lines: vec![],
+                    },
+                    InstructionPatchOperation {
+                        op: "append_block".to_string(),
+                        target_mode: "exact_text".to_string(),
+                        target: "mutability_class: immutable".to_string(),
+                        with_lines: vec![
+                            "appendix: extra guidance".to_string(),
+                            "appendix: follow patched runtime".to_string(),
+                        ],
+                    },
+                ],
+            })
+            .await
+            .expect("upsert diff patch");
+
+        let projection = store
+            .project_instruction_artifact("framework-instruction-contract")
+            .await
+            .expect("project artifact");
+
+        assert_eq!(projection.artifact_id, "framework-instruction-contract");
+        assert_eq!(projection.applied_patch_ids, vec!["test-projection-patch"]);
+        assert!(projection
+            .body
+            .contains("artifact_kind: instruction_contract_patched"));
+        assert!(projection
+            .body
+            .contains("clarification: sidecar-added-line"));
+        assert!(!projection.body.contains("hierarchy: framework"));
+        assert!(projection.body.contains("appendix: extra guidance"));
+        assert!(!projection.projected_hash.is_empty());
+
+        let mut receipt_query = store
+            .db
+            .query("SELECT count() AS count FROM instruction_projection_receipt GROUP ALL;")
+            .await
+            .expect("count projection receipts");
+        #[derive(Debug, serde::Deserialize, SurrealValue)]
+        struct CountRow {
+            count: i64,
+        }
+        let receipt_rows: Vec<CountRow> = receipt_query.take(0).expect("take receipt count");
+        assert_eq!(receipt_rows.first().map(|row| row.count), Some(1));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn apply_patch_operation_supports_line_span_targeting() {
+        let mut lines = vec!["one".to_string(), "two".to_string(), "three".to_string()];
+
+        apply_patch_operation(
+            &mut lines,
+            &InstructionPatchOperation {
+                op: "insert_before".to_string(),
+                target_mode: "line_span".to_string(),
+                target: "2".to_string(),
+                with_lines: vec!["between".to_string()],
+            },
+        )
+        .expect("line_span op should succeed");
+
+        assert_eq!(lines, vec!["one", "between", "two", "three"]);
+    }
+
+    #[test]
+    fn apply_patch_operation_supports_anchor_hash_targeting() {
+        let mut lines = vec!["one".to_string(), "two".to_string(), "three".to_string()];
+        let anchor = format!("blake3:{}", blake3::hash("two".as_bytes()).to_hex());
+
+        apply_patch_operation(
+            &mut lines,
+            &InstructionPatchOperation {
+                op: "insert_after".to_string(),
+                target_mode: "anchor_hash".to_string(),
+                target: anchor,
+                with_lines: vec!["after-two".to_string()],
+            },
+        )
+        .expect("anchor_hash op should succeed");
+
+        assert_eq!(lines, vec!["one", "two", "after-two", "three"]);
+    }
+
+    #[test]
+    fn apply_patch_operation_fails_closed_on_stale_anchor_hash() {
+        let mut lines = vec!["one".to_string(), "two".to_string()];
+
+        let error = apply_patch_operation(
+            &mut lines,
+            &InstructionPatchOperation {
+                op: "replace_range".to_string(),
+                target_mode: "anchor_hash".to_string(),
+                target: format!("blake3:{}", blake3::hash("stale".as_bytes()).to_hex()),
+                with_lines: vec!["new".to_string()],
+            },
+        )
+        .expect_err("stale anchor hash should fail");
+
+        assert!(matches!(
+            error,
+            StateStoreError::InvalidPatchOperation { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_patch_conflicts_fails_on_equal_precedence_same_anchor() {
+        let patches = vec![
+            InstructionDiffPatchRow {
+                patch_id: "patch-a".to_string(),
+                target_artifact_id: "artifact".to_string(),
+                target_artifact_version: 1,
+                target_artifact_hash: "base-hash".to_string(),
+                patch_precedence: 10,
+                active: true,
+                operations: vec![InstructionPatchOperation {
+                    op: "replace_range".to_string(),
+                    target_mode: "exact_text".to_string(),
+                    target: "anchor".to_string(),
+                    with_lines: vec!["a".to_string()],
+                }],
+            },
+            InstructionDiffPatchRow {
+                patch_id: "patch-b".to_string(),
+                target_artifact_id: "artifact".to_string(),
+                target_artifact_version: 1,
+                target_artifact_hash: "base-hash".to_string(),
+                patch_precedence: 10,
+                active: true,
+                operations: vec![InstructionPatchOperation {
+                    op: "delete_range".to_string(),
+                    target_mode: "exact_text".to_string(),
+                    target: "anchor".to_string(),
+                    with_lines: vec![],
+                }],
+            },
+        ];
+
+        let error = validate_patch_conflicts(&patches).expect_err("conflict should fail");
+        assert!(matches!(error, StateStoreError::PatchConflict { .. }));
+    }
+
+    #[test]
+    fn apply_patch_operation_fails_closed_on_missing_anchor() {
+        let mut lines = vec!["one".to_string()];
+
+        let error = apply_patch_operation(
+            &mut lines,
+            &InstructionPatchOperation {
+                op: "replace_range".to_string(),
+                target_mode: "exact_text".to_string(),
+                target: "missing".to_string(),
+                with_lines: vec!["new".to_string()],
+            },
+        )
+        .expect_err("missing anchor should fail");
+
+        assert!(matches!(
+            error,
+            StateStoreError::InvalidPatchOperation { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_patch_conflicts_fails_on_equal_precedence_same_anchor_hash() {
+        let anchor = format!("blake3:{}", blake3::hash("anchor".as_bytes()).to_hex());
+        let patches = vec![
+            InstructionDiffPatchRow {
+                patch_id: "patch-a".to_string(),
+                target_artifact_id: "artifact".to_string(),
+                target_artifact_version: 1,
+                target_artifact_hash: "base-hash".to_string(),
+                patch_precedence: 10,
+                active: true,
+                operations: vec![InstructionPatchOperation {
+                    op: "replace_range".to_string(),
+                    target_mode: "anchor_hash".to_string(),
+                    target: anchor.clone(),
+                    with_lines: vec!["a".to_string()],
+                }],
+            },
+            InstructionDiffPatchRow {
+                patch_id: "patch-b".to_string(),
+                target_artifact_id: "artifact".to_string(),
+                target_artifact_version: 1,
+                target_artifact_hash: "base-hash".to_string(),
+                patch_precedence: 10,
+                active: true,
+                operations: vec![InstructionPatchOperation {
+                    op: "delete_range".to_string(),
+                    target_mode: "anchor_hash".to_string(),
+                    target: anchor,
+                    with_lines: vec![],
+                }],
+            },
+        ];
+
+        let error =
+            validate_patch_conflicts(&patches).expect_err("anchor_hash conflict should fail");
+        assert!(matches!(error, StateStoreError::PatchConflict { .. }));
+    }
+
+    #[tokio::test]
+    async fn project_instruction_artifact_fails_on_stale_patch_binding() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-projection-binding-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("seed bundle");
+        store
+            .ingest_instruction_source_tree(DEFAULT_INSTRUCTION_SOURCE_ROOT)
+            .await
+            .expect("ingest source tree");
+
+        store
+            .upsert_instruction_diff_patch(InstructionDiffPatchContent {
+                patch_id: "stale-binding-patch".to_string(),
+                target_artifact_id: "framework-instruction-contract".to_string(),
+                target_artifact_version: 1,
+                target_artifact_hash: "stale-hash".to_string(),
+                patch_precedence: 10,
+                author_class: "test".to_string(),
+                applies_if: "always".to_string(),
+                created_at: "2026-03-08T00:00:00Z".to_string(),
+                active: true,
+                operations: vec![InstructionPatchOperation {
+                    op: "replace_range".to_string(),
+                    target_mode: "exact_text".to_string(),
+                    target: "artifact_kind: instruction_contract".to_string(),
+                    with_lines: vec!["artifact_kind: changed".to_string()],
+                }],
+            })
+            .await
+            .expect("upsert stale patch");
+
+        let error = store
+            .project_instruction_artifact("framework-instruction-contract")
+            .await
+            .expect_err("stale binding should fail");
+        assert!(matches!(
+            error,
+            StateStoreError::InvalidPatchOperation { .. }
+        ));
+
+        let mut receipt_query = store
+            .db
+            .query("SELECT * FROM instruction_projection_receipt;")
+            .await
+            .expect("query projection receipts");
+        let receipts: Vec<InstructionProjectionReceiptContent> =
+            receipt_query.take(0).expect("take receipts");
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].applied_patch_ids.len(), 0);
+        assert_eq!(receipts[0].skipped_patch_ids, vec!["stale-binding-patch"]);
+        assert!(receipts[0].failed_reason.contains("targets artifact hash"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn resolve_effective_instruction_bundle_returns_mandatory_chain_in_order() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-effective-bundle-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("seed bundle");
+        store
+            .ingest_instruction_source_tree(DEFAULT_INSTRUCTION_SOURCE_ROOT)
+            .await
+            .expect("ingest source tree");
+
+        let bundle = store
+            .resolve_effective_instruction_bundle("framework-agent-definition")
+            .await
+            .expect("resolve bundle");
+
+        assert_eq!(
+            bundle.mandatory_chain_order,
+            vec![
+                "framework-agent-definition",
+                "framework-instruction-contract",
+                "framework-prompt-template-config",
+            ]
+        );
+        assert_eq!(
+            bundle.source_version_tuple,
+            vec![
+                "framework-agent-definition@v1",
+                "framework-instruction-contract@v1",
+                "framework-prompt-template-config@v1",
+            ]
+        );
+        assert_eq!(bundle.projected_artifacts.len(), 3);
+        assert_eq!(
+            bundle.projected_artifacts[0].artifact_id,
+            "framework-agent-definition"
+        );
+        assert!(bundle
+            .receipt_id
+            .starts_with("effective-bundle-framework-agent-definition-"));
+
+        let mut receipt_query = store
+            .db
+            .query("SELECT * FROM effective_instruction_bundle_receipt;")
+            .await
+            .expect("query bundle receipts");
+        let receipts: Vec<EffectiveInstructionBundleReceiptContent> =
+            receipt_query.take(0).expect("take bundle receipts");
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(
+            receipts[0].mandatory_chain_order,
+            bundle.mandatory_chain_order
+        );
+        assert_eq!(
+            receipts[0].source_version_tuple,
+            bundle.source_version_tuple
+        );
+        assert_eq!(receipts[0].optional_triggered_reads, Vec::<String>::new());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn resolve_mandatory_chain_handles_diamond_graph_topologically() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-diamond-graph-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        for artifact_id in ["test-a", "test-b", "test-c", "test-d"] {
+            let _: Option<InstructionArtifactContent> = store
+                .db
+                .upsert(("instruction_artifact", artifact_id))
+                .content(InstructionArtifactContent {
+                    artifact_id: artifact_id.to_string(),
+                    artifact_kind: "instruction_contract".to_string(),
+                    version: 1,
+                    ownership_class: "framework".to_string(),
+                    mutability_class: "immutable".to_string(),
+                    activation_class: "always_on".to_string(),
+                    source_hash: format!("hash-{artifact_id}"),
+                    body: artifact_id.to_string(),
+                    hierarchy: vec!["framework".to_string()],
+                    required_follow_on: vec![],
+                })
+                .await
+                .expect("insert diamond artifact");
+        }
+        for (edge_id, from_artifact, to_artifact) in [
+            ("test-a__test-b", "test-a", "test-b"),
+            ("test-a__test-c", "test-a", "test-c"),
+            ("test-b__test-d", "test-b", "test-d"),
+            ("test-c__test-d", "test-c", "test-d"),
+        ] {
+            let _: Option<InstructionDependencyEdgeContent> = store
+                .db
+                .upsert(("instruction_dependency_edge", edge_id))
+                .content(InstructionDependencyEdgeContent {
+                    from_artifact: from_artifact.to_string(),
+                    to_artifact: to_artifact.to_string(),
+                    edge_kind: "mandatory_follow_on".to_string(),
+                })
+                .await
+                .expect("insert diamond edge");
+        }
+
+        let ordered = store
+            .resolve_mandatory_chain("test-a")
+            .await
+            .expect("resolve diamond graph");
+
+        let pos_a = ordered
+            .iter()
+            .position(|id| id == "test-a")
+            .expect("a present");
+        let pos_b = ordered
+            .iter()
+            .position(|id| id == "test-b")
+            .expect("b present");
+        let pos_c = ordered
+            .iter()
+            .position(|id| id == "test-c")
+            .expect("c present");
+        let pos_d = ordered
+            .iter()
+            .position(|id| id == "test-d")
+            .expect("d present");
+        assert!(pos_a < pos_b);
+        assert!(pos_a < pos_c);
+        assert!(pos_b < pos_d);
+        assert!(pos_c < pos_d);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn resolve_mandatory_chain_fails_closed_on_cycle() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-cycle-graph-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        for artifact_id in ["test-a", "test-b", "test-c"] {
+            let _: Option<InstructionArtifactContent> = store
+                .db
+                .upsert(("instruction_artifact", artifact_id))
+                .content(InstructionArtifactContent {
+                    artifact_id: artifact_id.to_string(),
+                    artifact_kind: "instruction_contract".to_string(),
+                    version: 1,
+                    ownership_class: "framework".to_string(),
+                    mutability_class: "immutable".to_string(),
+                    activation_class: "always_on".to_string(),
+                    source_hash: format!("hash-{artifact_id}"),
+                    body: artifact_id.to_string(),
+                    hierarchy: vec!["framework".to_string()],
+                    required_follow_on: vec![],
+                })
+                .await
+                .expect("insert cycle artifact");
+        }
+        for (edge_id, from_artifact, to_artifact) in [
+            ("test-a__test-b", "test-a", "test-b"),
+            ("test-b__test-c", "test-b", "test-c"),
+            ("test-c__test-a", "test-c", "test-a"),
+        ] {
+            let _: Option<InstructionDependencyEdgeContent> = store
+                .db
+                .upsert(("instruction_dependency_edge", edge_id))
+                .content(InstructionDependencyEdgeContent {
+                    from_artifact: from_artifact.to_string(),
+                    to_artifact: to_artifact.to_string(),
+                    edge_kind: "mandatory_follow_on".to_string(),
+                })
+                .await
+                .expect("insert cycle edge");
+        }
+
+        let error = store
+            .resolve_mandatory_chain("test-a")
+            .await
+            .expect_err("cycle should fail");
+        match error {
+            StateStoreError::InstructionDependencyCycle { cycle_path } => {
+                assert!(cycle_path.contains("test-a"));
+                assert!(cycle_path.contains("test-b"));
+                assert!(cycle_path.contains("test-c"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn resolve_mandatory_chain_fails_on_missing_dependency_target() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-missing-dependency-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _: Option<InstructionArtifactContent> = store
+            .db
+            .upsert(("instruction_artifact", "test-a"))
+            .content(InstructionArtifactContent {
+                artifact_id: "test-a".to_string(),
+                artifact_kind: "agent_definition".to_string(),
+                version: 1,
+                ownership_class: "framework".to_string(),
+                mutability_class: "immutable".to_string(),
+                activation_class: "always_on".to_string(),
+                source_hash: "hash-a".to_string(),
+                body: "test-a".to_string(),
+                hierarchy: vec!["framework".to_string()],
+                required_follow_on: vec!["missing-b".to_string()],
+            })
+            .await
+            .expect("insert root artifact");
+        let _: Option<InstructionDependencyEdgeContent> = store
+            .db
+            .upsert(("instruction_dependency_edge", "test-a__missing-b"))
+            .content(InstructionDependencyEdgeContent {
+                from_artifact: "test-a".to_string(),
+                to_artifact: "missing-b".to_string(),
+                edge_kind: "mandatory_follow_on".to_string(),
+            })
+            .await
+            .expect("insert missing edge");
+
+        let error = store
+            .resolve_mandatory_chain("test-a")
+            .await
+            .expect_err("missing dependency should fail");
+        match error {
+            StateStoreError::MissingInstructionArtifact { artifact_id } => {
+                assert_eq!(artifact_id, "missing-b");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+}

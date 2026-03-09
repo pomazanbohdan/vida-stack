@@ -15,21 +15,25 @@ from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent.parent
-BR_SAFE = SCRIPT_DIR / "br-safe.sh"
 VIDA_CONFIG = SCRIPT_DIR / "vida-config.py"
 RUN_GRAPH = SCRIPT_DIR / "run-graph.py"
 TASK_STATE_RECONCILE = SCRIPT_DIR / "task-state-reconcile.py"
+VIDA_LEGACY_BIN = ROOT_DIR / "_vida" / "scripts-nim" / "vida-legacy"
+TURSO_PYTHON = str(ROOT_DIR / ".venv" / "bin" / "python3")
 
 
 def now_utc() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def run_br_json(*args: str) -> list[dict[str, Any]]:
+def run_vida_legacy_json(*args: str) -> list[dict[str, Any]]:
+    if not VIDA_LEGACY_BIN.exists():
+        raise SystemExit(f"[vida-boot-snapshot] vida-legacy binary is missing: {VIDA_LEGACY_BIN}")
     env = os.environ.copy()
-    env.setdefault("RUST_LOG", "error")
+    env.setdefault("VIDA_ROOT", str(ROOT_DIR))
+    env.setdefault("VIDA_LEGACY_TURSO_PYTHON", TURSO_PYTHON)
     proc = subprocess.run(
-        ["bash", str(BR_SAFE), *args],
+        [str(VIDA_LEGACY_BIN), "task", *args, "--json"],
         cwd=ROOT_DIR,
         capture_output=True,
         text=True,
@@ -38,16 +42,20 @@ def run_br_json(*args: str) -> list[dict[str, Any]]:
     )
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout).strip()
-        raise SystemExit(f"[vida-boot-snapshot] br call failed: {' '.join(args)}\n{detail}")
+        raise SystemExit(
+            f"[vida-boot-snapshot] vida-legacy task call failed: {' '.join(args)}\n{detail}"
+        )
     payload = proc.stdout.strip() or "[]"
     try:
         data = json.loads(payload)
     except json.JSONDecodeError as exc:
         raise SystemExit(
-            f"[vida-boot-snapshot] Failed to decode JSON from br call: {' '.join(args)}"
+            f"[vida-boot-snapshot] Failed to decode JSON from vida-legacy task call: {' '.join(args)}"
         ) from exc
     if not isinstance(data, list):
-        raise SystemExit(f"[vida-boot-snapshot] Unexpected br payload type for: {' '.join(args)}")
+        raise SystemExit(
+            f"[vida-boot-snapshot] Unexpected vida-legacy payload type for: {' '.join(args)}"
+        )
     return data
 
 
@@ -88,9 +96,9 @@ def reconciliation_status(task_id: str) -> dict[str, Any]:
 
 
 def show_issue(issue_id: str) -> dict[str, Any]:
-    rows = run_br_json("show", issue_id, "--json")
+    rows = run_vida_legacy_json("show", issue_id)
     if not rows:
-        raise SystemExit(f"[vida-boot-snapshot] Missing issue in br show: {issue_id}")
+        raise SystemExit(f"[vida-boot-snapshot] Missing issue in vida-legacy task show: {issue_id}")
     return rows[0]
 
 
@@ -184,19 +192,29 @@ def issue_entry(issue: dict[str, Any], subtasks: list[dict[str, Any]], subtasks_
     }
 
 
-def child_entries_for(issue_id: str) -> list[dict[str, Any]]:
-    issue = show_issue(issue_id)
+def child_entries_for(issue_id: str, all_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     children = []
-    for dependent in issue.get("dependents") or []:
-        if dependent.get("dependency_type") != "parent-child":
+    for candidate in all_rows:
+        if candidate.get("status") not in {"open", "in_progress"}:
             continue
-        if dependent.get("status") not in {"open", "in_progress"}:
+        matched = False
+        for dependency in candidate.get("dependencies") or []:
+            if dependency.get("type") != "parent-child":
+                continue
+            if str(dependency.get("depends_on_id", "")).strip() != issue_id:
+                continue
+            matched = True
+            break
+        if not matched:
             continue
         children.append(
             {
-                "id": dependent.get("id"),
-                "title": dependent.get("title"),
-                "status": dependent.get("status"),
+                "id": candidate.get("id"),
+                "title": candidate.get("title"),
+                "status": candidate.get("status"),
+                "priority": candidate.get("priority"),
+                "updated_at": candidate.get("updated_at"),
+                "created_at": candidate.get("created_at"),
             }
         )
     children.sort(key=lambda item: (0 if item.get("status") == "in_progress" else 1, *issue_sort_key(item)))
@@ -204,10 +222,11 @@ def child_entries_for(issue_id: str) -> list[dict[str, Any]]:
 
 
 def build_snapshot(top_limit: int, ready_limit: int, subtasks_limit: int) -> dict[str, Any]:
-    open_rows = run_br_json("list", "--status", "open", "--json")
-    doing_rows = run_br_json("list", "--status", "in_progress", "--json")
-    blocked_rows = run_br_json("list", "--status", "blocked", "--json")
-    ready_rows = run_br_json("ready", "--json")
+    all_rows = run_vida_legacy_json("list", "--all")
+    open_rows = [row for row in all_rows if row.get("status") == "open"]
+    doing_rows = [row for row in all_rows if row.get("status") == "in_progress"]
+    blocked_rows = [row for row in all_rows if row.get("status") == "blocked"]
+    ready_rows = run_vida_legacy_json("ready")
 
     top_open = sorted(top_level(open_rows), key=issue_sort_key)
     top_doing = sorted(top_level(doing_rows), key=issue_sort_key)
@@ -217,11 +236,11 @@ def build_snapshot(top_limit: int, ready_limit: int, subtasks_limit: int) -> dic
     top_ready_in_progress = [row for row in top_ready if row.get("status") == "in_progress"]
 
     in_progress = [
-        issue_entry(row, child_entries_for(str(row.get("id"))), subtasks_limit)
+        issue_entry(row, child_entries_for(str(row.get("id")), all_rows), subtasks_limit)
         for row in top_doing[:top_limit]
     ]
     ready_head = [
-        issue_entry(row, child_entries_for(str(row.get("id"))), subtasks_limit)
+        issue_entry(row, child_entries_for(str(row.get("id")), all_rows), subtasks_limit)
         for row in top_ready_open[:ready_limit]
     ]
     decision_required = [

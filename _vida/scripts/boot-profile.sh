@@ -3,9 +3,27 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-source "$SCRIPT_DIR/status-ui.sh"
 
 cd "$ROOT_DIR"
+
+vida_icon() {
+  case "${1:-info}" in
+    ok) printf '✅' ;;
+    warn) printf '⚠️' ;;
+    fail) printf '❌' ;;
+    blocked) printf '⛔' ;;
+    info) printf 'ℹ️' ;;
+    sparkle) printf '✨' ;;
+    progress) printf '🔄' ;;
+    *) printf '•' ;;
+  esac
+}
+
+vida_status_line() {
+  local level="${1:-info}"
+  shift || true
+  printf '%s %s\n' "$(vida_icon "$level")" "$*"
+}
 
 usage() {
   cat <<'EOF'
@@ -185,7 +203,7 @@ run_checks() {
   done
 
   if [[ -n "$task_id" ]]; then
-    if ! bash _vida/scripts/context-capsule.sh hydrate "$task_id" >/dev/null 2>&1; then
+    if ! VIDA_ROOT="${VIDA_ROOT:-$ROOT_DIR}" VIDA_LEGACY_TURSO_PYTHON="${VIDA_LEGACY_TURSO_PYTHON:-$ROOT_DIR/.venv/bin/python3}" "$ROOT_DIR/_vida/scripts-nim/vida-legacy" context-capsule hydrate "$task_id" --json >/dev/null 2>&1; then
       write_receipt "$profile" "$task_id" "$non_dev" "missing" "blocked" "" "${read_contract[@]}"
       vida_status_line blocked "[boot-profile] BLK_CONTEXT_NOT_HYDRATED task=${task_id}" >&2
       return 1

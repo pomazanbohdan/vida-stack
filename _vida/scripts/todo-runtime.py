@@ -17,7 +17,7 @@ LOG_FILE = ROOT_DIR / ".vida" / "logs" / "beads-execution.jsonl"
 TODO_INDEX_DIR = ROOT_DIR / ".vida" / "logs" / "todo-index"
 TODO_LOG_DIR = ROOT_DIR / ".vida" / "logs"
 TODO_SYNC_STATE_DIR = ROOT_DIR / ".vida" / "logs" / "todo-sync-state"
-STATEFUL_SEQUENCE_SCRIPT = ROOT_DIR / "_vida" / "scripts" / "stateful-sequence-check.sh"
+LOCK_FILE = ROOT_DIR / ".vida" / "locks" / "stateful-workflow.lock"
 
 
 @dataclass
@@ -371,6 +371,32 @@ def run_checked(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, cwd=ROOT_DIR, text=True, capture_output=True, check=False)
 
 
+def is_stateful_command(command: str) -> bool:
+    return command in {
+        "start",
+        "checkpoint",
+        "redirect",
+        "block-plan",
+        "block-start",
+        "block-end",
+        "block-finish",
+        "pack-start",
+        "pack-end",
+        "reflect",
+        "finish",
+        "sync",
+    }
+
+
+def stateful_idle() -> bool:
+    if not is_stateful_command("block-plan"):
+        return True
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with LOCK_FILE.open("a+") as fh:
+        proc = subprocess.run(["flock", "-n", str(fh.fileno())], cwd=ROOT_DIR, text=True, capture_output=True, check=False)
+        return proc.returncode == 0
+
+
 def cmd_validate(task_id: str, strict: bool, quiet: bool, diff_aware: bool, base_ref: str) -> int:
     steps = steps_json(task_id)
     if not steps:
@@ -378,11 +404,10 @@ def cmd_validate(task_id: str, strict: bool, quiet: bool, diff_aware: bool, base
         return 1
 
     fail = False
-    if STATEFUL_SEQUENCE_SCRIPT.exists() and STATEFUL_SEQUENCE_SCRIPT.is_file():
-        proc = run_checked(["bash", str(STATEFUL_SEQUENCE_SCRIPT), "assert", "block-plan", "--quiet"])
-        if proc.returncode != 0 and not quiet:
+    if not stateful_idle():
+        if not quiet:
             print("[todo-plan-validate] WARN: stateful operation currently in-flight; plan snapshot may be briefly stale", file=sys.stderr)
-            fail = fail or strict
+        fail = fail or strict
 
     ids = [s["block_id"] for s in steps]
     dup_ids = len(ids) - len(set(ids))

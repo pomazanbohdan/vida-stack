@@ -1,0 +1,166 @@
+artifact_name: route_catalog
+artifact_type: route_catalog
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+canonical_source_refs:
+  - _vida/docs/plans/2026-03-08-vida-0.3-route-and-receipt-spec.md
+  - vida.config.yaml
+  - vida/docs/spec/partial-development-kernel-scope.md
+runtime_defaults:
+  subagent_mode: hybrid
+  state_owner: orchestrator_only
+  max_parallel_agents: 3
+defaults:
+  primary_lane: analysis_lane
+  verification_lane: verification_lane
+  coach_lane: coach_lane
+task_class_bindings:
+  analysis:
+    primary_lane: analysis_lane
+  meta_analysis:
+    primary_lane: analysis_lane
+  research:
+    primary_lane: analysis_lane
+  research_fast:
+    primary_lane: analysis_lane
+  research_deep:
+    primary_lane: analysis_lane
+  ui_research:
+    primary_lane: analysis_lane
+  architecture:
+    primary_lane: analysis_lane
+  read_only_prep:
+    primary_lane: analysis_lane
+  problem_party:
+    primary_lane: analysis_lane
+  implementation:
+    primary_lane: writer_lane
+    verification_lane: verification_lane
+    coach_lane: coach_lane
+    external_first_required: true
+  small_patch:
+    primary_lane: writer_lane
+    verification_lane: verification_lane
+    coach_lane: coach_lane
+    external_first_required: true
+  small_patch_write:
+    primary_lane: writer_lane
+    verification_lane: verification_lane
+    coach_lane: coach_lane
+    external_first_required: true
+  ui_patch:
+    primary_lane: writer_lane
+    verification_lane: verification_lane
+    coach_lane: coach_lane
+    external_first_required: true
+  coach:
+    primary_lane: coach_lane
+  verification:
+    primary_lane: verification_lane
+  verification_ensemble:
+    primary_lane: verification_lane
+  review_ensemble:
+    primary_lane: verification_lane
+routes:
+  analysis_lane:
+    route_stage: analysis
+    required_roles:
+      - analyst
+    capability: analysis
+    assignment_mode: single
+    selection_strategy: capability_score
+    independence_class: none
+    preferred_capabilities:
+      - web_search
+    lease_profile: shared_read_only
+    fallback: escalation_lane
+    timeout_seconds: 1800
+
+  writer_lane:
+    route_stage: writer
+    required_roles:
+      - writer
+    capability: implementation
+    assignment_mode: single
+    selection_strategy: least_loaded
+    independence_class: none
+    lease_profile: exclusive_mutation
+    fallback: escalation_lane
+    timeout_seconds: 2400
+
+  coach_lane:
+    route_stage: coach
+    required_roles:
+      - coach
+    capability: review
+    assignment_mode: single
+    selection_strategy: strict_independent
+    independence_class: not_same_agent
+    external_first_required: true
+    preferred_capabilities:
+      - web_search
+    lease_profile: scoped_review
+    fallback: escalation_lane
+    timeout_seconds: 1800
+
+  verification_lane:
+    route_stage: verification
+    required_roles:
+      - verifier
+    capability: verification
+    assignment_mode: single
+    selection_strategy: strict_independent
+    independence_class: not_same_route_chain
+    external_first_required: true
+    lease_profile: scoped_verification
+    fallback: escalation_lane
+    timeout_seconds: 2400
+
+  approval_lane:
+    route_stage: approval
+    required_roles:
+      - approver
+    capability: approval
+    assignment_mode: single
+    selection_strategy: human_required
+    independence_class: human_independent_required
+    lease_profile: approval_window
+    fallback: escalation_lane
+    timeout_seconds: 86400
+
+  synthesis_lane:
+    route_stage: synthesis
+    required_roles:
+      - synthesizer
+    capability: synthesis
+    assignment_mode: single
+    selection_strategy: pinned_agent
+    independence_class: none
+    lease_profile: orchestration_scope
+    fallback: escalation_lane
+    timeout_seconds: 900
+
+  escalation_lane:
+    route_stage: synthesis
+    required_roles:
+      - orchestrator
+    capability: escalation
+    assignment_mode: single
+    selection_strategy: pinned_agent
+    independence_class: none
+    lease_profile: orchestration_scope
+    fallback: manual_intervention_lane
+    timeout_seconds: 900
+
+  manual_intervention_lane:
+    route_stage: approval
+    required_roles:
+      - approver
+    capability: manual_intervention
+    assignment_mode: manual
+    selection_strategy: manual_assignment
+    independence_class: human_independent_required
+    lease_profile: approval_window
+    fallback: null
+    timeout_seconds: 86400

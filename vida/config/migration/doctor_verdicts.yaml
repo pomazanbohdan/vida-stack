@@ -1,0 +1,24 @@
+artifact_name: doctor_verdicts
+artifact_type: doctor_verdicts
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+overlay_source: vida.config.yaml
+framework_self_diagnosis:
+  enabled: true
+  silent_mode: true
+  auto_capture_bugs: true
+  parent_issue: vida-stack-2d9
+verdicts:
+  compatible:
+    blocking: false
+  compatible_with_migration_required:
+    blocking: false
+  incompatible:
+    blocking: true
+  insufficient_evidence:
+    blocking: true
+  doctor_blocking:
+    blocking: true
+  unsafe_to_boot:
+    blocking: true

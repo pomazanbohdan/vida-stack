@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VIDA Receipt Schema",
+  "type": "object",
+  "required": [
+    "receipt_id",
+    "receipt_type",
+    "entity_type",
+    "entity_id",
+    "machine",
+    "event",
+    "actor",
+    "timestamp",
+    "config_revision"
+  ],
+  "properties": {
+    "receipt_id": { "type": "string" },
+    "receipt_type": { "type": "string" },
+    "entity_type": { "type": "string" },
+    "entity_id": { "type": "string" },
+    "machine": { "type": "string" },
+    "event": { "type": "string" },
+    "actor": { "type": "string" },
+    "timestamp": { "type": "string" },
+    "config_revision": { "type": "string" },
+    "prior_state": {},
+    "new_state": {},
+    "route_ref": { "type": ["string", "null"] },
+    "proof_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

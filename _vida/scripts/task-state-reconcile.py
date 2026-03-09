@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -13,10 +14,10 @@ from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent.parent
-ISSUES_JSONL = ROOT_DIR / ".beads" / "issues.jsonl"
-TODO_TOOL = SCRIPT_DIR / "todo-tool.sh"
+VIDA_LEGACY_BIN = ROOT_DIR / "_vida" / "scripts-nim" / "vida-legacy"
+TURSO_PYTHON = str(ROOT_DIR / ".venv" / "bin" / "python3")
+TODO_TOOL = SCRIPT_DIR / "todo-runtime.py"
 BOOT_PROFILE = SCRIPT_DIR / "boot-profile.sh"
-VERIFY_LOG = SCRIPT_DIR / "beads-verify-log.sh"
 RUN_GRAPH = SCRIPT_DIR / "run-graph.py"
 
 
@@ -31,19 +32,27 @@ def load_module(name: str, path: Path):
 
 
 def load_issue(task_id: str) -> dict[str, Any]:
-    if not ISSUES_JSONL.exists():
+    if not VIDA_LEGACY_BIN.exists():
         return {}
-    for raw_line in ISSUES_JSONL.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if str(payload.get("id", "")).strip() == task_id:
-            return payload if isinstance(payload, dict) else {}
-    return {}
+    completed = subprocess.run(
+        [str(VIDA_LEGACY_BIN), "task", "show", task_id, "--json"],
+        cwd=ROOT_DIR,
+        env={
+            **os.environ,
+            "VIDA_ROOT": str(ROOT_DIR),
+            "VIDA_LEGACY_TURSO_PYTHON": TURSO_PYTHON,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return {}
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def run_json_command(command: list[str]) -> dict[str, Any]:
@@ -67,7 +76,7 @@ def run_json_command(command: list[str]) -> dict[str, Any]:
 
 
 def todo_payload(task_id: str) -> dict[str, Any]:
-    return run_json_command(["bash", str(TODO_TOOL), "ui-json", task_id])
+    return run_json_command(["python3", str(TODO_TOOL), "ui-json", task_id])
 
 
 def verify_boot_receipt(task_id: str) -> bool:
@@ -83,8 +92,13 @@ def verify_boot_receipt(task_id: str) -> bool:
 
 def verify_log_ok(task_id: str) -> bool:
     completed = subprocess.run(
-        ["bash", str(VERIFY_LOG), "--task", task_id],
+        [str(VIDA_LEGACY_BIN), "beads", "verify", "--task", task_id],
         cwd=ROOT_DIR,
+        env={
+            **os.environ,
+            "VIDA_ROOT": str(ROOT_DIR),
+            "VIDA_LEGACY_TURSO_PYTHON": TURSO_PYTHON,
+        },
         capture_output=True,
         text=True,
         check=False,

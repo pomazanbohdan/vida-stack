@@ -12,7 +12,14 @@ from typing import Any
 ROOT_DIR = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT_DIR / "vida.config.yaml"
 TOP_LEVEL_REQUIRED = {"project", "protocol_activation"}
-TOP_LEVEL_OPTIONAL = {"language_policy", "pack_router_keywords", "project_bootstrap", "agent_system", "framework_self_diagnosis"}
+TOP_LEVEL_OPTIONAL = {
+    "language_policy",
+    "pack_router_keywords",
+    "project_bootstrap",
+    "agent_system",
+    "framework_self_diagnosis",
+    "autonomous_execution",
+}
 PROJECT_KEYS = {"id", "overlay_version"}
 PROTOCOL_ACTIVATION_KEYS = {"agent_system"}
 LANGUAGE_POLICY_KEYS = {"user_communication", "reasoning", "documentation", "todo_protocol"}
@@ -42,6 +49,13 @@ FRAMEWORK_SELF_DIAGNOSIS_KEYS = {
     "quality_token_efficiency",
     "session_reflection_criteria",
 }
+AUTONOMOUS_EXECUTION_KEYS = {
+    "next_task_boundary_analysis",
+    "next_task_boundary_report",
+    "next_task_boundary_report_gating",
+    "dependent_coverage_autoupdate",
+}
+AUTONOMOUS_EXECUTION_REPORT_VALUES = {"off", "brief_plan"}
 AGENT_SYSTEM_KEYS = {"init_on_boot", "mode", "state_owner", "max_parallel_agents", "subagents", "routing", "scoring"}
 AGENT_SYSTEM_MODES = {"native", "hybrid", "disabled"}
 SUBAGENT_KEYS = {
@@ -552,6 +566,38 @@ def _validate_framework_self_diagnosis(payload: dict[str, Any], errors: list[str
         errors.append(f"{path}.silent_mode: must be true when enabled=true")
 
 
+def _validate_autonomous_execution(payload: dict[str, Any], errors: list[str]) -> None:
+    path = "autonomous_execution"
+    _validate_allowed_keys(payload, AUTONOMOUS_EXECUTION_KEYS, path, errors)
+    for key in {
+        "next_task_boundary_analysis",
+        "next_task_boundary_report_gating",
+        "dependent_coverage_autoupdate",
+    }:
+        if key in payload:
+            _validate_bool_field(payload, key, path, errors)
+    if "next_task_boundary_report" in payload:
+        _validate_enum_field(
+            payload,
+            "next_task_boundary_report",
+            path,
+            errors,
+            allowed=AUTONOMOUS_EXECUTION_REPORT_VALUES,
+            required=True,
+        )
+    analysis = payload.get("next_task_boundary_analysis")
+    if analysis is False:
+        errors.append(
+            f"{path}.next_task_boundary_analysis: may not be false because internal boundary analysis is framework-required"
+        )
+    report = payload.get("next_task_boundary_report")
+    gating = payload.get("next_task_boundary_report_gating")
+    if report == "off" and gating is True:
+        errors.append(
+            f"{path}.next_task_boundary_report_gating: must be false when next_task_boundary_report=off"
+        )
+
+
 def _validate_dispatch(subagent_name: str, dispatch_cfg: dict[str, Any], errors: list[str]) -> None:
     path = f"agent_system.subagents.{subagent_name}.dispatch"
     _validate_allowed_keys(dispatch_cfg, DISPATCH_KEYS, path, errors)
@@ -995,6 +1041,9 @@ def validate_config(cfg: dict[str, Any]) -> list[str]:
     framework_self_diagnosis_cfg = _require_mapping(cfg, "framework_self_diagnosis", "root", errors, required=False)
     if framework_self_diagnosis_cfg is not None:
         _validate_framework_self_diagnosis(framework_self_diagnosis_cfg, errors)
+    autonomous_execution_cfg = _require_mapping(cfg, "autonomous_execution", "root", errors, required=False)
+    if autonomous_execution_cfg is not None:
+        _validate_autonomous_execution(autonomous_execution_cfg, errors)
 
     agent_cfg = _require_mapping(cfg, "agent_system", "root", errors, required=agent_system_active)
     if agent_cfg is not None:

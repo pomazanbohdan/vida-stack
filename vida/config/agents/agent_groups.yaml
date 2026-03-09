@@ -1,0 +1,61 @@
+artifact_name: agent_groups
+artifact_type: agent_groups
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+groups:
+  analysis_pool:
+    workflow_role: analyst
+    selector:
+      capability_band_any:
+        - read_only
+        - review_safe
+        - implementation_safe
+        - architecture_safe
+      require_available: true
+
+  writer_pool:
+    workflow_role: writer
+    selector:
+      capability_band_any:
+        - bounded_write_safe
+        - implementation_safe
+      write_scopes_any:
+        - scoped_only
+        - sandbox
+        - patch
+        - orchestrator_native
+        - external_write
+        - repo_write
+      require_available: true
+
+  coach_pool:
+    workflow_role: coach
+    selector:
+      capability_band_any:
+        - review_safe
+      require_available: true
+
+  verification_pool:
+    workflow_role: verifier
+    selector:
+      capability_band_any:
+        - review_safe
+      require_available: true
+
+  synthesis_pool:
+    workflow_role: synthesizer
+    selector:
+      agent_types_any:
+        - system_agent
+      orchestration_tiers_any:
+        - senior
+      require_available: true
+
+  approval_pool:
+    workflow_role: approver
+    manual_only: true
+    selector:
+      agent_types_any:
+        - human_agent
+      require_available: true

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,7 +15,8 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR = SCRIPT_DIR.parent.parent
 DEFAULT_MANIFEST_PATH = ROOT_DIR / ".vida" / "state" / "framework-wave-task-sync.json"
-BR_MUTATION_QUEUE_SCRIPT = SCRIPT_DIR / "br-mutation-queue.py"
+VIDA_LEGACY_BIN = ROOT_DIR / "_vida" / "scripts-nim" / "vida-legacy"
+TURSO_PYTHON = str(ROOT_DIR / ".venv" / "bin" / "python3")
 
 
 def load_json(path: Path, default: Any) -> Any:
@@ -26,41 +28,44 @@ def load_json(path: Path, default: Any) -> Any:
         return default
 
 
-def run_br_read(*args: str) -> dict[str, Any]:
-    for extra_args in (["--json"], ["--json", "--no-db"]):
-        completed = subprocess.run(
-            ["br", *args, *extra_args],
-            cwd=str(ROOT_DIR),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode != 0:
-            continue
-        payload = json.loads((completed.stdout or "").strip())
-        if isinstance(payload, list):
-            if not payload or not isinstance(payload[0], dict):
-                raise RuntimeError("br read returned empty/non-object list payload")
-            return payload[0]
-        if not isinstance(payload, dict):
-            raise RuntimeError("br read returned non-object payload")
-        return payload
-    raise RuntimeError((completed.stderr or completed.stdout or "br read failed").strip())
-
-
-def run_br_mutation(args: list[str]) -> dict[str, Any]:
+def run_task_read(task_id: str) -> dict[str, Any]:
+    if not VIDA_LEGACY_BIN.exists():
+        raise RuntimeError(f"vida-legacy binary is missing: {VIDA_LEGACY_BIN}")
+    env = os.environ.copy()
+    env.setdefault("VIDA_ROOT", str(ROOT_DIR))
+    env.setdefault("VIDA_LEGACY_TURSO_PYTHON", TURSO_PYTHON)
     completed = subprocess.run(
-        [sys.executable, str(BR_MUTATION_QUEUE_SCRIPT), "br", "--", *args, "--json", "--no-db"],
+        [str(VIDA_LEGACY_BIN), "task", "show", task_id, "--json"],
         cwd=str(ROOT_DIR),
+        env=env,
         capture_output=True,
         text=True,
         check=False,
     )
     if completed.returncode != 0:
-        raise RuntimeError((completed.stderr or completed.stdout or "br mutation failed").strip())
+        raise RuntimeError((completed.stderr or completed.stdout or "vida-legacy task show failed").strip())
     payload = json.loads((completed.stdout or "").strip())
-    if isinstance(payload, list):
-        return payload[0] if payload else {}
+    if not isinstance(payload, dict):
+        raise RuntimeError("vida-legacy task show returned non-object payload")
+    return payload
+
+
+def run_task_mutation(args: list[str]) -> dict[str, Any]:
+    completed = subprocess.run(
+        [str(VIDA_LEGACY_BIN), "task", *args, "--json"],
+        cwd=str(ROOT_DIR),
+        env={
+            **os.environ,
+            "VIDA_ROOT": str(ROOT_DIR),
+            "VIDA_LEGACY_TURSO_PYTHON": TURSO_PYTHON,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError((completed.stderr or completed.stdout or "vida-legacy task mutation failed").strip())
+    payload = json.loads((completed.stdout or "").strip())
     return payload if isinstance(payload, dict) else {}
 
 
@@ -70,14 +75,14 @@ def sync_task(entry: dict[str, Any]) -> dict[str, Any]:
     reason = str(entry.get("reason", "")).strip()
     if not task_id or not target_status:
         return {"status": "skipped", "reason": "invalid_manifest_entry", "entry": entry}
-    current = run_br_read("show", task_id)
+    current = run_task_read(task_id)
     current_status = str(current.get("status", "")).strip()
     if current_status == target_status:
         return {"status": "noop", "task_id": task_id, "current_status": current_status}
     if target_status == "closed":
-        result = run_br_mutation(["close", task_id, "--reason", reason or "framework task synchronized from manifest"])
+        result = run_task_mutation(["close", task_id, "--reason", reason or "framework task synchronized from manifest"])
         return {"status": "closed", "task_id": task_id, "result": result}
-    result = run_br_mutation(["update", task_id, "--status", target_status])
+    result = run_task_mutation(["update", task_id, "--status", target_status])
     return {"status": "updated", "task_id": task_id, "result": result}
 
 

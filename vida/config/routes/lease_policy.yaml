@@ -1,0 +1,47 @@
+artifact_name: lease_policy
+artifact_type: lease_policy
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+lease_profiles:
+  shared_read_only:
+    exclusive: false
+    renewable: true
+    default_duration_seconds: 1800
+    scope: read_only
+
+  exclusive_mutation:
+    exclusive: true
+    renewable: true
+    default_duration_seconds: 2400
+    scope: mutation
+
+  scoped_review:
+    exclusive: false
+    renewable: true
+    default_duration_seconds: 1800
+    scope: review
+
+  scoped_verification:
+    exclusive: false
+    renewable: true
+    default_duration_seconds: 2400
+    scope: verification
+
+  approval_window:
+    exclusive: false
+    renewable: true
+    default_duration_seconds: 86400
+    scope: approval
+
+  orchestration_scope:
+    exclusive: true
+    renewable: true
+    default_duration_seconds: 900
+    scope: orchestration
+
+rules:
+  only_leased_agent_may_mutate: true
+  expired_execution_lease_invalidates_result: true
+  verification_must_not_reuse_execution_lease: true
+  approval_must_not_reuse_execution_lease: true

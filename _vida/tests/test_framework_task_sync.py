@@ -41,8 +41,8 @@ class FrameworkTaskSyncTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with mock.patch.object(self.module, "run_br_read", return_value={"id": "mobile-1hv.5", "status": "open"}), \
-                mock.patch.object(self.module, "run_br_mutation", return_value={"id": "mobile-1hv.5", "status": "closed"}) as mocked_mutation:
+            with mock.patch.object(self.module, "run_task_read", return_value={"id": "mobile-1hv.5", "status": "open"}), \
+                mock.patch.object(self.module, "run_task_mutation", return_value={"id": "mobile-1hv.5", "status": "closed"}) as mocked_mutation:
                 result = self.module.sync_manifest(manifest_path)
 
         mocked_mutation.assert_called_once_with(["close", "mobile-1hv.5", "--reason", "done"])

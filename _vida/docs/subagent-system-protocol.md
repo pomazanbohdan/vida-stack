@@ -21,6 +21,12 @@ Cost-priority default:
 3. bridge fallback should be explicit and deterministic,
 4. internal subagents should remain the senior lane under orchestrator control.
 
+Debug-escalation default:
+
+1. when repeated technical failures trigger `_vida/docs/debug-escalation-protocol.md`, the default first parallel lane should include a bounded external catch/review agent when one is eligible,
+2. this diagnostic lane is independent evidence, not writer ownership,
+3. repeated local debugging without eligible external review should require an explicit blocker or exhaustion receipt.
+
 ## Scope
 
 This protocol governs the system level above single-dispatch prompts:

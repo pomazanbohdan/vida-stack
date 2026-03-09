@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VIDA Machine Spec",
+  "type": "object",
+  "required": [
+    "artifact_name",
+    "artifact_type",
+    "version",
+    "revision",
+    "compatibility_class",
+    "entity_type"
+  ],
+  "properties": {
+    "artifact_name": { "type": "string" },
+    "artifact_type": { "const": "machine" },
+    "version": { "type": "integer", "minimum": 1 },
+    "revision": { "type": "string" },
+    "compatibility_class": { "type": "string" },
+    "entity_type": { "type": "string" },
+    "states": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "axes": { "type": "object" },
+    "events": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "transitions": {
+      "type": "array",
+      "items": { "type": "object" }
+    }
+  },
+  "additionalProperties": true
+}

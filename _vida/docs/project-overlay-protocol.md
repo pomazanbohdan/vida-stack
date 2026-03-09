@@ -91,6 +91,8 @@ Optional top-level sections:
 1. `language_policy`
 2. `pack_router_keywords`
 3. `project_bootstrap`
+4. `framework_self_diagnosis`
+5. `autonomous_execution`
 
 Supported `language_policy` keys:
 
@@ -125,6 +127,20 @@ Supported `project_bootstrap` keys:
 10. `agent_system_doc`
 11. `allow_scaffold_missing`
 12. `require_launch_confirmation`
+
+Supported `autonomous_execution` keys:
+
+1. `next_task_boundary_analysis`
+2. `next_task_boundary_report`
+3. `next_task_boundary_report_gating`
+4. `dependent_coverage_autoupdate`
+
+Autonomous execution overlay rule:
+
+1. `autonomous_execution` may tune next-task boundary behavior only within framework law.
+2. It may disable user-facing boundary reporting, but it may not disable required internal next-task boundary analysis.
+3. It may not convert a non-gating boundary report into silent scope widening.
+4. Approval gating still belongs to `_vida/docs/task-approval-loop-protocol.md`.
 
 Current supported `agent_system` keys:
 
@@ -221,30 +237,52 @@ Supported routing-level keys:
 1. `subagents`
 2. `models`
 3. `profiles`
-4. `write_scope`
-5. `verification_gate`
-6. `max_runtime_seconds`
-7. `min_output_bytes`
-8. `fanout_subagents`
-9. `fanout_min_results`
-10. `merge_policy`
-11. `dispatch_required`
-12. `external_first_required`
-13. `web_search_required`
-14. `bridge_fallback_subagent`
-15. `internal_escalation_trigger`
-16. `verification_route_task_class`
-17. `independent_verification_required`
-18. `graph_strategy`
-19. `deterministic_first`
-20. `budget_policy`
-21. `max_budget_units`
-22. `max_cli_subagent_calls`
-23. `max_verification_passes`
-24. `max_fallback_hops`
-25. `max_total_runtime_seconds`
-26. `problem_party_required`
-27. `problem_party_task_class`
+4. `analysis_required`
+5. `analysis_route_task_class`
+6. `analysis_fanout_subagents`
+7. `analysis_fanout_min_results`
+8. `analysis_merge_policy`
+9. `analysis_external_first_required`
+10. `analysis_receipt_required`
+11. `analysis_zero_budget_required`
+12. `analysis_default_in_boot`
+13. `coach_required`
+14. `coach_route_task_class`
+15. `write_scope`
+16. `verification_gate`
+17. `max_runtime_seconds`
+18. `min_output_bytes`
+19. `fanout_subagents`
+20. `fanout_min_results`
+21. `merge_policy`
+22. `dispatch_required`
+23. `external_first_required`
+24. `web_search_required`
+25. `local_execution_allowed`
+26. `local_execution_preferred`
+27. `cli_dispatch_required_if_delegating`
+28. `direct_internal_bypass_forbidden`
+29. `bridge_fallback_subagent`
+30. `internal_escalation_trigger`
+31. `allowed_internal_reasons`
+32. `verification_route_task_class`
+33. `independent_verification_required`
+34. `graph_strategy`
+35. `deterministic_first`
+36. `budget_policy`
+37. `max_budget_units`
+38. `max_cli_subagent_calls`
+39. `max_coach_passes`
+40. `max_verification_passes`
+41. `max_fallback_hops`
+42. `max_total_runtime_seconds`
+43. `problem_party_required`
+44. `problem_party_task_class`
+
+Derived route-receipt note:
+
+1. `dispatch_policy.internal_escalation_allowed` is a runtime-derived receipt field, not a project-owned overlay key.
+2. The runtime derives it from the presence of lawful `allowed_internal_reasons` and the active route policy.
 
 Validation scope:
 

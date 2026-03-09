@@ -71,6 +71,12 @@ Default rule:
 2. Non-trivial does not automatically mean `br`/TODO.
 3. Explicit VIDA/framework self-diagnosis requests are a special execution-in-chat path: execute the diagnosis now, but keep it outside TODO/`br` unless the user explicitly asks for tracked task flow.
 
+Entry rule for new sessions:
+1. If the incoming or resumed request is already clearly `execution_flow` or `artifact_flow`, do not begin write-producing work from chat mode.
+2. Resolve the lawful `br` task first, then enter canonical TODO/`br` flow immediately.
+3. Keep implementation, artifact drafting, and multi-step execution inside TODO block lifecycle from the start of the session, not after the first code change.
+4. When autonomous follow-through mode is active and the next lawful step is already determined by canonical protocols, continue execution without asking the user to reconfirm the step.
+
 Tracked-flow boundary:
 1. route to tracked flow immediately when the deliverable requires any repository/runtime mutation, canonical artifact creation, or multi-step traceable execution,
 2. remain `answer_only` only when the deliverable is fully satisfied by chat and no canonical artifact or state mutation is required,
@@ -83,6 +89,11 @@ TODO/`br` flow is mandatory only when at least one is true:
 2. the request must create or update a formal artifact,
 3. the request is a multi-step execution flow that needs traceability,
 4. a canonical pack/task handoff is part of the deliverable.
+
+Immediate-entry rule:
+1. when the request already satisfies this gate at session start, attach to or create/select the lawful `br` task before implementation,
+2. start tracked execution through the canonical entrypoints from `_vida/docs/todo-protocol.md` and `_vida/docs/beads-protocol.md`,
+3. pre-register planned blocks before non-trivial execution and keep subsequent work inside active TODO block lifecycle.
 
 TODO/`br` flow is forbidden by default when all are true:
 1. the request is `answer_only`,

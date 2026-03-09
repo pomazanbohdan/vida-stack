@@ -18,7 +18,7 @@ ROUTE_RECEIPT_DIR = ROOT_DIR / ".vida" / "logs" / "route-receipts"
 RUN_GRAPH_DIR = ROOT_DIR / ".vida" / "state" / "run-graphs"
 TRACE_EVAL_DIR = ROOT_DIR / ".vida" / "logs" / "trace-evals"
 TRACE_DATASET_DIR = ROOT_DIR / ".vida" / "logs" / "trace-datasets"
-EVAL_PACK_SCRIPT = SCRIPT_DIR / "eval-pack.sh"
+EVAL_PACK_SCRIPT = SCRIPT_DIR / "eval-pack.py"
 
 GRADE_ORDER = ("route_correctness", "fallback_correctness", "budget_correctness", "approval_correctness")
 
@@ -57,7 +57,7 @@ def save_json(path: Path, payload: Any) -> Path:
 def run_eval_pack(task_id: str) -> dict[str, Any]:
     out_path = ROOT_DIR / ".vida" / "logs" / f"eval-pack-{task_id}.json"
     completed = subprocess.run(
-        ["bash", str(EVAL_PACK_SCRIPT), "run", task_id],
+        ["python3", str(EVAL_PACK_SCRIPT), "run", task_id],
         cwd=str(ROOT_DIR),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -65,7 +65,7 @@ def run_eval_pack(task_id: str) -> dict[str, Any]:
         check=False,
     )
     if completed.returncode != 0 and not out_path.exists():
-        raise RuntimeError(completed.stderr.strip() or "eval-pack.sh failed")
+        raise RuntimeError(completed.stderr.strip() or "eval-pack.py failed")
     return load_json(out_path, {})
 
 

@@ -1,0 +1,28 @@
+artifact_name: independence_policy
+artifact_type: policy
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+classes:
+  none:
+    description: No additional actor independence required.
+
+  not_same_agent:
+    description: Assigned agent must differ from the prior mutation-owning agent.
+
+  not_same_role_instance:
+    description: Assigned agent must differ from the prior actor in the same workflow role.
+
+  not_same_route_chain:
+    description: Assigned agent must not appear in the authoring or coach chain for the same routed run.
+
+  human_independent_required:
+    description: Only a human agent can satisfy the independence requirement.
+
+  service_independent_required:
+    description: Only a service agent can satisfy the independence requirement.
+
+defaults:
+  coach_lane: not_same_agent
+  verification_lane: not_same_route_chain
+  approval_lane: human_independent_required

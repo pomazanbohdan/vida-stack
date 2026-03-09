@@ -1,0 +1,31 @@
+artifact_name: proof_taxonomy
+artifact_type: proof_taxonomy
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+proof_categories:
+  - artifact_manifest
+  - test_report
+  - diff_summary
+  - review_findings
+  - verification_evidence
+  - approval_note
+  - doctor_output
+  - migration_report
+  - execution_log_excerpt
+  - policy_evaluation_snapshot
+mapping:
+  closure_policy:
+    required:
+      - artifact_manifest
+      - verification_evidence
+
+  migration_boot:
+    required:
+      - migration_report
+      - doctor_output
+
+  risky_approval:
+    required:
+      - approval_note
+      - verification_evidence

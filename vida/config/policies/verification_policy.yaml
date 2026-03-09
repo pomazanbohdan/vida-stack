@@ -1,0 +1,39 @@
+artifact_name: verification_policy
+artifact_type: policy
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+default_mode: single_verifier
+allowed_aggregation_policies:
+  - single_verifier
+  - unanimous
+  - majority
+  - weighted_majority
+  - human_tiebreak
+  - strict_quorum
+proof_categories:
+  - artifact_manifest
+  - test_report
+  - verification_evidence
+  - review_findings
+  - policy_evaluation_snapshot
+rules:
+  verifier_independence:
+    required_class: not_same_route_chain
+
+  minimum_verifier_count:
+    single_verifier: 1
+    unanimous: 2
+    majority: 3
+    weighted_majority: 3
+    human_tiebreak: 2
+    strict_quorum: 3
+
+  proof_category_coverage:
+    minimum_required:
+      - artifact_manifest
+      - verification_evidence
+
+  lawful_fallback_when_no_eligible_verifier:
+    mode: explicit_receipt_only
+    required_receipt: assignment_exhausted_receipt

@@ -83,6 +83,8 @@ Canonical examples:
 7. `_vida/docs/implement-execution-protocol.md`
 8. `_vida/docs/subagent-system-protocol.md`
 9. `_vida/docs/problem-party-protocol.md`
+10. `_vida/docs/autonomous-execution-protocol.md`
+11. `_vida/docs/execution-priority-protocol.md`
 
 Rule:
 
@@ -124,6 +126,8 @@ Rule:
 | raw inputs are mixed, scope-bearing, or negotiation-heavy | `spec-intake-protocol.md` |
 | non-equivalent change is visible | `spec-delta-protocol.md` |
 | implementation route selected | `implement-execution-protocol.md` |
+| plan/spec/task pool is settled and the user wants continued execution to completion | `autonomous-execution-protocol.md` |
+| tracked execution must choose between multiple lawful next tasks or handle reprioritization | `execution-priority-protocol.md` |
 | subagent mode active for eligible work | `subagent-system-protocol.md` |
 | bounded conflict escalation is authorized | `problem-party-protocol.md` |
 | task appears stale, done-but-open, or drifted | `task-state-reconciliation-protocol.md` |

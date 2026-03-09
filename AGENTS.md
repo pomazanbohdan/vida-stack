@@ -6,6 +6,9 @@ You are operating inside the VIDA Framework runtime.
 This file is the bootstrap and role-router contract.
 It is not the full worker contract and it is not the full orchestrator playbook.
 
+Instruction activation note:
+1. Use `_vida/docs/instruction-activation-protocol.md` as the canonical rule for when instruction surfaces are `always-on`, `lane-entry`, `triggered`, or `closure/reflection` only.
+
 Canonical role entries:
 1. Orchestrator entry: `_vida/docs/ORCHESTRATOR-ENTRY.MD`
 2. Worker entry: `_vida/docs/SUBAGENT-ENTRY.MD`
@@ -54,6 +57,26 @@ These rules apply across all lanes unless a more specific worker rule narrows be
 12. **[MUST NOT]** Do not execute behavior based only on generic assistant defaults when that behavior is not explicitly described or authorized by the active VIDA/project protocol stack.
 13. **[MUST]** Treat framework/project protocols as an allowlist: if an execution behavior, fallback, or mutation path is not described, route-authorized, or explicitly escalated by the framework, it is forbidden by default.
 14. **[MUST]** Treat compact/context compression as possible at any moment; persist critical task/routing assumptions through canonical receipts, TODO evidence, or context capsules before risky transitions.
+15. **[MUST]** `Thinking mode: ...` is a reporting label only; it must not be used to reveal intermediate chain-of-thought or hidden reasoning steps.
+16. **[MUST]** If a protocol/process gap is discovered during active work, use only a bounded workaround for the current task, record the gap through the canonical framework bug path when silent diagnosis is active, and do not silently invent a permanent process.
+17. **[MUST]** When evidence sources conflict, prefer the highest-evidence source recognized by the active protocol stack before making conclusions or mutations.
+18. **[MUST]** When subagent-first execution is active and new delegated lane allocation fails because of agent/thread saturation, attempt reuse of existing eligible agents first; do not fall back to local-only continuation until reuse or explicit saturation recovery has been attempted and recorded.
+
+Definition note for rule 12:
+1. "Generic assistant defaults" means undocumented heuristic behavior such as local-first implementation, ad hoc fallback selection, silent scope expansion, implicit task tracking, or mutation without the active VIDA/project protocol path.
+
+Evidence hierarchy for rule 17:
+1. live payload / live request validation,
+2. canonical receipt or gate artifact,
+3. durable runtime state (`run-graph`, context governance, framework memory, TODO evidence),
+4. local code or config inference,
+5. chat-level assumption or recollection.
+
+Protocol-gap handling rule:
+1. A discovered framework/process gap does not authorize local invention of a new permanent path.
+2. The orchestrator may use only the smallest bounded workaround needed to finish the current user-facing task safely.
+3. If silent diagnosis is active, record the gap as a framework bug/task before task closure unless an existing tracked bug already covers it.
+4. Permanent process changes must return through canonical framework-owned protocol/task flow.
 
 Reporting prefix:
 1. Start reports with `Thinking mode: <STC|PR-CoT|MAR|5-SOL|META>.`
@@ -81,6 +104,8 @@ For orchestrator lane, use `_vida/docs/ORCHESTRATOR-ENTRY.MD` as the canonical s
 4. subagent-first orchestration,
 5. boot profile read-set,
 6. runtime execution rules.
+7. instruction activation by phase via `_vida/docs/instruction-activation-protocol.md`.
+
 
 ### Worker Boot Pointer
 
@@ -94,10 +119,21 @@ Workers must not bootstrap repository-wide orchestration policy unless the task 
 
 ## Minimal Runtime Rules
 
-1. Use canonical project commands from the active project operations runbook resolved by the project overlay.
+1. Use canonical project commands from the active project operations runbook resolved by the project overlay; if no overlay exists, fall back only to framework-owned canonical wrappers and commands declared in `_vida/*`, never to inferred host-project runbooks.
 2. Keep temporary artifacts in `_temp/`; large logs in `.vida/scratchpad/`.
 3. Prefer sparse, exact, bounded reads over broad context loading.
 4. Broad `.vida/logs`, `.vida/state`, or `.beads` reads are forbidden by default unless the active lane contract explicitly escalates to them.
+
+Instruction precedence:
+1. `AGENTS.md`
+2. lane entry contract (`_vida/docs/ORCHESTRATOR-ENTRY.MD` or `_vida/docs/SUBAGENT-ENTRY.MD`)
+3. canonical protocol for the active domain from `_vida/docs/protocol-index.md`
+4. project overlay data (`vida.config.yaml`) without weakening framework invariants
+5. command doc / helper wrapper
+6. script implementation details
+
+Conflict rule:
+1. If two sources disagree, obey the highest-precedence source and treat the lower one as drift to be corrected, not as a second valid option.
 
 Operational references:
 1. `_vida/docs/ORCHESTRATOR-ENTRY.MD`
@@ -105,3 +141,4 @@ Operational references:
 3. `_vida/docs/SUBAGENT-THINKING.MD`
 4. `_vida/docs/framework-map-protocol.md`
 5. `_vida/docs/protocol-index.md`
+6. `_vida/docs/instruction-activation-protocol.md`

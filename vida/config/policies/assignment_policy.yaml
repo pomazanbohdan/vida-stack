@@ -1,0 +1,36 @@
+artifact_name: assignment_policy
+artifact_type: policy
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+overlay_source: vida.config.yaml
+runtime:
+  init_on_boot: true
+  mode: hybrid
+  state_owner: orchestrator_only
+  max_parallel_agents: 3
+selection_strategies:
+  - first_eligible
+  - priority
+  - least_loaded
+  - capability_score
+  - strict_independent
+  - human_required
+  - quorum_set
+  - pinned_agent
+  - fallback_chain
+  - manual_assignment
+scoring:
+  consecutive_failure_limit: 3
+  promotion_score: 75
+  demotion_score: 45
+  probation_success_runs: 2
+  probation_task_runs: 2
+  retirement_failure_limit: 8
+defaults:
+  analysis_lane: capability_score
+  writer_lane: least_loaded
+  coach_lane: strict_independent
+  verification_lane: strict_independent
+  approval_lane: human_required
+  synthesis_lane: pinned_agent

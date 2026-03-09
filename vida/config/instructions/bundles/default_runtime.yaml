@@ -1,0 +1,34 @@
+artifact_name: default_runtime_bundle
+artifact_type: instruction_bundle
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+bundle_order:
+  - system_base
+  - project_overlay
+  - machine_binding
+  - route_overlay
+  - role_overlay
+  - task_overlay
+role_defaults:
+  orchestrator:
+    overlays:
+      - project_overlay
+  analyst:
+    overlays:
+      - project_overlay
+  writer:
+    overlays:
+      - project_overlay
+  coach:
+    overlays:
+      - project_overlay
+  verifier:
+    overlays:
+      - project_overlay
+  approver:
+    overlays:
+      - project_overlay
+  synthesizer:
+    overlays:
+      - project_overlay

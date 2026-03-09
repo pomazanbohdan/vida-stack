@@ -23,6 +23,11 @@ Hard rule:
 5. For command-layer documentation audits, pre-register one TODO block per protocol unit (`/vida-*#CLx`) and keep the pending list visible.
 6. Every planned block should include `next_step` (block_id or `-` for terminal step).
 7. Use rolling-window planning: keep 2-3 upcoming planned blocks visible; expand further plan just-in-time.
+8. When the same technical error repeats twice inside an active block, the block must record an escalation event and switch to `_vida/docs/debug-escalation-protocol.md` before the next substantive fix attempt.
+9. If subagent mode is active and an eligible catch/review lane exists, dispatch that external diagnostic lane in parallel with escalation lookup instead of debugging alone.
+10. Escalation evidence must capture which outside inputs were used: `external_agent`, `primary_source`, `web/google`, or explicit `not_available` receipt.
+11. Completed write-producing slices must receive catch/review coverage when an eligible lane exists; if not, record a protocol-drift finding and correct it.
+12. Progress reporting must not interrupt lawful continuation by itself when continuous autonomous execution is active.
 
 ## 1.1) Silent Framework Diagnosis Integration
 
@@ -217,6 +222,7 @@ Command audit mode:
 8. `block-start` may reopen a previously ended block (clears previous end marker in TODO view and sets status back to `doing`).
 9. When execution focus changes because of a new user instruction, use `beads-workflow.sh redirect` so the current block is closed as `partial` and the replacement block becomes the active `doing` step in one canonical path.
 10. Redirected/superseded blocks must not return to the active TODO backlog; runtime views should surface them as `superseded` instead of `todo`.
+11. When more than one next task/block appears lawful, apply `_vida/docs/execution-priority-protocol.md` before choosing or redirecting.
 
 Protocol-unit rule:
 

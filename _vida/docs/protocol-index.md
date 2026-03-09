@@ -12,6 +12,10 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Tooling/search guide | `_vida/docs/tooling.md` | `_vida/docs/pipelines.md`, `AGENTS.md` |
 | Framework change log | `_vida/CHANGELOG.md` | `_vida/docs/protocol-index.md` |
 | Instruction activation and decomposition | `_vida/docs/instruction-activation-protocol.md` | `AGENTS.md`, `_vida/docs/ORCHESTRATOR-ENTRY.MD`, `_vida/docs/protocol-index.md` |
+| Agent definition runtime contract | `_vida/docs/agent-definition-protocol.md` | `_vida/docs/research/2026-03-08-agentic-agent-definition-system.md`, `_vida/templates/instruction-contract.yaml`, `_vida/templates/prompt-template-config.yaml`, `_vida/tests/test_agent_definition_contract.py` |
+| Autonomous follow-through mode | `_vida/docs/autonomous-execution-protocol.md` | `_vida/docs/implement-execution-protocol.md`, `_vida/docs/todo-protocol.md`, `_vida/docs/beads-protocol.md`, `_vida/docs/subagent-system-protocol.md` |
+| Autonomous next-task selector helper | `_vida/scripts/autonomous-next-task.py` | `_vida/docs/autonomous-execution-protocol.md`, `_vida/docs/execution-priority-protocol.md` |
+| Execution prioritization and reprioritization | `_vida/docs/execution-priority-protocol.md` | `_vida/docs/form-task-protocol.md`, `_vida/docs/todo-protocol.md`, `_vida/docs/implement-execution-protocol.md`, `_vida/docs/autonomous-execution-protocol.md` |
 | Project overlay activation | `_vida/docs/project-overlay-protocol.md` | `vida.config.yaml`, `_vida/templates/vida.config.yaml.template`, `AGENTS.md`, `_vida/scripts/vida-config.py`, `_vida/scripts/boot-profile.sh`, `_vida/scripts/quality-health-check.sh` |
 | Boot packet runtime artifact | `_vida/docs/boot-packet-protocol.md` | `_vida/scripts/boot-packet.py`, `_vida/scripts/boot-profile.sh`, `AGENTS.md`, `_vida/docs/ORCHESTRATOR-ENTRY.MD`, `_vida/docs/SUBAGENT-ENTRY.MD` |
 | Project bootstrap/self-reproduction | `_vida/docs/project-bootstrap-protocol.md` | `_vida/scripts/project-bootstrap.py`, `_vida/templates/vida.config.yaml.template`, `vida.config.yaml` |
@@ -19,6 +23,15 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Silent framework diagnosis | `_vida/docs/silent-framework-diagnosis-protocol.md` | `_vida/scripts/vida-silent-diagnosis.py`, `vida.config.yaml`, `_vida/docs/framework-self-analysis-protocol.md`, `_vida/docs/todo-protocol.md` |
 | Human approval lifecycle | `_vida/docs/human-approval-protocol.md` | `_vida/scripts/human-approval-gate.py`, `_vida/scripts/subagent-dispatch.py`, `_vida/docs/subagent-system-protocol.md`, `_vida/docs/implement-execution-protocol.md` |
 | Framework memory ledger | `_vida/docs/framework-memory-protocol.md` | `_vida/scripts/framework-memory.py`, `_vida/scripts/vida-silent-diagnosis.py`, `_vida/docs/silent-framework-diagnosis-protocol.md` |
+| DB-first runtime ownership | `_vida/docs/plans/2026-03-08-vida-0.3-db-first-runtime-spec.md` | `_vida/docs/plans/2026-03-08-vida-0.3-storage-kernel-spec.md`, `_vida/docs/plans/2026-03-08-vida-0.3-instruction-memory-and-sidecar-spec.md`, `_vida/docs/export-protocol.md` |
+| Export surfaces | `_vida/docs/export-protocol.md` | `_vida/docs/plans/2026-03-08-vida-0.3-db-first-runtime-spec.md`, `_vida/docs/plans/2026-03-08-vida-0.3-migration-kernel-spec.md` |
+| Spec sync after autonomous changes | `_vida/docs/spec-sync-protocol.md` | `_vida/docs/autonomous-execution-protocol.md`, `_vida/docs/implement-execution-protocol.md` |
+| Spec freshness and newer-decision precedence | `_vida/docs/spec-freshness-protocol.md` | `_vida/docs/spec-sync-protocol.md`, `_vida/docs/task-approval-loop-protocol.md` |
+| Protocol self-diagnosis and runtime drift checks | `_vida/docs/protocol-self-diagnosis-protocol.md` | `_vida/docs/todo-protocol.md`, `_vida/docs/autonomous-execution-protocol.md`, `_vida/docs/subagent-system-protocol.md`, `_vida/docs/spec-sync-protocol.md`, `_vida/docs/silent-framework-diagnosis-protocol.md` |
+| Debug escalation after repeated errors | `_vida/docs/debug-escalation-protocol.md` | `_vida/docs/autonomous-execution-protocol.md`, `_vida/docs/spec-sync-protocol.md` |
+| External-agent and web escalation for repeated technical failures | `_vida/docs/debug-escalation-protocol.md` | `_vida/docs/subagent-system-protocol.md`, `_vida/docs/todo-protocol.md`, `_vida/docs/autonomous-execution-protocol.md` |
+| Library evaluation and live alternatives matrix | `_vida/docs/library-evaluation-protocol.md` | `_vida/docs/debug-escalation-protocol.md`, `_vida/docs/spec-sync-protocol.md` |
+| User approval loop between tasks | `_vida/docs/task-approval-loop-protocol.md` | `_vida/docs/autonomous-execution-protocol.md`, `_vida/docs/human-approval-protocol.md` |
 | Document lifecycle and freshness | `_vida/docs/document-lifecycle-protocol.md` | `_vida/scripts/doc-lifecycle.py`, `_vida/docs/project-overlay-protocol.md`, `_vida/docs/silent-framework-diagnosis-protocol.md` |
 | Context governance ledger | `_vida/docs/context-governance-protocol.md` | `_vida/scripts/context-governance.py`, `_vida/scripts/subagent-dispatch.py`, `_vida/scripts/framework-operator-status.py`, `_vida/docs/future.md` |
 | Durable run-graph ledger | `_vida/docs/run-graph-protocol.md` | `_vida/scripts/run-graph.py`, `_vida/docs/future.md`, `_vida/scripts/subagent-dispatch.py` |

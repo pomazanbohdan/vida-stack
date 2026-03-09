@@ -1,0 +1,62 @@
+artifact_name: receipt_taxonomy
+artifact_type: receipt_taxonomy
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+classes:
+  transition:
+    - task_state_changed_receipt
+    - execution_plan_state_changed_receipt
+    - route_state_changed_receipt
+    - coach_state_changed_receipt
+    - verification_state_changed_receipt
+    - approval_state_changed_receipt
+    - boot_state_changed_receipt
+
+  routing:
+    - route_resolved_receipt
+    - assignment_requested_receipt
+    - agent_assigned_receipt
+    - lease_issued_receipt
+    - dispatch_started_receipt
+    - fallback_selected_receipt
+    - escalation_triggered_receipt
+    - assignment_exhausted_receipt
+    - manual_intervention_required_receipt
+
+  execution:
+    - execution_started_receipt
+    - execution_completed_receipt
+    - execution_failed_receipt
+    - execution_paused_receipt
+    - execution_resumed_receipt
+    - rework_requested_receipt
+
+  coach:
+    - coach_requested_receipt
+    - coach_feedback_issued_receipt
+    - coach_rework_receipt
+
+  verification:
+    - verification_requested_receipt
+    - verifier_assigned_receipt
+    - verification_partial_receipt
+    - verification_aggregate_receipt
+    - verification_passed_receipt
+    - verification_failed_receipt
+    - verification_inconclusive_receipt
+
+  approval:
+    - approval_requested_receipt
+    - approval_received_receipt
+    - approval_rejected_receipt
+    - approval_expired_receipt
+    - approval_escalated_receipt
+
+  boot_migration:
+    - compat_checked_receipt
+    - migration_required_receipt
+    - migration_applied_receipt
+    - doctor_verdict_receipt
+    - boot_allowed_receipt
+    - boot_blocked_receipt

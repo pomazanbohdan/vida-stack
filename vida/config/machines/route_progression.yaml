@@ -1,0 +1,134 @@
+artifact_name: route_progression
+artifact_type: machine
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+entity_type: RoutedRun
+canonical_source_refs:
+  - _vida/docs/plans/2026-03-08-vida-0.3-route-and-receipt-spec.md
+  - _vida/docs/plans/2026-03-08-vida-0.3-state-kernel-schema-spec.md
+  - vida/docs/spec/canonical-machine-map.md
+purpose: Canonical route-stage progression, stage status, lawful assignment, fallback, and escalation metadata.
+axes:
+  stage:
+    initial: analysis
+    values:
+      - analysis
+      - writer
+      - coach
+      - verification
+      - approval
+      - synthesis
+  stage_status:
+    initial: pending
+    values:
+      - pending
+      - ready
+      - running
+      - completed
+      - blocked
+      - failed
+      - skipped
+events:
+  - route_resolved
+  - assignment_requested
+  - agent_assigned
+  - lease_issued
+  - stage_started
+  - stage_completed
+  - stage_blocked
+  - fallback_selected
+  - escalation_triggered
+  - route_completed
+  - route_failed
+guards_catalog:
+  - route_metadata_present
+  - required_role_available
+  - instruction_bundle_composed
+  - independence_satisfied
+  - lease_valid
+  - fallback_allowed
+  - escalation_lawful
+stage_routes:
+  analysis: analysis_lane
+  writer: writer_lane
+  coach: coach_lane
+  verification: verification_lane
+  approval: approval_lane
+  synthesis: synthesis_lane
+transitions:
+  - name: resolve_stage
+    command: route.resolve
+    from_status:
+      - pending
+    to_status: ready
+    guards:
+      all_of:
+        - route_metadata_present
+        - instruction_bundle_composed
+    receipts:
+      - route_resolved_receipt
+
+  - name: assign_stage
+    command: route.assign
+    from_status:
+      - ready
+    to_status: running
+    guards:
+      all_of:
+        - required_role_available
+        - independence_satisfied
+        - lease_valid
+    receipts:
+      - assignment_requested_receipt
+      - agent_assigned_receipt
+      - lease_issued_receipt
+      - dispatch_started_receipt
+
+  - name: block_stage
+    command: route.block
+    from_status:
+      - pending
+      - ready
+      - running
+    to_status: blocked
+    guards:
+      all_of:
+        - route_metadata_present
+    receipts:
+      - route_state_changed_receipt
+
+  - name: complete_stage
+    command: route.complete
+    from_status:
+      - running
+    to_status: completed
+    guards:
+      all_of:
+        - instruction_bundle_composed
+    receipts:
+      - route_state_changed_receipt
+
+  - name: fallback_stage
+    command: route.fallback
+    from_status:
+      - blocked
+      - failed
+    to_status: ready
+    guards:
+      all_of:
+        - fallback_allowed
+    receipts:
+      - fallback_selected_receipt
+
+  - name: escalate_stage
+    command: route.escalate
+    from_status:
+      - blocked
+      - failed
+    to_status: blocked
+    guards:
+      all_of:
+        - escalation_lawful
+    receipts:
+      - escalation_triggered_receipt

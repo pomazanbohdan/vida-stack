@@ -29,7 +29,8 @@ SPEC_DELTA_DIR = LOG_DIR / "spec-deltas"
 DRAFT_EXECUTION_SPEC_DIR = LOG_DIR / "draft-execution-specs"
 RUN_GRAPH_STATE_DIR = ROOT_DIR / ".vida" / "state" / "run-graphs"
 FRAMEWORK_TASK_SYNC_STATE_PATH = ROOT_DIR / ".vida" / "state" / "framework-wave-task-sync.json"
-BR_MUTATION_QUEUE_SCRIPT = SCRIPT_DIR / "br-mutation-queue.py"
+VIDA_LEGACY_BIN = ROOT_DIR / "_vida" / "scripts-nim" / "vida-legacy"
+TURSO_PYTHON = str(ROOT_DIR / ".venv" / "bin" / "python3")
 FRAMEWORK_MUTATION_ROOTS = ("AGENTS.md", "_vida")
 FRAMEWORK_MUTATION_IGNORED_SEGMENTS = {"__pycache__"}
 FRAMEWORK_MUTATION_IGNORED_SUFFIXES = (".pyc",)
@@ -1077,35 +1078,41 @@ def sync_issue_split_follow_up_task(task_id: str, issue_split: dict[str, Any]) -
             "status": "reused",
             "task_id": existing_follow_up,
         }
-    if not BR_MUTATION_QUEUE_SCRIPT.exists():
+    if not VIDA_LEGACY_BIN.exists():
         return {
             "status": "blocked",
-            "reason": "br_mutation_queue_missing",
+            "reason": "vida_legacy_missing",
         }
     cmd = [
-        sys.executable,
-        str(BR_MUTATION_QUEUE_SCRIPT),
-        "br",
-        "--",
-        "create",
-        "--title",
-        issue_split_follow_up_title(task_id, issue_split),
-        "-t",
+        str(VIDA_LEGACY_BIN),
         "task",
-        "-p",
+        "create",
+        task_id + ".1",
+        issue_split_follow_up_title(task_id, issue_split),
+        "--type",
+        "task",
+        "--priority",
         "2",
-        "--parent",
+        "--parent-id",
         task_id,
-        "-d",
+        "--description",
         issue_split_follow_up_description(task_id, issue_split),
         "--labels",
-        "issue-split,follow-up,secondary-slice",
+        "issue-split",
+        "--labels",
+        "follow-up",
+        "--labels",
+        "secondary-slice",
         "--json",
-        "--no-db",
     ]
     completed = subprocess.run(
         cmd,
         cwd=str(ROOT_DIR),
+        env={
+            **os.environ,
+            "VIDA_ROOT": str(ROOT_DIR),
+            "VIDA_LEGACY_TURSO_PYTHON": TURSO_PYTHON,
+        },
         capture_output=True,
         text=True,
         check=False,
@@ -1113,7 +1120,7 @@ def sync_issue_split_follow_up_task(task_id: str, issue_split: dict[str, Any]) -
     if completed.returncode != 0:
         return {
             "status": "failed",
-            "reason": "br_create_failed",
+            "reason": "vida_legacy_create_failed",
             "return_code": completed.returncode,
             "stderr": (completed.stderr or "").strip(),
             "stdout": (completed.stdout or "").strip(),
@@ -1123,10 +1130,11 @@ def sync_issue_split_follow_up_task(task_id: str, issue_split: dict[str, Any]) -
     except json.JSONDecodeError:
         return {
             "status": "failed",
-            "reason": "invalid_br_create_output",
+            "reason": "invalid_vida_legacy_create_output",
             "stdout": (completed.stdout or "").strip(),
         }
-    follow_up_task_id = policy_value(payload.get("id"), "")
+    task_payload = payload.get("task", {}) if isinstance(payload, dict) else {}
+    follow_up_task_id = policy_value(task_payload.get("id"), "")
     if not follow_up_task_id:
         return {
             "status": "failed",

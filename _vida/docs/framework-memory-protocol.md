@@ -8,7 +8,9 @@ Purpose: define one canonical, framework-owned memory ledger for lessons, correc
 2. Framework memory is distinct from:
    - routing scorecards,
    - TODO execution logs,
-   - one-off session reflections.
+   - one-off session reflections,
+   - project memory,
+   - instruction memory.
 3. The minimum memory kinds are:
    - `lesson`
    - `correction`
@@ -39,6 +41,7 @@ Minimum shape:
 1. Silent framework diagnosis may record anomalies automatically when framework bugs are captured.
 2. Session reflection may record anomalies automatically for newly detected framework gaps.
 3. Later operator surfaces may summarize memory counts, repeated anomaly clusters, task-level anomaly concentration, and recent entries, but the ledger itself remains the canonical store.
+4. Framework memory is not the canonical durable store for `Agent Definition`, `Instruction Contract`, `Prompt Template Configuration`, or their sidecars.
 
 ## Commands
 
