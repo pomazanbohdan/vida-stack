@@ -55,9 +55,9 @@ Minimum fields:
 ## Commands
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/human-approval-gate.py record <task_id> <task_class> <review_state> <approved|rejected> --approver-id "<id>" --notes "<notes>"
-python3 docs/framework/history/_vida-source/scripts/human-approval-gate.py status <task_id> <task_class>
-python3 docs/framework/history/_vida-source/scripts/human-approval-gate.py validate <task_id> <task_class> <review_state>
+python3 human-approval-gate.py record <task_id> <task_class> <review_state> <approved|rejected> --approver-id "<id>" --notes "<notes>"
+python3 human-approval-gate.py status <task_id> <task_class>
+python3 human-approval-gate.py validate <task_id> <task_class> <review_state>
 ```
 
 ## Fail-Closed Rule

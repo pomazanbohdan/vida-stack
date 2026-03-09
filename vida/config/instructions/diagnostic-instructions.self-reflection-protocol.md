@@ -25,13 +25,13 @@ Run a self-reflection entry:
 Use the shared execution log channel:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh reflect <task_id> <goal> <constraints> <evidence> <decision> <risks> <next_step> [confidence]
+bash beads-workflow.sh reflect <task_id> <goal> <constraints> <evidence> <decision> <risks> <next_step> [confidence]
 ```
 
 Example:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh reflect bd-34r5 \
+bash beads-workflow.sh reflect bd-34r5 \
   "Normalize AGENTS sections" \
   "Keep boot rules + no duplicate policy blocks" \
   "Diff + protocol checks completed" \

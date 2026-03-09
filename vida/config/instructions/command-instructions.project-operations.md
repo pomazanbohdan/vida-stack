@@ -7,7 +7,7 @@ Framework/runtime policy stays in `vida/config/instructions/*`. App-specific ope
 ## Command Discipline
 
 1. Use only canonical project commands documented in this file; do not invent ad hoc build, run, audit, or packaging commands that bypass project scripts.
-2. Follow the project-specific preflight and execution order documented here; keep project sequencing rules out of `docs/framework/history/_vida-source/*`.
+2. Follow the project-specific preflight and execution order documented here; keep project sequencing rules out of `legacy helper surfaces`.
 3. Run stateful project commands sequentially. This includes dependency resolution, analysis, tests, builds, and scripts that mutate local runtime or cache state.
 
 ## Build And Packaging
@@ -115,7 +115,7 @@ bash scripts/test-connectivity.sh
 ## Ownership Rule
 
 1. If a command is app-specific, document it here and implement it in `scripts/`.
-2. If a command enforces VIDA runtime protocol, keep it in `docs/framework/history/_vida-source/scripts/` and reference it from `vida/config/instructions/*.md`.
+2. If a command enforces VIDA runtime protocol, keep it in `scripts/` and reference it from `vida/config/instructions/*.md`.
 
 -----
 artifact_path: config/command-instructions/project-operations

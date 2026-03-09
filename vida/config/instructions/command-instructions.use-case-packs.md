@@ -24,16 +24,16 @@ Transition note:
 2. they remain migration-only until pack orchestration is either moved into `vida-v0` or intentionally retired,
 3. they must not be read as the final post-cutover canonical runtime home.
 
-1. Detect pack via `bash docs/framework/history/_vida-source/scripts/vida-pack-helper.sh detect "<request>"`.
+1. Detect pack via `bash vida-pack-helper.sh detect "<request>"`.
 2. Start the selected pack session:
-   `bash docs/framework/history/_vida-source/scripts/vida-pack-helper.sh start <task_id> <pack_id> "<goal>" [constraints]`.
+   `bash vida-pack-helper.sh start <task_id> <pack_id> "<goal>" [constraints]`.
 3. Scaffold the pack-specific TaskFlow plan (optional but recommended):
-   `bash docs/framework/history/_vida-source/scripts/vida-pack-helper.sh scaffold <task_id> <pack_id>`.
+   `bash vida-pack-helper.sh scaffold <task_id> <pack_id>`.
    - Scaffold pre-registers only near-term 2-3 blocks; extend next blocks just-in-time.
 4. Execute pack blocks via the standard workflow:
    `block-plan -> block-start -> block-end -> reflect -> verify`.
 5. End the selected pack session:
-   `bash docs/framework/history/_vida-source/scripts/vida-pack-helper.sh end <task_id> <pack_id> <done|partial|failed> "<summary>" [next]`.
+   `bash vida-pack-helper.sh end <task_id> <pack_id> <done|partial|failed> "<summary>" [next]`.
 
 Rule:
 
@@ -43,7 +43,7 @@ Rule:
 Shortcut for standard non-dev pack initialization:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/nondev-pack-init.sh <task_id> <research-pack|spec-pack|work-pool-pack|bug-pool-pack|reflection-pack> "<goal>" [constraints]
+bash nondev-pack-init.sh <task_id> <research-pack|spec-pack|work-pool-pack|bug-pool-pack|reflection-pack> "<goal>" [constraints]
 ```
 
 ## Change-Impact Absorption (Cascade Behavior)
@@ -173,7 +173,7 @@ Explicit VIDA/framework self-analysis scaffold (`reflection-pack` + FSAP):
 2. TaskFlow board is execution visibility, not task-state authority.
 3. Multi-pack requests use sequence: `research -> spec -> work-pool -> dev/bug-pool -> reflection`.
 4. Explicit VIDA/framework diagnosis requests route through `reflection-pack` and `vida/config/instructions/diagnostic-instructions.framework-self-analysis-protocol.md`.
-5. Tracked FSAP/remediation closure requires delegated verification/proving evidence or a structured override receipt recorded through `docs/framework/history/_vida-source/scripts/fsap-verification-gate.py`.
+5. Tracked FSAP/remediation closure requires delegated verification/proving evidence or a structured override receipt recorded through `fsap-verification-gate.py`.
 
 Legacy note:
 

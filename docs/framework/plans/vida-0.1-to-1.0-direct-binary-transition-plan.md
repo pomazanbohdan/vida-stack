@@ -63,7 +63,7 @@ The current `_vida` runtime is already a strong behavioral reference system, but
 
 Current shape:
 
-1. shell command surface under `docs/framework/history/_vida-source/scripts/*.sh`,
+1. shell command surface under `*.sh`,
 2. Python engines for parsing, routing, scoring, validation, and state derivation,
 3. `br` plus `.beads/issues.jsonl` plus queue-backed mutations for task state,
 4. `.vida/logs/*` and `.vida/state/*` for receipts, telemetry, memory, run-graph, and diagnostics,
@@ -201,7 +201,7 @@ Owns:
 
 This is directly aligned with the already-created local research and runtime contract:
 
-1. `docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md`
+1. `docs/framework/research/agentic-agent-definition-system.md`
 2. `vida/config/instructions/agent-definitions.protocol.md`
 3. `docs/framework/templates/instruction-contract.yaml`
 4. `docs/framework/templates/prompt-template-config.yaml`
@@ -561,24 +561,24 @@ This plan is the umbrella direction only.
 
 The next canonical artifacts should be:
 
-1. `docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
-2. `docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
-3. `docs/framework/history/research/2026-03-08-agentic-cheap-worker-packet-system.md`
-4. `docs/framework/history/plans/2026-03-08-vida-0.2-semantic-freeze-spec.md`
-5. `docs/framework/history/plans/2026-03-08-vida-0.2-bridge-policy.md`
-6. `docs/framework/history/plans/2026-03-08-vida-0.3-command-tree-spec.md`
-7. `docs/framework/history/plans/2026-03-08-vida-0.3-state-kernel-schema-spec.md`
-8. `docs/framework/history/plans/2026-03-08-vida-0.3-instruction-kernel-spec.md`
-9. `docs/framework/history/plans/2026-03-08-vida-0.3-migration-kernel-spec.md`
-10. `docs/framework/history/plans/2026-03-08-vida-0.3-route-and-receipt-spec.md`
-11. `docs/framework/history/plans/2026-03-08-vida-0.3-parity-and-conformance-spec.md`
+1. `docs/framework/plans/vida-semantic-extraction-layer-map.md`
+2. `docs/framework/plans/vida-direct-1.0-local-spec-program.md`
+3. `docs/framework/research/agentic-cheap-worker-packet-system.md`
+4. `docs/framework/plans/vida-0.2-semantic-freeze-spec.md`
+5. `docs/framework/plans/vida-0.2-bridge-policy.md`
+6. `docs/framework/plans/vida-0.3-command-tree-spec.md`
+7. `docs/framework/plans/vida-0.3-state-kernel-schema-spec.md`
+8. `docs/framework/plans/vida-0.3-instruction-kernel-spec.md`
+9. `docs/framework/plans/vida-0.3-migration-kernel-spec.md`
+10. `docs/framework/plans/vida-0.3-route-and-receipt-spec.md`
+11. `docs/framework/plans/vida-0.3-parity-and-conformance-spec.md`
 
 These are the spec surfaces that future agents should slice into implementation tasks.
 
 Current progression note:
 
 1. items `1-4` now exist,
-2. the next missing required artifact is `docs/framework/history/plans/2026-03-08-vida-0.2-bridge-policy.md`.
+2. the next missing required artifact is `docs/framework/plans/vida-0.2-bridge-policy.md`.
 
 ---
 

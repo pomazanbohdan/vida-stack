@@ -46,10 +46,10 @@ Minimum shape:
 ## Commands
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/framework-memory.py record lesson --summary "<summary>" [--source-task <task_id>] [--details-json '{"pattern":"..."}']
-python3 docs/framework/history/_vida-source/scripts/framework-memory.py record correction --summary "<summary>" [--source-task <task_id>] [--details-json '{"before":"...","after":"..."}']
-python3 docs/framework/history/_vida-source/scripts/framework-memory.py record anomaly --summary "<summary>" [--source-task <task_id>] [--details-json '{"source":"..."}']
-python3 docs/framework/history/_vida-source/scripts/framework-memory.py status
+python3 framework-memory.py record lesson --summary "<summary>" [--source-task <task_id>] [--details-json '{"pattern":"..."}']
+python3 framework-memory.py record correction --summary "<summary>" [--source-task <task_id>] [--details-json '{"before":"...","after":"..."}']
+python3 framework-memory.py record anomaly --summary "<summary>" [--source-task <task_id>] [--details-json '{"source":"..."}']
+python3 framework-memory.py status
 ```
 
 ## Fail-Closed Rule

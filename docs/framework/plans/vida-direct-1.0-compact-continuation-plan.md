@@ -44,7 +44,7 @@ This plan exists because:
 
 The compact-safe continuation stack is:
 
-1. `docs/framework/history/research/2026-03-08-agentic-master-index.md`
+1. `docs/framework/research/agentic-master-index.md`
    - stable navigation bridge,
    - current-scope map,
    - compact-ready resume order,
@@ -53,7 +53,7 @@ The compact-safe continuation stack is:
    - session slicing map,
    - post-spec wave map,
    - bridge-update rules,
-3. `docs/framework/history/research/2026-03-08-vida-direct-1.0-next-agent-compact-instruction.md`
+3. `docs/framework/research/vida-direct-1.0-next-agent-compact-instruction.md`
    - program-level continuation contract,
    - inherited behavioral law,
    - current active stage for the direct `1.0` program,
@@ -62,7 +62,7 @@ The compact-safe continuation stack is:
    - bounded read set,
    - exact deliverable,
    - exact following slice,
-5. `docs/framework/history/research/2026-03-08-agentic-cheap-worker-packet-system.md`
+5. `docs/framework/research/agentic-cheap-worker-packet-system.md`
    - bounded worker or external-worker handoff contract when delegated work is used.
 
 Stack rule:
@@ -103,7 +103,7 @@ Current exact session slice:
 
 Canonical target artifact:
 
-1. `docs/framework/history/research/2026-03-08-vida-binary-foundation-next-step-after-compact-instruction.md`
+1. `docs/framework/research/vida-binary-foundation-next-step-after-compact-instruction.md`
 
 Binary Foundation owns:
 
@@ -116,9 +116,9 @@ Binary Foundation owns:
 
 Repository-local execution constraint:
 
-1. framework-owned repo mutations must stay inside `docs/framework/history/_vida-source/*`,
-2. if Binary Foundation requires files outside `docs/framework/history/_vida-source/*`, stage templates under `docs/framework/history/_vida-source/templates/*`, perform the actual implementation in the external development environment, and return durable receipts/prompts/docs here.
-3. the canonical staged transfer root for that external environment is `docs/framework/history/_vida-source/staged/direct-1.0-development-root/`.
+1. framework-owned repo mutations must stay inside `legacy helper surfaces`,
+2. if Binary Foundation requires files outside `legacy helper surfaces`, stage templates under `docs/framework/templates/*`, perform the actual implementation in the external development environment, and return durable receipts/prompts/docs here.
+3. the canonical staged transfer root for that external environment is `staged/direct-1.0-development-root/`.
 
 ### 4.3 Queued spec slices
 
@@ -148,10 +148,10 @@ After the spec spine is complete, implementation should continue in this order:
 
 | Session slice | Canonical file | Owns now | Must not absorb now |
 |---|---|---|---|
-| `Route/Receipt Part A` | `docs/framework/history/plans/2026-03-08-vida-0.3-route-and-receipt-spec.md` | authorization law, route stages, lane boundaries, fail-closed posture, proof-vs-state boundary | detailed receipt families, operator visibility detail, parity thresholds, implementation topology |
-| `Route/Receipt Part B` | `docs/framework/history/plans/2026-03-08-vida-0.3-route-and-receipt-spec.md` | receipt families, run-graph attachment, approval/escalation/verification/closure proof surfaces, operator visibility boundaries | command/state/instruction/migration redefinition, implementation topology, memory-kernel design |
-| `Parity/Conformance Part A` | `docs/framework/history/plans/2026-03-08-vida-0.3-parity-and-conformance-spec.md` | fixture scope, evidence basis, delta categories, parity-testable semantic surface | final thresholds, cutover gates, implementation planning |
-| `Parity/Conformance Part B` | `docs/framework/history/plans/2026-03-08-vida-0.3-parity-and-conformance-spec.md` | conformance matrix, thresholds, cutover proof gates, semantic reproduction verdict rules | new product scope, kernel redefinition, runtime implementation topology |
+| `Route/Receipt Part A` | `docs/framework/plans/vida-0.3-route-and-receipt-spec.md` | authorization law, route stages, lane boundaries, fail-closed posture, proof-vs-state boundary | detailed receipt families, operator visibility detail, parity thresholds, implementation topology |
+| `Route/Receipt Part B` | `docs/framework/plans/vida-0.3-route-and-receipt-spec.md` | receipt families, run-graph attachment, approval/escalation/verification/closure proof surfaces, operator visibility boundaries | command/state/instruction/migration redefinition, implementation topology, memory-kernel design |
+| `Parity/Conformance Part A` | `docs/framework/plans/vida-0.3-parity-and-conformance-spec.md` | fixture scope, evidence basis, delta categories, parity-testable semantic surface | final thresholds, cutover gates, implementation planning |
+| `Parity/Conformance Part B` | `docs/framework/plans/vida-0.3-parity-and-conformance-spec.md` | conformance matrix, thresholds, cutover proof gates, semantic reproduction verdict rules | new product scope, kernel redefinition, runtime implementation topology |
 
 Slicing rule:
 
@@ -171,13 +171,13 @@ Minimum continuation bundle:
 2. `vida/config/instructions/agent-definitions.orchestrator-entry.md`
 3. `vida/config/instructions/instruction-contracts.thinking-protocol.md`
 4. `vida.config.yaml`
-5. `docs/framework/history/research/2026-03-08-agentic-master-index.md`
+5. `docs/framework/research/agentic-master-index.md`
 6. this file
-7. `docs/framework/history/research/2026-03-08-vida-direct-1.0-next-agent-compact-instruction.md`
+7. `docs/framework/research/vida-direct-1.0-next-agent-compact-instruction.md`
 8. the current active artifact-level next-step instruction
 9. every already-complete canonical spec needed by the active slice
-10. `docs/framework/history/research/2026-03-08-agentic-cheap-worker-packet-system.md` when worker or external-worker handoff is used.
-11. `docs/framework/history/research/2026-03-08-vida-external-task-slicing-and-development-start-prompt.md` when an external environment should cut tasks from the plan stack and start the earliest lawful development slice.
+10. `docs/framework/research/agentic-cheap-worker-packet-system.md` when worker or external-worker handoff is used.
+11. `docs/framework/research/vida-external-task-slicing-and-development-start-prompt.md` when an external environment should cut tasks from the plan stack and start the earliest lawful development slice.
 
 External-environment rule:
 

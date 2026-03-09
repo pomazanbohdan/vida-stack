@@ -173,7 +173,7 @@ Handoff rule:
 Use dynamic skill discovery for each new scope:
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/skill-discovery.py suggest "<request or scope>" --top 8
+python3 skill-discovery.py suggest "<request or scope>" --top 8
 ```
 
 Interpretation:
@@ -183,7 +183,7 @@ Interpretation:
 3. If no suitable project skill exists, scaffold one:
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/skill-discovery.py scaffold <skill-name> "<description>"
+python3 skill-discovery.py scaffold <skill-name> "<description>"
 ```
 
 4. New skill is candidate until reviewed and wired into runtime docs.

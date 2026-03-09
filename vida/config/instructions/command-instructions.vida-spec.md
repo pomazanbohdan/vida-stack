@@ -2,7 +2,7 @@
 
 Purpose: produce implementation-ready specs that are aligned with user intent, real external contracts, and project architecture.
 
-Primary protocol: `docs/framework/history/_vida-source/docs/spec-contract-protocol.md` (SCP).
+Primary protocol: `spec-contract-protocol.md` (SCP).
 
 ## Protocol Layers
 
@@ -14,7 +14,7 @@ This command maps layers as:
 4. `CL4 Materialization` -> spec artifact production, skills routing, and confidence scoring.
 5. `CL5 Gates And Handoff` -> reassessment, ready verdict, and approved-contract handoff to `/vida-form-task`.
 
-Canonical source: `docs/framework/history/_vida-source/docs/command-layer-protocol.md`
+Canonical source: `command-layer-protocol.md`
 
 Handoff boundary:
 
@@ -41,9 +41,9 @@ Handoff boundary:
 2. `docs/research/*` relevant files
 3. `docs/specs/README.md` + related `docs/specs/**`
 4. `docs/decisions.md`
-5. `docs/framework/history/_vida-source/docs/spec-contract-protocol.md`
-6. `docs/framework/history/_vida-source/docs/web-validation-protocol.md`
-7. `docs/framework/history/_vida-source/docs/beads-protocol.md` + `docs/framework/history/_vida-source/docs/todo-protocol.md`
+5. `spec-contract-protocol.md`
+6. `web-validation-protocol.md`
+7. `beads-protocol.md` + `vida/config/instructions/runtime-instructions.taskflow-protocol.md`
 
 ## Commands
 
@@ -126,7 +126,7 @@ Decision categories (default):
 
 ## External Contract Validation (Mandatory When API Exists)
 
-Use `docs/framework/history/_vida-source/docs/web-validation-protocol.md` as canonical validation contract.
+Use `web-validation-protocol.md` as canonical validation contract.
 
 Evidence must include:
 
@@ -153,7 +153,7 @@ Include:
 Mandatory skill scan before finalizing non-trivial spec:
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/skill-discovery.py suggest "<scope/request>" --top 8
+python3 skill-discovery.py suggest "<scope/request>" --top 8
 ```
 
 Rules:
@@ -163,7 +163,7 @@ Rules:
 3. if skill gap exists, scaffold project candidate:
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/skill-discovery.py scaffold <skill-name> "<description>"
+python3 skill-discovery.py scaffold <skill-name> "<description>"
 ```
 
 ## Confidence Gate (Weighted)
@@ -171,7 +171,7 @@ python3 docs/framework/history/_vida-source/scripts/skill-discovery.py scaffold 
 Compute before ready verdict:
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/scp-confidence.py \
+python3 scp-confidence.py \
   --user-alignment <0..100> \
   --api-reality <0..100> \
   --evidence-quality <0..100> \

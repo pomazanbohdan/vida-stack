@@ -39,15 +39,15 @@ The following domains are intentionally preserved but excluded from the current 
 
 Canonical preservation artifact:
 
-- `docs/framework/history/research/2026-03-08-agentic-external-future-bundle.md`
+- `docs/framework/research/agentic-external-future-bundle.md`
 
 ### Missing but referenced
 
 These artifacts are referenced by the current bundle but do not yet exist:
 
-1. `docs/framework/history/research/2026-03-08-agentic-role-profile-source-registry.md`
-2. `docs/framework/history/research/2026-03-08-agentic-role-profile-source-delta-log.md`
-3. `docs/framework/history/research/2026-03-08-agentic-role-profile-eval-plan.md`
+1. `docs/framework/research/agentic-role-profile-source-registry.md`
+2. `docs/framework/research/agentic-role-profile-source-delta-log.md`
+3. `docs/framework/research/agentic-role-profile-eval-plan.md`
 
 Rule:
 
@@ -72,46 +72,46 @@ Then continue with the bundle reading order below.
 
 ### Tier A: Orientation backbone
 
-1. `docs/framework/history/plans/2026-03-08-vida-autonomous-role-profiles-and-adaptive-orchestration-plan.md`
-2. `docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
-3. `docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
-4. `docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
-5. `docs/framework/history/research/2026-03-08-agentic-research-architecture-map.md`
-6. `docs/framework/history/research/2026-03-08-agentic-parameter-registry.md`
-7. `docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md`
-8. `docs/framework/history/research/2026-03-08-agentic-decision-ledger.md`
-9. `docs/framework/history/research/2026-03-08-agentic-proof-obligation-registry.md`
-10. `docs/framework/history/research/2026-03-08-agentic-escalation-policy-matrix.md`
+1. `docs/framework/plans/vida-autonomous-role-profiles-and-adaptive-orchestration-plan.md`
+2. `docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
+3. `docs/framework/plans/vida-semantic-extraction-layer-map.md`
+4. `docs/framework/plans/vida-direct-1.0-local-spec-program.md`
+5. `docs/framework/research/agentic-research-architecture-map.md`
+6. `docs/framework/research/agentic-parameter-registry.md`
+7. `docs/framework/research/agentic-agent-definition-system.md`
+8. `docs/framework/research/agentic-decision-ledger.md`
+9. `docs/framework/research/agentic-proof-obligation-registry.md`
+10. `docs/framework/research/agentic-escalation-policy-matrix.md`
 
 ### Tier B: Knowledge synthesis
 
-1. `docs/framework/history/research/2026-03-08-agentic-atomic-claims-registry.md`
-2. `docs/framework/history/research/2026-03-08-agentic-source-consensus-matrix.md`
-3. `docs/framework/history/research/2026-03-08-agentic-source-disagreement-matrix.md`
-4. `docs/framework/history/research/2026-03-08-agentic-research-invariants.md`
-5. `docs/framework/history/research/2026-03-08-agentic-heuristic-library.md`
-6. `docs/framework/history/research/2026-03-08-agentic-known-unknowns-ledger.md`
-7. `docs/framework/history/research/2026-03-08-agentic-research-implication-map.md`
-8. `docs/framework/history/research/2026-03-08-agentic-claim-to-artifact-trace-map.md`
-9. `docs/framework/history/research/2026-03-08-agentic-threshold-hypotheses-registry.md`
+1. `docs/framework/research/agentic-atomic-claims-registry.md`
+2. `docs/framework/research/agentic-source-consensus-matrix.md`
+3. `docs/framework/research/agentic-source-disagreement-matrix.md`
+4. `docs/framework/research/agentic-research-invariants.md`
+5. `docs/framework/research/agentic-heuristic-library.md`
+6. `docs/framework/research/agentic-known-unknowns-ledger.md`
+7. `docs/framework/research/agentic-research-implication-map.md`
+8. `docs/framework/research/agentic-claim-to-artifact-trace-map.md`
+9. `docs/framework/research/agentic-threshold-hypotheses-registry.md`
 
 ### Tier C: Execution, safety, and slicing support
 
-1. `docs/framework/history/research/2026-03-08-agentic-pattern-chooser-matrix.md`
-2. `docs/framework/history/research/2026-03-08-agentic-anti-pattern-catalog.md`
-3. `docs/framework/history/research/2026-03-08-agentic-threat-model-control-matrix.md`
-4. `docs/framework/history/research/2026-03-08-agentic-metric-glossary.md`
-5. `docs/framework/history/research/2026-03-08-agentic-terminology-glossary.md`
-6. `docs/framework/history/research/2026-03-08-agentic-invalidation-watchlist.md`
-7. `docs/framework/history/research/2026-03-08-agentic-task-archetype-library.md`
-8. `docs/framework/history/research/2026-03-08-agentic-source-query-log.md`
-9. `docs/framework/history/research/2026-03-08-agentic-cheap-worker-packet-system.md`
-10. `docs/framework/history/research/2026-03-08-agentic-cheap-worker-prompt-pack.md`
-11. `docs/framework/history/research/2026-03-08-agentic-epic-slicing-agent-instruction.md`
+1. `docs/framework/research/agentic-pattern-chooser-matrix.md`
+2. `docs/framework/research/agentic-anti-pattern-catalog.md`
+3. `docs/framework/research/agentic-threat-model-control-matrix.md`
+4. `docs/framework/research/agentic-metric-glossary.md`
+5. `docs/framework/research/agentic-terminology-glossary.md`
+6. `docs/framework/research/agentic-invalidation-watchlist.md`
+7. `docs/framework/research/agentic-task-archetype-library.md`
+8. `docs/framework/research/agentic-source-query-log.md`
+9. `docs/framework/research/agentic-cheap-worker-packet-system.md`
+10. `docs/framework/research/agentic-cheap-worker-prompt-pack.md`
+11. `docs/framework/research/agentic-epic-slicing-agent-instruction.md`
 
 ### Tier D: Future scope preservation
 
-1. `docs/framework/history/research/2026-03-08-agentic-external-future-bundle.md`
+1. `docs/framework/research/agentic-external-future-bundle.md`
 
 Read Tier D only when:
 
@@ -127,51 +127,51 @@ Every child task packet cut from the master plan should carry a `Reference bundl
 
 ### Mandatory current-scope references
 
-1. `docs/framework/history/plans/2026-03-08-vida-autonomous-role-profiles-and-adaptive-orchestration-plan.md`
-2. `docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
-3. `docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
-4. `docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
-5. `docs/framework/history/research/2026-03-08-agentic-master-index.md`
-6. `docs/framework/history/research/2026-03-08-agentic-research-architecture-map.md`
-7. `docs/framework/history/research/2026-03-08-agentic-parameter-registry.md`
-8. `docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md`
-9. `docs/framework/history/research/2026-03-08-agentic-decision-ledger.md`
-10. `docs/framework/history/research/2026-03-08-agentic-proof-obligation-registry.md`
-11. `docs/framework/history/research/2026-03-08-agentic-escalation-policy-matrix.md`
-12. `docs/framework/history/research/2026-03-08-agentic-atomic-claims-registry.md`
-13. `docs/framework/history/research/2026-03-08-agentic-source-consensus-matrix.md`
-14. `docs/framework/history/research/2026-03-08-agentic-source-disagreement-matrix.md`
-15. `docs/framework/history/research/2026-03-08-agentic-research-invariants.md`
-16. `docs/framework/history/research/2026-03-08-agentic-heuristic-library.md`
-17. `docs/framework/history/research/2026-03-08-agentic-known-unknowns-ledger.md`
-18. `docs/framework/history/research/2026-03-08-agentic-research-implication-map.md`
-19. `docs/framework/history/research/2026-03-08-agentic-claim-to-artifact-trace-map.md`
-20. `docs/framework/history/research/2026-03-08-agentic-threshold-hypotheses-registry.md`
-21. `docs/framework/history/research/2026-03-08-agentic-pattern-chooser-matrix.md`
-22. `docs/framework/history/research/2026-03-08-agentic-anti-pattern-catalog.md`
-23. `docs/framework/history/research/2026-03-08-agentic-threat-model-control-matrix.md`
-24. `docs/framework/history/research/2026-03-08-agentic-metric-glossary.md`
-25. `docs/framework/history/research/2026-03-08-agentic-terminology-glossary.md`
-26. `docs/framework/history/research/2026-03-08-agentic-invalidation-watchlist.md`
-27. `docs/framework/history/research/2026-03-08-agentic-task-archetype-library.md`
-28. `docs/framework/history/research/2026-03-08-agentic-source-query-log.md`
-29. `docs/framework/history/research/2026-03-08-agentic-cheap-worker-packet-system.md`
-30. `docs/framework/history/research/2026-03-08-agentic-cheap-worker-prompt-pack.md`
-31. `docs/framework/history/research/2026-03-08-agentic-epic-slicing-agent-instruction.md`
+1. `docs/framework/plans/vida-autonomous-role-profiles-and-adaptive-orchestration-plan.md`
+2. `docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
+3. `docs/framework/plans/vida-semantic-extraction-layer-map.md`
+4. `docs/framework/plans/vida-direct-1.0-local-spec-program.md`
+5. `docs/framework/research/agentic-master-index.md`
+6. `docs/framework/research/agentic-research-architecture-map.md`
+7. `docs/framework/research/agentic-parameter-registry.md`
+8. `docs/framework/research/agentic-agent-definition-system.md`
+9. `docs/framework/research/agentic-decision-ledger.md`
+10. `docs/framework/research/agentic-proof-obligation-registry.md`
+11. `docs/framework/research/agentic-escalation-policy-matrix.md`
+12. `docs/framework/research/agentic-atomic-claims-registry.md`
+13. `docs/framework/research/agentic-source-consensus-matrix.md`
+14. `docs/framework/research/agentic-source-disagreement-matrix.md`
+15. `docs/framework/research/agentic-research-invariants.md`
+16. `docs/framework/research/agentic-heuristic-library.md`
+17. `docs/framework/research/agentic-known-unknowns-ledger.md`
+18. `docs/framework/research/agentic-research-implication-map.md`
+19. `docs/framework/research/agentic-claim-to-artifact-trace-map.md`
+20. `docs/framework/research/agentic-threshold-hypotheses-registry.md`
+21. `docs/framework/research/agentic-pattern-chooser-matrix.md`
+22. `docs/framework/research/agentic-anti-pattern-catalog.md`
+23. `docs/framework/research/agentic-threat-model-control-matrix.md`
+24. `docs/framework/research/agentic-metric-glossary.md`
+25. `docs/framework/research/agentic-terminology-glossary.md`
+26. `docs/framework/research/agentic-invalidation-watchlist.md`
+27. `docs/framework/research/agentic-task-archetype-library.md`
+28. `docs/framework/research/agentic-source-query-log.md`
+29. `docs/framework/research/agentic-cheap-worker-packet-system.md`
+30. `docs/framework/research/agentic-cheap-worker-prompt-pack.md`
+31. `docs/framework/research/agentic-epic-slicing-agent-instruction.md`
 
 ### Optional future-scope reference
 
 Use only when the task explicitly reopens excluded external domains:
 
-1. `docs/framework/history/research/2026-03-08-agentic-external-future-bundle.md`
+1. `docs/framework/research/agentic-external-future-bundle.md`
 
 ### Planned-but-missing references
 
 Carry as dependencies or blockers when relevant:
 
-1. `docs/framework/history/research/2026-03-08-agentic-role-profile-source-registry.md`
-2. `docs/framework/history/research/2026-03-08-agentic-role-profile-source-delta-log.md`
-3. `docs/framework/history/research/2026-03-08-agentic-role-profile-eval-plan.md`
+1. `docs/framework/research/agentic-role-profile-source-registry.md`
+2. `docs/framework/research/agentic-role-profile-source-delta-log.md`
+3. `docs/framework/research/agentic-role-profile-eval-plan.md`
 
 ---
 
@@ -212,24 +212,24 @@ Resume in this exact order:
 3. read `vida/config/instructions/instruction-contracts.thinking-protocol.md`
 4. read `vida.config.yaml`
 5. read this master index
-6. read `docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
-7. read `docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
-8. read `docs/framework/history/plans/2026-03-08-vida-0.2-semantic-freeze-spec.md`
-9. read `docs/framework/history/plans/2026-03-08-vida-0.2-bridge-policy.md`
-10. read `docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
-11. read `docs/framework/history/plans/2026-03-08-vida-direct-1.0-compact-continuation-plan.md`
-12. read `docs/framework/history/research/2026-03-08-agentic-cheap-worker-packet-system.md`
-13. read `docs/framework/history/research/2026-03-08-agentic-cheap-worker-prompt-pack.md`
-14. read `docs/framework/history/research/2026-03-08-vida-direct-1.0-next-agent-compact-instruction.md`
-15. read `docs/framework/history/plans/2026-03-08-vida-0.3-command-tree-spec.md`
-16. read `docs/framework/history/plans/2026-03-08-vida-0.3-state-kernel-schema-spec.md`
-17. read `docs/framework/history/plans/2026-03-08-vida-0.3-instruction-kernel-spec.md`
-18. read `docs/framework/history/plans/2026-03-08-vida-0.3-migration-kernel-spec.md`
-19. read `docs/framework/history/research/2026-03-08-vida-parity-and-conformance-next-step-after-compact-instruction.md`
+6. read `docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
+7. read `docs/framework/plans/vida-semantic-extraction-layer-map.md`
+8. read `docs/framework/plans/vida-0.2-semantic-freeze-spec.md`
+9. read `docs/framework/plans/vida-0.2-bridge-policy.md`
+10. read `docs/framework/plans/vida-direct-1.0-local-spec-program.md`
+11. read `docs/framework/plans/vida-direct-1.0-compact-continuation-plan.md`
+12. read `docs/framework/research/agentic-cheap-worker-packet-system.md`
+13. read `docs/framework/research/agentic-cheap-worker-prompt-pack.md`
+14. read `docs/framework/research/vida-direct-1.0-next-agent-compact-instruction.md`
+15. read `docs/framework/plans/vida-0.3-command-tree-spec.md`
+16. read `docs/framework/plans/vida-0.3-state-kernel-schema-spec.md`
+17. read `docs/framework/plans/vida-0.3-instruction-kernel-spec.md`
+18. read `docs/framework/plans/vida-0.3-migration-kernel-spec.md`
+19. read `docs/framework/research/vida-parity-and-conformance-next-step-after-compact-instruction.md`
 
 Then execute these next session slices in order:
 
-1. begin post-spec implementation using `docs/framework/history/research/2026-03-08-vida-binary-foundation-next-step-after-compact-instruction.md`
+1. begin post-spec implementation using `docs/framework/research/vida-binary-foundation-next-step-after-compact-instruction.md`
 
 Session-slice rule:
 

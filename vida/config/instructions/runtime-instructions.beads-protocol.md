@@ -5,7 +5,7 @@ Purpose: one operational contract for task state + execution visibility.
 Transition note:
 
 1. `vida-v0 task`, `vida-v0 todo`, and `vida-v0 run-graph` are the active transitioned read surfaces.
-2. Legacy `docs/framework/history/_vida-source/scripts/beads-workflow.sh` and companion wrappers remain migration-source operator helpers only until their sequencing behavior is reimplemented or retired.
+2. Legacy `beads-workflow.sh` and companion wrappers remain migration-source operator helpers only until their sequencing behavior is reimplemented or retired.
 
 ## 1) SSOT Rule
 
@@ -26,9 +26,9 @@ Required:
 5. Optional background backup worker must use sparse cadence (`>=120s`, default 600s):
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/beads-bg-sync.sh start --interval 600
-bash docs/framework/history/_vida-source/scripts/beads-bg-sync.sh status
-bash docs/framework/history/_vida-source/scripts/beads-bg-sync.sh stop
+bash beads-bg-sync.sh start --interval 600
+bash beads-bg-sync.sh status
+bash beads-bg-sync.sh stop
 ```
 
 Autostart note:
@@ -51,7 +51,7 @@ Reconciliation rule:
 
 Wrapper rule:
 
-1. `docs/framework/history/_vida-source/*` wrappers operate in JSONL-first mode while `beads_mutate` owns task writes.
+1. `legacy helper surfaces` wrappers operate in JSONL-first mode while `beads_mutate` owns task writes.
 2. Direct `br`/SQLite usage is diagnostic-only until the mutator path is fully retired.
 3. All mutating task-state writes must pass through one queue-backed single-writer path; concurrent callers may enqueue but must not mutate task state outside that serialized path.
 
@@ -67,19 +67,19 @@ br sync --flush-only
 Mutation serialization rule:
 
 1. Read-only `br` commands may execute directly through the safe wrapper.
-2. Mutating `br` commands (`create|update|close|link|unlink|sync`) and JSONL mutator writes must run through the queue-backed writer path owned by `docs/framework/history/_vida-source/scripts/beads-runtime.sh`.
+2. Mutating `br` commands (`create|update|close|link|unlink|sync`) and JSONL mutator writes must run through the queue-backed writer path owned by `beads-runtime.sh`.
 3. If queue execution fails, stop with a blocker instead of retrying ad hoc from multiple lanes.
 
 Status snapshots:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/vida-status.sh [task_id]
-bash docs/framework/history/_vida-source/scripts/taskflow-tool.sh board <task_id>
+bash vida-status.sh [task_id]
+bash taskflow-tool.sh board <task_id>
 ```
 
 ## 4) Workflow Wrapper (Canonical)
 
-Use `docs/framework/history/_vida-source/scripts/beads-workflow.sh` for consistent logging and gates.
+Use `beads-workflow.sh` for consistent logging and gates.
 
 Main commands:
 
@@ -127,11 +127,11 @@ For non-trivial requests routed via use-case packs:
 
 ## 6) Compact Contract
 
-Use `docs/framework/history/_vida-source/scripts/beads-compact.sh` around context compaction:
+Use `beads-compact.sh` around context compaction:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/beads-compact.sh pre <task_id> <done> <next> [risk]
-bash docs/framework/history/_vida-source/scripts/beads-compact.sh post [task_after]
+bash beads-compact.sh pre <task_id> <done> <next> [risk]
+bash beads-compact.sh post [task_after]
 ```
 
 Rules:
@@ -166,15 +166,15 @@ Operational hooks:
 
 Before close/handoff:
 
-1. `bash docs/framework/history/_vida-source/scripts/quality-health-check.sh <task_id>`.
-2. `bash docs/framework/history/_vida-source/scripts/beads-workflow.sh verify <task_id>`.
+1. `bash quality-health-check.sh <task_id>`.
+2. `bash beads-workflow.sh verify <task_id>`.
 
 Finish gate:
 
 1. `finish` runs strict log checks.
 2. If critical contradictions exist, finish is blocked.
 3. At least one `self_reflection` entry is required in strict mode.
-4. When a task appears done-but-open or stale-in-progress, run `python3 docs/framework/history/_vida-source/scripts/task-state-reconcile.py status <task_id>` before closure or reopen decisions.
+4. When a task appears done-but-open or stale-in-progress, run `python3 task-state-reconcile.py status <task_id>` before closure or reopen decisions.
 
 ## 8) Files
 

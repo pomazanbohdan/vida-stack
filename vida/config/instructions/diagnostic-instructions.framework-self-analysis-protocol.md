@@ -46,7 +46,7 @@ Do not use FSAP for product/codebase diagnosis unless the user explicitly asks a
 4. Thinking mode:
    - default `META` for explicit self-analysis requests;
    - downgrade to `MAR` only for narrow single-script questions with low blast radius.
-5. Scope: `AGENTS.md`, `vida/config/instructions/*`, `docs/framework/history/_vida-source/scripts/*`, runtime logs, and only the project evidence that proves a framework-level friction point.
+5. Scope: `AGENTS.md`, `vida/config/instructions/*`, `*`, runtime logs, and only the project evidence that proves a framework-level friction point.
 6. Instruction-layer efficiency is in scope: FSAP must inspect `AGENTS.md`, lane entry contracts, and canonical protocols when instruction ambiguity or drift increases rereads, optionality, routing confusion, or token cost.
 
 When the user explicitly requests tracked execution, use `reflection-pack` and the dedicated FSAP chain:
@@ -63,7 +63,7 @@ FSAP must separate findings into two ownership buckets:
    - VIDA runtime protocols
    - AGENTS rules
    - `vida/config/instructions/*`
-   - `docs/framework/history/_vida-source/scripts/*`
+   - `*`
 2. `project-owned`
    - app-specific runbooks
    - `docs/*`
@@ -72,7 +72,7 @@ FSAP must separate findings into two ownership buckets:
 
 Rule:
 
-1. Do not "fix project pain" inside `docs/framework/history/_vida-source/*`.
+1. Do not "fix project pain" inside `legacy helper surfaces`.
 2. Do not store framework policy in `docs/*`.
 3. If one symptom spans both layers, produce split actions per ownership layer.
 
@@ -86,7 +86,7 @@ Rule:
    - preferred shortcuts:
      - dev/task-state visibility: `vida-v0 boot snapshot --json`
      - untracked mode: `vida-v0 system snapshot` plus bounded queue/status reads as needed,
-     - tracked mode: `bash docs/framework/history/_vida-source/scripts/framework-self-check.sh <task_id>`.
+     - tracked mode: `bash framework-self-check.sh <task_id>`.
 3. `FSAP-2 Evidence Collection`
    - inspect only the protocols/scripts actually involved in the observed friction.
    - prefer direct script/doc reads over broad repo sweeps.
@@ -119,7 +119,7 @@ Rule:
      - schema validation,
      - or structured option matrix
 7. `FSAP-6 Canonical Update`
-   - update framework files in `docs/framework/history/_vida-source/*`.
+   - update framework files in `legacy helper surfaces`.
    - if project fixes are in scope, update `docs/*` / `scripts/*` separately in the same request.
    - do not leave a mandatory finding in advisory wording when the framework can enforce it mechanically.
 8. `FSAP-7 Verification`
@@ -127,7 +127,7 @@ Rule:
    - in tracked mode, prefer delegated verification/proving lanes over a second local orchestrator-only audit.
    - before closure-ready state, require either:
      - a delegated verification artifact with real worker activity, or
-     - a structured override receipt recorded by `docs/framework/history/_vida-source/scripts/fsap-verification-gate.py`.
+     - a structured override receipt recorded by `fsap-verification-gate.py`.
 9. `FSAP-8 Report`
    - report findings in chat, grouped by ownership.
 
@@ -150,7 +150,7 @@ Use the smallest proof that demonstrates the framework change:
 
 1. `bash -n` for shell scripts
 2. `taskflow-tool current|compact` for TaskFlow/runtime state fixes in tracked mode
-3. `python3 docs/framework/history/_vida-source/scripts/fsap-verification-gate.py check <task_id>` for tracked FSAP verification readiness
+3. `python3 fsap-verification-gate.py check <task_id>` for tracked FSAP verification readiness
 4. `quality-health-check.sh --mode quick <task_id>` for protocol sanity in tracked mode
 5. a focused smoke command that reproduces the improved behavior
 
@@ -161,7 +161,7 @@ Avoid full project build/test loops unless the framework change directly affects
 If the user explicitly requests task tracking, formal artifact production, or deferred multi-step follow-through, FSAP may escalate into tracked mode:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/framework-wave-start.sh <task_id> <reflection-pack|dev-pack|work-pool-pack> "<goal>" [constraints]
+bash framework-wave-start.sh <task_id> <reflection-pack|dev-pack|work-pool-pack> "<goal>" [constraints]
 ```
 
 Rule:

@@ -69,17 +69,17 @@ Primary local source basis:
 2. `vida/config/instructions/agent-definitions.orchestrator-entry.md`
 3. `vida/config/instructions/instruction-contracts.thinking-protocol.md`
 4. `vida.config.yaml`
-5. `docs/framework/history/research/2026-03-08-agentic-master-index.md`
-6. `docs/framework/history/research/2026-03-08-vida-direct-1.0-next-agent-compact-instruction.md`
-7. `docs/framework/history/research/2026-03-08-vida-instruction-kernel-next-step-after-compact-instruction.md`
-8. `docs/framework/history/plans/2026-03-08-vida-0.3-command-tree-spec.md`
-9. `docs/framework/history/plans/2026-03-08-vida-0.3-state-kernel-schema-spec.md`
-10. `docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
-11. `docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
-12. `docs/framework/history/plans/2026-03-08-vida-0.2-semantic-freeze-spec.md`
-13. `docs/framework/history/plans/2026-03-08-vida-0.2-bridge-policy.md`
-14. `docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
-15. `docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md`
+5. `docs/framework/research/agentic-master-index.md`
+6. `docs/framework/research/vida-direct-1.0-next-agent-compact-instruction.md`
+7. `docs/framework/research/vida-instruction-kernel-next-step-after-compact-instruction.md`
+8. `docs/framework/plans/vida-0.3-command-tree-spec.md`
+9. `docs/framework/plans/vida-0.3-state-kernel-schema-spec.md`
+10. `docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
+11. `docs/framework/plans/vida-semantic-extraction-layer-map.md`
+12. `docs/framework/plans/vida-0.2-semantic-freeze-spec.md`
+13. `docs/framework/plans/vida-0.2-bridge-policy.md`
+14. `docs/framework/plans/vida-direct-1.0-local-spec-program.md`
+15. `docs/framework/research/agentic-agent-definition-system.md`
 16. `vida/config/instructions/agent-definitions.protocol.md`
 17. `docs/framework/templates/instruction-contract.yaml`
 18. `docs/framework/templates/prompt-template-config.yaml`
@@ -648,7 +648,7 @@ This artifact unlocks:
 
 The next artifact is:
 
-1. `docs/framework/history/plans/2026-03-08-vida-0.3-migration-kernel-spec.md`
+1. `docs/framework/plans/vida-0.3-migration-kernel-spec.md`
 
 Reason:
 

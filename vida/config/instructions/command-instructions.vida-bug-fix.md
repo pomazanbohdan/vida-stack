@@ -2,7 +2,7 @@
 
 Purpose: one command for single or batch bug fixing with root-cause workflow, regression validation, and spec/doc synchronization.
 
-Primary protocol: `docs/framework/history/_vida-source/docs/bug-fix-protocol.md` (BFP).
+Primary protocol: `bug-fix-protocol.md` (BFP).
 
 ## Protocol Layers
 
@@ -14,7 +14,7 @@ This command maps layers as:
 4. `CL4 Materialization` -> `BFP-5 Implement`
 5. `CL5 Gates And Handoff` -> `BFP-6 Verify` + `BFP-7 Sync` + `BFP-8 Close`
 
-Canonical source: `docs/framework/history/_vida-source/docs/command-layer-protocol.md`
+Canonical source: `command-layer-protocol.md`
 
 Fix boundary:
 
@@ -76,10 +76,10 @@ Optional context:
 
 ## Related
 
-1. `docs/framework/history/_vida-source/docs/bug-fix-protocol.md`
-2. `docs/framework/history/_vida-source/docs/thinking-protocol.md` (bug reasoning)
-3. `docs/framework/history/_vida-source/docs/todo-protocol.md`
-4. `docs/framework/history/_vida-source/docs/beads-protocol.md`
+1. `bug-fix-protocol.md`
+2. `thinking-protocol.md` (bug reasoning)
+3. `vida/config/instructions/runtime-instructions.taskflow-protocol.md`
+4. `beads-protocol.md`
 
 -----
 artifact_path: config/command-instructions/vida.bug-fix

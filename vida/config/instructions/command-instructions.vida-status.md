@@ -12,7 +12,7 @@ This command maps layers as:
 4. `CL4 Materialization` -> terminal report rendering
 5. `CL5 Gates And Handoff` -> explicit read-only completion guarantee
 
-Canonical source: `docs/framework/history/_vida-source/docs/command-layer-protocol.md`
+Canonical source: `command-layer-protocol.md`
 
 ## Contract
 
@@ -25,13 +25,13 @@ Canonical source: `docs/framework/history/_vida-source/docs/command-layer-protoc
 ## Runtime Command
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/vida-status.sh
+bash vida-status.sh
 ```
 
 Compact boot-time companion:
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/vida-boot-snapshot.py
+python3 vida-boot-snapshot.py
 ```
 
 ## Output Sections

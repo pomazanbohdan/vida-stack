@@ -294,7 +294,7 @@ Use when at least one is true:
 2. For `artifact_flow`, use `TaskFlow` + pack.
 3. For `execution_flow`, use `TaskFlow` and the canonical execution protocol.
 4. For `mixed`, start in answer mode and transition only when execution is clearly required.
-5. Route all framework-owned changes to `AGENTS.md` and `docs/framework/history/_vida-source/*`.
+5. Route all framework-owned changes to `AGENTS.md` and `legacy helper surfaces`.
 6. Use `br ready`, `br update`, and `br close` only when TaskFlow is engaged.
 7. During active task execution, use TaskFlow blocks and keep near-term planning lean.
 8. Explicit VIDA/framework self-diagnosis is executed directly by the main orchestrator and bypasses TaskFlow/pack flow by default only for untracked chat diagnosis.

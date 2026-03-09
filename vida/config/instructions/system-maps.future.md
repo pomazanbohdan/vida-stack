@@ -166,8 +166,8 @@ Recommended local next step:
 
 Current local evidence:
 
-1. `docs/framework/history/_vida-source/scripts/eval-pack.sh`,
-2. `docs/framework/history/_vida-source/scripts/worker-eval-pack.py`,
+1. `eval-pack.sh`,
+2. `worker-eval-pack.py`,
 3. local score refresh in `.vida/state/worker-strategy.json`.
 
 Local gap:

@@ -110,9 +110,9 @@ Stop downstream formation if any are true:
 ## Commands
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/spec-intake.py write <task_id> <input.json> [--output PATH]
-python3 docs/framework/history/_vida-source/scripts/spec-intake.py validate <task_id> [--path PATH]
-python3 docs/framework/history/_vida-source/scripts/spec-intake.py status <task_id> [--path PATH]
+python3 spec-intake.py write <task_id> <input.json> [--output PATH]
+python3 spec-intake.py validate <task_id> [--path PATH]
+python3 spec-intake.py status <task_id> [--path PATH]
 ```
 
 -----

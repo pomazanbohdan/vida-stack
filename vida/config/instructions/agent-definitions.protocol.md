@@ -27,8 +27,8 @@ Required runtime artifacts:
 
 Upstream supporting artifacts:
 
-1. `docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md`
-2. `docs/framework/history/research/2026-03-08-agentic-terminology-glossary.md`
+1. `docs/framework/research/agentic-agent-definition-system.md`
+2. `docs/framework/research/agentic-terminology-glossary.md`
 3. future `vida/config/instructions/agent-definitions.role-profile-protocol.md` when role profiles are implemented
 
 ## Canonical Terminology

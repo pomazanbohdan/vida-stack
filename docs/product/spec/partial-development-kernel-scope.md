@@ -180,7 +180,7 @@ The partial kernel must not silently redefine the already frozen `0.3` kernels.
 
 ### 7.1 Task Lifecycle Rule
 
-Per `docs/framework/history/plans/2026-03-08-vida-0.3-state-kernel-schema-spec.md`, canonical `Task.lifecycle_state` remains:
+Per `docs/framework/plans/vida-0.3-state-kernel-schema-spec.md`, canonical `Task.lifecycle_state` remains:
 
 1. `open`
 2. `in_progress`
@@ -194,7 +194,7 @@ Rule:
 
 ### 7.2 Route Stage Rule
 
-Per `docs/framework/history/plans/2026-03-08-vida-0.3-route-and-receipt-spec.md`, canonical route stages remain:
+Per `docs/framework/plans/vida-0.3-route-and-receipt-spec.md`, canonical route stages remain:
 
 1. `analysis`
 2. `writer`
@@ -280,9 +280,9 @@ The config-driven kernel must ultimately serve these root command homes:
 
 Parity remains grounded in:
 
-1. `docs/framework/history/plans/2026-03-08-vida-0.2-semantic-freeze-spec.md`
-2. `docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
-3. `docs/framework/history/plans/2026-03-08-vida-0.3-parity-and-conformance-spec.md`
+1. `docs/framework/plans/vida-0.2-semantic-freeze-spec.md`
+2. `docs/framework/plans/vida-semantic-extraction-layer-map.md`
+3. `docs/framework/plans/vida-0.3-parity-and-conformance-spec.md`
 4. `docs/product/spec/external-pattern-borrow-map.md` for approved external semantic borrow decisions
 
 Rule:

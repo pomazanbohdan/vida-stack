@@ -19,36 +19,36 @@ Your objective is to convert the 2026-03-08 agentic master plan into one tracked
 <required_inputs>
 Read these files in order before creating or editing any epic or child task:
 
-1. `/home/unnamed/project/mobile-odoo/AGENTS.md`
-2. `/home/unnamed/project/mobile-odoo/vida/config/instructions/agent-definitions.orchestrator-entry.md`
-3. `/home/unnamed/project/mobile-odoo/vida/config/instructions/instruction-contracts.thinking-protocol.md`
-4. `/home/unnamed/project/mobile-odoo/vida.config.yaml`
-5. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-master-index.md`
-6. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-autonomous-role-profiles-and-adaptive-orchestration-plan.md`
-7. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-research-architecture-map.md`
-8. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-parameter-registry.md`
-9. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md`
-10. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-decision-ledger.md`
-11. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-proof-obligation-registry.md`
-12. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-escalation-policy-matrix.md`
-13. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-atomic-claims-registry.md`
-14. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-source-consensus-matrix.md`
-15. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-source-disagreement-matrix.md`
-16. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-research-invariants.md`
-17. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-heuristic-library.md`
-18. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-known-unknowns-ledger.md`
-19. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-research-implication-map.md`
-20. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-claim-to-artifact-trace-map.md`
-21. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-threshold-hypotheses-registry.md`
-22. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-pattern-chooser-matrix.md`
-23. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-anti-pattern-catalog.md`
-24. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-threat-model-control-matrix.md`
-25. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-metric-glossary.md`
-26. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-terminology-glossary.md`
-27. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-invalidation-watchlist.md`
-28. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-task-archetype-library.md`
-29. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-source-query-log.md`
-30. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-external-future-bundle.md`
+1. `/home/unnamed/project/vida-stack/AGENTS.md`
+2. `/home/unnamed/project/vida-stack/vida/config/instructions/agent-definitions.orchestrator-entry.md`
+3. `/home/unnamed/project/vida-stack/vida/config/instructions/instruction-contracts.thinking-protocol.md`
+4. `/home/unnamed/project/vida-stack/vida.config.yaml`
+5. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-master-index.md`
+6. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-autonomous-role-profiles-and-adaptive-orchestration-plan.md`
+7. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-research-architecture-map.md`
+8. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-parameter-registry.md`
+9. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-agent-definition-system.md`
+10. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-decision-ledger.md`
+11. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-proof-obligation-registry.md`
+12. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-escalation-policy-matrix.md`
+13. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-atomic-claims-registry.md`
+14. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-source-consensus-matrix.md`
+15. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-source-disagreement-matrix.md`
+16. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-research-invariants.md`
+17. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-heuristic-library.md`
+18. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-known-unknowns-ledger.md`
+19. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-research-implication-map.md`
+20. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-claim-to-artifact-trace-map.md`
+21. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-threshold-hypotheses-registry.md`
+22. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-pattern-chooser-matrix.md`
+23. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-anti-pattern-catalog.md`
+24. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-threat-model-control-matrix.md`
+25. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-metric-glossary.md`
+26. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-terminology-glossary.md`
+27. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-invalidation-watchlist.md`
+28. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-task-archetype-library.md`
+29. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-source-query-log.md`
+30. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-external-future-bundle.md`
 </required_inputs>
 
 ## Scope Contract
@@ -74,9 +74,9 @@ Do NOT pull future scope into the new epic unless the task explicitly reopens it
 <missing_references>
 These files are referenced but not yet created:
 
-1. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-role-profile-source-registry.md`
-2. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-role-profile-source-delta-log.md`
-3. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-role-profile-eval-plan.md`
+1. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-role-profile-source-registry.md`
+2. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-role-profile-source-delta-log.md`
+3. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-role-profile-eval-plan.md`
 
 You MUST surface them explicitly in the new epic as:
 - early child tasks, or
@@ -189,8 +189,8 @@ Return:
 
 Use this prompt together with:
 
-1. `docs/framework/history/research/2026-03-08-agentic-master-index.md`
-2. `docs/framework/history/plans/2026-03-08-vida-autonomous-role-profiles-and-adaptive-orchestration-plan.md`
+1. `docs/framework/research/agentic-master-index.md`
+2. `docs/framework/plans/vida-autonomous-role-profiles-and-adaptive-orchestration-plan.md`
 
 If the next agent is asked to create actual tracked tasks, keep the output in tracked TaskFlow and preserve the master index as the compact bridge artifact.
 -----

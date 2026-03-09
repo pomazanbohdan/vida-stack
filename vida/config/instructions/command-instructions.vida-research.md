@@ -12,7 +12,7 @@ This command maps layers as:
 4. `CL4 Materialization` -> research document updates plus approved feature/decision sync.
 5. `CL5 Gates And Handoff` -> handoff inputs for `/vida-spec`, not implementation or task-pool mutation.
 
-Canonical source: `docs/framework/history/_vida-source/docs/command-layer-protocol.md`
+Canonical source: `command-layer-protocol.md`
 
 Handoff boundary:
 
@@ -28,10 +28,10 @@ Handoff boundary:
 
 ## Mandatory Validation Contract
 
-1. Use `docs/framework/history/_vida-source/docs/web-validation-protocol.md` as canonical internet validation standard.
+1. Use `web-validation-protocol.md` as canonical internet validation standard.
 2. For external factual claims, keep source evidence and reconciliation status.
 3. For API/server assumptions discovered during research, require live validation evidence before escalation to `/vida-spec`.
-4. Apply `docs/framework/history/_vida-source/docs/spec-contract-protocol.md` gates for this non-development flow.
+4. Apply `spec-contract-protocol.md` gates for this non-development flow.
 
 ## Mandatory Artifacts
 
@@ -134,7 +134,7 @@ Each `docs/research/<topic>.md` iteration should contain:
 1. `docs/feature-checklist.md`
 2. `docs/decisions.md`
 3. `/vida-spec`
-4. `docs/framework/history/_vida-source/docs/use-case-packs.md`
+4. `use-case-packs.md`
 
 -----
 artifact_path: config/command-instructions/vida.research

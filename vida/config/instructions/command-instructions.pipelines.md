@@ -27,7 +27,7 @@ Mandatory gate:
 2. Before worker-result handoff on transitioned slices, run the relevant `vida-v0` verification set from `vida/config/instructions/system-maps.runtime-transition-map.md`.
 3. If root `vida.config.yaml` exists, health-check must validate overlay schema before passing.
 4. If WVP triggers fired, record evidence per `vida/config/instructions/runtime-instructions.web-validation-protocol.md`.
-4.1. Prefer structured WVP markers via `bash docs/framework/history/_vida-source/scripts/wvp-evidence.sh ...` to reduce heuristic false positives in health checks.
+4.1. Prefer structured WVP markers via `bash wvp-evidence.sh ...` to reduce heuristic false positives in health checks.
 4.2. Health-check should ignore soft WVP keywords for framework-scope diagnosis/overlay tasks unless a strong external-fact trigger is also present.
 5. During in-flight execution, prefer `--mode quick`; use `--mode strict-dev` for development-cycle close checks; reserve `full` mode for final post-`pack-end`, pre-close/handoff checks.
 
@@ -111,26 +111,26 @@ Operational expectation:
 Validate skill availability before skill-driven flows:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/validate-skills.sh
+bash validate-skills.sh
 ```
 
 Use wrappers to keep task state consistent and reduce protocol drift:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh ready
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh start <id>
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh pack-start <id> <pack_id> "goal" "constraints"
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh block-plan <id> B01 "goal"
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh block-start <id> B01 "goal"
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh block-finish <id> B01 done "B02" "actions" "artifacts" - - "evidence" "85"
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh pack-end <id> <pack_id> done "summary" "next"
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh finish <id> "All ACs met"
+bash beads-workflow.sh ready
+bash beads-workflow.sh start <id>
+bash beads-workflow.sh pack-start <id> <pack_id> "goal" "constraints"
+bash beads-workflow.sh block-plan <id> B01 "goal"
+bash beads-workflow.sh block-start <id> B01 "goal"
+bash beads-workflow.sh block-finish <id> B01 done "B02" "actions" "artifacts" - - "evidence" "85"
+bash beads-workflow.sh pack-end <id> <pack_id> done "summary" "next"
+bash beads-workflow.sh finish <id> "All ACs met"
 ```
 
 Shortcut for standard non-dev initialization:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/nondev-pack-init.sh <task_id> <pack_id> "<goal>" [constraints]
+bash nondev-pack-init.sh <task_id> <pack_id> "<goal>" [constraints]
 ```
 
 Boot profile preflight:
@@ -145,9 +145,9 @@ Escalate profile (`standard`/`full`) only when risk/complexity justifies extra r
 Quiet background backup (optional):
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/beads-bg-sync.sh start --interval 600
-bash docs/framework/history/_vida-source/scripts/beads-bg-sync.sh status
-bash docs/framework/history/_vida-source/scripts/beads-bg-sync.sh stop
+bash beads-bg-sync.sh start --interval 600
+bash beads-bg-sync.sh status
+bash beads-bg-sync.sh stop
 ```
 
 Policy: prefer sparse interval (default 10 min) to avoid high operational overhead. The worker snapshots `.beads/issues.jsonl`; it is not a DB-authoritative sync loop.
@@ -186,8 +186,8 @@ Legacy migration note:
 For context compression checkpoints:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/beads-compact.sh pre <id> "done" "next" "risk"
-bash docs/framework/history/_vida-source/scripts/beads-compact.sh post <task_after>
+bash beads-compact.sh pre <id> "done" "next" "risk"
+bash beads-compact.sh post <task_after>
 ```
 
 Compact safety gate:
@@ -199,8 +199,8 @@ Compact safety gate:
 Evaluation pack (learning loop baseline):
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/eval-pack.sh run <task_id>
-python3 docs/framework/history/_vida-source/scripts/worker-eval-pack.py run <task_id>
+bash eval-pack.sh run <task_id>
+python3 worker-eval-pack.py run <task_id>
 ```
 
 Use generated scorecards (`.vida/logs/eval-pack-<task_id>.json`, `.vida/logs/trace-evals/trace-eval-<task_id>.json`, `.vida/logs/trace-datasets/trace-dataset-<task_id>.json`, `.vida/logs/worker-review-<task_id>.json`) and strategy snapshot (`.vida/state/worker-strategy.json`) for telemetry-driven improvement decisions.

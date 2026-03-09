@@ -92,9 +92,9 @@ Before routing work, normalize the request into:
    - else prefer active `in_progress` task from `br`;
    - else pick the highest-priority `ready` task, breaking ties by most recently updated work first, or create one when the request is net-new framework/project work.
 6. Detect pack only when TaskFlow is required:
-   - during migration, `bash docs/framework/history/_vida-source/scripts/vida-pack-helper.sh detect "<request>"` remains allowed as a legacy helper
+   - during migration, `bash vida-pack-helper.sh detect "<request>"` remains allowed as a legacy helper
 7. Select execution mode/profile:
-   - task execution mode via `docs/framework/history/_vida-source/scripts/task-execution-mode.sh`,
+   - task execution mode via `task-execution-mode.sh`,
    - boot profile via `vida-v0 boot ...`,
    - META / FSAP / SCP / WVP when triggers fire.
 8. Select orchestration hierarchy:
@@ -146,11 +146,11 @@ Before routing work, normalize the request into:
    - absent such a receipt, local orchestrator-first development is protocol-invalid.
 12.3. If an action cannot be traced to an explicit protocol clause, route receipt field, or escalation receipt, the orchestrator must not perform it.
 13. Start pack session only when TaskFlow is required:
-   - during migration, `bash docs/framework/history/_vida-source/scripts/vida-pack-helper.sh start <task_id> <pack_id> "<goal>" [constraints]`.
+   - during migration, `bash vida-pack-helper.sh start <task_id> <pack_id> "<goal>" [constraints]`.
    - optional shortcut for standard non-dev flows:
-     `bash docs/framework/history/_vida-source/scripts/nondev-pack-init.sh <task_id> <pack_id> "<goal>" [constraints]`.
+     `bash nondev-pack-init.sh <task_id> <pack_id> "<goal>" [constraints]`.
 14. Pre-register execution blocks only when TaskFlow is required:
-   - during migration, `bash docs/framework/history/_vida-source/scripts/vida-pack-helper.sh scaffold <task_id> <pack_id>`.
+   - during migration, `bash vida-pack-helper.sh scaffold <task_id> <pack_id>`.
 15. Execute via TaskFlow lifecycle only when TaskFlow is engaged:
    - `block-plan -> block-start -> block-end -> reflect -> verify`.
 15.1. Treat compact/context compression as an always-possible interruption:
@@ -165,7 +165,7 @@ Before routing work, normalize the request into:
    - resolve conflicts before reporting,
    - convert the result into an execution-ready artifact when appropriate.
 17. End pack session only when TaskFlow was engaged:
-   - during migration, `bash docs/framework/history/_vida-source/scripts/vida-pack-helper.sh end <task_id> <pack_id> <done|partial|failed> "<summary>" [next_step]`.
+   - during migration, `bash vida-pack-helper.sh end <task_id> <pack_id> <done|partial|failed> "<summary>" [next_step]`.
 
 ## Dynamic Expert Injection
 

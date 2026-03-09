@@ -1,6 +1,6 @@
 # Runtime Transition Map
 
-Purpose: provide one canonical map from legacy `docs/framework/history/_vida-source/scripts/*` helpers to the `vida-v0` transitional runtime or to explicit historical-only status.
+Purpose: provide one canonical map from legacy `*` helpers to the `vida-v0` transitional runtime or to explicit historical-only status.
 
 ## Active Transitional Runtime
 
@@ -21,20 +21,20 @@ Use `vida-v0` as the canonical runtime surface for these domains:
 
 These surfaces still exist as migration sources but are not the target canonical home:
 
-1. `docs/framework/history/_vida-source/scripts/beads-workflow.sh`
-2. `docs/framework/history/_vida-source/scripts/quality-health-check.sh`
-3. `docs/framework/history/_vida-source/scripts/beads-bg-sync.sh`
-4. `docs/framework/history/_vida-source/scripts/vida-pack-helper.sh`
-5. `docs/framework/history/_vida-source/scripts/vida-pack-router.sh`
-6. `docs/framework/history/_vida-source/scripts/nondev-pack-init.sh`
-7. `docs/framework/history/_vida-source/scripts/framework-wave-start.sh`
-8. `docs/framework/history/_vida-source/scripts/framework-task-sync.py`
-9. `docs/framework/history/_vida-source/scripts/skill-discovery.py`
-10. `docs/framework/history/_vida-source/scripts/doc-lifecycle.py`
-11. `docs/framework/history/_vida-source/scripts/problem-party.py`
-12. `docs/framework/history/_vida-source/scripts/render-worker-prompt.sh`
-13. `docs/framework/history/_vida-source/scripts/framework-memory.py`
-14. `docs/framework/history/_vida-source/scripts/trace-eval.py`
+1. `beads-workflow.sh`
+2. `quality-health-check.sh`
+3. `beads-bg-sync.sh`
+4. `vida-pack-helper.sh`
+5. `vida-pack-router.sh`
+6. `nondev-pack-init.sh`
+7. `framework-wave-start.sh`
+8. `framework-task-sync.py`
+9. `skill-discovery.py`
+10. `doc-lifecycle.py`
+11. `problem-party.py`
+12. `render-worker-prompt.sh`
+13. `framework-memory.py`
+14. `trace-eval.py`
 
 Rule:
 

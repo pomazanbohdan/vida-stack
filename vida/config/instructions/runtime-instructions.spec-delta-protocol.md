@@ -83,9 +83,9 @@ Normalize each delta source into one of:
 ## Commands
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/spec-delta.py write <task_id> <input.json> [--output PATH]
-python3 docs/framework/history/_vida-source/scripts/spec-delta.py validate <task_id> [--path PATH]
-python3 docs/framework/history/_vida-source/scripts/spec-delta.py status <task_id> [--path PATH]
+python3 spec-delta.py write <task_id> <input.json> [--output PATH]
+python3 spec-delta.py validate <task_id> [--path PATH]
+python3 spec-delta.py status <task_id> [--path PATH]
 ```
 
 -----

@@ -8,7 +8,7 @@ Purpose: preserve and promote the script-era cheap worker prompt pack into the p
 
 Source lineage:
 
-1. `docs/framework/history/_vida-source/docs/research/2026-03-08-agentic-cheap-worker-prompt-pack.md`
+1. `2026-03-08-agentic-cheap-worker-prompt-pack.md`
 
 ## Usage Rule
 

@@ -25,20 +25,20 @@ Then read the required files in the exact order below before acting.
 
 ## Required Read Order
 <required_read_order>
-1. `/home/unnamed/project/mobile-odoo/AGENTS.md`
-2. `/home/unnamed/project/mobile-odoo/vida/config/instructions/agent-definitions.orchestrator-entry.md`
-3. `/home/unnamed/project/mobile-odoo/vida/config/instructions/instruction-contracts.thinking-protocol.md`
-4. `/home/unnamed/project/mobile-odoo/vida.config.yaml`
-5. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-direct-1.0-compact-continuation-plan.md`
-6. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-vida-direct-1.0-next-agent-compact-instruction.md`
-7. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-cheap-worker-packet-system.md`
-8. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-autonomous-role-profiles-and-adaptive-orchestration-plan.md`
-9. `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/staged/direct-1.0-development-root/MASTER-DEVELOPMENT-PLAN.md`
+1. `/home/unnamed/project/vida-stack/AGENTS.md`
+2. `/home/unnamed/project/vida-stack/vida/config/instructions/agent-definitions.orchestrator-entry.md`
+3. `/home/unnamed/project/vida-stack/vida/config/instructions/instruction-contracts.thinking-protocol.md`
+4. `/home/unnamed/project/vida-stack/vida.config.yaml`
+5. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-direct-1.0-compact-continuation-plan.md`
+6. `/home/unnamed/project/vida-stack/docs/framework/research/vida-direct-1.0-next-agent-compact-instruction.md`
+7. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-cheap-worker-packet-system.md`
+8. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-autonomous-role-profiles-and-adaptive-orchestration-plan.md`
+9. `/home/unnamed/project/vida-stack/staged/direct-1.0-development-root/MASTER-DEVELOPMENT-PLAN.md`
 </required_read_order>
 
 Optional reference only if blocked on current scope or artifact order:
 
-1. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-master-index.md`
+1. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-master-index.md`
 
 ## Canonical Truth Sources
 <canonical_truth_sources>

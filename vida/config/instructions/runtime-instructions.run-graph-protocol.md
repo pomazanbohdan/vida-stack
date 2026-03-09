@@ -62,9 +62,9 @@ Current minimum runtime integration:
 ## Commands
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/run-graph.py init <task_id> <task_class> [route_task_class]
-python3 docs/framework/history/_vida-source/scripts/run-graph.py update <task_id> <task_class> <node> <status> [route_task_class] [meta_json]
-python3 docs/framework/history/_vida-source/scripts/run-graph.py status <task_id>
+python3 run-graph.py init <task_id> <task_class> [route_task_class]
+python3 run-graph.py update <task_id> <task_class> <node> <status> [route_task_class] [meta_json]
+python3 run-graph.py status <task_id>
 ```
 
 -----

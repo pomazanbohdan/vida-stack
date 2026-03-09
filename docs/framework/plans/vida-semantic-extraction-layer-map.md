@@ -174,7 +174,7 @@ Extract:
 
 Do not carry forward:
 
-1. `bash docs/framework/history/_vida-source/scripts/...` as the long-term operator surface
+1. `bash ...` as the long-term operator surface
 2. shell-specific argument plumbing
 
 Current sources:
@@ -341,7 +341,7 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md`
+1. `docs/framework/research/agentic-agent-definition-system.md`
 2. `vida/config/instructions/agent-definitions.protocol.md`
 3. `docs/framework/templates/instruction-contract.yaml`
 4. `docs/framework/templates/prompt-template-config.yaml`
@@ -368,7 +368,7 @@ Current sources:
 1. `vida/config/instructions/instruction-contracts.worker-dispatch-protocol.md`
 2. `vida/config/instructions/agent-definitions.worker-entry.md`
 3. `vida/config/instructions/instruction-contracts.worker-thinking.md`
-4. `docs/framework/history/research/2026-03-08-agentic-epic-slicing-agent-instruction.md`
+4. `docs/framework/research/agentic-epic-slicing-agent-instruction.md`
 
 Target artifact:
 
@@ -441,8 +441,8 @@ Do not carry forward:
 Current sources:
 
 1. `vida/config/instructions/runtime-instructions.trace-eval-protocol.md`
-2. `docs/framework/history/research/2026-03-08-agentic-metric-glossary.md`
-3. `docs/framework/history/research/2026-03-08-agentic-proof-obligation-registry.md`
+2. `docs/framework/research/agentic-metric-glossary.md`
+3. `docs/framework/research/agentic-proof-obligation-registry.md`
 
 Target artifact:
 
@@ -465,7 +465,7 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
+1. `docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
 2. `docs/research/vida-framework/vida-migration-registry.md`
 3. `vida-stack/VERSION-PLAN.md` via the direct-transition plan
 

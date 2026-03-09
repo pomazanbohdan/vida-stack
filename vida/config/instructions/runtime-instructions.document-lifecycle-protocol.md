@@ -29,9 +29,9 @@ Minimum entry fields:
 ## Commands
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/doc-lifecycle.py record <path> <proposed|current|superseded|deprecated|stale> --owner "<owner>" --notes "<notes>"
-python3 docs/framework/history/_vida-source/scripts/doc-lifecycle.py validate <path> [--max-age-days N]
-python3 docs/framework/history/_vida-source/scripts/doc-lifecycle.py status
+python3 doc-lifecycle.py record <path> <proposed|current|superseded|deprecated|stale> --owner "<owner>" --notes "<notes>"
+python3 doc-lifecycle.py validate <path> [--max-age-days N]
+python3 doc-lifecycle.py status
 ```
 
 ## Validation Rules

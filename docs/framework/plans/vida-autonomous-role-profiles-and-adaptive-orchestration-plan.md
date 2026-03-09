@@ -8,7 +8,7 @@
 
 **Architecture:** Build the system in layers. First establish canonical source refresh and the role/profile/instruction-definition contract. Then add routing, adaptive scaling, consensus, task packets, verification burden, OWASP mapping, and evaluation/trace surfaces. Only after the control plane is explicit should the project roll out task slicing, pilot runs, and epic-scale adoption.
 
-**Tech Stack:** Markdown protocols, instruction contracts, YAML templates/config, Python runtime helpers, shell wrappers, local execution receipts, web-search-based research refresh, `docs/framework/history/_vida-source/tests/*` proof surfaces, `br` task state, TaskFlow telemetry.
+**Tech Stack:** Markdown protocols, instruction contracts, YAML templates/config, Python runtime helpers, shell wrappers, local execution receipts, web-search-based research refresh, `conformance-tests/*` proof surfaces, `br` task state, TaskFlow telemetry.
 
 **Parallelizable:** PARTIALLY. Foundation tasks are sequential. After the profile/routing contract is stable, verification/eval/security work can split into bounded parallel slices.
 
@@ -70,8 +70,8 @@ Every task packet that touches any source-sensitive behavior must begin with:
 
 ### Required source artifacts to create during implementation
 
-- `docs/framework/history/research/2026-03-08-agentic-role-profile-source-registry.md`
-- `docs/framework/history/research/2026-03-08-agentic-role-profile-source-delta-log.md`
+- `docs/framework/research/agentic-role-profile-source-registry.md`
+- `docs/framework/research/agentic-role-profile-source-delta-log.md`
 
 ---
 
@@ -214,10 +214,10 @@ The bundle above is additive. It strengthens those sections and must be merged i
 **Why first:** The rest of the plan depends on refreshed external guidance. This task prevents knowledge drift.
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-role-profile-source-registry.md`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-role-profile-source-delta-log.md`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/research-refresh-protocol.md`
-- Modify: `/home/unnamed/project/mobile-odoo/docs/process/agent-system.md`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/research/agentic-role-profile-source-registry.md`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/research/agentic-role-profile-source-delta-log.md`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/research-refresh-protocol.md`
+- Modify: `/home/unnamed/project/vida-stack/docs/process/agent-system.md`
 
 **Autonomous packet must include:**
 - source families
@@ -261,8 +261,8 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 2: Define the canonical role taxonomy
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/role-taxonomy-protocol.md`
-- Modify: `/home/unnamed/project/mobile-odoo/docs/process/agent-system.md`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/role-taxonomy-protocol.md`
+- Modify: `/home/unnamed/project/vida-stack/docs/process/agent-system.md`
 
 **Autonomous packet must include:**
 - list of current and target roles
@@ -303,9 +303,9 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 3: Define the role profile card schema
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/role-profile-protocol.md`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/templates/role-profile-card.yaml`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/tests/test_role_profile_schema.py`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/role-profile-protocol.md`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/templates/role-profile-card.yaml`
+- Create: `/home/unnamed/project/vida-stack/conformance-tests/test_role_profile_schema.py`
 
 **Autonomous packet must include:**
 - required profile fields
@@ -367,8 +367,8 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 4: Define thinking-tone axes and cognitive stance vocabulary
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/thinking-tone-axes.md`
-- Modify: `/home/unnamed/project/mobile-odoo/docs/framework/role-profile-protocol.md`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/thinking-tone-axes.md`
+- Modify: `/home/unnamed/project/vida-stack/docs/framework/role-profile-protocol.md`
 
 **Autonomous packet must include:**
 - the tone axes list
@@ -418,9 +418,9 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 5: Define the task classification model
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/task-classification-protocol.md`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/scripts/task-classify.py`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/tests/test_task_classification.py`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/task-classification-protocol.md`
+- Create: `/home/unnamed/project/vida-stack/task-classify.py`
+- Create: `/home/unnamed/project/vida-stack/conformance-tests/test_task_classification.py`
 
 **Autonomous packet must include:**
 - task classes
@@ -472,9 +472,9 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 6: Define the task score model
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/task-score-protocol.md`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/scripts/task-score.py`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/tests/test_task_score.py`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/task-score-protocol.md`
+- Create: `/home/unnamed/project/vida-stack/task-score.py`
+- Create: `/home/unnamed/project/vida-stack/conformance-tests/test_task_score.py`
 
 **Autonomous packet must include:**
 - scoring inputs
@@ -521,10 +521,10 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 7: Define the adaptive agent-count policy
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/adaptive-agent-count-protocol.md`
-- Modify: `/home/unnamed/project/mobile-odoo/vida/config/instructions/instruction-contracts.agent-system-protocol.md`
-- Modify: `/home/unnamed/project/mobile-odoo/vida.config.yaml`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/tests/test_adaptive_agent_count.py`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/adaptive-agent-count-protocol.md`
+- Modify: `/home/unnamed/project/vida-stack/vida/config/instructions/instruction-contracts.agent-system-protocol.md`
+- Modify: `/home/unnamed/project/vida-stack/vida.config.yaml`
+- Create: `/home/unnamed/project/vida-stack/conformance-tests/test_adaptive_agent_count.py`
 
 **Autonomous packet must include:**
 - score thresholds
@@ -570,9 +570,9 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 8: Define the consensus and escalation policy
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/consensus-orchestration-protocol.md`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/scripts/consensus-merge.py`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/tests/test_consensus_merge.py`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/consensus-orchestration-protocol.md`
+- Create: `/home/unnamed/project/vida-stack/consensus-merge.py`
+- Create: `/home/unnamed/project/vida-stack/conformance-tests/test_consensus_merge.py`
 
 **Autonomous packet must include:**
 - allowed consensus modes
@@ -619,9 +619,9 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 9: Define the task packet and autonomous handoff contract
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/autonomous-task-packet-protocol.md`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/templates/autonomous-task-packet.md`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/tests/test_task_packet_contract.py`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/autonomous-task-packet-protocol.md`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/templates/autonomous-task-packet.md`
+- Create: `/home/unnamed/project/vida-stack/conformance-tests/test_task_packet_contract.py`
 
 **Autonomous packet must include:**
 - objective
@@ -666,9 +666,9 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 10: Define context compaction and summary-handoff rules
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/context-handoff-protocol.md`
-- Modify: `/home/unnamed/project/mobile-odoo/docs/framework/research-refresh-protocol.md`
-- Modify: `/home/unnamed/project/mobile-odoo/docs/framework/autonomous-task-packet-protocol.md`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/context-handoff-protocol.md`
+- Modify: `/home/unnamed/project/vida-stack/docs/framework/research-refresh-protocol.md`
+- Modify: `/home/unnamed/project/vida-stack/docs/framework/autonomous-task-packet-protocol.md`
 
 **Autonomous packet must include:**
 - handoff artifact format
@@ -707,8 +707,8 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 11: Define the role compatibility and forbidden substitution matrix
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/role-compatibility-matrix.md`
-- Modify: `/home/unnamed/project/mobile-odoo/docs/framework/role-taxonomy-protocol.md`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/role-compatibility-matrix.md`
+- Modify: `/home/unnamed/project/vida-stack/docs/framework/role-taxonomy-protocol.md`
 
 **Autonomous packet must include:**
 - roles under analysis
@@ -754,8 +754,8 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 12: Define the verification burden matrix
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/verification-burden-matrix.md`
-- Modify: `/home/unnamed/project/mobile-odoo/vida/config/instructions/command-instructions.implement-execution-protocol.md`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/verification-burden-matrix.md`
+- Modify: `/home/unnamed/project/vida-stack/vida/config/instructions/command-instructions.implement-execution-protocol.md`
 
 **Autonomous packet must include:**
 - task class
@@ -799,10 +799,10 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 13: Define the OWASP security spine
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/owasp-agent-security-protocol.md`
-- Create: `/home/unnamed/project/mobile-odoo/docs/process/owasp-vida-mapping.md`
-- Modify: `/home/unnamed/project/mobile-odoo/docs/framework/verification-burden-matrix.md`
-- Modify: `/home/unnamed/project/mobile-odoo/docs/framework/role-profile-protocol.md`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/owasp-agent-security-protocol.md`
+- Create: `/home/unnamed/project/vida-stack/docs/process/owasp-vida-mapping.md`
+- Modify: `/home/unnamed/project/vida-stack/docs/framework/verification-burden-matrix.md`
+- Modify: `/home/unnamed/project/vida-stack/docs/framework/role-profile-protocol.md`
 
 **Autonomous packet must include:**
 - OWASP source set
@@ -850,9 +850,9 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 14: Define observability and trace schema
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/adaptive-orchestration-trace-schema.md`
-- Modify: `/home/unnamed/project/mobile-odoo/vida/config/instructions/runtime-instructions.run-graph-protocol.md`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/tests/test_trace_schema.py`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/adaptive-orchestration-trace-schema.md`
+- Modify: `/home/unnamed/project/vida-stack/vida/config/instructions/runtime-instructions.run-graph-protocol.md`
+- Create: `/home/unnamed/project/vida-stack/conformance-tests/test_trace_schema.py`
 
 **Autonomous packet must include:**
 - required trace fields
@@ -903,9 +903,9 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 15: Define the eval and benchmark package
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-role-profile-eval-plan.md`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/agentic-eval-protocol.md`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/tests/test_eval_protocol_contract.py`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/research/agentic-role-profile-eval-plan.md`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/agentic-eval-protocol.md`
+- Create: `/home/unnamed/project/vida-stack/conformance-tests/test_eval_protocol_contract.py`
 
 **Autonomous packet must include:**
 - benchmark questions
@@ -955,8 +955,8 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 16: Define rollout and migration order
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/process/agent-role-profile-rollout.md`
-- Modify: `/home/unnamed/project/mobile-odoo/docs/process/agent-system.md`
+- Create: `/home/unnamed/project/vida-stack/docs/process/agent-role-profile-rollout.md`
+- Modify: `/home/unnamed/project/vida-stack/docs/process/agent-system.md`
 
 **Autonomous packet must include:**
 - migration sequence
@@ -995,8 +995,8 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 17: Define the proving wave
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/process/agent-role-profile-proving-wave.md`
-- Modify: `/home/unnamed/project/mobile-odoo/docs/process/agent-role-profile-rollout.md`
+- Create: `/home/unnamed/project/vida-stack/docs/process/agent-role-profile-proving-wave.md`
+- Modify: `/home/unnamed/project/vida-stack/docs/process/agent-role-profile-rollout.md`
 
 **Autonomous packet must include:**
 - pilot task selection rules
@@ -1035,9 +1035,9 @@ The bundle above is additive. It strengthens those sections and must be merged i
 ## Task 18: Prepare epic-slicing and TaskFlow formation guidance
 
 **Files:**
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-master-index.md`
-- Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-epic-slicing-agent-instruction.md`
-- Modify: `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-autonomous-role-profiles-and-adaptive-orchestration-plan.md`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/research/agentic-master-index.md`
+- Create: `/home/unnamed/project/vida-stack/docs/framework/research/agentic-epic-slicing-agent-instruction.md`
+- Modify: `/home/unnamed/project/vida-stack/docs/framework/plans/vida-autonomous-role-profiles-and-adaptive-orchestration-plan.md`
 
 **Autonomous packet must include:**
 - target epic waves
@@ -1174,16 +1174,16 @@ This is a filled example for future slicing. Use it as the canonical sample when
 1. `Goal`
    - Define and implement the policy that chooses single-agent, dual-lane, triad, quorum, or arbiter routing based on task score and prior effectiveness rather than a fixed agent minimum.
 2. `Files`
-   - Create: `/home/unnamed/project/mobile-odoo/docs/framework/adaptive-agent-count-protocol.md`
-   - Modify: `/home/unnamed/project/mobile-odoo/vida/config/instructions/instruction-contracts.agent-system-protocol.md`
-   - Modify: `/home/unnamed/project/mobile-odoo/vida.config.yaml`
-   - Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/tests/test_adaptive_agent_count.py`
+   - Create: `/home/unnamed/project/vida-stack/docs/framework/adaptive-agent-count-protocol.md`
+   - Modify: `/home/unnamed/project/vida-stack/vida/config/instructions/instruction-contracts.agent-system-protocol.md`
+   - Modify: `/home/unnamed/project/vida-stack/vida.config.yaml`
+   - Create: `/home/unnamed/project/vida-stack/conformance-tests/test_adaptive_agent_count.py`
 3. `Research Refresh Gate`
    - Refresh Google scaling research, Anthropic multi-agent guidance, and Microsoft single-vs-multi-agent guidance.
    - Update the source delta log if routing rules or anti-pattern warnings changed materially.
 4. `Input Artifacts`
-   - `docs/framework/history/research/2026-03-08-agentic-role-profile-source-registry.md`
-   - `docs/framework/history/research/2026-03-08-agentic-role-profile-source-delta-log.md`
+   - `docs/framework/research/agentic-role-profile-source-registry.md`
+   - `docs/framework/research/agentic-role-profile-source-delta-log.md`
    - `docs/framework/task-classification-protocol.md`
    - `docs/framework/task-score-protocol.md`
    - `docs/framework/role-taxonomy-protocol.md`

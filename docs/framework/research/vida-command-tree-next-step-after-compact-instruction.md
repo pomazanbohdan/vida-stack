@@ -2,7 +2,7 @@
 
 Purpose: give the next orchestrator an exact prompt-ready instruction for the first post-compact artifact step: `command tree spec`.
 
-Use when: context was compacted and the next artifact to create is `docs/framework/history/plans/2026-03-08-vida-0.3-command-tree-spec.md`.
+Use when: context was compacted and the next artifact to create is `docs/framework/plans/vida-0.3-command-tree-spec.md`.
 
 ---
 
@@ -10,7 +10,7 @@ Use when: context was compacted and the next artifact to create is `docs/framewo
 
 Create:
 
-1. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-command-tree-spec.md`
+1. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-command-tree-spec.md`
 
 The artifact must define:
 
@@ -27,26 +27,26 @@ The artifact must define:
 
 Read these in order before acting:
 
-1. `/home/unnamed/project/mobile-odoo/AGENTS.md`
-2. `/home/unnamed/project/mobile-odoo/vida/config/instructions/agent-definitions.orchestrator-entry.md`
-3. `/home/unnamed/project/mobile-odoo/vida/config/instructions/instruction-contracts.thinking-protocol.md`
-4. `/home/unnamed/project/mobile-odoo/vida.config.yaml`
-5. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-master-index.md`
-6. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-vida-direct-1.0-next-agent-compact-instruction.md`
-7. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
-8. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
-9. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.2-semantic-freeze-spec.md`
-10. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.2-bridge-policy.md`
-11. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
-12. `/home/unnamed/project/mobile-odoo/vida/config/instructions/command-instructions.command-layer-protocol.md`
-13. `/home/unnamed/project/mobile-odoo/vida/config/instructions/instruction-contracts.orchestration-protocol.md`
-14. `/home/unnamed/project/mobile-odoo/vida/config/instructions/system-maps.protocol-index.md`
-15. `/home/unnamed/project/mobile-odoo/vida/config/instructions/agent-definitions.protocol.md`
+1. `/home/unnamed/project/vida-stack/AGENTS.md`
+2. `/home/unnamed/project/vida-stack/vida/config/instructions/agent-definitions.orchestrator-entry.md`
+3. `/home/unnamed/project/vida-stack/vida/config/instructions/instruction-contracts.thinking-protocol.md`
+4. `/home/unnamed/project/vida-stack/vida.config.yaml`
+5. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-master-index.md`
+6. `/home/unnamed/project/vida-stack/docs/framework/research/vida-direct-1.0-next-agent-compact-instruction.md`
+7. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
+8. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-semantic-extraction-layer-map.md`
+9. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.2-semantic-freeze-spec.md`
+10. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.2-bridge-policy.md`
+11. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-direct-1.0-local-spec-program.md`
+12. `/home/unnamed/project/vida-stack/vida/config/instructions/command-instructions.command-layer-protocol.md`
+13. `/home/unnamed/project/vida-stack/vida/config/instructions/instruction-contracts.orchestration-protocol.md`
+14. `/home/unnamed/project/vida-stack/vida/config/instructions/system-maps.protocol-index.md`
+15. `/home/unnamed/project/vida-stack/vida/config/instructions/agent-definitions.protocol.md`
 
 Optional but preferred:
 
-1. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-proof-obligation-registry.md`
-2. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-cheap-worker-packet-system.md`
+1. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-proof-obligation-registry.md`
+2. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-cheap-worker-packet-system.md`
 
 ---
 

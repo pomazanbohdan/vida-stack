@@ -8,7 +8,7 @@ scope_boundary:
   out_of_scope:
     - "Explicit non-goal."
 mandatory_reads:
-  - "docs/framework/history/_vida-source/docs/example-protocol.md"
+  - "vida/config/instructions/instruction-contracts.example-protocol.md"
 input_contract:
   required_inputs:
     - "task_packet"

@@ -22,7 +22,7 @@ Bootstrap cluster:
 Split rule:
 
 1. `docs/framework/plans/**` are active strategic and execution-spec artifacts by default.
-2. `docs/framework/history/**` are evidence/history by default.
+2. `**` are evidence/history by default.
 3. `docs/product/spec/**` are promoted stable product canon.
 4. `vida/config/**` is the executable law home.
 

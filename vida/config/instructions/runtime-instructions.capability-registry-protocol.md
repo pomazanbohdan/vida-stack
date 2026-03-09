@@ -35,8 +35,8 @@ Each group must declare:
 ## Commands
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/capability-registry.py build
-python3 docs/framework/history/_vida-source/scripts/capability-registry.py check <task_class> <worker>
+python3 capability-registry.py build
+python3 capability-registry.py check <task_class> <worker>
 ```
 
 -----

@@ -94,10 +94,10 @@ For runtime artifacts (`.vida/logs`, `.vida/state`, `.beads`):
 For runtime tool availability/fallback consistency, use:
 
 ```text
-bash docs/framework/history/_vida-source/scripts/tool-capability.sh matrix
-bash docs/framework/history/_vida-source/scripts/tool-capability.sh resolve <required_tool>
-bash docs/framework/history/_vida-source/scripts/tool-capability.sh evidence <task_id> <required_tool> [impact]
-bash docs/framework/history/_vida-source/scripts/tool-capability.sh use <task_id> <required_tool> [impact]
+bash tool-capability.sh matrix
+bash tool-capability.sh resolve <required_tool>
+bash tool-capability.sh evidence <task_id> <required_tool> [impact]
+bash tool-capability.sh use <task_id> <required_tool> [impact]
 ```
 
 Fallback evidence line format (mandatory for non-trivial fallback):

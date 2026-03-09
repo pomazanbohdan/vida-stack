@@ -85,7 +85,7 @@ Precedence:
 
 Fallback helper:
 
-1. if `br ready` cannot express lawful ordering because dependency readiness is temporarily unreliable, use `python3 docs/framework/history/_vida-source/scripts/autonomous-next-task.py` with bounded prefix/label scope as the fallback selector,
+1. if `br ready` cannot express lawful ordering because dependency readiness is temporarily unreliable, use `python3 autonomous-next-task.py` with bounded prefix/label scope as the fallback selector,
 2. this helper is a bounded runtime workaround and must not silently override higher-precedence receipts or active TaskFlow state.
 
 ## Operating Loop

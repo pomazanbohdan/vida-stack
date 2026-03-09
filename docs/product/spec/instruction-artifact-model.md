@@ -130,10 +130,10 @@ Canonical rule:
 
 This spec absorbs and supersedes product-instruction semantics previously scattered across:
 
-1. `docs/framework/history/plans/2026-03-08-vida-0.3-instruction-kernel-spec.md`
-2. `docs/framework/history/_vida-source/instructions/framework/agent-definition.md`
-3. `docs/framework/history/_vida-source/instructions/framework/instruction-contract.md`
-4. `docs/framework/history/_vida-source/instructions/framework/prompt-template-config.md`
+1. `docs/framework/plans/vida-0.3-instruction-kernel-spec.md`
+2. `vida/config/instructions/agent-definitions.protocol.md`
+3. `docs/product/spec/instruction-artifact-model.md`
+4. `vida/config/instructions/prompt-templates.worker-packet-templates.md`
 5. `docs/framework/templates/instruction-contract.yaml`
 6. `docs/framework/templates/prompt-template-config.yaml`
 

@@ -2,7 +2,7 @@
 
 Purpose: give the next orchestrator an exact prompt-ready instruction for the post-state-kernel artifact step: `instruction kernel spec`.
 
-Use when: context was compacted and the next artifact to create is `docs/framework/history/plans/2026-03-08-vida-0.3-instruction-kernel-spec.md`.
+Use when: context was compacted and the next artifact to create is `docs/framework/plans/vida-0.3-instruction-kernel-spec.md`.
 
 ---
 
@@ -10,7 +10,7 @@ Use when: context was compacted and the next artifact to create is `docs/framewo
 
 Create:
 
-1. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-instruction-kernel-spec.md`
+1. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-instruction-kernel-spec.md`
 
 The artifact must define:
 
@@ -34,31 +34,31 @@ The artifact must define:
 
 Read these in order before acting:
 
-1. `/home/unnamed/project/mobile-odoo/AGENTS.md`
-2. `/home/unnamed/project/mobile-odoo/vida/config/instructions/agent-definitions.orchestrator-entry.md`
-3. `/home/unnamed/project/mobile-odoo/vida/config/instructions/instruction-contracts.thinking-protocol.md`
-4. `/home/unnamed/project/mobile-odoo/vida.config.yaml`
-5. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-master-index.md`
-6. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-vida-direct-1.0-next-agent-compact-instruction.md`
-7. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-command-tree-spec.md`
-8. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-state-kernel-schema-spec.md`
-9. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
-10. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
-11. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.2-semantic-freeze-spec.md`
-12. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.2-bridge-policy.md`
-13. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
-14. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md`
-15. `/home/unnamed/project/mobile-odoo/vida/config/instructions/agent-definitions.protocol.md`
-16. `/home/unnamed/project/mobile-odoo/docs/framework/templates/instruction-contract.yaml`
-17. `/home/unnamed/project/mobile-odoo/docs/framework/templates/prompt-template-config.yaml`
-18. `/home/unnamed/project/mobile-odoo/vida/config/instructions/runtime-instructions.project-overlay-protocol.md`
-19. `/home/unnamed/project/mobile-odoo/vida/config/instructions/instruction-contracts.instruction-activation-protocol.md`
-20. `/home/unnamed/project/mobile-odoo/vida/config/instructions/instruction-contracts.agent-system-protocol.md`
+1. `/home/unnamed/project/vida-stack/AGENTS.md`
+2. `/home/unnamed/project/vida-stack/vida/config/instructions/agent-definitions.orchestrator-entry.md`
+3. `/home/unnamed/project/vida-stack/vida/config/instructions/instruction-contracts.thinking-protocol.md`
+4. `/home/unnamed/project/vida-stack/vida.config.yaml`
+5. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-master-index.md`
+6. `/home/unnamed/project/vida-stack/docs/framework/research/vida-direct-1.0-next-agent-compact-instruction.md`
+7. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-command-tree-spec.md`
+8. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-state-kernel-schema-spec.md`
+9. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
+10. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-semantic-extraction-layer-map.md`
+11. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.2-semantic-freeze-spec.md`
+12. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.2-bridge-policy.md`
+13. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-direct-1.0-local-spec-program.md`
+14. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-agent-definition-system.md`
+15. `/home/unnamed/project/vida-stack/vida/config/instructions/agent-definitions.protocol.md`
+16. `/home/unnamed/project/vida-stack/docs/framework/templates/instruction-contract.yaml`
+17. `/home/unnamed/project/vida-stack/docs/framework/templates/prompt-template-config.yaml`
+18. `/home/unnamed/project/vida-stack/vida/config/instructions/runtime-instructions.project-overlay-protocol.md`
+19. `/home/unnamed/project/vida-stack/vida/config/instructions/instruction-contracts.instruction-activation-protocol.md`
+20. `/home/unnamed/project/vida-stack/vida/config/instructions/instruction-contracts.agent-system-protocol.md`
 
 Optional but preferred:
 
-1. `/home/unnamed/project/mobile-odoo/vida/config/instructions/runtime-instructions.framework-memory-protocol.md`
-2. `/home/unnamed/project/mobile-odoo/vida/config/instructions/diagnostic-instructions.silent-framework-diagnosis-protocol.md`
+1. `/home/unnamed/project/vida-stack/vida/config/instructions/runtime-instructions.framework-memory-protocol.md`
+2. `/home/unnamed/project/vida-stack/vida/config/instructions/diagnostic-instructions.silent-framework-diagnosis-protocol.md`
 
 ---
 

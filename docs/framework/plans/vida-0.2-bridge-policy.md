@@ -31,15 +31,15 @@ Compact formula:
 
 Local source basis:
 
-1. `docs/framework/history/plans/2026-03-08-vida-0.2-semantic-freeze-spec.md`
-2. `docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
-3. `docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
-4. `docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
+1. `docs/framework/plans/vida-0.2-semantic-freeze-spec.md`
+2. `docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
+3. `docs/framework/plans/vida-direct-1.0-local-spec-program.md`
+4. `docs/framework/plans/vida-semantic-extraction-layer-map.md`
 5. `vida/config/instructions/runtime-instructions.beads-protocol.md`
 6. `vida/config/instructions/instruction-contracts.agent-system-protocol.md`
 7. `vida/config/instructions/agent-definitions.protocol.md`
-8. `docs/framework/history/research/2026-03-08-agentic-cheap-worker-packet-system.md`
-9. `docs/framework/history/research/2026-03-08-agentic-proof-obligation-registry.md`
+8. `docs/framework/research/agentic-cheap-worker-packet-system.md`
+9. `docs/framework/research/agentic-proof-obligation-registry.md`
 
 Web source basis:
 
@@ -260,16 +260,16 @@ No bridge task is closure-ready if:
 
 This bridge policy unlocks:
 
-1. `docs/framework/history/plans/2026-03-08-vida-0.3-command-tree-spec.md`
-2. `docs/framework/history/plans/2026-03-08-vida-0.3-state-kernel-schema-spec.md`
-3. `docs/framework/history/plans/2026-03-08-vida-0.3-instruction-kernel-spec.md`
-4. `docs/framework/history/plans/2026-03-08-vida-0.3-migration-kernel-spec.md`
-5. `docs/framework/history/plans/2026-03-08-vida-0.3-route-and-receipt-spec.md`
-6. `docs/framework/history/plans/2026-03-08-vida-0.3-parity-and-conformance-spec.md`
+1. `docs/framework/plans/vida-0.3-command-tree-spec.md`
+2. `docs/framework/plans/vida-0.3-state-kernel-schema-spec.md`
+3. `docs/framework/plans/vida-0.3-instruction-kernel-spec.md`
+4. `docs/framework/plans/vida-0.3-migration-kernel-spec.md`
+5. `docs/framework/plans/vida-0.3-route-and-receipt-spec.md`
+6. `docs/framework/plans/vida-0.3-parity-and-conformance-spec.md`
 
 Immediate next artifact:
 
-1. `docs/framework/history/plans/2026-03-08-vida-0.3-command-tree-spec.md`
+1. `docs/framework/plans/vida-0.3-command-tree-spec.md`
 
 Immediate sequencing rule:
 

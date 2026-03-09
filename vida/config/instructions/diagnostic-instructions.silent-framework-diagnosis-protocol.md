@@ -44,7 +44,7 @@ Capture records must include:
 Canonical helper:
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/vida-silent-diagnosis.py capture \
+python3 vida-silent-diagnosis.py capture \
   --summary "<framework issue>" \
   --details "<what happened>" \
   --current-task "<task_id>" \

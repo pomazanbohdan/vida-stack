@@ -5,7 +5,7 @@ Purpose: provide reusable proving-pack templates for high-value product and fram
 Canonical helper:
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/proving-pack.py <navigation_ownership|account_switch|locale_preservation|drawer_interaction|framework_self> [--task-id <task_id>]
+python3 proving-pack.py <navigation_ownership|account_switch|locale_preservation|drawer_interaction|framework_self> [--task-id <task_id>]
 ```
 
 Rules:

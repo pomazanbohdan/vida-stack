@@ -108,8 +108,8 @@ LIVE:
 Structured marker shortcut:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/wvp-evidence.sh record <task_id> <trigger> <agreement> <live_check> <decision_impact> [sources_csv]
-bash docs/framework/history/_vida-source/scripts/wvp-evidence.sh not-required <task_id> <reason>
+bash wvp-evidence.sh record <task_id> <trigger> <agreement> <live_check> <decision_impact> [sources_csv]
+bash wvp-evidence.sh not-required <task_id> <reason>
 ```
 
 `quality-health-check.sh` treats these markers as canonical WVP evidence for runtime validation.

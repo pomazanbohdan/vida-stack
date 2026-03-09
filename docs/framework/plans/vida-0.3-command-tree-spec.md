@@ -31,7 +31,7 @@ This is command-law, not shell-topology law.
 `1.0` must not preserve mechanically:
 
 1. `/vida-*` slash-command names as product law,
-2. `docs/framework/history/_vida-source/scripts/*.sh|*.py` entrypoints,
+2. `*.sh|*.py` entrypoints,
 3. `br`/`.beads`/`.vida` storage topology,
 4. helper/path/flag naming,
 5. markdown-first startup as the primary operator surface.
@@ -77,11 +77,11 @@ Local source basis:
 13. `vida/config/instructions/command-instructions.vida-implement.md`
 14. `vida/config/instructions/command-instructions.vida-bug-fix.md`
 15. `vida/config/instructions/command-instructions.vida-status.md`
-16. `docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
-17. `docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
-18. `docs/framework/history/plans/2026-03-08-vida-0.2-semantic-freeze-spec.md`
-19. `docs/framework/history/plans/2026-03-08-vida-0.2-bridge-policy.md`
-20. `docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
+16. `docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
+17. `docs/framework/plans/vida-semantic-extraction-layer-map.md`
+18. `docs/framework/plans/vida-0.2-semantic-freeze-spec.md`
+19. `docs/framework/plans/vida-0.2-bridge-policy.md`
+20. `docs/framework/plans/vida-direct-1.0-local-spec-program.md`
 
 Target-direction source basis:
 
@@ -297,8 +297,8 @@ Doctor boundary:
 
 | Current semantic source | Preserved future family | What survives | What does not survive |
 |---|---|---|---|
-| boot snapshot + bootstrap router | `vida boot` | boot boundary, compact resume, startup guidance | `python3 docs/framework/history/_vida-source/scripts/vida-boot-snapshot.py`, `boot-profile.sh`, receipt file names |
-| `/vida-status` + operator status surfaces | `vida status` | read-only operator visibility | `bash docs/framework/history/_vida-source/scripts/vida-status.sh`, `br ... --json`, tmp-file choreography |
+| boot snapshot + bootstrap router | `vida boot` | boot boundary, compact resume, startup guidance | `python3 vida-boot-snapshot.py`, `boot-profile.sh`, receipt file names |
+| `/vida-status` + operator status surfaces | `vida status` | read-only operator visibility | `bash vida-status.sh`, `br ... --json`, tmp-file choreography |
 | `/vida-research` | `vida task ...` | evidence gathering and handoff semantics | top-level slash name and markdown doc path |
 | `/vida-spec` | `vida task ...` | contract formation, reality validation, readiness semantics | top-level slash name and SCP shell-era surface naming |
 | `/vida-form-task` | `vida task ...` | planning, dependency graph, readiness verdict, launch gate | helper-driven pack/task-pool shell plumbing |
@@ -338,7 +338,7 @@ Preserve:
 Do not freeze:
 
 1. `vida/config/instructions/command-instructions.commands.md` or `docs/framework/commands/vida-*.md` as product command topology,
-2. `bash docs/framework/history/_vida-source/scripts/...` or `python3 docs/framework/history/_vida-source/scripts/...` entrypoints,
+2. `bash ...` or `python3 ...` entrypoints,
 3. pack/helper verbs such as `detect|start|scaffold|end`,
 4. shell profiles such as `lean|standard|full`,
 5. `br`/`beads_br` flags, JSON/JSONL command shapes, or `--no-db`,
@@ -502,7 +502,7 @@ This artifact unlocks:
 
 The next artifact is:
 
-1. `docs/framework/history/plans/2026-03-08-vida-0.3-state-kernel-schema-spec.md`
+1. `docs/framework/plans/vida-0.3-state-kernel-schema-spec.md`
 
 Reason:
 

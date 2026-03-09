@@ -12,7 +12,7 @@ This command maps layers as:
 4. `CL4 Materialization` -> `IEP-5 Implement Loop`
 5. `CL5 Gates And Handoff` -> `IEP-6 Verify And Review` + `IEP-7 Close And Continue` + `IEP-8 Pool Completion`
 
-Canonical source: `docs/framework/history/_vida-source/docs/command-layer-protocol.md`
+Canonical source: `command-layer-protocol.md`
 
 Execution boundary:
 
@@ -29,13 +29,13 @@ Execution boundary:
 
 ## Mandatory Reads Before Execution
 
-1. `docs/framework/history/_vida-source/docs/implement-execution-protocol.md`.
-2. `docs/framework/history/_vida-source/docs/form-task-protocol.md`.
-3. `docs/framework/history/_vida-source/docs/spec-contract-protocol.md`.
-4. `docs/framework/history/_vida-source/docs/web-validation-protocol.md`.
-5. `docs/framework/history/_vida-source/docs/beads-protocol.md`.
-6. `docs/framework/history/_vida-source/docs/todo-protocol.md`.
-7. `docs/framework/history/_vida-source/docs/workers.md`.
+1. `implement-execution-protocol.md`.
+2. `form-task-protocol.md`.
+3. `spec-contract-protocol.md`.
+4. `web-validation-protocol.md`.
+5. `beads-protocol.md`.
+6. `vida/config/instructions/runtime-instructions.taskflow-protocol.md`.
+7. `vida/config/instructions/agent-definitions.worker-entry.md`.
 8. `docs/decisions.md`.
 
 ## Inputs
@@ -48,7 +48,7 @@ Execution boundary:
 
 ## Canonical Flow (IEP)
 
-Use `docs/framework/history/_vida-source/docs/implement-execution-protocol.md` as source of truth.
+Use `implement-execution-protocol.md` as source of truth.
 
 1. `IEP-0 Launch Intake`.
 2. `IEP-1 Context Hydration`.
@@ -102,10 +102,10 @@ Key blocker for absorbed cascade behavior:
 
 ## Related
 
-1. `docs/framework/history/_vida-source/docs/implement-execution-protocol.md`
-2. `docs/framework/history/_vida-source/docs/form-task-protocol.md`
-3. `docs/framework/history/_vida-source/docs/use-case-packs.md`
-4. `docs/framework/history/_vida-source/docs/todo-protocol.md`
+1. `implement-execution-protocol.md`
+2. `form-task-protocol.md`
+3. `use-case-packs.md`
+4. `vida/config/instructions/runtime-instructions.taskflow-protocol.md`
 5. `vida/config/instructions/command-instructions.vida-form-task.md`
 
 -----

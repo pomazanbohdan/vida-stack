@@ -39,8 +39,8 @@ Allowed grade values:
 ## Commands
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/trace-eval.py grade <task_id>
-python3 docs/framework/history/_vida-source/scripts/trace-eval.py dataset <task_id>
+python3 trace-eval.py grade <task_id>
+python3 trace-eval.py dataset <task_id>
 ```
 
 ## Dataset Contract

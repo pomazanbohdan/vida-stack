@@ -21,7 +21,7 @@ Canonical split:
 1. `vida/config/instructions/` -> active framework instruction canon.
 2. `docs/framework/plans/` -> active strategic and execution-spec program artifacts.
 3. `docs/framework/research/` -> active research artifacts.
-4. `docs/framework/history/` -> historical evidence only.
+4. `` -> historical evidence only.
 5. `docs/process/` -> canonical project operational runbooks.
 6. `scripts/` -> executable project operations referenced by `docs/process/`.
 
@@ -36,7 +36,7 @@ Migration policy:
 1. New active framework instruction docs belong in flat filenames under `vida/config/instructions/`.
 2. New framework plans and research stay in `docs/framework/{plans,research}/`.
 3. New project docs and build/ops runbooks belong in `docs/` or `docs/process/`.
-4. New executable project workflows belong in `scripts/`, not `docs/framework/history/_vida-source/scripts/`.
+4. New executable project workflows belong in `scripts/`, not `scripts/`.
 
 -----
 artifact_path: config/system-maps/framework.readme

@@ -38,9 +38,9 @@ Purpose: define one canonical framework-owned ledger for context source classes,
 ## Commands
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/context-governance.py record --task-id <task_id> --phase <phase> --sources-json '[...]'
-python3 docs/framework/history/_vida-source/scripts/context-governance.py validate --sources-json '[...]'
-python3 docs/framework/history/_vida-source/scripts/context-governance.py status
+python3 context-governance.py record --task-id <task_id> --phase <phase> --sources-json '[...]'
+python3 context-governance.py validate --sources-json '[...]'
+python3 context-governance.py status
 ```
 
 -----

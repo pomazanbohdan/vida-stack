@@ -5,7 +5,7 @@ revision: 2026-03-09
 compatibility_class: direct_v1_kernel
 entity_type: CoachReview
 canonical_source_refs:
-  - docs/framework/history/plans/2026-03-08-vida-0.3-route-and-receipt-spec.md
+  - docs/framework/plans/vida-0.3-route-and-receipt-spec.md
   - docs/product/spec/canonical-machine-map.md
 purpose: Post-write formative review loop, distinct from verification.
 initial_state: not_requested

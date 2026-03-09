@@ -1,13 +1,13 @@
 # Script Runtime Architecture
 
-Purpose: define the canonical transition from legacy `docs/framework/history/_vida-source/scripts/*` wrappers to the `vida-v0` transitional runtime package.
+Purpose: define the canonical transition from legacy `*` wrappers to the `vida-v0` transitional runtime package.
 
 ## Core Rule
 
 Current transitional runtime model:
 
 1. `vida-v0/*` is the active transitional runtime surface,
-2. legacy `docs/framework/history/_vida-source/scripts/*.sh` and `docs/framework/history/_vida-source/scripts/*.py` are migration-source wrappers only,
+2. legacy `*.sh` and `*.py` are migration-source wrappers only,
 3. project delivery scripts stay in `scripts/` and are not part of this framework contract.
 
 Rule:

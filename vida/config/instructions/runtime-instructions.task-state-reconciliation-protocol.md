@@ -78,7 +78,7 @@ Rule:
 ## Canonical Helper
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/task-state-reconcile.py status <task_id>
+python3 task-state-reconcile.py status <task_id>
 ```
 
 -----

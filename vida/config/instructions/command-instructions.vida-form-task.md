@@ -12,7 +12,7 @@ This command maps layers as:
 4. `CL4 Materialization` -> `TaskFlow task-pool build plus dependency/track routing.
 5. `CL5 Gates And Handoff` -> readiness verdict and explicit launch gate for `/vida-implement`.
 
-Canonical source: `docs/framework/history/_vida-source/docs/command-layer-protocol.md`
+Canonical source: `command-layer-protocol.md`
 
 Handoff boundary:
 
@@ -37,12 +37,12 @@ This command also absorbs epic-planning responsibilities (scope boundary, depend
 
 ## Mandatory Reads Before Execution
 
-1. `docs/framework/history/_vida-source/docs/form-task-protocol.md`.
-2. `docs/framework/history/_vida-source/docs/spec-contract-protocol.md`.
-3. `docs/framework/history/_vida-source/docs/web-validation-protocol.md`.
-4. `docs/framework/history/_vida-source/docs/beads-protocol.md`.
-5. `docs/framework/history/_vida-source/docs/todo-protocol.md`.
-6. `docs/framework/history/_vida-source/docs/implement-execution-protocol.md`.
+1. `form-task-protocol.md`.
+2. `spec-contract-protocol.md`.
+3. `web-validation-protocol.md`.
+4. `beads-protocol.md`.
+5. `vida/config/instructions/runtime-instructions.taskflow-protocol.md`.
+6. `implement-execution-protocol.md`.
 7. `docs/decisions.md`.
 8. `docs/feature-checklist.md`.
 9. `docs/specs/*` (if scope touches existing boundaries).
@@ -93,7 +93,7 @@ Epic planning is internal to `/vida-form-task` and not a separate command.
 
 ## Questioning Contract (Mandatory)
 
-Use `docs/framework/history/_vida-source/docs/form-task-protocol.md` question-card rules.
+Use `form-task-protocol.md` question-card rules.
 
 Required cards:
 
@@ -174,9 +174,9 @@ VIDA_FORM_TASK:
 
 ## Related
 
-1. `docs/framework/history/_vida-source/docs/form-task-protocol.md`
-2. `docs/framework/history/_vida-source/docs/use-case-packs.md`
-3. `docs/framework/history/_vida-source/docs/todo-protocol.md`
+1. `form-task-protocol.md`
+2. `use-case-packs.md`
+3. `vida/config/instructions/runtime-instructions.taskflow-protocol.md`
 4. `vida/config/instructions/command-instructions.vida-spec.md`
 5. `vida/config/instructions/command-instructions.vida-implement.md`
 

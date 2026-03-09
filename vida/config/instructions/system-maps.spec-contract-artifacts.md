@@ -141,9 +141,9 @@ Notes:
 Canonical helper:
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/draft-execution-spec.py write <task_id> <input.json> [--output PATH]
-python3 docs/framework/history/_vida-source/scripts/draft-execution-spec.py validate <task_id> [--path PATH]
-python3 docs/framework/history/_vida-source/scripts/draft-execution-spec.py status <task_id> [--path PATH]
+python3 draft-execution-spec.py write <task_id> <input.json> [--output PATH]
+python3 draft-execution-spec.py validate <task_id> [--path PATH]
+python3 draft-execution-spec.py status <task_id> [--path PATH]
 ```
 
 -----

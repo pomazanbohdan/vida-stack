@@ -46,7 +46,7 @@ Rules:
 Canonical helper:
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/vida-silent-diagnosis.py capture \
+python3 vida-silent-diagnosis.py capture \
   --summary "<framework issue>" \
   --details "<what happened>" \
   --current-task "<task_id>" \
@@ -155,58 +155,58 @@ Transition note:
 Start task:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh start <task_id>
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh pack-start <task_id> <pack_id> "goal" [constraints]
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh redirect <task_id> <from_block_id> <to_block_id> "reason"
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh block-plan <task_id> <block_id> "goal" [track_id] [owner] [depends_on]
+bash beads-workflow.sh start <task_id>
+bash beads-workflow.sh pack-start <task_id> <pack_id> "goal" [constraints]
+bash beads-workflow.sh redirect <task_id> <from_block_id> <to_block_id> "reason"
+bash beads-workflow.sh block-plan <task_id> <block_id> "goal" [track_id] [owner] [depends_on]
 ```
 
 Track-aware step logging:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh block-start <task_id> <block_id> "goal" [track_id] [owner] [depends_on]
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh block-finish <task_id> <block_id> <done|partial|failed> "next" "actions" [artifacts] [risks] [assumptions] [evidence] [confidence]
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh block-end <task_id> <block_id> <done|partial|failed> "next" "actions" [artifacts] [risks] [assumptions] [evidence] [track_id] [owner] [merge_ready]
+bash beads-workflow.sh block-start <task_id> <block_id> "goal" [track_id] [owner] [depends_on]
+bash beads-workflow.sh block-finish <task_id> <block_id> <done|partial|failed> "next" "actions" [artifacts] [risks] [assumptions] [evidence] [confidence]
+bash beads-workflow.sh block-end <task_id> <block_id> <done|partial|failed> "next" "actions" [artifacts] [risks] [assumptions] [evidence] [track_id] [owner] [merge_ready]
 ```
 
 Reflection + quality gate (manual path):
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh reflect <task_id> "goal" "constraints" "evidence" "decision" "risks" "next" [confidence]
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh verify <task_id>
-bash docs/framework/history/_vida-source/scripts/quality-health-check.sh <task_id>
+bash beads-workflow.sh reflect <task_id> "goal" "constraints" "evidence" "decision" "risks" "next" [confidence]
+bash beads-workflow.sh verify <task_id>
+bash quality-health-check.sh <task_id>
 ```
 
 Finish:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/beads-workflow.sh finish <task_id> "reason"
+bash beads-workflow.sh finish <task_id> "reason"
 ```
 
 TaskFlow interface commands (derived view from execution log):
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/taskflow-tool.sh board <task_id>
-bash docs/framework/history/_vida-source/scripts/taskflow-tool.sh compact <task_id> [limit]
-bash docs/framework/history/_vida-source/scripts/taskflow-tool.sh list <task_id>
-bash docs/framework/history/_vida-source/scripts/taskflow-tool.sh current <task_id>
-bash docs/framework/history/_vida-source/scripts/taskflow-tool.sh next <task_id>
-bash docs/framework/history/_vida-source/scripts/taskflow-tool.sh ui-json <task_id>
-bash docs/framework/history/_vida-source/scripts/taskflow-sync-plan.sh <task_id>
-bash docs/framework/history/_vida-source/scripts/taskflow-sync-plan.sh <task_id> --mode compact --max-items 3
-bash docs/framework/history/_vida-source/scripts/taskflow-sync-plan.sh <task_id> --mode delta
-bash docs/framework/history/_vida-source/scripts/taskflow-sync-plan.sh <task_id> --mode json-only --quiet
-bash docs/framework/history/_vida-source/scripts/taskflow-overhead-report.sh <task_id>
-bash docs/framework/history/_vida-source/scripts/todo-plan-validate.sh <task_id> [--strict] [--quiet] [--diff-aware] [--base REF]
-bash docs/framework/history/_vida-source/scripts/vida-command-audit.sh report <task_id>
-bash docs/framework/history/_vida-source/scripts/vida-command-audit.sh plan <task_id> [--limit N]
-bash docs/framework/history/_vida-source/scripts/vida-command-audit.sh repair-next <task_id>
+bash taskflow-tool.sh board <task_id>
+bash taskflow-tool.sh compact <task_id> [limit]
+bash taskflow-tool.sh list <task_id>
+bash taskflow-tool.sh current <task_id>
+bash taskflow-tool.sh next <task_id>
+bash taskflow-tool.sh ui-json <task_id>
+bash taskflow-sync-plan.sh <task_id>
+bash taskflow-sync-plan.sh <task_id> --mode compact --max-items 3
+bash taskflow-sync-plan.sh <task_id> --mode delta
+bash taskflow-sync-plan.sh <task_id> --mode json-only --quiet
+bash taskflow-overhead-report.sh <task_id>
+bash todo-plan-validate.sh <task_id> [--strict] [--quiet] [--diff-aware] [--base REF]
+bash vida-command-audit.sh report <task_id>
+bash vida-command-audit.sh plan <task_id> [--limit N]
+bash vida-command-audit.sh repair-next <task_id>
 ```
 
 Framework-only lean starter:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/framework-wave-start.sh <task_id> <pack_id> "<goal>" [constraints]
+bash framework-wave-start.sh <task_id> <pack_id> "<goal>" [constraints]
 ```
 
 Use only as a migration-only helper for framework-owned legacy wrapper flow. It preserves:
@@ -218,8 +218,8 @@ Use only as a migration-only helper for framework-owned legacy wrapper flow. It 
 
 Command audit mode:
 
-1. Run `bash docs/framework/history/_vida-source/scripts/vida-command-audit.sh report <task_id>` to see done/pending coverage.
-2. Run `bash docs/framework/history/_vida-source/scripts/vida-command-audit.sh plan <task_id>` to pre-register missing protocol-unit analysis blocks.
+1. Run `bash vida-command-audit.sh report <task_id>` to see done/pending coverage.
+2. Run `bash vida-command-audit.sh plan <task_id>` to pre-register missing protocol-unit analysis blocks.
 3. Execute protocol-unit analyses sequentially (`block-start` -> `block-end`) to keep pending list accurate.
 4. Before reporting to user, confirm `board` and `report` snapshots are up to date.
 5. Sequential automation: after `block-end ... done <next_block_id> ...`, workflow auto-starts `<next_block_id>` if it exists and is `todo`.
@@ -239,11 +239,11 @@ Protocol-unit rule:
 
 UI sync rule:
 
-1. TaskFlow UI reads from `docs/framework/history/_vida-source/scripts/taskflow-tool.sh ui-json <task_id>`.
+1. TaskFlow UI reads from `taskflow-tool.sh ui-json <task_id>`.
 2. Source of truth remains execution events in `.vida/logs/beads-execution.jsonl`.
 3. Never mutate TaskFlow state directly in UI without writing corresponding execution events.
-4. Use `docs/framework/history/_vida-source/scripts/taskflow-sync-plan.sh <task_id>` to generate a deterministic checklist snapshot for UI mirroring.
-5. `docs/framework/history/_vida-source/scripts/beads-workflow.sh` auto-runs `taskflow-sync-plan.sh` in `json-only` mode according to `TASKFLOW_AUTO_SYNC_LEVEL`.
+4. Use `taskflow-sync-plan.sh <task_id>` to generate a deterministic checklist snapshot for UI mirroring.
+5. `beads-workflow.sh` auto-runs `taskflow-sync-plan.sh` in `json-only` mode according to `TASKFLOW_AUTO_SYNC_LEVEL`.
 5.1. `TASKFLOW_AUTO_SYNC_LEVEL=lean` (default): sync on `start`, `block-start`, `block-end`, `finish`.
 5.2. `TASKFLOW_AUTO_SYNC_LEVEL=full`: sync on all workflow mutations.
 5.3. `TASKFLOW_AUTO_SYNC_LEVEL=off`: disable auto sync (manual sync only).
@@ -253,16 +253,16 @@ UI sync rule:
 9. Response visibility rule: when reporting task/todo state to user, include IDs and concise descriptions (not IDs only).
 10. `quality-health-check` cadence: run on checkpoint boundaries, pre-handoff, and finish (not after every micro-step).
 11. Runtime scripts should be quiet-by-default for progress chatter; keep human-facing status output in `taskflow-tool current|list` and `quality-health-check`.
-12. Use `python3 docs/framework/history/_vida-source/scripts/task-state-reconcile.py status <task_id>` when a task looks done-but-open, stale-in-progress, or otherwise drifted between `br` and TaskFlow.
+12. Use `python3 task-state-reconcile.py status <task_id>` when a task looks done-but-open, stale-in-progress, or otherwise drifted between `br` and TaskFlow.
 
 Background worker policy (token/cost aware):
 
 1. For continuous live backup without chat noise, use tmux-managed worker:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/beads-bg-sync.sh start --interval 600
-bash docs/framework/history/_vida-source/scripts/beads-bg-sync.sh status
-bash docs/framework/history/_vida-source/scripts/beads-bg-sync.sh stop
+bash beads-bg-sync.sh start --interval 600
+bash beads-bg-sync.sh status
+bash beads-bg-sync.sh stop
 ```
 
 2. Default interval is 600 sec (10 min).
@@ -285,11 +285,11 @@ Silent diagnosis TaskFlow handoff:
 2. Track gate: each parallel track must pass verify.
 3. Task gate: strict verify + self-reflection required before close.
 4. Compact gate: always record `compact_pre` and `compact_post`.
-4.1. Drift gate: run `bash docs/framework/history/_vida-source/scripts/context-drift-sentinel.sh check <task_id>` after capsule write checkpoints (`block-finish`, compact restore).
+4.1. Drift gate: run `bash context-drift-sentinel.sh check <task_id>` after capsule write checkpoints (`block-finish`, compact restore).
 4.2. If silent framework diagnosis is active and a framework gap was detected, compact-safe evidence must include the capture artifact path or follow-up framework task id.
 5. Execution gate: if no active block exists, execution must not proceed.
-6. Plan integrity gate: run `bash docs/framework/history/_vida-source/scripts/todo-plan-validate.sh <task_id>` after `block-plan` batch and before execution start. Use `--diff-aware` when the worktree already contains target-scope changes; coverage is evaluated against the whole task plan so already-completed blocks still count.
-6.1. For framework-only tasks, compact evidence is valid when work is confined to `docs/framework/history/_vida-source/*` and the block records concrete actions plus canonical artifacts or task IDs. Runtime verification may downgrade missing artifact warnings to informational severity for these tasks in non-strict mode.
+6. Plan integrity gate: run `bash todo-plan-validate.sh <task_id>` after `block-plan` batch and before execution start. Use `--diff-aware` when the worktree already contains target-scope changes; coverage is evaluated against the whole task plan so already-completed blocks still count.
+6.1. For framework-only tasks, compact evidence is valid when work is confined to `legacy helper surfaces` and the block records concrete actions plus canonical artifacts or task IDs. Runtime verification may downgrade missing artifact warnings to informational severity for these tasks in non-strict mode.
 6.2. Silent diagnosis gate: when active, task closure is invalid if a detected framework gap was only discussed in chat and not captured in canonical execution evidence, context capsule, or framework task state.
 
 ## 7) Anti-Patterns
@@ -328,9 +328,9 @@ Per-task execution mode must be explicit:
 Mode operations:
 
 ```bash
-bash docs/framework/history/_vida-source/scripts/task-execution-mode.sh get <task_id>
-bash docs/framework/history/_vida-source/scripts/task-execution-mode.sh recommend <task_id>
-bash docs/framework/history/_vida-source/scripts/task-execution-mode.sh set <task_id> <decision_required|autonomous> [reason]
+bash task-execution-mode.sh get <task_id>
+bash task-execution-mode.sh recommend <task_id>
+bash task-execution-mode.sh set <task_id> <decision_required|autonomous> [reason]
 ```
 
 Routing rule:

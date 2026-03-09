@@ -3,8 +3,8 @@
 **Purpose:** Provide one map of all research-derived documentation layers created for VIDA autonomous orchestration work so future protocol, config, plan, and test changes can reuse the same architecture instead of rediscovering it from chat history.
 
 **Primary inputs:**
-- `docs/framework/history/plans/2026-03-08-vida-autonomous-role-profiles-and-adaptive-orchestration-plan.md`
-- `docs/framework/history/research/2026-03-08-agentic-parameter-registry.md`
+- `docs/framework/plans/vida-autonomous-role-profiles-and-adaptive-orchestration-plan.md`
+- `docs/framework/research/agentic-parameter-registry.md`
 
 **Primary outputs:**
 - a stable documentation graph
@@ -17,35 +17,35 @@
 
 | Layer | File | Purpose | Promotes into |
 |---|---|---|---|
-| Source registry | `docs/framework/history/research/2026-03-08-agentic-role-profile-source-registry.md` | current external sources and trust basis | refresh protocol, delta log |
-| Source delta log | `docs/framework/history/research/2026-03-08-agentic-role-profile-source-delta-log.md` | material changes in external guidance | spec deltas, task refresh gates |
-| Parameter registry | `docs/framework/history/research/2026-03-08-agentic-parameter-registry.md` | reusable enumerations and value families | templates, protocols, config, tests |
-| Agent definition system | `docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md` | canonical terminology and relation model for agent definition, instruction contract, and prompt template configuration | agent-definition protocol, instruction schemas, templates, evals |
-| Cheap worker packet system | `docs/framework/history/research/2026-03-08-agentic-cheap-worker-packet-system.md` | minimum packet/prompt system for low-cost bounded worker execution | packet templates, worker prompts, readiness gates, conformance tests |
-| Cheap worker prompt pack | `docs/framework/history/research/2026-03-08-agentic-cheap-worker-prompt-pack.md` | concrete reusable prompts for cheap schema/test/kernel/review worker lanes | rendered worker packets, dispatch templates, prompt libraries |
-| Atomic claims registry | `docs/framework/history/research/2026-03-08-agentic-atomic-claims-registry.md` | fine-grained research claims with confidence and affected surfaces | consensus/disagreement layers, decisions, protocols |
-| Source consensus matrix | `docs/framework/history/research/2026-03-08-agentic-source-consensus-matrix.md` | strongest cross-source agreements | invariants, heuristics, protocols |
-| Source disagreement matrix | `docs/framework/history/research/2026-03-08-agentic-source-disagreement-matrix.md` | unresolved or conditional differences between source families | local decision rules, experiments, thresholds |
-| Decision ledger | `docs/framework/history/research/2026-03-08-agentic-decision-ledger.md` | explicit architecture decisions derived from research | protocols, plans, config |
-| Research implication map | `docs/framework/history/research/2026-03-08-agentic-research-implication-map.md` | what research means for routing, profiles, proof, security, and rollout | plans, protocols, promotion backlog |
-| Claim-to-artifact trace map | `docs/framework/history/research/2026-03-08-agentic-claim-to-artifact-trace-map.md` | which claims are already captured in which artifacts | coverage review, compaction resilience |
-| Threshold hypotheses registry | `docs/framework/history/research/2026-03-08-agentic-threshold-hypotheses-registry.md` | candidate thresholds not yet promoted to runtime law | pilots, evals, route tuning |
-| Research invariants | `docs/framework/history/research/2026-03-08-agentic-research-invariants.md` | stable cross-source truths safe to treat as design laws | protocols, reviews, templates |
-| Heuristic library | `docs/framework/history/research/2026-03-08-agentic-heuristic-library.md` | conditional design heuristics distilled from research | routing, review, task packets |
-| Known unknowns ledger | `docs/framework/history/research/2026-03-08-agentic-known-unknowns-ledger.md` | unresolved questions and threshold gaps | experiments, pilots, future tasks |
-| Pattern chooser | `docs/framework/history/research/2026-03-08-agentic-pattern-chooser-matrix.md` | route selection by task shape | routing protocol, task scoring |
-| Anti-pattern catalog | `docs/framework/history/research/2026-03-08-agentic-anti-pattern-catalog.md` | failure and drift patterns to avoid | verification, review checklists |
-| Proof registry | `docs/framework/history/research/2026-03-08-agentic-proof-obligation-registry.md` | required proof bundles by task family | verification burden matrix, health checks |
-| Threat/control matrix | `docs/framework/history/research/2026-03-08-agentic-threat-model-control-matrix.md` | risks, attacks, and controls | OWASP/security protocol, approval gates |
-| Escalation matrix | `docs/framework/history/research/2026-03-08-agentic-escalation-policy-matrix.md` | when work must reopen or escalate | routing law, approval policy |
-| Metric glossary | `docs/framework/history/research/2026-03-08-agentic-metric-glossary.md` | metrics and formulas | eval protocol, operator surfaces |
-| Terminology glossary | `docs/framework/history/research/2026-03-08-agentic-terminology-glossary.md` | normalized vocabulary | all docs, config, tests |
-| Invalidation watchlist | `docs/framework/history/research/2026-03-08-agentic-invalidation-watchlist.md` | external changes that force document review | refresh protocol, delta log |
-| Task archetype library | `docs/framework/history/research/2026-03-08-agentic-task-archetype-library.md` | reusable child-task shapes | epic slicing, task packets |
-| Source query log | `docs/framework/history/research/2026-03-08-agentic-source-query-log.md` | repeatable refresh queries | source refresh work |
-| Master index | `docs/framework/history/research/2026-03-08-agentic-master-index.md` | compact-safe entry point and reading order | handoff, compact recovery, epic slicing |
-| Epic slicing instruction | `docs/framework/history/research/2026-03-08-agentic-epic-slicing-agent-instruction.md` | prompt-ready execution bridge for next-agent epic formation | epic/task formation, packet generation |
-| External future bundle | `docs/framework/history/research/2026-03-08-agentic-external-future-bundle.md` | preserved future-facing bundle for excluded external integration topics | future external epic/spec work |
+| Source registry | `docs/framework/research/agentic-role-profile-source-registry.md` | current external sources and trust basis | refresh protocol, delta log |
+| Source delta log | `docs/framework/research/agentic-role-profile-source-delta-log.md` | material changes in external guidance | spec deltas, task refresh gates |
+| Parameter registry | `docs/framework/research/agentic-parameter-registry.md` | reusable enumerations and value families | templates, protocols, config, tests |
+| Agent definition system | `docs/framework/research/agentic-agent-definition-system.md` | canonical terminology and relation model for agent definition, instruction contract, and prompt template configuration | agent-definition protocol, instruction schemas, templates, evals |
+| Cheap worker packet system | `docs/framework/research/agentic-cheap-worker-packet-system.md` | minimum packet/prompt system for low-cost bounded worker execution | packet templates, worker prompts, readiness gates, conformance tests |
+| Cheap worker prompt pack | `docs/framework/research/agentic-cheap-worker-prompt-pack.md` | concrete reusable prompts for cheap schema/test/kernel/review worker lanes | rendered worker packets, dispatch templates, prompt libraries |
+| Atomic claims registry | `docs/framework/research/agentic-atomic-claims-registry.md` | fine-grained research claims with confidence and affected surfaces | consensus/disagreement layers, decisions, protocols |
+| Source consensus matrix | `docs/framework/research/agentic-source-consensus-matrix.md` | strongest cross-source agreements | invariants, heuristics, protocols |
+| Source disagreement matrix | `docs/framework/research/agentic-source-disagreement-matrix.md` | unresolved or conditional differences between source families | local decision rules, experiments, thresholds |
+| Decision ledger | `docs/framework/research/agentic-decision-ledger.md` | explicit architecture decisions derived from research | protocols, plans, config |
+| Research implication map | `docs/framework/research/agentic-research-implication-map.md` | what research means for routing, profiles, proof, security, and rollout | plans, protocols, promotion backlog |
+| Claim-to-artifact trace map | `docs/framework/research/agentic-claim-to-artifact-trace-map.md` | which claims are already captured in which artifacts | coverage review, compaction resilience |
+| Threshold hypotheses registry | `docs/framework/research/agentic-threshold-hypotheses-registry.md` | candidate thresholds not yet promoted to runtime law | pilots, evals, route tuning |
+| Research invariants | `docs/framework/research/agentic-research-invariants.md` | stable cross-source truths safe to treat as design laws | protocols, reviews, templates |
+| Heuristic library | `docs/framework/research/agentic-heuristic-library.md` | conditional design heuristics distilled from research | routing, review, task packets |
+| Known unknowns ledger | `docs/framework/research/agentic-known-unknowns-ledger.md` | unresolved questions and threshold gaps | experiments, pilots, future tasks |
+| Pattern chooser | `docs/framework/research/agentic-pattern-chooser-matrix.md` | route selection by task shape | routing protocol, task scoring |
+| Anti-pattern catalog | `docs/framework/research/agentic-anti-pattern-catalog.md` | failure and drift patterns to avoid | verification, review checklists |
+| Proof registry | `docs/framework/research/agentic-proof-obligation-registry.md` | required proof bundles by task family | verification burden matrix, health checks |
+| Threat/control matrix | `docs/framework/research/agentic-threat-model-control-matrix.md` | risks, attacks, and controls | OWASP/security protocol, approval gates |
+| Escalation matrix | `docs/framework/research/agentic-escalation-policy-matrix.md` | when work must reopen or escalate | routing law, approval policy |
+| Metric glossary | `docs/framework/research/agentic-metric-glossary.md` | metrics and formulas | eval protocol, operator surfaces |
+| Terminology glossary | `docs/framework/research/agentic-terminology-glossary.md` | normalized vocabulary | all docs, config, tests |
+| Invalidation watchlist | `docs/framework/research/agentic-invalidation-watchlist.md` | external changes that force document review | refresh protocol, delta log |
+| Task archetype library | `docs/framework/research/agentic-task-archetype-library.md` | reusable child-task shapes | epic slicing, task packets |
+| Source query log | `docs/framework/research/agentic-source-query-log.md` | repeatable refresh queries | source refresh work |
+| Master index | `docs/framework/research/agentic-master-index.md` | compact-safe entry point and reading order | handoff, compact recovery, epic slicing |
+| Epic slicing instruction | `docs/framework/research/agentic-epic-slicing-agent-instruction.md` | prompt-ready execution bridge for next-agent epic formation | epic/task formation, packet generation |
+| External future bundle | `docs/framework/research/agentic-external-future-bundle.md` | preserved future-facing bundle for excluded external integration topics | future external epic/spec work |
 
 ---
 

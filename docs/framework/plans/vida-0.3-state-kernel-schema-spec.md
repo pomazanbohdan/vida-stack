@@ -61,12 +61,12 @@ Primary local source basis:
 2. `vida/config/instructions/agent-definitions.orchestrator-entry.md`
 3. `vida/config/instructions/instruction-contracts.thinking-protocol.md`
 4. `vida.config.yaml`
-5. `docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
-6. `docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
-7. `docs/framework/history/plans/2026-03-08-vida-0.2-semantic-freeze-spec.md`
-8. `docs/framework/history/plans/2026-03-08-vida-0.2-bridge-policy.md`
-9. `docs/framework/history/plans/2026-03-08-vida-0.3-command-tree-spec.md`
-10. `docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
+5. `docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
+6. `docs/framework/plans/vida-semantic-extraction-layer-map.md`
+7. `docs/framework/plans/vida-0.2-semantic-freeze-spec.md`
+8. `docs/framework/plans/vida-0.2-bridge-policy.md`
+9. `docs/framework/plans/vida-0.3-command-tree-spec.md`
+10. `docs/framework/plans/vida-direct-1.0-local-spec-program.md`
 11. `vida/config/instructions/runtime-instructions.beads-protocol.md`
 12. `vida/config/instructions/runtime-instructions.taskflow-protocol.md`
 13. `vida/config/instructions/runtime-instructions.task-state-reconciliation-protocol.md`
@@ -554,7 +554,7 @@ Direct `1.0` must **not** freeze:
 3. JSONL-first or `br --no-db` runtime modes,
 4. `.vida/state/*` and `.vida/logs/*` path layout,
 5. queue-backed shell mutator choreography as product law,
-6. `docs/framework/history/_vida-source/scripts/*.sh|*.py` entrypoints,
+6. `*.sh|*.py` entrypoints,
 7. shell/Python split,
 8. current CLI/provider transport assumptions,
 9. cache/log naming or tmp-file choreography,
@@ -691,7 +691,7 @@ This artifact unlocks:
 
 The next artifact is:
 
-1. `docs/framework/history/plans/2026-03-08-vida-0.3-instruction-kernel-spec.md`
+1. `docs/framework/plans/vida-0.3-instruction-kernel-spec.md`
 
 Reason:
 

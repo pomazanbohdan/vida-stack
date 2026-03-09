@@ -36,33 +36,33 @@ Behavior inheritance mandate:
 
 Read these files in order before acting:
 
-1. `/home/unnamed/project/mobile-odoo/AGENTS.md`
-2. `/home/unnamed/project/mobile-odoo/vida/config/instructions/agent-definitions.orchestrator-entry.md`
-3. `/home/unnamed/project/mobile-odoo/vida/config/instructions/instruction-contracts.thinking-protocol.md`
-4. `/home/unnamed/project/mobile-odoo/vida.config.yaml`
-5. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-master-index.md`
-6. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
-7. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
-8. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.2-semantic-freeze-spec.md`
-9. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.2-bridge-policy.md`
-10. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-command-tree-spec.md`
-11. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-state-kernel-schema-spec.md`
-12. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-instruction-kernel-spec.md`
-13. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
-14. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-direct-1.0-compact-continuation-plan.md`
-15. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-cheap-worker-packet-system.md`
-16. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-cheap-worker-prompt-pack.md`
-17. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md`
-18. `/home/unnamed/project/mobile-odoo/vida/config/instructions/agent-definitions.protocol.md`
-19. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-migration-kernel-spec.md`
-20. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-vida-parity-and-conformance-next-step-after-compact-instruction.md`
+1. `/home/unnamed/project/vida-stack/AGENTS.md`
+2. `/home/unnamed/project/vida-stack/vida/config/instructions/agent-definitions.orchestrator-entry.md`
+3. `/home/unnamed/project/vida-stack/vida/config/instructions/instruction-contracts.thinking-protocol.md`
+4. `/home/unnamed/project/vida-stack/vida.config.yaml`
+5. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-master-index.md`
+6. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
+7. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-semantic-extraction-layer-map.md`
+8. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.2-semantic-freeze-spec.md`
+9. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.2-bridge-policy.md`
+10. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-command-tree-spec.md`
+11. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-state-kernel-schema-spec.md`
+12. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-instruction-kernel-spec.md`
+13. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-direct-1.0-local-spec-program.md`
+14. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-direct-1.0-compact-continuation-plan.md`
+15. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-cheap-worker-packet-system.md`
+16. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-cheap-worker-prompt-pack.md`
+17. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-agent-definition-system.md`
+18. `/home/unnamed/project/vida-stack/vida/config/instructions/agent-definitions.protocol.md`
+19. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-migration-kernel-spec.md`
+20. `/home/unnamed/project/vida-stack/docs/framework/research/vida-parity-and-conformance-next-step-after-compact-instruction.md`
 
 Optional but preferred reference set for deeper synthesis:
 
-1. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-proof-obligation-registry.md`
-2. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-metric-glossary.md`
-3. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-terminology-glossary.md`
-4. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-vida-parity-and-conformance-next-step-after-compact-instruction.md`
+1. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-proof-obligation-registry.md`
+2. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-metric-glossary.md`
+3. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-terminology-glossary.md`
+4. `/home/unnamed/project/vida-stack/docs/framework/research/vida-parity-and-conformance-next-step-after-compact-instruction.md`
 
 ---
 
@@ -88,22 +88,22 @@ Already complete:
 
 Next required artifact:
 
-1. `Binary Foundation` via `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-vida-binary-foundation-next-step-after-compact-instruction.md`
+1. `Binary Foundation` via `/home/unnamed/project/vida-stack/docs/framework/research/vida-binary-foundation-next-step-after-compact-instruction.md`
 
 Then continue in order:
 
-1. post-spec implementation waves from `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-direct-1.0-compact-continuation-plan.md`
+1. post-spec implementation waves from `/home/unnamed/project/vida-stack/docs/framework/plans/vida-direct-1.0-compact-continuation-plan.md`
 
 Exact next-step prompt artifact:
 
-1. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-vida-binary-foundation-next-step-after-compact-instruction.md`
+1. `/home/unnamed/project/vida-stack/docs/framework/research/vida-binary-foundation-next-step-after-compact-instruction.md`
 
 Compact continuation rule:
 
 1. `Part A` and `Part B` are bounded session slices,
 2. they do not create extra product-law artifact families,
 3. the active next-step instruction must be updated at the end of each slice so the following slice becomes explicit,
-4. this file and `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-direct-1.0-compact-continuation-plan.md` are the durable program-state bridge after compact.
+4. this file and `/home/unnamed/project/vida-stack/docs/framework/plans/vida-direct-1.0-compact-continuation-plan.md` are the durable program-state bridge after compact.
 
 ---
 
@@ -215,7 +215,7 @@ For bridge, migration, and parity-sensitive artifacts, add these checks:
 2. Do not start shared Rust kernel implementation from chat.
 3. Do not treat missing future spec files as errors; they are planned artifacts.
 4. Do not silently widen scope into `MCP`, `A2A`, `A2UI`, remote identity, gateways, or remote memory.
-5. Do not rely on transcript memory; write every durable conclusion into `docs/framework/history/_vida-source/docs`.
+5. Do not rely on transcript memory; write every durable conclusion into `docs`.
 6. Do not let `Prompt Template Configuration` become the logic source; preserve the hierarchy:
    - `Agent Definition`
    - `Instruction Contract`

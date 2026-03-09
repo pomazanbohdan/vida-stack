@@ -152,9 +152,9 @@ Required fields:
 ## Canonical Helper
 
 ```bash
-python3 docs/framework/history/_vida-source/scripts/problem-party.py render <task_id> "<topic>" --board small|large [--rounds N] [--problem-file PATH] [--output-dir DIR]
-python3 docs/framework/history/_vida-source/scripts/problem-party.py synthesize <board_manifest.json> <role_notes.json> [--output PATH]
-python3 docs/framework/history/_vida-source/scripts/problem-party.py receipt <task_id> <task_class> "<topic>" <decision_artifact.json>
+python3 problem-party.py render <task_id> "<topic>" --board small|large [--rounds N] [--problem-file PATH] [--output-dir DIR]
+python3 problem-party.py synthesize <board_manifest.json> <role_notes.json> [--output PATH]
+python3 problem-party.py receipt <task_id> <task_class> "<topic>" <decision_artifact.json>
 ```
 
 ## Anti-Patterns

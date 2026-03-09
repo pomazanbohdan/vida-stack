@@ -39,9 +39,9 @@ Compact rule:
 
 This freeze covers the semantically valuable layers already identified in:
 
-1. `docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
-2. `docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
-3. `docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
+1. `docs/framework/plans/vida-semantic-extraction-layer-map.md`
+2. `docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
+3. `docs/framework/plans/vida-direct-1.0-local-spec-program.md`
 
 In scope:
 
@@ -71,7 +71,7 @@ Out of scope:
 
 Those remain preserved only in:
 
-1. `docs/framework/history/research/2026-03-08-agentic-external-future-bundle.md`
+1. `docs/framework/research/agentic-external-future-bundle.md`
 
 ---
 
@@ -390,7 +390,7 @@ Semantic rule:
 
 `1.0` must not treat the following as product law:
 
-1. `bash docs/framework/history/_vida-source/scripts/...` as the canonical operator surface,
+1. `bash ...` as the canonical operator surface,
 2. the shell/Python split,
 3. `br --no-db` workarounds,
 4. `.beads/issues.jsonl` as the long-term backend,
@@ -413,13 +413,13 @@ This semantic freeze is considered usable only when the following are treated as
 
 Downstream specs unlocked by this document:
 
-1. `docs/framework/history/plans/2026-03-08-vida-0.2-bridge-policy.md`
-2. `docs/framework/history/plans/2026-03-08-vida-0.3-command-tree-spec.md`
-3. `docs/framework/history/plans/2026-03-08-vida-0.3-state-kernel-schema-spec.md`
-4. `docs/framework/history/plans/2026-03-08-vida-0.3-instruction-kernel-spec.md`
-5. `docs/framework/history/plans/2026-03-08-vida-0.3-migration-kernel-spec.md`
-6. `docs/framework/history/plans/2026-03-08-vida-0.3-route-and-receipt-spec.md`
-7. `docs/framework/history/plans/2026-03-08-vida-0.3-parity-and-conformance-spec.md`
+1. `docs/framework/plans/vida-0.2-bridge-policy.md`
+2. `docs/framework/plans/vida-0.3-command-tree-spec.md`
+3. `docs/framework/plans/vida-0.3-state-kernel-schema-spec.md`
+4. `docs/framework/plans/vida-0.3-instruction-kernel-spec.md`
+5. `docs/framework/plans/vida-0.3-migration-kernel-spec.md`
+6. `docs/framework/plans/vida-0.3-route-and-receipt-spec.md`
+7. `docs/framework/plans/vida-0.3-parity-and-conformance-spec.md`
 
 ---
 
@@ -462,12 +462,12 @@ Primary local source basis used for this freeze:
 18. `vida/config/instructions/agent-definitions.protocol.md`
 19. `docs/framework/templates/instruction-contract.yaml`
 20. `docs/framework/templates/prompt-template-config.yaml`
-21. `docs/framework/history/plans/2026-03-08-vida-semantic-extraction-layer-map.md`
-22. `docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
-23. `docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
-24. `docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md`
-25. `docs/framework/history/research/2026-03-08-agentic-proof-obligation-registry.md`
-26. `docs/framework/history/research/2026-03-08-agentic-metric-glossary.md`
+21. `docs/framework/plans/vida-semantic-extraction-layer-map.md`
+22. `docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
+23. `docs/framework/plans/vida-direct-1.0-local-spec-program.md`
+24. `docs/framework/research/agentic-agent-definition-system.md`
+25. `docs/framework/research/agentic-proof-obligation-registry.md`
+26. `docs/framework/research/agentic-metric-glossary.md`
 
 Current source takeaways:
 

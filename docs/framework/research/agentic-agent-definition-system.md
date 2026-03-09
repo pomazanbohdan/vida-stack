@@ -225,7 +225,7 @@ Framework-owned runtime artifacts created from this doc:
 1. `vida/config/instructions/agent-definitions.protocol.md`
 2. `docs/framework/templates/instruction-contract.yaml`
 3. `docs/framework/templates/prompt-template-config.yaml`
-4. `docs/framework/history/_vida-source/tests/test_agent_definition_contract.py`
+4. `conformance-tests/test_agent_definition_contract.py`
 
 ---
 

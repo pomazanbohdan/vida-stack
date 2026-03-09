@@ -2,7 +2,7 @@
 
 Purpose: give the next orchestrator a prompt-ready, compact-safe instruction for the current bounded parity/conformance session slice: `Parity/Conformance Part B`.
 
-Use when: context was compacted and the next work is to continue `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-parity-and-conformance-spec.md` with `Part B` scope only.
+Use when: context was compacted and the next work is to continue `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-parity-and-conformance-spec.md` with `Part B` scope only.
 
 ---
 
@@ -10,7 +10,7 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
   <role>
   You are the VIDA direct-1.0 spec orchestrator resuming after compact.
   Your immediate objective is to create or continue the next canonical artifact with the active bounded session scope:
-  `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-parity-and-conformance-spec.md`
+  `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-parity-and-conformance-spec.md`
   </role>
 
   ## Mandatory First Action
@@ -21,22 +21,22 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
 
   ## Required Read Order
   <required_read_order>
-  1. `/home/unnamed/project/mobile-odoo/AGENTS.md`
-  2. `/home/unnamed/project/mobile-odoo/vida/config/instructions/agent-definitions.orchestrator-entry.md`
-  3. `/home/unnamed/project/mobile-odoo/vida/config/instructions/instruction-contracts.thinking-protocol.md`
-  4. `/home/unnamed/project/mobile-odoo/vida.config.yaml`
-  5. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-master-index.md`
-  6. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-vida-direct-1.0-next-agent-compact-instruction.md`
-  7. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-direct-1.0-compact-continuation-plan.md`
-  8. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-route-and-receipt-spec.md`
-  9. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-command-tree-spec.md`
-  10. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-state-kernel-schema-spec.md`
-  11. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-instruction-kernel-spec.md`
-  12. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-migration-kernel-spec.md`
-  13. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.2-semantic-freeze-spec.md`
-  14. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.2-bridge-policy.md`
-  15. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
-  16. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
+  1. `/home/unnamed/project/vida-stack/AGENTS.md`
+  2. `/home/unnamed/project/vida-stack/vida/config/instructions/agent-definitions.orchestrator-entry.md`
+  3. `/home/unnamed/project/vida-stack/vida/config/instructions/instruction-contracts.thinking-protocol.md`
+  4. `/home/unnamed/project/vida-stack/vida.config.yaml`
+  5. `/home/unnamed/project/vida-stack/docs/framework/research/agentic-master-index.md`
+  6. `/home/unnamed/project/vida-stack/docs/framework/research/vida-direct-1.0-next-agent-compact-instruction.md`
+  7. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-direct-1.0-compact-continuation-plan.md`
+  8. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-route-and-receipt-spec.md`
+  9. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-command-tree-spec.md`
+  10. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-state-kernel-schema-spec.md`
+  11. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-instruction-kernel-spec.md`
+  12. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-migration-kernel-spec.md`
+  13. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.2-semantic-freeze-spec.md`
+  14. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.2-bridge-policy.md`
+  15. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md`
+  16. `/home/unnamed/project/vida-stack/docs/framework/plans/vida-direct-1.0-local-spec-program.md`
   </required_read_order>
 
   ## Current Program State
@@ -59,10 +59,10 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
   - `Parity/Conformance Part B`
 
   Canonical target artifact for the active slice:
-  - `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-parity-and-conformance-spec.md`
+  - `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-parity-and-conformance-spec.md`
 
   After that, continue in this order:
-  1. post-spec implementation waves from `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-direct-1.0-compact-continuation-plan.md`
+  1. post-spec implementation waves from `/home/unnamed/project/vida-stack/docs/framework/plans/vida-direct-1.0-compact-continuation-plan.md`
 
   Current frozen results that must remain intact:
   - command semantics are frozen as product law
@@ -144,7 +144,7 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
   ## Exact Task
   <exact_task>
   Create or continue:
-  `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-0.3-parity-and-conformance-spec.md`
+  `/home/unnamed/project/vida-stack/docs/framework/plans/vida-0.3-parity-and-conformance-spec.md`
 
   The active `Part B` session slice must define:
   1. the final conformance matrix across the parity-tested semantic surfaces
