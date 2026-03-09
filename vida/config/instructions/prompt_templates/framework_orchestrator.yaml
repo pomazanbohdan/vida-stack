@@ -1,0 +1,30 @@
+artifact_name: framework_orchestrator
+artifact_type: prompt_template_configuration
+config_id: framework.orchestrator
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+instruction_contract_ref: ../instruction_contracts/framework_orchestrator.yaml
+rendering_target: generic_chat_runtime
+template_format: markdown
+system_prompt_template:
+  role_header: "## Role"
+  instruction_header: "## Instructions"
+  constraint_header: "## Constraints"
+  output_header: "## Output Contract"
+parameter_bindings:
+  role_id: "{{ role_id }}"
+  mission: "{{ mission }}"
+  scope_boundary: "{{ scope_boundary }}"
+runtime_bindings:
+  model_hint: provider-default
+  temperature_mode: deterministic
+  context_policy: bounded
+tool_exposure:
+  include:
+    - allowed tools from instruction contract
+  exclude:
+    - forbidden tools from instruction contract
+output_rendering:
+  structured_output_required: true
+  schema_source: instruction_contract.output_contract

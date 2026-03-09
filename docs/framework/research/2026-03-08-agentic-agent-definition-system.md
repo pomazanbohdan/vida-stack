@@ -11,7 +11,7 @@
 - Microsoft Learn, *Create an Agent from a Semantic Kernel Template* — https://learn.microsoft.com/en-us/semantic-kernel/frameworks/agent/agent-templates
 - OpenAI, *Model Spec (2025-10-27)* — https://model-spec.openai.com/2025-10-27
 - OpenAI, *Agent Builder* — https://platform.openai.com/docs/guides/agent-builder
-- Anthropic, *Create custom subagents* — https://docs.anthropic.com/en/docs/claude-code/sub-agents
+- Anthropic, *Create custom workers* — https://docs.anthropic.com/en/docs/claude-code/sub-agents
 - Google Cloud, *Choose a design pattern for your agentic AI system* — https://docs.cloud.google.com/architecture/choose-design-pattern-agentic-ai-system
 
 ---
@@ -121,8 +121,8 @@ VIDA implication:
 
 ### Anthropic
 
-- subagents are defined through custom system prompt, tool access, permissions, and separate context
-- the system prompt body is only one part of the subagent definition
+- workers are defined through custom system prompt, tool access, permissions, and separate context
+- the system prompt body is only one part of the worker definition
 
 VIDA implication:
 - role logic must include prompt, tools, permissions, and context boundaries together

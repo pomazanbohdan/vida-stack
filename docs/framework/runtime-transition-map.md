@@ -14,7 +14,7 @@ Use `vida-v0` as the canonical runtime surface for these domains:
 6. TODO/readiness views -> `vida-v0 todo ...`
 7. run-graph -> `vida-v0 run-graph ...`
 8. execution auth / coach / verification prompt -> `vida-v0 auth ...`, `vida-v0 coach ...`, `vida-v0 coach-decision ...`, `vida-v0 verification-prompt ...`
-9. subagent runtime inventory and leases -> `vida-v0 system ...`, `vida-v0 registry ...`, `vida-v0 lease ...`, `vida-v0 pool ...`
+9. worker runtime inventory and leases -> `vida-v0 system ...`, `vida-v0 registry ...`, `vida-v0 lease ...`, `vida-v0 pool ...`
 10. context/memory/spec surfaces -> `vida-v0 context ...`, `vida-v0 context-capsule ...`, `vida-v0 memory ...`, `vida-v0 spec-intake ...`, `vida-v0 spec-delta ...`, `vida-v0 draft-execution-spec ...`
 
 ## Historical-Only Until Retired Or Reimplemented
@@ -32,7 +32,7 @@ These surfaces still exist as migration sources but are not the target canonical
 9. `docs/framework/history/_vida-source/scripts/skill-discovery.py`
 10. `docs/framework/history/_vida-source/scripts/doc-lifecycle.py`
 11. `docs/framework/history/_vida-source/scripts/problem-party.py`
-12. `docs/framework/history/_vida-source/scripts/render-subagent-prompt.sh`
+12. `docs/framework/history/_vida-source/scripts/render-worker-prompt.sh`
 13. `docs/framework/history/_vida-source/scripts/framework-memory.py`
 14. `docs/framework/history/_vida-source/scripts/trace-eval.py`
 

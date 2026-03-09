@@ -61,10 +61,10 @@ pack_router_keywords:
 
 # Optional agent-system example.
 # Prefer YAML lists for repeated scalar values in new overlays and templates.
-# This example mirrors the canonical VIDA cli-subagent stack and includes the
-# runtime knobs that have proven useful in real CLI-subagent orchestration:
-# cli-subagent runtime caps, minimum useful output thresholds, bridge fallback,
-# and cli-subagent-side timeout env vars where those CLIs actually honor them.
+# This example mirrors the canonical VIDA cli-worker stack and includes the
+# runtime knobs that have proven useful in real CLI-worker orchestration:
+# cli-worker runtime caps, minimum useful output thresholds, bridge fallback,
+# and cli-worker-side timeout env vars where those CLIs actually honor them.
 #
 # agent_system:
 #   init_on_boot: true
@@ -78,10 +78,10 @@ pack_router_keywords:
 #     probation_success_runs: 3
 #     probation_task_runs: 1
 #     retirement_failure_limit: 12
-#   subagents:
-#     internal_subagents:
+#   workers:
+#     internal_workers:
 #       enabled: true
-#       subagent_backend_class: internal
+#       worker_backend_class: internal
 #       role: senior_internal
 #       orchestration_tier: senior
 #       cost_priority: premium
@@ -104,7 +104,7 @@ pack_router_keywords:
 #         - integration
 #     codex_cli:
 #       enabled: true
-#       subagent_backend_class: external_cli
+#       worker_backend_class: external_cli
 #       detect_command: codex
 #       role: bridge_fallback
 #       orchestration_tier: bridge
@@ -162,7 +162,7 @@ pack_router_keywords:
 #         max_runtime_extension_seconds: 90
 #     qwen_cli:
 #       enabled: true
-#       subagent_backend_class: external_cli
+#       worker_backend_class: external_cli
 #       detect_command: qwen
 #       role: free_primary
 #       orchestration_tier: external_free
@@ -203,7 +203,7 @@ pack_router_keywords:
 #         max_runtime_extension_seconds: 90
 #     gemini_cli:
 #       enabled: true
-#       subagent_backend_class: external_cli
+#       worker_backend_class: external_cli
 #       detect_command: gemini
 #       role: free_primary
 #       orchestration_tier: external_free
@@ -244,7 +244,7 @@ pack_router_keywords:
 #         max_runtime_extension_seconds: 120
 #     kilo_cli:
 #       enabled: true
-#       subagent_backend_class: external_cli
+#       worker_backend_class: external_cli
 #       detect_command: kilo
 #       role: free_primary
 #       orchestration_tier: external_free
@@ -283,7 +283,7 @@ pack_router_keywords:
 #         max_runtime_extension_seconds: 75
 #     opencode_cli:
 #       enabled: true
-#       subagent_backend_class: external_cli
+#       worker_backend_class: external_cli
 #       detect_command: opencode
 #       role: free_primary
 #       orchestration_tier: external_free
@@ -322,7 +322,7 @@ pack_router_keywords:
 #         max_runtime_extension_seconds: 75
 #     vibe_cli:
 #       enabled: true
-#       subagent_backend_class: external_cli
+#       worker_backend_class: external_cli
 #       detect_command: vibe
 #       role: free_primary
 #       orchestration_tier: external_free
@@ -353,44 +353,44 @@ pack_router_keywords:
 #         max_runtime_extension_seconds: 60
 #   routing:
 #     default:
-#       subagents:
+#       workers:
 #         - qwen_cli
 #         - kilo_cli
 #         - opencode_cli
 #         - vibe_cli
 #         - codex_cli
-#         - internal_subagents
+#         - internal_workers
 #       write_scope: none
-#       verification_gate: subagent_return_contract
+#       verification_gate: worker_return_contract
 #       graph_strategy: deterministic_then_escalate
 #       deterministic_first: yes
 #       budget_policy: balanced
 #       max_budget_units: 4
-#       max_cli_subagent_calls: 5
+#       max_cli_worker_calls: 5
 #       max_verification_passes: 1
 #       max_fallback_hops: 2
 #       max_total_runtime_seconds: 420
 #       dispatch_required: external_first_when_eligible
 #       external_first_required: yes
 #       # Set web_search_required: yes only on routes that must validate internet facts
-#       # and ensure at least one listed route subagent both declares web_search and exposes dispatch wiring.
+#       # and ensure at least one listed route worker both declares web_search and exposes dispatch wiring.
 #       local_execution_allowed: no
 #       local_execution_preferred: no
 #       cli_dispatch_required_if_delegating: yes
 #       direct_internal_bypass_forbidden: yes
-#       bridge_fallback_subagent: codex_cli
+#       bridge_fallback_worker: codex_cli
 #       internal_escalation_trigger: write_scope_or_tie_break
 #       independent_verification_required: no
 #     status_diagnostic:
-#       subagents:
+#       workers:
 #         - qwen_cli
 #         - gemini_cli
 #         - kilo_cli
 #         - opencode_cli
 #         - vibe_cli
 #         - codex_cli
-#         - internal_subagents
-#       fanout_subagents:
+#         - internal_workers
+#       fanout_workers:
 #         - qwen_cli
 #         - gemini_cli
 #         - kilo_cli
@@ -404,7 +404,7 @@ pack_router_keywords:
 #       deterministic_first: yes
 #       budget_policy: strict
 #       max_budget_units: 0
-#       max_cli_subagent_calls: 2
+#       max_cli_worker_calls: 2
 #       max_verification_passes: 0
 #       max_fallback_hops: 1
 #       max_total_runtime_seconds: 180
@@ -414,7 +414,7 @@ pack_router_keywords:
 #       local_execution_preferred: yes
 #       cli_dispatch_required_if_delegating: yes
 #       direct_internal_bypass_forbidden: yes
-#       bridge_fallback_subagent: codex_cli
+#       bridge_fallback_worker: codex_cli
 #       internal_escalation_trigger: provider_exhausted_or_decision_conflict
 #       allowed_internal_reasons:
 #         - provider_exhausted
@@ -423,12 +423,12 @@ pack_router_keywords:
 #         - provider_exhausted_or_decision_conflict
 #       independent_verification_required: no
 #     analysis:
-#       subagents:
+#       workers:
 #         - qwen_cli
 #         - kilo_cli
 #         - codex_cli
-#         - internal_subagents
-#       fanout_subagents:
+#         - internal_workers
+#       fanout_workers:
 #         - qwen_cli
 #         - kilo_cli
 #       fanout_min_results: 1
@@ -439,24 +439,24 @@ pack_router_keywords:
 #       deterministic_first: yes
 #       budget_policy: strict
 #       max_budget_units: 3
-#       max_cli_subagent_calls: 3
+#       max_cli_worker_calls: 3
 #       max_verification_passes: 1
 #       max_fallback_hops: 1
 #       max_total_runtime_seconds: 360
 #       verification_gate: source_backed_summary
 #       dispatch_required: fanout_then_synthesize
 #       external_first_required: yes
-#       bridge_fallback_subagent: codex_cli
+#       bridge_fallback_worker: codex_cli
 #       internal_escalation_trigger: semantic_conflict_without_majority
 #       verification_route_task_class: verification_ensemble
 #       independent_verification_required: no
 #     read_only_prep:
-#       subagents:
+#       workers:
 #         - qwen_cli
 #         - kilo_cli
 #         - codex_cli
-#         - internal_subagents
-#       fanout_subagents:
+#         - internal_workers
+#       fanout_workers:
 #         - qwen_cli
 #         - kilo_cli
 #       fanout_min_results: 1
@@ -469,7 +469,7 @@ pack_router_keywords:
 #       deterministic_first: yes
 #       budget_policy: strict
 #       max_budget_units: 1
-#       max_cli_subagent_calls: 2
+#       max_cli_worker_calls: 2
 #       max_verification_passes: 0
 #       max_fallback_hops: 1
 #       max_total_runtime_seconds: 240
@@ -479,23 +479,23 @@ pack_router_keywords:
 #       local_execution_preferred: no
 #       cli_dispatch_required_if_delegating: yes
 #       direct_internal_bypass_forbidden: yes
-#       bridge_fallback_subagent: codex_cli
-#       internal_escalation_trigger: subagent_exhausted_or_quality_gap
+#       bridge_fallback_worker: codex_cli
+#       internal_escalation_trigger: worker_exhausted_or_quality_gap
 #       independent_verification_required: no
 #     meta_analysis:
-#       subagents:
+#       workers:
 #         - qwen_cli
 #         - gemini_cli
 #         - kilo_cli
 #         - vibe_cli
 #         - opencode_cli
 #         - codex_cli
-#         - internal_subagents
+#         - internal_workers
 #       models:
 #         codex_cli: gpt-5.1-codex-mini
 #       profiles:
-#         internal_subagents: internal_review
-#       fanout_subagents:
+#         internal_workers: internal_review
+#       fanout_workers:
 #         - qwen_cli
 #         - gemini_cli
 #         - kilo_cli
@@ -512,40 +512,40 @@ pack_router_keywords:
 #       deterministic_first: yes
 #       budget_policy: balanced
 #       max_budget_units: 4
-#       max_cli_subagent_calls: 5
+#       max_cli_worker_calls: 5
 #       max_verification_passes: 1
 #       max_fallback_hops: 1
 #       max_total_runtime_seconds: 480
 #       dispatch_required: fanout_then_synthesize
 #       external_first_required: yes
-#       bridge_fallback_subagent: codex_cli
+#       bridge_fallback_worker: codex_cli
 #       internal_escalation_trigger: semantic_conflict_without_majority
 #       verification_route_task_class: verification_ensemble
 #       independent_verification_required: yes
 #     review:
-#       subagents:
+#       workers:
 #         - qwen_cli
 #         - gemini_cli
 #         - kilo_cli
 #         - opencode_cli
 #         - vibe_cli
 #         - codex_cli
-#         - internal_subagents
+#         - internal_workers
 #       models:
 #         codex_cli: gpt-5.1-codex-mini
 #       profiles:
-#         internal_subagents: internal_review
+#         internal_workers: internal_review
 #       write_scope: none
 #       verification_gate: review_findings
 #       max_runtime_seconds: 180
 #       min_output_bytes: 260
 #       dispatch_required: external_first_review
 #       external_first_required: yes
-#       bridge_fallback_subagent: codex_cli
+#       bridge_fallback_worker: codex_cli
 #       internal_escalation_trigger: unresolved_high_risk_findings
 #       independent_verification_required: no
 #     review_ensemble:
-#       subagents:
+#       workers:
 #         - gemini_cli
 #         - kilo_cli
 #         - opencode_cli
@@ -554,7 +554,7 @@ pack_router_keywords:
 #         - codex_cli
 #       models:
 #         codex_cli: gpt-5.1-codex-mini
-#       fanout_subagents:
+#       fanout_workers:
 #         - qwen_cli
 #         - codex_cli
 #         - gemini_cli
@@ -569,11 +569,11 @@ pack_router_keywords:
 #       min_output_bytes: 280
 #       dispatch_required: fanout_then_synthesize
 #       external_first_required: yes
-#       bridge_fallback_subagent: codex_cli
+#       bridge_fallback_worker: codex_cli
 #       internal_escalation_trigger: unresolved_high_risk_findings
 #       independent_verification_required: no
 #     coach:
-#       subagents:
+#       workers:
 #         - gemini_cli
 #         - kilo_cli
 #         - opencode_cli
@@ -582,7 +582,7 @@ pack_router_keywords:
 #         - codex_cli
 #       models:
 #         codex_cli: gpt-5.1-codex-mini
-#       fanout_subagents:
+#       fanout_workers:
 #         - gemini_cli
 #         - kilo_cli
 #         - opencode_cli
@@ -596,20 +596,20 @@ pack_router_keywords:
 #       min_output_bytes: 280
 #       dispatch_required: external_first_review
 #       external_first_required: yes
-#       bridge_fallback_subagent: codex_cli
+#       bridge_fallback_worker: codex_cli
 #       internal_escalation_trigger: unresolved_coach_conflict
 #       independent_verification_required: no
 #     small_patch:
-#       subagents:
+#       workers:
 #         - codex_cli
-#         - internal_subagents
+#         - internal_workers
 #       models:
 #         codex_cli: gpt-5.1-codex-mini
 #       profiles:
-#         internal_subagents: internal_fast
+#         internal_workers: internal_fast
 #       analysis_required: yes
 #       analysis_route_task_class: analysis
-#       analysis_fanout_subagents:
+#       analysis_fanout_workers:
 #         - qwen_cli
 #         - kilo_cli
 #       analysis_fanout_min_results: 1
@@ -626,29 +626,29 @@ pack_router_keywords:
 #       deterministic_first: no
 #       budget_policy: balanced
 #       max_budget_units: 3
-#       max_cli_subagent_calls: 3
+#       max_cli_worker_calls: 3
 #       max_coach_passes: 2
 #       max_verification_passes: 1
 #       max_fallback_hops: 1
 #       max_total_runtime_seconds: 480
 #       dispatch_required: bridge_write_then_internal_if_expands
 #       external_first_required: no
-#       bridge_fallback_subagent: codex_cli
+#       bridge_fallback_worker: codex_cli
 #       internal_escalation_trigger: scope_expands_beyond_bounded_write
 #       verification_route_task_class: review_ensemble
 #       independent_verification_required: yes
 #     implementation:
-#       subagents:
+#       workers:
 #         - codex_cli
-#         - internal_subagents
+#         - internal_workers
 #       models:
 #         codex_cli: gpt-5.1-codex
 #       profiles:
-#         internal_subagents: internal_fast
+#         internal_workers: internal_fast
 #       max_runtime_seconds: 420
 #       analysis_required: yes
 #       analysis_route_task_class: analysis
-#       analysis_fanout_subagents:
+#       analysis_fanout_workers:
 #         - qwen_cli
 #         - kilo_cli
 #       analysis_fanout_min_results: 1
@@ -665,71 +665,71 @@ pack_router_keywords:
 #       deterministic_first: no
 #       budget_policy: balanced
 #       max_budget_units: 5
-#       max_cli_subagent_calls: 4
+#       max_cli_worker_calls: 4
 #       max_coach_passes: 2
 #       max_verification_passes: 1
 #       max_fallback_hops: 2
 #       max_total_runtime_seconds: 540
 #       dispatch_required: external_readonly_then_senior_writer
 #       external_first_required: no
-#       bridge_fallback_subagent: codex_cli
+#       bridge_fallback_worker: codex_cli
 #       internal_escalation_trigger: cross_module_or_architecture_shift
 #       verification_route_task_class: review_ensemble
 #       independent_verification_required: yes
 #     architecture:
-#       subagents:
+#       workers:
 #         - qwen_cli
 #         - gemini_cli
 #         - codex_cli
-#         - internal_subagents
+#         - internal_workers
 #       models:
 #         codex_cli: gpt-5.2-codex
 #       profiles:
-#         internal_subagents: internal_arch
+#         internal_workers: internal_arch
 #       write_scope: none
 #       verification_gate: architectural_review
 #       dispatch_required: external_first_then_senior_arbitration
 #       external_first_required: yes
-#       bridge_fallback_subagent: codex_cli
+#       bridge_fallback_worker: codex_cli
 #       internal_escalation_trigger: architecture_decision_required
 #       verification_route_task_class: review_ensemble
 #       independent_verification_required: yes
 #     verification:
-#       subagents:
+#       workers:
 #         - qwen_cli
 #         - gemini_cli
 #         - kilo_cli
 #         - vibe_cli
 #         - opencode_cli
 #         - codex_cli
-#         - internal_subagents
+#         - internal_workers
 #       models:
 #         codex_cli: gpt-5.1-codex-mini
 #       profiles:
-#         internal_subagents: internal_review
+#         internal_workers: internal_review
 #       write_scope: none
 #       verification_gate: verification_summary
 #       max_runtime_seconds: 180
 #       min_output_bytes: 240
 #       dispatch_required: external_first_review
 #       external_first_required: yes
-#       bridge_fallback_subagent: codex_cli
+#       bridge_fallback_worker: codex_cli
 #       internal_escalation_trigger: unresolved_verification_conflict
 #       independent_verification_required: no
 #     verification_ensemble:
-#       subagents:
+#       workers:
 #         - qwen_cli
 #         - gemini_cli
 #         - kilo_cli
 #         - vibe_cli
 #         - opencode_cli
 #         - codex_cli
-#         - internal_subagents
+#         - internal_workers
 #       models:
 #         codex_cli: gpt-5.1-codex-mini
 #       profiles:
-#         internal_subagents: internal_review
-#       fanout_subagents:
+#         internal_workers: internal_review
+#       fanout_workers:
 #         - qwen_cli
 #         - gemini_cli
 #         - kilo_cli
@@ -744,6 +744,6 @@ pack_router_keywords:
 #       min_output_bytes: 260
 #       dispatch_required: fanout_then_synthesize
 #       external_first_required: yes
-#       bridge_fallback_subagent: codex_cli
+#       bridge_fallback_worker: codex_cli
 #       internal_escalation_trigger: unresolved_verification_conflict
 #       independent_verification_required: no

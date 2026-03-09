@@ -44,7 +44,7 @@ Already transitioned or transition-ready in `vida-v0`:
 7. worker packet gate,
 8. execution authorization and coach gates,
 9. spec-intake/spec-delta/draft-execution-spec surfaces,
-10. subagent registry/system/leases/pool.
+10. worker registry/system/leases/pool.
 
 Canonical reference map lives in `docs/framework/runtime-transition-map.md`.
 
@@ -77,4 +77,4 @@ Do not place here:
 1. project build commands,
 2. app-specific delivery scripts,
 3. product runtime runbooks,
-4. subagent/model choices for project overlay.
+4. worker/model choices for project overlay.

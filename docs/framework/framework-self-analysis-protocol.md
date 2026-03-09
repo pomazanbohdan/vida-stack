@@ -40,7 +40,7 @@ Do not use FSAP for product/codebase diagnosis unless the user explicitly asks a
 1. Default execution lane: main orchestrator only for direct chat diagnosis and tracked FSAP trigger framing.
 2. Default task-flow policy: bypass TODO/`br`/pack flow and execute in chat mode unless the user explicitly requests tracked execution or a formal artifact.
 3. Delegation policy:
-   - do not delegate the primary FSAP trigger framing or ownership split to subagents by default;
+   - do not delegate the primary FSAP trigger framing or ownership split to workers by default;
    - in untracked chat mode, use delegated lanes only for narrow secondary verification when the orchestrator is blocked or the user explicitly requests delegation;
    - in tracked FSAP/remediation mode, delegated verification/proving is the default before closure or report-finalization, and a local-only close path requires a structured override receipt.
 4. Thinking mode:
@@ -126,7 +126,7 @@ Rule:
    - run the lightest proof that the framework fix changed behavior.
    - in tracked mode, prefer delegated verification/proving lanes over a second local orchestrator-only audit.
    - before closure-ready state, require either:
-     - a delegated verification artifact with real subagent activity, or
+     - a delegated verification artifact with real worker activity, or
      - a structured override receipt recorded by `docs/framework/history/_vida-source/scripts/fsap-verification-gate.py`.
 9. `FSAP-8 Report`
    - report findings in chat, grouped by ownership.

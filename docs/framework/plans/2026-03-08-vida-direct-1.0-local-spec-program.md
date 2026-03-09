@@ -1,6 +1,6 @@
 # VIDA Direct 1.0 Local Spec Program
 
-Purpose: define how VIDA should build `1.0` directly as a local-first binary product through layered specs and bounded epics, using cheap subagents for implementation from strong packets rather than iteratively reshaping the old engine.
+Purpose: define how VIDA should build `1.0` directly as a local-first binary product through layered specs and bounded epics, using cheap workers for implementation from strong packets rather than iteratively reshaping the old engine.
 
 Status: canonical program plan for direct local-first `1.0` implementation.
 
@@ -24,7 +24,7 @@ This program assumes:
 2. fast compiled Rust feedback loops,
 3. tests run against the binary itself,
 4. unit, integration, and e2e tests can all be local and cheap,
-5. cheap subagents can execute most code tasks if packets are bounded enough.
+5. cheap workers can execute most code tasks if packets are bounded enough.
 
 ---
 
@@ -48,7 +48,7 @@ This program assumes:
 ### 2.3 Execution Model Assumptions
 
 1. orchestrator writes specs and integration decisions,
-2. cheap subagents receive bounded packets,
+2. cheap workers receive bounded packets,
 3. one integrator lane keeps shared contracts coherent,
 4. no task may depend on chat memory.
 

@@ -1,6 +1,6 @@
 # Protocol Self-Diagnosis Protocol
 
-Purpose: define a canonical self-diagnosis layer for VIDA runtime protocols so the orchestrator can detect and correct protocol drift in TODO flow, autonomous execution, subagent routing, spec sync, approval gating, and debug escalation.
+Purpose: define a canonical self-diagnosis layer for VIDA runtime protocols so the orchestrator can detect and correct protocol drift in TODO flow, autonomous execution, worker routing, spec sync, approval gating, and debug escalation.
 
 ## Core Contract
 
@@ -15,7 +15,7 @@ This protocol applies to runtime behavior governed by at least:
 
 1. `docs/framework/todo-protocol.md`
 2. `docs/framework/autonomous-execution-protocol.md`
-3. `docs/framework/subagent-system-protocol.md`
+3. `docs/framework/agent-system-protocol.md`
 4. `docs/framework/spec-sync-protocol.md`
 5. `docs/framework/task-approval-loop-protocol.md`
 6. `docs/framework/debug-escalation-protocol.md`
@@ -32,7 +32,7 @@ Run protocol self-diagnosis when any are true:
 3. a new executable spec requirement has no task coverage,
 4. a task/protocol/spec decision contradicts current runtime behavior,
 5. repeated local debugging continued without the required escalation path,
-6. subagent-first law was bypassed without lawful exhaustion/blocker evidence,
+6. worker-first law was bypassed without lawful exhaustion/blocker evidence,
 7. TODO execution drifted outside an active block,
 8. task/task-pool progression no longer matches canonical next-task sources.
 
@@ -51,7 +51,7 @@ Minimum self-diagnosis checks:
 3. `verification_coverage`
    - did each completed write-producing slice receive required verify/catch-review coverage?
 4. `route_compliance`
-   - did runtime use the required subagent/external/debug escalation paths?
+   - did runtime use the required worker/external/debug escalation paths?
 5. `spec_runtime_consistency`
    - does behavior still match the nearest governing specs/protocols?
 6. `fail_closed_integrity`

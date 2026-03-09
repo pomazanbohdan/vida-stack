@@ -18,7 +18,7 @@ rg --files | rg "vida|protocol|beads|runtime"
 When to use:
 - "Where is error X handled?"
 - "How is auth implemented?"
-- "Where is cli subagent Y used?"
+- "Where is cli worker Y used?"
 
 ### `recall_code` — optional semantic search
 

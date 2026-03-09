@@ -1,6 +1,6 @@
 # Agentic Cheap Worker Packet System
 
-Purpose: define the minimum packet and prompt system that lets cheap subagents execute bounded `1.0` implementation work with near-zero chat context and no loss of deterministic behavior.
+Purpose: define the minimum packet and prompt system that lets cheap workers execute bounded `1.0` implementation work with near-zero chat context and no loss of deterministic behavior.
 
 Status: research-to-execution bridge artifact for packetized cheap-agent implementation.
 

@@ -24,7 +24,7 @@ The current workspace already has strong local foundations:
 5. document lifecycle ledger,
 6. problem-party bounded escalation,
 7. queue-backed task-state mutation,
-8. subagent pool, probing, and evaluation refresh,
+8. worker pool, probing, and evaluation refresh,
 9. operator status and silent framework diagnosis.
 
 These surfaces mean the next future work should focus on platform maturity, interoperability, and stronger runtime evidence loops rather than re-solving basic orchestration.
@@ -35,7 +35,7 @@ These surfaces mean the next future work should focus on platform maturity, inte
 
 Why this is outside the current environment:
 
-1. VIDA currently orchestrates local/internal subagents and CLI lanes, not external agent servers with stable network contracts.
+1. VIDA currently orchestrates local/internal workers and CLI lanes, not external agent servers with stable network contracts.
 2. Full A2A adoption needs externally reachable agent endpoints, discovery documents, authenticated agent identity, and interoperability testing across protocol bindings.
 
 Research anchor:
@@ -167,8 +167,8 @@ Recommended local next step:
 Current local evidence:
 
 1. `docs/framework/history/_vida-source/scripts/eval-pack.sh`,
-2. `docs/framework/history/_vida-source/scripts/subagent-eval-pack.py`,
-3. local score refresh in `.vida/state/subagent-strategy.json`.
+2. `docs/framework/history/_vida-source/scripts/worker-eval-pack.py`,
+3. local score refresh in `.vida/state/worker-strategy.json`.
 
 Local gap:
 
@@ -184,7 +184,7 @@ Recommended local next step:
 
 Current local evidence:
 
-1. `vida.config.yaml` and the subagent system carry capability bands and dispatch wiring,
+1. `vida.config.yaml` and the agent system carry capability bands and dispatch wiring,
 2. routing is still largely config-driven rather than schema-first typed interoperability.
 
 Local gap:
@@ -236,7 +236,7 @@ Recommended local next step:
 Current local evidence:
 
 1. framework operator status exists,
-2. subagent status already exposes lifecycle and remediation hints.
+2. worker status already exposes lifecycle and remediation hints.
 
 Local gap:
 

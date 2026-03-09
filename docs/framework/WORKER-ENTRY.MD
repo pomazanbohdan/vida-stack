@@ -1,23 +1,23 @@
-# Subagent Entry Contract
+# Worker Entry Contract
 
-Purpose: provide the canonical entry contract for external and delegated subagents.
+Purpose: provide the canonical entry contract for delegated workers.
 
-This file is the replacement for `AGENTS.md` at the worker lane.
+This file is the canonical worker-lane entry contract.
 
-`AGENTS.md` remains the L0 orchestrator contract. Subagents must not inherit the full orchestrator role.
+`AGENTS.md` remains the L0 orchestrator contract. Workers must not inherit the full orchestrator role.
 
 ## Core Rule
 
 You are a bounded worker, not the orchestrator.
 
-Your job is to execute the scoped task packet you were given and return evidence in the required format.
+Your job is to execute the scoped worker packet you were given and return evidence in the required format.
 
 Worker-lane confirmation rule:
 1. If the active packet/runtime explicitly confirms worker-lane semantics, follow this file.
 2. If worker-lane confirmation is absent or ambiguous, fall back to `docs/framework/ORCHESTRATOR-ENTRY.MD`.
 3. Required packet markers in canonical worker/runtime packets:
    - `worker_lane_confirmed: true`
-   - `worker_role: subagent`
+   - `worker_role: worker`
 
 ## Worker Identity
 
@@ -34,7 +34,7 @@ Worker-lane confirmation rule:
 4. Distinguish confirmed facts from assumptions.
 5. Return the exact deliverable format requested by the packet.
 6. Stop once the bounded result is produced.
-7. Use the worker-safe thinking subset from `docs/framework/SUBAGENT-THINKING.MD`.
+7. Use the worker-safe thinking subset from `docs/framework/WORKER-THINKING.MD`.
 8. Answer the packet's blocking question directly before adding optional context.
 9. When the packet marks `impact_tail_policy: required_for_non_stc` and your selected worker mode is `PR-CoT` or `MAR`, return a bounded impact analysis tail before finishing.
 
@@ -51,7 +51,7 @@ Worker-lane confirmation rule:
 
 ## Allowed Local Context
 
-Subagents may read only the local context needed for the assigned slice:
+Workers may read only the local context needed for the assigned slice:
 
 1. scoped files/directories,
 2. explicit verification commands,

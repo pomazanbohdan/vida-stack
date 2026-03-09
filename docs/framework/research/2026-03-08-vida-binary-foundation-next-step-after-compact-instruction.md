@@ -72,15 +72,15 @@ if the current environment forbids mutations outside `docs/framework/history/_vi
   - fail-closed behavior when authorization, proof, or migration safety is missing
   </behavioral_inheritance_contract>
 
-  ## Subagent Requirements
-  <subagent_requirements>
-  Use subagents actively before editing.
+  ## Worker Requirements
+  <worker_requirements>
+  Use workers actively before editing.
 
   Minimum lane split:
   1. one lane to propose the first bounded Binary Foundation slice,
   2. one lane to review test/proof scope for that slice,
   3. one lane to check that the slice does not overreach into later waves.
-  </subagent_requirements>
+  </worker_requirements>
 
   ## Exact Task
   <exact_task>

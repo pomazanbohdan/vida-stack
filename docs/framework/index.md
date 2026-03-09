@@ -1,27 +1,27 @@
 # Framework Canon Index
 
-Purpose: define the canonical framework documentation home after the `docs/framework/history/_vida-source/docs` cutover.
+Purpose: thin entrypoint into the canonical framework map and protocol registry.
 
-Canonical split:
+Primary entrypoints:
 
-1. `docs/framework/` holds active framework runtime contracts.
-2. `docs/framework/history/` holds historical plans, research, and reference artifacts.
-3. `docs/product/spec/` holds current VIDA product law.
-4. `vida/config/` holds executable product law.
-5. `vida-v0/` holds the transitional Nim runtime package.
+1. [framework-map-protocol.md](/home/unnamed/project/vida-stack/docs/framework/framework-map-protocol.md)
+   - canonical map for repository structure, artifact taxonomy, legacy states, promotion/projection rules, and shared runtime-spec spine
+2. [protocol-index.md](/home/unnamed/project/vida-stack/docs/framework/protocol-index.md)
+   - canonical registry of domain protocols
+3. [current-spec-map.md](/home/unnamed/project/vida-stack/docs/product/spec/current-spec-map.md)
+   - canonical promoted product-spec map
 
 Bootstrap cluster:
 
 1. [AGENTS.md](/home/unnamed/project/vida-stack/AGENTS.md)
 2. [ORCHESTRATOR-ENTRY.MD](/home/unnamed/project/vida-stack/docs/framework/ORCHESTRATOR-ENTRY.MD)
-3. [SUBAGENT-ENTRY.MD](/home/unnamed/project/vida-stack/docs/framework/SUBAGENT-ENTRY.MD)
-4. [SUBAGENT-THINKING.MD](/home/unnamed/project/vida-stack/docs/framework/SUBAGENT-THINKING.MD)
+3. [WORKER-ENTRY.MD](/home/unnamed/project/vida-stack/docs/framework/WORKER-ENTRY.MD)
+4. [WORKER-THINKING.MD](/home/unnamed/project/vida-stack/docs/framework/WORKER-THINKING.MD)
 5. [instruction-activation-protocol.md](/home/unnamed/project/vida-stack/docs/framework/instruction-activation-protocol.md)
-6. [protocol-index.md](/home/unnamed/project/vida-stack/docs/framework/protocol-index.md)
 
-History policy:
+Split rule:
 
-1. Historical `docs/framework/history/_vida-source/docs/plans/**` moved to [history/plans](/home/unnamed/project/vida-stack/docs/framework/history/plans).
-2. Historical `docs/framework/history/_vida-source/docs/research/**` moved to [history/research](/home/unnamed/project/vida-stack/docs/framework/history/research).
-3. Historical roadmap/reference notes moved to [history/future.md](/home/unnamed/project/vida-stack/docs/framework/history/future.md).
-4. Historical artifacts are evidence inputs, not current canon, unless a current spec explicitly cites them.
+1. `docs/framework/plans/**` are active strategic and execution-spec artifacts by default.
+2. `docs/framework/history/**` are evidence/history by default.
+3. `docs/product/spec/**` are promoted stable product canon.
+4. `vida/config/**` is the executable law home.

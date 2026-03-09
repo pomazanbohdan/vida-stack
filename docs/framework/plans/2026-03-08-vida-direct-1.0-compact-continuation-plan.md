@@ -63,7 +63,7 @@ The compact-safe continuation stack is:
    - exact deliverable,
    - exact following slice,
 5. `docs/framework/history/research/2026-03-08-agentic-cheap-worker-packet-system.md`
-   - bounded subagent or external-worker handoff contract when delegated work is used.
+   - bounded worker or external-worker handoff contract when delegated work is used.
 
 Stack rule:
 
@@ -176,7 +176,7 @@ Minimum continuation bundle:
 7. `docs/framework/history/research/2026-03-08-vida-direct-1.0-next-agent-compact-instruction.md`
 8. the current active artifact-level next-step instruction
 9. every already-complete canonical spec needed by the active slice
-10. `docs/framework/history/research/2026-03-08-agentic-cheap-worker-packet-system.md` when subagent or external-worker handoff is used.
+10. `docs/framework/history/research/2026-03-08-agentic-cheap-worker-packet-system.md` when worker or external-worker handoff is used.
 11. `docs/framework/history/research/2026-03-08-vida-external-task-slicing-and-development-start-prompt.md` when an external environment should cut tasks from the plan stack and start the earliest lawful development slice.
 
 External-environment rule:
@@ -196,7 +196,7 @@ Every future session-level continuation packet should state:
 2. canonical target file,
 3. current slice boundary,
 4. minimal required read set,
-5. subagent questions and scope split,
+5. worker questions and scope split,
 6. explicit non-goals,
 7. exact end-of-session updates required,
 8. exact following slice or next artifact.

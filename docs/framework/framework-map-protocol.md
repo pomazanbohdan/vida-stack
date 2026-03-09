@@ -1,133 +1,303 @@
 # Framework Map Protocol (FMP)
 
-Purpose: single canonical map of the VIDA runtime framework boundaries.
+Purpose: one canonical map for VIDA repository structure, documentation architecture, artifact taxonomy, runtime layering, and promotion/projection rules.
 
-This protocol answers three questions:
+This file is the single framework-owned answer to five questions:
 
-1. What is runtime core (must stay minimal and clean).
-2. What is project artifact space (business/spec/research outputs).
-3. How requests move through the framework end-to-end.
+1. where each major directory belongs,
+2. which artifact class each document/config family represents,
+3. what is active canon vs transitional vs historical,
+4. how `0.2.0` and `1.0` relate to one shared runtime-spec spine,
+5. how artifacts move from plan -> spec -> executable law.
 
-## 1) Runtime Core (Canonical)
+## 1. Catalog Map
 
-Runtime core is the minimal set required to run agent workflows:
+Top-level repository layout:
 
-1. `AGENTS.md` — bootstrap router, lane dispatch, and cross-lane invariants.
-2. `docs/framework/ORCHESTRATOR-ENTRY.MD` — orchestrator entry contract, request intent gate, and TODO engagement gate.
-3. `docs/framework/SUBAGENT-ENTRY.MD` + `docs/framework/SUBAGENT-THINKING.MD` — worker entry contract and bounded worker reasoning subset.
-4. `docs/framework/*.md` — operational protocols (routing, command-layer matrix, SCP, IEP, WVP, etc.).
-5. `docs/framework/beads-protocol.md` — cross-flow task-state/execution contract.
-6. `docs/framework/runtime-transition-map.md` — canonical map from retired `docs/framework/history/_vida-source/scripts/*` surfaces into `vida-v0` or historical-only status.
-7. `vida-v0/*` — transitional executable runtime package for the `0.2.0` rollback architecture line.
-8. `docs/framework/templates/*` — current framework-owned reference templates.
-9. `docs/framework/script-runtime-architecture.md` — canonical runtime transition and ownership split.
-10. `.beads/` + `br` state — SSOT for task lifecycle.
+1. `AGENTS.md`
+   - bootstrap router and cross-lane invariants,
+   - framework-owned,
+   - active canon.
+2. `docs/framework/`
+   - framework-owned human-readable law, maps, plans, and domain protocols,
+   - active canon unless a file is explicitly marked pointer-only or historical-only.
+3. `docs/framework/plans/`
+   - active strategic and execution-spec program artifacts,
+   - not legacy by default.
+4. `docs/framework/history/`
+   - evidence, provenance, prior source artifacts, and historical copies,
+   - not active canon unless a current canonical document cites the artifact explicitly.
+5. `docs/product/spec/`
+   - promoted stable product prose canon.
+6. `vida/config/`
+   - executable product law and runtime-readable projections.
+7. `vida-v0/`
+   - transitional implementation runtime,
+   - current execution substrate for the `0.2.0` line.
+8. `docs/project-memory/`
+   - Git-resident source tree for project-memory artifacts.
+9. `docs/process/`
+   - project operational runbooks when present.
 
 Rule:
 
-1. Runtime core must be clear and single-path.
-2. Runtime core uses only canonical command and protocol paths.
-3. Do not reintroduce non-canonical topology artifacts.
+1. directory placement is semantic, not cosmetic,
+2. no artifact should exist in two active homes with equal authority,
+3. if the same concept appears in multiple places, exactly one location must be canonical and the others must be projections, pointers, or evidence.
 
-## 2) Project Artifact Space (Non-Core)
+## 2. Layer Map
 
-Project artifacts are not runtime orchestration code. They contain delivery content:
+VIDA uses one normalized documentation/runtime stack:
 
-1. `docs/` — research, specs, planning, ADR-like decisions, reports.
-2. `docs/process/` — project operational runbooks and canonical human-readable command contracts.
-3. `scripts/` — executable project build/run/validation/audit entrypoints.
-4. `vida.config.yaml` — optional project overlay manifest consumed by VIDA at boot.
-5. `docs/research/vida-framework/` — historical project research and migration artifacts.
+1. `Bootstrap Layer`
+   - `AGENTS.md`
+   - `docs/framework/ORCHESTRATOR-ENTRY.MD`
+   - `docs/framework/WORKER-ENTRY.MD`
+   - `docs/framework/WORKER-THINKING.MD`
+2. `Framework Program Layer`
+   - `docs/framework/plans/**`
+   - strategic plan plus execution/spec artifacts that implement that strategy
+3. `Framework Protocol Layer`
+   - `docs/framework/*-protocol.md`
+   - runtime law for bounded domains
+4. `Framework Map / Index Layer`
+   - this file
+   - `docs/framework/protocol-index.md`
+   - thin indexes/pointers only
+5. `Product Spec Layer`
+   - `docs/product/spec/**`
+   - stable promoted product law
+6. `Instruction Artifact Layer`
+   - `vida/config/instructions/**`
+   - product-owned instruction authoring/projection home
+7. `Executable Law Layer`
+   - `vida/config/**`
+   - machine-readable law consumed by runtime
+8. `Implementation Layer`
+   - `vida-v0/**`
+   - current transitional implementation
+9. `History / Evidence Layer`
+   - `docs/framework/history/**`
 
-Rule:
+## 3. Canonical Artifact Taxonomy
 
-1. Artifact docs may evolve independently.
-2. Runtime protocols must only reference artifact locations that are currently canonical.
-3. Project build/run/observability guidance must not live in `docs/framework/`.
-4. `docs/framework/history/_vida-source/*` is historical migration/source material during cutover, not the target active home.
-5. Requests that touch both layers must be split by ownership: framework policy changes stay in `AGENTS.md` / `docs/framework/*` / `vida-v0/*`, while project delivery behavior stays in `docs/*` / `scripts/*`.
-6. `vida.config.yaml` is project-owned overlay data; framework owns only the schema, validation, and activation semantics.
-7. framework-owned starter templates live in `docs/framework/templates/*`; the instantiated artifacts remain project-owned.
+Canonical artifact classes:
 
-## 3) Layer Map
+1. `plan`
+   - strategic or execution-program artifact,
+   - active home: `docs/framework/plans/**`
+2. `runtime_spec`
+   - human-readable runtime law/specification that may be shared across implementations,
+   - active homes: `docs/framework/plans/**`, then promoted parts in `docs/product/spec/**` when stabilized
+3. `framework_protocol`
+   - bounded framework runtime law for one domain,
+   - active home: `docs/framework/*-protocol.md`
+4. `instruction_artifact`
+   - human-readable or projected agent-facing/runtime-facing instruction artifact,
+   - active home: `vida/config/instructions/**`
+5. `product_spec`
+   - stable promoted product prose canon,
+   - active home: `docs/product/spec/**`
+6. `executable_law`
+   - machine-readable runtime projection/config,
+   - active home: `vida/config/**`
+7. `implementation`
+   - concrete runtime code,
+   - active home: `vida-v0/**` today
+8. `history_evidence`
+   - non-canonical source trail, historical artifacts, or migration evidence,
+   - active home: `docs/framework/history/**`
+9. `pointer`
+   - short document whose job is to redirect readers to the canonical source,
+   - allowed in `docs/framework/**` and other map/index locations only when it clearly names the canonical target.
 
-```text
-L0 Policy      : AGENTS.md
-L0a Router      : AGENTS.md
-L0b Orchestrator: docs/framework/ORCHESTRATOR-ENTRY.MD
-L0c Worker      : docs/framework/SUBAGENT-ENTRY.MD + docs/framework/SUBAGENT-THINKING.MD
-L1 Routing      : docs/framework/orchestration-protocol.md + docs/framework/use-case-packs.md
-L2 Command Map  : docs/framework/command-layer-protocol.md + docs/framework/runtime-transition-map.md
-L3 Reasoning    : docs/framework/thinking-protocol.md + docs/framework/web-validation-protocol.md
-                  support refs: docs/framework/algorithms-one-screen.md, docs/framework/algorithms-quick-reference.md
-L4 Contracts    : docs/framework/spec-contract-protocol.md + docs/framework/form-task-protocol.md
-L5 Execution    : docs/framework/implement-execution-protocol.md + docs/framework/bug-fix-protocol.md
-L6 State/Logs   : docs/framework/beads-protocol.md + docs/framework/todo-protocol.md + docs/framework/log-policy.md
-L7 Health       : docs/framework/pipelines.md + docs/framework/runtime-transition-map.md
-L8 Runtime Core : docs/framework/script-runtime-architecture.md + vida-v0/*
-L9 Bootstrap    : docs/framework/project-bootstrap-protocol.md + vida-v0/*
-```
+Hard rule:
 
-State/log-read invariant:
+1. a document must have one primary artifact class,
+2. mixed documents should be split or explicitly marked as transitional,
+3. “human-readable” alone does not define the class; ownership and function do.
 
-1. State and log inspection is budgeted.
-2. Default path is exact-key search against one specific file, then short-window reads.
-3. Broad recursive scans of `.vida/logs`, `.vida/state`, and `.beads` are forbidden unless the active lane contract explicitly escalates.
+## 4. Canonical Glossary
 
-## 4) Request Flow Map
+Use one normalized vocabulary.
 
-```text
-User Request
-  -> Bootstrap Router (AGENTS.md)
-  -> Lane Selection (orchestrator or worker)
-  -> Problem Framing + Lens Selection
-  -> Request Intent Classification (answer_only | artifact_flow | execution_flow | mixed)
-  -> If answer_only: bounded analysis/synthesis -> User Report
-  -> If task/artifact flow: Pack Detection (use-case-packs)
-  -> Command Contract (/vida-*)
-  -> Command Layer Selection (CL1..CL5)
-  -> Protocol Execution (SCP/IEP/BFP/WVP)
-  -> Subagent-First Analysis (mode-aware when enabled)
-  -> Change-Impact Reconciliation (if drift)
-  -> TODO Blocks (block-plan/start/end/reflect/verify)
-  -> br State Update (open/in_progress/closed)
-  -> Health Check
-  -> User Report
-```
+### 4.1 Program and Spec Terms
 
-## 5) Consistency Rules
+1. `strategic plan`
+   - top-level direction-setting plan,
+   - current canonical source: `docs/framework/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
+2. `execution-spec artifact`
+   - detailed plan/spec artifact that concretizes the strategic plan,
+   - current active home: `docs/framework/plans/**`
+3. `runtime spec`
+   - shared semantic runtime model independent of one implementation substrate.
+
+### 4.2 Agent-System Terms
+
+1. `agent system`
+   - orchestration/runtime layer above one delegated execution
+2. `agent backend`
+   - concrete execution backend such as `internal` or `external_cli`
+3. `agent role`
+   - semantic route role such as `analyst`, `writer`, `coach`, `verifier`, `approver`, `synthesizer`
+4. `worker`
+   - bounded delegated executor posture
+5. `worker packet`
+   - canonical dispatch artifact for a worker lane
+
+Normalization rule:
+
+1. Canonical docs use `worker`, `agent backend`, `agent role`, and `worker packet`.
+2. Legacy `SUBAGENT-*` naming is not part of the active canon.
+
+## 5. Legacy / Transitional State Model
+
+Canonical artifact states:
+
+1. `canonical`
+   - current source of truth
+2. `active_transitional`
+   - current and valid, but expected to be replaced by a cleaner canonical form later
+3. `projected`
+   - derived or machine-readable projection of another canonical artifact
+4. `pointer_only`
+   - navigation aid that must not carry unique source-of-truth semantics
+5. `history_evidence`
+   - historical input only
+
+Legacy rule:
+
+1. “legacy” must never mean merely “older date”,
+2. an artifact is legacy only when its state is explicitly `history_evidence`,
+3. `docs/framework/plans/**` are active by default unless marked otherwise,
+4. `docs/framework/history/**` are evidence by default unless cited by an active canonical document.
+
+## 6. Shared Runtime-Spec Spine
+
+VIDA `0.2.0` and VIDA `1.0` must share one runtime-spec spine.
+
+Current rule:
+
+1. `vida 0.2.0` and `vida 1.0` do not own separate semantic runtime models,
+2. they share one canonical runtime-spec foundation,
+3. they differ by implementation substrate and maturity, not by core runtime law.
+
+Implementation posture:
+
+1. `vida 0.2.0`
+   - prototype / proving / continuation runtime,
+   - current implementation substrate: `vida-v0/**`,
+   - expected to continue development and refine instruction/runtime behavior in practice
+2. `vida 1.0`
+   - target durable runtime implementation,
+   - expected to consume the same semantic runtime spine with a stronger final implementation
+
+Current shared runtime-spec sources:
+
+1. `docs/framework/plans/2026-03-08-vida-0.1-to-1.0-direct-binary-transition-plan.md`
+   - strategic master plan
+2. `docs/framework/plans/2026-03-08-vida-0.3-state-kernel-schema-spec.md`
+3. `docs/framework/plans/2026-03-08-vida-0.3-route-and-receipt-spec.md`
+4. `docs/framework/plans/2026-03-08-vida-0.3-instruction-kernel-spec.md`
+5. `docs/framework/plans/2026-03-08-vida-0.3-migration-kernel-spec.md`
+6. `docs/framework/plans/2026-03-08-vida-0.3-command-tree-spec.md`
+7. `docs/framework/plans/2026-03-08-vida-0.3-parity-and-conformance-spec.md`
+
+Promotion rule:
+
+1. when a runtime-spec boundary is stable and no longer merely program-facing, promote its settled product-law portion into `docs/product/spec/**`,
+2. executable projections then belong in `vida/config/**`,
+3. implementation-specific details remain in `vida-v0/**` or later target runtimes.
+
+## 7. Promotion And Projection Rules
+
+Artifact movement is deterministic.
+
+### 7.1 Plan -> Product Spec
+
+Promote from `docs/framework/plans/**` to `docs/product/spec/**` when all are true:
+
+1. the semantics are settled enough to act as stable product law,
+2. the document is no longer primarily a sequencing/program artifact,
+3. implementation-independent rules can be stated cleanly,
+4. the spec should outlive one implementation wave.
+
+### 7.2 Product Spec -> Executable Law
+
+Project from `docs/product/spec/**` into `vida/config/**` when all are true:
+
+1. runtime needs machine-readable configuration or schema,
+2. the executable shape can be derived from the prose canon,
+3. the projection does not become the only understandable source of meaning.
+
+### 7.3 Framework Protocol -> Product Instruction Artifact
+
+Move or mirror content from `docs/framework/**` into `vida/config/instructions/**` only when:
+
+1. the content is an instruction-bearing artifact consumed as agent/worker behavior law or prompt authoring surface,
+2. the content belongs to the instruction artifact model rather than a generic framework domain protocol,
+3. canonical ownership is clearer in the product-owned instruction home.
+
+### 7.4 Pointer Reduction
+
+Reduce a document to `pointer_only` when:
+
+1. a clearer canonical source already exists elsewhere,
+2. keeping two full bodies would duplicate active law,
+3. the old location is still useful for navigation or compatibility.
+
+## 8. Minimal Duplication Policy
+
+Use this anti-duplication rule:
+
+1. one master map: this file
+2. one protocol registry: `docs/framework/protocol-index.md`
+3. one current product-spec map: `docs/product/spec/current-spec-map.md`
+4. one canonical source per semantic decision
+
+Avoid:
+
+1. multiple competing framework maps,
+2. repeated narrative summaries across `README`, `index`, `map`, and `protocol-index`,
+3. duplicated active law in both `docs/framework/**` and `vida/config/**`.
+
+Index reduction rule:
+
+1. `docs/framework/index.md` should remain a thin pointer into this map and the protocol index,
+2. `docs/framework/protocol-index.md` should remain a registry, not a second architecture map.
+
+## 9. Normalized Worker Model
+
+Canonical state:
+
+1. one agent-system protocol,
+2. one worker-dispatch protocol,
+3. one backend lifecycle protocol,
+4. one normalized role vocabulary,
+5. prompt bodies living in `vida/config/instructions/prompt_templates/**`.
+
+## 10. Consistency Rules
 
 When changing framework structure, in the same change set:
 
-1. Update this file (`framework-map-protocol.md`).
-2. Update `docs/framework/protocol-index.md` links/domain rows.
-3. Update `AGENTS.md` operational references if read-set changed.
-4. Update `docs/README.md` and `docs/process/*` if project runbooks moved.
-5. Remove outdated references immediately (LEGACY-ZERO).
-6. If the same request changes both framework and project scope, verify that each edit landed in its ownership layer before closing the block.
-7. Keep the request-intent gate and log-read budget synchronized across bootstrap router, orchestrator entry, worker entry, and orchestration docs.
+1. update this file,
+2. update `docs/framework/protocol-index.md` if protocol ownership or canonical source changed,
+3. update `docs/product/spec/current-spec-map.md` if a runtime-spec promotion changed current product canon,
+4. update instruction projection docs when an instruction-bearing artifact moves,
+5. remove outdated active-body duplicates immediately or mark them pointer-only.
 
-## 6) Fast Integrity Checks
-
-Use these checks after structural edits:
-
-```bash
-! rg -n "docs/framework/history/_vida-source/shared/|docs/framework/history/_vida-source/reports/|docs/framework/history/_vida-source/scratchpad/|/vida-lead|/vida-cascade|/vida-epic|vida-spec-categories|bash scripts/beads-workflow\.sh|bash scripts/quality-health-check\.sh" AGENTS.md docs/framework docs/product -g '!docs/framework/framework-map-protocol.md'
-nim c vida-v0/src/vida.nim
-nim c -r vida-v0/tests/test_kernel_runtime.nim
-```
-
-## 7) Decision Boundary
+## 11. Decision Boundary
 
 Use this protocol when:
 
-1. deciding whether a file belongs to runtime core or artifact space,
-2. refactoring command/protocol topology,
-3. resolving duplicate sources of truth.
+1. deciding where a document belongs,
+2. deciding whether something is canonical, projected, or historical,
+3. deciding whether a runtime rule should stay in plans, promote to product spec, or project into config,
+4. normalizing terminology across framework, product, and runtime layers.
 
-If conflict appears, precedence order:
+Conflict rule:
 
-1. `AGENTS.md` (L0)
-2. `docs/framework/protocol-index.md`
-3. this file (`framework-map-protocol.md`)
-4. command-level docs
+1. `AGENTS.md` remains stronger for bootstrap behavior,
+2. this file is the canonical repository/documentation architecture map,
+3. `docs/framework/protocol-index.md` is the canonical domain-protocol registry,
+4. `docs/product/spec/current-spec-map.md` is the canonical promoted product-spec map.

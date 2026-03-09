@@ -39,7 +39,7 @@ Use when: context was compacted and the next artifact to create is `/home/unname
   16. `/home/unnamed/project/mobile-odoo/docs/framework/agent-definition-protocol.md`
   17. `/home/unnamed/project/mobile-odoo/docs/framework/project-overlay-protocol.md`
   18. `/home/unnamed/project/mobile-odoo/docs/framework/instruction-activation-protocol.md`
-  19. `/home/unnamed/project/mobile-odoo/docs/framework/subagent-system-protocol.md`
+  19. `/home/unnamed/project/mobile-odoo/docs/framework/agent-system-protocol.md`
   20. `/home/unnamed/project/mobile-odoo/docs/framework/framework-memory-protocol.md`
   21. `/home/unnamed/project/mobile-odoo/docs/framework/silent-framework-diagnosis-protocol.md`
   </required_read_order>
@@ -93,7 +93,7 @@ Use when: context was compacted and the next artifact to create is `/home/unname
 
   ## Behavioral Inheritance Contract
   <behavioral_inheritance_contract>
-  You MUST carry these laws into every future instruction artifact, task packet, and subagent prompt you create:
+  You MUST carry these laws into every future instruction artifact, task packet, and worker packet you create:
 
   ### Runtime Laws
   - `AGENTS.md` first after compact
@@ -106,11 +106,11 @@ Use when: context was compacted and the next artifact to create is `/home/unname
   - if a process gap is found, use only a bounded workaround and record the gap
 
   ### Orchestration Laws
-  - use subagents as the primary bounded analysis/review fabric when supported
-  - use blocking-question prompts for subagents
+  - use workers as the primary bounded analysis/review fabric when supported
+  - use blocking-question prompts for workers
   - keep one writer/integrator ownership per shared write scope
   - separate authorship from verification when route law requires it
-  - reuse eligible subagents before falling back to local-only continuation under saturation
+  - reuse eligible workers before falling back to local-only continuation under saturation
   - orchestrator owns synthesis and user-facing reporting
 
   ### Instruction Laws
@@ -133,13 +133,13 @@ Use when: context was compacted and the next artifact to create is `/home/unname
   - rollback notes must be explicit where migration risk exists
 
   Propagation rule:
-  - every new next-step instruction, packet, or subagent prompt must either copy these laws or explicitly reference the compact-instruction artifacts that
+  - every new next-step instruction, packet, or worker packet must either copy these laws or explicitly reference the compact-instruction artifacts that
   contain them
   </behavioral_inheritance_contract>
 
-  ## Subagent Requirements
-  <subagent_requirements>
-  You MUST use subagents actively.
+  ## Worker Requirements
+  <worker_requirements>
+  You MUST use workers actively.
 
   Before drafting the migration kernel spec:
   1. launch or reuse at least 2 bounded read-only explorer lanes
@@ -150,17 +150,17 @@ Use when: context was compacted and the next artifact to create is `/home/unname
   - Explorer B: identify versioning, compatibility, startup fail-closed checks, migration receipts, and rollback surfaces that belong in the migration kernel
   - Explorer C: identify discardable topology versus migratable semantics, and validate the boundary between migration law and command/state/instruction/route kernels
 
-  Each subagent prompt MUST include:
+  Each worker packet MUST include:
   - one blocking question
   - exact bounded source list
   - expected output shape
   - stop condition
   - no-edit restriction
 
-  Do not let subagents invent architecture.
+  Do not let workers invent architecture.
   Keep final synthesis and writing in the orchestrator lane.
-  Do not output raw subagent reports to the user by default.
-  </subagent_requirements>
+  Do not output raw worker reports to the user by default.
+  </worker_requirements>
 
   ## Exact Task
   <exact_task>
@@ -210,7 +210,7 @@ Use when: context was compacted and the next artifact to create is `/home/unname
   - DO NOT let migration semantics swallow route/authorization/proof law that belongs later
   - DO NOT treat current file paths, helper flags, or `br` carriers as product law
   - DO NOT omit behavioral inheritance from future instructions you create
-  - DO NOT output raw subagent reports to the user by default
+  - DO NOT output raw worker reports to the user by default
   </constraints>
 
   ## Success Criteria
@@ -234,6 +234,6 @@ Use when: context was compacted and the next artifact to create is `/home/unname
   3. why this artifact had to come next after the instruction kernel spec
   4. what it unlocks next
   5. what remains unresolved
-  6. which subagents were used and for what bounded questions
+  6. which workers were used and for what bounded questions
   7. confirmation that behavioral instructions were propagated into the next-step artifact
   </user_report_contract>

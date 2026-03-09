@@ -75,7 +75,7 @@ Initial supported overlay domain:
 
 If `true`, VIDA must activate:
 
-1. `docs/framework/subagent-system-protocol.md`
+1. `docs/framework/agent-system-protocol.md`
 2. runtime helper: `vida-v0 system`
 
 ## Minimum Schema Surface
@@ -148,14 +148,14 @@ Current supported `agent_system` keys:
 2. `mode`
 3. `state_owner`
 4. `max_parallel_agents`
-5. `subagents`
+5. `workers`
 6. `routing`
 7. `scoring`
 
-Supported subagent-level keys:
+Supported worker-level keys:
 
 1. `enabled`
-2. `subagent_backend_class`
+2. `worker_backend_class`
 3. `detect_command`
 4. `role`
 5. `orchestration_tier`
@@ -175,7 +175,7 @@ Supported subagent-level keys:
 19. `specialties`
 20. `dispatch`
 
-Supported subagent-level `dispatch` keys:
+Supported worker-level `dispatch` keys:
 
 1. `command`
 2. `pre_static_args`
@@ -222,24 +222,24 @@ Repeated-scalar encoding:
 
 Common repeated-scalar examples:
 
-1. subagent `profiles`
-2. subagent `models_hint`
-3. subagent `capability_band`
-4. subagent `specialties`
-5. route `subagents`
-6. route `fanout_subagents`
-7. subagent `dispatch.static_args`
-8. subagent `dispatch.pre_static_args`
+1. worker `profiles`
+2. worker `models_hint`
+3. worker `capability_band`
+4. worker `specialties`
+5. route `workers`
+6. route `fanout_workers`
+7. worker `dispatch.static_args`
+8. worker `dispatch.pre_static_args`
 9. `framework_self_diagnosis.session_reflection_criteria`
 
 Supported routing-level keys:
 
-1. `subagents`
+1. `workers`
 2. `models`
 3. `profiles`
 4. `analysis_required`
 5. `analysis_route_task_class`
-6. `analysis_fanout_subagents`
+6. `analysis_fanout_workers`
 7. `analysis_fanout_min_results`
 8. `analysis_merge_policy`
 9. `analysis_external_first_required`
@@ -252,7 +252,7 @@ Supported routing-level keys:
 16. `verification_gate`
 17. `max_runtime_seconds`
 18. `min_output_bytes`
-19. `fanout_subagents`
+19. `fanout_workers`
 20. `fanout_min_results`
 21. `merge_policy`
 22. `dispatch_required`
@@ -262,7 +262,7 @@ Supported routing-level keys:
 26. `local_execution_preferred`
 27. `cli_dispatch_required_if_delegating`
 28. `direct_internal_bypass_forbidden`
-29. `bridge_fallback_subagent`
+29. `bridge_fallback_worker`
 30. `internal_escalation_trigger`
 31. `allowed_internal_reasons`
 32. `verification_route_task_class`
@@ -271,7 +271,7 @@ Supported routing-level keys:
 35. `deterministic_first`
 36. `budget_policy`
 37. `max_budget_units`
-38. `max_cli_subagent_calls`
+38. `max_cli_worker_calls`
 39. `max_coach_passes`
 40. `max_verification_passes`
 41. `max_fallback_hops`
@@ -289,23 +289,23 @@ Validation scope:
 1. required top-level sections and required fields inside them,
 2. unsupported keys in canonical sections,
 3. type checks for booleans, integers, strings, mappings, and repeated-string fields,
-4. subagent `dispatch` requirements for enabled `external_cli` subagents,
-5. route/subagent consistency checks such as `default_profile in profiles` and `fanout_min_results <= fanout_subagents`,
+4. worker `dispatch` requirements for enabled `external_cli` workers,
+5. route/worker consistency checks such as `default_profile in profiles` and `fanout_min_results <= fanout_workers`,
 6. web-search capability consistency between `capability_band` and dispatch wiring.
 7. silent framework diagnosis overlay schema when present.
 
 Availability-state contract:
 
-1. subagent runtime may persist subagent availability separately from quality score,
-2. canonical subagent availability states are:
+1. worker runtime may persist worker availability separately from quality score,
+2. canonical worker availability states are:
    - `active`
    - `degraded`
    - `quota_exhausted`
    - `disabled_manual`
-3. temporary subagent suppression should use `cooldown_until`,
+3. temporary worker suppression should use `cooldown_until`,
 4. probe-driven recovery may use `probe_required=true`,
-5. new overlays should prefer explicit probe-capable dispatch for external CLI subagents that support headless smoke checks.
-6. web-search-capable subagents should declare both `capability_band=web_search` and dispatch-level wiring via `dispatch.web_search_mode`.
+5. new overlays should prefer explicit probe-capable dispatch for external CLI workers that support headless smoke checks.
+6. web-search-capable workers should declare both `capability_band=web_search` and dispatch-level wiring via `dispatch.web_search_mode`.
 7. `dispatch.web_search_mode=provider_configured` is an operator-trusted declaration of provider-side search enablement; it is weaker than an explicit flag-based path and does not by itself prove a live search probe.
 8. `dispatch.web_probe_*` allows provider-agnostic live web-search smoke checks without hardcoding a specific CLI into framework runtime.
 9. `dispatch.models_cache_path` allows CLI-specific model-cache discovery to remain config-driven.
@@ -323,25 +323,25 @@ Portable default behavior:
 
 Overlay may configure:
 
-1. which subagent backend classes are allowed,
+1. which worker backend classes are allowed,
 2. which routing preferences are preferred,
 3. which escalation thresholds apply,
 4. external-first routing preference for eligible read-only classes,
-5. which subagent is the canonical bridge fallback before internal escalation.
+5. which worker is the canonical bridge fallback before internal escalation.
 
 Overlay may not configure:
 
 1. permission to bypass `br` as SSOT,
 2. permission to bypass verification gates,
-3. permission to let external subagents mutate framework task state directly.
+3. permission to let external workers mutate framework task state directly.
 
 ## Runtime Files
 
 Current runtime artifacts for overlay activation:
 
-1. `.vida/state/subagent-init.json`
-2. `.vida/state/subagent-scorecards.json`
-3. `.vida/state/subagent-strategy.json`
+1. `.vida/state/worker-init.json`
+2. `.vida/state/worker-scorecards.json`
+3. `.vida/state/worker-strategy.json`
 
 These are runtime state files, not canonical project configuration.
 

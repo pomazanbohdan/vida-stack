@@ -1,0 +1,31 @@
+artifact_name: instruction_projection_manifest
+artifact_type: projection_manifest
+version: 1
+revision: 2026-03-09
+compatibility_class: direct_v1_kernel
+rules:
+  canonical_authoring_format: markdown_first
+  machine_readable_projection_allowed: true
+  duplicate_active_authority_forbidden: true
+families:
+  agent_definitions:
+    authoring_home: vida/config/instructions/agent_definitions/
+    projection_forms:
+      - yaml
+      - json
+  instruction_contracts:
+    authoring_home: vida/config/instructions/instruction_contracts/
+    projection_forms:
+      - yaml
+      - json
+  prompt_templates:
+    authoring_home: vida/config/instructions/prompt_templates/
+    projection_forms:
+      - yaml
+      - json
+status_terms:
+  - canonical
+  - active_transitional
+  - projected
+  - pointer_only
+  - history_evidence

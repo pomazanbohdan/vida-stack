@@ -1,6 +1,6 @@
 # Capability Registry Protocol (CRP)
 
-Purpose: define a framework-owned typed capability registry for agent lanes and a deterministic compatibility gate between route task classes and candidate subagents.
+Purpose: define a framework-owned typed capability registry for agent lanes and a deterministic compatibility gate between route task classes and candidate workers.
 
 ## Core Contract
 
@@ -36,5 +36,5 @@ Each group must declare:
 
 ```bash
 python3 docs/framework/history/_vida-source/scripts/capability-registry.py build
-python3 docs/framework/history/_vida-source/scripts/capability-registry.py check <task_class> <subagent>
+python3 docs/framework/history/_vida-source/scripts/capability-registry.py check <task_class> <worker>
 ```

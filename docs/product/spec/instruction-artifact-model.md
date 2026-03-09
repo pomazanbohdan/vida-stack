@@ -98,6 +98,16 @@ Target families:
 5. `bundles/**`
 6. `activation/**`
 
+## 5.1 Authoring Format
+
+Canonical authoring rule:
+
+1. `Agent Definition` and `Instruction Contract` artifacts must remain human-auditable and repo-readable.
+2. The preferred canonical authoring format for instruction-bearing artifacts is Markdown written in natural language, following the inspectable posture of `AGENTS.md`.
+3. `vida/config/instructions/**` defines the canonical location of the product-owned artifacts; it does not require YAML-only authoring.
+4. YAML/JSON artifacts may exist as executable bridge or compiled runtime forms when the transitional runtime needs machine-readable loading.
+5. When both human-readable and machine-readable forms exist, the human-readable Markdown artifact is the canonical authoring surface unless a stricter runtime protocol explicitly promotes the machine-readable projection.
+
 ## 6. Historical Sources
 
 This spec absorbs and supersedes product-instruction semantics previously scattered across:

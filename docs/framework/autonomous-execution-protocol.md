@@ -6,7 +6,7 @@ Scope:
 
 1. activates only after the task is already in tracked execution,
 2. applies when the user intent is "continue until done", "follow the plan", "implement all remaining work", or equivalent,
-3. reuses existing execution law from `docs/framework/todo-protocol.md`, `docs/framework/beads-protocol.md`, `docs/framework/implement-execution-protocol.md`, and `docs/framework/subagent-system-protocol.md` rather than replacing them,
+3. reuses existing execution law from `docs/framework/todo-protocol.md`, `docs/framework/beads-protocol.md`, `docs/framework/implement-execution-protocol.md`, and `docs/framework/agent-system-protocol.md` rather than replacing them,
 4. owns the default next-task boundary analysis/report behavior unless `docs/framework/task-approval-loop-protocol.md` inserts an explicit approval gate.
 
 ## Core Contract
@@ -43,11 +43,11 @@ User-prompt minimization rule:
 2. Ask the user again only when a stop condition is hit, a required approval contract is genuinely missing, or the user interrupts/reprioritizes explicitly.
 3. "I have a plausible next step" is not a reason to ask; if the next step is lawful, execute it.
 
-Subagent-first continuity rule:
+Worker-first continuity rule:
 
-1. AEP does not suspend `docs/framework/subagent-system-protocol.md`.
-2. If the active route/mode requires subagent-first analysis, review, coach, or verification lanes, autonomous follow-through must keep using them rather than collapsing into local-only continuation.
-3. Local-only continuation during AEP is lawful only when route metadata allows it or when the runtime records explicit subagent exhaustion/blocker evidence.
+1. AEP does not suspend `docs/framework/agent-system-protocol.md`.
+2. If the active route/mode requires worker-first analysis, review, coach, or verification lanes, autonomous follow-through must keep using them rather than collapsing into local-only continuation.
+3. Local-only continuation during AEP is lawful only when route metadata allows it or when the runtime records explicit worker exhaustion/blocker evidence.
 
 ## Activation Gate
 
@@ -135,7 +135,7 @@ Autonomous follow-through must stop and return control to routing/slicing when a
 9.2. boundary analysis/report lives outside TODO execution for the next task; it prepares lawful continuation but does not replace the next task's tracked flow.
 9.3. when the boundary analysis finds dependent executable scope, update existing dependent specs/tasks or create the missing coverage before claiming lawful continuation.
 10. when the same technical error repeats twice or an external API/format is uncertain, escalate via `docs/framework/debug-escalation-protocol.md` instead of continuing blind local retries.
-10.1. under active subagent mode, pair that escalation with a bounded external catch/review agent whenever an eligible lane exists.
+10.1. under active worker mode, pair that escalation with a bounded external catch/review agent whenever an eligible lane exists.
 10.2. if primary-source lookup still leaves ambiguity after one pass, execute Google/web search on the next pass rather than repeating another blind local attempt.
 11. if `docs/framework/task-approval-loop-protocol.md` is active, stop after the current task completes and present the next task for approval before starting it.
 11.1. if the user enables continuous autonomous execution with next-task reporting, do not stop after progress reports inside the current task, but do present the next task briefly at task boundary before starting it.
@@ -159,7 +159,7 @@ Reporting continuity rule:
 1. `docs/framework/todo-protocol.md` owns task/block execution lifecycle,
 2. `docs/framework/beads-protocol.md` owns task-state SSOT and workflow commands,
 3. `docs/framework/implement-execution-protocol.md` owns queue selection, implement loop, and continue-to-next-task behavior,
-4. `docs/framework/subagent-system-protocol.md` still owns subagent routing/fallback law during autonomous continuation,
+4. `docs/framework/agent-system-protocol.md` still owns worker routing/fallback law during autonomous continuation,
 5. this file adds the trigger and stop doctrine for using those protocols in sustained follow-through mode.
 
 ## Canonical Entry Pattern

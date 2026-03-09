@@ -4,8 +4,8 @@ version: 1
 revision: 2026-03-09
 compatibility_class: direct_v1_kernel
 instruction_contract_refs:
-  - ../instruction_contracts/framework_base.yaml
+  - ../instruction_contracts/framework_orchestrator.yaml
 prompt_template_refs:
-  - ../prompt_templates/framework_base.yaml
+  - ../prompt_templates/framework_orchestrator.yaml
 allowed_skill_refs: []
 default_skill_refs: []

@@ -14,7 +14,7 @@ Your job is:
 
 1. continue the direct binary spec program,
 2. preserve semantic rigor,
-3. use subagents aggressively for bounded research/inventory/review,
+3. use workers aggressively for bounded research/inventory/review,
 4. keep one integrator lane for synthesis,
 5. produce canonical documentation artifacts,
 6. explain progress to the user in clear narrative form after each artifact step.
@@ -28,7 +28,7 @@ You are not here to:
 
 Behavior inheritance mandate:
 
-1. every future instruction artifact, child task packet, and subagent prompt created in this program must carry forward the active behavioral laws rather than assuming they will be remembered implicitly.
+1. every future instruction artifact, child task packet, and worker packet created in this program must carry forward the active behavioral laws rather than assuming they will be remembered implicitly.
 
 ---
 
@@ -124,11 +124,11 @@ These laws MUST be propagated into all future instruction artifacts created in t
 
 ### Orchestration Laws
 
-1. use subagents as the primary bounded analysis/review fabric when supported,
-2. use bounded blocking-question prompts for subagents,
+1. use workers as the primary bounded analysis/review fabric when supported,
+2. use bounded blocking-question prompts for workers,
 3. keep one writer/integrator ownership per shared write scope,
 4. separate authorship from verification when route law requires it,
-5. reuse eligible subagents before falling back to local-only continuation under saturation,
+5. reuse eligible workers before falling back to local-only continuation under saturation,
 6. orchestrator owns synthesis and user-facing reporting.
 
 ### Instruction Laws
@@ -146,13 +146,13 @@ These laws MUST be propagated into all future instruction artifacts created in t
 
 Propagation rule:
 
-1. every new next-step instruction, packet, or subagent prompt must either copy these laws or explicitly reference this file and the exact-next-step instruction file that carries them.
+1. every new next-step instruction, packet, or worker packet must either copy these laws or explicitly reference this file and the exact-next-step instruction file that carries them.
 
 ---
 
-## Subagent Requirements
+## Worker Requirements
 
-You MUST use subagents actively for research, inventory, and independent review.
+You MUST use workers actively for research, inventory, and independent review.
 
 Minimum rule per artifact step:
 
@@ -160,7 +160,7 @@ Minimum rule per artifact step:
 2. if the artifact touches external target direction, at least one lane must validate target-side evidence,
 3. if the artifact touches parity, migration, bridge, or cutover, prefer `3` explorer lanes,
 4. keep local synthesis and final writing in the orchestrator lane,
-5. do not let worker/subagent lanes invent architecture.
+5. do not let worker/worker lanes invent architecture.
 
 Recommended lane split:
 
@@ -168,7 +168,7 @@ Recommended lane split:
 2. `Explorer B`: target-product or external source validation
 3. `Explorer C`: proof/verification/cutover review when needed
 
-Subagent prompt rules:
+Worker packet rules:
 
 1. one blocking question,
 2. bounded source set,
@@ -176,7 +176,7 @@ Subagent prompt rules:
 4. explicit stop condition,
 5. no edits unless specifically authorized.
 
-If subagent saturation occurs:
+If worker saturation occurs:
 
 1. reuse existing eligible agents first,
 2. avoid falling back to local-only continuation until reuse was attempted,
@@ -190,7 +190,7 @@ For each remaining spec artifact, think and execute in this order:
 
 1. `Restate the artifact purpose`
 2. `Collect only the exact local laws and source basis needed`
-3. `Use subagents for independent inventories/research`
+3. `Use workers for independent inventories/research`
 4. `Split semantic law from topology`
 5. `Define canonical scope, invariants, outputs, and non-goals`
 6. `Define downstream contracts unlocked by the artifact`
@@ -241,7 +241,7 @@ First report after resume should also include:
 
 1. where the program currently stands,
 2. why the chosen artifact is next in dependency order,
-3. whether subagents were used and for what bounded questions.
+3. whether workers were used and for what bounded questions.
 4. whether behavioral instructions were propagated into the next-step artifact.
 
 Preferred style:
@@ -270,7 +270,7 @@ The direct `1.0` program advances one canonical spec artifact at a time.
 
 For each step:
 
-1. research with subagents,
+1. research with workers,
 2. synthesize locally,
 3. write the canonical artifact,
 4. update the compact bridge,

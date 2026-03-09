@@ -24,7 +24,7 @@ Hard rule:
 6. Every planned block should include `next_step` (block_id or `-` for terminal step).
 7. Use rolling-window planning: keep 2-3 upcoming planned blocks visible; expand further plan just-in-time.
 8. When the same technical error repeats twice inside an active block, the block must record an escalation event and switch to `docs/framework/debug-escalation-protocol.md` before the next substantive fix attempt.
-9. If subagent mode is active and an eligible catch/review lane exists, dispatch that external diagnostic lane in parallel with escalation lookup instead of debugging alone.
+9. If worker mode is active and an eligible catch/review lane exists, dispatch that external diagnostic lane in parallel with escalation lookup instead of debugging alone.
 10. Escalation evidence must capture which outside inputs were used: `external_agent`, `primary_source`, `web/google`, or explicit `not_available` receipt.
 11. Completed write-producing slices must receive catch/review coverage when an eligible lane exists; if not, record a protocol-drift finding and correct it.
 12. Progress reporting must not interrupt lawful continuation by itself when continuous autonomous execution is active.
@@ -104,7 +104,7 @@ Choose `parallel` only if ALL are true:
 
 If at least one condition fails, use sequential chain (`next_step`) on `main` track.
 
-## 3) Parallel Tracks Mode (Subagents)
+## 3) Parallel Tracks Mode (Workers)
 
 Use this mode when 2+ independent chunks can run concurrently.
 

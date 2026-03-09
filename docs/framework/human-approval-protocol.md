@@ -48,7 +48,7 @@ Minimum fields:
 
 ## Runtime Integration
 
-1. Subagent/verification manifests may reach a governance review target before final closure.
+1. Worker/verification manifests may reach a governance review target before final closure.
 2. Runtime must apply the approval gate after technical verification and before closure-ready synthesis.
 3. Approval gating must not silently downgrade the review state.
 

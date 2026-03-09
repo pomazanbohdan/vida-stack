@@ -1,36 +1,32 @@
-# Subagent Prompt Templates
+# Worker Packet Templates
 
-Use these as copy-paste starting points.
+Status: canonical prompt authoring artifact
 
-For routine dispatches, prefer the render helper so `<repo_root>` and project preflight are injected automatically:
+Revision: `2026-03-09`
 
-```bash
-bash docs/framework/history/_vida-source/scripts/render-subagent-prompt.sh implementation \
-  --task "Implement [feature/fix]" \
-  --protocol-unit "/vida-implement#CL4" \
-  --scope "[paths]" \
-  --verification "[exact command]"
-```
+Purpose: keep the human-readable worker packet templates in the product-owned instruction home for `vida 0.2` and `vida v1`.
 
-Worker-lane rule:
+Use these as copy-paste or render-time starting points for bounded worker packets.
 
-1. external/delegated workers should receive `docs/framework/SUBAGENT-ENTRY.MD` semantics, not the full `AGENTS.md` orchestrator identity.
-2. prompts should bias toward evidence and deliverables, not boot narration.
-3. external/delegated workers should receive `docs/framework/SUBAGENT-THINKING.MD` semantics and stay inside `STC|PR-CoT|MAR` unless explicitly instructed otherwise.
-4. prompts should include an explicit runtime role packet that confirms worker-lane semantics.
-5. prompts should include one blocking question and require the worker to answer it directly before optional context.
-6. prompts should forbid broad `.vida/logs`, `.vida/state`, and `.beads` sweeps unless the packet explicitly escalates to them.
-7. request-intent classification is orchestrator-owned; workers must not rerun it unless the packet explicitly asks for that audit.
+## Worker-Lane Rules
 
-Required runtime role packet:
+1. External and delegated workers receive worker-lane semantics, not full orchestrator identity.
+2. Prompts must bias toward evidence and deliverables, not boot narration.
+3. Workers stay inside `STC|PR-CoT|MAR` unless the packet explicitly authorizes more.
+4. Every prompt must include explicit worker-lane confirmation markers.
+5. Every prompt must include one blocking question and require the worker to answer it directly before optional context.
+6. Broad `.vida/logs`, `.vida/state`, and `.beads` sweeps stay forbidden unless the packet explicitly escalates to them.
+7. Request-intent classification remains orchestrator-owned unless the packet explicitly asks for that audit.
+
+## Required Runtime Role Packet
 
 ```text
 Runtime Role Packet:
 - worker_lane_confirmed: true
-- worker_role: subagent
+- worker_role: worker
 - orchestrator_entry_fallback: docs/framework/ORCHESTRATOR-ENTRY.MD
-- worker_entry: docs/framework/SUBAGENT-ENTRY.MD
-- worker_thinking: docs/framework/SUBAGENT-THINKING.MD
+- worker_entry: docs/framework/WORKER-ENTRY.MD
+- worker_thinking: docs/framework/WORKER-THINKING.MD
 - impact_tail_policy: required_for_non_stc
 - impact_analysis_scope: bounded_to_assigned_scope
 ```
@@ -39,21 +35,21 @@ Fallback rule:
 
 1. If `worker_lane_confirmed: true` is absent or ambiguous, do not assume worker-lane semantics; fall back to `docs/framework/ORCHESTRATOR-ENTRY.MD`.
 
-## 1) Read-Only Audit (Qwen)
+## 1. Read-Only Audit
 
 ```text
 Runtime Role Packet:
 - worker_lane_confirmed: true
-- worker_role: subagent
+- worker_role: worker
 - orchestrator_entry_fallback: docs/framework/ORCHESTRATOR-ENTRY.MD
-- worker_entry: docs/framework/SUBAGENT-ENTRY.MD
-- worker_thinking: docs/framework/SUBAGENT-THINKING.MD
+- worker_entry: docs/framework/WORKER-ENTRY.MD
+- worker_thinking: docs/framework/WORKER-THINKING.MD
 - impact_tail_policy: required_for_non_stc
 - impact_analysis_scope: bounded_to_assigned_scope
 Worker Entry Contract:
 - You are a bounded worker, not the orchestrator.
-- Follow docs/framework/SUBAGENT-ENTRY.MD.
-- Follow docs/framework/SUBAGENT-THINKING.MD and use STC by default for audits.
+- Follow docs/framework/WORKER-ENTRY.MD.
+- Follow docs/framework/WORKER-THINKING.MD and use STC by default for audits.
 - Do not bootstrap repository-wide orchestration policy.
 - Do not rerun request-intent classification unless the packet explicitly asks for that audit.
 Task: Audit [topic] in <repo_root>.
@@ -74,21 +70,21 @@ Deliverable:
 - If you use PR-CoT or MAR, end with a bounded impact analysis tail for your assigned scope.
 ```
 
-## 2) Implementation (Codex 5.3)
+## 2. Implementation
 
 ```text
 Runtime Role Packet:
 - worker_lane_confirmed: true
-- worker_role: subagent
+- worker_role: worker
 - orchestrator_entry_fallback: docs/framework/ORCHESTRATOR-ENTRY.MD
-- worker_entry: docs/framework/SUBAGENT-ENTRY.MD
-- worker_thinking: docs/framework/SUBAGENT-THINKING.MD
+- worker_entry: docs/framework/WORKER-ENTRY.MD
+- worker_thinking: docs/framework/WORKER-THINKING.MD
 - impact_tail_policy: required_for_non_stc
 - impact_analysis_scope: bounded_to_assigned_scope
 Worker Entry Contract:
 - You are a bounded worker, not the orchestrator.
-- Follow docs/framework/SUBAGENT-ENTRY.MD.
-- Follow docs/framework/SUBAGENT-THINKING.MD and use PR-CoT only when trade-offs inside scope require it.
+- Follow docs/framework/WORKER-ENTRY.MD.
+- Follow docs/framework/WORKER-THINKING.MD and use PR-CoT only when trade-offs inside scope require it.
 - Do not widen scope or reframe orchestration ownership.
 - Do not rerun request-intent classification unless the packet explicitly asks for that audit.
 Task: Implement [feature/fix] in <repo_root>.
@@ -109,21 +105,21 @@ Deliverable:
 - If you use PR-CoT or MAR, include bounded impact analysis for the changed scope.
 ```
 
-## 3) Complex Decision (Codex 5.2)
+## 3. Complex Decision
 
 ```text
 Runtime Role Packet:
 - worker_lane_confirmed: true
-- worker_role: subagent
+- worker_role: worker
 - orchestrator_entry_fallback: docs/framework/ORCHESTRATOR-ENTRY.MD
-- worker_entry: docs/framework/SUBAGENT-ENTRY.MD
-- worker_thinking: docs/framework/SUBAGENT-THINKING.MD
+- worker_entry: docs/framework/WORKER-ENTRY.MD
+- worker_thinking: docs/framework/WORKER-THINKING.MD
 - impact_tail_policy: required_for_non_stc
 - impact_analysis_scope: bounded_to_assigned_scope
 Worker Entry Contract:
 - You are a bounded worker, not the orchestrator.
-- Follow docs/framework/SUBAGENT-ENTRY.MD.
-- Follow docs/framework/SUBAGENT-THINKING.MD and prefer PR-CoT or MAR depending on whether this is comparison or root-cause analysis.
+- Follow docs/framework/WORKER-ENTRY.MD.
+- Follow docs/framework/WORKER-THINKING.MD and prefer PR-CoT or MAR depending on whether this is comparison or root-cause analysis.
 - Keep the decision bounded to the requested slice.
 - Do not rerun request-intent classification unless the packet explicitly asks for that audit.
 Task: Produce architecture decision for [problem].
@@ -144,21 +140,21 @@ Deliverable:
 - Always include bounded impact analysis for the requested slice.
 ```
 
-## 4) Small Patch (Codex mini)
+## 4. Small Patch
 
 ```text
 Runtime Role Packet:
 - worker_lane_confirmed: true
-- worker_role: subagent
+- worker_role: worker
 - orchestrator_entry_fallback: docs/framework/ORCHESTRATOR-ENTRY.MD
-- worker_entry: docs/framework/SUBAGENT-ENTRY.MD
-- worker_thinking: docs/framework/SUBAGENT-THINKING.MD
+- worker_entry: docs/framework/WORKER-ENTRY.MD
+- worker_thinking: docs/framework/WORKER-THINKING.MD
 - impact_tail_policy: required_for_non_stc
 - impact_analysis_scope: bounded_to_assigned_scope
 Worker Entry Contract:
 - You are a bounded worker, not the orchestrator.
-- Follow docs/framework/SUBAGENT-ENTRY.MD.
-- Follow docs/framework/SUBAGENT-THINKING.MD and use STC by default for small isolated patches.
+- Follow docs/framework/WORKER-ENTRY.MD.
+- Follow docs/framework/WORKER-THINKING.MD and use STC by default for small isolated patches.
 - Do not widen the patch beyond the isolated scope.
 - Do not rerun request-intent classification unless the packet explicitly asks for that audit.
 Task: Apply a small isolated patch for [problem].

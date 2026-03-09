@@ -118,24 +118,24 @@ If development is lawful, also produce:
 3. updated continuation-state docs if the slice changes current state materially.
 </required_deliverables>
 
-## Subagent Requirements
-<subagent_requirements>
-Use subagents actively before slicing or implementation.
+## Worker Requirements
+<worker_requirements>
+Use workers actively before slicing or implementation.
 
 Minimum lane split:
 1. one lane to validate blocker state versus lawful-start state,
 2. one lane to propose the first bounded child task packets,
 3. one lane to review proof/test scope for the first slice when implementation starts.
 
-Each subagent prompt must include:
+Each worker packet must include:
 1. one blocking question,
 2. exact bounded source list,
 3. expected output shape,
 4. stop condition,
 5. no-edit restriction unless explicitly authorized.
 
-Do not expose raw subagent reports to the user by default.
-</subagent_requirements>
+Do not expose raw worker reports to the user by default.
+</worker_requirements>
 
 ## Constraints
 <constraints>

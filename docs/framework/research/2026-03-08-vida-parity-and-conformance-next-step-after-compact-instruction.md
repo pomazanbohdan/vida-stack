@@ -75,7 +75,7 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
 
   ## Behavioral Inheritance Contract
   <behavioral_inheritance_contract>
-  You MUST carry these laws into every future instruction artifact, task packet, and subagent prompt you create:
+  You MUST carry these laws into every future instruction artifact, task packet, and worker packet you create:
 
   ### Runtime Laws
   - `AGENTS.md` first after compact
@@ -88,11 +88,11 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
   - if a process gap is found, use only a bounded workaround and record the gap
 
   ### Orchestration Laws
-  - use subagents as the primary bounded analysis/review fabric when supported
-  - use blocking-question prompts for subagents
+  - use workers as the primary bounded analysis/review fabric when supported
+  - use blocking-question prompts for workers
   - keep one writer/integrator ownership per shared write scope
   - separate authorship from verification when route law requires it
-  - reuse eligible subagents before falling back to local-only continuation under saturation
+  - reuse eligible workers before falling back to local-only continuation under saturation
   - orchestrator owns synthesis and user-facing reporting
 
   ### Instruction Laws
@@ -113,12 +113,12 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
   - `Part B` must consume the fixture/evidence boundary from `Part A` instead of redefining it
 
   Propagation rule:
-  - every new next-step instruction, packet, or subagent prompt must either copy these laws or explicitly reference the compact-instruction artifacts that contain them
+  - every new next-step instruction, packet, or worker packet must either copy these laws or explicitly reference the compact-instruction artifacts that contain them
   </behavioral_inheritance_contract>
 
-  ## Subagent Requirements
-  <subagent_requirements>
-  You MUST use subagents actively.
+  ## Worker Requirements
+  <worker_requirements>
+  You MUST use workers actively.
 
   Before drafting the active `Parity/Conformance Part B` slice:
   1. launch or reuse at least 2 bounded read-only explorer lanes
@@ -129,17 +129,17 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
   - Explorer B: inventory thresholds, tolerances, and semantic reproduction verdict rules
   - Explorer C: inventory cutover proof gates and what remains deferred to implementation waves
 
-  Each subagent prompt MUST include:
+  Each worker packet MUST include:
   - one blocking question
   - exact bounded source list
   - expected output shape
   - stop condition
   - no-edit restriction
 
-  Do not let subagents invent architecture.
+  Do not let workers invent architecture.
   Keep final synthesis and writing in the orchestrator lane.
-  Do not output raw subagent reports to the user by default.
-  </subagent_requirements>
+  Do not output raw worker reports to the user by default.
+  </worker_requirements>
 
   ## Exact Task
   <exact_task>
@@ -180,7 +180,7 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
   - DO NOT let parity evidence depend on shell-era topology or current helper paths
   - DO NOT redefine the `Part A` fixture/evidence boundary that is already frozen in the canonical parity spec
   - DO NOT omit behavioral inheritance from future instructions you create
-  - DO NOT output raw subagent reports to the user by default
+  - DO NOT output raw worker reports to the user by default
   </constraints>
 
   ## Success Criteria
@@ -203,6 +203,6 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
   3. why this `Part B` slice had to come after the frozen `Part A` evidence surface and before implementation waves
   4. what it unlocks next
   5. what remains unresolved
-  6. which subagents were used and for what bounded questions
+  6. which workers were used and for what bounded questions
   7. confirmation that behavioral instructions were propagated into the next-step artifact
   </user_report_contract>

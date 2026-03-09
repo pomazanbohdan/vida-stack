@@ -35,7 +35,7 @@ Execution boundary:
 4. `docs/framework/history/_vida-source/docs/web-validation-protocol.md`.
 5. `docs/framework/history/_vida-source/docs/beads-protocol.md`.
 6. `docs/framework/history/_vida-source/docs/todo-protocol.md`.
-7. `docs/framework/history/_vida-source/docs/subagents.md`.
+7. `docs/framework/history/_vida-source/docs/workers.md`.
 8. `docs/decisions.md`.
 
 ## Inputs
@@ -73,7 +73,7 @@ Layer interpretation:
 
 1. Start only if launch was explicitly confirmed in `/vida-form-task`.
 2. Work through `br` ready queue sequentially by default.
-3. Subagents allowed for read-heavy and review-heavy work.
+3. Workers allowed for read-heavy and review-heavy work.
 4. Keep one write lane unless isolated worktrees are explicitly used.
 5. For server/API behavior, validate assumptions with live requests.
 6. For package/platform/security/migration choices, execute WVP and log evidence.

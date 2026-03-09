@@ -21,7 +21,7 @@ Purpose: define how the top-level orchestrator turns a non-trivial request into 
 
 1. Entry behavior is executed via TODO blocks and, where still needed during migration, legacy wrapper surfaces such as `vida-pack-helper.sh`.
 2. This protocol covers request interpretation above command-level execution details.
-3. Detailed task-state, TODO, and subagent-routing rules remain in their canonical protocols.
+3. Detailed task-state, TODO, and worker-routing rules remain in their canonical protocols.
 
 ## Inputs
 
@@ -99,11 +99,11 @@ Before routing work, normalize the request into:
    - META / FSAP / SCP / WVP when triggers fire.
 8. Select orchestration hierarchy:
    - default to free external read-only fanout for eligible non-trivial analysis/research/review/verification work,
-   - use the configured bridge fallback subagent before internal escalation,
-   - reserve internal subagents for senior arbitration, architecture-heavy synthesis, and mutation-owning execution.
+   - use the configured bridge fallback worker before internal escalation,
+   - reserve internal workers for senior arbitration, architecture-heavy synthesis, and mutation-owning execution.
    - if the selected route declares hard requirements, block invalid alternate paths instead of degrading to manual fallback.
 9. For `execution_flow` when `protocol_activation.agent_system=true` and effective mode is not `disabled`, resolve the orchestration-first execution path before local implementation:
-   - decompose the task into subagent lanes first whenever route policy requires orchestration,
+   - decompose the task into worker lanes first whenever route policy requires orchestration,
    - forbid local orchestrator-first development as the default path,
    - keep the orchestrator as the single writer unless bounded write scope is explicitly granted,
    - preserve mode distinction: `native` = internal-first authorized lanes, `hybrid` = external-first routing with bridge fallback and lawful internal escalation.
@@ -130,19 +130,19 @@ Before routing work, normalize the request into:
    - classify `ready`, `blocked`, `soft-blocked`, and `parallel_read_only`,
    - identify single-writer serialization boundaries,
    - treat missing dependency-graph analysis as a blocking orchestration gap for multi-task execution.
-12. For `execution_flow` under active subagent mode, treat orchestration-first dispatch as the default execution posture rather than optional expert injection:
+12. For `execution_flow` under active worker mode, treat orchestration-first dispatch as the default execution posture rather than optional expert injection:
    - dispatch analysis, review, verification, and other eligible pre-write work through the routing system first,
    - use additional expert lanes when domain specialization, conflict arbitration, or risk requires it,
    - do not bypass the routing layer into local-first development unless the active mode is `disabled` or route policy explicitly authorizes the exception.
    - user phrasing like "continue development", "fix it", or "implement now" opens execution routing, not an implicit waiver of the gate above.
-12.1. For eligible non-trivial work, prefer separate cli-subagent lanes for authorship, coach review, and verification when route policy requires them:
-   - one cli subagent or cli-subagent ensemble produces the primary analysis/recommendation,
+12.1. For eligible non-trivial work, prefer separate cli-worker lanes for authorship, coach review, and verification when route policy requires them:
+   - one cli worker or cli-worker ensemble produces the primary analysis/recommendation,
    - for write-producing routes with `coach_required=yes`, a coach lane reviews the produced implementation and may return it for rework before the final verifier runs,
-   - another eligible cli subagent (or verification ensemble) validates it independently when route policy requires it,
+   - another eligible cli worker (or verification ensemble) validates it independently when route policy requires it,
    - the orchestrator owns synthesis, escalation, and mutation-only control.
 12.2. Lawful local-orchestrator mutation is an escalation path, not a default:
    - allow only when route metadata authorizes local execution, the active mode is `disabled`, or the runtime records a concise escalation receipt,
-   - acceptable escalation reasons include `no_eligible_author`, `subagent_exhausted`, `bridge_failure_with_time_critical_fix`, and `tiny_bounded_patch_after_completed_evidence_cycle`,
+   - acceptable escalation reasons include `no_eligible_author`, `worker_exhausted`, `bridge_failure_with_time_critical_fix`, and `tiny_bounded_patch_after_completed_evidence_cycle`,
    - absent such a receipt, local orchestrator-first development is protocol-invalid.
 12.3. If an action cannot be traced to an explicit protocol clause, route receipt field, or escalation receipt, the orchestrator must not perform it.
 13. Start pack session only when task flow is required:
@@ -180,15 +180,15 @@ When dispatching additional agents, define all of:
 
 Routing rule:
 
-1. Use `docs/framework/subagent-system-protocol.md` + project overlay for subagent choice.
-2. Use `docs/framework/subagents.md` for dispatch contract.
-3. For eligible non-trivial read-heavy work, prefer subagent-first execution whenever the active subagent mode is not `disabled`.
-4. For `execution_flow` under active subagent mode, orchestration-first routing is mandatory; do not treat subagents as optional helpers around an otherwise local-first development path.
+1. Use `docs/framework/agent-system-protocol.md` + project overlay for worker choice.
+2. Use `docs/framework/worker-dispatch-protocol.md` for dispatch contract.
+3. For eligible non-trivial read-heavy work, prefer worker-first execution whenever the active worker mode is not `disabled`.
+4. For `execution_flow` under active worker mode, orchestration-first routing is mandatory; do not treat workers as optional helpers around an otherwise local-first development path.
 5. In `hybrid`, prefer external free fanout first, then the configured bridge fallback, then internal senior escalation only when route policy or evidence requires it.
-6. In `native`, prefer internal subagents as the first analysis/review lane and the first authorized development-support orchestration lane.
+6. In `native`, prefer internal workers as the first analysis/review lane and the first authorized development-support orchestration lane.
 7. In `disabled`, keep analysis local and obey bounded-read policy.
 8. Keep writer ownership singular under the orchestrator even when read-only fanout is active.
-9. Prefer independent verification by a different cli subagent when route metadata marks independent verification as required and a distinct eligible verifier exists.
+9. Prefer independent verification by a different cli worker when route metadata marks independent verification as required and a distinct eligible verifier exists.
 
 ## Conflict Resolution
 
@@ -201,14 +201,14 @@ When agent or domain outputs disagree:
 
 ## User-Facing Reporting
 
-When subagents participate in the flow:
+When workers participate in the flow:
 
-1. treat subagent outputs as internal evidence unless the user explicitly asks to inspect them,
+1. treat worker outputs as internal evidence unless the user explicitly asks to inspect them,
 2. present one orchestrator-synthesized answer in chat,
-3. do not add explicit visual subagent/process sections in the default user-facing report,
-4. do not stream or paste raw subagent reports into the final user response by default,
-5. reference subagent findings only through synthesized conclusions, evidence refs, or clearly marked supporting summaries,
-6. expose raw subagent disagreement only when it remains decision-relevant after synthesis.
+3. do not add explicit visual worker/process sections in the default user-facing report,
+4. do not stream or paste raw worker reports into the final user response by default,
+5. reference worker findings only through synthesized conclusions, evidence refs, or clearly marked supporting summaries,
+6. expose raw worker disagreement only when it remains decision-relevant after synthesis.
 
 ## Delivery Alignment
 
@@ -265,7 +265,7 @@ Change-impact triggers routed to `reflection-pack`:
    - `Risks / Trade-offs`
    - `Next Actions`
 6. Completion state and next step.
-7. When subagents contributed, report the orchestrator's synthesized result, not raw subagent text, unless the user explicitly asks for the raw output.
+7. When workers contributed, report the orchestrator's synthesized result, not raw worker text, unless the user explicitly asks for the raw output.
 
 ## Constraints
 
@@ -275,7 +275,7 @@ Change-impact triggers routed to `reflection-pack`:
 4. Do not route through non-canonical command paths.
 5. Do not use multiple writer lanes without explicit scope isolation.
 6. Do not replace synthesis with unintegrated agent fragments.
-7. Do not expose raw subagent reports as the default user-facing deliverable.
+7. Do not expose raw worker reports as the default user-facing deliverable.
 8. Do not route explicit VIDA/framework self-analysis through TODO/`br`/pack flow unless the user explicitly asks for tracked execution.
 9. Do not use the self-diagnosis exception to justify local-only closure of tracked FSAP/remediation work; tracked closure-ready state requires delegated verification/proving or a structured override receipt.
 9. Do not start dev-related boot with broad repo or `br` sweeps when the compact boot snapshot is sufficient.
@@ -287,5 +287,5 @@ Change-impact triggers routed to `reflection-pack`:
 2. `docs/framework/todo-protocol.md`
 3. `docs/framework/beads-protocol.md`
 4. legacy `vida-pack-helper.sh` during migration only
-5. `docs/framework/subagent-system-protocol.md`
-6. `docs/framework/subagents.md`
+5. `docs/framework/agent-system-protocol.md`
+6. `docs/framework/worker-dispatch-protocol.md`

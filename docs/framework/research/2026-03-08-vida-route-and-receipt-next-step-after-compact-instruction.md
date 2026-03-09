@@ -37,7 +37,7 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
   14. `/home/unnamed/project/mobile-odoo/docs/framework/history/plans/2026-03-08-vida-direct-1.0-local-spec-program.md`
   15. `/home/unnamed/project/mobile-odoo/docs/framework/history/research/2026-03-08-agentic-agent-definition-system.md`
   16. `/home/unnamed/project/mobile-odoo/docs/framework/agent-definition-protocol.md`
-  17. `/home/unnamed/project/mobile-odoo/docs/framework/subagent-system-protocol.md`
+  17. `/home/unnamed/project/mobile-odoo/docs/framework/agent-system-protocol.md`
   </required_read_order>
 
   ## Current Program State
@@ -105,7 +105,7 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
 
   ## Behavioral Inheritance Contract
   <behavioral_inheritance_contract>
-  You MUST carry these laws into every future instruction artifact, task packet, and subagent prompt you create:
+  You MUST carry these laws into every future instruction artifact, task packet, and worker packet you create:
 
   ### Runtime Laws
   - `AGENTS.md` first after compact
@@ -118,11 +118,11 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
   - if a process gap is found, use only a bounded workaround and record the gap
 
   ### Orchestration Laws
-  - use subagents as the primary bounded analysis/review fabric when supported
-  - use blocking-question prompts for subagents
+  - use workers as the primary bounded analysis/review fabric when supported
+  - use blocking-question prompts for workers
   - keep one writer/integrator ownership per shared write scope
   - separate authorship from verification when route law requires it
-  - reuse eligible subagents before falling back to local-only continuation under saturation
+  - reuse eligible workers before falling back to local-only continuation under saturation
   - orchestrator owns synthesis and user-facing reporting
 
   ### Instruction Laws
@@ -146,12 +146,12 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
   - `Part B` must extend the canonical route/receipt spec without redefining the `Part A` route law
 
   Propagation rule:
-  - every new next-step instruction, packet, or subagent prompt must either copy these laws or explicitly reference the compact-instruction artifacts that contain them
+  - every new next-step instruction, packet, or worker packet must either copy these laws or explicitly reference the compact-instruction artifacts that contain them
   </behavioral_inheritance_contract>
 
-  ## Subagent Requirements
-  <subagent_requirements>
-  You MUST use subagents actively.
+  ## Worker Requirements
+  <worker_requirements>
+  You MUST use workers actively.
 
   Before drafting the active `Route/Receipt Part B` slice:
   1. launch or reuse at least 2 bounded read-only explorer lanes
@@ -162,17 +162,17 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
   - Explorer B: inventory the relationship between route receipts, run-graph nodes, and operator visibility surfaces
   - Explorer C: inventory approval/escalation/verification/closure-ready proof surfaces that must now be frozen
 
-  Each subagent prompt MUST include:
+  Each worker packet MUST include:
   - one blocking question
   - exact bounded source list
   - expected output shape
   - stop condition
   - no-edit restriction
 
-  Do not let subagents invent architecture.
+  Do not let workers invent architecture.
   Keep final synthesis and writing in the orchestrator lane.
-  Do not output raw subagent reports to the user by default.
-  </subagent_requirements>
+  Do not output raw worker reports to the user by default.
+  </worker_requirements>
 
   ## Exact Task
   <exact_task>
@@ -218,7 +218,7 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
   - DO NOT let provider-specific prompt rendering, CLI transport, or shell-era topology become route truth
   - DO NOT treat current file paths, helper flags, or `br` carriers as product law
   - DO NOT omit behavioral inheritance from future instructions you create
-  - DO NOT output raw subagent reports to the user by default
+  - DO NOT output raw worker reports to the user by default
   </constraints>
 
   ## Success Criteria
@@ -242,6 +242,6 @@ Use when: context was compacted and the next work is to continue `/home/unnamed/
   3. why this `Part B` slice had to come after the frozen `Part A` route law and before parity
   4. what it unlocks next
   5. what remains unresolved
-  6. which subagents were used and for what bounded questions
+  6. which workers were used and for what bounded questions
   7. confirmation that behavioral instructions were propagated into the next-step artifact
   </user_report_contract>

@@ -50,3 +50,10 @@ Purpose: define the current product-spec home, show absorbed historical sources,
 1. `docs/product/spec/**` is the current prose canon.
 2. `vida/config/**` is the executable law home.
 3. `docs/framework/history/**` is evidence/history, not active canon, unless cited here.
+
+## Shared Runtime Spine Rule
+
+1. VIDA `0.2.0` and VIDA `1.0` share one semantic runtime-spec spine.
+2. `docs/framework/plans/**` remains the active strategic and execution-spec program layer for that shared runtime spine.
+3. Stable product-law portions of that spine are promoted here into `docs/product/spec/**`.
+4. `vida-v0/**` is the current transitional implementation substrate for the `0.2.0` line, not a separate semantic canon.

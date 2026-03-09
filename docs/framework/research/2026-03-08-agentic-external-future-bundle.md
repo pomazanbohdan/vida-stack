@@ -38,7 +38,7 @@
 - MCP versioning — https://modelcontextprotocol.io/specification/versioning
 - Google A2A — https://developers.googleblog.com/a2a-a-new-era-of-agent-interoperability/
 - Google A2UI — https://developers.googleblog.com/introducing-a2ui-an-open-project-for-agent-driven-interfaces/
-- Anthropic subagents — https://docs.anthropic.com/en/docs/claude-code/sub-agents
+- Anthropic workers — https://docs.anthropic.com/en/docs/claude-code/sub-agents
 - Anthropic Agent SDK — https://www.anthropic.com/engineering/building-agents-with-the-claude-agent-sdk/
 - Microsoft governance/security across organization — https://learn.microsoft.com/en-us/azure/cloud-adoption-framework/ai-agents/governance-security-across-organization
 
@@ -113,7 +113,7 @@
 ## 11. Anti-Patterns
 
 - importing external protocols before the local core is stable
-- treating remote lanes like local subagents with identical trust
+- treating remote lanes like local workers with identical trust
 - using interoperability terminology without versioning or identity rules
 - flattening consent into generic approval
 

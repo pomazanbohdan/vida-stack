@@ -48,7 +48,7 @@ Google/web-search activation rule:
 
 External-agent activation rule:
 
-1. when subagent mode is not `disabled`, dispatch a bounded catch/review/diagnostic agent in parallel with the first escalation lookup,
+1. when worker mode is not `disabled`, dispatch a bounded catch/review/diagnostic agent in parallel with the first escalation lookup,
 2. use that agent for independent diagnosis, alternative fix shape, or API/result-shape validation,
 3. if no eligible external agent exists, record explicit `no_eligible_external_agent` evidence and continue with primary-source/web escalation.
 

@@ -26,7 +26,7 @@ Use these inputs in order:
 3. `br` lifecycle state and dependency state,
 4. approved scope/order contract from `docs/framework/form-task-protocol.md`,
 5. canonical wave/plan ordering,
-6. route-required subagent findings or verifier/coach results,
+6. route-required worker findings or verifier/coach results,
 7. explicit user reprioritization,
 8. local convenience heuristics.
 
@@ -47,10 +47,10 @@ When multiple tasks are candidate next work, select in this order:
 4. else the highest-priority unblocked task within the same approved delivery cut,
 5. else stop and surface the blocker rather than widening scope.
 
-Subagent-sensitive selection rule:
+Worker-sensitive selection rule:
 
-1. If a higher-priority candidate still lacks required subagent analysis/review/verification state, it is not lawful next work yet.
-2. In that case, prefer the next candidate whose route receipts and subagent gates are already satisfiable.
+1. If a higher-priority candidate still lacks required worker analysis/review/verification state, it is not lawful next work yet.
+2. In that case, prefer the next candidate whose route receipts and worker gates are already satisfiable.
 
 ## Reprioritization Rule
 

@@ -1,7 +1,7 @@
 # VIDA Autonomous Role Profiles And Adaptive Orchestration Implementation Plan
 
 > **For Agent:** Choose execution skill based on task dependencies:
-> - Sequential/dependent tasks -> `subagent-driven-development`
+> - Sequential/dependent tasks -> `worker-driven-development`
 > - 3+ independent tasks -> `dispatching-parallel-agents`
 
 **Goal:** Implement a complete VIDA-native system for role profiles, agent definitions, instruction contracts, adaptive agent counts, consensus orchestration, research-refresh execution, and OWASP-aware verification without introducing external tool integrations beyond web search.
@@ -522,7 +522,7 @@ The bundle above is additive. It strengthens those sections and must be merged i
 
 **Files:**
 - Create: `/home/unnamed/project/mobile-odoo/docs/framework/adaptive-agent-count-protocol.md`
-- Modify: `/home/unnamed/project/mobile-odoo/docs/framework/subagent-system-protocol.md`
+- Modify: `/home/unnamed/project/mobile-odoo/docs/framework/agent-system-protocol.md`
 - Modify: `/home/unnamed/project/mobile-odoo/vida.config.yaml`
 - Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/tests/test_adaptive_agent_count.py`
 
@@ -1175,7 +1175,7 @@ This is a filled example for future slicing. Use it as the canonical sample when
    - Define and implement the policy that chooses single-agent, dual-lane, triad, quorum, or arbiter routing based on task score and prior effectiveness rather than a fixed agent minimum.
 2. `Files`
    - Create: `/home/unnamed/project/mobile-odoo/docs/framework/adaptive-agent-count-protocol.md`
-   - Modify: `/home/unnamed/project/mobile-odoo/docs/framework/subagent-system-protocol.md`
+   - Modify: `/home/unnamed/project/mobile-odoo/docs/framework/agent-system-protocol.md`
    - Modify: `/home/unnamed/project/mobile-odoo/vida.config.yaml`
    - Create: `/home/unnamed/project/mobile-odoo/docs/framework/history/_vida-source/tests/test_adaptive_agent_count.py`
 3. `Research Refresh Gate`

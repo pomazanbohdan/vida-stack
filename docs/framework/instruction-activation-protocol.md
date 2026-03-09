@@ -51,8 +51,8 @@ Activated immediately after bootstrap according to lane resolution.
 Canonical owners:
 
 1. `docs/framework/ORCHESTRATOR-ENTRY.MD`
-2. `docs/framework/SUBAGENT-ENTRY.MD`
-3. `docs/framework/SUBAGENT-THINKING.MD`
+2. `docs/framework/WORKER-ENTRY.MD`
+3. `docs/framework/WORKER-THINKING.MD`
 
 Allowed responsibilities:
 
@@ -81,7 +81,7 @@ Canonical examples:
 5. `docs/framework/spec-intake-protocol.md`
 6. `docs/framework/spec-delta-protocol.md`
 7. `docs/framework/implement-execution-protocol.md`
-8. `docs/framework/subagent-system-protocol.md`
+8. `docs/framework/agent-system-protocol.md`
 9. `docs/framework/problem-party-protocol.md`
 10. `docs/framework/autonomous-execution-protocol.md`
 11. `docs/framework/execution-priority-protocol.md`
@@ -110,8 +110,8 @@ Rule:
 | Phase | Mandatory surfaces | Trigger-only surfaces |
 |---|---|---|
 | bootstrap | `AGENTS.md` | none |
-| lane entry | `ORCHESTRATOR-ENTRY.MD` or `SUBAGENT-ENTRY.MD`; `SUBAGENT-THINKING.MD` in worker lane | none |
-| lean execution boot | `thinking-protocol.md`, `web-validation-protocol.md`, `project-overlay-protocol.md`, `vida.config.yaml` when present | `subagent-system-protocol.md`, `beads-protocol.md`, `silent-framework-diagnosis-protocol.md` |
+| lane entry | `ORCHESTRATOR-ENTRY.MD` or `WORKER-ENTRY.MD`; `WORKER-THINKING.MD` in worker lane | none |
+| lean execution boot | `thinking-protocol.md`, `web-validation-protocol.md`, `project-overlay-protocol.md`, `vida.config.yaml` when present | `agent-system-protocol.md`, `beads-protocol.md`, `silent-framework-diagnosis-protocol.md` |
 | standard/full execution boot | lean set plus route-required pack/TODO/implementation protocols | only the protocols selected by route, pack, or risk |
 | tracked execution | TODO / beads / route-specific protocol | domain-specific protocols not triggered by the active path stay unread |
 | closure / handoff | reconciliation, approval, diagnosis/reflection protocols as required | none |
@@ -128,7 +128,7 @@ Rule:
 | implementation route selected | `implement-execution-protocol.md` |
 | plan/spec/task pool is settled and the user wants continued execution to completion | `autonomous-execution-protocol.md` |
 | tracked execution must choose between multiple lawful next tasks or handle reprioritization | `execution-priority-protocol.md` |
-| subagent mode active for eligible work | `subagent-system-protocol.md` |
+| worker mode active for eligible work | `agent-system-protocol.md` |
 | bounded conflict escalation is authorized | `problem-party-protocol.md` |
 | task appears stale, done-but-open, or drifted | `task-state-reconciliation-protocol.md` |
 | silent diagnosis mode enabled | `silent-framework-diagnosis-protocol.md` |

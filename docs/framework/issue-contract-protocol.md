@@ -6,7 +6,7 @@ Scope:
 
 1. Canonical bridge for `bug-as-spec` style requests.
 2. Applies when the incoming issue text is the main spec input or when analysis must decide whether a reported bug is an equivalent fix versus a spec/product-contract delta.
-3. Works with `docs/framework/bug-fix-protocol.md`, `docs/framework/implement-execution-protocol.md`, and `docs/framework/subagent-system-protocol.md`.
+3. Works with `docs/framework/bug-fix-protocol.md`, `docs/framework/implement-execution-protocol.md`, and `docs/framework/agent-system-protocol.md`.
 4. Consumes `docs/framework/spec-intake-protocol.md` when an incoming issue/release signal is still too mixed or scope-bearing for direct issue-contract narrowing.
 
 ## Core Principle

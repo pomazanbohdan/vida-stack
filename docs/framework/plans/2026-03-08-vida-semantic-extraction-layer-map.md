@@ -210,7 +210,7 @@ Current sources:
 1. `docs/framework/beads-protocol.md`
 2. `docs/framework/todo-protocol.md`
 3. `docs/framework/human-approval-protocol.md`
-4. `docs/framework/subagent-system-protocol.md`
+4. `docs/framework/agent-system-protocol.md`
 
 Target artifact:
 
@@ -265,7 +265,7 @@ Current sources:
 3. `docs/framework/boot-packet-protocol.md`
 4. `docs/framework/context-governance-protocol.md`
 5. `docs/framework/beads-protocol.md`
-6. `docs/framework/subagent-system-protocol.md`
+6. `docs/framework/agent-system-protocol.md`
 
 Target artifact:
 
@@ -288,7 +288,7 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/subagent-system-protocol.md`
+1. `docs/framework/agent-system-protocol.md`
 2. `docs/framework/ORCHESTRATOR-ENTRY.MD`
 3. `docs/framework/orchestration-protocol.md`
 4. `docs/framework/implement-execution-protocol.md`
@@ -314,7 +314,7 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/subagent-system-protocol.md`
+1. `docs/framework/agent-system-protocol.md`
 2. `docs/framework/human-approval-protocol.md`
 3. `docs/framework/product-proving-packs-protocol.md`
 4. `docs/framework/trace-eval-protocol.md`
@@ -365,9 +365,9 @@ Do not carry forward:
 
 Current sources:
 
-1. `docs/framework/subagents.md`
-2. `docs/framework/SUBAGENT-ENTRY.MD`
-3. `docs/framework/SUBAGENT-THINKING.MD`
+1. `docs/framework/worker-dispatch-protocol.md`
+2. `docs/framework/WORKER-ENTRY.MD`
+3. `docs/framework/WORKER-THINKING.MD`
 4. `docs/framework/history/research/2026-03-08-agentic-epic-slicing-agent-instruction.md`
 
 Target artifact:

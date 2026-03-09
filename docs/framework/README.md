@@ -6,7 +6,7 @@ Use `docs/framework/` for:
 
 1. Boot, routing, reasoning, TODO, pack, and task-state protocols.
 2. Runtime topology and agent behavior contracts.
-3. Framework-owned helper policies for subagents, logs, and protocol scripts.
+3. Framework-owned helper policies for workers, logs, and protocol scripts.
 4. Canonical runtime script architecture and ownership rules.
 5. Project-bootstrap and self-reproduction contracts for the framework.
 6. Framework product and release-target scope documents.

@@ -110,12 +110,12 @@ Rules:
 
 1. read-heavy layers (`CL1`, `CL2`, parts of `CL3`, parts of `CL5`) are delegation-friendly,
 2. mutation-heavy layers (`CL4`) remain single-writer unless explicit isolation exists,
-3. command decomposition must reference layer ids before introducing subagent/task granularity.
+3. command decomposition must reference layer ids before introducing worker/task granularity.
 
 Protocol-unit format:
 
 1. represent delegable/plannable units as `<command>#CL1..CL5`,
-2. use the unit id in TODO goals, audit inventory, and subagent prompts when work is scoped below full-command level,
+2. use the unit id in TODO goals, audit inventory, and worker packets when work is scoped below full-command level,
 3. keep final gate ownership in the orchestrator even when read-heavy evidence collection is delegated.
 
 ## Consistency Rules

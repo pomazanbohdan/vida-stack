@@ -5,7 +5,7 @@ Purpose: define the always-on silent VIDA framework diagnosis mode that monitors
 Direction:
 
 1. VIDA is an agentic engineering platform, not just a prompt wrapper.
-2. The target is high-quality, token-efficient automation for agent and subagent work.
+2. The target is high-quality, token-efficient automation for agent and worker work.
 3. Quality and token efficiency are equal-weight goals in silent diagnosis mode.
 
 ## Activation

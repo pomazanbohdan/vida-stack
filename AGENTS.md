@@ -11,8 +11,8 @@ Instruction activation note:
 
 Canonical role entries:
 1. Orchestrator entry: `docs/framework/ORCHESTRATOR-ENTRY.MD`
-2. Worker entry: `docs/framework/SUBAGENT-ENTRY.MD`
-3. Worker thinking subset: `docs/framework/SUBAGENT-THINKING.MD`
+2. Worker entry: `docs/framework/WORKER-ENTRY.MD`
+3. Worker thinking subset: `docs/framework/WORKER-THINKING.MD`
 
 Language policy:
 1. Framework-owned files stay in English.
@@ -25,12 +25,12 @@ Language policy:
 
 Use this file only to determine which entry contract applies next.
 
-1. If the active task packet or runtime packet explicitly confirms worker lane semantics, follow `docs/framework/SUBAGENT-ENTRY.MD`.
+1. If the active task packet or runtime packet explicitly confirms worker lane semantics, follow `docs/framework/WORKER-ENTRY.MD`.
 2. If worker-lane confirmation is absent or ambiguous, follow `docs/framework/ORCHESTRATOR-ENTRY.MD`.
 3. Worker-lane confirmation may come from:
-   - rendered subagent prompt/runtime packet,
+   - rendered worker prompt/runtime packet,
    - delegated/external worker packet,
-   - canonical subagent dispatch flow.
+   - canonical worker dispatch flow.
 4. Default fallback is orchestrator, never worker.
 
 Hard rule:
@@ -60,7 +60,7 @@ These rules apply across all lanes unless a more specific worker rule narrows be
 15. **[MUST]** `Thinking mode: ...` is a reporting label only; it must not be used to reveal intermediate chain-of-thought or hidden reasoning steps.
 16. **[MUST]** If a protocol/process gap is discovered during active work, use only a bounded workaround for the current task, record the gap through the canonical framework bug path when silent diagnosis is active, and do not silently invent a permanent process.
 17. **[MUST]** When evidence sources conflict, prefer the highest-evidence source recognized by the active protocol stack before making conclusions or mutations.
-18. **[MUST]** When subagent-first execution is active and new delegated lane allocation fails because of agent/thread saturation, attempt reuse of existing eligible agents first; do not fall back to local-only continuation until reuse or explicit saturation recovery has been attempted and recorded.
+18. **[MUST]** When worker-first execution is active and new delegated lane allocation fails because of agent/thread saturation, attempt reuse of existing eligible agents first; do not fall back to local-only continuation until reuse or explicit saturation recovery has been attempted and recorded.
 
 Definition note for rule 12:
 1. "Generic assistant defaults" means undocumented heuristic behavior such as local-first implementation, ad hoc fallback selection, silent scope expansion, implicit task tracking, or mutation without the active VIDA/project protocol path.
@@ -91,7 +91,7 @@ Reporting prefix:
 After context compression/clearing:
 1. Read `AGENTS.md`.
 2. Resolve lane:
-   - worker lane -> `docs/framework/SUBAGENT-ENTRY.MD`
+   - worker lane -> `docs/framework/WORKER-ENTRY.MD`
    - orchestrator lane -> `docs/framework/ORCHESTRATOR-ENTRY.MD`
 3. Complete the selected boot path before resuming work.
 
@@ -101,7 +101,7 @@ For orchestrator lane, use `docs/framework/ORCHESTRATOR-ENTRY.MD` as the canonic
 1. L0 contract,
 2. request-intent gate,
 3. TODO engagement gate,
-4. subagent-first orchestration,
+4. worker-first orchestration,
 5. boot profile read-set,
 6. runtime execution rules.
 7. instruction activation by phase via `docs/framework/instruction-activation-protocol.md`.
@@ -110,8 +110,8 @@ For orchestrator lane, use `docs/framework/ORCHESTRATOR-ENTRY.MD` as the canonic
 ### Worker Boot Pointer
 
 For worker lane, use:
-1. `docs/framework/SUBAGENT-ENTRY.MD`
-2. `docs/framework/SUBAGENT-THINKING.MD`
+1. `docs/framework/WORKER-ENTRY.MD`
+2. `docs/framework/WORKER-THINKING.MD`
 
 Workers must not bootstrap repository-wide orchestration policy unless the task packet explicitly asks for framework-lane audit behavior.
 
@@ -126,7 +126,7 @@ Workers must not bootstrap repository-wide orchestration policy unless the task 
 
 Instruction precedence:
 1. `AGENTS.md`
-2. lane entry contract (`docs/framework/ORCHESTRATOR-ENTRY.MD` or `docs/framework/SUBAGENT-ENTRY.MD`)
+2. lane entry contract (`docs/framework/ORCHESTRATOR-ENTRY.MD` or `docs/framework/WORKER-ENTRY.MD`)
 3. canonical protocol for the active domain from `docs/framework/protocol-index.md`
 4. project overlay data (`vida.config.yaml`) without weakening framework invariants
 5. command doc / helper wrapper
@@ -137,8 +137,8 @@ Conflict rule:
 
 Operational references:
 1. `docs/framework/ORCHESTRATOR-ENTRY.MD`
-2. `docs/framework/SUBAGENT-ENTRY.MD`
-3. `docs/framework/SUBAGENT-THINKING.MD`
+2. `docs/framework/WORKER-ENTRY.MD`
+3. `docs/framework/WORKER-THINKING.MD`
 4. `docs/framework/framework-map-protocol.md`
 5. `docs/framework/protocol-index.md`
 6. `docs/framework/instruction-activation-protocol.md`

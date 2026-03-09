@@ -24,6 +24,7 @@ composition_order:
 project_overlay_ref: overlays/project_overlay.yaml
 default_bundle_ref: bundles/default_runtime.yaml
 default_activation_policy_ref: activation/default_policy.yaml
+projection_manifest_ref: projection_manifest.yaml
 packaging_policy:
   packaged_artifacts_are_not_default_enabled: true
   skills_require_explicit_enablement: true

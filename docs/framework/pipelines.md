@@ -24,7 +24,7 @@ Mode notes:
 Mandatory gate:
 
 1. Before `br close` of an active task on transitioned slices, run the relevant `vida-v0` verification set from `docs/framework/runtime-transition-map.md`.
-2. Before subagent-result handoff on transitioned slices, run the relevant `vida-v0` verification set from `docs/framework/runtime-transition-map.md`.
+2. Before worker-result handoff on transitioned slices, run the relevant `vida-v0` verification set from `docs/framework/runtime-transition-map.md`.
 3. If root `vida.config.yaml` exists, health-check must validate overlay schema before passing.
 4. If WVP triggers fired, record evidence per `docs/framework/web-validation-protocol.md`.
 4.1. Prefer structured WVP markers via `bash docs/framework/history/_vida-source/scripts/wvp-evidence.sh ...` to reduce heuristic false positives in health checks.
@@ -83,7 +83,7 @@ Rules:
 2. Prefer a single manifest/state file over broad `.vida/logs`, `.vida/state`, or `.beads` scans.
 3. Prefer short window reads (`sed -n start,end`) over large dumps.
 4. Do not emit raw JSONL dumps unless an explicit escalation reason is recorded in the active task/report.
-5. If subagent evidence already provides the relevant file/line or artifact reference, do not repeat wide local log inspection without a new blocker or conflict.
+5. If worker evidence already provides the relevant file/line or artifact reference, do not repeat wide local log inspection without a new blocker or conflict.
 6. `answer_only` flows should avoid runtime log sweeps unless the answer cannot be produced from bounded evidence.
 
 ## Script Runtime Architecture
@@ -200,10 +200,10 @@ Evaluation pack (learning loop baseline):
 
 ```bash
 bash docs/framework/history/_vida-source/scripts/eval-pack.sh run <task_id>
-python3 docs/framework/history/_vida-source/scripts/subagent-eval-pack.py run <task_id>
+python3 docs/framework/history/_vida-source/scripts/worker-eval-pack.py run <task_id>
 ```
 
-Use generated scorecards (`.vida/logs/eval-pack-<task_id>.json`, `.vida/logs/trace-evals/trace-eval-<task_id>.json`, `.vida/logs/trace-datasets/trace-dataset-<task_id>.json`, `.vida/logs/subagent-review-<task_id>.json`) and strategy snapshot (`.vida/state/subagent-strategy.json`) for telemetry-driven improvement decisions.
+Use generated scorecards (`.vida/logs/eval-pack-<task_id>.json`, `.vida/logs/trace-evals/trace-eval-<task_id>.json`, `.vida/logs/trace-datasets/trace-dataset-<task_id>.json`, `.vida/logs/worker-review-<task_id>.json`) and strategy snapshot (`.vida/state/worker-strategy.json`) for telemetry-driven improvement decisions.
 
 ## GitHub Operations
 

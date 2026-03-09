@@ -16,7 +16,7 @@ Core ownership:
 2. Classify request intent before task or pack routing.
 3. Choose execution route (`answer_only|artifact_flow|execution_flow|mixed`, pack, task mode, boot profile, reasoning/orchestration lens).
 4. Keep writer ownership singular and under orchestrator control.
-5. Use subagents as the primary analysis/review fabric when the active mode supports it.
+5. Use workers as the primary analysis/review fabric when the active mode supports it.
 6. Synthesize results, resolve conflicts, and own final quality gates.
 
 Operating principles:
@@ -106,19 +106,19 @@ TODO/`br` flow is also forbidden for explicit VIDA/framework self-diagnosis by d
 2. the deliverable is a chat report,
 3. no explicit task-tracking request was made.
 
-## Subagent-First Orchestration
+## Worker-First Orchestration
 
-When the subagent system is active, the orchestrator is not the default primary analyst.
+When the agent system is active, the orchestrator is not the default primary analyst.
 
 Mode-synced rule:
 1. `native`
-   - use internal subagents only,
-   - internal subagents become the first orchestration lane for eligible work, including development-support analysis/review and authorized bounded execution.
+   - use internal workers only,
+   - internal workers become the first orchestration lane for eligible work, including development-support analysis/review and authorized bounded execution.
 2. `hybrid`
    - use external and internal providers under routing policy,
    - external-first orchestration is the default lane for eligible work, with bridge fallback and internal escalation only under route policy.
 3. `disabled`
-   - do not use the subagent system,
+   - do not use the agent system,
    - orchestrator analyzes locally under the same log-read budget and bounded-read rules; this is the canonical mode-specific path, not a discretionary fallback.
 
 Eligible work:
@@ -132,11 +132,11 @@ Eligible work:
 Required behavior:
 1. delegate the blocking analysis question first when mode supports it,
 2. separate authorship and verification lanes when route metadata requires it,
-3. stop local deep reading once subagent evidence is sufficient for synthesis or mutation prep,
+3. stop local deep reading once worker evidence is sufficient for synthesis or mutation prep,
 4. keep mutation ownership under the orchestrator unless bounded write scope is explicitly granted,
-5. for `execution_flow` development work, when `protocol_activation.agent_system=true` and the effective subagent mode is not `disabled`, route execution through orchestration-first subagent lanes and do not default to local orchestrator-first development,
+5. for `execution_flow` development work, when `protocol_activation.agent_system=true` and the effective worker mode is not `disabled`, route execution through orchestration-first worker lanes and do not default to local orchestrator-first development,
 6. in `hybrid`, honor route dispatch policy before any local-first or direct-internal path; external-first routing, bridge fallback, and lawful internal escalation must remain inspectable,
-7. keep user-facing reporting ownership under the orchestrator; do not expose raw subagent reports unless the user explicitly asks to inspect them.
+7. keep user-facing reporting ownership under the orchestrator; do not expose raw worker reports unless the user explicitly asks to inspect them.
 8. if delegated lane creation fails because of internal agent/thread saturation, attempt `reuse existing eligible agents first` before any local-only continuation:
    - reuse an existing relevant agent via queued `send_input` when context fit is acceptable,
    - or close/resume idle agents and retry bounded delegation,
@@ -157,12 +157,12 @@ Execution Authorization Gate:
    - bounded protocol/contract reads,
    - dispatch preparation,
    - analysis-receipt preparation for write-producing routes,
-4. this gate is mandatory for `execution_flow` whenever the active subagent mode is not `disabled`.
+4. this gate is mandatory for `execution_flow` whenever the active worker mode is not `disabled`.
 5. if the orchestrator cannot point to the exact protocol/routing clause that authorizes an execution behavior, that behavior is forbidden by default.
 
 Exception:
 1. explicit VIDA/framework self-diagnosis runs in the main orchestrator lane by default for direct chat diagnosis and tracked FSAP trigger framing,
-2. do not delegate FSAP-first diagnosis to subagents unless the user explicitly asks for delegated verification or the orchestrator is blocked on a narrow secondary question,
+2. do not delegate FSAP-first diagnosis to workers unless the user explicitly asks for delegated verification or the orchestrator is blocked on a narrow secondary question,
 3. once tracked FSAP/remediation flow is active, delegated verification or proving lanes become the default for closure-ready state; do not use the self-diagnosis exception to justify local-only repeated audits or closure without either a delegated verification artifact or a structured override receipt.
 
 Protocol-gap rule:
@@ -183,7 +183,7 @@ Evidence rule:
 
 ## Blocking-Question Dispatch Rule
 
-Subagent prompts must be question-driven.
+Worker packets must be question-driven.
 
 Each delegated lane should receive:
 1. one blocking question,
@@ -200,11 +200,11 @@ Each delegated lane should return:
 5. recommended next action.
 
 User-facing reporting rule:
-1. Treat subagent returns as internal evidence for orchestrator synthesis by default.
-2. Present the orchestrator's own integrated answer to the user, not the raw subagent report.
-3. Do not add explicit user-facing subagent/process sections by default; subagent participation remains an internal execution mechanism.
-4. Quote or summarize subagent findings only as supporting evidence when necessary.
-5. Surface raw subagent output only when the user explicitly requests it or when unresolved conflict remains decision-relevant.
+1. Treat worker returns as internal evidence for orchestrator synthesis by default.
+2. Present the orchestrator's own integrated answer to the user, not the raw worker report.
+3. Do not add explicit user-facing worker/process sections by default; worker participation remains an internal execution mechanism.
+4. Quote or summarize worker findings only as supporting evidence when necessary.
+5. Surface raw worker output only when the user explicitly requests it or when unresolved conflict remains decision-relevant.
 
 ## Log-Read Budget
 
@@ -216,11 +216,11 @@ Hard rules:
 3. prefer one manifest/state file over many logs,
 4. prefer short window reads (`sed -n start,end`) over large dumps,
 5. do not emit raw JSONL dumps unless a documented escalation requires it,
-6. if subagent findings already provide file/line evidence, do not repeat wide local log inspection without a new conflict or blocker.
+6. if worker findings already provide file/line evidence, do not repeat wide local log inspection without a new conflict or blocker.
 
 Escalation to wider reads is allowed only when:
 1. the blocking question remains unanswered after bounded evidence,
-2. subagent findings conflict materially,
+2. worker findings conflict materially,
 3. mutation requires verifying a specific runtime artifact,
 4. final verification requires targeted proof.
 
@@ -259,7 +259,7 @@ Use for routine execution and token-efficient continuation.
 7. Read `docs/framework/web-validation-protocol.md`.
 8. Read `docs/framework/project-overlay-protocol.md`.
 9. Read `vida.config.yaml` when present.
-10. If `protocol_activation.agent_system=true`, read `docs/framework/subagent-system-protocol.md`.
+10. If `protocol_activation.agent_system=true`, read `docs/framework/agent-system-protocol.md`.
 11. Read `docs/framework/beads-protocol.md` only if the request is not `answer_only` and the compact snapshot is insufficient.
 12. If `framework_self_diagnosis.enabled=true`, read `docs/framework/silent-framework-diagnosis-protocol.md` and keep the silent diagnosis contract active for the session.
 13. Apply `docs/framework/instruction-activation-protocol.md` when deciding whether additional instruction/protocol files should be loaded beyond the lean set.
@@ -314,8 +314,8 @@ For non-trivial orchestrator reports, default order:
 ## References
 
 1. `docs/framework/orchestration-protocol.md`
-2. `docs/framework/subagent-system-protocol.md`
-3. `docs/framework/subagents.md`
+2. `docs/framework/agent-system-protocol.md`
+3. `docs/framework/worker-dispatch-protocol.md`
 4. `docs/framework/pipelines.md`
 5. `docs/framework/beads-protocol.md`
 6. `docs/framework/todo-protocol.md`

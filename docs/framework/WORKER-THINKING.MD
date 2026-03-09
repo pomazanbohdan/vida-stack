@@ -1,8 +1,8 @@
-# Subagent Thinking Contract
+# Worker Thinking Contract
 
-Purpose: provide a compact worker-safe subset of VIDA thinking algorithms for delegated and external subagents.
+Purpose: provide a compact worker-safe subset of VIDA thinking algorithms for delegated workers.
 
-This file is for worker lanes only.
+This file is the canonical worker-lane thinking subset.
 
 Do not use it as a replacement for the full orchestrator thinking protocol.
 

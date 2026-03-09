@@ -59,7 +59,7 @@ Canonical layer source: `docs/framework/command-layer-protocol.md`
 4. `IEP-2 Queue Intake`
    - select next `ready` task from `br`.
    - if none: move to `IEP-8 Pool Completion`.
-   - if multiple candidates remain after queue intake, apply `docs/framework/execution-priority-protocol.md` and keep `docs/framework/subagent-system-protocol.md` route law active while selecting the next writer task.
+   - if multiple candidates remain after queue intake, apply `docs/framework/execution-priority-protocol.md` and keep `docs/framework/agent-system-protocol.md` route law active while selecting the next writer task.
 5. `IEP-3 Skills Routing`
    - run dynamic skill selection for current task scope.
 6. `IEP-4 Preflight`
@@ -68,7 +68,7 @@ Canonical layer source: `docs/framework/command-layer-protocol.md`
    - confirm route receipt, analysis lane, analysis receipt (when required), `issue_contract` readiness when the task is issue-driven, non-empty `issue_contract.proven_scope`, symptom-level evidence for any multi-symptom issue, author lane, verifier lane (or explicit `no_eligible_verifier`), and writer ownership before deep local implementation prep.
    - if analysis routing is unavailable because the route records explicit `no_eligible_analysis_lane`, remain fail-closed by default; only framework-owned tracked remediation may proceed via a structured execution-auth override receipt, never by silent local fallback.
    - if `issue_contract` emits a mixed-issue split artifact, keep writer ownership on the primary executable slice only and preserve the unresolved slice as follow-up work.
-   - if local mutation is proposed under active subagent mode, require route authorization or lawful escalation receipt.
+   - if local mutation is proposed under active worker mode, require route authorization or lawful escalation receipt.
    - if the gate is not satisfied: `BLOCKED (BLK_EXECUTION_AUTH_MISSING)`.
 8. `IEP-4.5 Change-Impact Gate`
    - detect scope/AC/dependency/decision drift before continuing.
@@ -114,7 +114,7 @@ Hard law:
 1. Multi-task execution without `IEP-1.5 Pool Graph Analysis` is invalid.
 2. Parallelism decisions must be graph-backed, not intuitive.
 3. Single-writer serialization is mandatory unless explicit isolation is proven.
-4. Under active subagent mode, generic autonomous-coding defaults do not authorize local orchestrator-first implementation.
+4. Under active worker mode, generic autonomous-coding defaults do not authorize local orchestrator-first implementation.
 5. Missing `IEP-4.2 Execution Authorization Gate` is a blocking protocol violation, not a soft warning.
 6. If an implementation action, fallback path, or local mutation step is not explicitly described by the active VIDA/project protocol stack or justified by an escalation receipt, it is forbidden by default.
 7. For write-producing routes in `hybrid`, the canonical default is `analysis -> writer -> coach -> review` when `coach_required=yes`; otherwise it remains `analysis -> writer -> review`. Bounded writer dispatch without the analysis receipt is invalid.
@@ -141,15 +141,15 @@ On trigger:
 ## Multi-Agent And Parallelism Policy
 
 1. Default topology: single writer lane.
-2. Parallel subagents are allowed for read-heavy tasks:
+2. Parallel workers are allowed for read-heavy tasks:
    - discovery,
    - risk analysis,
    - review triage,
    - docs checks.
 3. When a downstream or dependent task needs preparation but must not enter writer execution yet, use a prep-only route such as `read_only_prep` and keep writer authorization blocked.
 4. Parallel write lanes are forbidden unless explicit isolation exists (separate worktrees + merge gate).
-5. Keep main thread clean: subagents return concise artifacts, not raw noisy logs.
-6. When route metadata declares `fanout_subagents`, use that fanout only for read-only phases and keep the writer lane singular under the orchestrator.
+5. Keep main thread clean: workers return concise artifacts, not raw noisy logs.
+6. When route metadata declares `fanout_workers`, use that fanout only for read-only phases and keep the writer lane singular under the orchestrator.
 7. If route metadata declares hard routing requirements, local/manual bypass is invalid unless a lawful escalation receipt exists.
 
 ## Skills Policy

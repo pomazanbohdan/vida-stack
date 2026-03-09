@@ -48,7 +48,7 @@ Read these in order before acting:
 15. `/home/unnamed/project/mobile-odoo/docs/framework/task-state-reconciliation-protocol.md`
 16. `/home/unnamed/project/mobile-odoo/docs/framework/run-graph-protocol.md`
 17. `/home/unnamed/project/mobile-odoo/docs/framework/human-approval-protocol.md`
-18. `/home/unnamed/project/mobile-odoo/docs/framework/subagent-system-protocol.md`
+18. `/home/unnamed/project/mobile-odoo/docs/framework/agent-system-protocol.md`
 
 Optional but preferred:
 
@@ -64,7 +64,7 @@ The following laws MUST be carried forward into:
 1. every future compact instruction,
 2. every next-step instruction,
 3. every child task packet,
-4. every subagent prompt,
+4. every worker packet,
 5. every worker prompt,
 6. every state-kernel-adjacent implementation packet.
 
@@ -76,15 +76,15 @@ Mandatory carried behavior laws:
 4. Protocols act as an allowlist, not guidance.
 5. Never widen scope silently.
 6. Never rely on chat memory as durable state.
-7. Use subagents as the primary bounded analysis/review fabric when supported.
-8. Reuse eligible subagents before falling back to local-only continuation under saturation.
+7. Use workers as the primary bounded analysis/review fabric when supported.
+8. Reuse eligible workers before falling back to local-only continuation under saturation.
 9. Keep one writer/integrator ownership per shared write scope.
 10. Separate authorship from verification when route law requires it.
 11. No implied behavior in instructions.
 12. `Instruction Contract` is the canonical logic source.
 13. `Prompt Template Configuration` must not become the logic source.
 14. Every prompt/packet must contain explicit fallback and escalation rules.
-15. User-facing reports must be synthesized by the orchestrator, not raw subagent dumps.
+15. User-facing reports must be synthesized by the orchestrator, not raw worker dumps.
 16. Evidence hierarchy must prefer live/receipt/runtime evidence over chat recollection.
 17. If a process gap is found, use only a bounded workaround and record the gap; do not invent a permanent path.
 18. Preserve the hierarchy:
@@ -100,7 +100,7 @@ Propagation rule:
 
 ---
 
-## Subagent Requirements For This Step
+## Worker Requirements For This Step
 
 Before drafting the state kernel spec:
 
@@ -115,7 +115,7 @@ Recommended blocking questions:
 2. `Explorer B`: Which current state/storage/file/layout surfaces are topology and must not be frozen into the future state kernel?
 3. `Explorer C`: Which run-graph, resumability, review, approval, and route-adjacent facts belong in state versus later route/receipt law?
 
-Each subagent prompt must carry:
+Each worker packet must carry:
 
 1. one blocking question,
 2. exact source list,
@@ -152,7 +152,7 @@ After writing the artifact, report to the user:
 3. what state-model problem it solves in the larger `1.0` program,
 4. what remains unresolved,
 5. that the next exact artifact is `instruction kernel spec`,
-6. which subagents were used and for what bounded questions,
+6. which workers were used and for what bounded questions,
 7. that behavioral inheritance was propagated into the next-step artifact.
 
 ---
