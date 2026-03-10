@@ -41,6 +41,10 @@ Purpose: provide current project/runtime context and canonical map pointers for 
    - each completed layer must be independently useful,
    - each next layer may deepen only what lower layers already close,
    - do not depend on future-layer capability to justify current-layer behavior.
+7. For every new layer, development is documentation-first:
+   - first bring the canonical layer documentation into shape,
+   - then implement against that documented law,
+   - do not justify new implementation behavior with undocumented layer rules.
 
 ## Canonical Maps
 
@@ -142,5 +146,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: '2026-03-10T03:06:28+02:00'
+updated_at: '2026-03-10T03:11:31+02:00'
 changelog_ref: AGENTS.sidecar.changelog.jsonl

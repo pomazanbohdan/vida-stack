@@ -30,6 +30,177 @@ Matrix reading rule:
 3. use the `Detail section` row to jump into the full normative definition below,
 4. treat the lower sections as the expanded law for the abbreviated matrix cells above.
 
+## 0.1 Current Documentation Compliance Snapshot
+
+Status markers:
+
+1. `✅` documentation coverage is already sufficient for the layer to act as canonical law,
+2. `🟡` documentation coverage exists but still depends on framework-plan detail or leaves meaningful gaps,
+3. `⚪` documentation coverage is still too thin to act as canonical law by itself.
+
+| Category | Layer 1 | Layer 2 | Layer 3 | Layer 4 | Layer 5 | Layer 6 | Layer 7 | Layer 8 |
+|---|---|---|---|---|---|---|---|---|
+| Documentation compliance | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | 🟡 |
+| Strongest evidence | `codex-v0/docsys_schema.yaml`, `instruction-artifact-model.md`, `projection_manifest.yaml` | `project-documentation-system.md`, `current-spec-map.md`, `instruction_catalog.yaml`, canonical registry path | this spec, `project-documentation-system.md`, canonical `check`/`doctor` rules in bootstrap docs | this spec, `AGENTS.sidecar.md`, canonical mutation command contract | this spec, `project-documentation-system.md`, `AGENTS.sidecar.md` relation/impact command contract | this spec, `framework-map-protocol.md`, `AGENTS.sidecar.md` overview/low-call contract | this spec plus framework plans `vida-0.3-instruction-kernel-spec.md` and `vida-0.3-migration-kernel-spec.md` | this spec plus framework/runtime transition documents only |
+| Main current gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | readiness law still depends on framework-plan detail more than on promoted product law | consumption law is defined as target architecture, but not yet expanded into a fully promoted runtime-consumption product spec |
+
+Compliance reading rule:
+
+1. this snapshot measures the state of the documentation itself, not the implementation maturity of the layer,
+2. a layer may be well-documented even if implementation is still partial,
+3. Layers 7 and 8 remain documentation-partial because their most detailed law still lives primarily in framework-plan artifacts rather than in fully promoted product-law form.
+
+## 0.1 Current Documentation Alignment Snapshot
+
+This snapshot evaluates the active documentation and instruction surfaces against the matrix above.
+
+### Layer 1: Canonical Schema
+
+Matrix status: `✅`  
+Documentation alignment: `✅`
+
+Strongest evidence:
+
+1. `docs/product/spec/instruction-artifact-model.md`
+2. `docs/product/spec/project-documentation-system.md`
+3. `docs/product/spec/current-spec-map.md`
+4. this spec
+
+Current conclusion:
+
+1. the documentation canon already fixes the base vocabulary for artifact identity, metadata footer, sidecar lineage, latest-only markdown authority, and active canon boundaries,
+2. the remaining vocabulary depth for some machine-readable families is handled as extension of the same schema space, not as a competing authority.
+
+### Layer 2: Canonical Inventory
+
+Matrix status: `🟡`  
+Documentation alignment: `🟡`
+
+Strongest evidence:
+
+1. `docs/product/spec/project-documentation-system.md`
+2. `docs/product/spec/current-spec-map.md`
+3. `vida/config/instructions/system-maps.framework-map-protocol.md`
+4. `docs/product/spec/instruction-artifact-model.md`
+
+Current conclusion:
+
+1. the documentation canon already requires a canonical registry path, registry snapshots, current catalog/status summaries, and coverage across markdown-first canon plus `vida/config/**`,
+2. documentation still distributes inventory law across several sources instead of one fully closed inventory spec for every active `vida/config/**` family.
+
+Primary blocker:
+
+1. one dedicated canonical inventory spec that fully enumerates inventory coverage and registry semantics across all active config families is still missing.
+
+### Layer 3: Canonical Validation
+
+Matrix status: `✅`  
+Documentation alignment: `✅`
+
+Strongest evidence:
+
+1. `docs/product/spec/project-documentation-system.md`
+2. this spec
+3. `vida/config/instructions/system-maps.framework-map-protocol.md`
+
+Current conclusion:
+
+1. the documentation canon defines footer completeness, sidecar ownership, consistency checks, profile-specific validation posture, and explicit bootstrap-carrier exceptions,
+2. validation behavior is described as policy-driven rather than ad hoc tool behavior.
+
+### Layer 4: Canonical Mutation
+
+Matrix status: `✅`  
+Documentation alignment: `✅`
+
+Strongest evidence:
+
+1. this spec
+2. `vida/config/instructions/system-maps.framework-map-protocol.md`
+3. `AGENTS.sidecar.md`
+
+Current conclusion:
+
+1. the documentation canon already describes lawful mutation paths, one-shot finalization after multiple diff edits, exact link migration, and narrow bootstrap-carrier mutation exceptions,
+2. the mutation layer is documented as operational law rather than as undocumented helper behavior.
+
+### Layer 5: Canonical Relations
+
+Matrix status: `🟡`  
+Documentation alignment: `🟡`
+
+Strongest evidence:
+
+1. `docs/product/spec/project-documentation-system.md`
+2. this spec
+3. `AGENTS.sidecar.md`
+
+Current conclusion:
+
+1. the documentation canon already requires artifact-impact, task-impact, link inventories, dependency views, and change-radius analysis,
+2. relation outputs are documented operationally, but edge taxonomy and canonical relation semantics are not yet frozen in one dedicated relation-law artifact.
+
+Primary blocker:
+
+1. one dedicated canonical relation/dependency spec is still missing.
+
+### Layer 6: Canonical Operator
+
+Matrix status: `✅`  
+Documentation alignment: `✅`
+
+Strongest evidence:
+
+1. `docs/product/spec/project-documentation-system.md`
+2. `vida/config/instructions/system-maps.framework-map-protocol.md`
+3. `AGENTS.sidecar.md`
+
+Current conclusion:
+
+1. the documentation canon already requires one-command overview reads, low-call operational paths, compact history/status views, and initialization-time automatic context reads,
+2. operator ergonomics are explicitly part of the architecture rather than accidental tooling convenience.
+
+### Layer 7: Canonical Runtime Readiness
+
+Matrix status: `⚪`  
+Documentation alignment: `🟡`
+
+Strongest evidence:
+
+1. this spec
+2. `docs/framework/plans/vida-0.3-instruction-kernel-spec.md`
+3. `docs/framework/plans/vida-0.3-migration-kernel-spec.md`
+4. `docs/product/spec/instruction-artifact-model.md`
+
+Current conclusion:
+
+1. the documentation canon already identifies source-version tuples, compatibility classes, bundle/projection expectations, and fail-closed readiness posture as the required law for this layer,
+2. that law still depends significantly on framework plan artifacts and is not yet promoted into one fully closed active readiness spec.
+
+Primary blocker:
+
+1. one promoted canonical readiness spec is still missing.
+
+### Layer 8: Canonical Runtime Consumption
+
+Matrix status: `⚪`  
+Documentation alignment: `⚪`
+
+Strongest evidence:
+
+1. this spec
+2. `vida/config/instructions/system-maps.framework-map-protocol.md`
+3. `docs/product/spec/current-spec-map.md`
+
+Current conclusion:
+
+1. the documentation canon clearly states the target end-state where runtime consumes canonical inventory, readiness, bundles, and projections directly,
+2. it does not yet define a closed active law for direct runtime consumption behavior.
+
+Primary blocker:
+
+1. runtime-consumption law is still reference-architecture intent, not an active closed documentation layer.
+
 ## 1. Scope
 
 This spec defines the target capability layers for the VIDA 1 canonical documentation and inventory system.
@@ -54,6 +225,13 @@ Each layer must satisfy all of the following:
 3. it must not depend on future-layer behavior,
 4. it may deepen or enrich a lower layer, but it must not redefine the lower layer’s responsibility,
 5. it must expose a clear proof of completion.
+
+Documentation-first development rule:
+
+1. when a new layer is started, its canonical documentation must be brought into shape first,
+2. that documentation pass must define the layer purpose, inputs, outputs, forbidden dependencies, completion proof, and standalone value before implementation begins,
+3. implementation substrate work may start only after the documentation pass for that layer is explicit enough to act as the authority for the work,
+4. if implementation and layer documentation diverge, the documentation must be corrected first or the implementation must be brought back into line before the layer is considered active.
 
 Compact rule:
 
@@ -130,6 +308,11 @@ Current completion note:
 2. it covers canonical artifact types, status terms, owners, layers, compatibility classes, and base bundle/projection/registry terms,
 3. higher layers may deepen this vocabulary, but they must not invent competing schema authorities.
 
+Documentation-first rule for this layer:
+
+1. before schema validators or schema-backed tooling evolve, the Layer 1 vocabulary and contracts must be documented first,
+2. implementation may only encode vocabulary that is already documented as Layer 1 law.
+
 ## 5. Layer 2: Canonical Inventory
 
 ### 5.1 Purpose
@@ -176,6 +359,11 @@ Layer 2 must not depend on:
 ### 5.7 Standalone Value
 
 Layer 2 gives VIDA a complete map of what canonical artifacts currently exist.
+
+Documentation-first rule for this layer:
+
+1. before registry coverage or inventory tooling expands, the Layer 2 scope and coverage rules must be documented first,
+2. implementation may only materialize inventory classes and registry behavior that are already documented as Layer 2 law.
 
 ## 6. Layer 3: Canonical Validation
 
@@ -224,6 +412,11 @@ Layer 3 must not depend on:
 ### 6.7 Standalone Value
 
 Layer 3 gives VIDA a trustworthy quality gate for the documentation/inventory canon.
+
+Documentation-first rule for this layer:
+
+1. before new validation gates are added, the Layer 3 validation law must define allowed checks, failure posture, and exception handling first,
+2. implementation may only enforce checks that are already documented as Layer 3 law.
 
 ## 7. Layer 4: Canonical Mutation
 
@@ -294,6 +487,11 @@ Completion rule:
 2. non-carrier root documents are governed by the standard metadata contract,
 3. no mixed root-level transitional exception mode remains.
 
+Documentation-first rule for this layer:
+
+1. before mutation commands or workflows expand, the Layer 4 lawful mutation contract must be documented first,
+2. implementation may only automate mutation paths that are already documented as Layer 4 law.
+
 ## 8. Layer 5: Canonical Relations
 
 ### 8.1 Purpose
@@ -338,6 +536,11 @@ Layer 5 must not depend on:
 
 Layer 5 gives VIDA a change-radius analysis system.
 
+Documentation-first rule for this layer:
+
+1. before relation or impact tooling expands, the Layer 5 relation surfaces and interpretations must be documented first,
+2. implementation may only expose relation outputs that are already documented as Layer 5 law.
+
 ## 9. Layer 6: Canonical Operator
 
 ### 9.1 Purpose
@@ -376,6 +579,11 @@ Layer 6 must not depend on:
 ### 9.7 Standalone Value
 
 Layer 6 gives VIDA a practical control surface for humans and transitional agents.
+
+Documentation-first rule for this layer:
+
+1. before operator UX is widened, the Layer 6 operator-facing contract must be documented first,
+2. implementation may only compose low-call operator views that are already documented as Layer 6 law.
 
 ## 10. Layer 7: Canonical Runtime Readiness
 
@@ -421,6 +629,11 @@ Layer 7 must not depend on:
 
 Layer 7 gives VIDA a pre-runtime readiness gate.
 
+Documentation-first rule for this layer:
+
+1. before readiness gates are implemented, the Layer 7 readiness law must define tuples, compatibility, bundle, and projection expectations first,
+2. implementation may only report readiness against rules that are already documented as Layer 7 law.
+
 ## 11. Layer 8: Canonical Runtime Consumption
 
 ### 11.1 Purpose
@@ -445,6 +658,11 @@ Allow the VIDA 1 runtime itself to consume the canonical inventory, readiness, b
 ### 11.5 Standalone Value
 
 Layer 8 is the final product state where the documentation/inventory system is no longer merely transitional tooling.
+
+Documentation-first rule for this layer:
+
+1. before runtime consumption is wired, the Layer 8 consumption contract must be documented first,
+2. implementation may only consume registry, readiness, and bundle surfaces that are already documented as Layer 8 law.
 
 ## 12. Required Canonical Requirement Clusters
 
@@ -505,5 +723,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/canonical-documentation-and-inventory-layers.md
 created_at: '2026-03-10T03:25:00+02:00'
-updated_at: '2026-03-10T03:00:04+02:00'
+updated_at: '2026-03-10T03:11:31+02:00'
 changelog_ref: canonical-documentation-and-inventory-layers.changelog.jsonl
