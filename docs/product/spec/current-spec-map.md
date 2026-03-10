@@ -47,6 +47,9 @@ Purpose: define the current product-spec home, show absorbed historical sources,
 13. [project-documentation-system.md](/home/unnamed/project/vida-stack/docs/product/spec/project-documentation-system.md)
    Sources: current markdown-first operating model and document-sidecar migration decisions
    Config families: project documentation governance only
+14. [canonical-documentation-and-inventory-layers.md](/home/unnamed/project/vida-stack/docs/product/spec/canonical-documentation-and-inventory-layers.md)
+   Sources: `docs/product/spec/project-documentation-system.md`, `docs/product/spec/instruction-artifact-model.md`, `docs/framework/plans/vida-0.3-instruction-kernel-spec.md`, `docs/framework/plans/vida-0.3-migration-kernel-spec.md`, `vida/config/**`
+   Config families: canonical inventory, validation, mutation, relation, readiness, and runtime-consumption architecture across `vida/config/**`
 
 ## Current Rule
 
@@ -70,11 +73,11 @@ Purpose: define the current product-spec home, show absorbed historical sources,
 -----
 artifact_path: product/spec/current-spec-map
 artifact_type: product_spec
-artifact_version: 1
-artifact_revision: 2026-03-10
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
-created_at: 2026-03-09T20:28:59+02:00
-updated_at: 2026-03-10T00:56:40+02:00
+created_at: '2026-03-09T20:28:59+02:00'
+updated_at: '2026-03-10T02:32:51+02:00'
 changelog_ref: current-spec-map.changelog.jsonl

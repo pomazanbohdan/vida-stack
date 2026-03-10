@@ -18,8 +18,9 @@ Current entrypoints:
 3. [skill-management-and-activation.md](/home/unnamed/project/vida-stack/docs/product/spec/skill-management-and-activation.md)
 4. [instruction-migration-crosswalk.md](/home/unnamed/project/vida-stack/docs/product/spec/instruction-migration-crosswalk.md)
 5. [project-documentation-system.md](/home/unnamed/project/vida-stack/docs/product/spec/project-documentation-system.md)
-6. [docs/process/README.md](/home/unnamed/project/vida-stack/docs/process/README.md)
-7. [docs/project-memory/README.md](/home/unnamed/project/vida-stack/docs/project-memory/README.md)
+6. [canonical-documentation-and-inventory-layers.md](/home/unnamed/project/vida-stack/docs/product/spec/canonical-documentation-and-inventory-layers.md)
+7. [docs/process/README.md](/home/unnamed/project/vida-stack/docs/process/README.md)
+8. [docs/project-memory/README.md](/home/unnamed/project/vida-stack/docs/project-memory/README.md)
 
 Repository narrative entrypoints:
 
@@ -30,11 +31,11 @@ Repository narrative entrypoints:
 -----
 artifact_path: product/index
 artifact_type: product_index
-artifact_version: 1
-artifact_revision: 2026-03-10
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
 status: canonical
 source_path: docs/product/index.md
-created_at: 2026-03-09T20:28:59+02:00
-updated_at: 2026-03-10T00:56:40+02:00
+created_at: '2026-03-09T20:28:59+02:00'
+updated_at: '2026-03-10T02:32:51+02:00'
 changelog_ref: index.changelog.jsonl

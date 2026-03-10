@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Unified markdown document toolkit for VIDA."""
+"""Unified canonical documentation and inventory toolkit for VIDA."""
 
 from __future__ import annotations
 
 import fnmatch
 import json
+import os
 from collections import Counter
 from datetime import datetime
 from io import StringIO
@@ -19,8 +20,10 @@ from ruamel.yaml import YAML
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, pretty_exceptions_enable=False)
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = Path(__file__).resolve().with_name("docsys_policy.yaml")
+SCHEMA_PATH = Path(__file__).resolve().with_name("docsys_schema.yaml")
+PROJECT_PATH = Path(os.environ.get("DOCSYS_PROJECT_CONFIG", Path(__file__).resolve().with_name("docsys_project.yaml")))
 FOOTER_MARKER = "\n-----\n"
 REQUIRED_FOOTER_FIELDS = (
     "artifact_path",
@@ -42,7 +45,7 @@ yaml.allow_unicode = True
 yaml.width = 4096
 
 result_note = ""
-current_command = "docsys"
+current_command = "codex"
 
 
 class PolicyRule(msgspec.Struct):
@@ -58,6 +61,41 @@ class PolicyConfig(msgspec.Struct):
     mutation_disabled: list[PolicyRule] = []
     scan_ignored: list[PolicyRule] = []
     profiles: dict[str, list[str]] = {}
+
+
+class ProfileSettings(msgspec.Struct):
+    warnings_fail: bool = False
+
+
+class SchemaRegistry(msgspec.Struct):
+    path: str = "vida/config/codex-registry.current.jsonl"
+
+
+class SchemaConfig(msgspec.Struct):
+    schema_version: int = 1
+    statuses: list[str] = []
+    owners: list[str] = []
+    layers: list[str] = []
+    artifact_types: list[str] = []
+    profiles: dict[str, ProfileSettings] = {}
+    canonical_registry: SchemaRegistry = msgspec.field(default_factory=SchemaRegistry)
+
+
+class LayerOwnerRule(msgspec.Struct):
+    pattern: str
+    layer: str
+    owner: str
+
+
+class RootBootstrapConfig(msgspec.Struct):
+    artifact_prefix: str = "project/repository"
+    artifact_type: str = "bootstrap_doc"
+
+
+class ProjectConfig(msgspec.Struct):
+    schema_version: int = 1
+    root_bootstrap: RootBootstrapConfig = msgspec.field(default_factory=RootBootstrapConfig)
+    layer_owner_rules: dict[str, list[LayerOwnerRule]] = {}
 
 
 class FooterMetadata(msgspec.Struct):
@@ -125,8 +163,23 @@ def load_policy() -> PolicyConfig:
     return msgspec.convert(data, type=PolicyConfig)
 
 
+def load_schema() -> SchemaConfig:
+    data = yaml.load(SCHEMA_PATH.read_text(encoding="utf-8")) or {}
+    return msgspec.convert(data, type=SchemaConfig)
+
+
+def load_project() -> ProjectConfig:
+    data = yaml.load(PROJECT_PATH.read_text(encoding="utf-8")) or {}
+    return msgspec.convert(data, type=ProjectConfig)
+
+
 def profile_names() -> list[str]:
     return sorted(load_policy().profiles.keys())
+
+
+def profile_settings(profile_name: str) -> ProfileSettings:
+    schema = load_schema()
+    return schema.profiles.get(profile_name, ProfileSettings())
 
 
 def match_policy_rule(markdown_file: Path, rule: PolicyRule) -> bool:
@@ -265,11 +318,12 @@ def changelog_path_for(markdown_file: Path) -> Path:
 
 
 def bootstrap_optional_event(markdown_file: Path, event_name: str, reason: str, task_id: str, actor: str, scope: str, tags: list[str]) -> dict[str, object]:
+    project = load_project()
     return {
         "ts": now_iso(),
         "event": event_name,
-        "artifact_path": f"project/repository/{markdown_file.stem.lower()}",
-        "artifact_type": "bootstrap_doc",
+        "artifact_path": f"{project.root_bootstrap.artifact_prefix}/{markdown_file.stem.lower()}",
+        "artifact_type": project.root_bootstrap.artifact_type,
         "artifact_version": "",
         "artifact_revision": "",
         "source_path": relative_to_root(markdown_file),
@@ -322,54 +376,15 @@ def iter_markdown_files(scan_root: Path):
 
 
 def classify_layer_and_owner(scan_root: Path, rel: Path, artifact_path: str) -> tuple[str, str]:
+    project = load_project()
     normalized_artifact = artifact_path.replace("\\", "/")
-    rel_posix = rel.as_posix()
-    try:
-        root_name = scan_root.relative_to(REPO_ROOT).parts[0]
-    except Exception:
-        root_name = scan_root.name
-    if root_name == "docs":
-        if rel_posix.startswith("framework/plans/"):
-            return "framework_plan", "framework"
-        if rel_posix.startswith("framework/research/"):
-            return "framework_research", "framework"
-        if rel_posix.startswith("product/spec/"):
-            return "product_spec", "product"
-        if rel_posix.startswith("product/research/"):
-            return "product_research", "product"
-        if rel_posix == "product/index.md":
-            return "product_index", "product"
-        if rel_posix.startswith("process/"):
-            return "project_process", "project"
-        if rel_posix.startswith("project-memory/"):
-            return "project_memory", "project"
-    if root_name == "vida":
-        if rel_posix.startswith("config/instructions/"):
-            return "instruction_canon", "product"
-        if rel_posix.startswith("config/"):
-            return "executable_law", "product"
-    if rel_posix in {"README.md", "CONTRIBUTING.md", "VERSION-PLAN.md"}:
-        return "repository_doc", "project"
-    if normalized_artifact.startswith("framework/plans/"):
-        return "framework_plan", "framework"
-    if normalized_artifact.startswith("framework/research/"):
-        return "framework_research", "framework"
-    if normalized_artifact.startswith("product/spec/"):
-        return "product_spec", "product"
-    if normalized_artifact.startswith("product/research/"):
-        return "product_research", "product"
-    if normalized_artifact == "product/index":
-        return "product_index", "product"
-    if normalized_artifact.startswith("process/"):
-        return "project_process", "project"
-    if normalized_artifact.startswith("project-memory/"):
-        return "project_memory", "project"
-    if normalized_artifact.startswith("project/repository/"):
-        return "repository_doc", "project"
-    if normalized_artifact.startswith("config/instructions/"):
-        return "instruction_canon", "product"
-    if normalized_artifact.startswith("config/"):
-        return "executable_law", "product"
+    rel_posix = relative_to_root((scan_root / rel).resolve())
+    for rule in project.layer_owner_rules.get("by_relative_path", []):
+        if fnmatch.fnmatch(rel_posix, rule.pattern):
+            return rule.layer, rule.owner
+    for rule in project.layer_owner_rules.get("by_artifact_prefix", []):
+        if normalized_artifact.startswith(rule.pattern):
+            return rule.layer, rule.owner
     return "unknown", "unknown"
 
 
@@ -418,6 +433,7 @@ def build_record(scan_root: Path, file_path: Path) -> dict[str, object]:
 
 def validate_record(file_path: Path, record: dict[str, object]) -> list[str]:
     problems: list[str] = []
+    schema = load_schema()
     state = record["state"]
     if not state["has_footer"]:
         if not is_footer_optional(file_path):
@@ -431,6 +447,18 @@ def validate_record(file_path: Path, record: dict[str, object]) -> list[str]:
         validate_footer(footer)
     except Exception:
         problems.append("invalid_footer_schema")
+    kind = str(record.get("kind", ""))
+    if kind and kind not in schema.artifact_types:
+        problems.append(f"unknown_artifact_type:{kind}")
+    layer = str(record.get("layer", ""))
+    if layer and layer not in schema.layers:
+        problems.append(f"unknown_layer:{layer}")
+    owner = str(record.get("owner", ""))
+    if owner and owner not in schema.owners:
+        problems.append(f"unknown_owner:{owner}")
+    status = str(state.get("status", ""))
+    if status and status not in schema.statuses:
+        problems.append(f"unknown_status:{status}")
     if record.get("artifact") and not record.get("kind"):
         problems.append("missing_kind")
     if not state["has_changelog"]:
@@ -449,6 +477,35 @@ def collect_registry(scan_root: Path) -> list[dict[str, object]]:
     rows = [build_record(scan_root, path) for path in iter_markdown_files(scan_root)]
     rows.sort(key=lambda row: str(row.get("artifact", row["path"])))
     return rows
+
+
+def registry_rows_for(root: Path | None, profile: str) -> list[dict[str, object]]:
+    if profile:
+        rows = [build_record(scope_root, path) for scope_root, path in scan_targets(root, profile)]
+    else:
+        rows = collect_registry(root.resolve())
+    rows.sort(key=lambda row: str(row.get("artifact", row["path"])))
+    return rows
+
+
+def summary_payload(rows: list[dict[str, object]], root_label: str) -> dict[str, object]:
+    layer_counts = Counter(row.get("layer", "unknown") for row in rows)
+    owner_counts = Counter(row.get("owner", "unknown") for row in rows)
+    status_counts = Counter(row.get("state", {}).get("status", "missing") for row in rows)
+    totals = {
+        "root": root_label,
+        "files": len(rows),
+        "missing_footer": sum(not row.get("state", {}).get("has_footer", False) for row in rows),
+        "missing_changelog": sum(not row.get("state", {}).get("has_changelog", False) for row in rows),
+        "missing_description": sum(not row.get("state", {}).get("has_description", False) for row in rows),
+        "missing_purpose": sum(not row.get("state", {}).get("has_purpose", False) for row in rows),
+    }
+    return {
+        "totals": totals,
+        "layers": [{"layer": value, "files": count} for value, count in sorted(layer_counts.items())],
+        "owners": [{"owner": value, "files": count} for value, count in sorted(owner_counts.items())],
+        "statuses": [{"status": value, "files": count} for value, count in sorted(status_counts.items())],
+    }
 
 
 def materialize_registry_rows(rows: list[dict[str, object]], output_path: Path) -> None:
@@ -591,6 +648,59 @@ def resolve_markdown_scope(target: Path) -> list[Path]:
     return [path for path in iter_markdown_files(resolved)]
 
 
+def impact_rows_for_reference(value: str) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for file_path in iter_markdown_files(REPO_ROOT):
+        _, body, footer = load_markdown(file_path)
+        reasons: list[str] = []
+        if value and footer.get("artifact_path", "") == value:
+            reasons.append("artifact_path")
+        if value and value in body:
+            reasons.append("body_reference")
+        if value and value in json.dumps(footer):
+            reasons.append("footer_reference")
+        if reasons:
+            rows.append({
+                "path": relative_to_root(file_path),
+                "artifact": footer.get("artifact_path", ""),
+                "reasons": ",".join(sorted(set(reasons))),
+            })
+    rows.sort(key=lambda row: (row["path"], row["reasons"]))
+    return rows
+
+
+def build_reference_index() -> tuple[dict[str, list[dict[str, object]]], dict[str, list[dict[str, object]]]]:
+    artifact_index: dict[str, list[dict[str, object]]] = {}
+    path_index: dict[str, list[dict[str, object]]] = {}
+    for file_path in iter_markdown_files(REPO_ROOT):
+        _, body, footer = load_markdown(file_path)
+        rel_path = relative_to_root(file_path)
+        artifact = footer.get("artifact_path", "")
+        row = {"path": rel_path, "artifact": artifact}
+        if artifact:
+            artifact_index.setdefault(artifact, []).append({**row, "reasons": "artifact_path,footer_reference"})
+        path_index.setdefault(rel_path, []).append({**row, "reasons": "path"})
+        for link in extract_link_targets(file_path, body):
+            path_index.setdefault(str(link["resolved"]), []).append({**row, "reasons": "markdown_link"})
+        for key in ("projection_ref", "contract_ref", "template_ref", "parent_definition_ref", "artifact_path"):
+            value = footer.get(key, "")
+            if value:
+                artifact_index.setdefault(value, []).append({**row, "reasons": f"footer_ref:{key}"})
+    return artifact_index, path_index
+
+
+def infer_reference_value(markdown_file: Path | None, artifact_path: str) -> tuple[str, str]:
+    if artifact_path:
+        return artifact_path, "artifact"
+    if markdown_file is None:
+        raise typer.BadParameter("either --file or --artifact is required")
+    path = markdown_file.resolve()
+    if not path.exists():
+        raise typer.BadParameter(f"markdown file not found: {path}")
+    _, _, footer = load_markdown(path)
+    return footer.get("artifact_path", relative_to_root(path)), "file"
+
+
 def apply_finalize_updates(footer: dict[str, str], status: str, artifact_version: str, artifact_revision: str, set_values: list[str]) -> tuple[dict[str, str], list[str]]:
     updated = dict(footer)
     applied_updates: list[str] = []
@@ -643,30 +753,56 @@ def cmd_summary(
     set_command("summary")
     rows = [build_record(scope_root, path) for scope_root, path in scan_targets(root, profile)]
     root_label = profile or str(root.resolve())
-    layer_counts = Counter(row.get("layer", "unknown") for row in rows)
-    owner_counts = Counter(row.get("owner", "unknown") for row in rows)
-    status_counts = Counter(row.get("state", {}).get("status", "missing") for row in rows)
-    totals = {
-        "root": root_label,
-        "files": len(rows),
-        "missing_footer": sum(not row.get("state", {}).get("has_footer", False) for row in rows),
-        "missing_changelog": sum(not row.get("state", {}).get("has_changelog", False) for row in rows),
-        "missing_description": sum(not row.get("state", {}).get("has_description", False) for row in rows),
-        "missing_purpose": sum(not row.get("state", {}).get("has_purpose", False) for row in rows),
-    }
+    payload = summary_payload(rows, root_label)
     if output_format == "toon":
         emit_toon_sections({
             "context": {"command": "summary", "root": root_label},
-            "totals": totals,
-            "layers": [{"layer": value, "files": count} for value, count in sorted(layer_counts.items())],
-            "owners": [{"owner": value, "files": count} for value, count in sorted(owner_counts.items())],
-            "statuses": [{"status": value, "files": count} for value, count in sorted(status_counts.items())],
+            "totals": payload["totals"],
+            "layers": payload["layers"],
+            "owners": payload["owners"],
+            "statuses": payload["statuses"],
         })
     else:
-        typer.echo(json.dumps({"summary": "totals", **totals}, ensure_ascii=True, separators=(",", ":")))
-        for label, counts, key in (("layer", layer_counts, "layer"), ("owner", owner_counts, "owner"), ("status", status_counts, "status")):
-            for value, count in sorted(counts.items()):
-                typer.echo(json.dumps({"summary": label, key: value, "files": count}, ensure_ascii=True, separators=(",", ":")))
+        typer.echo(json.dumps({"summary": "totals", **payload["totals"]}, ensure_ascii=True, separators=(",", ":")))
+        for label, key in (("layer", "layer"), ("owner", "owner"), ("status", "status")):
+            for row in payload[f"{label}s" if label != "status" else "statuses"]:
+                typer.echo(json.dumps({"summary": label, key: row[key], "files": row["files"]}, ensure_ascii=True, separators=(",", ":")))
+    complete_status(0)
+
+
+@app.command("overview")
+def cmd_overview(
+    profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "active-canon",
+    show_warnings: Annotated[bool, typer.Option(help="Include doctor warnings in the overview.")] = True,
+) -> None:
+    set_command("overview")
+    rows = [build_record(scope_root, path) for scope_root, path in scan_targets(None, profile)]
+    payload = summary_payload(rows, profile)
+    issue_rows: list[dict[str, object]] = []
+    targets = scan_targets(None, profile)
+    for scope_root, file_path in targets:
+        record = build_record(scope_root, file_path)
+        _, body, footer = load_markdown(file_path)
+        problems = validate_record(file_path, record) + validate_footer_consistency(file_path, footer)
+        warnings = []
+        if is_footer_optional(file_path):
+            warnings.append("footer_optional_policy")
+        if is_changelog_only(file_path):
+            warnings.append("changelog_only_policy")
+        if is_mutation_disabled(file_path):
+            warnings.append("mutation_disabled_policy")
+        if problems:
+            issue_rows.append({"severity": "error", "path": relative_to_root(file_path), "issues": ",".join(sorted(set(problems)))})
+        elif show_warnings and warnings:
+            issue_rows.append({"severity": "warning", "path": relative_to_root(file_path), "issues": ",".join(sorted(set(warnings)))})
+    emit_toon_sections({
+        "context": {"command": "overview", "profile": profile},
+        "totals": payload["totals"],
+        "layers": payload["layers"],
+        "owners": payload["owners"],
+        "statuses": payload["statuses"],
+        "issues": issue_rows,
+    })
     complete_status(0)
 
 
@@ -676,8 +812,7 @@ def cmd_registry(
     profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "",
 ) -> None:
     set_command("registry")
-    rows = [build_record(scope_root, path) for scope_root, path in scan_targets(root, profile)] if profile else collect_registry(root.resolve())
-    rows.sort(key=lambda row: str(row.get("artifact", row["path"])))
+    rows = registry_rows_for(root, profile)
     for row in rows:
         typer.echo(json.dumps(row, ensure_ascii=True, separators=(",", ":")))
     complete_status(0)
@@ -687,13 +822,14 @@ def cmd_registry(
 def cmd_registry_write(
     root: Annotated[Path | None, typer.Option(help="Root directory to scan.")] = None,
     profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "",
-    output: Annotated[Path, typer.Option(help="Output JSONL path.")] = REPO_ROOT / "_temp" / "docsys-registry.jsonl",
+    output: Annotated[Path, typer.Option(help="Output JSONL path.")] = REPO_ROOT / "_temp" / "codex-registry.jsonl",
+    canonical: Annotated[bool, typer.Option(help="Write to the canonical registry path from schema.")] = False,
 ) -> None:
     set_command("registry-write")
-    rows = [build_record(scope_root, path) for scope_root, path in scan_targets(root, profile)] if profile else collect_registry(root.resolve())
-    rows.sort(key=lambda row: str(row.get("artifact", row["path"])))
-    materialize_registry_rows(rows, output.resolve())
-    set_result_note(f"wrote registry for {profile or relative_to_root(root.resolve())} to {relative_to_root(output.resolve())}")
+    rows = registry_rows_for(root, profile)
+    final_output = (REPO_ROOT / load_schema().canonical_registry.path).resolve() if canonical else output.resolve()
+    materialize_registry_rows(rows, final_output)
+    set_result_note(f"wrote registry for {profile or relative_to_root(root.resolve())} to {relative_to_root(final_output)}")
     complete_status(0)
 
 
@@ -1048,6 +1184,111 @@ def cmd_deps(markdown_file: Path,
     complete_status(0)
 
 
+@app.command("deps-map")
+def cmd_deps_map(path: Path,
+                 output_format: Annotated[str, typer.Option("--format", help="Output format: toon or jsonl.")] = "toon") -> None:
+    set_command("deps-map")
+    target = path.resolve()
+    files = resolve_markdown_scope(target)
+    rows: list[dict[str, object]] = []
+    for file_path in files:
+        _, body, footer = load_markdown(file_path)
+        artifact = footer.get("artifact_path", "")
+        for link in extract_link_targets(file_path, body):
+            rows.append({
+                "path": relative_to_root(file_path),
+                "artifact": artifact,
+                "edge_type": "markdown_link",
+                "target": link["target"],
+                "resolved": link["resolved"],
+                "exists": link["exists"],
+            })
+        for key in ("projection_ref", "contract_ref", "template_ref", "parent_definition_ref"):
+            if footer.get(key):
+                rows.append({
+                    "path": relative_to_root(file_path),
+                    "artifact": artifact,
+                    "edge_type": key,
+                    "target": footer[key],
+                    "resolved": footer[key],
+                    "exists": True,
+                })
+    if output_format == "toon":
+        emit_toon_sections({
+            "context": {"command": "deps-map", "path": relative_to_root(target)},
+            "edges": rows,
+        })
+    else:
+        for row in rows:
+            typer.echo(json.dumps(row, ensure_ascii=True, separators=(",", ":")))
+    complete_status(0)
+
+
+@app.command("artifact-impact")
+def cmd_artifact_impact(markdown_file: Annotated[Path | None, typer.Option("--file", help="Markdown file whose artifact impact should be traced.")] = None,
+                        artifact: Annotated[str, typer.Option(help="Artifact path to trace.")] = "",
+                        output_format: Annotated[str, typer.Option("--format", help="Output format: toon or jsonl.")] = "toon") -> None:
+    set_command("artifact-impact")
+    value, source = infer_reference_value(markdown_file, artifact)
+    artifact_index, path_index = build_reference_index()
+    rows = artifact_index.get(value, []) + path_index.get(value, [])
+    deduped: dict[tuple[str, str], dict[str, object]] = {}
+    for row in rows:
+        key = (str(row["path"]), str(row["reasons"]))
+        deduped[key] = row
+    rows = sorted(deduped.values(), key=lambda row: (str(row["path"]), str(row["reasons"])))
+    if output_format == "toon":
+        emit_toon_sections({
+            "context": {"command": "artifact-impact", "source": source, "artifact": value},
+            "impacts": rows,
+        })
+    else:
+        for row in rows:
+            typer.echo(json.dumps(row, ensure_ascii=True, separators=(",", ":")))
+    complete_status(0)
+
+
+@app.command("task-impact")
+def cmd_task_impact(root: Annotated[Path | None, typer.Option(help="Root directory to scan.")] = None,
+                    profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "",
+                    task_id: Annotated[str, typer.Option(help="Task id to trace.")] = "",
+                    output_format: Annotated[str, typer.Option("--format", help="Output format: toon or jsonl.")] = "toon") -> None:
+    set_command("task-impact")
+    touched_artifacts: set[str] = set()
+    touched_paths: set[str] = set()
+    for scope_root, markdown_file in scan_targets(root, profile):
+        try:
+            rows = read_changelog_rows(changelog_path_for(markdown_file))
+        except Exception:
+            continue
+        for row in rows:
+            if str(row.get("task_id", "")).strip() != task_id:
+                continue
+            touched_paths.add(relative_to_root(markdown_file))
+            if row.get("artifact_path"):
+                touched_artifacts.add(str(row["artifact_path"]))
+    artifact_index, _ = build_reference_index()
+    impact_rows: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    for artifact_value in sorted(touched_artifacts):
+        for row in artifact_index.get(artifact_value, []):
+            key = (artifact_value, str(row["path"]))
+            if row["path"] in touched_paths or key in seen:
+                continue
+            seen.add(key)
+            impact_rows.append({"source_artifact": artifact_value, **row})
+    if output_format == "toon":
+        emit_toon_sections({
+            "context": {"command": "task-impact", "task_id": task_id, "root": profile or (str(root.resolve()) if root else "")},
+            "touched": [{"path": path} for path in sorted(touched_paths)],
+            "indirect_impacts": impact_rows,
+        })
+    else:
+        for row in impact_rows:
+            typer.echo(json.dumps(row, ensure_ascii=True, separators=(",", ":")))
+    complete_status(0)
+
+
 @app.command("links")
 def cmd_links(path: Path,
               output_format: Annotated[str, typer.Option("--format", help="Output format: toon or jsonl.")] = "toon") -> None:
@@ -1168,7 +1409,8 @@ def cmd_check(root: Annotated[Path | None, typer.Option(help="Root directory for
 def cmd_doctor(root: Annotated[Path | None, typer.Option(help="Root directory to scan.")] = None,
                profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "",
                show_warnings: Annotated[bool, typer.Option(help="Also emit policy-warning rows for exception-based files.")] = False,
-               output_format: Annotated[str, typer.Option("--format", help="Output format: toon or jsonl for emitted issues.")] = "jsonl") -> None:
+               output_format: Annotated[str, typer.Option("--format", help="Output format: toon or jsonl for emitted issues.")] = "jsonl",
+               fail_on_warnings: Annotated[bool, typer.Option(help="Treat warnings as failures.")] = False) -> None:
     set_command("doctor")
     had_error = False
     warning_count = 0
@@ -1248,9 +1490,10 @@ def cmd_doctor(root: Annotated[Path | None, typer.Option(help="Root directory to
         else:
             for row in issue_rows:
                 typer.echo(json.dumps(row, ensure_ascii=True, separators=(",", ":")))
+    profile_fail = bool(profile and profile_settings(profile).warnings_fail)
     if had_error or (show_warnings and warning_count):
         set_result_note(f"errors={error_count}, warnings={warning_count}")
-    complete_status(1 if had_error else 0)
+    complete_status(1 if had_error or ((fail_on_warnings or profile_fail) and warning_count > 0) else 0)
 
 
 def main() -> int:

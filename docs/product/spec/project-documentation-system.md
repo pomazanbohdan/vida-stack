@@ -77,10 +77,13 @@ Required fields:
 
 1. Project initialization must begin with an automatic latest-state read of active project documentation and instruction canon before broad manual inspection.
 2. The canonical documentation system must provide:
+   - one-command overview reads for current document health and totals,
    - current catalog/status summaries,
    - materialized registry snapshots when downstream automation needs a frozen inventory,
+   - a canonical registry write path when automation requires one shared latest inventory file,
    - per-artifact history reads,
    - task-scoped change aggregation,
+   - artifact-impact and task-impact tracing for change radius analysis,
    - link inventories and lawful link migration,
    - consistency checks over metadata, sidecars, and references.
 3. Tool names may evolve, but this initialization capability is mandatory for the active architecture.

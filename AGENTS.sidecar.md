@@ -25,6 +25,23 @@ Purpose: provide current project/runtime context and canonical map pointers for 
 3. This target task mechanism is not yet working as the intended default operational path in the current transitional state.
 4. Until it is explicitly brought online and re-authorized, ignore instructions that assume the canonical TaskFlow task mechanism is already functioning as the default task path.
 
+## Transitional Information-System Note
+
+1. The canonical VIDA 1 documentation, instruction, and inventory architecture is defined by product specs and `vida/config/**`.
+2. The current repository tooling `codex-v0/codex.py` is the transitional `0.2.0` implementation substrate for that information-system layer.
+3. Treat `codex` in the same architectural posture that `vida-v0/**` occupies for the runtime layer:
+   - useful and active now,
+   - implementation-facing,
+   - not the authority that defines the final VIDA 1 architecture.
+4. When product specs and current `codex` behavior diverge, the product spec wins and `codex` must be corrected.
+5. The development goal for `codex` is dual:
+   - use the `codex` system to operate the project itself,
+   - evolve `codex` layer by layer according to the canonical VIDA specification.
+6. `codex` development must follow the layered closure rule from the product spec:
+   - each completed layer must be independently useful,
+   - each next layer may deepen only what lower layers already close,
+   - do not depend on future-layer capability to justify current-layer behavior.
+
 ## Canonical Maps
 
 1. Framework/documentation architecture map:
@@ -57,23 +74,31 @@ Purpose: provide current project/runtime context and canonical map pointers for 
 
 Read/status commands:
 
-1. `summary --root <dir> [--format toon|jsonl]`
+1. `overview [--profile <name>]`
+   - one-command documentation state overview with totals and current issues/warnings
+2. `summary --root <dir> [--format toon|jsonl]`
    - compact totals by layer, owner, and status
-2. `registry --root <dir>`
+3. `registry --root <dir>`
    - one machine-readable row per markdown artifact
-3. `registry-write --root <dir> [--output <file>]`
-   - materialize one registry snapshot for later automation or review
-4. `scan --root <dir> [--missing-only]`
+4. `registry-write --root <dir> [--output <file>] [--canonical]`
+   - materialize one registry snapshot for later automation or write the canonical registry path
+5. `scan --root <dir> [--missing-only]`
    - per-file latest-state rows
-5. `changelog <file> [--limit N] [--newest-first] [--format toon|jsonl]`
+6. `changelog <file> [--limit N] [--newest-first] [--format toon|jsonl]`
    - one artifact history
-6. `changelog-task --root <dir> <task_id> [--limit N] [--newest-first] [--format toon|jsonl]`
+7. `changelog-task --root <dir> <task_id> [--limit N] [--newest-first] [--format toon|jsonl]`
    - all matching history rows for one task id
-7. `task-summary --root <dir> <task_id> [--format toon|jsonl]`
+8. `task-summary --root <dir> <task_id> [--format toon|jsonl]`
    - aggregate task-level history summary
-8. `deps <file> [--format toon|jsonl]`
+9. `deps <file> [--format toon|jsonl]`
    - direct footer refs, markdown links, and reverse mentions
-9. `links <file-or-dir> [--format toon|jsonl]`
+10. `deps-map <file-or-dir> [--format toon|jsonl]`
+   - graph-style dependency edge inventory for one file or a whole scope
+11. `artifact-impact [--file <file> | --artifact <artifact_path>] [--format toon|jsonl]`
+   - show all direct document impacts for one artifact identity
+12. `task-impact --root <dir> --task-id <id> [--format toon|jsonl]`
+   - show indirect documentation impacts around artifacts touched by one task
+13. `links <file-or-dir> [--format toon|jsonl]`
    - markdown-link inventory for one file or a whole scope
 
 Mutation/finalization commands:
@@ -95,7 +120,7 @@ Validation commands:
 
 1. `check --root <dir> [files...]`
    - footer and sidecar health checks
-2. `doctor --root <dir> [--show-warnings] [--format toon|jsonl]`
+2. `doctor --root <dir> [--show-warnings] [--format toon|jsonl] [--fail-on-warnings]`
    - stronger consistency checks for metadata, changelogs, links, and policy exceptions
 
 Operational rule:

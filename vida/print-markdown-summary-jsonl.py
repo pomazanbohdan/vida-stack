@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Thin wrapper for docsys summary over vida/."""
+"""Thin wrapper for codex summary over vida/."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 
 
 def main() -> int:
-    script = Path(__file__).resolve().parents[1] / "scripts" / "docsys" / "vida_docsys.py"
+    script = Path(__file__).resolve().parents[1] / "codex-v0" / "codex.py"
     sys.argv = [str(script), "summary", "--root", str(Path(__file__).resolve().parent), *sys.argv[1:]]
     runpy.run_path(str(script), run_name="__main__")
     return 0

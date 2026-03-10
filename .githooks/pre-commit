@@ -10,4 +10,4 @@ if [ "${#staged_md[@]}" -eq 0 ]; then
   exit 0
 fi
 
-python3 scripts/docsys/vida_docsys.py check --root "$repo_root" "${staged_md[@]}"
+python3 codex-v0/codex.py check --root "$repo_root" "${staged_md[@]}"

@@ -49,21 +49,23 @@ Rule:
 
 ## 1.1 Docsys Operational Bootstrap
 
-The canonical repository doc/instruction tooling is `scripts/docsys/vida_docsys.py`.
+The canonical repository doc/instruction tooling is `codex-v0/codex.py`.
 
 Default status reads:
 
-1. `python3 scripts/docsys/vida_docsys.py summary --root docs`
-2. `python3 scripts/docsys/vida_docsys.py summary --root vida`
-3. `python3 scripts/docsys/vida_docsys.py registry --root vida/config/instructions`
-4. `python3 scripts/docsys/vida_docsys.py registry-write --root vida/config/instructions --output _temp/docsys-instructions-registry.jsonl`
+1. `python3 codex-v0/codex.py overview --profile active-canon`
+2. `python3 codex-v0/codex.py summary --root docs`
+3. `python3 codex-v0/codex.py summary --root vida`
+4. `python3 codex-v0/codex.py registry --root vida/config/instructions`
+5. `python3 codex-v0/codex.py registry-write --profile active-canon --canonical`
 
 Default targeted reads:
 
 1. `scan` for per-file latest state,
 2. `changelog` for one artifact history,
 3. `changelog-task` and `task-summary` for task-scoped history,
-4. `links` for current markdown link inventories.
+4. `artifact-impact` and `task-impact` for change-radius tracing,
+5. `links` and `deps-map` for current markdown/dependency inventories.
 
 Default maintenance/mutation operations:
 
@@ -76,9 +78,9 @@ Default maintenance/mutation operations:
 
 Operational rule:
 
-1. use docsys first for catalog, status, changelog, and link-migration work,
-2. prefer automated docsys mutation paths over ad hoc footer/changelog edits,
-3. docsys mutation commands should stay quiet on success and print only issues on validation failure.
+1. use codex first for catalog, status, changelog, and link-migration work,
+2. prefer automated codex mutation paths over ad hoc footer/changelog edits,
+3. codex mutation commands should stay quiet on success and print only issues on validation failure.
 
 Document maturity rule:
 
@@ -370,11 +372,11 @@ Conflict rule:
 -----
 artifact_path: config/system-maps/framework.map
 artifact_type: system_map
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps.framework-map-protocol.md
-created_at: 2026-03-06T22:42:30+02:00
-updated_at: 2026-03-10T01:41:07+02:00
+created_at: '2026-03-06T22:42:30+02:00'
+updated_at: '2026-03-10T02:43:18+02:00'
 changelog_ref: system-maps.framework-map-protocol.changelog.jsonl
