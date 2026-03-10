@@ -132,3 +132,15 @@ Operational rule:
 5. command result status is printed at command end with leading emoji:
    - `✅ OK`
    - `❌ ERROR`
+
+-----
+artifact_path: project/repository/agents.sidecar
+artifact_type: bootstrap_doc
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
+status: canonical
+source_path: AGENTS.sidecar.md
+created_at: '2026-03-10T02:13:40+02:00'
+updated_at: '2026-03-10T03:00:04+02:00'
+changelog_ref: AGENTS.sidecar.changelog.jsonl

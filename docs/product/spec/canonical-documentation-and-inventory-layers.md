@@ -4,7 +4,7 @@ Status: active product law
 
 Purpose: define the reference VIDA 1 layering model for canonical documentation, inventory, validation, mutation, relations, operator use, and runtime-readiness without coupling any layer to capabilities that belong only to a later layer.
 
-## 0. Layer Status Table
+## 0. Layer Status Matrix
 
 Status markers:
 
@@ -12,16 +12,23 @@ Status markers:
 2. `🟡` partially implemented or planned next, but not yet closed as a full layer
 3. `⚪` not yet implemented
 
-| Layer | Status | Core value | Must not depend on |
-|---|---|---|---|
-| Canonical Schema | ✅ | one canonical vocabulary for artifact identity, status, compatibility, bundle/projection terms, and metadata | inventory generation, mutation workflows, runtime bundle execution |
-| Canonical Inventory | 🟡 | one authoritative inventory and canonical registry path for active canon | impact analysis, runtime migration logic, bundle execution |
-| Canonical Validation | 🟡 | fail-closed consistency checks and strict quality gates | graph inference, runtime startup execution, migration state machines |
-| Canonical Mutation | ✅ | lawful metadata/changelog/link/file mutation without manual drift | relation graphs, runtime compatibility resolution, migration authorization |
-| Canonical Relations | 🟡 | dependency and impact visibility over canonical artifacts | runtime bundle materialization, live migration/boot execution |
-| Canonical Operator | ✅ | low-call operational views for state, history, and issues | runtime latest-resolution execution, boot authorization |
-| Canonical Runtime Readiness | ⚪ | explicit readiness verdict for runtime consumption | actual runtime execution or live route progression |
-| Canonical Runtime Consumption | ⚪ | VIDA runtime directly consumes canonical inventory and readiness | none; this is the final layer |
+| Category | Layer 1 | Layer 2 | Layer 3 | Layer 4 | Layer 5 | Layer 6 | Layer 7 | Layer 8 |
+|---|---|---|---|---|---|---|---|---|
+| Layer name | Canonical Schema | Canonical Inventory | Canonical Validation | Canonical Mutation | Canonical Relations | Canonical Operator | Canonical Runtime Readiness | Canonical Runtime Consumption |
+| Status | ✅ | 🟡 | ✅ | ✅ | 🟡 | ✅ | ⚪ | ⚪ |
+| Core value | one canonical vocabulary for identity, status, compatibility, bundle/projection terms, and metadata | one authoritative inventory and canonical registry path for active canon | fail-closed consistency checks and strict quality gates with explicit bootstrap carrier rules | lawful metadata, changelog, link, and file mutation without manual drift | dependency and impact visibility over canonical artifacts | low-call operational views for state, history, and issues | explicit readiness verdict for runtime consumption | VIDA runtime directly consumes canonical inventory and readiness |
+| Required implementation | schema vocabularies, metadata contract, changelog event contract | registry model, canonical registry artifact, coverage rules | check, doctor, strict profiles, consistency gates | touch, finalize, init, move, rename, link migration | deps, deps-map, artifact-impact, task-impact | overview, compact operator surfaces, low-call workflows | readiness checks for tuples, projections, bundles, compatibility | runtime consumption of registry, readiness, and canonical bundles |
+| Builds on | none | Layer 1 | Layers 1-2 | Layers 1-3 | Layers 2-3 | Layers 2-5 | Layers 1-6 | Layers 1-7 |
+| Must not depend on | inventory generation, mutation workflows, runtime bundle execution | impact analysis, runtime migration logic, bundle execution | graph inference, runtime startup execution, migration state machines | relation graphs, runtime compatibility resolution, migration authorization | runtime bundle materialization, live migration/boot execution | runtime latest-resolution execution, boot authorization | actual runtime execution or live route progression | none; final layer |
+| Standalone value | one language for all canonical artifacts | one complete map of current canonical artifacts | one trustworthy quality gate | one lawful authoring and mutation system | one change-radius and dependency analysis system | one low-call operator surface | one runtime-readiness gate | one live runtime consumption path |
+| Detail section | [§4](#4-layer-1-canonical-schema) | [§5](#5-layer-2-canonical-inventory) | [§6](#6-layer-3-canonical-validation) | [§7](#7-layer-4-canonical-mutation) | [§8](#8-layer-5-canonical-relations) | [§9](#9-layer-6-canonical-operator) | [§10](#10-layer-7-canonical-runtime-readiness) | [§11](#11-layer-8-canonical-runtime-consumption) |
+
+Matrix reading rule:
+
+1. read the matrix left-to-right to see the capability progression,
+2. read any one column top-to-bottom to understand one layer completely,
+3. use the `Detail section` row to jump into the full normative definition below,
+4. treat the lower sections as the expanded law for the abbreviated matrix cells above.
 
 ## 1. Scope
 
@@ -211,7 +218,8 @@ Layer 3 must not depend on:
 
 1. active-canon validation succeeds in normal mode,
 2. strict mode is usable as a real release-quality gate,
-3. exceptions are policy-defined rather than ad hoc.
+3. exceptions are policy-defined rather than ad hoc,
+4. bootstrap routing exceptions are explicit canonical carrier rules rather than hidden tool-only drift.
 
 ### 6.7 Standalone Value
 
@@ -263,6 +271,28 @@ Layer 4 must not depend on:
 ### 7.7 Standalone Value
 
 Layer 4 gives VIDA an operational authoring system rather than manual footer/changelog handling.
+
+### 7.8 Root Bootstrap Normalization Rule
+
+The repository root bootstrap surface must use one explicit canonical mode rather than a mixed exception model.
+
+Canonical root-bootstrap rule:
+
+1. `AGENTS.md` is the bootstrap carrier and routing contract,
+2. `AGENTS.sidecar.md` is the canonical metadata-bearing sidecar for bootstrap context,
+3. repository root documents that are not bootstrap carriers must use the normal metadata and changelog contract.
+
+Validation and mutation rule:
+
+1. bootstrap carrier exceptions must be explicit, narrow, and named,
+2. carrier exceptions must not silently widen to unrelated root documents,
+3. canonical metadata and mutation behavior for non-carrier root documents must match the rest of the active canon.
+
+Completion rule:
+
+1. root bootstrap routing is handled through the carrier-plus-sidecar model,
+2. non-carrier root documents are governed by the standard metadata contract,
+3. no mixed root-level transitional exception mode remains.
 
 ## 8. Layer 5: Canonical Relations
 
@@ -475,5 +505,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/canonical-documentation-and-inventory-layers.md
 created_at: '2026-03-10T03:25:00+02:00'
-updated_at: '2026-03-10T02:37:11+02:00'
+updated_at: '2026-03-10T03:00:04+02:00'
 changelog_ref: canonical-documentation-and-inventory-layers.changelog.jsonl

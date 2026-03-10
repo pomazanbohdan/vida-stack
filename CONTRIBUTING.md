@@ -1,5 +1,7 @@
 # Contributing
 
+Purpose: define the current contribution posture and collaboration boundaries for the repository.
+
 Vida Stack is still in active architectural formation.
 
 ## Current Contribution Policy
@@ -35,3 +37,15 @@ When the project matures enough to accept external code contributions, Vida Stac
 3. a clearer distinction between open core and future commercial/proprietary layers.
 
 Until then, please use issues and discussions for collaboration.
+
+-----
+artifact_path: project/repository/contributing
+artifact_type: repository_doc
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
+status: canonical
+source_path: CONTRIBUTING.md
+created_at: '2026-03-08T02:15:22+02:00'
+updated_at: '2026-03-10T03:00:04+02:00'
+changelog_ref: CONTRIBUTING.changelog.jsonl

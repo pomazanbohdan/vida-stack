@@ -235,3 +235,15 @@ Vida Stack should evolve in this order:
 3. productize the binary,
 4. daemonize the runtime,
 5. open the extension ecosystem.
+
+-----
+artifact_path: project/repository/version-plan
+artifact_type: repository_doc
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
+status: canonical
+source_path: VERSION-PLAN.md
+created_at: '2026-03-10T00:30:00+02:00'
+updated_at: '2026-03-10T03:00:04+02:00'
+changelog_ref: VERSION-PLAN.changelog.jsonl

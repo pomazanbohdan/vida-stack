@@ -6,6 +6,8 @@
 
 > **Vida Stack** is an agentic engineering framework for building a highly autonomous product-development orchestrator. Developed with the help of OpenAI Codex, it serves as the active implementation and orchestration environment for the framework's real-world evolution.
 
+Purpose: explain the repository-level product narrative, current direction, and architectural intent for Vida Stack.
+
 Its purpose is not to be *another* task tracker or prompt collection. The goal is to evolve a real **control plane for agent-driven product engineering**: planning, execution, verification, documentation sync, telemetry, learning loops, and multi-agent orchestration working as one coherent system.
 
 Core licensing is provided under **MPL-2.0**. See [LICENSE](LICENSE).
@@ -735,3 +737,15 @@ The future standalone repository should allow people to contribute in areas such
 ## ⭐ North Star
 
 Build a complete, high-integrity, self-hostable product-development control plane that proves itself on real work, productizes itself into a local binary, then grows into a daemonized and extensible ecosystem without losing deterministic runtime law.
+
+-----
+artifact_path: project/repository/readme
+artifact_type: repository_doc
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
+status: canonical
+source_path: README.md
+created_at: '2026-03-10T01:41:07+02:00'
+updated_at: '2026-03-10T03:00:04+02:00'
+changelog_ref: README.changelog.jsonl

@@ -1,16 +1,16 @@
 schema_version: 1
 footer_optional:
-  - scope: repo_root
-    glob: "*.md"
-    reason: root bootstrap markdown is a transitional metadata exception until VIDA 1.0.0
+  - scope: filename
+    glob: "AGENTS.md"
+    reason: AGENTS.md is the canonical bootstrap carrier; metadata lives in AGENTS.sidecar.md and AGENTS.changelog.jsonl
 changelog_only:
-  - scope: repo_root
-    glob: "*.md"
-    reason: root bootstrap markdown uses changelog-only mutation during the pre-1.0.0 transition
+  - scope: filename
+    glob: "AGENTS.md"
+    reason: AGENTS.md is the canonical bootstrap carrier and uses changelog-only mutation
 mutation_disabled:
-  - scope: repo_root
-    glob: "*.md"
-    reason: root bootstrap markdown body mutation is disabled through codex during the pre-1.0.0 transition
+  - scope: filename
+    glob: "AGENTS.md"
+    reason: AGENTS.md bootstrap body mutation is disabled through codex; mutate AGENTS.sidecar.md for canonical metadata and project context
 scan_ignored:
   - scope: relative_path
     glob: ".agents/**"
