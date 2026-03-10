@@ -57,7 +57,7 @@ Purpose: provide current project/runtime context and canonical map pointers for 
 
 Read/status commands:
 
-1. `summary --root <dir>`
+1. `summary --root <dir> [--format toon|jsonl]`
    - compact totals by layer, owner, and status
 2. `registry --root <dir>`
    - one machine-readable row per markdown artifact
@@ -65,15 +65,15 @@ Read/status commands:
    - materialize one registry snapshot for later automation or review
 4. `scan --root <dir> [--missing-only]`
    - per-file latest-state rows
-5. `changelog <file> [--limit N] [--newest-first]`
+5. `changelog <file> [--limit N] [--newest-first] [--format toon|jsonl]`
    - one artifact history
-6. `changelog-task --root <dir> <task_id> [--limit N] [--newest-first]`
+6. `changelog-task --root <dir> <task_id> [--limit N] [--newest-first] [--format toon|jsonl]`
    - all matching history rows for one task id
-7. `task-summary --root <dir> <task_id>`
+7. `task-summary --root <dir> <task_id> [--format toon|jsonl]`
    - aggregate task-level history summary
-8. `deps <file>`
+8. `deps <file> [--format toon|jsonl]`
    - direct footer refs, markdown links, and reverse mentions
-9. `links <file-or-dir>`
+9. `links <file-or-dir> [--format toon|jsonl]`
    - markdown-link inventory for one file or a whole scope
 
 Mutation/finalization commands:
@@ -102,7 +102,8 @@ Operational rule:
 
 1. if one documentation change needs multiple diff operations, perform the diff edits first and run exactly one `finalize-edit` afterward,
 2. prefer one changelog entry per logical document edit batch, not one entry per low-level diff step,
-3. `stdout` remains machine-readable `jsonl` for data commands,
-4. command result status is printed at command end with leading emoji:
+3. history and human-facing map commands default to `toon`; use `--format jsonl` when machine-readable output is needed,
+4. machine-oriented plumbing commands such as `scan`, `registry`, `registry-write`, and `check` stay `jsonl`-first,
+5. command result status is printed at command end with leading emoji:
    - `✅ OK`
    - `❌ ERROR`
