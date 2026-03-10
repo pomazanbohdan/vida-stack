@@ -64,10 +64,8 @@ Default documentation orientation path:
 1. `python3 codex-v0/codex.py overview --profile active-canon`
 2. `python3 codex-v0/codex.py layer-status --layer <N>`
 3. targeted reads of the canonical documents being changed
-4. `python3 codex-v0/codex.py fastcheck --root <dir> [files...]`
-5. `python3 codex-v0/codex.py check --root <dir> [files...]`
-6. `python3 codex-v0/codex.py doctor --profile active-canon-strict`
-7. `python3 codex-v0/codex.py readiness-check --profile active-canon`
+4. `python3 codex-v0/codex.py proofcheck --profile active-canon-strict`
+5. targeted deep reads only when the proof surface reports a blocker
 
 Use richer history or status views only when needed:
 
@@ -79,7 +77,9 @@ Use richer history or status views only when needed:
 6. `artifact-impact`
 7. `task-impact`
 8. `activation-check`
-9. `readiness-check`
+9. `protocol-coverage-check`
+10. `readiness-check`
+11. `readiness-write`
 
 ## Lawful Mutation Path
 
@@ -110,10 +110,12 @@ Before closure of documentation work:
 
 1. run `check` on the changed scope or changed files,
 2. run `activation-check` when the change touches a canonical protocol, protocol index row, lane-entry routing, or activation wiring,
-3. run `readiness-check --profile active-canon` when the change touches readiness law, projection parity, canonical bundles, compatibility classes, or boot-gate surfaces,
-4. run `doctor --profile active-canon-strict` when the change affects canonical docs or maps,
-5. treat validation failure as blocking,
-6. keep success output quiet and failure output explicit.
+3. run `protocol-coverage-check --profile active-canon` when the change touches canonical protocol inventory, protocol index rows, or protocol-bearing instruction artifacts,
+4. run `readiness-check --profile active-canon` when the change touches readiness law, projection parity, canonical bundles, compatibility classes, or boot-gate surfaces,
+5. run `doctor --profile active-canon-strict` when the change affects canonical docs or maps,
+6. prefer `proofcheck --profile active-canon-strict` as the one-command closure proof when the changed scope is entirely within active canon,
+7. treat validation failure as blocking,
+8. keep success output quiet and failure output explicit.
 
 ## Protocol Activation Verification Rule
 
@@ -125,6 +127,7 @@ Before closure of documentation work:
 3. When documentation work changes a canonical protocol or its routing/index wiring, verify the activation rule in the same work cycle.
 4. If a documentation-context protocol lacks a valid activation binding, treat that as a bounded green-layer gap and correct it immediately when safe.
 5. Use `python3 codex-v0/codex.py activation-check --root <dir> [files...]` as the bounded operational proof for activation coverage during documentation work.
+6. Use `python3 codex-v0/codex.py protocol-coverage-check --root <dir> [files...]` as the bounded operational proof that canonical protocol-bearing artifacts are present in the protocol index and still have valid activation coverage.
 
 ## Immediate Gap Correction Rule
 
@@ -158,8 +161,10 @@ Documentation work is closed only when:
 2. metadata and sidecar lineage are synchronized,
 3. `check` passes,
 4. `activation-check` passes when protocol activation coverage changed,
-5. `readiness-check` passes when readiness surfaces changed,
-6. `doctor --profile active-canon-strict` passes when the change touches canonical maps, specs, or active instruction canon.
+5. `protocol-coverage-check` passes when canonical protocol coverage changed,
+6. `readiness-check` passes when readiness surfaces changed,
+7. `doctor --profile active-canon-strict` passes when the change touches canonical maps, specs, or active instruction canon,
+8. `proofcheck --profile active-canon-strict` may be used as the one-command bounded closure proof for active-canon work.
 
 ## Current Boundary Note
 
@@ -180,5 +185,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts.documentation-operation-protocol.md
 created_at: '2026-03-10T04:10:00+02:00'
-updated_at: '2026-03-10T03:54:51+02:00'
+updated_at: '2026-03-10T04:07:10+02:00'
 changelog_ref: instruction-contracts.documentation-operation-protocol.changelog.jsonl

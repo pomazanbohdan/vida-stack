@@ -139,9 +139,15 @@ Validation commands:
    - quick bounded validation for footer, relation refs, and broken links
 3. `activation-check --root <dir> [files...]`
    - verify that changed protocol surfaces still have lawful activation bindings
-4. `readiness-check --profile active-canon [--format toon|jsonl]`
+4. `protocol-coverage-check --profile active-canon [--format toon|jsonl]`
+   - verify that canonical protocol-bearing artifacts still appear in the protocol index and still have valid activation coverage
+5. `readiness-check --profile active-canon [--format toon|jsonl]`
    - verify version tuples, compatibility classes, projection parity, bundle completeness, and boot-gate artifact presence
-5. `doctor --root <dir> [--show-warnings] [--format toon|jsonl] [--fail-on-warnings]`
+6. `readiness-write --profile active-canon [--canonical]`
+   - materialize the current bounded readiness report to one shared artifact path
+7. `proofcheck --profile active-canon-strict [files...] [--format toon|jsonl]`
+   - run the bounded closure proof path for fastcheck, protocol coverage, readiness, and strict doctor in one command
+8. `doctor --root <dir> [--show-warnings] [--format toon|jsonl] [--fail-on-warnings]`
    - stronger consistency checks for metadata, changelogs, links, relation refs, and policy exceptions
 
 Operational rule:
@@ -155,8 +161,11 @@ Operational rule:
    - `❌ ERROR`
 6. use `fastcheck` during active editing for quick bounded safety and `doctor` before closure of canonical changes,
 7. use `activation-check` whenever protocol activation wiring changed,
-8. use `readiness-check` whenever readiness law, projection parity, canonical bundle shape, compatibility classes, or boot-gate artifacts changed,
-9. use `layer-status` when the active work is organized around one canonical layer and its adjacent layers.
+8. use `protocol-coverage-check` whenever canonical protocol rows, protocol-bearing artifacts, or activation-index wiring changed,
+9. use `readiness-check` whenever readiness law, projection parity, canonical bundle shape, compatibility classes, or boot-gate artifacts changed,
+10. use `readiness-write --canonical` when downstream automation or runtime proving needs the current shared readiness artifact,
+11. prefer `proofcheck --profile active-canon-strict` as the one-command closure proof for active-canon documentation work,
+12. use `layer-status` when the active work is organized around one canonical layer and its adjacent layers.
 
 -----
 artifact_path: project/repository/agents.sidecar
@@ -167,5 +176,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: '2026-03-10T03:59:16+02:00'
+updated_at: '2026-03-10T04:07:10+02:00'
 changelog_ref: AGENTS.sidecar.changelog.jsonl

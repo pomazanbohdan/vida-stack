@@ -121,7 +121,7 @@ Rule:
 
 | Condition | Activate |
 |---|---|
-| repository or runtime mutation required | `todo-protocol.md`, `beads-protocol.md` |
+| repository or runtime mutation required | `taskflow-protocol.md`, `beads-protocol.md` |
 | external facts can change the decision | `web-validation-protocol.md` |
 | issue/bug text is the primary spec input | `issue-contract-protocol.md` |
 | raw inputs are mixed, scope-bearing, or negotiation-heavy | `spec-intake-protocol.md` |
@@ -135,6 +135,46 @@ Rule:
 | task appears stale, done-but-open, or drifted | `task-state-reconciliation-protocol.md` |
 | silent diagnosis mode enabled | `silent-framework-diagnosis-protocol.md` |
 | explicit framework self-analysis/remediation doctrine needed | `framework-self-analysis-protocol.md` |
+
+## Explicit Canonical Protocol Coverage
+
+The following canonical protocol-bearing artifacts are explicitly covered by this activation law.
+
+### Triggered-domain coverage
+
+1. `vida/config/instructions/agent-backends.lifecycle-protocol.md`
+2. `vida/config/instructions/agent-definitions.protocol.md`
+3. `vida/config/instructions/command-instructions.bug-fix-protocol.md`
+4. `vida/config/instructions/command-instructions.command-layer-protocol.md`
+5. `vida/config/instructions/command-instructions.form-task-protocol.md`
+6. `vida/config/instructions/command-instructions.project-bootstrap-protocol.md`
+7. `vida/config/instructions/diagnostic-instructions.debug-escalation-protocol.md`
+8. `vida/config/instructions/diagnostic-instructions.library-evaluation-protocol.md`
+9. `vida/config/instructions/diagnostic-instructions.product-proving-packs-protocol.md`
+10. `vida/config/instructions/diagnostic-instructions.protocol-self-diagnosis-protocol.md`
+11. `vida/config/instructions/diagnostic-instructions.self-reflection-protocol.md`
+12. `vida/config/instructions/instruction-contracts.orchestration-protocol.md`
+13. `vida/config/instructions/instruction-contracts.thinking-protocol.md`
+14. `vida/config/instructions/instruction-contracts.worker-dispatch-protocol.md`
+15. `vida/config/instructions/runtime-instructions.boot-packet-protocol.md`
+16. `vida/config/instructions/runtime-instructions.capability-registry-protocol.md`
+17. `vida/config/instructions/runtime-instructions.context-governance-protocol.md`
+18. `vida/config/instructions/runtime-instructions.document-lifecycle-protocol.md`
+19. `vida/config/instructions/runtime-instructions.export-protocol.md`
+20. `vida/config/instructions/runtime-instructions.framework-memory-protocol.md`
+21. `vida/config/instructions/runtime-instructions.project-overlay-protocol.md`
+22. `vida/config/instructions/runtime-instructions.run-graph-protocol.md`
+23. `vida/config/instructions/runtime-instructions.spec-contract-protocol.md`
+24. `vida/config/instructions/runtime-instructions.spec-freshness-protocol.md`
+25. `vida/config/instructions/runtime-instructions.spec-sync-protocol.md`
+26. `vida/config/instructions/runtime-instructions.task-approval-loop-protocol.md`
+27. `vida/config/instructions/runtime-instructions.trace-eval-protocol.md`
+
+Coverage rule:
+
+1. these artifacts are canonical protocol-bearing surfaces even when they are not named in the shorter activation examples above,
+2. each of them must remain representable by this protocol's activation classes and trigger matrix,
+3. `protocol-coverage-check` may treat absence of one of these artifacts from this law or from the protocol index as blocking drift.
 
 ## Decomposition Guidance
 
@@ -214,5 +254,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts.instruction-activation-protocol.md
 created_at: '2026-03-08T02:15:22+02:00'
-updated_at: '2026-03-10T03:35:34+02:00'
+updated_at: '2026-03-10T04:07:10+02:00'
 changelog_ref: instruction-contracts.instruction-activation-protocol.changelog.jsonl

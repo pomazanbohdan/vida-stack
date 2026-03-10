@@ -81,10 +81,13 @@ Required fields:
    - current catalog/status summaries,
    - materialized registry snapshots when downstream automation needs a frozen inventory,
    - a canonical registry write path when automation requires one shared latest inventory file,
+   - a canonical readiness write path when downstream automation needs one shared latest readiness report,
    - per-artifact history reads,
    - task-scoped change aggregation,
    - artifact-impact and task-impact tracing for change radius analysis,
+   - canonical protocol-index and activation coverage checks for protocol-bearing artifacts,
    - bounded readiness checks for tuples, projections, bundles, compatibility classes, and boot-gate artifact presence,
+   - one grouped proof command that can close the active documentation work cycle with bounded checks,
    - link inventories and lawful link migration,
    - consistency checks over metadata, sidecars, and references.
 3. Tool names may evolve, but this initialization capability is mandatory for the active architecture.
@@ -98,5 +101,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/project-documentation-system.md
 created_at: '2026-03-10T00:00:00+02:00'
-updated_at: '2026-03-10T03:52:18+02:00'
+updated_at: '2026-03-10T04:07:10+02:00'
 changelog_ref: project-documentation-system.changelog.jsonl

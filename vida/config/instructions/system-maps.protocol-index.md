@@ -120,6 +120,7 @@ When a protocol changes:
 3. Keep this index synchronized.
 4. If a `vida/config/instructions/*.md` file is referenced as a canonical, mandatory, or full operational guide anywhere else in active canon, it must appear in this index before the change is considered complete.
 5. If an active instruction artifact is intentionally excluded from this index, the excluding protocol must state that it is non-canonical reference material.
+6. Use `python3 codex-v0/codex.py protocol-coverage-check --profile active-canon` as the bounded operational proof that canonical protocol-bearing artifacts remain indexed and activation-covered after changes.
 
 -----
 artifact_path: config/system-maps/protocol.index
@@ -130,5 +131,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps.protocol-index.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-10T03:35:34+02:00'
+updated_at: '2026-03-10T04:07:10+02:00'
 changelog_ref: system-maps.protocol-index.changelog.jsonl

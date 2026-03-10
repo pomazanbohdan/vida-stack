@@ -41,7 +41,7 @@ Status markers:
 | Category | Layer 1 | Layer 2 | Layer 3 | Layer 4 | Layer 5 | Layer 6 | Layer 7 | Layer 8 |
 |---|---|---|---|---|---|---|---|---|
 | Documentation compliance | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 |
-| Strongest evidence | `codex-v0/docsys_schema.yaml`, `instruction-artifact-model.md`, `projection_manifest.yaml` | `canonical-inventory-law.md`, `project-documentation-system.md`, `current-spec-map.md`, `instruction_catalog.yaml`, canonical registry path | this spec, `project-documentation-system.md`, canonical `check`/`doctor` rules in bootstrap docs | this spec, `AGENTS.sidecar.md`, canonical mutation command contract | `canonical-relation-law.md`, `project-documentation-system.md`, `AGENTS.sidecar.md`, relation commands in `codex-v0/codex.py` | this spec, `framework-map-protocol.md`, `AGENTS.sidecar.md` overview/low-call contract | `canonical-runtime-readiness-law.md`, `instruction-artifact-model.md`, `docs/framework/research/canonical-runtime-readiness-external-patterns.md`, `codex-v0/codex.py` readiness-check | consumption law is defined as target architecture, but not yet expanded into a fully promoted runtime-consumption product spec |
+| Strongest evidence | `codex-v0/docsys_schema.yaml`, `instruction-artifact-model.md`, `projection_manifest.yaml` | `canonical-inventory-law.md`, `project-documentation-system.md`, `current-spec-map.md`, `instruction_catalog.yaml`, canonical registry path | this spec, `project-documentation-system.md`, canonical `check`/`doctor` rules in bootstrap docs | this spec, `AGENTS.sidecar.md`, canonical mutation command contract | `canonical-relation-law.md`, `project-documentation-system.md`, `AGENTS.sidecar.md`, relation commands in `codex-v0/codex.py` | this spec, `framework-map-protocol.md`, `AGENTS.sidecar.md` overview/low-call contract | `canonical-runtime-readiness-law.md`, `instruction-artifact-model.md`, `docs/framework/research/canonical-runtime-readiness-external-patterns.md`, `codex-v0/codex.py` readiness-check, readiness-write, and proofcheck | consumption law is defined as target architecture, but not yet expanded into a fully promoted runtime-consumption product spec |
 | Main current gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | consumption law is defined as target architecture, but not yet expanded into a fully promoted runtime-consumption product spec |
 
 Compliance reading rule:
@@ -172,7 +172,8 @@ Current conclusion:
 
 1. the documentation canon now has one promoted readiness law,
 2. source-version tuples, compatibility classes, projection parity, canonical bundles, boot-gate artifacts, verdict classes, and fail-closed blocker reasons are explicitly defined,
-3. Layer 7 documentation is now sufficient to act as canonical law without relying on scattered framework-plan text.
+3. Layer 7 documentation is now sufficient to act as canonical law without relying on scattered framework-plan text,
+4. the bounded operational proof now includes `readiness-check`, `readiness-write`, and grouped `proofcheck` closure.
 
 ### Layer 8: Canonical Runtime Consumption
 
@@ -726,5 +727,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/canonical-documentation-and-inventory-layers.md
 created_at: '2026-03-10T03:25:00+02:00'
-updated_at: '2026-03-10T03:59:16+02:00'
+updated_at: '2026-03-10T04:07:10+02:00'
 changelog_ref: canonical-documentation-and-inventory-layers.changelog.jsonl

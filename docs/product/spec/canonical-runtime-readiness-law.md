@@ -50,6 +50,7 @@ Current canonical sources:
 5. `vida/config/migration/compatibility_classes.yaml`
 6. `vida/config/migration/boot_gates.yaml`
 7. `vida/config/codex-registry.current.jsonl`
+8. `vida/config/codex-readiness.current.jsonl` as the current materialized readiness report path
 
 ## 4. Source-Version Tuple Rule
 
@@ -149,6 +150,7 @@ The minimum blocker families are:
 The current transitional bounded proof surface is:
 
 1. `python3 codex-v0/codex.py readiness-check --profile active-canon`
+2. `python3 codex-v0/codex.py readiness-write --profile active-canon --canonical`
 
 Current scope of that proof:
 
@@ -157,6 +159,13 @@ Current scope of that proof:
 3. compatibility-class presence and support for machine-readable runtime-law artifacts,
 4. canonical bundle presence and family completeness,
 5. canonical boot-gate artifact presence.
+
+Materialized-readiness rule:
+
+1. the transitional canonical readiness report path is `vida/config/codex-readiness.current.jsonl`,
+2. the readiness artifact must contain only current blocking rows for the selected canonical scope,
+3. an empty materialized readiness artifact means the selected scope is currently `ready` under bounded Layer 7 proof,
+4. the materialized readiness artifact is evidence only and does not by itself authorize runtime consumption.
 
 ## 12. Completion Proof For Layer 7
 
@@ -190,5 +199,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/canonical-runtime-readiness-law.md
 created_at: '2026-03-10T05:05:00+02:00'
-updated_at: '2026-03-10T03:52:18+02:00'
+updated_at: '2026-03-10T04:07:10+02:00'
 changelog_ref: canonical-runtime-readiness-law.changelog.jsonl

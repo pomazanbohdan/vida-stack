@@ -1845,7 +1845,7 @@ def cmd_readiness_write(root: Annotated[Path | None, typer.Option(help="Root dir
 
 @app.command("proofcheck")
 def cmd_proofcheck(root: Annotated[Path | None, typer.Option(help="Root directory for grouped proof scope.")] = None,
-                   profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "active-canon",
+                   profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "active-canon-strict",
                    files: Annotated[list[Path], typer.Argument(help="Optional explicit markdown files to validate.")] = [],
                    output_format: Annotated[str, typer.Option("--format", help="Output format: toon or jsonl.")] = "toon") -> None:
     set_command("proofcheck")
