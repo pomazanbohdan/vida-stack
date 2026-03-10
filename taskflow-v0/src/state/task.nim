@@ -158,21 +158,21 @@ proc resolveTaskIdByDisplayId*(displayId: string): JsonNode =
 proc cmdTask*(args: seq[string]): int =
   if args.len == 0:
     echo """Usage:
-  vida-v0 task create <task_id> <title> [--type <issue_type>] [--status <status>] [--priority <n>] [--display-id <display_id>] [--parent-id <task_id>] [--parent-display-id <display_id>] [--auto-display-from <parent_display_id>] [--description <description>] [--labels <label>] [--json]
-  vida-v0 task update <task_id> [--status <status>] [--notes <notes>] [--description <description>] [--add-label <label>] [--remove-label <label>] [--set-labels <label>] [--json]
-  vida-v0 task close <task_id> --reason <reason> [--json]
-  vida-v0 task import-jsonl <path> [--json]
-  vida-v0 task export-jsonl <path> [--json]
-  vida-v0 task list [--status <status>] [--all] [--json]
-  vida-v0 task show <task_id> [--json|--jsonl]
-  vida-v0 task next-display-id <parent_display_id> [--json]
-  vida-v0 task ready [--json]"""
+  taskflow-v0 task create <task_id> <title> [--type <issue_type>] [--status <status>] [--priority <n>] [--display-id <display_id>] [--parent-id <task_id>] [--parent-display-id <display_id>] [--auto-display-from <parent_display_id>] [--description <description>] [--labels <label>] [--json]
+  taskflow-v0 task update <task_id> [--status <status>] [--notes <notes>] [--description <description>] [--add-label <label>] [--remove-label <label>] [--set-labels <label>] [--json]
+  taskflow-v0 task close <task_id> --reason <reason> [--json]
+  taskflow-v0 task import-jsonl <path> [--json]
+  taskflow-v0 task export-jsonl <path> [--json]
+  taskflow-v0 task list [--status <status>] [--all] [--json]
+  taskflow-v0 task show <task_id> [--json|--jsonl]
+  taskflow-v0 task next-display-id <parent_display_id> [--json]
+  taskflow-v0 task ready [--json]"""
     return 1
 
   case args[0]
   of "create":
     if args.len < 3:
-      echo "Usage: vida-v0 task create <task_id> <title> [--type <issue_type>] [--status <status>] [--priority <n>] [--display-id <display_id>] [--parent-id <task_id>] [--parent-display-id <display_id>] [--auto-display-from <parent_display_id>] [--description <description>] [--labels <label>] [--json]"
+      echo "Usage: taskflow-v0 task create <task_id> <title> [--type <issue_type>] [--status <status>] [--priority <n>] [--display-id <display_id>] [--parent-id <task_id>] [--parent-display-id <display_id>] [--auto-display-from <parent_display_id>] [--description <description>] [--labels <label>] [--json]"
       return 1
     var issueType = "task"
     var status = "open"
@@ -259,7 +259,7 @@ proc cmdTask*(args: seq[string]): int =
 
   of "update":
     if args.len < 2:
-      echo "Usage: vida-v0 task update <task_id> [--status <status>] [--notes <notes>] [--description <description>] [--add-label <label>] [--remove-label <label>] [--set-labels <label>] [--json]"
+      echo "Usage: taskflow-v0 task update <task_id> [--status <status>] [--notes <notes>] [--description <description>] [--add-label <label>] [--remove-label <label>] [--set-labels <label>] [--json]"
       return 1
     var status = ""
     var notes = ""
@@ -317,7 +317,7 @@ proc cmdTask*(args: seq[string]): int =
 
   of "close":
     if args.len < 4 or args[2] != "--reason":
-      echo "Usage: vida-v0 task close <task_id> --reason <reason> [--json]"
+      echo "Usage: taskflow-v0 task close <task_id> --reason <reason> [--json]"
       return 1
     let payload = closeIssue(args[1], args[3])
     let asJson = "--json" in args
@@ -335,7 +335,7 @@ proc cmdTask*(args: seq[string]): int =
 
   of "import-jsonl":
     if args.len < 2:
-      echo "Usage: vida-v0 task import-jsonl <path> [--json]"
+      echo "Usage: taskflow-v0 task import-jsonl <path> [--json]"
       return 1
     let payload = importIssuesJsonl(args[1])
     let asJson = "--json" in args
@@ -350,7 +350,7 @@ proc cmdTask*(args: seq[string]): int =
 
   of "export-jsonl":
     if args.len < 2:
-      echo "Usage: vida-v0 task export-jsonl <path> [--json]"
+      echo "Usage: taskflow-v0 task export-jsonl <path> [--json]"
       return 1
     let payload = exportIssuesJsonl(args[1])
     let asJson = "--json" in args
@@ -390,7 +390,7 @@ proc cmdTask*(args: seq[string]): int =
 
   of "show":
     if args.len < 2:
-      echo "Usage: vida-v0 task show <task_id> [--json|--jsonl]"
+      echo "Usage: taskflow-v0 task show <task_id> [--json|--jsonl]"
       return 1
     let payload = showIssue(args[1])
     let asJson = "--json" in args
@@ -421,7 +421,7 @@ proc cmdTask*(args: seq[string]): int =
 
   of "next-display-id":
     if args.len < 2:
-      echo "Usage: vida-v0 task next-display-id <parent_display_id> [--json]"
+      echo "Usage: taskflow-v0 task next-display-id <parent_display_id> [--json]"
       return 1
     let payload = nextDisplayId(args[1])
     let asJson = "--json" in args
@@ -444,8 +444,8 @@ proc cmdTask*(args: seq[string]): int =
 proc cmdBrCompat*(args: seq[string]): int =
   if args.len == 0:
     echo """Usage:
-  vida-v0 br import [path] [--json]
-  vida-v0 br export [path] [--json]
+  taskflow-v0 br import [path] [--json]
+  taskflow-v0 br export [path] [--json]
 
 Defaults:
   import -> .beads/issues.jsonl
@@ -479,5 +479,5 @@ Defaults:
     return if policyValue(payload{"status"}, "") == "ok": 0 else: 1
 
   else:
-    echo "Usage: vida-v0 br <import|export> [path] [--json]"
+    echo "Usage: taskflow-v0 br <import|export> [path] [--json]"
     return 1

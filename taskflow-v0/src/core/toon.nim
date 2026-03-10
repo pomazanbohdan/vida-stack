@@ -14,7 +14,7 @@ proc toonPython*(): string =
 
 proc renderToon*(payload: JsonNode): string =
   let uniqueStamp = safeName($epochTime(), "tmp").replace(".", "-")
-  let tempPath = getTempDir() / ("vida-v0-toon-" & safeName(nowUtc(), "tmp") & "-" & uniqueStamp & ".json")
+  let tempPath = getTempDir() / ("taskflow-v0-toon-" & safeName(nowUtc(), "tmp") & "-" & uniqueStamp & ".json")
   writeFile(tempPath, $normalizeJson(payload) & "\n")
   try:
     execProcess(

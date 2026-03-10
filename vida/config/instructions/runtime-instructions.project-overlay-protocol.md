@@ -7,11 +7,11 @@ Purpose: define how VIDA reads project-owned root configuration without losing f
 1. VIDA framework remains autonomous when no project overlay exists.
 2. Project overlay is optional and must live in the repository root as `vida.config.yaml`.
 3. Overlay may activate framework protocol bundles, but may not weaken framework invariants.
-4. Overlay is project-owned data; framework-owned behavior stays in `AGENTS.md`, `vida/config/instructions/*`, and `vida-v0/*`.
+4. Overlay is project-owned data; framework-owned behavior stays in `AGENTS.md`, `vida/config/instructions/*`, and `taskflow-v0/*`.
 
 No-overlay execution rule:
 
-1. If `vida.config.yaml` is absent, VIDA must use only framework-owned canonical commands and wrappers declared in `AGENTS.md`, `vida/config/instructions/system-maps.protocol-index.md`, and `vida-v0/*`.
+1. If `vida.config.yaml` is absent, VIDA must use only framework-owned canonical commands and wrappers declared in `AGENTS.md`, `vida/config/instructions/system-maps.protocol-index.md`, and `taskflow-v0/*`.
 2. In no-overlay mode, host-project operations docs are not assumed to exist and must not be treated as the canonical command source.
 3. Project-specific commands become canonical only after an overlay resolves an explicit host-project operations doc.
 4. When neither overlay-resolved project operations nor framework-owned wrappers cover the requested action, the action is not implicitly authorized; the orchestrator must stop, ask the user, or route the gap through tracked framework/project clarification.
@@ -33,14 +33,14 @@ Framework template:
 1. framework-owned starter template lives at `docs/framework/templates/vida.config.yaml.template`,
 2. template is canonical for scaffold/default structure,
 3. instantiated root `vida.config.yaml` remains project-owned data.
-4. project docs referenced from `project_bootstrap` remain project-owned runbooks; framework runtime law must stay in `AGENTS.md`, `vida/config/instructions/*`, and `vida-v0/*`, not be synchronized into project docs by drift.
+4. project docs referenced from `project_bootstrap` remain project-owned runbooks; framework runtime law must stay in `AGENTS.md`, `vida/config/instructions/*`, and `taskflow-v0/*`, not be synchronized into project docs by drift.
 5. framework-owned document lifecycle/freshness metadata belongs in `vida/config/instructions/runtime-instructions.document-lifecycle-protocol.md` and `.vida/state/doc-lifecycle.json`, not inside project-owned docs.
 
 ## Language Policy
 
 Framework-owned rule:
 
-1. `AGENTS.md`, `vida/config/instructions/*`, and `vida-v0/*` use English as the framework language.
+1. `AGENTS.md`, `vida/config/instructions/*`, and `taskflow-v0/*` use English as the framework language.
 2. Project-owned language preferences live in root `vida.config.yaml`.
 3. Project language preferences may affect user-facing communication, reasoning language, and project documentation language, but they do not localize framework-owned source files.
 
@@ -76,7 +76,7 @@ Initial supported overlay domain:
 If `true`, VIDA must activate:
 
 1. `vida/config/instructions/instruction-contracts.agent-system-protocol.md`
-2. runtime helper: `vida-v0 system`
+2. runtime helper: `taskflow-v0 system`
 
 ## Minimum Schema Surface
 
@@ -350,27 +350,27 @@ These are runtime state files, not canonical project configuration.
 Minimum proof for overlay support:
 
 ```bash
-vida-v0 config validate
-vida-v0 config dump
-vida-v0 config protocol-active agent_system
-vida-v0 system snapshot [task_id]
+taskflow-v0 config validate
+taskflow-v0 config dump
+taskflow-v0 config protocol-active agent_system
+taskflow-v0 system snapshot [task_id]
 ```
 
 Minimum proof for framework template support:
 
 ```bash
-vida-v0 boot read-contract lean
-vida-v0 boot snapshot --json
+taskflow-v0 boot read-contract lean
+taskflow-v0 boot snapshot --json
 ```
 
 -----
 artifact_path: config/runtime-instructions/project-overlay.protocol
 artifact_type: runtime_instruction
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions.project-overlay-protocol.md
-created_at: 2026-03-06T22:42:30+02:00
-updated_at: 2026-03-10T00:55:00+02:00
+created_at: '2026-03-06T22:42:30+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: runtime-instructions.project-overlay-protocol.changelog.jsonl

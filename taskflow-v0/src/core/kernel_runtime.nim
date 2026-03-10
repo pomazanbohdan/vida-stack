@@ -7,17 +7,17 @@ import ../agents/route
 proc printHelp() =
   echo """
 Usage:
-  vida-v0 kernel summary
-  vida-v0 kernel machine <name> [--json]
-  vida-v0 kernel route <name> [--json]
-  vida-v0 kernel agents [--json]
-  vida-v0 kernel instruction <role> [machine] [route] [--json]
-  vida-v0 kernel policy <name> [--json]
-  vida-v0 kernel assign lane <lane> [context_json] [--json]
-  vida-v0 kernel assign task-class <task_class> [context_json] [--json]
-  vida-v0 kernel transition <machine> <current_state> <command> [context_json]
-  vida-v0 kernel project transition <machine> <current_state> <command> [context_json] [--json]
-  vida-v0 kernel project route <task_class> [task_id] [--json]
+  taskflow-v0 kernel summary
+  taskflow-v0 kernel machine <name> [--json]
+  taskflow-v0 kernel route <name> [--json]
+  taskflow-v0 kernel agents [--json]
+  taskflow-v0 kernel instruction <role> [machine] [route] [--json]
+  taskflow-v0 kernel policy <name> [--json]
+  taskflow-v0 kernel assign lane <lane> [context_json] [--json]
+  taskflow-v0 kernel assign task-class <task_class> [context_json] [--json]
+  taskflow-v0 kernel transition <machine> <current_state> <command> [context_json]
+  taskflow-v0 kernel project transition <machine> <current_state> <command> [context_json] [--json]
+  taskflow-v0 kernel project route <task_class> [task_id] [--json]
 """
 
 proc emitPayload(payload: JsonNode, asJson: bool) =
@@ -44,7 +44,7 @@ proc cmdKernel*(args: seq[string]): int =
 
   of "machine":
     if args.len < 2:
-      echo "Usage: vida-v0 kernel machine <name> [--json]"
+      echo "Usage: taskflow-v0 kernel machine <name> [--json]"
       return 1
     let payload = loadMachineSpec(args[1])
     if payload.kind != JObject or payload.len == 0:
@@ -55,7 +55,7 @@ proc cmdKernel*(args: seq[string]): int =
 
   of "route":
     if args.len < 2:
-      echo "Usage: vida-v0 kernel route <name> [--json]"
+      echo "Usage: taskflow-v0 kernel route <name> [--json]"
       return 1
     let catalog = loadRouteCatalog()
     let payload = dottedGet(catalog, "routes." & args[1], newJObject())
@@ -71,7 +71,7 @@ proc cmdKernel*(args: seq[string]): int =
 
   of "policy":
     if args.len < 2:
-      echo "Usage: vida-v0 kernel policy <name> [--json]"
+      echo "Usage: taskflow-v0 kernel policy <name> [--json]"
       return 1
     let payload = loadPolicySpec(args[1])
     if payload.kind != JObject or payload.len == 0:
@@ -82,7 +82,7 @@ proc cmdKernel*(args: seq[string]): int =
 
   of "instruction":
     if args.len < 2:
-      echo "Usage: vida-v0 kernel instruction <role> [machine] [route] [--json]"
+      echo "Usage: taskflow-v0 kernel instruction <role> [machine] [route] [--json]"
       return 1
     let machineName =
       if args.len >= 3 and args[2] != "--json": args[2]
@@ -96,7 +96,7 @@ proc cmdKernel*(args: seq[string]): int =
 
   of "assign":
     if args.len < 3:
-      echo "Usage: vida-v0 kernel assign <lane|task-class> <name> [context_json] [--json]"
+      echo "Usage: taskflow-v0 kernel assign <lane|task-class> <name> [context_json] [--json]"
       return 1
     let ctx =
       if args.len >= 4 and args[3] != "--json":
@@ -114,14 +114,14 @@ proc cmdKernel*(args: seq[string]): int =
       of "task-class":
         resolveAssignmentForTaskClass(args[2], ctx)
       else:
-        echo "Usage: vida-v0 kernel assign <lane|task-class> <name> [context_json] [--json]"
+        echo "Usage: taskflow-v0 kernel assign <lane|task-class> <name> [context_json] [--json]"
         return 1
     emitPayload(payload, wantsJson(args))
     return (if dottedGetBool(payload, "ok", false): 0 else: 1)
 
   of "transition":
     if args.len < 4:
-      echo "Usage: vida-v0 kernel transition <machine> <current_state> <command> [context_json]"
+      echo "Usage: taskflow-v0 kernel transition <machine> <current_state> <command> [context_json]"
       return 1
     let machine = loadMachineSpec(args[1])
     if machine.kind != JObject or machine.len == 0:
@@ -142,12 +142,12 @@ proc cmdKernel*(args: seq[string]): int =
 
   of "project":
     if args.len < 2:
-      echo "Usage: vida-v0 kernel project <transition|route> ..."
+      echo "Usage: taskflow-v0 kernel project <transition|route> ..."
       return 1
     case args[1]
     of "transition":
       if args.len < 5:
-        echo "Usage: vida-v0 kernel project transition <machine> <current_state> <command> [context_json] [--json]"
+        echo "Usage: taskflow-v0 kernel project transition <machine> <current_state> <command> [context_json] [--json]"
         return 1
       let machine = loadMachineSpec(args[2])
       if machine.kind != JObject or machine.len == 0:
@@ -169,7 +169,7 @@ proc cmdKernel*(args: seq[string]): int =
       return (if dottedGetBool(payload, "ok", false): 0 else: 1)
     of "route":
       if args.len < 3:
-        echo "Usage: vida-v0 kernel project route <task_class> [task_id] [--json]"
+        echo "Usage: taskflow-v0 kernel project route <task_class> [task_id] [--json]"
         return 1
       let taskId =
         if args.len >= 4 and args[3] != "--json": args[3]
@@ -178,7 +178,7 @@ proc cmdKernel*(args: seq[string]): int =
       emitPayload(payload, wantsJson(args))
       return (if dottedGetBool(payload, "ok", false): 0 else: 1)
     else:
-      echo "Usage: vida-v0 kernel project <transition|route> ..."
+      echo "Usage: taskflow-v0 kernel project <transition|route> ..."
       return 1
 
   else:

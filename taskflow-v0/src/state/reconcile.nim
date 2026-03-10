@@ -143,7 +143,7 @@ proc buildStatusPayload*(taskId: string): JsonNode =
 proc cmdReconcile*(args: seq[string]): int =
   if args.len < 2:
     echo """Usage:
-  vida-v0 reconcile status <task_id> [--json]"""
+  taskflow-v0 reconcile status <task_id> [--json]"""
     return 1
   case args[0]
   of "status":

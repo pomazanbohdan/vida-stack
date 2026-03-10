@@ -33,7 +33,7 @@ Top-level repository layout:
    - promoted stable product prose canon.
 7. `vida/config/`
    - executable product law and runtime-readable projections.
-8. `vida-v0/`
+8. `taskflow-v0/`
    - transitional implementation runtime,
    - current execution substrate for the `0.2.0` line.
 9. `docs/project-memory/`
@@ -130,7 +130,7 @@ VIDA uses one normalized documentation/runtime stack:
    - `vida/config/**`
    - machine-readable law consumed by runtime
 8. `Implementation Layer`
-   - `vida-v0/**`
+   - `taskflow-v0/**`
    - current transitional implementation
    - future `vida 1.0` implementation must be a Rust workspace with reusable crates, not only one CLI-bound binary crate
 ## 3. Canonical Artifact Taxonomy
@@ -154,7 +154,7 @@ Canonical artifact classes:
    - active home: `vida/config/**`
 7. `implementation`
    - concrete runtime code,
-   - active home: `vida-v0/**` today
+   - active home: `taskflow-v0/**` today
 8. `history_evidence`
    - non-canonical source trail carried by Git history and sidecar changelogs,
    - no separate active directory is required for this class in the clean architecture.
@@ -201,10 +201,14 @@ Use one normalized vocabulary.
 
 1. `workspace crate architecture`
    - `vida 1.0` implementation is split into bounded Rust crates with explicit ownership
+   - the minimal required split includes a dedicated `taskflow` crate and a dedicated `codex` crate
 2. `embeddable crate`
    - a crate that can be consumed by another host program without depending on the full VIDA CLI binary
+   - for VIDA this applies at minimum to both `taskflow` and `codex`
 3. `CLI shell`
    - the standalone `vida` binary as one consumer of reusable VIDA crates, not the only runtime surface
+4. `independent CLI surface`
+   - a bounded crate may also expose its own CLI tool without requiring the top-level `vida` shell
 
 Normalization rule:
 
@@ -246,14 +250,17 @@ Current rule:
 Packaging rule:
 
 1. `vida 1.0` must be implemented as a Rust workspace with explicit crate boundaries,
-2. the agent engine and other bounded runtime subsystems must be embeddable into other programs,
-3. the standalone CLI binary is one packaging target, not the sole integration surface.
+2. `taskflow` and `codex` must exist as separate bounded crates in that workspace,
+3. `taskflow` must work independently as a library and independently as a CLI tool,
+4. `codex` must work independently as a library and independently as a CLI tool,
+5. the agent engine and other bounded runtime subsystems must be embeddable into other programs,
+6. the standalone `vida` CLI binary is one packaging target over those crates, not the sole integration surface.
 
 Implementation posture:
 
 1. `vida 0.2.0`
    - prototype / proving / continuation runtime,
-   - current implementation substrate: `vida-v0/**`,
+   - current implementation substrate: `taskflow-v0/**`,
    - expected to continue development and refine instruction/runtime behavior in practice
 2. `vida 1.0`
    - target durable runtime implementation,
@@ -274,7 +281,7 @@ Promotion rule:
 
 1. when a runtime-spec boundary is stable and no longer merely program-facing, promote its settled product-law portion into `docs/product/spec/**`,
 2. executable projections then belong in `vida/config/**`,
-3. implementation-specific details remain in `vida-v0/**` or later target runtimes.
+3. implementation-specific details remain in `taskflow-v0/**` or later target runtimes.
 
 ## 7. Promotion And Projection Rules
 
@@ -378,5 +385,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps.framework-map-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-10T02:43:18+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: system-maps.framework-map-protocol.changelog.jsonl

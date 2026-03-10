@@ -134,7 +134,7 @@ proc recordEntry*(taskId, phase: string, sources: JsonNode, notes: string = ""):
 
 proc cmdContext*(args: seq[string]): int =
   if args.len == 0:
-    echo "Usage: vida-v0 context <status|validate|record>"
+    echo "Usage: taskflow-v0 context <status|validate|record>"
     return 1
   case args[0]
   of "status":

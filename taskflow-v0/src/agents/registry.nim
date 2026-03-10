@@ -129,7 +129,7 @@ proc compatibilityFor*(taskClass, agentBackendName: string,
 
 proc cmdRegistry*(args: seq[string]): int =
   if args.len == 0:
-    echo "Usage: vida-v0 registry <build|check <task_class> <agent_backend>>"
+    echo "Usage: taskflow-v0 registry <build|check <task_class> <agent_backend>>"
     return 2
 
   case args[0]
@@ -144,7 +144,7 @@ proc cmdRegistry*(args: seq[string]): int =
 
   of "check":
     if args.len < 3:
-      echo "Usage: vida-v0 registry check <task_class> <agent_backend>"
+      echo "Usage: taskflow-v0 registry check <task_class> <agent_backend>"
       return 2
     let cr = compatibilityFor(args[1], args[2])
     let payload = normalizeJson(%*{

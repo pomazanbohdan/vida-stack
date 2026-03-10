@@ -201,17 +201,17 @@ proc cmdVerifyReceipt*(subject: string, expectedProfile: string = ""): int =
 proc cmdProfile*(args: seq[string]): int =
   if args.len == 0:
     echo """Usage:
-  vida-v0 boot run <lean|standard|full> [task_id] [--non-dev]
-  vida-v0 boot verify-receipt <subject> [profile]
-  vida-v0 boot read-contract <lean|standard|full> [--non-dev]
-  vida-v0 boot summary <subject>
-  vida-v0 boot snapshot [--json] [--top-limit N] [--ready-limit N]"""
+  taskflow-v0 boot run <lean|standard|full> [task_id] [--non-dev]
+  taskflow-v0 boot verify-receipt <subject> [profile]
+  taskflow-v0 boot read-contract <lean|standard|full> [--non-dev]
+  taskflow-v0 boot summary <subject>
+  taskflow-v0 boot snapshot [--json] [--top-limit N] [--ready-limit N]"""
     return 1
 
   case args[0]
   of "run":
     if args.len < 2:
-      echo "Usage: vida-v0 boot run <lean|standard|full> [task_id] [--non-dev]"
+      echo "Usage: taskflow-v0 boot run <lean|standard|full> [task_id] [--non-dev]"
       return 1
     let profile = args[1].toLowerAscii()
     var taskId = ""
@@ -225,7 +225,7 @@ proc cmdProfile*(args: seq[string]): int =
 
   of "verify-receipt":
     if args.len < 2:
-      echo "Usage: vida-v0 boot verify-receipt <subject> [profile]"
+      echo "Usage: taskflow-v0 boot verify-receipt <subject> [profile]"
       return 1
     let expectedProfile = if args.len > 2: args[2] else: ""
     return cmdVerifyReceipt(args[1], expectedProfile)

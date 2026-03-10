@@ -84,8 +84,8 @@ Rule:
    - capture the current orchestrator/runtime state and relevant health/status views.
    - if tracked execution is active, also capture current task id, active TaskFlow block, and pack state.
    - preferred shortcuts:
-     - dev/task-state visibility: `vida-v0 boot snapshot --json`
-     - untracked mode: `vida-v0 system snapshot` plus bounded queue/status reads as needed,
+     - dev/task-state visibility: `taskflow-v0 boot snapshot --json`
+     - untracked mode: `taskflow-v0 system snapshot` plus bounded queue/status reads as needed,
      - tracked mode: `bash framework-self-check.sh <task_id>`.
 3. `FSAP-2 Evidence Collection`
    - inspect only the protocols/scripts actually involved in the observed friction.
@@ -167,7 +167,7 @@ bash framework-wave-start.sh <task_id> <reflection-pack|dev-pack|work-pool-pack>
 Rule:
 
 1. `framework-wave-start.sh` is a migration-only wrapper surface.
-2. It must not be treated as the long-term canonical runtime entrypoint after the `vida-v0` cutover.
+2. It must not be treated as the long-term canonical runtime entrypoint after the `taskflow-v0` cutover.
 
 Use this only when at least one is true:
 
@@ -200,11 +200,11 @@ Report in this structure:
 -----
 artifact_path: config/diagnostic-instructions/framework-self-analysis.protocol
 artifact_type: diagnostic_instruction
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/diagnostic-instructions.framework-self-analysis-protocol.md
-created_at: 2026-03-06T22:42:30+02:00
-updated_at: 2026-03-10T00:55:00+02:00
+created_at: '2026-03-06T22:42:30+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: diagnostic-instructions.framework-self-analysis-protocol.changelog.jsonl

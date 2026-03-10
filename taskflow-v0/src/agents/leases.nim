@@ -247,16 +247,16 @@ proc activeLeases*(): JsonNode =
 proc cmdLease*(args: seq[string]): int =
   if args.len == 0:
     echo """Usage:
-  vida-v0 lease acquire <resource_type> <resource_id> <holder> [--ttl-seconds N]
-  vida-v0 lease renew <resource_type> <resource_id> <holder> [--ttl-seconds N]
-  vida-v0 lease release <resource_type> <resource_id> <holder>
-  vida-v0 lease list"""
+  taskflow-v0 lease acquire <resource_type> <resource_id> <holder> [--ttl-seconds N]
+  taskflow-v0 lease renew <resource_type> <resource_id> <holder> [--ttl-seconds N]
+  taskflow-v0 lease release <resource_type> <resource_id> <holder>
+  taskflow-v0 lease list"""
     return 1
 
   case args[0]
   of "acquire":
     if args.len < 4:
-      echo "Usage: vida-v0 lease acquire <resource_type> <resource_id> <holder>"
+      echo "Usage: taskflow-v0 lease acquire <resource_type> <resource_id> <holder>"
       return 1
     var ttl = 3600
     if args.len > 4 and args[4] == "--ttl-seconds" and args.len > 5:
@@ -267,7 +267,7 @@ proc cmdLease*(args: seq[string]): int =
 
   of "renew":
     if args.len < 4:
-      echo "Usage: vida-v0 lease renew <resource_type> <resource_id> <holder>"
+      echo "Usage: taskflow-v0 lease renew <resource_type> <resource_id> <holder>"
       return 1
     var ttl = 3600
     if args.len > 4 and args[4] == "--ttl-seconds" and args.len > 5:
@@ -278,7 +278,7 @@ proc cmdLease*(args: seq[string]): int =
 
   of "release":
     if args.len < 4:
-      echo "Usage: vida-v0 lease release <resource_type> <resource_id> <holder>"
+      echo "Usage: taskflow-v0 lease release <resource_type> <resource_id> <holder>"
       return 1
     let payload = normalizeJson(releaseLease(args[1], args[2], args[3]))
     if "--json" in args: echo pretty(payload) else: echo renderToon(payload)

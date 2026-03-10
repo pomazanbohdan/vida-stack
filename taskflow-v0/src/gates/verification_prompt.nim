@@ -136,7 +136,7 @@ proc verificationPromptText*(originalPrompt, taskClass, verificationTaskClass: s
 
 proc cmdVerificationPrompt*(args: seq[string]): int =
   if args.len < 5:
-    echo "Usage: vida-v0 verification-prompt <original_prompt_file> <task_class> <verification_task_class> <merge_summary_json> <post_arbitration_summary_json> [results_json]"
+    echo "Usage: taskflow-v0 verification-prompt <original_prompt_file> <task_class> <verification_task_class> <merge_summary_json> <post_arbitration_summary_json> [results_json]"
     return 1
   let originalPrompt = readFile(args[0])
   let mergeSummary = loadJson(args[3], newJObject())

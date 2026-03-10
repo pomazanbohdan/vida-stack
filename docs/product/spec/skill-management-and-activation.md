@@ -46,7 +46,7 @@ Primary executable-law homes:
 
 ## 5. Transitional Runtime Mapping
 
-`vida-v0` is the first transitional runtime expected to consume this split:
+`taskflow-v0` is the first transitional runtime expected to consume this split:
 
 1. inventory,
 2. enablement,
@@ -57,11 +57,11 @@ Primary executable-law homes:
 -----
 artifact_path: product/spec/skill-management-and-activation
 artifact_type: product_spec
-artifact_version: 1
-artifact_revision: 2026-03-10
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
 status: canonical
 source_path: docs/product/spec/skill-management-and-activation.md
-created_at: 2026-03-09T20:28:59+02:00
-updated_at: 2026-03-09T20:28:59+02:00
+created_at: '2026-03-09T20:28:59+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: skill-management-and-activation.changelog.jsonl

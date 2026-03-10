@@ -92,15 +92,15 @@ proc poolStatus*(): JsonNode =
 proc cmdPool*(args: seq[string]): int =
   if args.len == 0:
     echo """Usage:
-  vida-v0 pool borrow <task_class> <holder> [--ttl-seconds N]
-  vida-v0 pool release <agent_backend> <holder>
-  vida-v0 pool status"""
+  taskflow-v0 pool borrow <task_class> <holder> [--ttl-seconds N]
+  taskflow-v0 pool release <agent_backend> <holder>
+  taskflow-v0 pool status"""
     return 1
 
   case args[0]
   of "borrow":
     if args.len < 3:
-      echo "Usage: vida-v0 pool borrow <task_class> <holder> [--ttl-seconds N]"
+      echo "Usage: taskflow-v0 pool borrow <task_class> <holder> [--ttl-seconds N]"
       return 1
     var ttl = 1800
     if args.len > 3 and args[3] == "--ttl-seconds" and args.len > 4:
@@ -111,7 +111,7 @@ proc cmdPool*(args: seq[string]): int =
 
   of "release":
     if args.len < 3:
-      echo "Usage: vida-v0 pool release <agent_backend> <holder>"
+      echo "Usage: taskflow-v0 pool release <agent_backend> <holder>"
       return 1
     let payload = normalizeJson(releaseAgentBackend(args[1], args[2]))
     if "--json" in args: echo pretty(payload) else: echo renderToon(payload)

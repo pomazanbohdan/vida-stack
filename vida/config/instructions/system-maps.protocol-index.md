@@ -9,7 +9,7 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Framework topology map | `vida/config/instructions/system-maps.framework-map-protocol.md` | `vida/config/instructions/system-maps.protocol-index.md` |
 | Command layer matrix | `vida/config/instructions/command-instructions.command-layer-protocol.md` | `vida/config/instructions/command-instructions.commands.md`, `vida/config/instructions/command-instructions.vida-*.md`, `vida/config/instructions/command-instructions.implement-execution-protocol.md`, `vida/config/instructions/command-instructions.bug-fix-protocol.md`, `vida/config/instructions/command-instructions.use-case-packs.md`, `vida/config/instructions/runtime-instructions.taskflow-protocol.md`, `vida/config/instructions/instruction-contracts.worker-dispatch-protocol.md`, `vida-command-audit.sh`, `render-worker-prompt.sh`, `vida/config/instructions/system-maps.framework-map-protocol.md` |
 | Runtime script architecture | `vida/config/instructions/system-maps.script-runtime-architecture.md` | `vida/config/instructions/system-maps.framework-map-protocol.md`, `*.sh`, `*.py` |
-| Runtime transition map | `vida/config/instructions/system-maps.runtime-transition-map.md` | `vida/config/instructions/system-maps.script-runtime-architecture.md`, `vida-v0/**`, `**` |
+| Runtime transition map | `vida/config/instructions/system-maps.runtime-transition-map.md` | `vida/config/instructions/system-maps.script-runtime-architecture.md`, `taskflow-v0/**`, `**` |
 | Tooling/search guide | `vida/config/instructions/system-maps.tooling.md` | `vida/config/instructions/command-instructions.pipelines.md`, `AGENTS.md` |
 | Framework change log | `sidecar changelog plus Git history` | `vida/config/instructions/system-maps.protocol-index.md` |
 | Instruction activation and decomposition | `vida/config/instructions/instruction-contracts.instruction-activation-protocol.md` | `AGENTS.md`, `vida/config/instructions/agent-definitions.orchestrator-entry.md`, `vida/config/instructions/system-maps.protocol-index.md` |
@@ -17,9 +17,9 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Autonomous follow-through mode | `vida/config/instructions/instruction-contracts.autonomous-execution-protocol.md` | `vida/config/instructions/command-instructions.implement-execution-protocol.md`, `vida/config/instructions/runtime-instructions.taskflow-protocol.md`, `vida/config/instructions/runtime-instructions.beads-protocol.md`, `vida/config/instructions/instruction-contracts.agent-system-protocol.md` |
 | Autonomous next-task selector helper | `autonomous-next-task.py` | `vida/config/instructions/instruction-contracts.autonomous-execution-protocol.md`, `vida/config/instructions/runtime-instructions.execution-priority-protocol.md` |
 | Execution prioritization and reprioritization | `vida/config/instructions/runtime-instructions.execution-priority-protocol.md` | `vida/config/instructions/command-instructions.form-task-protocol.md`, `vida/config/instructions/runtime-instructions.taskflow-protocol.md`, `vida/config/instructions/command-instructions.implement-execution-protocol.md`, `vida/config/instructions/instruction-contracts.autonomous-execution-protocol.md` |
-| Project overlay activation | `vida/config/instructions/runtime-instructions.project-overlay-protocol.md` | `vida.config.yaml`, `docs/framework/templates/vida.config.yaml.template`, `AGENTS.md`, `vida-v0 config ...`, `vida-v0 system ...` |
-| Boot packet runtime artifact | `vida/config/instructions/runtime-instructions.boot-packet-protocol.md` | `vida-v0 boot ...`, `AGENTS.md`, `vida/config/instructions/agent-definitions.orchestrator-entry.md`, `vida/config/instructions/agent-definitions.worker-entry.md` |
-| Project bootstrap/self-reproduction | `vida/config/instructions/command-instructions.project-bootstrap-protocol.md` | `vida-v0 boot ...`, `docs/framework/templates/vida.config.yaml.template`, `vida.config.yaml` |
+| Project overlay activation | `vida/config/instructions/runtime-instructions.project-overlay-protocol.md` | `vida.config.yaml`, `docs/framework/templates/vida.config.yaml.template`, `AGENTS.md`, `taskflow-v0 config ...`, `taskflow-v0 system ...` |
+| Boot packet runtime artifact | `vida/config/instructions/runtime-instructions.boot-packet-protocol.md` | `taskflow-v0 boot ...`, `AGENTS.md`, `vida/config/instructions/agent-definitions.orchestrator-entry.md`, `vida/config/instructions/agent-definitions.worker-entry.md` |
+| Project bootstrap/self-reproduction | `vida/config/instructions/command-instructions.project-bootstrap-protocol.md` | `taskflow-v0 boot ...`, `docs/framework/templates/vida.config.yaml.template`, `vida.config.yaml` |
 | VIDA framework self-analysis | `vida/config/instructions/diagnostic-instructions.framework-self-analysis-protocol.md` | `vida/config/instructions/system-maps.framework-map-protocol.md`, `vida/config/instructions/diagnostic-instructions.self-reflection-protocol.md` |
 | Silent framework diagnosis | `vida/config/instructions/diagnostic-instructions.silent-framework-diagnosis-protocol.md` | `vida-silent-diagnosis.py`, `vida.config.yaml`, `vida/config/instructions/diagnostic-instructions.framework-self-analysis-protocol.md`, `vida/config/instructions/runtime-instructions.taskflow-protocol.md` |
 | Human approval lifecycle | `vida/config/instructions/runtime-instructions.human-approval-protocol.md` | `human-approval-gate.py`, `worker-dispatch.py`, `vida/config/instructions/instruction-contracts.agent-system-protocol.md`, `vida/config/instructions/command-instructions.implement-execution-protocol.md` |
@@ -37,7 +37,7 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Context governance ledger | `vida/config/instructions/runtime-instructions.context-governance-protocol.md` | `context-governance.py`, `worker-dispatch.py`, `framework-operator-status.py`, `future.md` |
 | Durable run-graph ledger | `vida/config/instructions/runtime-instructions.run-graph-protocol.md` | `run-graph.py`, `future.md`, `worker-dispatch.py` |
 | Local trace grading and datasets | `vida/config/instructions/runtime-instructions.trace-eval-protocol.md` | `trace-eval.py`, `eval-pack.sh`, `worker-eval-pack.py`, `future.md` |
-| Typed capability registry | `vida/config/instructions/runtime-instructions.capability-registry-protocol.md` | `vida-v0 registry ...`, `vida.config.yaml` |
+| Typed capability registry | `vida/config/instructions/runtime-instructions.capability-registry-protocol.md` | `taskflow-v0 registry ...`, `vida.config.yaml` |
 | Task-state reconciliation | `vida/config/instructions/runtime-instructions.task-state-reconciliation-protocol.md` | `task-state-reconcile.py`, `vida/config/instructions/runtime-instructions.taskflow-protocol.md`, `vida/config/instructions/runtime-instructions.beads-protocol.md`, `quality-health-check.sh` |
 | Problem-party discussion | `vida/config/instructions/runtime-instructions.problem-party-protocol.md` | `problem-party.py`, `vida/config/instructions/instruction-contracts.orchestration-protocol.md`, `vida/config/instructions/runtime-instructions.taskflow-protocol.md` |
 | Future platform alignment (non-canonical reference) | `future.md` | `vida/config/instructions/system-maps.protocol-index.md`, `sidecar changelog plus Git history` |
@@ -65,11 +65,11 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Planning decomposition (Q-Gate -> TaskFlow plan) | `vida/config/instructions/runtime-instructions.taskflow-protocol.md` | `vida/config/instructions/command-instructions.form-task-protocol.md`, `vida/config/instructions/diagnostic-instructions.silent-framework-diagnosis-protocol.md`, `todo-plan-validate.sh`, `stateful-sequence-check.sh` |
 | Implement execution (dev) | `vida/config/instructions/command-instructions.implement-execution-protocol.md` | `vida/config/instructions/command-instructions.vida-implement.md`, `vida/config/instructions/command-instructions.use-case-packs.md`, `vida/config/instructions/command-instructions.command-layer-protocol.md` |
 | VIDA migration decisions | `docs/research/vida-framework/vida-migration-registry.md` | `docs/research/vida-framework/**`, `legacy helper surfaces*` |
-| Agent-system activation/routing | `vida/config/instructions/instruction-contracts.agent-system-protocol.md` | `vida/config/instructions/instruction-contracts.agent-system-protocol.md`, `vida-v0 system ...`, `vida-v0 registry ...`, `vida.config.yaml`, `docs/process/agent-system.md`, `vida/config/instructions/agent-backends.matrix.md` |
-| Agent-backend onboarding and recovery | `vida/config/instructions/agent-backends.lifecycle-protocol.md` | `vida/config/instructions/agent-backends.lifecycle-protocol.md`, `vida-v0 system ...`, `vida-v0 prepare-execution ...`, `vida.config.yaml`, `docs/framework/templates/vida.config.yaml.template` |
+| Agent-system activation/routing | `vida/config/instructions/instruction-contracts.agent-system-protocol.md` | `vida/config/instructions/instruction-contracts.agent-system-protocol.md`, `taskflow-v0 system ...`, `taskflow-v0 registry ...`, `vida.config.yaml`, `docs/process/agent-system.md`, `vida/config/instructions/agent-backends.matrix.md` |
+| Agent-backend onboarding and recovery | `vida/config/instructions/agent-backends.lifecycle-protocol.md` | `vida/config/instructions/agent-backends.lifecycle-protocol.md`, `taskflow-v0 system ...`, `taskflow-v0 prepare-execution ...`, `vida.config.yaml`, `docs/framework/templates/vida.config.yaml.template` |
 | Worker entry contract | `vida/config/instructions/agent-definitions.worker-entry.md` | `AGENTS.md`, `vida/config/instructions/instruction-contracts.worker-dispatch-protocol.md`, `vida/config/instructions/instruction-contracts.agent-system-protocol.md`, `vida/config/instructions/instruction-contracts.worker-thinking.md` |
 | Worker thinking subset | `vida/config/instructions/instruction-contracts.worker-thinking.md` | `AGENTS.md`, `vida/config/instructions/agent-definitions.worker-entry.md`, `vida/config/instructions/prompt-templates.worker-packet-templates.md` |
-| Worker dispatch | `vida/config/instructions/instruction-contracts.worker-dispatch-protocol.md` | `vida/config/instructions/instruction-contracts.worker-dispatch-protocol.md`, `vida/config/instructions/agent-definitions.worker-entry.md`, `vida/config/instructions/instruction-contracts.worker-thinking.md`, `vida/config/instructions/prompt-templates.worker-packet-templates.md`, `vida-v0 worker ...` |
+| Worker dispatch | `vida/config/instructions/instruction-contracts.worker-dispatch-protocol.md` | `vida/config/instructions/instruction-contracts.worker-dispatch-protocol.md`, `vida/config/instructions/agent-definitions.worker-entry.md`, `vida/config/instructions/instruction-contracts.worker-thinking.md`, `vida/config/instructions/prompt-templates.worker-packet-templates.md`, `taskflow-v0 worker ...` |
 | Runtime log policy | `vida/config/instructions/runtime-instructions.log-policy.md` | `.gitignore` |
 | TaskFlow overhead diagnostics | `taskflow-overhead-report.sh` | `vida/config/instructions/runtime-instructions.taskflow-protocol.md` |
 | Project operations (build/run/observability/live checks) | host-project operations doc declared by project overlay when overlay exists; otherwise framework-owned wrappers under `*` | host-project scripts and runbooks |
@@ -79,7 +79,7 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 
 ## Mandatory Gates
 
-1. Before close/handoff on transitioned runtime slices: run the relevant `vida-v0` tests or build proof from `vida/config/instructions/system-maps.runtime-transition-map.md`; legacy-only health wrappers remain migration-only until replaced.
+1. Before close/handoff on transitioned runtime slices: run the relevant `taskflow-v0` tests or build proof from `vida/config/instructions/system-maps.runtime-transition-map.md`; legacy-only health wrappers remain migration-only until replaced.
 2. Before `finish`: strict execution-log verify must pass.
 3. For server/API assumptions: live request validation is required.
 4. For external assumptions (API/package/platform/security/migration): WVP evidence is required (`vida/config/instructions/runtime-instructions.web-validation-protocol.md`).
@@ -91,10 +91,10 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 ## Execution Command Path
 
 ```bash
-nim c vida-v0/src/vida.nim
-nim c -r vida-v0/tests/test_boot_profile.nim
-nim c -r vida-v0/tests/test_worker_packet.nim
-nim c -r vida-v0/tests/test_kernel_runtime.nim
+nim c taskflow-v0/src/vida.nim
+nim c -r taskflow-v0/tests/test_boot_profile.nim
+nim c -r taskflow-v0/tests/test_worker_packet.nim
+nim c -r taskflow-v0/tests/test_kernel_runtime.nim
 ```
 
 ## Scope Rule: `vida/config/instructions/` vs `docs/`
@@ -123,11 +123,11 @@ When a protocol changes:
 -----
 artifact_path: config/system-maps/protocol.index
 artifact_type: system_map
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps.protocol-index.md
-created_at: 2026-03-09T20:28:59+02:00
-updated_at: 2026-03-10T00:55:00+02:00
+created_at: '2026-03-09T20:28:59+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: system-maps.protocol-index.changelog.jsonl

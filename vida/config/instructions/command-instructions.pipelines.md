@@ -7,10 +7,10 @@ Framework-owned execution and verification policy lives here. Host-project build
 Run this before handoff or finish when you want a fast protocol sanity check:
 
 ```bash
-nim c vida-v0/src/vida.nim
-nim c -r vida-v0/tests/test_boot_profile.nim
-nim c -r vida-v0/tests/test_worker_packet.nim
-nim c -r vida-v0/tests/test_kernel_runtime.nim
+nim c taskflow-v0/src/vida.nim
+nim c -r taskflow-v0/tests/test_boot_profile.nim
+nim c -r taskflow-v0/tests/test_worker_packet.nim
+nim c -r taskflow-v0/tests/test_kernel_runtime.nim
 ```
 
 If `task_id` is provided, strict execution-log verification and pack-coverage checks are enforced for that task.
@@ -23,8 +23,8 @@ Mode notes:
 
 Mandatory gate:
 
-1. Before `br close` of an active task on transitioned slices, run the relevant `vida-v0` verification set from `vida/config/instructions/system-maps.runtime-transition-map.md`.
-2. Before worker-result handoff on transitioned slices, run the relevant `vida-v0` verification set from `vida/config/instructions/system-maps.runtime-transition-map.md`.
+1. Before `br close` of an active task on transitioned slices, run the relevant `taskflow-v0` verification set from `vida/config/instructions/system-maps.runtime-transition-map.md`.
+2. Before worker-result handoff on transitioned slices, run the relevant `taskflow-v0` verification set from `vida/config/instructions/system-maps.runtime-transition-map.md`.
 3. If root `vida.config.yaml` exists, health-check must validate overlay schema before passing.
 4. If WVP triggers fired, record evidence per `vida/config/instructions/runtime-instructions.web-validation-protocol.md`.
 4.1. Prefer structured WVP markers via `bash wvp-evidence.sh ...` to reduce heuristic false positives in health checks.
@@ -136,8 +136,8 @@ bash nondev-pack-init.sh <task_id> <pack_id> "<goal>" [constraints]
 Boot profile preflight:
 
 ```bash
-vida-v0 boot run lean <task_id>
-vida-v0 boot verify-receipt <task_id> [profile]
+taskflow-v0 boot run lean <task_id>
+taskflow-v0 boot verify-receipt <task_id> [profile]
 ```
 
 Escalate profile (`standard`/`full`) only when risk/complexity justifies extra read-set.
@@ -214,11 +214,11 @@ Use generated scorecards (`.vida/logs/eval-pack-<task_id>.json`, `.vida/logs/tra
 -----
 artifact_path: config/command-instructions/pipelines
 artifact_type: command_instruction
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/command-instructions.pipelines.md
-created_at: 2026-03-06T22:42:30+02:00
-updated_at: 2026-03-10T00:55:00+02:00
+created_at: '2026-03-06T22:42:30+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: command-instructions.pipelines.changelog.jsonl

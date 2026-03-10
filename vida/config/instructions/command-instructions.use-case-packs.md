@@ -21,7 +21,7 @@ This file owns pack taxonomy, pack-selection intent, and pack-specific step maps
 Transition note:
 
 1. pack helper commands below are legacy wrapper examples,
-2. they remain migration-only until pack orchestration is either moved into `vida-v0` or intentionally retired,
+2. they remain migration-only until pack orchestration is either moved into `taskflow-v0` or intentionally retired,
 3. they must not be read as the final post-cutover canonical runtime home.
 
 1. Detect pack via `bash vida-pack-helper.sh detect "<request>"`.
@@ -38,7 +38,7 @@ Transition note:
 Rule:
 
 1. these commands are migration-only wrapper examples,
-2. they are allowed only until pack orchestration is moved into `vida-v0` or intentionally retired.
+2. they are allowed only until pack orchestration is moved into `taskflow-v0` or intentionally retired.
 
 Shortcut for standard non-dev pack initialization:
 
@@ -188,11 +188,11 @@ Non-dev handoff boundary:
 -----
 artifact_path: config/command-instructions/use-case-packs
 artifact_type: command_instruction
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/command-instructions.use-case-packs.md
-created_at: 2026-03-06T22:42:30+02:00
-updated_at: 2026-03-10T00:55:00+02:00
+created_at: '2026-03-06T22:42:30+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: command-instructions.use-case-packs.changelog.jsonl

@@ -12,7 +12,7 @@ Purpose: provide current project/runtime context and canonical map pointers for 
 3. Active instruction canon:
    - `vida/config/instructions/*`
 4. Current transitional implementation:
-   - `vida-v0/*`
+   - `taskflow-v0/*`
 5. Active product/process/project documentation:
    - `docs/product/*`
    - `docs/process/*`
@@ -29,7 +29,7 @@ Purpose: provide current project/runtime context and canonical map pointers for 
 
 1. The canonical VIDA 1 documentation, instruction, and inventory architecture is defined by product specs and `vida/config/**`.
 2. The current repository tooling `codex-v0/codex.py` is the transitional `0.2.0` implementation substrate for that information-system layer.
-3. Treat `codex` in the same architectural posture that `vida-v0/**` occupies for the runtime layer:
+3. Treat `codex` in the same architectural posture that `taskflow-v0/**` occupies for the runtime layer:
    - useful and active now,
    - implementation-facing,
    - not the authority that defines the final VIDA 1 architecture.
@@ -142,5 +142,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: '2026-03-10T03:00:04+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: AGENTS.sidecar.changelog.jsonl

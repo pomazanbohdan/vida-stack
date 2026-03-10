@@ -11,9 +11,9 @@ It is not a full protocol compiler.
 ## Command
 
 ```bash
-vida-v0 boot run <lean|standard|full> [task_id] [--non-dev]
-vida-v0 boot read-contract <lean|standard|full> [--non-dev]
-vida-v0 boot summary <task_id|session>
+taskflow-v0 boot run <lean|standard|full> [task_id] [--non-dev]
+taskflow-v0 boot read-contract <lean|standard|full> [--non-dev]
+taskflow-v0 boot summary <task_id|session>
 ```
 
 ## Output Contract
@@ -30,7 +30,7 @@ Boot packet should expose:
 
 ## Integration With Boot Receipts
 
-When boot is executed through `vida-v0 boot ...`:
+When boot is executed through `taskflow-v0 boot ...`:
 
 1. a boot packet should be written next to the receipt,
 2. receipt should record `boot_packet_file`,
@@ -49,7 +49,7 @@ Canonical policy still lives in:
 1. `AGENTS.md`
 2. `vida/config/instructions/instruction-contracts.thinking-protocol.md`
 3. `vida/config/instructions/runtime-instructions.project-overlay-protocol.md`
-4. `vida-v0`
+4. `taskflow-v0`
 
 ## Current Version
 
@@ -60,7 +60,7 @@ Characteristics:
 1. generated on demand,
 2. no signature/hash enforcement yet,
 3. integrated with boot receipts and receipt verification,
-4. `vida-v0 boot run` should consume boot-packet read-contract output instead of duplicating profile file lists,
+4. `taskflow-v0 boot run` should consume boot-packet read-contract output instead of duplicating profile file lists,
 5. health/verification flows may consume packet summaries as a compact proof surface,
 6. dev-oriented boot receipts may include a compact task-state snapshot artifact,
 7. intended as the first step toward lighter compiled boot contracts.
@@ -68,11 +68,11 @@ Characteristics:
 -----
 artifact_path: config/runtime-instructions/boot-packet.protocol
 artifact_type: runtime_instruction
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions.boot-packet-protocol.md
-created_at: 2026-03-07T06:22:32+02:00
-updated_at: 2026-03-10T00:55:00+02:00
+created_at: '2026-03-07T06:22:32+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: runtime-instructions.boot-packet-protocol.changelog.jsonl

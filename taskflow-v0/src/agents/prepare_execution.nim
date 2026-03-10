@@ -271,7 +271,7 @@ proc buildManifest*(taskId, writerTaskClass, promptFile, outputDir: string,
 
 proc cmdPrepareExecution*(args: seq[string]): int =
   if args.len < 4:
-    echo "Usage: vida-v0 prepare-execution <task_id> <writer_task_class> <prompt_file> <output_dir> [workdir]"
+    echo "Usage: taskflow-v0 prepare-execution <task_id> <writer_task_class> <prompt_file> <output_dir> [workdir]"
     return 2
   let workdir = if args.len > 4: args[4] else: ""
   let (exitCode, rawPayload) = buildManifest(args[0], args[1], args[2], args[3], workdir)

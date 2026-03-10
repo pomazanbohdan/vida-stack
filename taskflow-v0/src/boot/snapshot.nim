@@ -1,7 +1,7 @@
 ## VIDA Boot Snapshot — task state snapshot for boot paths.
 ##
 ## Replaces `vida-boot-snapshot.py` (379 lines).
-## Queries the vida-v0 task store for current task state, enriches with run-graph
+## Queries the taskflow-v0 task store for current task state, enriches with run-graph
 ## and reconciliation status, renders as JSON or compact text.
 
 import std/[json, os, strutils, algorithm, sequtils, times, options]

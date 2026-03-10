@@ -148,9 +148,9 @@ proc statusPayload*(taskId: string): JsonNode =
 proc cmdRunGraph*(args: seq[string]): int =
   if args.len < 2:
     echo """Usage:
-  vida-v0 run-graph init <task_id> <task_class> [route_task_class]
-  vida-v0 run-graph update <task_id> <task_class> <node> <status> [route_task_class] [meta_json]
-  vida-v0 run-graph status <task_id>"""
+  taskflow-v0 run-graph init <task_id> <task_class> [route_task_class]
+  taskflow-v0 run-graph update <task_id> <task_class> <node> <status> [route_task_class] [meta_json]
+  taskflow-v0 run-graph status <task_id>"""
     return 2
 
   let command = args[0]
@@ -159,7 +159,7 @@ proc cmdRunGraph*(args: seq[string]): int =
   case command
   of "init":
     if args.len < 3:
-      echo "Usage: vida-v0 run-graph init <task_id> <task_class> [route_task_class]"
+      echo "Usage: taskflow-v0 run-graph init <task_id> <task_class> [route_task_class]"
       return 2
     let taskClass = args[2]
     let rtc = if args.len > 3: args[3] else: ""
@@ -169,7 +169,7 @@ proc cmdRunGraph*(args: seq[string]): int =
 
   of "update":
     if args.len < 5:
-      echo "Usage: vida-v0 run-graph update <task_id> <task_class> <node> <status> [route_task_class] [meta_json]"
+      echo "Usage: taskflow-v0 run-graph update <task_id> <task_class> <node> <status> [route_task_class] [meta_json]"
       return 2
     let taskClass = args[2]
     let node = args[3]

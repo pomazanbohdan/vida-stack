@@ -22,7 +22,7 @@ Purpose: define the current product-spec home, show absorbed historical sources,
    Config families: cross-cutting product law only
 5. [projection-listener-checkpoint-kernel.md](/home/unnamed/project/vida-stack/docs/product/spec/projection-listener-checkpoint-kernel.md)
    Sources: Eventuous, Elsa, LangGraph research promoted through the borrow map
-   Config families: `vida/config/machines/**`, runtime consumption by `vida-v0`
+   Config families: `vida/config/machines/**`, runtime consumption by `taskflow-v0`
 6. [gateway-resume-handle-and-trigger-index.md](/home/unnamed/project/vida-stack/docs/product/spec/gateway-resume-handle-and-trigger-index.md)
    Sources: Elsa trigger/bookmark semantics
    Config families: future route/gateway law
@@ -62,7 +62,7 @@ Purpose: define the current product-spec home, show absorbed historical sources,
 1. VIDA `0.2.0` and VIDA `1.0` share one semantic runtime-spec spine.
 2. `docs/framework/plans/**` remains the active strategic and execution-spec program layer for that shared runtime spine.
 3. Stable product-law portions of that spine are promoted here into `docs/product/spec/**`.
-4. `vida-v0/**` is the current transitional implementation substrate for the `0.2.0` line, not a separate semantic canon.
+4. `taskflow-v0/**` is the current transitional implementation substrate for the `0.2.0` line, not a separate semantic canon.
 
 ## Project Documentation Rule
 
@@ -79,5 +79,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-10T02:32:51+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: current-spec-map.changelog.jsonl

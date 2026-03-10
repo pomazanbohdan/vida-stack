@@ -261,8 +261,8 @@ proc validateOutputText*(promptText, outputText: string): seq[string] =
 proc cmdWorkerPacket*(args: seq[string]): int =
   if args.len < 2:
     echo """Usage:
-  vida-v0 worker check <prompt_file|->
-  vida-v0 worker check-output <prompt_file|-> <output_file|->"""
+  taskflow-v0 worker check <prompt_file|->
+  taskflow-v0 worker check-output <prompt_file|-> <output_file|->"""
     return 1
 
   case args[0]
@@ -275,7 +275,7 @@ proc cmdWorkerPacket*(args: seq[string]): int =
 
   of "check-output":
     if args.len < 3:
-      echo "Usage: vida-v0 worker check-output <prompt_file> <output_file>"; return 1
+      echo "Usage: taskflow-v0 worker check-output <prompt_file> <output_file>"; return 1
     let promptText = if args[1] == "-": stdin.readAll() else: readFile(args[1])
     let outputText = if args[2] == "-": stdin.readAll() else: readFile(args[2])
     let errors = validateOutputText(promptText, outputText)

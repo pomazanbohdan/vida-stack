@@ -667,7 +667,7 @@ Current repository layout:
 ├── vida/
 │   └── config/
 │       └── instructions/
-└── vida-v0/
+└── taskflow-v0/
 ```
 
 Key runtime areas:
@@ -747,5 +747,5 @@ schema_version: '1'
 status: canonical
 source_path: README.md
 created_at: '2026-03-10T01:41:07+02:00'
-updated_at: '2026-03-10T03:00:04+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: README.changelog.jsonl

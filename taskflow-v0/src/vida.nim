@@ -1,7 +1,7 @@
 ## VIDA v0 — Nim CLI entry point.
 ##
 ## Experimental Nim runtime for selected VIDA script surfaces.
-## Usage: vida-v0 <command> [args...]
+## Usage: taskflow-v0 <command> [args...]
 
 import std/os
 import core/config
@@ -29,7 +29,7 @@ proc printHelp() =
 VIDA v0 Runtime v""" & Version & """
 
 Usage:
-  vida-v0 <command> [args...]
+  taskflow-v0 <command> [args...]
 
 Commands:
   config    Config validation and inspection
@@ -37,7 +37,7 @@ Commands:
   boot      Boot profile, packets, and snapshots
   run-graph Run graph ledger
   task      DB-backed task surface with JSONL ingest
-  br        Legacy import/export compatibility over vida-v0 task store
+  br        Legacy import/export compatibility over taskflow-v0 task store
   todo      TODO task views
   reconcile Task-state reconcile status
   draft-execution-spec Draft execution spec validator
@@ -75,12 +75,12 @@ Current VIDA_WORKSPACE: """ & vidaWorkspaceDir() & """
 # ─────────────────────────── Config ───────────────────────────
 
 proc cmdConfig(args: seq[string]): int =
-  if args.len == 0: echo "Usage: vida-v0 config <validate|dump|protocol-active>"; return 1
+  if args.len == 0: echo "Usage: taskflow-v0 config <validate|dump|protocol-active>"; return 1
   case args[0]
   of "validate": config.cmdValidate()
   of "dump": config.cmdDump()
   of "protocol-active":
-    if args.len < 2: echo "Usage: vida-v0 config protocol-active <protocol>"; return 1
+    if args.len < 2: echo "Usage: taskflow-v0 config protocol-active <protocol>"; return 1
     config.cmdProtocolActive(args[1])
   else: echo "Unknown config subcommand: " & args[0]; 1
 
@@ -99,7 +99,7 @@ proc main() =
   let args = commandLineParams()
   if args.len == 0: printHelp(); quit(0)
   if args[0] in ["--help", "-h"]: printHelp(); quit(0)
-  if args[0] in ["--version", "-v"]: echo "vida-v0 " & Version; quit(0)
+  if args[0] in ["--version", "-v"]: echo "taskflow-v0 " & Version; quit(0)
 
   let command = args[0]
   let subArgs = if args.len > 1: args[1..^1] else: @[]
@@ -135,7 +135,7 @@ proc main() =
     of "status": cmdStatus(subArgs)
     else:
       echo "Unknown command: " & command
-      echo "Run `vida-v0 --help` to see available commands."
+      echo "Run `taskflow-v0 --help` to see available commands."
       1
 
   quit(exitCode)

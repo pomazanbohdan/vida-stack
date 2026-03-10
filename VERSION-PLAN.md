@@ -70,6 +70,7 @@ The transition to `1.0` should move through these internal milestones:
    - define project and user instruction overlay rules without weakening framework law
 3. `0.4` — binary foundation
    - create Rust workspace,
+   - split `taskflow` and `codex` into separate crates from the start,
    - add embedded SurrealDB,
    - add fast build profile,
    - ship minimal `vida` binary shell,
@@ -122,6 +123,9 @@ Required `1.0` capabilities:
 8. self-hosting viability for daily framework work
 9. hard startup checks for schema, instruction, and compatibility migrations
 10. framework-owned instruction updates with compatibility validation for project and user overlays
+11. `taskflow` available as a reusable library crate and as its own CLI surface
+12. `codex` available as a reusable library crate and as its own CLI surface
+13. the top-level `vida` CLI composed over those crates rather than replacing them
 
 Core architectural expectations:
 
@@ -131,6 +135,9 @@ Core architectural expectations:
 4. versioned instruction kernel,
 5. command kernel over those runtime layers,
 6. migration kernel for data and instruction upgrades.
+7. `taskflow` and `codex` must remain separate bounded crates in the same workspace.
+8. each must be usable independently as a library and independently as a CLI tool.
+9. the `vida` binary may compose them, but it must not collapse their boundaries.
 
 `1.0` is not a daemon release.
 It is a usable, self-hosted, local control binary.
@@ -245,5 +252,5 @@ schema_version: '1'
 status: canonical
 source_path: VERSION-PLAN.md
 created_at: '2026-03-10T00:30:00+02:00'
-updated_at: '2026-03-10T03:00:04+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: VERSION-PLAN.changelog.jsonl

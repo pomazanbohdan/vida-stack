@@ -241,7 +241,7 @@ Use for routine execution and token-efficient continuation.
 1. Read `AGENTS.md`.
 2. Read this file.
 3. If the request is development-related (`execution_flow` or dev-oriented `answer_only`), capture a compact task-state snapshot first:
-   - `vida-v0 boot snapshot --json`
+   - `taskflow-v0 boot snapshot --json`
    - default target: top-level `in_progress`, `ready_head`, and open/in-progress subtask tree
    - if the snapshot answers the request, stop there and avoid wider status discovery
 4. If the request is write-producing continuation work, stop after the compact snapshot long enough to build the route receipt and prepare the external analysis receipt; do not expand into broad protocol reading before that route step.
@@ -324,11 +324,11 @@ For non-trivial orchestrator reports, default order:
 -----
 artifact_path: config/instructions/agent-definitions/orchestrator.entry
 artifact_type: agent_definition
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/agent-definitions.orchestrator-entry.md
-created_at: 2026-03-07T09:54:22+02:00
-updated_at: 2026-03-10T01:29:19+02:00
+created_at: '2026-03-07T09:54:22+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: agent-definitions.orchestrator-entry.changelog.jsonl

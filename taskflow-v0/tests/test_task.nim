@@ -199,11 +199,11 @@ suite "task":
     check second["id"].getStr() == "vida-stack-2d9.1.3"
     check second["display_id"].getStr() == "vida-2d9.1.3"
 
-  test "vida-v0 br import export aliases work":
+  test "taskflow-v0 br import export aliases work":
     let rootDir = getCurrentDir()
-    let binPath = root / "vida-v0-test-bin"
+    let binPath = root / "taskflow-v0-test-bin"
     let compile = execCmdEx("nim c --nimcache:/tmp/vida-nimcache-task-br -o:" & binPath.quoteShell &
-      " " & (rootDir / "vida-v0" / "src" / "vida.nim").quoteShell)
+      " " & (rootDir / "taskflow-v0" / "src" / "vida.nim").quoteShell)
     check compile.exitCode == 0
 
     let source = root / ".beads" / "alias-import.jsonl"

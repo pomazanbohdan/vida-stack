@@ -294,14 +294,14 @@ proc mergeCoachDecisions*(decisions: seq[JsonNode], requiredResults: int, mergeP
 proc cmdCoachDecision*(args: seq[string]): int =
   if args.len == 0:
     echo """Usage:
-  vida-v0 coach-decision parse <output_file|->
-  vida-v0 coach-decision merge <required_results> <merge_policy> <decisions_json_file|->"""
+  taskflow-v0 coach-decision parse <output_file|->
+  taskflow-v0 coach-decision merge <required_results> <merge_policy> <decisions_json_file|->"""
     return 1
 
   case args[0]
   of "parse":
     if args.len < 2:
-      echo "Usage: vida-v0 coach-decision parse <output_file|->"
+      echo "Usage: taskflow-v0 coach-decision parse <output_file|->"
       return 1
     let text = if args[1] == "-": stdin.readAll() else: readFile(args[1])
     let payload = normalizeJson(parseCoachDecision(text))
@@ -313,7 +313,7 @@ proc cmdCoachDecision*(args: seq[string]): int =
 
   of "merge":
     if args.len < 4:
-      echo "Usage: vida-v0 coach-decision merge <required_results> <merge_policy> <decisions_json_file|->"
+      echo "Usage: taskflow-v0 coach-decision merge <required_results> <merge_policy> <decisions_json_file|->"
       return 1
     let requiredResults = try: parseInt(args[1]) except ValueError: 1
     let decisionsPayload =

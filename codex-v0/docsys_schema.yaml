@@ -66,6 +66,7 @@ artifact_types:
   - proof_taxonomy
   - machine
   - policy
+  - implementation_doc
 compatibility_classes:
   - direct_v1_kernel
   - overlay_v1_bridge

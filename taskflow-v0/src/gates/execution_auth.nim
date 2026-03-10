@@ -389,16 +389,16 @@ proc checkGate*(taskId, taskClass: string, localWrite: bool = false,
 proc cmdAuthGate*(args: seq[string]): int =
   if args.len == 0:
     echo """Usage:
-  vida-v0 auth check <task_id> <task_class> [--local-write] [--block-id <id>]
-  vida-v0 auth authorize-local <task_id> <task_class> <reason> <scope> <notes> [evidence] [actor]
-  vida-v0 auth authorize-internal <task_id> <task_class> <reason> <scope> <notes> [evidence] [actor]
-  vida-v0 auth authorize-skip <task_id> <task_class> <reason> <notes> [evidence] [actor]"""
+  taskflow-v0 auth check <task_id> <task_class> [--local-write] [--block-id <id>]
+  taskflow-v0 auth authorize-local <task_id> <task_class> <reason> <scope> <notes> [evidence] [actor]
+  taskflow-v0 auth authorize-internal <task_id> <task_class> <reason> <scope> <notes> [evidence] [actor]
+  taskflow-v0 auth authorize-skip <task_id> <task_class> <reason> <notes> [evidence] [actor]"""
     return 1
 
   case args[0]
   of "check":
     if args.len < 3:
-      echo "Usage: vida-v0 auth check <task_id> <task_class>"; return 1
+      echo "Usage: taskflow-v0 auth check <task_id> <task_class>"; return 1
     var localWrite = false; var blockId = ""
     var i = 3
     while i < args.len:

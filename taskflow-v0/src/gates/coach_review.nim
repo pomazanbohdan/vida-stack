@@ -151,13 +151,13 @@ proc checkCoachGate*(taskId: string): tuple[exitCode: int, payload: JsonNode] =
 proc cmdCoachGate*(args: seq[string]): int =
   if args.len == 0:
     echo """Usage:
-  vida-v0 coach check <task_id>
-  vida-v0 coach authorize-skip <task_id> <reason> <notes> [evidence] [actor]"""
+  taskflow-v0 coach check <task_id>
+  taskflow-v0 coach authorize-skip <task_id> <reason> <notes> [evidence] [actor]"""
     return 1
 
   case args[0]
   of "check":
-    if args.len < 2: echo "Usage: vida-v0 coach check <task_id>"; return 1
+    if args.len < 2: echo "Usage: taskflow-v0 coach check <task_id>"; return 1
     let (exitCode, rawPayload) = checkCoachGate(args[1])
     let payload = normalizeJson(rawPayload)
     if "--json" in args:
@@ -168,7 +168,7 @@ proc cmdCoachGate*(args: seq[string]): int =
 
   of "authorize-skip":
     if args.len < 4:
-      echo "Usage: vida-v0 coach authorize-skip <task_id> <reason> <notes>"; return 1
+      echo "Usage: taskflow-v0 coach authorize-skip <task_id> <reason> <notes>"; return 1
     let evidence = if args.len > 4: args[4] else: ""
     let actor = if args.len > 5: args[5] else: ""
     try:

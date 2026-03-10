@@ -149,7 +149,7 @@ Optional parallel fields:
 Transition note:
 
 1. the block-lifecycle command examples below are legacy wrapper examples,
-2. transitioned runtime reads now live under `vida-v0 task`, `vida-v0 todo`, and `vida-v0 run-graph`,
+2. transitioned runtime reads now live under `taskflow-v0 task`, `taskflow-v0 todo`, and `taskflow-v0 run-graph`,
 3. wrapper retirement is tracked by `vida/config/instructions/system-maps.runtime-transition-map.md`.
 
 Start task:
@@ -368,8 +368,8 @@ Before non-trivial execution or post-compact recovery, select boot profile expli
 Validation command:
 
 ```bash
-vida-v0 boot run <lean|standard|full> [task_id] [--non-dev]
-vida-v0 boot verify-receipt <task_id> [profile]
+taskflow-v0 boot run <lean|standard|full> [task_id] [--non-dev]
+taskflow-v0 boot verify-receipt <task_id> [profile]
 ```
 
 Rule:
@@ -417,11 +417,11 @@ For `/vida-form-task` (`work-pool-pack`) report:
 -----
 artifact_path: config/runtime-instructions/taskflow.protocol
 artifact_type: runtime_instruction
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions.taskflow-protocol.md
-created_at: 2026-03-06T22:42:30+02:00
-updated_at: 2026-03-10T01:29:02+02:00
+created_at: '2026-03-06T22:42:30+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: runtime-instructions.taskflow-protocol.changelog.jsonl

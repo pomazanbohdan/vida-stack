@@ -50,7 +50,7 @@ These rules apply across all lanes unless a more specific worker rule narrows be
 3. **[MUST]** Prefer root-cause, architecture-oriented fixes over hotfixes.
 4. **[MUST]** Read and apply `vida/config/instructions/instruction-contracts.thinking-protocol.md` algorithms before analysis/decisions in orchestrator lane.
 5. **[MUST]** If root `vida.config.yaml` exists, apply `vida/config/instructions/runtime-instructions.project-overlay-protocol.md`.
-6. **[MUST]** Keep bootstrap routing in `AGENTS.md`, project/runtime context in `AGENTS.sidecar.md`, active instruction canon in `vida/config/instructions/*`, and runtime implementation in `vida-v0/*`; keep project-owned behavior in `docs/product/*`, `docs/process/*`, and `scripts/*`.
+6. **[MUST]** Keep bootstrap routing in `AGENTS.md`, project/runtime context in `AGENTS.sidecar.md`, active instruction canon in `vida/config/instructions/*`, and runtime implementation in `taskflow-v0/*`; keep project-owned behavior in `docs/product/*`, `docs/process/*`, and `scripts/*`.
 7. **[MUST]** Use `rg` as the primary cross-file search tool.
 8. **[MUST]** Never widen scope silently when user intent, ownership layer, or risk posture changes materially.
 9. **[MUST]** Before conclusions that depend on live server/API behavior, validate with real requests and actual payloads.
@@ -122,7 +122,7 @@ Workers must not bootstrap repository-wide orchestration policy unless the task 
 
 ## Minimal Runtime Rules
 
-1. Use canonical project commands from the active project operations runbook resolved by the project overlay; if no overlay exists, fall back only to canonical wrappers and commands declared in `vida/config/instructions/*` or `vida-v0/*`, never to inferred host-project runbooks.
+1. Use canonical project commands from the active project operations runbook resolved by the project overlay; if no overlay exists, fall back only to canonical wrappers and commands declared in `vida/config/instructions/*` or `taskflow-v0/*`, never to inferred host-project runbooks.
 2. Keep temporary artifacts in `_temp/`; large logs in `.vida/scratchpad/`.
 3. Prefer sparse, exact, bounded reads over broad context loading.
 4. Broad `.vida/logs`, `.vida/state`, or `.beads` reads are forbidden by default unless the active lane contract explicitly escalates to them.

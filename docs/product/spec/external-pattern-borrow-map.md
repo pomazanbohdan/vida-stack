@@ -79,7 +79,7 @@ Reason:
 
 1. `vida` already owns a config-driven kernel contract
 2. product law must stay YAML plus explicit receipts/proofs
-3. runtime implementation must remain swappable between `vida-v0` and future `vida-v1`
+3. runtime implementation must remain swappable between `taskflow-v0` and future `vida-v1`
 
 ## 3. Borrowed From LangChain OSS / LangGraph
 
@@ -189,11 +189,11 @@ Borrowed patterns must not violate these invariants:
 -----
 artifact_path: product/spec/external-pattern-borrow-map
 artifact_type: product_spec
-artifact_version: 1
-artifact_revision: 2026-03-10
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
 status: canonical
 source_path: docs/product/spec/external-pattern-borrow-map.md
-created_at: 2026-03-09T12:00:46+02:00
-updated_at: 2026-03-09T20:28:59+02:00
+created_at: '2026-03-09T12:00:46+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: external-pattern-borrow-map.changelog.jsonl

@@ -81,7 +81,7 @@ Before routing work, normalize the request into:
 1. Frame the problem.
 2. Determine request intent class and active orchestration lens.
 3. For `execution_flow` and development-related `answer_only`, capture a compact boot snapshot first:
-   - `vida-v0 boot snapshot --json`
+   - `taskflow-v0 boot snapshot --json`
    - prefer this snapshot over broad `br`/repo discovery for task-state questions and boot-time context
 4. Apply TaskFlow engagement gate:
    - `answer_only` -> stay outside `TaskFlow/pack flow,
@@ -95,7 +95,7 @@ Before routing work, normalize the request into:
    - during migration, `bash vida-pack-helper.sh detect "<request>"` remains allowed as a legacy helper
 7. Select execution mode/profile:
    - task execution mode via `task-execution-mode.sh`,
-   - boot profile via `vida-v0 boot ...`,
+   - boot profile via `taskflow-v0 boot ...`,
    - META / FSAP / SCP / WVP when triggers fire.
 8. Select orchestration hierarchy:
    - default to free external read-only fanout for eligible non-trivial analysis/research/review/verification work,
@@ -293,11 +293,11 @@ Change-impact triggers routed to `reflection-pack`:
 -----
 artifact_path: config/instructions/instruction-contracts/orchestration.protocol
 artifact_type: instruction_contract
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts.orchestration-protocol.md
-created_at: 2026-03-06T22:42:30+02:00
-updated_at: 2026-03-10T01:26:51+02:00
+created_at: '2026-03-06T22:42:30+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: instruction-contracts.orchestration-protocol.changelog.jsonl

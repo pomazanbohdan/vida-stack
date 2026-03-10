@@ -4,7 +4,7 @@ Purpose: one operational contract for task state + execution visibility.
 
 Transition note:
 
-1. `vida-v0 task`, `vida-v0 todo`, and `vida-v0 run-graph` are the active transitioned read surfaces.
+1. `taskflow-v0 task`, `taskflow-v0 todo`, and `taskflow-v0 run-graph` are the active transitioned read surfaces.
 2. Legacy `beads-workflow.sh` and companion wrappers remain migration-source operator helpers only until their sequencing behavior is reimplemented or retired.
 
 ## 1) SSOT Rule
@@ -111,8 +111,8 @@ Auto-sync level:
 Boot profile validation:
 
 ```bash
-vida-v0 boot run lean <task_id>
-vida-v0 boot verify-receipt <task_id> [profile]
+taskflow-v0 boot run lean <task_id>
+taskflow-v0 boot verify-receipt <task_id> [profile]
 ```
 
 Escalate to `standard|full` only when complexity/risk requires broader read-set.
@@ -194,11 +194,11 @@ Rule:
 -----
 artifact_path: config/runtime-instructions/beads.protocol
 artifact_type: runtime_instruction
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions.beads-protocol.md
-created_at: 2026-03-06T22:42:30+02:00
-updated_at: 2026-03-10T00:55:00+02:00
+created_at: '2026-03-06T22:42:30+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: runtime-instructions.beads-protocol.changelog.jsonl

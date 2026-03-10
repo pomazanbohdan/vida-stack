@@ -66,7 +66,7 @@ proc validatePayload*(payload: JsonNode, taskId: string): tuple[ok: bool, reason
 
 proc cmdSpecDelta*(args: seq[string]): int =
   if args.len < 2:
-    echo "Usage: vida-v0 spec-delta <validate|status> <task_id> [--path PATH]"
+    echo "Usage: taskflow-v0 spec-delta <validate|status> <task_id> [--path PATH]"
     return 2
   let command = args[0]
   let taskId = args[1]

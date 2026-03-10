@@ -10,9 +10,9 @@ This protocol applies to CLI backend onboarding inside:
 
 1. `vida.config.yaml`
 2. `docs/framework/templates/vida.config.yaml.template`
-3. `vida-v0 system ...`
-4. `vida-v0 prepare-execution ...`
-5. `vida-v0 registry ...`
+3. `taskflow-v0 system ...`
+4. `taskflow-v0 prepare-execution ...`
+5. `taskflow-v0 registry ...`
 
 ## Lifecycle
 
@@ -55,11 +55,11 @@ Lane fitness should be evaluated independently for:
 -----
 artifact_path: config/instructions/agent-backends/lifecycle.protocol
 artifact_type: agent_backend_instruction
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/agent-backends.lifecycle-protocol.md
-created_at: 2026-03-09T22:51:59+02:00
-updated_at: 2026-03-10T00:55:00+02:00
+created_at: '2026-03-09T22:51:59+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: agent-backends.lifecycle-protocol.changelog.jsonl

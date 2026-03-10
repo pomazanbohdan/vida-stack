@@ -43,10 +43,10 @@ Minimum scaffoldable project artifacts:
 ## Commands
 
 ```bash
-vida-v0 config validate
-vida-v0 boot read-contract lean
-vida-v0 boot snapshot --json
-vida-v0 system snapshot
+taskflow-v0 config validate
+taskflow-v0 boot read-contract lean
+taskflow-v0 boot snapshot --json
+taskflow-v0 system snapshot
 ```
 
 ## Machine-Readable Contract
@@ -90,11 +90,11 @@ Minimum proof:
 -----
 artifact_path: config/command-instructions/project-bootstrap.protocol
 artifact_type: command_instruction
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/command-instructions.project-bootstrap-protocol.md
-created_at: 2026-03-06T22:42:30+02:00
-updated_at: 2026-03-10T00:55:00+02:00
+created_at: '2026-03-06T22:42:30+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: command-instructions.project-bootstrap-protocol.changelog.jsonl

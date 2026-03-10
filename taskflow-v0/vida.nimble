@@ -4,7 +4,7 @@ author        = "VIDA Stack"
 description   = "VIDA v0 runtime — Nim alternative to Python/Shell scripts"
 license       = "MIT"
 srcDir        = "src"
-bin           = @["vida-v0"]
+bin           = @["taskflow-v0"]
 
 # Dependencies
 requires "nim >= 2.0.0"

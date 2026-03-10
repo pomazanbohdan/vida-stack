@@ -237,14 +237,14 @@ proc syncDelta*(prevPayload, payload: JsonNode): seq[string] =
 proc cmdTodo*(args: seq[string]): int =
   if args.len < 2:
     echo """Usage:
-  vida-v0 todo ui-json <task_id>
-  vida-v0 todo list <task_id>
-  vida-v0 todo current <task_id>
-  vida-v0 todo next <task_id>
-  vida-v0 todo board <task_id>
-  vida-v0 todo compact <task_id> [limit]
-  vida-v0 todo tracks <task_id>
-  vida-v0 todo sync <task_id> [--stdout-only] [--mode <full|json-only|delta|compact>] [--quiet] [--max-items <n>]"""
+  taskflow-v0 todo ui-json <task_id>
+  taskflow-v0 todo list <task_id>
+  taskflow-v0 todo current <task_id>
+  taskflow-v0 todo next <task_id>
+  taskflow-v0 todo board <task_id>
+  taskflow-v0 todo compact <task_id> [limit]
+  taskflow-v0 todo tracks <task_id>
+  taskflow-v0 todo sync <task_id> [--stdout-only] [--mode <full|json-only|delta|compact>] [--quiet] [--max-items <n>]"""
     return 1
 
   let cmd = args[0]

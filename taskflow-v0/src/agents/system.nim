@@ -290,10 +290,10 @@ proc costClassForUnits*(units: int): string =
 proc cmdSystem*(args: seq[string]): int =
   if args.len == 0:
     echo """Usage:
-  vida-v0 system snapshot [task_id]
-  vida-v0 system detect
-  vida-v0 system mode
-  vida-v0 system budget-summary [task_class]"""
+  taskflow-v0 system snapshot [task_id]
+  taskflow-v0 system detect
+  taskflow-v0 system mode
+  taskflow-v0 system budget-summary [task_class]"""
     return 1
 
   case args[0]

@@ -44,7 +44,7 @@ proc buildCapsulePayload(taskId, doneText, nextStep, risks, acceptanceSlice, con
     "task_role_in_epic": taskRole,
     "done": doneText,
     "next": nextStep,
-    "constraints": (if constraints.len > 0: %*[constraints] else: %*["follow-L0-invariants", "legacy-zero", "vida-v0-task-store"]),
+    "constraints": (if constraints.len > 0: %*[constraints] else: %*["follow-L0-invariants", "legacy-zero", "taskflow-v0-task-store"]),
     "open_risks": (if risks.len > 0: %*[risks] else: newJArray()),
     "acceptance_slice": acceptanceSlice,
     "task_context": taskDesc,
@@ -70,7 +70,7 @@ proc hydrateCapsule*(taskId: string): tuple[code: int, payload: JsonNode, reason
         "planning",
         "",
         "runtime-bootstrap",
-        "legacy-zero,vida-v0-task-store",
+        "legacy-zero,taskflow-v0-task-store",
         "runtime-bootstrap",
       )
       return (0, payload, "")
@@ -93,15 +93,15 @@ proc hydrateCapsule*(taskId: string): tuple[code: int, payload: JsonNode, reason
 proc cmdContextCapsule*(args: seq[string]): int =
   if args.len == 0:
     echo """Usage:
-  vida-v0 context-capsule write <task_id> <done> <next> [risks] [acceptance_slice] [constraints] [task_role]
-  vida-v0 context-capsule read <task_id> [--json]
-  vida-v0 context-capsule hydrate <task_id> [--json]"""
+  taskflow-v0 context-capsule write <task_id> <done> <next> [risks] [acceptance_slice] [constraints] [task_role]
+  taskflow-v0 context-capsule read <task_id> [--json]
+  taskflow-v0 context-capsule hydrate <task_id> [--json]"""
     return 1
 
   case args[0]
   of "write":
     if args.len < 4:
-      echo "Usage: vida-v0 context-capsule write <task_id> <done> <next> [risks] [acceptance_slice] [constraints] [task_role]"
+      echo "Usage: taskflow-v0 context-capsule write <task_id> <done> <next> [risks] [acceptance_slice] [constraints] [task_role]"
       return 1
     let payload = writeCapsule(
       args[1],
@@ -119,7 +119,7 @@ proc cmdContextCapsule*(args: seq[string]): int =
     return 0
   of "read":
     if args.len < 2:
-      echo "Usage: vida-v0 context-capsule read <task_id> [--json]"
+      echo "Usage: taskflow-v0 context-capsule read <task_id> [--json]"
       return 1
     let payload = readCapsule(args[1])
     if "--json" in args:
@@ -129,7 +129,7 @@ proc cmdContextCapsule*(args: seq[string]): int =
     return 0
   of "hydrate":
     if args.len < 2:
-      echo "Usage: vida-v0 context-capsule hydrate <task_id> [--json]"
+      echo "Usage: taskflow-v0 context-capsule hydrate <task_id> [--json]"
       return 1
     let (code, payload, reason) = hydrateCapsule(args[1])
     if code != 0:

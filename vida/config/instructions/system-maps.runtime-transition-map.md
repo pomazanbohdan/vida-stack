@@ -1,21 +1,21 @@
 # Runtime Transition Map
 
-Purpose: provide one canonical map from legacy `*` helpers to the `vida-v0` transitional runtime or to explicit historical-only status.
+Purpose: provide one canonical map from legacy `*` helpers to the `taskflow-v0` transitional runtime or to explicit historical-only status.
 
 ## Active Transitional Runtime
 
-Use `vida-v0` as the canonical runtime surface for these domains:
+Use `taskflow-v0` as the canonical runtime surface for these domains:
 
-1. `boot-packet.py` / `boot-profile.sh` / `vida-boot-snapshot.py` -> `vida-v0 boot ...`
-2. `worker-packet-gate.py` -> `vida-v0 worker ...`
-3. route snapshot/receipt helpers -> `vida-v0 route ...`
-4. kernel config introspection -> `vida-v0 kernel ...`
-5. task store and import/export -> `vida-v0 task ...` and `vida-v0 br ...`
-6. TaskFlow/readiness views -> `vida-v0 todo ...`
-7. run-graph -> `vida-v0 run-graph ...`
-8. execution auth / coach / verification prompt -> `vida-v0 auth ...`, `vida-v0 coach ...`, `vida-v0 coach-decision ...`, `vida-v0 verification-prompt ...`
-9. worker runtime inventory and leases -> `vida-v0 system ...`, `vida-v0 registry ...`, `vida-v0 lease ...`, `vida-v0 pool ...`
-10. context/memory/spec surfaces -> `vida-v0 context ...`, `vida-v0 context-capsule ...`, `vida-v0 memory ...`, `vida-v0 spec-intake ...`, `vida-v0 spec-delta ...`, `vida-v0 draft-execution-spec ...`
+1. `boot-packet.py` / `boot-profile.sh` / `vida-boot-snapshot.py` -> `taskflow-v0 boot ...`
+2. `worker-packet-gate.py` -> `taskflow-v0 worker ...`
+3. route snapshot/receipt helpers -> `taskflow-v0 route ...`
+4. kernel config introspection -> `taskflow-v0 kernel ...`
+5. task store and import/export -> `taskflow-v0 task ...` and `taskflow-v0 br ...`
+6. TaskFlow/readiness views -> `taskflow-v0 todo ...`
+7. run-graph -> `taskflow-v0 run-graph ...`
+8. execution auth / coach / verification prompt -> `taskflow-v0 auth ...`, `taskflow-v0 coach ...`, `taskflow-v0 coach-decision ...`, `taskflow-v0 verification-prompt ...`
+9. worker runtime inventory and leases -> `taskflow-v0 system ...`, `taskflow-v0 registry ...`, `taskflow-v0 lease ...`, `taskflow-v0 pool ...`
+10. context/memory/spec surfaces -> `taskflow-v0 context ...`, `taskflow-v0 context-capsule ...`, `taskflow-v0 memory ...`, `taskflow-v0 spec-intake ...`, `taskflow-v0 spec-delta ...`, `taskflow-v0 draft-execution-spec ...`
 
 ## Historical-Only Until Retired Or Reimplemented
 
@@ -40,7 +40,7 @@ Rule:
 
 1. historical-only commands may be referenced only as migration sources or temporary gaps,
 2. they must not be treated as the long-term active runtime home,
-3. removal is blocked only until replacement behavior is either implemented in `vida-v0` or intentionally retired.
+3. removal is blocked only until replacement behavior is either implemented in `taskflow-v0` or intentionally retired.
 
 Pack/wave rule:
 
@@ -52,19 +52,19 @@ Pack/wave rule:
 
 Minimum transitional runtime proof:
 
-1. `nim c vida-v0/src/vida.nim`
-2. `nim c -r vida-v0/tests/test_boot_profile.nim`
-3. `nim c -r vida-v0/tests/test_worker_packet.nim`
-4. `nim c -r vida-v0/tests/test_kernel_runtime.nim`
+1. `nim c taskflow-v0/src/vida.nim`
+2. `nim c -r taskflow-v0/tests/test_boot_profile.nim`
+3. `nim c -r taskflow-v0/tests/test_worker_packet.nim`
+4. `nim c -r taskflow-v0/tests/test_kernel_runtime.nim`
 
 -----
 artifact_path: config/system-maps/runtime-transition.map
 artifact_type: system_map
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps.runtime-transition-map.md
-created_at: 2026-03-09T20:28:59+02:00
-updated_at: 2026-03-10T00:55:00+02:00
+created_at: '2026-03-09T20:28:59+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: system-maps.runtime-transition-map.changelog.jsonl

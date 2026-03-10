@@ -67,8 +67,8 @@ vida/
 Rule:
 
 1. root config artifacts are product law,
-2. `docs/framework/*` and `vida-v0/*` are framework/runtime support surfaces outside product law,
-3. `vida-v0` and `vida-v1` must read the same root config law.
+2. `docs/framework/*` and `taskflow-v0/*` are framework/runtime support surfaces outside product law,
+3. `taskflow-v0` and `vida-v1` must read the same root config law.
 4. concrete installed agent IDs, model IDs, and live backend inventory are runtime-owned bridge data, not canonical route or policy law.
 
 ## 4. Canonical Entities
@@ -293,11 +293,11 @@ Rule:
 -----
 artifact_path: product/spec/partial-development-kernel-scope
 artifact_type: product_spec
-artifact_version: 1
-artifact_revision: 2026-03-10
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
 status: canonical
 source_path: docs/product/spec/partial-development-kernel-scope.md
-created_at: 2026-03-09T12:00:46+02:00
-updated_at: 2026-03-09T20:28:59+02:00
+created_at: '2026-03-09T12:00:46+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: partial-development-kernel-scope.changelog.jsonl

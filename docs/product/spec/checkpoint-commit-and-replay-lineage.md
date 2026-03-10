@@ -103,7 +103,7 @@ Replay runs should carry:
 2. `receipt-proof-taxonomy` -> checkpoint receipts and replay-linked proof artifacts
 3. `execution_plan` -> pending checkpoint writes and resumability posture
 4. `route_progression` -> replay of route-facing projections only, not route law itself
-5. `run_graph` -> practical runtime resume cursor source in `vida-v0`
+5. `run_graph` -> practical runtime resume cursor source in `taskflow-v0`
 
 ## 6. Invariants
 
@@ -116,11 +116,11 @@ Replay runs should carry:
 -----
 artifact_path: product/spec/checkpoint-commit-and-replay-lineage
 artifact_type: product_spec
-artifact_version: 1
-artifact_revision: 2026-03-10
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
 status: canonical
 source_path: docs/product/spec/checkpoint-commit-and-replay-lineage.md
-created_at: 2026-03-09T12:00:46+02:00
-updated_at: 2026-03-09T20:28:59+02:00
+created_at: '2026-03-09T12:00:46+02:00'
+updated_at: '2026-03-10T03:06:28+02:00'
 changelog_ref: checkpoint-commit-and-replay-lineage.changelog.jsonl

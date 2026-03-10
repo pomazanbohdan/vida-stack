@@ -193,12 +193,12 @@ proc verifyTaskLog*(taskId: string, strict: bool = false,
 proc cmdBeads*(args: seq[string]): int =
   if args.len == 0:
     echo """Usage:
-  vida-v0 beads mode
-  vida-v0 beads set-mode <mode> [reason]
-  vida-v0 beads snapshot [reason]
-  vida-v0 beads snapshot-age
-  vida-v0 beads jsonl-stats
-  vida-v0 beads verify --task <id> [--strict] [--assumption-hours N]"""
+  taskflow-v0 beads mode
+  taskflow-v0 beads set-mode <mode> [reason]
+  taskflow-v0 beads snapshot [reason]
+  taskflow-v0 beads snapshot-age
+  taskflow-v0 beads jsonl-stats
+  taskflow-v0 beads verify --task <id> [--strict] [--assumption-hours N]"""
     return 1
 
   case args[0]
@@ -206,7 +206,7 @@ proc cmdBeads*(args: seq[string]): int =
     echo beadsMode(); return 0
 
   of "set-mode":
-    if args.len < 2: echo "Usage: vida-v0 beads set-mode <mode> [reason]"; return 1
+    if args.len < 2: echo "Usage: taskflow-v0 beads set-mode <mode> [reason]"; return 1
     let reason = if args.len > 2: args[2] else: "manual"
     setBeadsMode(args[1], reason); return 0
 

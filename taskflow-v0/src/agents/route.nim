@@ -395,16 +395,16 @@ proc ensembleAgentBackends*(route: JsonNode): seq[string] =
 proc cmdRoute*(args: seq[string]): int =
   if args.len == 0:
     echo """Usage:
-  vida-v0 route snapshot <task_class> [task_id]
-  vida-v0 route receipt <task_id> <task_class>
-  vida-v0 route hash <task_id> <task_class>
-  vida-v0 route framework-snapshot
-  vida-v0 route project-snapshot"""
+  taskflow-v0 route snapshot <task_class> [task_id]
+  taskflow-v0 route receipt <task_id> <task_class>
+  taskflow-v0 route hash <task_id> <task_class>
+  taskflow-v0 route framework-snapshot
+  taskflow-v0 route project-snapshot"""
     return 1
 
   case args[0]
   of "snapshot":
-    if args.len < 2: echo "Usage: vida-v0 route snapshot <task_class> [task_id]"; return 1
+    if args.len < 2: echo "Usage: taskflow-v0 route snapshot <task_class> [task_id]"; return 1
     let taskId = if args.len > 2: args[2] else: ""
     let (snapshot, route) = routeSnapshot(args[1], taskId)
     let payload = normalizeJson(%*{"snapshot": snapshot, "route": route})
@@ -415,13 +415,13 @@ proc cmdRoute*(args: seq[string]): int =
     return 0
 
   of "receipt":
-    if args.len < 3: echo "Usage: vida-v0 route receipt <task_id> <task_class>"; return 1
+    if args.len < 3: echo "Usage: taskflow-v0 route receipt <task_id> <task_class>"; return 1
     let (_, route) = routeSnapshot(args[2], args[1])
     let path = writeRouteReceipt(args[1], args[2], route)
     echo path; return 0
 
   of "hash":
-    if args.len < 3: echo "Usage: vida-v0 route hash <task_id> <task_class>"; return 1
+    if args.len < 3: echo "Usage: taskflow-v0 route hash <task_id> <task_class>"; return 1
     let (_, route) = routeSnapshot(args[2], args[1])
     echo routeReceiptHash(route); return 0
 

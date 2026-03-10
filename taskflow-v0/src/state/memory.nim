@@ -41,7 +41,7 @@ proc recordEntry*(kind: string; summary: string; sourceTask: string = ""; detail
 
 proc cmdMemory*(args: seq[string]): int =
   if args.len == 0:
-    echo "Usage: vida-v0 memory <record|status>"
+    echo "Usage: taskflow-v0 memory <record|status>"
     return 1
   case args[0]
   of "status":
@@ -53,7 +53,7 @@ proc cmdMemory*(args: seq[string]): int =
     return 0
   of "record":
     if args.len < 2:
-      echo "Usage: vida-v0 memory record <kind> --summary <text>"
+      echo "Usage: taskflow-v0 memory record <kind> --summary <text>"
       return 1
     let kind = args[1]
     var summary = ""

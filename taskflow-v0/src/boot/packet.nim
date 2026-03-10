@@ -39,7 +39,7 @@ const FullReads* = @[
 const Invariants* = @[
   "read AGENTS.md first after compression",
   "apply thinking-protocol algorithms",
-  "task state lives in vida-v0 task store",
+  "task state lives in taskflow-v0 task store",
   "execute only through TODO blocks",
   "external-first fanout for eligible read-only work",
 ]
@@ -70,7 +70,7 @@ proc buildPacket*(profile: string, nonDev: bool, rootDir: string): JsonNode =
   let reads = profileReads(profile, nonDev, agentSystemActive, rootDir)
 
   let snapshotCmd = if nonDev: ""
-    else: "VIDA_ROOT=$PWD vida-v0/vida-v0 boot snapshot --json"
+    else: "VIDA_ROOT=$PWD taskflow-v0/taskflow-v0 boot snapshot --json"
   let snapshotScope = if nonDev: "disabled for non-dev boot"
     else: "top-level in-progress tasks, ready head, and open subtask tree"
 
@@ -117,7 +117,7 @@ proc packetSummary*(subject: string, rootDir: string): JsonNode =
 
 proc cmdBootPacket*(args: seq[string], rootDir: string): int =
   if args.len == 0:
-    echo "Usage: vida-v0 boot <lean|standard|full|read-contract|summary> [args]"
+    echo "Usage: taskflow-v0 boot <lean|standard|full|read-contract|summary> [args]"
     return 1
 
   let command = args[0].toLowerAscii().strip()
@@ -125,7 +125,7 @@ proc cmdBootPacket*(args: seq[string], rootDir: string): int =
   case command
   of "read-contract":
     if args.len < 2:
-      echo "Usage: vida-v0 boot read-contract <lean|standard|full> [--non-dev]"
+      echo "Usage: taskflow-v0 boot read-contract <lean|standard|full> [--non-dev]"
       return 1
     let profile = args[1].toLowerAscii().strip()
     if profile notin ["lean", "standard", "full"]:
@@ -138,7 +138,7 @@ proc cmdBootPacket*(args: seq[string], rootDir: string): int =
 
   of "summary":
     if args.len < 2:
-      echo "Usage: vida-v0 boot summary <subject>"
+      echo "Usage: taskflow-v0 boot summary <subject>"
       return 1
     let subject = args[1].strip()
     let payload = normalizeJson(packetSummary(subject, rootDir))

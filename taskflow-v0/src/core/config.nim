@@ -43,7 +43,7 @@ proc vidaRoot*(): string =
   return CompileTimeRoot
 
 proc vidaWorkspaceDir*(): string =
-  ## Canonical runtime workspace directory for vida-v0 transitional state.
+  ## Canonical runtime workspace directory for taskflow-v0 transitional state.
   vidaRoot() / ".vida"
 
 proc vidaWorkspacePath*(parts: varargs[string]): string =
