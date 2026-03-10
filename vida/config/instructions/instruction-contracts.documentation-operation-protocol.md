@@ -73,6 +73,12 @@ Use only the following canonical foundations:
 5. `AGENTS.sidecar.md`
 6. `codex-v0/codex.py`
 
+Evidence rule:
+
+1. For documentation ownership, bootstrap, canonical-map, or documentation-model analysis, use canonical instruction/spec/map artifacts as the primary authority.
+2. Do not use operational artifacts such as `*.changelog.jsonl`, `*.current.jsonl`, registry snapshots, readiness snapshots, or other generated status files as the primary basis for conclusions about documentation ownership or canonical policy.
+3. Those operational artifacts may be used only as secondary corroboration after the conclusion is already grounded in canonical documentation.
+
 ## Required Working Mode
 
 When working on documentation, the agent must operate in this order:

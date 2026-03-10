@@ -1,17 +1,17 @@
 project:
-  id: mobile-odoo
+  id: vida-stack
   overlay_version: 1
 
 project_bootstrap:
   enabled: true
   docs_root: docs
   process_root: docs/process
-  research_root: docs/research
-  readme_doc: docs/README.md
-  architecture_doc: docs/architecture.md
-  decisions_doc: docs/decisions.md
-  environments_doc: docs/environments.md
-  project_operations_doc: docs/process/project-operations.md
+  research_root: docs/framework/research
+  readme_doc: README.md
+  architecture_doc: docs/project-root-map.md
+  decisions_doc: docs/product/spec/current-spec-map.md
+  environments_doc: docs/product/spec/repository-two-project-surface-model.md
+  project_operations_doc: docs/process/README.md
   agent_system_doc: docs/process/agent-system.md
   allow_scaffold_missing: true
   require_launch_confirmation: true

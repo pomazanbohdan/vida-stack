@@ -62,6 +62,15 @@ Purpose: define the current product-spec home, show absorbed historical sources,
 18. [canonical-layer-documentation-template.md](/home/unnamed/project/vida-stack/docs/product/spec/canonical-layer-documentation-template.md)
    Sources: `docs/product/spec/canonical-documentation-and-inventory-layers.md`, promoted Layer 1 through Layer 7 specs, and current documentation operation law
    Config families: canonical layer-law authoring shape for Layers 1 through 7
+19. [framework-project-documentation-layering.md](/home/unnamed/project/vida-stack/docs/product/spec/framework-project-documentation-layering.md)
+   Sources: `AGENTS.md`, `AGENTS.sidecar.md`, `vida/config/instructions/system-maps.framework-map-protocol.md`, `vida/config/instructions/system-maps.framework-index.md`, and the current framework/project documentation restructuring decisions
+   Config families: framework canon vs role/bootstrap/governance/project documentation layering, derivation boundaries, two-map bootstrap, and root-map requirements
+20. [root-map-and-runtime-surface-model.md](/home/unnamed/project/vida-stack/docs/product/spec/root-map-and-runtime-surface-model.md)
+   Sources: `AGENTS.md`, `AGENTS.sidecar.md`, `vida/config/instructions/system-maps.framework-map-protocol.md`, `vida/config/instructions/system-maps.framework-index.md`, and the current runtime-surface optimization decisions for `codex`, `taskflow`, and future runtime families
+   Config families: framework root map, project root map, runtime-family submaps, template maps, and activation-trigger discoverability across active canon
+21. [repository-two-project-surface-model.md](/home/unnamed/project/vida-stack/docs/product/spec/repository-two-project-surface-model.md)
+   Sources: `AGENTS.sidecar.md`, `vida/config/instructions/system-maps.framework-map-protocol.md`, root `vida.config.yaml`, and the current repository separation decisions for `vida-stack` and extracted `vida-mobile`
+   Config families: active current-project routing, extracted second-project bundle boundaries, root config continuity, and two-project repository map discipline
 
 ## Current Rule
 
@@ -91,5 +100,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-10T04:25:26+02:00'
+updated_at: '2026-03-10T10:15:00+02:00'
 changelog_ref: current-spec-map.changelog.jsonl

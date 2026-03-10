@@ -9,6 +9,15 @@ Rules:
 3. If a process rule becomes stable product law, promote it into `docs/product/spec/**`.
 4. If a process rule needs executable enforcement, project it into runtime/config artifacts instead of leaving it as prose only.
 
+Canonical entrypoints:
+
+1. `docs/process/README.md`
+   - process lane root
+2. `docs/process/documentation-tooling-map.md`
+   - project-owned documentation tooling and operator-command map
+3. `docs/process/agent-system.md`
+   - project-owned agent-system process surface
+
 -----
 artifact_path: process/readme
 artifact_type: process_doc
@@ -18,5 +27,5 @@ schema_version: 1
 status: canonical
 source_path: docs/process/README.md
 created_at: 2026-03-10T00:00:00+02:00
-updated_at: 2026-03-10T00:30:00+02:00
+updated_at: 2026-03-10T10:05:00+02:00
 changelog_ref: README.changelog.jsonl

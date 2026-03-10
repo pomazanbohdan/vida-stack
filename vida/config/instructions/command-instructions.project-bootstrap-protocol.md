@@ -33,12 +33,12 @@ Fail-fast rule:
 Minimum scaffoldable project artifacts:
 
 1. `vida.config.yaml`
-2. `docs/README.md`
-2. `docs/architecture.md`
-3. `docs/decisions.md`
-4. `docs/environments.md`
-5. host-project operations doc resolved by the emitted overlay/bootstrap contract
-6. `docs/process/agent-system.md`
+2. project docs root readme/map
+3. project architecture document
+4. project decisions document
+5. project environment/operations notes when the project needs them
+6. host-project operations doc resolved by the emitted overlay/bootstrap contract
+7. project process/agent-system doc when the project bootstrap contract declares it
 
 ## Commands
 

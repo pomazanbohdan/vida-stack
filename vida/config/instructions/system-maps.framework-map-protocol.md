@@ -1,8 +1,12 @@
 # Framework Map Protocol (FMP)
 
-Purpose: one canonical map for VIDA repository structure, documentation architecture, artifact taxonomy, runtime layering, and promotion/projection rules.
+Purpose: define the canonical framework topology, layer model, artifact taxonomy, and promotion/projection rules beneath the top-level `vida/` root map.
 
-This file is the single framework-owned answer to five questions:
+Primary framework root:
+
+1. `vida/root-map.md`
+
+This file answers five topology questions:
 
 1. where each major directory belongs,
 2. which artifact class each document/config family represents,
@@ -36,10 +40,18 @@ Top-level repository layout:
 8. `taskflow-v0/`
    - transitional implementation runtime,
    - current execution substrate for the `0.2.0` line.
-9. `docs/project-memory/`
+9. `codex-v0/`
+   - bounded transitional documentation/operator runtime surface,
+   - independently usable, but still part of the unified VIDA framework runtime family.
+10. additional runtime families may exist or be added later,
+   - each must remain both independently understandable and discoverable through the unified VIDA framework map layer.
+11. `docs/project-memory/`
    - Git-resident source tree for project-memory artifacts.
-10. `docs/process/`
+12. `docs/process/`
    - project operational runbooks when present.
+13. `projects/`
+   - extracted or quarantined secondary project bundles preserved locally during repository cleanup or staged separation,
+   - not part of the default active project-doc bootstrap path.
 
 Rule:
 
@@ -47,40 +59,26 @@ Rule:
 2. no artifact should exist in two active homes with equal authority,
 3. if the same concept appears in multiple places, exactly one location must be canonical and the others must be projections, pointers, or evidence.
 
-## 1.1 Docsys Operational Bootstrap
+Bootstrap routing rule:
 
-The canonical repository doc/instruction tooling is `codex-v0/codex.py`.
+1. framework bootstrap resolves downstream documentation discovery through framework-owned maps first,
+2. `AGENTS.md` and `AGENTS.sidecar.md` must not directly bear project/product document discovery details beyond routing to the correct framework-owned map/index surface,
+3. once this framework map resolves the owner layer, bootstrap may continue into `docs/product/**` or `docs/process/**` as discovered targets rather than as implicit bootstrap knowledge.
 
-Default status reads:
+Runtime-family map rule:
 
-1. `python3 codex-v0/codex.py overview --profile active-canon`
-2. `python3 codex-v0/codex.py summary --root docs`
-3. `python3 codex-v0/codex.py summary --root vida`
-4. `python3 codex-v0/codex.py registry --root vida/config/instructions`
-5. `python3 codex-v0/codex.py registry-write --profile active-canon --canonical`
+1. the unified framework map must expose all active runtime families,
+2. each runtime family such as `codex`, `taskflow`, or a future runtime must have a bounded map/discovery surface of its own,
+3. runtime-family discoverability must not depend on ad hoc filesystem guessing,
+4. one runtime family must not silently absorb the identity of the others.
+5. current runtime-family discovery entrypoint: `vida/config/instructions/system-maps.runtime-family-index.md`
 
-Default targeted reads:
+Tooling routing rule:
 
-1. `scan` for per-file latest state,
-2. `changelog` for one artifact history,
-3. `changelog-task` and `task-summary` for task-scoped history,
-4. `artifact-impact` and `task-impact` for change-radius tracing,
-5. `links` and `deps-map` for current markdown/dependency inventories.
-
-Default maintenance/mutation operations:
-
-1. `touch` for lawful timestamp plus changelog updates,
-2. `init` for new canonical markdown artifacts,
-3. `move` for file plus changelog relocation,
-4. `rename-artifact` for canonical artifact-path changes,
-5. `migrate-links` for exact markdown-link rewrites in one file or across a directory,
-6. `check` and `doctor` for consistency enforcement.
-
-Operational rule:
-
-1. use codex first for catalog, status, changelog, and link-migration work,
-2. prefer automated codex mutation paths over ad hoc footer/changelog edits,
-3. codex mutation commands should stay quiet on success and print only issues on validation failure.
+1. concrete documentation/runtime tooling discovery does not belong in this topology map,
+2. use `vida/config/instructions/system-maps.runtime-family-index.md` for runtime-family routing,
+3. use `vida/config/instructions/system-maps.template-map.md` for template routing,
+4. use `vida/config/instructions/system-maps.governance-map.md` for policy/gate discovery.
 
 Document maturity rule:
 
@@ -88,18 +86,17 @@ Document maturity rule:
 2. current framework/product/instruction documents are expected to continue evolving during work on VIDA `0.2.0` and VIDA `1.0.0`,
 3. this ongoing status is a policy-level fact and must be recorded in canonical maps/specs, not spammed as repetitive per-file changelog noise.
 
-Root-bootstrap exception rule:
+Governance boundary rule:
 
-1. root-level repository markdown files may temporarily use a bootstrap exception path where missing footer metadata is tolerated,
-2. this exception exists only to keep the current bootstrap surface workable during the pre-`1.0.0` phase,
-3. the exception must be expressed through a canonical policy layer rather than hardcoded ad hoc logic,
-4. the exception must be removed by VIDA `1.0.0`, after which root-level markdown files must conform to the same metadata contract as the rest of the active canon unless replaced by a stricter bootstrap mechanism.
+1. root-bootstrap exceptions, contribution/publication rules, approval gates, and lifecycle policies belong to the governance map,
+2. keep only topology, layer, and artifact-boundary rules here.
 
-Tooling detail rule:
+Template-map rule:
 
-1. keep only the bootstrap/tooling policy here,
-2. keep concrete repository documentation command inventory in `AGENTS.sidecar.md`,
-3. avoid duplicating detailed command catalogs across multiple maps.
+1. template discovery must be available through an explicit template-map surface,
+2. top-level framework discovery must point to that template-map surface,
+3. template families must remain distinguishable by owner and by activation trigger.
+4. current template discovery entrypoint: `vida/config/instructions/system-maps.template-map.md`
 
 ## 2. Layer Map
 
@@ -120,8 +117,10 @@ VIDA uses one normalized documentation/runtime stack:
    - `vida/config/instructions/**`
    - active latest-revision Markdown canon plus adjacent changelogs and projections
 5. `Framework Map / Index Layer`
+   - `vida/root-map.md`
    - this file
    - `vida/config/instructions/system-maps.protocol-index.md`
+   - `vida/config/instructions/system-maps.governance-map.md`
    - thin indexes/pointers only
 6. `Product Spec Layer`
    - `docs/product/spec/**`
@@ -326,7 +325,7 @@ Use this anti-duplication rule:
 
 1. one master map: this file
 2. one protocol registry: `vida/config/instructions/system-maps.protocol-index.md`
-3. one current product-spec map: `docs/product/spec/current-spec-map.md`
+3. one current project/product docs map resolved through the project docs bootstrap surface
 4. one canonical source per semantic decision
 
 Avoid:
@@ -356,7 +355,7 @@ When changing framework structure, in the same change set:
 
 1. update this file,
 2. update `vida/config/instructions/system-maps.protocol-index.md` if protocol ownership or canonical source changed,
-3. update `docs/product/spec/current-spec-map.md` if a runtime-spec promotion changed current product canon,
+3. update the project docs map if a runtime-spec promotion changed current project/product canon,
 4. update instruction projection docs when an instruction-bearing artifact moves,
 5. remove outdated active-body duplicates immediately or mark them pointer-only.
 
@@ -374,7 +373,7 @@ Conflict rule:
 1. `AGENTS.md` remains stronger for bootstrap behavior,
 2. this file is the canonical repository/documentation architecture map,
 3. `vida/config/instructions/system-maps.protocol-index.md` is the canonical domain-protocol registry,
-4. `docs/product/spec/current-spec-map.md` is the canonical promoted product-spec map.
+4. the active project docs map is the canonical promoted project/product-spec map for the current repository.
 
 -----
 artifact_path: config/system-maps/framework.map
@@ -385,5 +384,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps.framework-map-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-10T03:06:28+02:00'
+updated_at: '2026-03-10T09:50:00+02:00'
 changelog_ref: system-maps.framework-map-protocol.changelog.jsonl
