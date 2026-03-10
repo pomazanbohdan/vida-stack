@@ -80,22 +80,22 @@ Mutation/finalization commands:
 
 1. `touch <file> <note> [--event ...] [--task-id ...] [--actor ...] [--scope ...] [--tags ...]`
    - update `updated_at` and append changelog in one step
-2. `finalize-edit <file> <note> [--status ...] [--artifact-version ...] [--artifact-revision ...] [--set key=value ...]`
-   - finalize one or more prior manual diff edits with one metadata/changelog update
+2. `finalize-edit <file> [<file> ...] <note> [--status ...] [--artifact-version ...] [--artifact-revision ...] [--set key=value ...]`
+   - finalize one or more prior manual diff edits across one or more files with one metadata/changelog update per file
 3. `init <file> <artifact_path> <artifact_type> <note> [...]`
    - initialize a canonical markdown artifact with footer and sidecar changelog
 4. `move <file> <destination> <note> [...]`
    - relocate one artifact plus its sidecar changelog
 5. `rename-artifact <file> <artifact_path> <note> [...]`
    - change canonical artifact identity without moving the file
-6. `migrate-links <file-or-dir> <old_target> <new_target> <note> [...]`
-   - exact markdown-link rewrite with changelog and validation
+6. `migrate-links <file-or-dir> <old_target> <new_target> <note> [--dry-run] [--format toon|jsonl] [...]`
+   - exact markdown-link rewrite with preview, summary, changelog, and validation
 
 Validation commands:
 
 1. `check --root <dir> [files...]`
    - footer and sidecar health checks
-2. `doctor --root <dir> [--show-warnings]`
+2. `doctor --root <dir> [--show-warnings] [--format toon|jsonl]`
    - stronger consistency checks for metadata, changelogs, links, and policy exceptions
 
 Operational rule:

@@ -584,6 +584,34 @@ def rewrite_markdown_links(body: str, old_target: str, new_target: str) -> tuple
     return link_re.sub(replace, body), replacements
 
 
+def resolve_markdown_scope(target: Path) -> list[Path]:
+    resolved = target.resolve()
+    if resolved.is_file():
+        return [resolved]
+    return [path for path in iter_markdown_files(resolved)]
+
+
+def apply_finalize_updates(footer: dict[str, str], status: str, artifact_version: str, artifact_revision: str, set_values: list[str]) -> tuple[dict[str, str], list[str]]:
+    updated = dict(footer)
+    applied_updates: list[str] = []
+    if status:
+        updated["status"] = status
+        applied_updates.append(f"status={status}")
+    if artifact_version:
+        updated["artifact_version"] = artifact_version
+        applied_updates.append(f"artifact_version={artifact_version}")
+    if artifact_revision:
+        updated["artifact_revision"] = artifact_revision
+        applied_updates.append(f"artifact_revision={artifact_revision}")
+    for item in set_values:
+        if "=" not in item:
+            raise typer.BadParameter(f"invalid --set pair: {item}")
+        key, value = item.split("=", 1)
+        updated[key.strip()] = value.strip()
+        applied_updates.append(f"{key.strip()}={value.strip()}")
+    return updated, applied_updates
+
+
 def complete_status(code: int) -> None:
     status = "✅ OK" if code == 0 else "❌ ERROR"
     suffix = f" ({result_note})" if result_note else ""
@@ -715,7 +743,7 @@ def cmd_touch(
 
 @app.command("finalize-edit")
 def cmd_finalize_edit(
-    markdown_file: Path,
+    markdown_files: Annotated[list[Path], typer.Argument(help="One or more markdown files to finalize.")] ,
     change_note: str,
     event: Annotated[str, typer.Option(help="Changelog event name.")] = "artifact_revision_updated",
     status: Annotated[str, typer.Option(help="Optional new status value.")] = "",
@@ -728,36 +756,48 @@ def cmd_finalize_edit(
     tags: Annotated[str, typer.Option(help="Optional comma-separated tags.")] = "",
 ) -> None:
     set_command("finalize-edit")
-    path = markdown_file.resolve()
-    if not path.exists():
-        raise typer.BadParameter(f"markdown file not found: {path}")
-    if is_changelog_only(path):
-        append_changelog_event(changelog_path_for(path), bootstrap_optional_event(path, event, change_note, task_id, actor, scope, normalize_tag_list(tags)))
-        set_result_note(f"{path.name} finalized via changelog only; {policy_reason(path, 'changelog_only') or 'bootstrap file body left unchanged'}")
+    resolved_files = [path.resolve() for path in markdown_files]
+    if not resolved_files:
+        raise typer.BadParameter("at least one markdown file is required")
+    changed_paths: list[Path] = []
+    changelog_only_count = 0
+    skipped_paths: list[str] = []
+    for path in resolved_files:
+        if not path.exists():
+            raise typer.BadParameter(f"markdown file not found: {path}")
+        if is_mutation_disabled(path) and not is_changelog_only(path):
+            skipped_paths.append(path.name)
+            continue
+        if is_changelog_only(path):
+            append_changelog_event(changelog_path_for(path), bootstrap_optional_event(path, event, change_note, task_id, actor, scope, normalize_tag_list(tags)))
+            changelog_only_count += 1
+            changed_paths.append(path)
+            continue
+        _, body, footer = load_markdown(path)
+        if not footer:
+            complete_status(2)
+        footer, applied_updates = apply_finalize_updates(footer, status, artifact_version, artifact_revision, set_values)
+        footer["updated_at"] = now_iso()
+        write_markdown(path, body, footer)
+        event_row = mutation_event(task_id, actor, scope, tags, footer, event, change_note, path)
+        if applied_updates:
+            event_row["metadata_updates"] = applied_updates
+        append_changelog_event(changelog_path_for(path), event_row)
+        changed_paths.append(path)
+    if skipped_paths:
+        set_result_note(f"skipped {len(skipped_paths)} mutation-disabled file(s)")
+    if not changed_paths:
         complete_status(0)
-    _, body, footer = load_markdown(path)
-    if not footer:
-        complete_status(2)
-    if status:
-        footer["status"] = status
-    if artifact_version:
-        footer["artifact_version"] = artifact_version
-    if artifact_revision:
-        footer["artifact_revision"] = artifact_revision
-    for item in set_values:
-        if "=" not in item:
-            raise typer.BadParameter(f"invalid --set pair: {item}")
-        key, value = item.split("=", 1)
-        footer[key.strip()] = value.strip()
-    footer["updated_at"] = now_iso()
-    write_markdown(path, body, footer)
-    event_row = mutation_event(task_id, actor, scope, tags, footer, event, change_note, path)
-    if status:
-        event_row["status"] = status
-    if set_values:
-        event_row["metadata_updates"] = set_values
-    append_changelog_event(changelog_path_for(path), event_row)
-    complete_status(run_quiet_check(path.parent, [path]))
+    scan_root = REPO_ROOT
+    if len(changed_paths) == 1 and changed_paths[0].parent.exists():
+        scan_root = changed_paths[0].parent
+    note_bits = [f"finalized {len(changed_paths)} file(s)"]
+    if changelog_only_count:
+        note_bits.append(f"{changelog_only_count} changelog-only")
+    if skipped_paths:
+        note_bits.append(f"{len(skipped_paths)} skipped")
+    set_result_note(", ".join(note_bits))
+    complete_status(run_quiet_check(scan_root, changed_paths))
 
 
 @app.command("init")
@@ -1043,12 +1083,15 @@ def cmd_migrate_links(path: Path, old_target: str, new_target: str, change_note:
                       task_id: Annotated[str, typer.Option(help="Optional task identifier.")] = "",
                       actor: Annotated[str, typer.Option(help="Actor responsible for the change.")] = "manual",
                       scope: Annotated[str, typer.Option(help="Optional bounded scope label.")] = "",
-                      tags: Annotated[str, typer.Option(help="Optional comma-separated tags.")] = "") -> None:
+                      tags: Annotated[str, typer.Option(help="Optional comma-separated tags.")] = "",
+                      dry_run: Annotated[bool, typer.Option(help="Preview replacements without mutating files.")] = False,
+                      output_format: Annotated[str, typer.Option("--format", help="Output format for preview/summary: toon or jsonl.")] = "toon") -> None:
     set_command("migrate-links")
     target = path.resolve()
-    files = [target] if target.is_file() else list(iter_markdown_files(target))
+    files = resolve_markdown_scope(target)
     changed: list[Path] = []
     skipped = 0
+    preview_rows: list[dict[str, object]] = []
     for file_path in files:
         if file_path.suffix.lower() != ".md":
             continue
@@ -1059,6 +1102,15 @@ def cmd_migrate_links(path: Path, old_target: str, new_target: str, change_note:
         updated_body, replacements = rewrite_markdown_links(body, old_target, new_target)
         if replacements == 0:
             continue
+        preview_rows.append({
+            "path": relative_to_root(file_path),
+            "artifact": footer.get("artifact_path", ""),
+            "replacements": replacements,
+            "old_target": old_target,
+            "new_target": new_target,
+        })
+        if dry_run:
+            continue
         footer["updated_at"] = now_iso()
         write_markdown(file_path, updated_body, footer)
         row = mutation_event(task_id, actor, scope, tags, footer, "links_migrated", change_note, file_path)
@@ -1067,9 +1119,31 @@ def cmd_migrate_links(path: Path, old_target: str, new_target: str, change_note:
         row["replacements"] = replacements
         append_changelog_event(changelog_path_for(file_path), row)
         changed.append(file_path)
+    if dry_run:
+        if output_format == "toon":
+            emit_toon_sections({
+                "context": {"command": "migrate-links", "mode": "dry-run", "path": relative_to_root(target)},
+                "totals": {"files": len(preview_rows), "replacements": sum(int(row["replacements"]) for row in preview_rows), "skipped": skipped},
+                "changes": preview_rows,
+            })
+        else:
+            for row in preview_rows:
+                typer.echo(json.dumps(row, ensure_ascii=True, separators=(",", ":")))
+        set_result_note(f"dry-run matched {len(preview_rows)} file(s), skipped {skipped}")
+        complete_status(0)
     if not changed and skipped:
         set_result_note(f"skipped {skipped} bootstrap file(s); no markdown links were mutated")
         complete_status(0)
+    if output_format == "toon" and changed:
+        emit_toon_sections({
+            "context": {"command": "migrate-links", "mode": "apply", "path": relative_to_root(target)},
+            "totals": {"files": len(preview_rows), "replacements": sum(int(row["replacements"]) for row in preview_rows), "skipped": skipped},
+            "changes": preview_rows,
+        })
+    elif changed:
+        for row in preview_rows:
+            typer.echo(json.dumps(row, ensure_ascii=True, separators=(",", ":")))
+    set_result_note(f"updated {len(changed)} file(s), replacements={sum(int(row['replacements']) for row in preview_rows)}, skipped={skipped}")
     complete_status(run_quiet_check(target if target.is_dir() else target.parent, changed))
 
 
@@ -1103,6 +1177,7 @@ def cmd_doctor(root: Annotated[Path | None, typer.Option(help="Root directory to
     artifact_seen: dict[str, str] = {}
     changelog_seen: dict[str, str] = {}
     issue_rows: list[dict[str, object]] = []
+    severity_counts: Counter[str] = Counter()
     for scope_root, file_path in targets:
         record = build_record(scope_root, file_path)
         _, body, footer = load_markdown(file_path)
@@ -1141,9 +1216,11 @@ def cmd_doctor(root: Annotated[Path | None, typer.Option(help="Root directory to
         if problems:
             had_error = True
             error_count += len(set(problems))
+            severity_counts["error"] += 1
             issue_rows.append({"severity": "error", "path": relative_to_root(file_path), "issues": ",".join(sorted(set(problems)))})
         elif show_warnings and warnings:
             warning_count += len(set(warnings))
+            severity_counts["warning"] += 1
             issue_rows.append({"severity": "warning", "path": relative_to_root(file_path), "issues": ",".join(sorted(set(warnings)))})
     changelog_paths = set()
     for _, file_path in targets:
@@ -1159,11 +1236,13 @@ def cmd_doctor(root: Annotated[Path | None, typer.Option(help="Root directory to
             if changelog_file.resolve() not in changelog_paths:
                 had_error = True
                 error_count += 1
+                severity_counts["error"] += 1
                 issue_rows.append({"severity": "error", "path": relative_to_root(changelog_file), "issues": "orphan_changelog"})
     if issue_rows:
         if output_format == "toon":
             emit_toon_sections({
                 "context": {"command": "doctor", "root": profile or (str(root.resolve()) if root else "")},
+                "totals": {"error_rows": severity_counts.get("error", 0), "warning_rows": severity_counts.get("warning", 0)},
                 "issues": issue_rows,
             })
         else:
