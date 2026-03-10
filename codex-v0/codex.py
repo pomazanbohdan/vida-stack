@@ -51,6 +51,58 @@ READINESS_REQUIRED_ARTIFACTS = (
     "vida/config/migration/compatibility_classes.yaml",
     "vida/config/migration/boot_gates.yaml",
 )
+LAYER_SCOPE_MAP: dict[int, tuple[str, ...]] = {
+    1: (
+        "docs/product/spec/instruction-artifact-model.md",
+        "docs/product/spec/project-documentation-system.md",
+        "docs/product/spec/current-spec-map.md",
+        "docs/product/spec/canonical-documentation-and-inventory-layers.md",
+    ),
+    2: (
+        "docs/product/spec/canonical-inventory-law.md",
+        "docs/product/spec/project-documentation-system.md",
+        "docs/product/spec/current-spec-map.md",
+        "vida/config/instructions/system-maps.framework-map-protocol.md",
+    ),
+    3: (
+        "docs/product/spec/project-documentation-system.md",
+        "docs/product/spec/canonical-documentation-and-inventory-layers.md",
+        "vida/config/instructions/system-maps.framework-map-protocol.md",
+        "vida/config/instructions/instruction-contracts.documentation-operation-protocol.md",
+    ),
+    4: (
+        "docs/product/spec/canonical-documentation-and-inventory-layers.md",
+        "vida/config/instructions/system-maps.framework-map-protocol.md",
+        "vida/config/instructions/instruction-contracts.documentation-operation-protocol.md",
+        "AGENTS.sidecar.md",
+    ),
+    5: (
+        "docs/product/spec/canonical-relation-law.md",
+        "docs/product/spec/project-documentation-system.md",
+        "docs/product/spec/canonical-documentation-and-inventory-layers.md",
+        "AGENTS.sidecar.md",
+    ),
+    6: (
+        "docs/product/spec/project-documentation-system.md",
+        "vida/config/instructions/system-maps.framework-map-protocol.md",
+        "AGENTS.sidecar.md",
+        "vida/config/instructions/instruction-contracts.documentation-operation-protocol.md",
+    ),
+    7: (
+        "docs/product/spec/canonical-runtime-readiness-law.md",
+        "docs/product/spec/instruction-artifact-model.md",
+        "docs/framework/research/canonical-runtime-readiness-external-patterns.md",
+        "docs/product/spec/canonical-documentation-and-inventory-layers.md",
+        "vida/config/instructions/instruction-contracts.documentation-operation-protocol.md",
+        "AGENTS.sidecar.md",
+    ),
+    8: (
+        "docs/product/spec/canonical-documentation-and-inventory-layers.md",
+        "vida/config/instructions/system-maps.framework-map-protocol.md",
+        "docs/product/spec/current-spec-map.md",
+        "AGENTS.sidecar.md",
+    ),
+}
 
 yaml = YAML()
 yaml.default_flow_style = False
@@ -260,6 +312,18 @@ def roots_for_profile(profile_name: str) -> list[Path]:
     for rel in policy.profiles[profile_name]:
         roots.append(REPO_ROOT if rel == "." else (REPO_ROOT / rel).resolve())
     return roots
+
+
+def layer_targets(layer: int) -> list[tuple[Path, Path]]:
+    if layer not in LAYER_SCOPE_MAP:
+        raise typer.BadParameter(f"unsupported layer: {layer}")
+    items: list[tuple[Path, Path]] = []
+    for rel in LAYER_SCOPE_MAP[layer]:
+        path = (REPO_ROOT / rel).resolve()
+        if not path.exists():
+            continue
+        items.append((path.parent, path))
+    return items
 
 
 def split_body_and_footer(text: str) -> tuple[str, dict[str, str]]:
@@ -710,10 +774,14 @@ def fastcheck_issue_rows(root: Path | None, profile: str, files: list[Path]) -> 
 
 
 def doctor_issue_rows(root: Path | None, profile: str, show_warnings: bool) -> tuple[list[dict[str, object]], int, int]:
+    targets = scan_targets(root, profile)
+    return doctor_issue_rows_for_targets(targets, show_warnings, check_orphans=True)
+
+
+def doctor_issue_rows_for_targets(targets: list[tuple[Path, Path]], show_warnings: bool, check_orphans: bool) -> tuple[list[dict[str, object]], int, int]:
     had_error = False
     warning_count = 0
     error_count = 0
-    targets = scan_targets(root, profile)
     artifact_seen: dict[str, str] = {}
     changelog_seen: dict[str, str] = {}
     issue_rows: list[dict[str, object]] = []
@@ -778,16 +846,17 @@ def doctor_issue_rows(root: Path | None, profile: str, show_warnings: bool) -> t
             changelog_paths.add(changelog_path_for(file_path).resolve())
         except Exception:
             pass
-    candidate_dirs = {scope_root for scope_root, _ in targets}
-    for candidate_dir in candidate_dirs:
-        for changelog_file in candidate_dir.rglob("*.changelog.jsonl"):
-            if is_scan_ignored(changelog_file):
-                continue
-            if changelog_file.resolve() not in changelog_paths:
-                had_error = True
-                error_count += 1
-                severity_counts["error"] += 1
-                issue_rows.append({"severity": "error", "path": relative_to_root(changelog_file), "issues": "orphan_changelog"})
+    if check_orphans:
+        candidate_dirs = {scope_root for scope_root, _ in targets}
+        for candidate_dir in candidate_dirs:
+            for changelog_file in candidate_dir.rglob("*.changelog.jsonl"):
+                if is_scan_ignored(changelog_file):
+                    continue
+                if changelog_file.resolve() not in changelog_paths:
+                    had_error = True
+                    error_count += 1
+                    severity_counts["error"] += 1
+                    issue_rows.append({"severity": "error", "path": relative_to_root(changelog_file), "issues": "orphan_changelog"})
     return issue_rows, error_count, warning_count
 
 
@@ -1846,17 +1915,29 @@ def cmd_readiness_write(root: Annotated[Path | None, typer.Option(help="Root dir
 @app.command("proofcheck")
 def cmd_proofcheck(root: Annotated[Path | None, typer.Option(help="Root directory for grouped proof scope.")] = None,
                    profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "active-canon-strict",
+                   layer: Annotated[int | None, typer.Option(help="Canonical layer number to validate as a bounded documentation scope.", min=1, max=8)] = None,
                    files: Annotated[list[Path], typer.Argument(help="Optional explicit markdown files to validate.")] = [],
                    output_format: Annotated[str, typer.Option("--format", help="Output format: toon or jsonl.")] = "toon") -> None:
     set_command("proofcheck")
-    fast_rows = fastcheck_issue_rows(root, profile, files)
-    protocol_rows = protocol_coverage_issue_rows(root, profile, files)
-    readiness_rows = readiness_issue_rows(root, profile, files)
-    doctor_rows, doctor_error_count, doctor_warning_count = doctor_issue_rows(root, profile, show_warnings=True)
+    scoped_files = files
+    scoped_root = root
+    scoped_profile = profile
+    files_mode = "explicit" if files else "profile"
+    doctor_targets: list[tuple[Path, Path]] | None = None
+    if layer:
+        doctor_targets = layer_targets(layer)
+        scoped_files = [path for _, path in doctor_targets]
+        scoped_root = None
+        scoped_profile = ""
+        files_mode = "layer"
+    fast_rows = fastcheck_issue_rows(scoped_root, scoped_profile, scoped_files)
+    protocol_rows = protocol_coverage_issue_rows(scoped_root, scoped_profile, scoped_files)
+    readiness_rows = readiness_issue_rows(scoped_root, scoped_profile, scoped_files)
+    doctor_rows, doctor_error_count, doctor_warning_count = doctor_issue_rows_for_targets(doctor_targets, True, check_orphans=False) if doctor_targets is not None else doctor_issue_rows(scoped_root, scoped_profile, show_warnings=True)
     blocking = bool(fast_rows or protocol_rows or readiness_rows or any(row.get("severity") == "error" for row in doctor_rows))
     if output_format == "toon":
         emit_toon_sections({
-            "context": {"command": "proofcheck", "root": profile or (str(root.resolve()) if root else ""), "files_mode": "explicit" if files else "profile"},
+            "context": {"command": "proofcheck", "root": scoped_profile or (str(scoped_root.resolve()) if scoped_root else ""), "layer": layer if layer is not None else "", "files_mode": files_mode},
             "totals": {
                 "fastcheck_rows": len(fast_rows),
                 "protocol_coverage_rows": len(protocol_rows),
@@ -1880,17 +1961,26 @@ def cmd_proofcheck(root: Annotated[Path | None, typer.Option(help="Root director
 @app.command("doctor")
 def cmd_doctor(root: Annotated[Path | None, typer.Option(help="Root directory to scan.")] = None,
                profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "",
+               layer: Annotated[int | None, typer.Option(help="Canonical layer number to validate as a bounded documentation scope.", min=1, max=8)] = None,
                show_warnings: Annotated[bool, typer.Option(help="Also emit policy-warning rows for exception-based files.")] = False,
                output_format: Annotated[str, typer.Option("--format", help="Output format: toon or jsonl for emitted issues.")] = "jsonl",
                fail_on_warnings: Annotated[bool, typer.Option(help="Treat warnings as failures.")] = False) -> None:
     set_command("doctor")
-    issue_rows, error_count, warning_count = doctor_issue_rows(root, profile, show_warnings)
+    scoped_root = root
+    scoped_profile = profile
+    if layer:
+        targets = layer_targets(layer)
+        scoped_root = None
+        scoped_profile = ""
+        issue_rows, error_count, warning_count = doctor_issue_rows_for_targets(targets, show_warnings, check_orphans=False)
+    else:
+        issue_rows, error_count, warning_count = doctor_issue_rows(scoped_root, scoped_profile, show_warnings)
     had_error = any(row.get("severity") == "error" for row in issue_rows)
     severity_counts: Counter[str] = Counter(str(row.get("severity", "")) for row in issue_rows)
     if issue_rows:
         if output_format == "toon":
             emit_toon_sections({
-                "context": {"command": "doctor", "root": profile or (str(root.resolve()) if root else "")},
+                "context": {"command": "doctor", "root": scoped_profile or (str(scoped_root.resolve()) if scoped_root else ""), "layer": layer if layer is not None else ""},
                 "totals": {"error_rows": severity_counts.get("error", 0), "warning_rows": severity_counts.get("warning", 0)},
                 "issues": issue_rows,
             })

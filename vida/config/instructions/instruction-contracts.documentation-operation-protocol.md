@@ -23,11 +23,37 @@ This protocol is limited to the currently documentation-green layers:
 
 It must not assume that later layers are closed.
 
+If the task is not one bounded documentation operation but a project-wide migration of another project's documentation system toward Layer 7 closure, escalate to:
+
+1. `vida/config/instructions/instruction-contracts.documentation-layer7-migration-protocol.md`
+
 ## Documentation-First Rule
 
 1. When a new documentation-facing layer or rule changes, bring the canonical documentation into shape first.
 2. Only after the documentation law is explicit may implementation or tooling behavior be changed.
 3. If implementation behavior and documentation law diverge, fix the documentation first or realign the implementation before closure.
+
+## Documentation Standard Precedence Rule
+
+When writing or reshaping documentation artifacts, use the highest-authority formatting and structure rule that applies.
+
+Precedence order:
+
+1. an active skill-specific artifact standard when the current task explicitly uses a skill and that skill defines the format of the artifact being written,
+2. an explicit project-owned documentation standard for that artifact family when such a standard is already documented,
+3. promoted product-law requirements for canonical documentation and instruction artifacts,
+4. the bounded default formatting and mutation behavior provided by `codex-v0/codex.py`.
+
+Rules:
+
+1. `codex` defaults are fallback behavior only; they must not override an explicit project standard.
+2. A skill-specific artifact contract may refine the shape of the document, but it must not weaken canonical metadata, lineage, validation, or deduplication law.
+3. If a project standard and a skill-specific format conflict materially, use the higher-precedence skill format for the artifact body and preserve canonical metadata/footer/sidecar law around it.
+4. If no higher-precedence artifact standard exists, use the canonical `codex` documentation path.
+
+Example rule:
+
+1. if a future business-analysis skill defines the canonical `PBI` document shape, use that `PBI` structure for the body of the document while still preserving the canonical metadata, changelog, and validation requirements from this protocol.
 
 ## One-Touch Activation Rule
 
@@ -62,10 +88,11 @@ When working on documentation, the agent must operate in this order:
 Default documentation orientation path:
 
 1. `python3 codex-v0/codex.py overview --profile active-canon`
-2. `python3 codex-v0/codex.py layer-status --layer <N>`
-3. targeted reads of the canonical documents being changed
-4. `python3 codex-v0/codex.py proofcheck --profile active-canon-strict`
-5. targeted deep reads only when the proof surface reports a blocker
+2. `python3 codex-v0/codex.py layer-status --layer <N>` when the work is bounded to one canonical layer
+3. `python3 codex-v0/codex.py doctor --layer <N>` when a bounded layer audit is needed
+4. targeted reads of the canonical documents being changed
+5. `python3 codex-v0/codex.py proofcheck --layer <N>` for bounded one-layer closure or `python3 codex-v0/codex.py proofcheck --profile active-canon-strict` for cross-layer closure
+6. targeted deep reads only when the proof surface reports a blocker
 
 Use richer history or status views only when needed:
 
@@ -102,7 +129,15 @@ For canonical markdown artifacts:
 1. keep the canonical markdown body as the latest active revision only,
 2. keep lineage in sibling `*.changelog.jsonl`,
 3. keep footer metadata machine-readable,
-4. prefer lawful codex mutation paths over manual footer/changelog manipulation.
+4. prefer lawful codex mutation paths over manual footer/changelog manipulation,
+5. do not create parallel active documents that restate the same canonical rule, matrix, or artifact law when one canonical home already exists.
+
+## Deduplication Rule
+
+1. One canonical rule should have one canonical home.
+2. If a higher-precedence artifact standard applies, align the existing canonical artifact to that standard instead of cloning the rule into a second active document.
+3. Summaries, maps, and pointers may restate orientation-level information, but they must not become a second law-bearing source of truth.
+4. If a documentation task reveals duplicated active law, the bounded task should reduce or remove that duplication when it is safe to do so within scope.
 
 ## Validation Rule
 
@@ -113,9 +148,10 @@ Before closure of documentation work:
 3. run `protocol-coverage-check --profile active-canon` when the change touches canonical protocol inventory, protocol index rows, or protocol-bearing instruction artifacts,
 4. run `readiness-check --profile active-canon` when the change touches readiness law, projection parity, canonical bundles, compatibility classes, or boot-gate surfaces,
 5. run `doctor --profile active-canon-strict` when the change affects canonical docs or maps,
-6. prefer `proofcheck --profile active-canon-strict` as the one-command closure proof when the changed scope is entirely within active canon,
-7. treat validation failure as blocking,
-8. keep success output quiet and failure output explicit.
+6. prefer `proofcheck --layer <N>` when the changed scope is tightly bounded to one canonical layer,
+7. prefer `proofcheck --profile active-canon-strict` when the changed scope spans multiple active-canon layers,
+8. treat validation failure as blocking,
+9. keep success output quiet and failure output explicit.
 
 ## Protocol Activation Verification Rule
 
@@ -164,7 +200,8 @@ Documentation work is closed only when:
 5. `protocol-coverage-check` passes when canonical protocol coverage changed,
 6. `readiness-check` passes when readiness surfaces changed,
 7. `doctor --profile active-canon-strict` passes when the change touches canonical maps, specs, or active instruction canon,
-8. `proofcheck --profile active-canon-strict` may be used as the one-command bounded closure proof for active-canon work.
+8. `proofcheck --layer <N>` may be used as the one-command bounded closure proof for one canonical layer,
+9. `proofcheck --profile active-canon-strict` may be used as the one-command bounded closure proof for cross-layer active-canon work.
 
 ## Current Boundary Note
 
@@ -185,5 +222,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts.documentation-operation-protocol.md
 created_at: '2026-03-10T04:10:00+02:00'
-updated_at: '2026-03-10T04:07:10+02:00'
+updated_at: '2026-03-10T04:25:26+02:00'
 changelog_ref: instruction-contracts.documentation-operation-protocol.changelog.jsonl

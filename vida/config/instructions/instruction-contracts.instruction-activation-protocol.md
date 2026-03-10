@@ -86,6 +86,7 @@ Canonical examples:
 10. `vida/config/instructions/instruction-contracts.autonomous-execution-protocol.md`
 11. `vida/config/instructions/runtime-instructions.execution-priority-protocol.md`
 12. `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md`
+13. `vida/config/instructions/instruction-contracts.documentation-layer7-migration-protocol.md`
 
 Rule:
 
@@ -130,6 +131,7 @@ Rule:
 | plan/spec/task pool is settled and the user wants continued execution to completion | `autonomous-execution-protocol.md` |
 | tracked execution must choose between multiple lawful next tasks or handle reprioritization | `execution-priority-protocol.md` |
 | documentation mutation, documentation validation, canonical map work, or documentation-layer tooling work is active | `documentation-operation-protocol.md` |
+| project documentation is being migrated toward Layer 7 closure | `documentation-layer7-migration-protocol.md` |
 | worker mode active for eligible work | `agent-system-protocol.md` |
 | bounded conflict escalation is authorized | `problem-party-protocol.md` |
 | task appears stale, done-but-open, or drifted | `task-state-reconciliation-protocol.md` |
@@ -254,5 +256,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts.instruction-activation-protocol.md
 created_at: '2026-03-08T02:15:22+02:00'
-updated_at: '2026-03-10T04:07:10+02:00'
+updated_at: '2026-03-10T04:25:26+02:00'
 changelog_ref: instruction-contracts.instruction-activation-protocol.changelog.jsonl

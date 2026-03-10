@@ -63,6 +63,27 @@ Required fields:
 3. If a document captures project-memory source material, it belongs in `docs/project-memory/**`.
 4. If a document is only narrative or contribution framing for the repo, it remains at root.
 
+## Documentation Standard Precedence Rule
+
+When an active documentation task writes or reshapes an artifact body, formatting authority is resolved in this order:
+
+1. a currently active skill-specific artifact format when the skill explicitly governs that artifact family,
+2. an explicit project-owned documentation standard for that artifact family,
+3. promoted product-law requirements for canonical documentation and instruction artifacts,
+4. transitional `codex` fallback behavior.
+
+Rules:
+
+1. `codex` is not the authority for project-specific artifact shape when a higher-precedence standard already exists.
+2. A skill-owned artifact format may refine the body structure of a document, but it must not remove canonical metadata/footer/sidecar/validation requirements.
+3. If no higher-precedence artifact standard exists, `codex` fallback behavior is allowed.
+
+## Deduplication Rule
+
+1. Active canonical law must not live in multiple parallel documents without an explicit primary owner.
+2. Maps, summaries, and reference surfaces may compress or point to canonical law, but they must not become duplicate law-bearing sources.
+3. If documentation work reveals duplicated active law, the bounded change should reduce that duplication when safe and scope-bounded.
+
 ## Runtime Transition Rule
 
 1. Before VIDA `0.2.0` and VIDA `1.0` fully own latest document resolution, humans and transitional tooling read the canonical markdown files directly.
@@ -78,6 +99,7 @@ Required fields:
 1. Project initialization must begin with an automatic latest-state read of active project documentation and instruction canon before broad manual inspection.
 2. The canonical documentation system must provide:
    - one-command overview reads for current document health and totals,
+   - one-layer bounded doctor and proof paths when the work is constrained to one canonical layer,
    - current catalog/status summaries,
    - materialized registry snapshots when downstream automation needs a frozen inventory,
    - a canonical registry write path when automation requires one shared latest inventory file,
@@ -101,5 +123,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/project-documentation-system.md
 created_at: '2026-03-10T00:00:00+02:00'
-updated_at: '2026-03-10T04:07:10+02:00'
+updated_at: '2026-03-10T04:25:26+02:00'
 changelog_ref: project-documentation-system.changelog.jsonl

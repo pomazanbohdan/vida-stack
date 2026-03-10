@@ -59,6 +59,9 @@ Purpose: define the current product-spec home, show absorbed historical sources,
 17. [canonical-runtime-readiness-law.md](/home/unnamed/project/vida-stack/docs/product/spec/canonical-runtime-readiness-law.md)
    Sources: `docs/framework/plans/vida-0.3-instruction-kernel-spec.md`, `docs/framework/plans/vida-0.3-migration-kernel-spec.md`, `docs/framework/research/canonical-runtime-readiness-external-patterns.md`, `vida/config/migration/**`, `vida/config/instructions/**`, `codex-v0/codex.py`
    Config families: source-version tuples, compatibility classes, projection parity, canonical bundles, boot-gate artifacts, and fail-closed readiness verdicts across active canon
+18. [canonical-layer-documentation-template.md](/home/unnamed/project/vida-stack/docs/product/spec/canonical-layer-documentation-template.md)
+   Sources: `docs/product/spec/canonical-documentation-and-inventory-layers.md`, promoted Layer 1 through Layer 7 specs, and current documentation operation law
+   Config families: canonical layer-law authoring shape for Layers 1 through 7
 
 ## Current Rule
 
@@ -88,5 +91,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-10T03:52:18+02:00'
+updated_at: '2026-03-10T04:25:26+02:00'
 changelog_ref: current-spec-map.changelog.jsonl

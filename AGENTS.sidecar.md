@@ -51,6 +51,15 @@ Purpose: provide current project/runtime context and canonical map pointers for 
 9. `Layer 8: Canonical Runtime Consumption` is directly blocked on `taskflow`:
    - `codex` can prepare inventory, readiness, and bundle authority,
    - but only `taskflow` becoming the primary runtime consumer can close that layer.
+10. Documentation formatting authority resolves top-down:
+   - active skill-specific artifact format,
+   - explicit project documentation standard,
+   - promoted product-law documentation contract,
+   - `codex` fallback behavior.
+11. `codex` defaults must not override a higher-precedence artifact standard.
+12. Deduplicate active law whenever a bounded documentation task safely can:
+   - one canonical rule should have one canonical home,
+   - maps and pointers may summarize it, but must not become a second law-bearing source.
 
 ## Canonical Maps
 
@@ -91,29 +100,33 @@ Read/status commands:
    - one-command documentation state overview with totals and current issues/warnings
 2. `layer-status --layer <N> [--format toon|jsonl]`
    - show the current layer plus adjacent layers from the canonical layer matrix
-3. `summary --root <dir> [--format toon|jsonl]`
+3. `doctor --layer <N> [--format toon|jsonl]`
+   - run bounded doctor checks only for the canonical documentation scope of one layer
+4. `proofcheck --layer <N> [--format toon|jsonl]`
+   - run the bounded closure proof path only for one canonical layer scope
+5. `summary --root <dir> [--format toon|jsonl]`
    - compact totals by layer, owner, and status
-4. `registry --root <dir>`
+6. `registry --root <dir>`
    - one machine-readable row per markdown artifact
-5. `registry-write --root <dir> [--output <file>] [--canonical]`
+7. `registry-write --root <dir> [--output <file>] [--canonical]`
    - materialize one registry snapshot for later automation or write the canonical registry path
-6. `scan --root <dir> [--missing-only]`
+8. `scan --root <dir> [--missing-only]`
    - per-file latest-state rows
-7. `changelog <file> [--limit N] [--newest-first] [--format toon|jsonl]`
+9. `changelog <file> [--limit N] [--newest-first] [--format toon|jsonl]`
    - one artifact history
-8. `changelog-task --root <dir> <task_id> [--limit N] [--newest-first] [--format toon|jsonl]`
+10. `changelog-task --root <dir> <task_id> [--limit N] [--newest-first] [--format toon|jsonl]`
    - all matching history rows for one task id
-9. `task-summary --root <dir> --task-id <id> [--format toon|jsonl]`
+11. `task-summary --root <dir> --task-id <id> [--format toon|jsonl]`
    - aggregate task-level history summary
-10. `deps <file> [--format toon|jsonl]`
+12. `deps <file> [--format toon|jsonl]`
    - direct footer refs, markdown links, and reverse mentions
-11. `deps-map <file-or-dir> [--format toon|jsonl]`
+13. `deps-map <file-or-dir> [--format toon|jsonl]`
    - graph-style dependency edge inventory for one file or a whole scope
-12. `artifact-impact [--file <file> | --artifact <artifact_path>] [--format toon|jsonl]`
+14. `artifact-impact [--file <file> | --artifact <artifact_path>] [--format toon|jsonl]`
    - show all direct document impacts for one artifact identity
-13. `task-impact --root <dir> --task-id <id> [--format toon|jsonl]`
+15. `task-impact --root <dir> --task-id <id> [--format toon|jsonl]`
    - show indirect documentation impacts around artifacts touched by one task
-14. `links <file-or-dir> [--format toon|jsonl]`
+16. `links <file-or-dir> [--format toon|jsonl]`
    - markdown-link inventory for one file or a whole scope
 
 Mutation/finalization commands:
@@ -145,9 +158,9 @@ Validation commands:
    - verify version tuples, compatibility classes, projection parity, bundle completeness, and boot-gate artifact presence
 6. `readiness-write --profile active-canon [--canonical]`
    - materialize the current bounded readiness report to one shared artifact path
-7. `proofcheck --profile active-canon-strict [files...] [--format toon|jsonl]`
-   - run the bounded closure proof path for fastcheck, protocol coverage, readiness, and strict doctor in one command
-8. `doctor --root <dir> [--show-warnings] [--format toon|jsonl] [--fail-on-warnings]`
+7. `proofcheck --profile active-canon-strict [files...] [--layer <N>] [--format toon|jsonl]`
+   - run the bounded closure proof path for fastcheck, protocol coverage, readiness, and strict doctor in one command, either by explicit files or one canonical layer scope
+8. `doctor --root <dir> [--show-warnings] [--format toon|jsonl] [--fail-on-warnings] [--layer <N>]`
    - stronger consistency checks for metadata, changelogs, links, relation refs, and policy exceptions
 
 Operational rule:
@@ -164,8 +177,10 @@ Operational rule:
 8. use `protocol-coverage-check` whenever canonical protocol rows, protocol-bearing artifacts, or activation-index wiring changed,
 9. use `readiness-check` whenever readiness law, projection parity, canonical bundle shape, compatibility classes, or boot-gate artifacts changed,
 10. use `readiness-write --canonical` when downstream automation or runtime proving needs the current shared readiness artifact,
-11. prefer `proofcheck --profile active-canon-strict` as the one-command closure proof for active-canon documentation work,
-12. use `layer-status` when the active work is organized around one canonical layer and its adjacent layers.
+11. prefer `proofcheck --layer <N>` when the active documentation work is tightly bounded to one canonical layer,
+12. prefer `proofcheck --profile active-canon-strict` when the change spans multiple active-canon layers,
+13. use `doctor --layer <N>` for bounded layer audits and `doctor --profile ...` for cross-layer audits,
+14. use `layer-status` when the active work is organized around one canonical layer and its adjacent layers.
 
 -----
 artifact_path: project/repository/agents.sidecar
@@ -176,5 +191,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: '2026-03-10T04:07:10+02:00'
+updated_at: '2026-03-10T04:25:26+02:00'
 changelog_ref: AGENTS.sidecar.changelog.jsonl
