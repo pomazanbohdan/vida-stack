@@ -50,6 +50,9 @@ Purpose: define the current product-spec home, show absorbed historical sources,
 14. [canonical-documentation-and-inventory-layers.md](/home/unnamed/project/vida-stack/docs/product/spec/canonical-documentation-and-inventory-layers.md)
    Sources: `docs/product/spec/project-documentation-system.md`, `docs/product/spec/instruction-artifact-model.md`, `docs/framework/plans/vida-0.3-instruction-kernel-spec.md`, `docs/framework/plans/vida-0.3-migration-kernel-spec.md`, `vida/config/**`
    Config families: canonical inventory, validation, mutation, relation, readiness, and runtime-consumption architecture across `vida/config/**`
+15. [canonical-inventory-law.md](/home/unnamed/project/vida-stack/docs/product/spec/canonical-inventory-law.md)
+   Sources: `docs/product/spec/project-documentation-system.md`, `docs/product/spec/current-spec-map.md`, `vida/config/instructions/instruction_catalog.yaml`, `vida/config/instructions/projection_manifest.yaml`, `vida/config/codex-registry.current.jsonl`
+   Config families: canonical inventory, registry structure, coverage, source/projection linkage, and version-tuple visibility across active canon
 
 ## Current Rule
 
@@ -79,5 +82,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-10T03:06:28+02:00'
+updated_at: '2026-03-10T03:16:07+02:00'
 changelog_ref: current-spec-map.changelog.jsonl
