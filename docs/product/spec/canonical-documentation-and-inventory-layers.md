@@ -15,7 +15,7 @@ Status markers:
 | Category | Layer 1 | Layer 2 | Layer 3 | Layer 4 | Layer 5 | Layer 6 | Layer 7 | Layer 8 |
 |---|---|---|---|---|---|---|---|---|
 | Layer name | Canonical Schema | Canonical Inventory | Canonical Validation | Canonical Mutation | Canonical Relations | Canonical Operator | Canonical Runtime Readiness | Canonical Runtime Consumption |
-| Status | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚪ | ⚪ |
+| Status | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚪ |
 | Core value | one canonical vocabulary for identity, status, compatibility, bundle/projection terms, and metadata | one authoritative inventory and canonical registry path for active canon | fail-closed consistency checks and strict quality gates with explicit bootstrap carrier rules | lawful metadata, changelog, link, and file mutation without manual drift | dependency and impact visibility over canonical artifacts | low-call operational views for state, history, and issues | explicit readiness verdict for runtime consumption | VIDA runtime directly consumes canonical inventory and readiness |
 | Required implementation | schema vocabularies, metadata contract, changelog event contract | registry model, canonical registry artifact, coverage rules | check, doctor, strict profiles, consistency gates | touch, finalize, init, move, rename, link migration | deps, deps-map, artifact-impact, task-impact | overview, compact operator surfaces, low-call workflows | readiness checks for tuples, projections, bundles, compatibility | runtime consumption of registry, readiness, and canonical bundles |
 | Builds on | none | Layer 1 | Layers 1-2 | Layers 1-3 | Layers 2-3 | Layers 2-5 | Layers 1-6 | Layers 1-7 |
@@ -40,15 +40,15 @@ Status markers:
 
 | Category | Layer 1 | Layer 2 | Layer 3 | Layer 4 | Layer 5 | Layer 6 | Layer 7 | Layer 8 |
 |---|---|---|---|---|---|---|---|---|
-| Documentation compliance | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 | 🟡 |
-| Strongest evidence | `codex-v0/docsys_schema.yaml`, `instruction-artifact-model.md`, `projection_manifest.yaml` | `canonical-inventory-law.md`, `project-documentation-system.md`, `current-spec-map.md`, `instruction_catalog.yaml`, canonical registry path | this spec, `project-documentation-system.md`, canonical `check`/`doctor` rules in bootstrap docs | this spec, `AGENTS.sidecar.md`, canonical mutation command contract | `canonical-relation-law.md`, `project-documentation-system.md`, `AGENTS.sidecar.md`, relation commands in `codex-v0/codex.py` | this spec, `framework-map-protocol.md`, `AGENTS.sidecar.md` overview/low-call contract | this spec plus framework plans `vida-0.3-instruction-kernel-spec.md` and `vida-0.3-migration-kernel-spec.md` | this spec plus framework/runtime transition documents only |
-| Main current gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | readiness law still depends on framework-plan detail more than on promoted product law | consumption law is defined as target architecture, but not yet expanded into a fully promoted runtime-consumption product spec |
+| Documentation compliance | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 |
+| Strongest evidence | `codex-v0/docsys_schema.yaml`, `instruction-artifact-model.md`, `projection_manifest.yaml` | `canonical-inventory-law.md`, `project-documentation-system.md`, `current-spec-map.md`, `instruction_catalog.yaml`, canonical registry path | this spec, `project-documentation-system.md`, canonical `check`/`doctor` rules in bootstrap docs | this spec, `AGENTS.sidecar.md`, canonical mutation command contract | `canonical-relation-law.md`, `project-documentation-system.md`, `AGENTS.sidecar.md`, relation commands in `codex-v0/codex.py` | this spec, `framework-map-protocol.md`, `AGENTS.sidecar.md` overview/low-call contract | `canonical-runtime-readiness-law.md`, `instruction-artifact-model.md`, `docs/framework/research/canonical-runtime-readiness-external-patterns.md`, `codex-v0/codex.py` readiness-check | consumption law is defined as target architecture, but not yet expanded into a fully promoted runtime-consumption product spec |
+| Main current gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | consumption law is defined as target architecture, but not yet expanded into a fully promoted runtime-consumption product spec |
 
 Compliance reading rule:
 
 1. this snapshot measures the state of the documentation itself, not the implementation maturity of the layer,
 2. a layer may be well-documented even if implementation is still partial,
-3. Layers 7 and 8 remain documentation-partial because their most detailed law still lives primarily in framework-plan artifacts rather than in fully promoted product-law form.
+3. Layer 8 remains documentation-partial because its most detailed law still lives primarily in target-architecture intent rather than in a fully promoted runtime-consumption product-law form.
 
 ## 0.1 Current Documentation Alignment Snapshot
 
@@ -158,24 +158,21 @@ Current conclusion:
 
 ### Layer 7: Canonical Runtime Readiness
 
-Matrix status: `⚪`  
-Documentation alignment: `🟡`
+Matrix status: `✅`  
+Documentation alignment: `✅`
 
 Strongest evidence:
 
-1. this spec
-2. `docs/framework/plans/vida-0.3-instruction-kernel-spec.md`
-3. `docs/framework/plans/vida-0.3-migration-kernel-spec.md`
-4. `docs/product/spec/instruction-artifact-model.md`
+1. `docs/product/spec/canonical-runtime-readiness-law.md`
+2. `docs/product/spec/instruction-artifact-model.md`
+3. `docs/framework/research/canonical-runtime-readiness-external-patterns.md`
+4. `codex-v0/codex.py`
 
 Current conclusion:
 
-1. the documentation canon already identifies source-version tuples, compatibility classes, bundle/projection expectations, and fail-closed readiness posture as the required law for this layer,
-2. that law still depends significantly on framework plan artifacts and is not yet promoted into one fully closed active readiness spec.
-
-Primary blocker:
-
-1. one promoted canonical readiness spec is still missing.
+1. the documentation canon now has one promoted readiness law,
+2. source-version tuples, compatibility classes, projection parity, canonical bundles, boot-gate artifacts, verdict classes, and fail-closed blocker reasons are explicitly defined,
+3. Layer 7 documentation is now sufficient to act as canonical law without relying on scattered framework-plan text.
 
 ### Layer 8: Canonical Runtime Consumption
 
@@ -592,20 +589,22 @@ Determine whether the canonical inventory is ready to be consumed by runtime wit
 1. source-version tuple completeness,
 2. compatibility class support,
 3. bundle membership completeness,
-4. projection freshness and rebind requirements,
-5. sidecar applicability to bundled artifacts,
-6. fail-closed readiness outcomes.
+4. projection freshness and tuple parity for explicitly bound projections,
+5. required boot-gate artifact presence,
+6. fail-closed readiness outcomes and explicit blocker reasons.
 
 ### 10.3 Inputs
 
 1. Layers 1 through 6,
-2. migration/kernel requirements already fixed in the canonical specs.
+2. `docs/product/spec/canonical-runtime-readiness-law.md`,
+3. migration/kernel requirements already fixed in the canonical specs.
 
 ### 10.4 Outputs
 
 1. readiness verdict,
 2. blocking reasons,
-3. compatibility or migration-required classification.
+3. compatibility or migration-required classification,
+4. bounded readiness proof through `codex-v0/codex.py readiness-check`.
 
 ### 10.5 Forbidden Dependencies
 
@@ -719,5 +718,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/canonical-documentation-and-inventory-layers.md
 created_at: '2026-03-10T03:25:00+02:00'
-updated_at: '2026-03-10T03:36:49+02:00'
+updated_at: '2026-03-10T03:52:18+02:00'
 changelog_ref: canonical-documentation-and-inventory-layers.changelog.jsonl

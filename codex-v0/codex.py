@@ -41,6 +41,16 @@ MARKDOWN_EXTS = {".md", ".MD"}
 FOOTER_REFERENCE_KEYS = ("projection_ref", "contract_ref", "template_ref", "parent_definition_ref")
 LAYER_SPEC_PATH = REPO_ROOT / "docs/product/spec/canonical-documentation-and-inventory-layers.md"
 ACTIVATION_PROTOCOL_PATH = REPO_ROOT / "vida/config/instructions/instruction-contracts.instruction-activation-protocol.md"
+READINESS_REQUIRED_ARTIFACTS = (
+    "vida/config/instructions/instruction_catalog.yaml",
+    "vida/config/instructions/projection_manifest.yaml",
+    "vida/config/instructions/bundles/default_runtime.yaml",
+    "vida/config/routes/route_catalog.yaml",
+    "vida/config/receipts/receipt_taxonomy.yaml",
+    "vida/config/receipts/proof_taxonomy.yaml",
+    "vida/config/migration/compatibility_classes.yaml",
+    "vida/config/migration/boot_gates.yaml",
+)
 
 yaml = YAML()
 yaml.default_flow_style = False
@@ -74,12 +84,19 @@ class SchemaRegistry(msgspec.Struct):
     path: str = "vida/config/codex-registry.current.jsonl"
 
 
+class BundleTerms(msgspec.Struct):
+    families: list[str] = []
+    fields: list[str] = []
+
+
 class SchemaConfig(msgspec.Struct):
     schema_version: int = 1
     statuses: list[str] = []
     owners: list[str] = []
     layers: list[str] = []
     artifact_types: list[str] = []
+    compatibility_classes: list[str] = []
+    bundle_terms: BundleTerms = msgspec.field(default_factory=BundleTerms)
     profiles: dict[str, ProfileSettings] = {}
     canonical_registry: SchemaRegistry = msgspec.field(default_factory=SchemaRegistry)
 
@@ -546,6 +563,84 @@ def validate_activation_binding(file_path: Path, activation_body: str) -> list[s
     if rel in activation_body or file_path.name in activation_body:
         return []
     return [f"missing_activation_binding:{rel}"]
+
+
+def load_yaml_artifact(path: Path) -> dict[str, object]:
+    data = yaml.load(path.read_text(encoding="utf-8")) or {}
+    return data if isinstance(data, dict) else {}
+
+
+def projection_target_for(footer: dict[str, str]) -> Path | None:
+    value = str(footer.get("projection_ref", "")).strip()
+    if not value:
+        return None
+    return (REPO_ROOT / value).resolve()
+
+
+def validate_projection_parity(footer: dict[str, str]) -> list[str]:
+    target = projection_target_for(footer)
+    if target is None:
+        return []
+    if not target.exists():
+        return [f"missing_projection_target:{footer.get('projection_ref', '')}"]
+    projection = load_yaml_artifact(target)
+    problems: list[str] = []
+    if not projection.get("version"):
+        problems.append(f"missing_projection_version:{relative_to_root(target)}")
+    if not projection.get("revision"):
+        problems.append(f"missing_projection_revision:{relative_to_root(target)}")
+    compatibility_class = str(projection.get("compatibility_class", "")).strip()
+    if not compatibility_class:
+        problems.append(f"missing_projection_compatibility_class:{relative_to_root(target)}")
+    if str(projection.get("version", "")) != str(footer.get("artifact_version", "")):
+        problems.append(f"projection_tuple_mismatch:version:{relative_to_root(target)}")
+    if str(projection.get("revision", "")) != str(footer.get("artifact_revision", "")):
+        problems.append(f"projection_tuple_mismatch:revision:{relative_to_root(target)}")
+    return problems
+
+
+def readiness_issue_rows(root: Path | None, profile: str, files: list[Path]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    schema = load_schema()
+    supported_classes = set(schema.compatibility_classes)
+    required_bundle_families = set(schema.bundle_terms.families)
+    scoped_paths = [(path.resolve().parent, path.resolve()) for path in files if path.exists()] if files else scan_targets(root, profile)
+
+    for scope_root, file_path in scoped_paths:
+        if file_path.suffix.lower() != ".md":
+            continue
+        _, _, footer = load_markdown(file_path)
+        issues: list[str] = []
+        if footer:
+            if not footer.get("artifact_version") or not footer.get("artifact_revision"):
+                issues.append("missing_version_tuple")
+            issues.extend(validate_projection_parity(footer))
+        if issues:
+            rows.append({"path": relative_to_root(file_path), "issues": ",".join(sorted(set(issues)))})
+
+    for rel in READINESS_REQUIRED_ARTIFACTS:
+        path = (REPO_ROOT / rel).resolve()
+        if not path.exists():
+            rows.append({"path": rel, "issues": "missing_boot_gate_artifact"})
+            continue
+        data = load_yaml_artifact(path)
+        issues: list[str] = []
+        if not data.get("version") or not data.get("revision"):
+            issues.append("missing_version_tuple")
+        compatibility_class = str(data.get("compatibility_class", "")).strip()
+        if not compatibility_class:
+            issues.append("missing_compatibility_class")
+        elif compatibility_class not in supported_classes:
+            issues.append(f"unsupported_compatibility_class:{compatibility_class}")
+        if rel == "vida/config/instructions/bundles/default_runtime.yaml":
+            bundle_order = {str(item) for item in (data.get("bundle_order") or [])}
+            missing = sorted(required_bundle_families - bundle_order)
+            if missing:
+                issues.append(f"bundle_family_gap:{','.join(missing)}")
+        if issues:
+            rows.append({"path": rel, "issues": ",".join(sorted(set(issues)))})
+
+    return rows
 
 
 def collect_registry(scan_root: Path) -> list[dict[str, object]]:
@@ -1564,6 +1659,25 @@ def cmd_activation_check(root: Annotated[Path | None, typer.Option(help="Root di
     for row in rows:
         typer.echo(json.dumps(row, ensure_ascii=True, separators=(",", ":")))
     complete_status(1 if had_error else 0)
+
+
+@app.command("readiness-check")
+def cmd_readiness_check(root: Annotated[Path | None, typer.Option(help="Root directory for readiness validation scope.")] = None,
+                        profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "active-canon",
+                        files: Annotated[list[Path], typer.Argument(help="Optional explicit markdown files to validate for readiness coverage.")] = [],
+                        output_format: Annotated[str, typer.Option("--format", help="Output format: toon or jsonl.")] = "toon") -> None:
+    set_command("readiness-check")
+    rows = readiness_issue_rows(root, profile, files)
+    if rows:
+        if output_format == "toon":
+            emit_toon_sections({
+                "context": {"command": "readiness-check", "root": profile or (str(root.resolve()) if root else "")},
+                "totals": {"blocking_rows": len(rows)},
+                "issues": rows,
+            })
+        else:
+            emit_rows(rows, output_format)
+    complete_status(1 if rows else 0)
 
 
 @app.command("doctor")

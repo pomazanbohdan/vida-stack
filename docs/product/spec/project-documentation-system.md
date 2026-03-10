@@ -84,6 +84,7 @@ Required fields:
    - per-artifact history reads,
    - task-scoped change aggregation,
    - artifact-impact and task-impact tracing for change radius analysis,
+   - bounded readiness checks for tuples, projections, bundles, compatibility classes, and boot-gate artifact presence,
    - link inventories and lawful link migration,
    - consistency checks over metadata, sidecars, and references.
 3. Tool names may evolve, but this initialization capability is mandatory for the active architecture.
@@ -91,11 +92,11 @@ Required fields:
 -----
 artifact_path: product/spec/project-documentation-system
 artifact_type: product_spec
-artifact_version: 1
-artifact_revision: 2026-03-10
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
 status: canonical
 source_path: docs/product/spec/project-documentation-system.md
-created_at: 2026-03-10T00:00:00+02:00
-updated_at: 2026-03-10T01:41:07+02:00
+created_at: '2026-03-10T00:00:00+02:00'
+updated_at: '2026-03-10T03:52:18+02:00'
 changelog_ref: project-documentation-system.changelog.jsonl

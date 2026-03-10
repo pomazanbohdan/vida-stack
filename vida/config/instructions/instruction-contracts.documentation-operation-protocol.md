@@ -1,6 +1,6 @@
 # Documentation Operation Protocol
 
-Purpose: define the canonical agent instruction for working with VIDA documentation using only the currently green documentation layers and without depending on unfinished readiness or runtime-consumption behavior.
+Purpose: define the canonical agent instruction for working with VIDA documentation using only the currently green documentation layers and without depending on unfinished runtime-consumption behavior.
 
 ## Scope
 
@@ -19,6 +19,7 @@ This protocol is limited to the currently documentation-green layers:
 4. `Layer 4: Canonical Mutation`
 5. `Layer 5: Canonical Relations`
 6. `Layer 6: Canonical Operator`
+7. `Layer 7: Canonical Runtime Readiness`
 
 It must not assume that later layers are closed.
 
@@ -66,6 +67,7 @@ Default documentation orientation path:
 4. `python3 codex-v0/codex.py fastcheck --root <dir> [files...]`
 5. `python3 codex-v0/codex.py check --root <dir> [files...]`
 6. `python3 codex-v0/codex.py doctor --profile active-canon-strict`
+7. `python3 codex-v0/codex.py readiness-check --profile active-canon`
 
 Use richer history or status views only when needed:
 
@@ -77,6 +79,7 @@ Use richer history or status views only when needed:
 6. `artifact-impact`
 7. `task-impact`
 8. `activation-check`
+9. `readiness-check`
 
 ## Lawful Mutation Path
 
@@ -107,9 +110,10 @@ Before closure of documentation work:
 
 1. run `check` on the changed scope or changed files,
 2. run `activation-check` when the change touches a canonical protocol, protocol index row, lane-entry routing, or activation wiring,
-3. run `doctor --profile active-canon-strict` when the change affects canonical docs or maps,
-4. treat validation failure as blocking,
-5. keep success output quiet and failure output explicit.
+3. run `readiness-check --profile active-canon` when the change touches readiness law, projection parity, canonical bundles, compatibility classes, or boot-gate surfaces,
+4. run `doctor --profile active-canon-strict` when the change affects canonical docs or maps,
+5. treat validation failure as blocking,
+6. keep success output quiet and failure output explicit.
 
 ## Protocol Activation Verification Rule
 
@@ -134,9 +138,8 @@ When documentation work or documentation-layer validation reveals a bounded defe
 
 This protocol must not depend on:
 
-1. runtime-readiness verdicts,
-2. runtime-owned latest resolution,
-3. ad hoc filesystem assumptions outside current canonical docs and codex policy.
+1. runtime-owned latest resolution,
+2. ad hoc filesystem assumptions outside current canonical docs and codex policy.
 
 ## Forbidden Behaviors
 
@@ -154,7 +157,8 @@ Documentation work is closed only when:
 2. metadata and sidecar lineage are synchronized,
 3. `check` passes,
 4. `activation-check` passes when protocol activation coverage changed,
-5. `doctor --profile active-canon-strict` passes when the change touches canonical maps, specs, or active instruction canon.
+5. `readiness-check` passes when readiness surfaces changed,
+6. `doctor --profile active-canon-strict` passes when the change touches canonical maps, specs, or active instruction canon.
 
 ## Current Boundary Note
 
@@ -163,7 +167,7 @@ This protocol is intentionally bounded to the currently green documentation laye
 That means:
 
 1. it is already safe to use for real documentation work now,
-2. it does not wait for runtime-readiness closure,
+2. it already includes canonical runtime-readiness work when that work is bounded by promoted Layer 7 law,
 3. those later layers may deepen this protocol later, but must not redefine the current lawful path retroactively.
 
 -----
@@ -175,5 +179,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts.documentation-operation-protocol.md
 created_at: '2026-03-10T04:10:00+02:00'
-updated_at: '2026-03-10T03:35:34+02:00'
+updated_at: '2026-03-10T03:52:18+02:00'
 changelog_ref: instruction-contracts.documentation-operation-protocol.changelog.jsonl
