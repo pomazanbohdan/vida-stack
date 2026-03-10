@@ -638,6 +638,7 @@ Allow the VIDA 1 runtime itself to consume the canonical inventory, readiness, b
 ### 11.2 Inputs
 
 1. Layers 1 through 7.
+2. a `taskflow` runtime engine that is already capable of acting as the primary runtime-consumption substrate.
 
 ### 11.3 Outputs
 
@@ -648,11 +649,18 @@ Allow the VIDA 1 runtime itself to consume the canonical inventory, readiness, b
 ### 11.4 Completion Proof
 
 1. runtime no longer depends on ad hoc filesystem assumptions for canonical artifact selection,
-2. runtime consumes canonical inventory and readiness surfaces directly.
+2. runtime consumes canonical inventory and readiness surfaces directly,
+3. `taskflow` is the primary direct consumer of canonical registry, readiness, bundles, and projections rather than an external helper path.
 
 ### 11.5 Standalone Value
 
 Layer 8 is the final product state where the documentation/inventory system is no longer merely transitional tooling.
+
+TaskFlow dependency rule:
+
+1. Layer 8 is directly blocked until `taskflow` becomes the primary runtime engine for the system,
+2. `codex` may prepare canonical inventory and readiness surfaces, but it cannot close Layer 8 by itself,
+3. Layer 8 requires `taskflow` to consume those surfaces as runtime authority.
 
 Documentation-first rule for this layer:
 
@@ -718,5 +726,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/canonical-documentation-and-inventory-layers.md
 created_at: '2026-03-10T03:25:00+02:00'
-updated_at: '2026-03-10T03:52:18+02:00'
+updated_at: '2026-03-10T03:59:16+02:00'
 changelog_ref: canonical-documentation-and-inventory-layers.changelog.jsonl

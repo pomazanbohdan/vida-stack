@@ -84,6 +84,10 @@ class SchemaRegistry(msgspec.Struct):
     path: str = "vida/config/codex-registry.current.jsonl"
 
 
+class ReadinessArtifact(msgspec.Struct):
+    path: str = "vida/config/codex-readiness.current.jsonl"
+
+
 class BundleTerms(msgspec.Struct):
     families: list[str] = []
     fields: list[str] = []
@@ -99,6 +103,7 @@ class SchemaConfig(msgspec.Struct):
     bundle_terms: BundleTerms = msgspec.field(default_factory=BundleTerms)
     profiles: dict[str, ProfileSettings] = {}
     canonical_registry: SchemaRegistry = msgspec.field(default_factory=SchemaRegistry)
+    canonical_readiness: ReadinessArtifact = msgspec.field(default_factory=ReadinessArtifact)
 
 
 class LayerOwnerRule(msgspec.Struct):
@@ -565,6 +570,25 @@ def validate_activation_binding(file_path: Path, activation_body: str) -> list[s
     return [f"missing_activation_binding:{rel}"]
 
 
+def is_canonical_protocol(file_path: Path) -> bool:
+    rel = relative_to_root(file_path)
+    if not rel.startswith("vida/config/instructions/"):
+        return False
+    name = file_path.name
+    return "protocol" in name and name.endswith(".md")
+
+
+def validate_protocol_index_coverage(file_path: Path, protocol_index_body: str) -> list[str]:
+    if not is_canonical_protocol(file_path):
+        return []
+    rel = relative_to_root(file_path)
+    if rel == relative_to_root(REPO_ROOT / "vida/config/instructions/system-maps.protocol-index.md"):
+        return []
+    if rel in protocol_index_body or file_path.name in protocol_index_body:
+        return []
+    return [f"missing_protocol_index_row:{rel}"]
+
+
 def load_yaml_artifact(path: Path) -> dict[str, object]:
     data = yaml.load(path.read_text(encoding="utf-8")) or {}
     return data if isinstance(data, dict) else {}
@@ -641,6 +665,130 @@ def readiness_issue_rows(root: Path | None, profile: str, files: list[Path]) -> 
             rows.append({"path": rel, "issues": ",".join(sorted(set(issues)))})
 
     return rows
+
+
+def protocol_coverage_issue_rows(root: Path | None, profile: str, files: list[Path]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    protocol_index_path = REPO_ROOT / "vida/config/instructions/system-maps.protocol-index.md"
+    _, protocol_index_body, _ = load_markdown(protocol_index_path)
+    activation_body = ACTIVATION_PROTOCOL_PATH.read_text(encoding="utf-8")
+    scoped_paths = [(path.resolve().parent, path.resolve()) for path in files if path.exists()] if files else scan_targets(root, profile)
+    for _, file_path in scoped_paths:
+        if file_path.suffix.lower() != ".md":
+            continue
+        issues = validate_protocol_index_coverage(file_path, protocol_index_body) + validate_activation_binding(file_path, activation_body)
+        if issues:
+            rows.append({"path": relative_to_root(file_path), "issues": ",".join(sorted(set(issues)))})
+    return rows
+
+
+def fastcheck_issue_rows(root: Path | None, profile: str, files: list[Path]) -> list[dict[str, object]]:
+    scoped_paths = [(path.resolve().parent, path.resolve()) for path in files if path.exists()] if files else scan_targets(root, profile)
+    artifact_targets, path_targets = existing_reference_targets()
+    activation_body = ACTIVATION_PROTOCOL_PATH.read_text(encoding="utf-8")
+    protocol_index_path = REPO_ROOT / "vida/config/instructions/system-maps.protocol-index.md"
+    _, protocol_index_body, _ = load_markdown(protocol_index_path)
+    rows: list[dict[str, object]] = []
+    for scope_root, file_path in scoped_paths:
+        if file_path.suffix.lower() != ".md":
+            continue
+        record = build_record(scope_root, file_path)
+        _, body, footer = load_markdown(file_path)
+        problems = (
+            validate_record(file_path, record)
+            + validate_footer_consistency(file_path, footer)
+            + validate_relation_targets(footer, artifact_targets, path_targets)
+            + validate_activation_binding(file_path, activation_body)
+            + validate_protocol_index_coverage(file_path, protocol_index_body)
+        )
+        for link in extract_link_targets(file_path, body):
+            if not link["exists"]:
+                problems.append(f"broken_link:{link['target']}")
+        if problems:
+            rows.append({"path": relative_to_root(file_path), "issues": ",".join(sorted(set(problems)))})
+    return rows
+
+
+def doctor_issue_rows(root: Path | None, profile: str, show_warnings: bool) -> tuple[list[dict[str, object]], int, int]:
+    had_error = False
+    warning_count = 0
+    error_count = 0
+    targets = scan_targets(root, profile)
+    artifact_seen: dict[str, str] = {}
+    changelog_seen: dict[str, str] = {}
+    issue_rows: list[dict[str, object]] = []
+    severity_counts: Counter[str] = Counter()
+    artifact_targets, path_targets = existing_reference_targets()
+    activation_body = ACTIVATION_PROTOCOL_PATH.read_text(encoding="utf-8")
+    protocol_index_path = REPO_ROOT / "vida/config/instructions/system-maps.protocol-index.md"
+    _, protocol_index_body, _ = load_markdown(protocol_index_path)
+    for scope_root, file_path in targets:
+        record = build_record(scope_root, file_path)
+        _, body, footer = load_markdown(file_path)
+        problems = (
+            validate_record(file_path, record)
+            + validate_footer_consistency(file_path, footer)
+            + validate_relation_targets(footer, artifact_targets, path_targets)
+            + validate_activation_binding(file_path, activation_body)
+            + validate_protocol_index_coverage(file_path, protocol_index_body)
+        )
+        artifact = footer.get("artifact_path", "")
+        if artifact:
+            rel = relative_to_root(file_path)
+            owner = artifact_seen.get(artifact)
+            if owner and owner != rel:
+                problems.append(f"duplicate_artifact:{artifact}")
+            else:
+                artifact_seen[artifact] = rel
+        try:
+            changelog_path = changelog_path_for(file_path)
+            rel_changelog = relative_to_root(changelog_path)
+            owner = changelog_seen.get(rel_changelog)
+            if owner and owner != relative_to_root(file_path):
+                problems.append(f"duplicate_changelog_ref:{rel_changelog}")
+            else:
+                changelog_seen[rel_changelog] = relative_to_root(file_path)
+            latest = latest_changelog_row(changelog_path)
+            if latest and latest.get("source_path") and not is_footer_optional(file_path) and str(latest["source_path"]) != footer.get("source_path", ""):
+                problems.append("latest_changelog_source_path_mismatch")
+        except Exception:
+            pass
+        for link in extract_link_targets(file_path, body):
+            if not link["exists"]:
+                problems.append(f"broken_link:{link['target']}")
+        warnings = []
+        if is_footer_optional(file_path):
+            warnings.append("footer_optional_policy")
+        if is_changelog_only(file_path):
+            warnings.append("changelog_only_policy")
+        if is_mutation_disabled(file_path):
+            warnings.append("mutation_disabled_policy")
+        if problems:
+            had_error = True
+            error_count += len(set(problems))
+            severity_counts["error"] += 1
+            issue_rows.append({"severity": "error", "path": relative_to_root(file_path), "issues": ",".join(sorted(set(problems)))})
+        elif show_warnings and warnings:
+            warning_count += len(set(warnings))
+            severity_counts["warning"] += 1
+            issue_rows.append({"severity": "warning", "path": relative_to_root(file_path), "issues": ",".join(sorted(set(warnings)))})
+    changelog_paths = set()
+    for _, file_path in targets:
+        try:
+            changelog_paths.add(changelog_path_for(file_path).resolve())
+        except Exception:
+            pass
+    candidate_dirs = {scope_root for scope_root, _ in targets}
+    for candidate_dir in candidate_dirs:
+        for changelog_file in candidate_dir.rglob("*.changelog.jsonl"):
+            if is_scan_ignored(changelog_file):
+                continue
+            if changelog_file.resolve() not in changelog_paths:
+                had_error = True
+                error_count += 1
+                severity_counts["error"] += 1
+                issue_rows.append({"severity": "error", "path": relative_to_root(changelog_file), "issues": "orphan_changelog"})
+    return issue_rows, error_count, warning_count
 
 
 def collect_registry(scan_root: Path) -> list[dict[str, object]]:
@@ -1616,28 +1764,10 @@ def cmd_fastcheck(root: Annotated[Path | None, typer.Option(help="Root directory
                   profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "",
                   files: Annotated[list[Path], typer.Argument(help="Optional explicit markdown files to validate quickly.")] = []) -> None:
     set_command("fastcheck")
-    scoped_paths = [(path.resolve().parent, path.resolve()) for path in files if path.exists()] if files else scan_targets(root, profile)
-    had_error = False
-    artifact_targets, path_targets = existing_reference_targets()
-    activation_body = ACTIVATION_PROTOCOL_PATH.read_text(encoding="utf-8")
-    for scope_root, file_path in scoped_paths:
-        if file_path.suffix.lower() != ".md":
-            continue
-        record = build_record(scope_root, file_path)
-        _, body, footer = load_markdown(file_path)
-        problems = (
-            validate_record(file_path, record)
-            + validate_footer_consistency(file_path, footer)
-            + validate_relation_targets(footer, artifact_targets, path_targets)
-            + validate_activation_binding(file_path, activation_body)
-        )
-        for link in extract_link_targets(file_path, body):
-            if not link["exists"]:
-                problems.append(f"broken_link:{link['target']}")
-        if problems:
-            had_error = True
-            typer.echo(json.dumps({"path": relative_to_root(file_path), "issues": sorted(set(problems))}, ensure_ascii=True, separators=(",", ":")))
-    complete_status(1 if had_error else 0)
+    rows = fastcheck_issue_rows(root, profile, files)
+    for row in rows:
+        typer.echo(json.dumps(row, ensure_ascii=True, separators=(",", ":")))
+    complete_status(1 if rows else 0)
 
 
 @app.command("activation-check")
@@ -1661,6 +1791,25 @@ def cmd_activation_check(root: Annotated[Path | None, typer.Option(help="Root di
     complete_status(1 if had_error else 0)
 
 
+@app.command("protocol-coverage-check")
+def cmd_protocol_coverage_check(root: Annotated[Path | None, typer.Option(help="Root directory for protocol coverage validation scope.")] = None,
+                                profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "active-canon",
+                                files: Annotated[list[Path], typer.Argument(help="Optional explicit markdown files to validate for protocol-index and activation coverage.")] = [],
+                                output_format: Annotated[str, typer.Option("--format", help="Output format: toon or jsonl.")] = "toon") -> None:
+    set_command("protocol-coverage-check")
+    rows = protocol_coverage_issue_rows(root, profile, files)
+    if rows:
+        if output_format == "toon":
+            emit_toon_sections({
+                "context": {"command": "protocol-coverage-check", "root": profile or (str(root.resolve()) if root else "")},
+                "totals": {"blocking_rows": len(rows)},
+                "issues": rows,
+            })
+        else:
+            emit_rows(rows, output_format)
+    complete_status(1 if rows else 0)
+
+
 @app.command("readiness-check")
 def cmd_readiness_check(root: Annotated[Path | None, typer.Option(help="Root directory for readiness validation scope.")] = None,
                         profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "active-canon",
@@ -1680,6 +1829,54 @@ def cmd_readiness_check(root: Annotated[Path | None, typer.Option(help="Root dir
     complete_status(1 if rows else 0)
 
 
+@app.command("readiness-write")
+def cmd_readiness_write(root: Annotated[Path | None, typer.Option(help="Root directory for readiness validation scope.")] = None,
+                        profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "active-canon",
+                        files: Annotated[list[Path], typer.Argument(help="Optional explicit markdown files to validate for readiness coverage.")] = [],
+                        output: Annotated[Path, typer.Option(help="Output JSONL path.")] = REPO_ROOT / "_temp" / "codex-readiness.jsonl",
+                        canonical: Annotated[bool, typer.Option(help="Write to the canonical readiness path from schema.")] = False) -> None:
+    set_command("readiness-write")
+    rows = readiness_issue_rows(root, profile, files)
+    final_output = (REPO_ROOT / load_schema().canonical_readiness.path).resolve() if canonical else output.resolve()
+    materialize_registry_rows(rows, final_output)
+    set_result_note(f"wrote readiness report for {profile or relative_to_root(root.resolve()) if root else 'explicit-files'} to {relative_to_root(final_output)}")
+    complete_status(1 if rows else 0)
+
+
+@app.command("proofcheck")
+def cmd_proofcheck(root: Annotated[Path | None, typer.Option(help="Root directory for grouped proof scope.")] = None,
+                   profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "active-canon",
+                   files: Annotated[list[Path], typer.Argument(help="Optional explicit markdown files to validate.")] = [],
+                   output_format: Annotated[str, typer.Option("--format", help="Output format: toon or jsonl.")] = "toon") -> None:
+    set_command("proofcheck")
+    fast_rows = fastcheck_issue_rows(root, profile, files)
+    protocol_rows = protocol_coverage_issue_rows(root, profile, files)
+    readiness_rows = readiness_issue_rows(root, profile, files)
+    doctor_rows, doctor_error_count, doctor_warning_count = doctor_issue_rows(root, profile, show_warnings=True)
+    blocking = bool(fast_rows or protocol_rows or readiness_rows or any(row.get("severity") == "error" for row in doctor_rows))
+    if output_format == "toon":
+        emit_toon_sections({
+            "context": {"command": "proofcheck", "root": profile or (str(root.resolve()) if root else ""), "files_mode": "explicit" if files else "profile"},
+            "totals": {
+                "fastcheck_rows": len(fast_rows),
+                "protocol_coverage_rows": len(protocol_rows),
+                "readiness_rows": len(readiness_rows),
+                "doctor_error_rows": doctor_error_count,
+                "doctor_warning_rows": doctor_warning_count,
+            },
+            "fastcheck": fast_rows,
+            "protocol_coverage": protocol_rows,
+            "readiness": readiness_rows,
+            "doctor": doctor_rows,
+        })
+    else:
+        for label, rows in (("fastcheck", fast_rows), ("protocol_coverage", protocol_rows), ("readiness", readiness_rows), ("doctor", doctor_rows)):
+            for row in rows:
+                payload = {"section": label, **row}
+                typer.echo(json.dumps(payload, ensure_ascii=True, separators=(",", ":")))
+    complete_status(1 if blocking else 0)
+
+
 @app.command("doctor")
 def cmd_doctor(root: Annotated[Path | None, typer.Option(help="Root directory to scan.")] = None,
                profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "",
@@ -1687,75 +1884,9 @@ def cmd_doctor(root: Annotated[Path | None, typer.Option(help="Root directory to
                output_format: Annotated[str, typer.Option("--format", help="Output format: toon or jsonl for emitted issues.")] = "jsonl",
                fail_on_warnings: Annotated[bool, typer.Option(help="Treat warnings as failures.")] = False) -> None:
     set_command("doctor")
-    had_error = False
-    warning_count = 0
-    error_count = 0
-    targets = scan_targets(root, profile)
-    artifact_seen: dict[str, str] = {}
-    changelog_seen: dict[str, str] = {}
-    issue_rows: list[dict[str, object]] = []
-    severity_counts: Counter[str] = Counter()
-    artifact_targets, path_targets = existing_reference_targets()
-    for scope_root, file_path in targets:
-        record = build_record(scope_root, file_path)
-        _, body, footer = load_markdown(file_path)
-        problems = validate_record(file_path, record) + validate_footer_consistency(file_path, footer) + validate_relation_targets(footer, artifact_targets, path_targets)
-        artifact = footer.get("artifact_path", "")
-        if artifact:
-            rel = relative_to_root(file_path)
-            owner = artifact_seen.get(artifact)
-            if owner and owner != rel:
-                problems.append(f"duplicate_artifact:{artifact}")
-            else:
-                artifact_seen[artifact] = rel
-        try:
-            changelog_path = changelog_path_for(file_path)
-            rel_changelog = relative_to_root(changelog_path)
-            owner = changelog_seen.get(rel_changelog)
-            if owner and owner != relative_to_root(file_path):
-                problems.append(f"duplicate_changelog_ref:{rel_changelog}")
-            else:
-                changelog_seen[rel_changelog] = relative_to_root(file_path)
-            latest = latest_changelog_row(changelog_path)
-            if latest and latest.get("source_path") and not is_footer_optional(file_path) and str(latest["source_path"]) != footer.get("source_path", ""):
-                problems.append("latest_changelog_source_path_mismatch")
-        except Exception:
-            pass
-        for link in extract_link_targets(file_path, body):
-            if not link["exists"]:
-                problems.append(f"broken_link:{link['target']}")
-        warnings = []
-        if is_footer_optional(file_path):
-            warnings.append("footer_optional_policy")
-        if is_changelog_only(file_path):
-            warnings.append("changelog_only_policy")
-        if is_mutation_disabled(file_path):
-            warnings.append("mutation_disabled_policy")
-        if problems:
-            had_error = True
-            error_count += len(set(problems))
-            severity_counts["error"] += 1
-            issue_rows.append({"severity": "error", "path": relative_to_root(file_path), "issues": ",".join(sorted(set(problems)))})
-        elif show_warnings and warnings:
-            warning_count += len(set(warnings))
-            severity_counts["warning"] += 1
-            issue_rows.append({"severity": "warning", "path": relative_to_root(file_path), "issues": ",".join(sorted(set(warnings)))})
-    changelog_paths = set()
-    for _, file_path in targets:
-        try:
-            changelog_paths.add(changelog_path_for(file_path).resolve())
-        except Exception:
-            pass
-    candidate_dirs = {scope_root for scope_root, _ in targets}
-    for candidate_dir in candidate_dirs:
-        for changelog_file in candidate_dir.rglob("*.changelog.jsonl"):
-            if is_scan_ignored(changelog_file):
-                continue
-            if changelog_file.resolve() not in changelog_paths:
-                had_error = True
-                error_count += 1
-                severity_counts["error"] += 1
-                issue_rows.append({"severity": "error", "path": relative_to_root(changelog_file), "issues": "orphan_changelog"})
+    issue_rows, error_count, warning_count = doctor_issue_rows(root, profile, show_warnings)
+    had_error = any(row.get("severity") == "error" for row in issue_rows)
+    severity_counts: Counter[str] = Counter(str(row.get("severity", "")) for row in issue_rows)
     if issue_rows:
         if output_format == "toon":
             emit_toon_sections({

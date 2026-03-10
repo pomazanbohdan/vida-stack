@@ -48,6 +48,9 @@ Purpose: provide current project/runtime context and canonical map pointers for 
 8. Gaps discovered inside already-green layers must be corrected immediately when the fix is bounded and safe:
    - do not defer a green-layer usability, validation, or mutation-path defect merely because the main task can continue,
    - fix the gap in the same work cycle unless doing so would widen scope materially.
+9. `Layer 8: Canonical Runtime Consumption` is directly blocked on `taskflow`:
+   - `codex` can prepare inventory, readiness, and bundle authority,
+   - but only `taskflow` becoming the primary runtime consumer can close that layer.
 
 ## Canonical Maps
 
@@ -164,5 +167,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: '2026-03-10T03:52:18+02:00'
+updated_at: '2026-03-10T03:59:16+02:00'
 changelog_ref: AGENTS.sidecar.changelog.jsonl

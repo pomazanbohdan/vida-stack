@@ -114,3 +114,5 @@ profiles:
     warnings_fail: false
 canonical_registry:
   path: vida/config/codex-registry.current.jsonl
+canonical_readiness:
+  path: vida/config/codex-readiness.current.jsonl

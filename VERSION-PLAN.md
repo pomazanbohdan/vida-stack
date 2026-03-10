@@ -138,6 +138,7 @@ Core architectural expectations:
 7. `taskflow` and `codex` must remain separate bounded crates in the same workspace.
 8. each must be usable independently as a library and independently as a CLI tool.
 9. the `vida` binary may compose them, but it must not collapse their boundaries.
+10. direct runtime consumption of canonical inventory, readiness, bundles, and projections is blocked until `taskflow` becomes the primary runtime engine for that path; `codex` alone cannot close that layer.
 
 `1.0` is not a daemon release.
 It is a usable, self-hosted, local control binary.

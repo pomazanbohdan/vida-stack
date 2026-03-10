@@ -148,6 +148,7 @@ This protocol must not depend on:
 3. Do not justify documentation changes by future-layer intent alone.
 4. Do not treat partial inventory or relation features as if they were already canonical authority.
 5. Do not close documentation work without validation.
+6. Do not restyle or reframe the repository `README.md` voice, presentation style, or narrative shape unless the user explicitly asks for a README stylistic rewrite; bounded factual updates are allowed, but stylistic transformation is forbidden by default.
 
 ## Closure Rule
 
@@ -179,5 +180,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts.documentation-operation-protocol.md
 created_at: '2026-03-10T04:10:00+02:00'
-updated_at: '2026-03-10T03:52:18+02:00'
+updated_at: '2026-03-10T03:54:51+02:00'
 changelog_ref: instruction-contracts.documentation-operation-protocol.changelog.jsonl
