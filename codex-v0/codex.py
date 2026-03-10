@@ -38,6 +38,9 @@ REQUIRED_FOOTER_FIELDS = (
     "changelog_ref",
 )
 MARKDOWN_EXTS = {".md", ".MD"}
+FOOTER_REFERENCE_KEYS = ("projection_ref", "contract_ref", "template_ref", "parent_definition_ref")
+LAYER_SPEC_PATH = REPO_ROOT / "docs/product/spec/canonical-documentation-and-inventory-layers.md"
+ACTIVATION_PROTOCOL_PATH = REPO_ROOT / "vida/config/instructions/instruction-contracts.instruction-activation-protocol.md"
 
 yaml = YAML()
 yaml.default_flow_style = False
@@ -473,6 +476,78 @@ def validate_footer_consistency(markdown_file: Path, footer: dict[str, str]) -> 
     return problems
 
 
+def parse_layer_status_matrix() -> list[dict[str, str]]:
+    text = LAYER_SPEC_PATH.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    table_lines: list[str] = []
+    in_table = False
+    for line in lines:
+        if line.startswith("| Category | Layer 1 |"):
+            in_table = True
+        if in_table:
+            if not line.startswith("|"):
+                break
+            table_lines.append(line)
+    if len(table_lines) < 3:
+        raise ValueError("layer status matrix not found")
+
+    def split_row(row: str) -> list[str]:
+        return [cell.strip() for cell in row.strip().strip("|").split("|")]
+
+    header = split_row(table_lines[0])
+    data_rows = [split_row(row) for row in table_lines[2:]]
+    layer_count = len(header) - 1
+    layers = [{"number": str(i + 1)} for i in range(layer_count)]
+    for row in data_rows:
+        if len(row) != len(header):
+            continue
+        category = row[0]
+        for idx in range(layer_count):
+            layers[idx][category] = row[idx + 1]
+    return layers
+
+
+def existing_reference_targets() -> tuple[set[str], set[str]]:
+    artifact_index, path_index = build_reference_index()
+    return set(artifact_index.keys()), set(path_index.keys())
+
+
+def validate_relation_targets(footer: dict[str, str], artifact_targets: set[str], path_targets: set[str]) -> list[str]:
+    problems: list[str] = []
+    for key in FOOTER_REFERENCE_KEYS:
+        value = str(footer.get(key, "")).strip()
+        if not value:
+            continue
+        repo_candidate = (REPO_ROOT / value).resolve()
+        repo_rel = relative_to_root(repo_candidate) if repo_candidate.exists() else value
+        if value not in artifact_targets and value not in path_targets and repo_rel not in path_targets:
+            problems.append(f"broken_footer_ref:{key}:{value}")
+    return problems
+
+
+def is_activation_governed_protocol(file_path: Path) -> bool:
+    rel = relative_to_root(file_path)
+    if not rel.startswith("vida/config/instructions/"):
+        return False
+    name = file_path.name
+    if not name.endswith("protocol.md"):
+        return False
+    if name.startswith("system-maps."):
+        return False
+    return True
+
+
+def validate_activation_binding(file_path: Path, activation_body: str) -> list[str]:
+    if not is_activation_governed_protocol(file_path):
+        return []
+    rel = relative_to_root(file_path)
+    if rel == relative_to_root(ACTIVATION_PROTOCOL_PATH):
+        return []
+    if rel in activation_body or file_path.name in activation_body:
+        return []
+    return [f"missing_activation_binding:{rel}"]
+
+
 def collect_registry(scan_root: Path) -> list[dict[str, object]]:
     rows = [build_record(scan_root, path) for path in iter_markdown_files(scan_root)]
     rows.sort(key=lambda row: str(row.get("artifact", row["path"])))
@@ -600,9 +675,20 @@ def scan_targets(root: Path | None, profile: str) -> list[tuple[Path, Path]]:
 
 def run_quiet_check(scan_root: Path, paths: list[Path]) -> int:
     had_error = False
+    artifact_targets, path_targets = existing_reference_targets()
+    activation_body = ACTIVATION_PROTOCOL_PATH.read_text(encoding="utf-8")
     for file_path in paths:
         record = build_record(scan_root, file_path)
-        problems = validate_record(file_path, record)
+        _, body, footer = load_markdown(file_path)
+        problems = (
+            validate_record(file_path, record)
+            + validate_footer_consistency(file_path, footer)
+            + validate_relation_targets(footer, artifact_targets, path_targets)
+            + validate_activation_binding(file_path, activation_body)
+        )
+        for link in extract_link_targets(file_path, body):
+            if not link["exists"]:
+                problems.append(f"broken_link:{link['target']}")
         if problems:
             had_error = True
             typer.echo(json.dumps({"path": relative_to_root(file_path), "issues": problems}, ensure_ascii=True, separators=(",", ":")))
@@ -803,6 +889,25 @@ def cmd_overview(
         "statuses": payload["statuses"],
         "issues": issue_rows,
     })
+    complete_status(0)
+
+
+@app.command("layer-status")
+def cmd_layer_status(layer: Annotated[int, typer.Option(min=1, max=8, help="Layer number from the canonical layer spec.")] = 1,
+                     output_format: Annotated[str, typer.Option("--format", help="Output format: toon or jsonl.")] = "toon") -> None:
+    set_command("layer-status")
+    layers = parse_layer_status_matrix()
+    idx = layer - 1
+    current = layers[idx]
+    adjacent: list[dict[str, str]] = []
+    for pos in range(max(0, idx - 1), min(len(layers), idx + 2)):
+        row = dict(layers[pos])
+        row["position"] = "current" if pos == idx else ("previous" if pos < idx else "next")
+        adjacent.append(row)
+    if output_format == "toon":
+        emit_toon_sections({"context": {"command": "layer-status", "layer": layer}, "current": current, "adjacent": adjacent})
+    else:
+        emit_rows(adjacent, output_format)
     complete_status(0)
 
 
@@ -1395,13 +1500,69 @@ def cmd_check(root: Annotated[Path | None, typer.Option(help="Root directory for
     set_command("check")
     scoped_paths = [(path.resolve().parent, path.resolve()) for path in files if path.exists()] if files else scan_targets(root, profile)
     had_error = False
+    activation_body = ACTIVATION_PROTOCOL_PATH.read_text(encoding="utf-8")
     for scope_root, file_path in scoped_paths:
         if file_path.suffix.lower() != ".md":
             continue
-        problems = validate_record(file_path, build_record(scope_root, file_path))
+        _, _, footer = load_markdown(file_path)
+        problems = (
+            validate_record(file_path, build_record(scope_root, file_path))
+            + validate_footer_consistency(file_path, footer)
+            + validate_activation_binding(file_path, activation_body)
+        )
         if problems:
             had_error = True
             typer.echo(json.dumps({"path": relative_to_root(file_path), "issues": problems}, ensure_ascii=True, separators=(",", ":")))
+    complete_status(1 if had_error else 0)
+
+
+@app.command("fastcheck")
+def cmd_fastcheck(root: Annotated[Path | None, typer.Option(help="Root directory for quick validation scope.")] = None,
+                  profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "",
+                  files: Annotated[list[Path], typer.Argument(help="Optional explicit markdown files to validate quickly.")] = []) -> None:
+    set_command("fastcheck")
+    scoped_paths = [(path.resolve().parent, path.resolve()) for path in files if path.exists()] if files else scan_targets(root, profile)
+    had_error = False
+    artifact_targets, path_targets = existing_reference_targets()
+    activation_body = ACTIVATION_PROTOCOL_PATH.read_text(encoding="utf-8")
+    for scope_root, file_path in scoped_paths:
+        if file_path.suffix.lower() != ".md":
+            continue
+        record = build_record(scope_root, file_path)
+        _, body, footer = load_markdown(file_path)
+        problems = (
+            validate_record(file_path, record)
+            + validate_footer_consistency(file_path, footer)
+            + validate_relation_targets(footer, artifact_targets, path_targets)
+            + validate_activation_binding(file_path, activation_body)
+        )
+        for link in extract_link_targets(file_path, body):
+            if not link["exists"]:
+                problems.append(f"broken_link:{link['target']}")
+        if problems:
+            had_error = True
+            typer.echo(json.dumps({"path": relative_to_root(file_path), "issues": sorted(set(problems))}, ensure_ascii=True, separators=(",", ":")))
+    complete_status(1 if had_error else 0)
+
+
+@app.command("activation-check")
+def cmd_activation_check(root: Annotated[Path | None, typer.Option(help="Root directory for activation validation scope.")] = None,
+                         profile: Annotated[str, typer.Option(help="Named scan profile from policy.")] = "",
+                         files: Annotated[list[Path], typer.Argument(help="Optional explicit markdown files to validate for activation coverage.")] = []) -> None:
+    set_command("activation-check")
+    scoped_paths = [(path.resolve().parent, path.resolve()) for path in files if path.exists()] if files else scan_targets(root, profile)
+    activation_body = ACTIVATION_PROTOCOL_PATH.read_text(encoding="utf-8")
+    had_error = False
+    rows: list[dict[str, object]] = []
+    for _, file_path in scoped_paths:
+        if file_path.suffix.lower() != ".md":
+            continue
+        issues = validate_activation_binding(file_path, activation_body)
+        if issues:
+            had_error = True
+            rows.append({"path": relative_to_root(file_path), "issues": ",".join(issues)})
+    for row in rows:
+        typer.echo(json.dumps(row, ensure_ascii=True, separators=(",", ":")))
     complete_status(1 if had_error else 0)
 
 
@@ -1420,10 +1581,11 @@ def cmd_doctor(root: Annotated[Path | None, typer.Option(help="Root directory to
     changelog_seen: dict[str, str] = {}
     issue_rows: list[dict[str, object]] = []
     severity_counts: Counter[str] = Counter()
+    artifact_targets, path_targets = existing_reference_targets()
     for scope_root, file_path in targets:
         record = build_record(scope_root, file_path)
         _, body, footer = load_markdown(file_path)
-        problems = validate_record(file_path, record) + validate_footer_consistency(file_path, footer)
+        problems = validate_record(file_path, record) + validate_footer_consistency(file_path, footer) + validate_relation_targets(footer, artifact_targets, path_targets)
         artifact = footer.get("artifact_path", "")
         if artifact:
             rel = relative_to_root(file_path)

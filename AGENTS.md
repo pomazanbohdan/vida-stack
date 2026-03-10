@@ -10,6 +10,7 @@ Project/runtime context sidecar:
 
 Instruction activation note:
 1. Use `vida/config/instructions/instruction-contracts.instruction-activation-protocol.md` as the canonical rule for when instruction surfaces are `always-on`, `lane-entry`, `triggered`, or `closure/reflection` only.
+2. If the active task context is documentation-shaped, activate `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md` immediately at `L0` without waiting for a second manual selection step.
 
 Canonical role entries:
 1. Orchestrator entry: `vida/config/instructions/agent-definitions.orchestrator-entry.md`
@@ -63,6 +64,7 @@ These rules apply across all lanes unless a more specific worker rule narrows be
 16. **[MUST]** If a protocol/process gap is discovered during active work, use only a bounded workaround for the current task, record the gap through the canonical framework bug path when silent diagnosis is active, and do not silently invent a permanent process.
 17. **[MUST]** When evidence sources conflict, prefer the highest-evidence source recognized by the active protocol stack before making conclusions or mutations.
 18. **[MUST]** When worker-first execution is active and new delegated lane allocation fails because of agent/thread saturation, attempt reuse of existing eligible agents first; do not fall back to local-only continuation until reuse or explicit saturation recovery has been attempted and recorded.
+19. **[MUST]** If the active task context is documentation-shaped, activate `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md` immediately at `L0`; do not defer documentation protocol activation to a later optional read.
 
 Definition note for rule 12:
 1. "Generic assistant defaults" means undocumented heuristic behavior such as local-first implementation, ad hoc fallback selection, silent scope expansion, implicit task tracking, or mutation without the active VIDA/project protocol path.
@@ -96,7 +98,8 @@ After context compression/clearing:
 3. Resolve lane:
    - worker lane -> `vida/config/instructions/agent-definitions.worker-entry.md`
    - orchestrator lane -> `vida/config/instructions/agent-definitions.orchestrator-entry.md`
-4. Complete the selected boot path before resuming work.
+4. If the active task is clearly about documentation, sidecar lineage, canonical maps, or documentation tooling, activate `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md` immediately.
+5. Complete the selected boot path before resuming work.
 
 ### Orchestrator Boot Pointer
 
@@ -145,6 +148,7 @@ Operational references:
 4. `vida/config/instructions/system-maps.framework-map-protocol.md`
 5. `vida/config/instructions/system-maps.protocol-index.md`
 6. `vida/config/instructions/instruction-contracts.instruction-activation-protocol.md`
+7. `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md`
 
 Initialization bootstrap rule:
 1. During project initialization, read `AGENTS.sidecar.md` for project context and canonical map pointers before broad manual inspection.

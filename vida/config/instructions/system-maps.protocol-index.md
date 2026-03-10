@@ -13,7 +13,7 @@ Purpose: one entry point for protocol governance. This file maps canonical sourc
 | Tooling/search guide | `vida/config/instructions/system-maps.tooling.md` | `vida/config/instructions/command-instructions.pipelines.md`, `AGENTS.md` |
 | Framework change log | `sidecar changelog plus Git history` | `vida/config/instructions/system-maps.protocol-index.md` |
 | Instruction activation and decomposition | `vida/config/instructions/instruction-contracts.instruction-activation-protocol.md` | `AGENTS.md`, `vida/config/instructions/agent-definitions.orchestrator-entry.md`, `vida/config/instructions/system-maps.protocol-index.md` |
-| Documentation operation using only green documentation layers | `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md` | `docs/product/spec/project-documentation-system.md`, `docs/product/spec/canonical-documentation-and-inventory-layers.md`, `AGENTS.sidecar.md`, `codex-v0/codex.py` |
+| Documentation operation using only green documentation layers | `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md` | `vida/config/instructions/instruction-contracts.instruction-activation-protocol.md`, `vida/config/instructions/agent-definitions.orchestrator-entry.md`, `docs/product/spec/project-documentation-system.md`, `docs/product/spec/canonical-documentation-and-inventory-layers.md`, `AGENTS.sidecar.md`, `codex-v0/codex.py` |
 | Agent definition runtime contract | `vida/config/instructions/agent-definitions.protocol.md` | `docs/product/spec/instruction-artifact-model.md`, `docs/product/spec/skill-management-and-activation.md`, `vida/config/instructions/`, `vida/config/instructions/`, `vida/config/instructions/`, `vida/config/instructions/skills/` |
 | Autonomous follow-through mode | `vida/config/instructions/instruction-contracts.autonomous-execution-protocol.md` | `vida/config/instructions/command-instructions.implement-execution-protocol.md`, `vida/config/instructions/runtime-instructions.taskflow-protocol.md`, `vida/config/instructions/runtime-instructions.beads-protocol.md`, `vida/config/instructions/instruction-contracts.agent-system-protocol.md` |
 | Autonomous next-task selector helper | `autonomous-next-task.py` | `vida/config/instructions/instruction-contracts.autonomous-execution-protocol.md`, `vida/config/instructions/runtime-instructions.execution-priority-protocol.md` |
@@ -130,5 +130,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps.protocol-index.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-10T03:13:23+02:00'
+updated_at: '2026-03-10T03:35:34+02:00'
 changelog_ref: system-maps.protocol-index.changelog.jsonl

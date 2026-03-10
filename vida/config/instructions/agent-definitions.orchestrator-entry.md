@@ -48,6 +48,7 @@ Drift rule:
 Instruction activation rule:
 1. use `vida/config/instructions/instruction-contracts.instruction-activation-protocol.md` as the canonical source for deciding which instruction surfaces are always-on, lane-entry, trigger-only, or closure-only,
 2. do not broaden the boot read-set or domain protocol set unless that protocol's trigger matrix authorizes it.
+3. if the active task context is documentation-shaped, activate `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md` immediately without waiting for a second manual selection step.
 
 ## Request Intent Gate
 
@@ -81,6 +82,7 @@ Tracked-flow boundary:
 1. route to tracked flow immediately when the deliverable requires any repository/runtime mutation, canonical artifact creation, or multi-step traceable execution,
 2. remain `answer_only` only when the deliverable is fully satisfied by chat and no canonical artifact or state mutation is required,
 3. if the request starts as diagnosis/recommendation and then gains a concrete mutation or artifact requirement, transition from `answer_only` to `artifact_flow` or `execution_flow` at that point; do not keep the request in chat mode by inertia.
+4. if the request is about documentation, sidecar lineage, canonical maps, protocol inventory, relation law, or documentation tooling, activate the documentation-operation protocol immediately as part of the lane context.
 
 ## TaskFlow Engagement Gate
 
@@ -330,5 +332,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/agent-definitions.orchestrator-entry.md
 created_at: '2026-03-07T09:54:22+02:00'
-updated_at: '2026-03-10T03:06:28+02:00'
+updated_at: '2026-03-10T03:35:34+02:00'
 changelog_ref: agent-definitions.orchestrator-entry.changelog.jsonl

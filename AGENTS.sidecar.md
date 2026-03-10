@@ -45,6 +45,9 @@ Purpose: provide current project/runtime context and canonical map pointers for 
    - first bring the canonical layer documentation into shape,
    - then implement against that documented law,
    - do not justify new implementation behavior with undocumented layer rules.
+8. Gaps discovered inside already-green layers must be corrected immediately when the fix is bounded and safe:
+   - do not defer a green-layer usability, validation, or mutation-path defect merely because the main task can continue,
+   - fix the gap in the same work cycle unless doing so would widen scope materially.
 
 ## Canonical Maps
 
@@ -73,6 +76,7 @@ Purpose: provide current project/runtime context and canonical map pointers for 
 1. Use `AGENTS.md` for lane routing and hard invariants.
 2. Use this sidecar for project context, map discovery, and current repository orientation.
 3. Prefer canonical maps and instruction artifacts over broad manual repo scanning when bootstrapping context.
+4. When the active task is documentation-shaped, treat `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md` as one-touch active context, not as an optional later read.
 
 ## Repository Documentation Commands
 
@@ -80,29 +84,31 @@ Read/status commands:
 
 1. `overview [--profile <name>]`
    - one-command documentation state overview with totals and current issues/warnings
-2. `summary --root <dir> [--format toon|jsonl]`
+2. `layer-status --layer <N> [--format toon|jsonl]`
+   - show the current layer plus adjacent layers from the canonical layer matrix
+3. `summary --root <dir> [--format toon|jsonl]`
    - compact totals by layer, owner, and status
-3. `registry --root <dir>`
+4. `registry --root <dir>`
    - one machine-readable row per markdown artifact
-4. `registry-write --root <dir> [--output <file>] [--canonical]`
+5. `registry-write --root <dir> [--output <file>] [--canonical]`
    - materialize one registry snapshot for later automation or write the canonical registry path
-5. `scan --root <dir> [--missing-only]`
+6. `scan --root <dir> [--missing-only]`
    - per-file latest-state rows
-6. `changelog <file> [--limit N] [--newest-first] [--format toon|jsonl]`
+7. `changelog <file> [--limit N] [--newest-first] [--format toon|jsonl]`
    - one artifact history
-7. `changelog-task --root <dir> <task_id> [--limit N] [--newest-first] [--format toon|jsonl]`
+8. `changelog-task --root <dir> <task_id> [--limit N] [--newest-first] [--format toon|jsonl]`
    - all matching history rows for one task id
-8. `task-summary --root <dir> <task_id> [--format toon|jsonl]`
+9. `task-summary --root <dir> --task-id <id> [--format toon|jsonl]`
    - aggregate task-level history summary
-9. `deps <file> [--format toon|jsonl]`
+10. `deps <file> [--format toon|jsonl]`
    - direct footer refs, markdown links, and reverse mentions
-10. `deps-map <file-or-dir> [--format toon|jsonl]`
+11. `deps-map <file-or-dir> [--format toon|jsonl]`
    - graph-style dependency edge inventory for one file or a whole scope
-11. `artifact-impact [--file <file> | --artifact <artifact_path>] [--format toon|jsonl]`
+12. `artifact-impact [--file <file> | --artifact <artifact_path>] [--format toon|jsonl]`
    - show all direct document impacts for one artifact identity
-12. `task-impact --root <dir> --task-id <id> [--format toon|jsonl]`
+13. `task-impact --root <dir> --task-id <id> [--format toon|jsonl]`
    - show indirect documentation impacts around artifacts touched by one task
-13. `links <file-or-dir> [--format toon|jsonl]`
+14. `links <file-or-dir> [--format toon|jsonl]`
    - markdown-link inventory for one file or a whole scope
 
 Mutation/finalization commands:
@@ -124,8 +130,12 @@ Validation commands:
 
 1. `check --root <dir> [files...]`
    - footer and sidecar health checks
-2. `doctor --root <dir> [--show-warnings] [--format toon|jsonl] [--fail-on-warnings]`
-   - stronger consistency checks for metadata, changelogs, links, and policy exceptions
+2. `fastcheck --root <dir> [files...]`
+   - quick bounded validation for footer, relation refs, and broken links
+3. `activation-check --root <dir> [files...]`
+   - verify that changed protocol surfaces still have lawful activation bindings
+4. `doctor --root <dir> [--show-warnings] [--format toon|jsonl] [--fail-on-warnings]`
+   - stronger consistency checks for metadata, changelogs, links, relation refs, and policy exceptions
 
 Operational rule:
 
@@ -136,6 +146,9 @@ Operational rule:
 5. command result status is printed at command end with leading emoji:
    - `✅ OK`
    - `❌ ERROR`
+6. use `fastcheck` during active editing for quick bounded safety and `doctor` before closure of canonical changes,
+7. use `activation-check` whenever protocol activation wiring changed,
+8. use `layer-status` when the active work is organized around one canonical layer and its adjacent layers.
 
 -----
 artifact_path: project/repository/agents.sidecar
@@ -146,5 +159,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: '2026-03-10T03:11:31+02:00'
+updated_at: '2026-03-10T03:35:34+02:00'
 changelog_ref: AGENTS.sidecar.changelog.jsonl

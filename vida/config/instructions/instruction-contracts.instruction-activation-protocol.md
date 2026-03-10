@@ -85,6 +85,7 @@ Canonical examples:
 9. `vida/config/instructions/runtime-instructions.problem-party-protocol.md`
 10. `vida/config/instructions/instruction-contracts.autonomous-execution-protocol.md`
 11. `vida/config/instructions/runtime-instructions.execution-priority-protocol.md`
+12. `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md`
 
 Rule:
 
@@ -128,6 +129,7 @@ Rule:
 | implementation route selected | `implement-execution-protocol.md` |
 | plan/spec/task pool is settled and the user wants continued execution to completion | `autonomous-execution-protocol.md` |
 | tracked execution must choose between multiple lawful next tasks or handle reprioritization | `execution-priority-protocol.md` |
+| documentation mutation, documentation validation, canonical map work, or documentation-layer tooling work is active | `documentation-operation-protocol.md` |
 | worker mode active for eligible work | `agent-system-protocol.md` |
 | bounded conflict escalation is authorized | `problem-party-protocol.md` |
 | task appears stale, done-but-open, or drifted | `task-state-reconciliation-protocol.md` |
@@ -206,11 +208,11 @@ Use this order for instruction-layer cleanup:
 -----
 artifact_path: config/instructions/instruction-contracts/instruction-activation.protocol
 artifact_type: instruction_contract
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts.instruction-activation-protocol.md
-created_at: 2026-03-08T02:15:22+02:00
-updated_at: 2026-03-10T00:55:00+02:00
+created_at: '2026-03-08T02:15:22+02:00'
+updated_at: '2026-03-10T03:35:34+02:00'
 changelog_ref: instruction-contracts.instruction-activation-protocol.changelog.jsonl
