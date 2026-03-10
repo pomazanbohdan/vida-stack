@@ -78,7 +78,8 @@ Routing input:
 4. backend availability,
 5. backend score state,
 6. optional project overlay model/profile policy,
-7. route-level write and verification policy.
+7. route-level write and verification policy,
+8. optional project role/skill/profile/flow extension registries and their validation posture.
 
 Routing output:
 
@@ -90,7 +91,16 @@ Routing output:
 6. fallback backends,
 7. effective write scope,
 8. verification gate,
-9. effective route-law metadata.
+9. effective route-law metadata,
+10. effective role source,
+11. effective flow-set source.
+
+Project extension rule:
+
+1. framework roles and standard flow sets remain the stable runtime base.
+2. project-owned roles, skills, profiles, and flow sets may extend that base only through the validated project overlay path.
+3. invalid or unresolved project extensions must fail closed rather than silently degrade into ad hoc runtime behavior.
+4. project extension activation and validation semantics are governed by `vida/config/instructions/runtime-instructions.project-agent-extension-protocol.md`.
 
 ## Independent Verification Contract
 
@@ -101,15 +111,16 @@ Minimum contract:
 1. eligible non-trivial work should separate authorship and verification when route policy requires it,
 2. verification should be selected from a dedicated verification route class when possible,
 3. the verifier should differ from the author lane when another eligible verifier exists.
+4. verification-lane semantics are governed by `vida/config/instructions/runtime-instructions.verification-lane-protocol.md`.
 
 -----
 artifact_path: config/instructions/instruction-contracts/agent-system.protocol
 artifact_type: instruction_contract
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts.agent-system-protocol.md
-created_at: 2026-03-09T22:51:59+02:00
-updated_at: 2026-03-10T00:55:00+02:00
+created_at: '2026-03-09T22:51:59+02:00'
+updated_at: '2026-03-10T15:41:04+02:00'
 changelog_ref: instruction-contracts.agent-system-protocol.changelog.jsonl

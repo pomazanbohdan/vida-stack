@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.8'
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python runtime dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv
+          .venv/bin/python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
+          .venv/bin/python3 -m pip install --upgrade pip
+          .venv/bin/python3 -m pip install -r install/requirements-python.txt
+
+      - name: Install Nim dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd taskflow-v0
+          nimble install -y --depsOnly
+
+      - name: Build taskflow runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          nim c -d:release -o:_temp/taskflow-ci/bin/taskflow-v0 --nimcache:_temp/nimcache/vida_ci taskflow-v0/src/vida.nim
+
+      - name: Run taskflow Nim tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _temp/nimcache/tests
+          for test_file in taskflow-v0/tests/test_*.nim; do
+            test_name="$(basename "${test_file}" .nim)"
+            nim c -r --nimcache:"_temp/nimcache/tests/${test_name}" "$test_file"
+          done
+
+      - name: Run cargo check
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo check
+
+      - name: Run codex validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 codex-v0/codex.py fastcheck --profile active-canon
+          python3 codex-v0/codex.py activation-check --profile active-canon
+          python3 codex-v0/codex.py protocol-coverage-check --profile active-canon
+          python3 codex-v0/codex.py readiness-check --profile active-canon
+          python3 codex-v0/codex.py proofcheck --profile active-canon
+
+      - name: Run runtime smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          VIDA_ROOT="$PWD" _temp/taskflow-ci/bin/taskflow-v0 task import-jsonl .beads/issues.jsonl --json >/tmp/task-import.json
+          VIDA_ROOT="$PWD" _temp/taskflow-ci/bin/taskflow-v0 consume final "CI smoke proof path" --json >/tmp/direct-consume.json

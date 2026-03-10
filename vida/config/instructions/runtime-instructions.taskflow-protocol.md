@@ -2,6 +2,12 @@
 
 Purpose: decompose user requests into executable step-level work while keeping `br` as the single source of truth for task state.
 
+Output policy:
+
+1. Human-facing `taskflow-v0` runtime commands default to `TOON`.
+2. Structured JSON output is enabled only through explicit `--json`.
+3. New runtime surfaces must not make raw JSON the default human-facing output.
+
 ## 1) Layer Model
 
 1. `Intent Layer`: user request (goal, constraints, acceptance).
@@ -28,6 +34,9 @@ Hard rule:
 10. Escalation evidence must capture which outside inputs were used: `external_agent`, `primary_source`, `web/google`, or explicit `not_available` receipt.
 11. Completed write-producing slices must receive catch/review coverage when an eligible lane exists; if not, record a protocol-drift finding and correct it.
 12. Progress reporting must not interrupt lawful continuation by itself when continuous autonomous execution is active.
+13. If overlay enables spec-ready auto development, TaskFlow may enter the next implementation-bearing task without a new user prompt only through the lawful execution-entry gates.
+14. If overlay requires validation before implementation, TaskFlow must treat the pre-implementation report as a gating artifact rather than an informational progress report.
+15. If overlay enables resume-after-validation, accepted validation should return TaskFlow to autonomous continuation for the same lawful task chain.
 
 ## 1.1) Silent Framework Diagnosis Integration
 
@@ -423,5 +432,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions.taskflow-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-10T03:06:28+02:00'
+updated_at: '2026-03-10T17:29:59+02:00'
 changelog_ref: runtime-instructions.taskflow-protocol.changelog.jsonl

@@ -49,47 +49,37 @@ jobs:
           git fetch --tags --force
           git checkout --detach "refs/tags/${RELEASE_TAG}"
 
-      - name: Stage framework payload
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          rm -rf dist/package
-          mkdir -p dist/package/_vida dist/package/.vida
-          cp AGENTS.md dist/package/AGENTS.md
-          cp -R _vida/. dist/package/_vida/
-          cp -R .vida/. dist/package/.vida/
-          rm -f dist/package/_vida/CHANGELOG.md
-          find dist/package/_vida -type d -name '__pycache__' -prune -exec rm -rf {} +
-          find dist/package/_vida -type f -name '*.pyc' -delete
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
-      - name: Build zip archive
-        shell: bash
-        run: |
-          set -euo pipefail
-          (
-            cd dist/package
-            zip -qr "../${ARCHIVE_BASE}.zip" AGENTS.md _vida .vida
-          )
+      - name: Set up Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: '2.2.8'
 
-      - name: Build tar.gz archive
+      - name: Install Python runtime dependencies
         shell: bash
         run: |
           set -euo pipefail
-          tar -czf "dist/${ARCHIVE_BASE}.tar.gz" -C dist/package AGENTS.md _vida .vida
+          python3 -m venv .venv
+          .venv/bin/python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
+          .venv/bin/python3 -m pip install --upgrade pip
+          .venv/bin/python3 -m pip install -r install/requirements-python.txt
 
-      - name: Build release notes from changelog
+      - name: Install Nim dependencies
         shell: bash
         run: |
           set -euo pipefail
-          awk '
-            BEGIN { capture=0 }
-            /^## [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}$/ {
-              if (capture) exit
-              capture=1
-            }
-            capture { print }
-          ' _vida/CHANGELOG.md > dist/release-notes.md
+          cd taskflow-v0
+          nimble install -y --depsOnly
+
+      - name: Build release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/build-release.sh "${RELEASE_TAG}"
 
       - name: Upload archives
         uses: actions/upload-artifact@v4
@@ -109,10 +99,10 @@ jobs:
             gh release edit "${RELEASE_TAG}" \
               --title "${title}" \
               --notes-file dist/release-notes.md
-            gh release upload "${RELEASE_TAG}" dist/*.zip dist/*.tar.gz --clobber
+            gh release upload "${RELEASE_TAG}" dist/*.zip dist/*.tar.gz dist/*.sha256 dist/vida-install.sh --clobber
           else
             gh release create "${RELEASE_TAG}" \
-              dist/*.zip dist/*.tar.gz \
+              dist/*.zip dist/*.tar.gz dist/*.sha256 dist/vida-install.sh \
               --title "${title}" \
               --notes-file dist/release-notes.md
           fi

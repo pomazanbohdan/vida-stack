@@ -93,6 +93,7 @@ Rules:
 5. This root-level metadata exception must be carried through one canonical policy layer, not repeated as ad hoc hardcoded exceptions.
 6. This root-level metadata exception is transitional only and must be removed by VIDA `1.0.0`.
 7. By VIDA `1.0.0`, root-level markdown files must obey the same canonical metadata contract as the rest of the active documentation surface unless a stricter replacement bootstrap mechanism supersedes them.
+8. Concrete operator-command discovery for documentation work must route through `docs/process/documentation-tooling-map.md`, not through bootstrap carriers or mixed product-spec bodies.
 
 ## Initialization Rule
 
@@ -123,5 +124,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/project-documentation-system.md
 created_at: '2026-03-10T00:00:00+02:00'
-updated_at: '2026-03-10T04:25:26+02:00'
+updated_at: '2026-03-10T14:41:12+02:00'
 changelog_ref: project-documentation-system.changelog.jsonl

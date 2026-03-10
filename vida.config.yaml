@@ -25,11 +25,149 @@ language_policy:
 protocol_activation:
   agent_system: true
 
+party_chat:
+  enabled: true
+  replaces_problem_party: true
+  execution_mode: multi_agent
+  model_routing_strategy: by_role
+  default_board_size: small
+  min_experts: 2
+  max_experts: 6
+  hard_cap_agents: 8
+  dei_enabled: true
+  single_agent:
+    backend: qwen_cli
+    model: qwen-max
+  role_model_bindings:
+    party_chat_facilitator:
+      backend: qwen_cli
+      model: qwen-max
+    party_chat_architect:
+      backend: qwen_cli
+      model: qwen-max
+    party_chat_runtime_systems:
+      backend: qwen_cli
+      model: qwen-plus
+    party_chat_quality_verification:
+      backend: qwen_cli
+      model: qwen-max
+    party_chat_delivery_cost:
+      backend: qwen_cli
+      model: qwen-plus
+    party_chat_product_scope:
+      backend: minimax_cli
+      model: minimax-design
+    party_chat_security_safety:
+      backend: qwen_cli
+      model: qwen-max
+    party_chat_sre_observability:
+      backend: qwen_cli
+      model: qwen-plus
+    party_chat_data_contracts:
+      backend: qwen_cli
+      model: qwen-plus
+    party_chat_dx_tooling:
+      backend: minimax_cli
+      model: minimax-design
+    party_chat_pm_process:
+      backend: minimax_cli
+      model: minimax-design
+
+agent_extensions:
+  enabled: true
+  map_doc: docs/process/agent-extensions/README.md
+  registries:
+    roles: docs/process/agent-extensions/roles.yaml
+    skills: docs/process/agent-extensions/skills.yaml
+    profiles: docs/process/agent-extensions/profiles.yaml
+    flows: docs/process/agent-extensions/flows.yaml
+  enabled_framework_roles:
+    - orchestrator
+    - worker
+    - business_analyst
+    - pm
+    - coach
+    - verifier
+    - prover
+  enabled_standard_flow_sets:
+    - minimal
+    - reviewed
+    - verified
+  enabled_project_roles:
+    - party_chat_facilitator
+    - party_chat_architect
+    - party_chat_runtime_systems
+    - party_chat_quality_verification
+    - party_chat_delivery_cost
+    - party_chat_product_scope
+    - party_chat_security_safety
+    - party_chat_sre_observability
+    - party_chat_data_contracts
+    - party_chat_dx_tooling
+    - party_chat_pm_process
+  enabled_project_skills:
+    - party_chat_council_reasoning
+    - party_chat_architecture_reasoning
+    - party_chat_runtime_reasoning
+    - party_chat_verification_reasoning
+    - party_chat_delivery_tradeoffs
+    - party_chat_product_scope
+    - party_chat_security_safety
+    - party_chat_observability
+    - party_chat_data_contracts
+    - party_chat_dx_tooling
+    - party_chat_pm_process
+  enabled_shared_skills: []
+  enabled_project_profiles:
+    - party_chat_facilitator_profile
+    - party_chat_architect_profile
+    - party_chat_runtime_systems_profile
+    - party_chat_quality_verification_profile
+    - party_chat_delivery_cost_profile
+    - party_chat_product_scope_profile
+    - party_chat_security_safety_profile
+    - party_chat_sre_observability_profile
+    - party_chat_data_contracts_profile
+    - party_chat_dx_tooling_profile
+    - party_chat_pm_process_profile
+  enabled_project_flows:
+    - party_chat_council_small
+    - party_chat_council_large
+  default_flow_set: verified
+  role_selection:
+    mode: auto
+    fallback_role: orchestrator
+    conversation_modes:
+      scope_discussion:
+        enabled: true
+        role: business_analyst
+        single_task_only: true
+        tracked_flow_entry: spec-pack
+        allow_freeform_chat: true
+      pbi_discussion:
+        enabled: true
+        role: pm
+        single_task_only: true
+        tracked_flow_entry: work-pool-pack
+        allow_freeform_chat: true
+  validation:
+    require_registry_files: true
+    require_unique_ids: true
+    require_framework_role_compatibility: true
+    require_skill_role_compatibility: true
+    require_profile_resolution: true
+    require_flow_resolution: true
+    fail_closed_on_validation_error: true
+
 autonomous_execution:
   next_task_boundary_analysis: true
   next_task_boundary_report: brief_plan
   next_task_boundary_report_gating: false
   dependent_coverage_autoupdate: true
+  continue_after_reports: true
+  spec_ready_auto_development: true
+  validation_report_required_before_implementation: true
+  resume_after_validation_gate: true
 
 framework_self_diagnosis:
   enabled: true
@@ -93,6 +231,7 @@ agent_system:
       enabled: true
       subagent_backend_class: external_cli
       detect_command: codex
+      binary_path: /home/unnamed/.bun/bin/codex
       role: bridge_fallback
       orchestration_tier: bridge
       cost_priority: fallback

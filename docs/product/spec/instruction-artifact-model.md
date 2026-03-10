@@ -15,6 +15,11 @@ VIDA product law recognizes four peer artifact classes:
 3. `Prompt Template Configuration`
 4. `Skill`
 
+Runtime composition note:
+
+1. `Flow Set` is a runtime composition artifact, not a fifth peer instruction-artifact class.
+2. Flow-set selection remains a runtime/taskflow concern layered above these four core artifact classes.
+
 ## 2. Ownership
 
 1. All four artifact classes are product-owned configuration artifacts.
@@ -85,6 +90,38 @@ Rule:
 2. skill inventories may be physically large,
 3. explicit management surfaces are required for discovery and enablement.
 
+## 4.1 VIDA 1.0 Runtime Contract Targets
+
+For `VIDA 1.0`, the instruction/config substrate must support explicit multi-agent runtime behavior rather than relying on implicit chat-context inheritance.
+
+Target requirements:
+
+1. `Instruction Contract` and rendered runtime packets must support explicit handoff/delegation boundaries between orchestrator and worker lanes.
+2. Handoff/runtime packets must support bounded context shaping so the receiving lane gets only the history and task state required for its role.
+3. The agent/runtime chain must preserve explicit output and proof contracts across handoff boundaries, including independent verification lanes when route law requires them.
+4. Runtime packet semantics must remain replay-safe:
+   - repeated delivery of the same bounded packet must not silently widen scope,
+   - retries and recovery must not require hidden chat-memory reconstruction,
+   - fail-closed escalation rules must survive restart/replay.
+5. Prompt Template Configuration may shape rendering and bindings for a provider/runtime, but it must not become the hidden owner of:
+   - handoff law,
+   - context-filtering law,
+   - proof/verification law,
+   - replay/recovery semantics.
+
+External alignment references:
+
+1. OpenAI Agents SDK overview:
+   - https://developers.openai.com/api/docs/guides/agents-sdk
+2. OpenAI Agents SDK handoffs:
+   - https://openai.github.io/openai-agents-js/guides/handoffs/
+3. LangGraph supervisor/handoff patterns:
+   - https://langchain-ai.github.io/langgraphjs/reference/modules/langgraph-supervisor.html
+4. Temporal durable execution:
+   - https://docs.temporal.io/
+5. Eventuous checkpointing:
+   - https://eventuous.dev/docs/subscriptions/checkpoint/
+
 ## 5. Config Mapping
 
 The executable law home for this model is `vida/config/instructions/**`.
@@ -140,11 +177,11 @@ This spec absorbs and supersedes product-instruction semantics previously scatte
 -----
 artifact_path: product/spec/instruction-artifact-model
 artifact_type: product_spec
-artifact_version: 1
-artifact_revision: 2026-03-10
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
 status: canonical
 source_path: docs/product/spec/instruction-artifact-model.md
-created_at: 2026-03-09T20:28:59+02:00
-updated_at: 2026-03-09T22:51:59+02:00
+created_at: '2026-03-09T20:28:59+02:00'
+updated_at: '2026-03-10T15:41:04+02:00'
 changelog_ref: instruction-artifact-model.changelog.jsonl

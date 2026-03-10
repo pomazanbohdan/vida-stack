@@ -15,6 +15,7 @@ Use:
 1. `vida/config/instructions/instruction-contracts.agent-system-protocol.md` for system-level activation, routing, fallback, and scoring.
 2. `vida/config/instructions/agent-backends.matrix.md` for generic backend classes and routing categories.
 3. project overlay (`vida.config.yaml` + project docs) for concrete backends/models enabled in the current repository.
+4. `vida/config/instructions/runtime-instructions.agent-handoff-context-protocol.md` for handoff/context shaping law.
 
 ## Mandatory Packet Fields
 
@@ -80,11 +81,11 @@ Required fields:
 -----
 artifact_path: config/instructions/instruction-contracts/worker.dispatch
 artifact_type: instruction_contract
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts.worker-dispatch-protocol.md
-created_at: 2026-03-09T22:51:59+02:00
-updated_at: 2026-03-10T00:55:00+02:00
+created_at: '2026-03-09T22:51:59+02:00'
+updated_at: '2026-03-10T14:41:13+02:00'
 changelog_ref: instruction-contracts.worker-dispatch-protocol.changelog.jsonl

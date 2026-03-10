@@ -1,7 +1,6 @@
 import std/[json, os, osproc, strutils]
 import ./config
 
-const DefaultTursoPython = currentSourcePath().parentDir().parentDir().parentDir().parentDir().parentDir() / ".venv" / "bin" / "python3"
 const HelperPath = currentSourcePath().parentDir().parentDir().parentDir() / "helpers" / "turso_task_store.py"
 
 proc v0TaskDbPath*(): string =
@@ -11,8 +10,9 @@ proc tursoPython*(): string =
   let overridePath = getEnv("VIDA_V0_TURSO_PYTHON")
   if overridePath.len > 0:
     return overridePath
-  if fileExists(DefaultTursoPython):
-    return DefaultTursoPython
+  let repoVenvPython = vidaRoot() / ".venv" / "bin" / "python3"
+  if fileExists(repoVenvPython):
+    return repoVenvPython
   return "python3"
 
 proc helperPath*(): string =

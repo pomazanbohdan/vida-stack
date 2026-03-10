@@ -4,6 +4,10 @@ Purpose: provide the canonical entry contract for delegated workers.
 
 This file is the canonical worker-lane entry contract.
 
+Explicit boot map:
+
+1. `vida/config/instructions/system-maps.worker-boot-flow.md`
+
 `AGENTS.md` remains the L0 orchestrator contract. Workers must not inherit the full orchestrator role.
 
 ## Core Rule
@@ -105,14 +109,20 @@ Escalate only when one of these is true:
 
 When escalating, say what is blocked and why in one short section.
 
+## References
+
+1. `vida/config/instructions/system-maps.worker-boot-flow.md`
+2. `vida/config/instructions/instruction-contracts.worker-dispatch-protocol.md`
+3. `vida/config/instructions/instruction-contracts.worker-thinking.md`
+
 -----
 artifact_path: config/instructions/agent-definitions/worker.entry
 artifact_type: agent_definition
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/agent-definitions.worker-entry.md
-created_at: 2026-03-07T00:25:15+02:00
-updated_at: 2026-03-10T00:55:00+02:00
+created_at: '2026-03-07T00:25:15+02:00'
+updated_at: '2026-03-10T14:41:12+02:00'
 changelog_ref: agent-definitions.worker-entry.changelog.jsonl

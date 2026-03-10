@@ -5,3 +5,4 @@ _vida/scripts-nim/vida-legacy
 target
 _temp
 .venv
+dist

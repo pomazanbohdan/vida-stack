@@ -12,6 +12,11 @@ Scope:
 
 Never finalize a decision that depends on external facts without validation evidence.
 
+Boundary rule:
+
+1. WVP is a validation layer, not a substitute for research artifacts, requirement formation, or specification/intake formation.
+2. When a practical validation step depends on earlier research, that research must already be reflected in the current research artifact and the downstream requirement/spec surfaces before WVP becomes the closure-ready validation step.
+
 External facts include:
 
 1. package/dependency versions and compatibility,
@@ -65,6 +70,41 @@ Minimum evidence:
    - bind decisions/spec text only to validated facts.
 7. `WVP-6 Log Evidence`
    - store concise evidence in task logs and user report.
+
+## Completeness Rule
+
+Web validation is incomplete until it explicitly states:
+
+1. what was checked,
+2. what was not checked,
+3. what remains unknown or conflicting,
+4. whether those remaining gaps are material to the decision.
+
+Fail-closed rule:
+
+1. if material gaps remain, continue validation before closure,
+2. do not treat one search result or one agreeing source as full validation,
+3. when alternatives or best-practice claims are involved, check competing candidates rather than validating only the preferred option.
+4. validation is closure-ready only when no unresolved material validation questions remain for the active decision.
+5. the required target is `100% decision-ready confidence`, not partial comfort from a small evidence sample.
+
+Autonomous continuation rule:
+
+1. When WVP is active and the evidence remains materially incomplete, continue with the next required validation pass automatically.
+2. Do not stop after one source sweep if additional primary sources, competing candidates, or live checks are still required by the protocol.
+3. Pause only when:
+   - the next validation step would widen scope materially,
+   - the next validation step needs user credentials, paid access, or privileged systems,
+   - the user explicitly asked to stop after the current pass.
+
+Research-ordering rule:
+
+1. Do not use web validation as a shortcut around unfinished upstream research synthesis.
+2. If the active question still lacks an updated research artifact, explicit requirements, or refreshed intake/spec, pause closure and return to those upstream steps first unless the web check is itself the missing research step.
+3. Practical validation is lawful only after the bounded question has been translated into:
+   - updated research state,
+   - explicit requirements,
+   - updated spec/intake or equivalent contract artifact.
 
 ## API Reality Validation (Mandatory for server/API assumptions)
 

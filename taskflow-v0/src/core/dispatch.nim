@@ -21,6 +21,9 @@ proc isAgentBackendAvailable*(cfg: JsonNode, agentBackendName: string): bool =
     "agent_system.subagents." & agentBackendName & ".subagent_backend_class")
   if backendClass == "internal":
     return true
+  let binaryPath = getAgentBackendBinaryPath(cfg, agentBackendName)
+  if binaryPath.len > 0:
+    return fileExists(binaryPath)
   let detectCmd = getAgentBackendDetectCommand(cfg, agentBackendName)
   if detectCmd.len == 0:
     return false
@@ -59,7 +62,8 @@ proc buildDispatchCommand*(
   let dispatch = getAgentBackendDispatch(cfg, agentBackendName)
 
   # 1. Command
-  let command = dottedGetStr(dispatch, "command")
+  let binaryPath = getAgentBackendBinaryPath(cfg, agentBackendName)
+  let command = if binaryPath.len > 0: binaryPath else: dottedGetStr(dispatch, "command")
   if command.len == 0:
     raise newException(ValueError, "No dispatch.command for agent backend: " & agentBackendName)
   result.args.add(command)

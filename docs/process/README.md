@@ -17,15 +17,17 @@ Canonical entrypoints:
    - project-owned documentation tooling and operator-command map
 3. `docs/process/agent-system.md`
    - project-owned agent-system process surface
+4. `docs/process/agent-extensions/README.md`
+   - project-owned role/skill/profile/flow extension map
 
 -----
 artifact_path: process/readme
 artifact_type: process_doc
-artifact_version: 1
-artifact_revision: 2026-03-10
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
 status: canonical
 source_path: docs/process/README.md
-created_at: 2026-03-10T00:00:00+02:00
-updated_at: 2026-03-10T10:05:00+02:00
+created_at: '2026-03-10T00:00:00+02:00'
+updated_at: '2026-03-10T15:41:04+02:00'
 changelog_ref: README.changelog.jsonl

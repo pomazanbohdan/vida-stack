@@ -82,6 +82,7 @@ Then continue with the bundle reading order below.
 8. `docs/framework/research/agentic-decision-ledger.md`
 9. `docs/framework/research/agentic-proof-obligation-registry.md`
 10. `docs/framework/research/agentic-escalation-policy-matrix.md`
+11. `docs/framework/research/vida-1.0-agent-runtime-external-alignment.md`
 
 ### Tier B: Knowledge synthesis
 
@@ -94,6 +95,7 @@ Then continue with the bundle reading order below.
 7. `docs/framework/research/agentic-research-implication-map.md`
 8. `docs/framework/research/agentic-claim-to-artifact-trace-map.md`
 9. `docs/framework/research/agentic-threshold-hypotheses-registry.md`
+10. `docs/framework/research/vida-1.0-agent-runtime-external-alignment.md`
 
 ### Tier C: Execution, safety, and slicing support
 
@@ -158,6 +160,7 @@ Every child task packet cut from the master plan should carry a `Reference bundl
 29. `docs/framework/research/agentic-cheap-worker-packet-system.md`
 30. `docs/framework/research/agentic-cheap-worker-prompt-pack.md`
 31. `docs/framework/research/agentic-epic-slicing-agent-instruction.md`
+32. `docs/framework/research/vida-1.0-agent-runtime-external-alignment.md`
 
 ### Optional future-scope reference
 
@@ -254,6 +257,7 @@ What is already sufficiently defined:
 11. direct local-first epic program
 12. cheap-worker packet model
 13. cheap-worker prompt model
+14. VIDA 1.0 external supervisor/handoff/durable-runtime alignment
 
 What is still not yet fully extracted into final specs:
 
@@ -270,15 +274,16 @@ If a future agent resumes after compact:
 2. use this file as the re-entry bridge
 3. verify the missing artifacts section before creating or closing any slicing task
 4. keep `future scope` excluded unless a new explicit task reopens it
+
 -----
 artifact_path: framework/research/agentic-master-index
 artifact_type: framework_research_doc
-artifact_version: 1
-artifact_revision: 2026-03-10
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
 status: canonical
 source_path: docs/framework/research/agentic-master-index.md
-created_at: 2026-03-09T20:28:59+02:00
-updated_at: 2026-03-10T01:12:03+02:00
+created_at: '2026-03-09T20:28:59+02:00'
+updated_at: '2026-03-10T14:41:12+02:00'
 changelog_ref: agentic-master-index.changelog.jsonl
 P26-03-09T21: 44:13Z

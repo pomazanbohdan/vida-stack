@@ -108,6 +108,14 @@ Each runtime family must have a bounded map surface that exposes:
 6. related project-facing dependencies when applicable,
 7. activation triggers.
 
+For `VIDA 1.0`, each runtime-family map should also be able to expose:
+
+1. checkpoint/recovery ownership,
+2. replay-safe transition boundaries,
+3. history/context shaping policy for cross-lane handoff,
+4. health/observability entrypoints,
+5. idempotency-sensitive mutation or proof surfaces when they exist.
+
 ### 4.5 Template Map
 
 There must be a template map surface.
@@ -140,6 +148,8 @@ The current canonical root-map stack is implemented as:
    - `vida/config/instructions/system-maps.template-map.md`
 7. project-owned documentation tooling map:
    - `docs/process/documentation-tooling-map.md`
+8. observability map:
+   - `vida/config/instructions/system-maps.observability-map.md`
 
 Rule:
 
@@ -212,6 +222,43 @@ The structure is considered healthy only when one bounded read path can tell an 
 
 If these questions cannot be answered through the root-map stack, the structure remains under-optimized.
 
+## 10. VIDA 1.0 External-Alignment Targets
+
+The `VIDA 1.0` runtime-family and root-map model should remain compatible with the following external architectural patterns:
+
+1. supervisor-driven bounded handoffs rather than broad shared chat context,
+2. explicit context/history filtering per receiving lane,
+3. hierarchical multi-agent supervision when one top-level orchestrator is not enough,
+4. durable execution with restart/resume safety,
+5. checkpoint-based recovery and replay-safe transitions,
+6. observability/health surfaces that remain discoverable through canonical maps.
+
+Target implications:
+
+1. future runtime families must remain independently understandable while still being attachable to one supervisor/orchestrator model,
+2. runtime-family discovery must not hide which family owns:
+   - durable state,
+   - checkpointing,
+   - replay/recovery,
+   - verification/proving,
+   - observability/health,
+3. root maps must remain able to route an agent toward those surfaces without broad repo scanning.
+
+External alignment references:
+
+1. OpenAI Agents SDK overview:
+   - https://developers.openai.com/api/docs/guides/agents-sdk
+2. OpenAI Agents SDK handoffs:
+   - https://openai.github.io/openai-agents-js/guides/handoffs/
+3. LangGraph supervisor:
+   - https://langchain-ai.github.io/langgraphjs/reference/modules/langgraph-supervisor.html
+4. Temporal documentation:
+   - https://docs.temporal.io/
+5. Eventuous checkpoints:
+   - https://eventuous.dev/docs/subscriptions/checkpoint/
+6. Eventuous subscription diagnostics:
+   - https://eventuous.dev/docs/subscriptions/subs-diagnostics/
+
 -----
 artifact_path: product/spec/root-map-and-runtime-surface-model
 artifact_type: product_spec
@@ -221,5 +268,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/root-map-and-runtime-surface-model.md
 created_at: '2026-03-10T05:42:00+02:00'
-updated_at: '2026-03-10T10:15:00+02:00'
+updated_at: '2026-03-10T14:41:12+02:00'
 changelog_ref: root-map-and-runtime-surface-model.changelog.jsonl

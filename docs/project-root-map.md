@@ -24,10 +24,14 @@ This map does not cover extracted secondary bundles by default.
    - project-memory lane
 5. `docs/product/spec/canonical-documentation-and-inventory-layers.md`
    - documentation/product alignment matrix
-6. `docs/product/spec/repository-two-project-surface-model.md`
+6. `docs/product/spec/canonical-runtime-layer-matrix.md`
+   - runtime capability layering matrix for the active project canon
+7. `docs/product/spec/repository-two-project-surface-model.md`
    - active-project vs extracted-bundle boundary law
-7. `docs/process/documentation-tooling-map.md`
+8. `docs/process/documentation-tooling-map.md`
    - project-owned documentation tooling map
+9. `docs/process/agent-extensions/README.md`
+   - project-owned agent role/skill/profile/flow extension map
 
 ## Activation Triggers
 
@@ -47,15 +51,19 @@ Do not use this map as the default route for extracted bundles unless the task e
    - then to `docs/product/spec/current-spec-map.md`
 2. Documentation alignment / documentation-state questions:
    - continue to `docs/product/spec/canonical-documentation-and-inventory-layers.md`
-3. Process/runbook questions for the active project:
+3. Runtime layering / runtime architecture / runtime readiness questions:
+   - continue to `docs/product/spec/canonical-runtime-layer-matrix.md`
+4. Process/runbook questions for the active project:
    - continue to `docs/process/README.md`
-4. Project-memory questions:
+5. Project-memory questions:
    - continue to `docs/project-memory/README.md`
-5. Extracted secondary bundle questions:
+6. Extracted secondary bundle questions:
    - do not continue through active project docs by default
    - enter the named bundle directly under `projects/<name>/**`
-6. Documentation tooling / operator-command questions:
+7. Documentation tooling / operator-command questions:
    - continue to `docs/process/documentation-tooling-map.md`
+8. Project agent-system extension questions:
+   - continue to `docs/process/agent-extensions/README.md`
 
 ## Boundary Rule
 
@@ -72,5 +80,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/project-root-map.md
 created_at: '2026-03-10T08:45:00+02:00'
-updated_at: '2026-03-10T09:45:00+02:00'
+updated_at: '2026-03-10T15:41:04+02:00'
 changelog_ref: project-root-map.changelog.jsonl

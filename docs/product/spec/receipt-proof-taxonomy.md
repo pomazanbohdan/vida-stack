@@ -1,6 +1,6 @@
 # VIDA Receipt And Proof Taxonomy
 
-Status: draft `v1` receipt/proof law
+Status: canonical `v1` receipt/proof law
 
 Revision: `2026-03-09`
 
@@ -337,11 +337,11 @@ Typical proof dependencies:
 -----
 artifact_path: product/spec/receipt-proof-taxonomy
 artifact_type: product_spec
-artifact_version: 1
-artifact_revision: 2026-03-10
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
 status: canonical
 source_path: docs/product/spec/receipt-proof-taxonomy.md
-created_at: 2026-03-09T12:00:46+02:00
-updated_at: 2026-03-09T20:28:59+02:00
+created_at: '2026-03-09T12:00:46+02:00'
+updated_at: '2026-03-10T17:22:42+02:00'
 changelog_ref: receipt-proof-taxonomy.changelog.jsonl

@@ -1,154 +1,190 @@
 <div align="center">
   <h1>🌌 Vida Stack</h1>
-  <p><b>The active development repository for <code>VIDA 0.2.0</code> and the reference architecture for <code>VIDA 1.0</code>.</b></p>
+  <p><b>The active repository for <code>VIDA 0.2.0</code>: a documentation-first control plane for agent-driven product engineering.</b></p>
   
   <p>
     <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen" alt="Status"></a>
-    <a href="#"><img src="https://img.shields.io/badge/Phase-0.2.0_Proving-blue" alt="Phase"></a>
+    <a href="#"><img src="https://img.shields.io/badge/Release-0.2.0-blue" alt="Release"></a>
+    <a href="#"><img src="https://img.shields.io/badge/Runtime-taskflow--v0-orange" alt="Runtime"></a>
+    <a href="#"><img src="https://img.shields.io/badge/Docsys-codex--v0-teal" alt="Docsys"></a>
     <a href="#"><img src="https://img.shields.io/badge/Target-VIDA_1.0-purple" alt="Target"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-Proprietary-red" alt="License"></a>
   </p>
 </div>
 
 > [!IMPORTANT]
-> **Transitional Architecture Notice:** Vida Stack is actively evolving. `taskflow-v0` and `codex-v0` are the current implementation substrates, but they do not alone define product authority. The canonical specification remains centralized in `docs/product/spec/` and `vida/config/`.
+> **Transitional Architecture Notice:** `taskflow-v0` and `codex-v0` are the active `0.2.0` runtime substrates, but product authority still lives in canonical maps, specs, and framework law under `docs/product/spec/` and `vida/config/`.
 
 ---
 
-## 🎯 Purpose
+## ✨ What Is VIDA?
 
-**Vida Stack** exists to build a real control plane for agent-driven product engineering, moving beyond a loose collection of prompts, scripts, or ad hoc helpers.
+**Vida Stack** is building a real control plane for agent-driven product engineering.
 
-The target system unifies:
-- ⚡ **Task Execution**
-- 🔀 **Routing & Orchestration**
-- ✅ **Verification & Approval**
-- 🧠 **Memory & Durable State**
-- 📜 **Instruction & Command Law**
-- 📚 **Canonical Documentation & Inventory**
-- 🔄 **Migration & Compatibility Control**
+Instead of treating prompts, scripts, task lists, and docs as disconnected artifacts, VIDA unifies them into one lawful operating model:
 
----
-
-## ✨ Core Features & Value Proposition
-
-- **Documentation-First Governance:** Code changes are illegal until the markdown specification and configuration laws are updated and approved.
-- **Strict Bootstrapping & Routing:** Agents navigate via predefined lanes and hard invariants (`AGENTS.md`).
-- **Agentic "Spec-to-Law" Pipeline:** Automates the transition from human-readable text to executable framework logic.
-- **Unified Layer Validation:** Multi-level layer checks ensure code, document sidecars, and configuration never drift.
+- ⚙️ **Task execution** through `taskflow-v0`
+- 📚 **Canonical documentation and inventory** through `codex-v0`
+- 🧭 **Boot, routing, and map-driven discovery** through `AGENTS.md`, `AGENTS.sidecar.md`, and framework maps
+- ✅ **Verification, approval, and proof gates**
+- 🧠 **Durable runtime state, receipts, and checkpoints**
+- 🔄 **Migration, compatibility, and release discipline**
 
 ---
 
-## 🚀 Quick Start / Operations Preview
+## 🚀 Install
 
-Development is governed by the `codex-v0` documentation engine. A typical workflow involves checking document health before execution:
+### One-line install
 
 ```bash
-# Get a one-command documentation state overview
-python3 codex-v0/codex.py overview
+curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- install
+```
 
-# Run stronger consistency checks before committing
-python3 codex-v0/codex.py doctor --root . --show-warnings
+### What the installer does
+
+- 📦 downloads the tagged release archive
+- 🔐 verifies release checksums
+- 🗂️ installs versioned sources under `~/.local/share/vida-stack/releases/<tag>`
+- 🔁 updates `~/.local/share/vida-stack/current`
+- 🧪 creates an installer-managed Python `venv` for `codex-v0` and `pyturso`
+- 🧰 writes launchers into `~/.local/bin`:
+  - `vida`
+  - `taskflow-v0`
+  - `codex-v0`
+- 🐚 wires `VIDA_HOME`, `VIDA_ROOT`, and `PATH` into `bash` / `zsh`
+
+### Upgrade / doctor
+
+```bash
+vida upgrade --version v0.2.0
+vida doctor
+vida use --version v0.2.0
 ```
 
 ---
 
-## 🏗️ Current Transitional Architecture
+## 🧩 Main Tools
 
-The repository currently has two explicit transitional implementation lines, which are active and useful now. However, neither defines the final authority of `VIDA 1.0` on its own. Product authority remains governed by `docs/product/spec/**`, `vida/config/**`, and the active instruction canon in `vida/config/instructions/**`.
+### ⚙️ `taskflow-v0`
 
-### ⚙️ `taskflow-v0/`
-The current `0.2.0` runtime proving ground. 
+The current runtime substrate for tracked execution.
 
-**Validates and hardens:**
-- Task state & execution flow
-- Routing & route-law enforcement
-- Worker/orchestrator cooperation
-- Verification & approval gates
-- Runtime memory & state artifacts
-- The behavioral spine that `VIDA 1.0` must preserve
+It already covers:
 
-### 📖 `codex-v0/`
-The current `0.2.0` information-system proving ground.
+- route- and gate-aware execution
+- role selection and conversational modes
+- checkpoint / replay / recovery behavior
+- verification merge and admissibility
+- DB-backed task store with JSONL import
+- final `taskflow -> codex` runtime-consumption wiring
 
-**Validates and hardens:**
-- Canonical document metadata
-- Sidecar lineage & changelogs
-- Inventory & registry generation
-- Validation & consistency gates
-- Lawful documentation mutation
-- Dependency & impact analysis
-- Documentation-first layer development
+### 📚 `codex-v0`
 
----
+The current canonical documentation and inventory engine.
 
-## 🧠 Foundations & Research Axis
+It already covers:
 
-Vida Stack is not merely a collection of scripts; it is heavily grounded in external patterns and synthesized AI research. Its functional spine relies on:
+- metadata and changelog normalization
+- protocol and activation coverage checks
+- readiness and proof checks
+- canonical map health checks
+- documentation-first mutation discipline
 
-1. **Strict "Spec-to-Law" Translation:**
-   - Product and system models are defined in `docs/product/spec/`.
-   - These are translated into executable laws, configurations, and templates in `vida/config/`.
+### 🌌 `vida`
 
-2. **Absorbed External Architecture Patterns:**
-   - **Event-Sourced State & Graph Checkpointing:** For checkpoint, commit, and replay lineage schemas.
-   - **Distributed Gateway & Resumable Workflows:** For trigger/bookmark semantics, gateway resumes, and verification merge laws.
-   - **Formal State Machines:** For strict machine definition and validation laws.
+The top-level product direction.
 
-3. **Agentic Research Synthesis:**
-   - Incorporates and normalizes guidance from **frontier AI research labs** and **industry-standard security frameworks**.
-   - Grounded in rigorous **Threat Models** and **Anti-Pattern Catalogs**.
-   - Applies strict task slicing, cheap-worker packet mechanisms, and consensus/escalation matrices defined via `docs/framework/research/`.
+In `0.2.0`, the install surface already gives you a `vida` launcher so the release can be operated as one product while keeping bounded internal tools separate.
 
 ---
 
-## 🛤️ VIDA 1.0 Direction
+## 🏗️ Standards Already Developed
 
-`VIDA 1.0` is the target durable local binary line. The canonical vector is to separate `taskflow` and `codex` into bounded crates that work independently (as libraries and CLI tools), while the top-level `vida` binary composes them.
+This repository is not just “some tooling”. It already contains several hardened standards and canonical maps:
 
-- 🧩 **`taskflow`** — Owns runtime/task execution behavior.
-- 🧩 **`codex`** — Owns canonical documentation, instruction, and inventory behavior.
-- 🌌 **`vida`** — Composes these capabilities into a unified product operator surface.
+- 🗺️ framework root-map architecture
+- 📚 canonical documentation and inventory layer matrix
+- ⚙️ canonical runtime layer matrix
+- 👥 role / skill / profile / flow model
+- 🤖 auto-role and conversational-mode model
+- 🔁 checkpoint / recovery / resumability law
+- ✅ verification-lane and merge law
+- 🧭 bootstrap, governance, runtime-family, and template maps
 
----
-
-## ⚖️ Current Working Rules
-
-We strictly follow a **documentation-first** rule:
-
-1. 📝 **Spec first:** When a new layer or rule is introduced, canonical documentation is brought into shape first.
-2. 🛠️ **Implement second:** Only after the spec is defined may the implementation be changed.
-3. 👑 **Spec wins:** If implementation and spec diverge, the spec wins and the implementation must be corrected.
-
-> **Incremental Closure:** Each completed layer must provide standalone value. Future-layer assumptions must never justify current-layer behavior.
+These standards are designed so each layer is independently coherent and future layers only extend, never retroactively justify, lower ones.
 
 ---
 
-## 🗺️ Current Maps & Navigation
+## 🗺️ Start Here
 
-Primary orientation surfaces to guide you through the framework:
+### Bootstrap and maps
 
-- 🧭 [**Bootstrap Router** (AGENTS.md)](/home/unnamed/project/vida-stack/AGENTS.md)
-- 📍 [**Project Context & Notes** (AGENTS.sidecar.md)](/home/unnamed/project/vida-stack/AGENTS.sidecar.md)
-- 🗺️ [**Framework Map Protocol**](/home/unnamed/project/vida-stack/vida/config/instructions/system-maps.framework-map-protocol.md)
-- 📑 [**Protocol Index**](/home/unnamed/project/vida-stack/vida/config/instructions/system-maps.protocol-index.md)
-- 🗺️ [**Current Spec Map**](/home/unnamed/project/vida-stack/docs/product/spec/current-spec-map.md)
-- 📚 [**Canonical Docs & Inventory Layers**](/home/unnamed/project/vida-stack/docs/product/spec/canonical-documentation-and-inventory-layers.md)
+- 🧭 [Bootstrap Router](AGENTS.md)
+- 📍 [Project Sidecar](AGENTS.sidecar.md)
+- 🌐 [Framework Root Map](vida/root-map.md)
+- 🗂️ [Project Root Map](docs/project-root-map.md)
+
+### Canonical matrices
+
+- ⚙️ [Canonical Runtime Layer Matrix](docs/product/spec/canonical-runtime-layer-matrix.md)
+- 📚 [Canonical Documentation & Inventory Layers](docs/product/spec/canonical-documentation-and-inventory-layers.md)
+
+### Spec navigation
+
+- 📑 [Current Spec Map](docs/product/spec/current-spec-map.md)
+- 🧱 [Runtime Surface Model](docs/product/spec/root-map-and-runtime-surface-model.md)
+- 👥 [Role / Skill / Profile / Flow Model](docs/product/spec/agent-role-skill-profile-flow-model.md)
+- 🧠 [Role Selection & Conversation Modes](docs/product/spec/agent-role-selection-and-conversation-mode-model.md)
+
+---
+
+## 🧪 Quick Commands
+
+Typical documentation/runtime proving flow:
+
+```bash
+python3 codex-v0/codex.py overview
+
+python3 codex-v0/codex.py readiness-check --profile active-canon
+
+taskflow-v0 task import-jsonl .beads/issues.jsonl --json
+
+taskflow-v0 consume final "Runtime closure proof path"
+```
+
+---
+
+## 🧠 Architecture Direction
+
+`VIDA 0.2.0` is the proving release.
+
+Its job is to make the transitional product trustworthy enough that `VIDA 1.0` can be built on stable semantics instead of moving heuristics.
+
+That means:
+
+- `taskflow` owns runtime execution
+- `codex` owns bounded documentation and inventory truth checks
+- framework law stays in maps, specs, and protocols
+- future `vida` composes these bounded systems into the final binary product
 
 ---
 
 ## 🤝 Contributing & Governance
 
-Contributions to Vida Stack strictly adhere to its documentation-first policy. Unsolicited code PRs will be rejected. Propose changes to the specifications (`docs/product/spec/`) first.
+VIDA is documentation-first and protocol-first.
 
-For detailed rules and project governance, read [CONTRIBUTING.md](/home/unnamed/project/vida-stack/CONTRIBUTING.md).
+- propose spec/law changes first
+- keep framework truth in canonical maps and protocols
+- do not treat implementation drift as a second valid source of truth
+
+For detailed rules, read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
 ## 📌 Version Path & Licensing
 
-- 🛤️ **Version Path:** Defined in [VERSION-PLAN.md](/home/unnamed/project/vida-stack/VERSION-PLAN.md).
-- 📄 **License:** Core licensing under [LICENSE](/home/unnamed/project/vida-stack/LICENSE).
+- 🛤️ **Version Path:** [VERSION-PLAN.md](VERSION-PLAN.md)
+- 📄 **License:** [LICENSE](LICENSE)
 
 -----
 artifact_path: project/repository/readme

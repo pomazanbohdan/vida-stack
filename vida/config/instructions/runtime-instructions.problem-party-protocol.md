@@ -149,10 +149,60 @@ Required fields:
    - issue-contract gates,
    - delegated verification requirements.
 
+## Party-Chat Projection
+
+Problem-party may be implemented by a richer Party Chat projection as long as the projection stays within the same framework safety envelope.
+
+Projection rules:
+
+1. Party Chat is lawful only as a stronger bounded projection of `problem_party`, not as a second parallel authority system.
+2. A Party Chat projection may enrich:
+   - board-role semantics,
+   - role/profile resolution,
+   - single-agent vs multi-agent execution planning,
+   - role-to-model routing,
+   - structured decision / verification / execution packet output.
+3. A Party Chat projection must preserve:
+   - single-writer ownership,
+   - route law,
+   - verification / approval boundaries,
+   - bounded board size and rounds,
+   - compact-safe structured artifacts.
+4. When project roles are used, they must resolve only through validated `agent_extensions` surfaces from the active overlay.
+5. If runtime exposes dispatch or execution planning for Party Chat, that plan must remain inspectable through manifests, receipts, and run-graph state.
+6. If runtime exposes `execute`, it must remain bounded and artifact-first:
+   - render/manifest validation first,
+   - inspectable dispatch/session artifacts,
+   - structured synthesis and receipt writing,
+   - no silent mutation outside the normal writer lane.
+
+## External Alignment Note
+
+Current public multi-agent guidance is compatible with this framework shape:
+
+1. orchestrator plus specialized subagents is a mainstream pattern,
+2. both single-agent and multi-agent execution modes are lawful runtime options,
+3. registry/capability-based runtime resolution is a standard design pattern,
+4. adaptive orchestration topology is often more important than static one-model choice alone.
+
+Examples:
+
+1. Anthropic multi-agent research system:
+   - https://www.anthropic.com/engineering/built-multi-agent-research-system
+2. OpenAI agents tooling:
+   - https://openai.com/index/new-tools-for-building-agents/
+3. Microsoft multi-agent reference architecture:
+   - https://microsoft.github.io/multi-agent-reference-architecture/docs/reference-architecture/Patterns.html
+4. AdaptOrch research:
+   - https://arxiv.org/abs/2602.16873
+
 ## Canonical Helper
 
 ```bash
 python3 problem-party.py render <task_id> "<topic>" --board small|large [--rounds N] [--problem-file PATH] [--output-dir DIR]
+python3 problem-party.py dispatch-plan <board_manifest.json> [--output PATH]
+python3 problem-party.py session-plan <board_manifest.json> [--output PATH]
+python3 problem-party.py execute <task_id> <task_class> <board_manifest.json> <role_notes.json> [--output PATH]
 python3 problem-party.py synthesize <board_manifest.json> <role_notes.json> [--output PATH]
 python3 problem-party.py receipt <task_id> <task_class> "<topic>" <decision_artifact.json>
 ```

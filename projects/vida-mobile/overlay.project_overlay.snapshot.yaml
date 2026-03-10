@@ -1,0 +1,54 @@
+artifact_name: project_overlay
+artifact_type: instruction_overlay
+version: 1
+revision: 2026-03-09
+compatibility_class: overlay_v1_bridge
+project:
+  id: mobile-odoo
+  overlay_version: 1
+
+project_bootstrap:
+  enabled: true
+  docs_root: docs
+  process_root: docs/process
+  research_root: docs/research
+  readme_doc: docs/README.md
+  architecture_doc: docs/architecture.md
+  decisions_doc: docs/decisions.md
+  environments_doc: docs/environments.md
+  project_operations_doc: docs/process/project-operations.md
+  agent_system_doc: docs/process/agent-system.md
+  allow_scaffold_missing: true
+  require_launch_confirmation: true
+
+language_policy:
+  user_communication: uk
+  reasoning: en
+  documentation: en
+  todo_protocol: en
+
+protocol_activation:
+  agent_system: true
+
+autonomous_execution:
+  next_task_boundary_analysis: true
+  next_task_boundary_report: brief_plan
+  next_task_boundary_report_gating: false
+  dependent_coverage_autoupdate: true
+
+framework_self_diagnosis:
+  enabled: true
+  silent_mode: true
+  auto_capture_bugs: true
+  parent_issue: vida-stack-2d9
+  defer_fix_until_task_boundary: true
+  session_reflection_required: true
+  platform_direction: agentic_engineering_platform
+  quality_token_efficiency: equal_weight
+  session_reflection_criteria:
+    - architecture_cleanliness
+    - completeness
+    - token_efficiency
+    - orchestration_efficiency
+    - instruction_clarity
+    - instruction_runtime_consistency

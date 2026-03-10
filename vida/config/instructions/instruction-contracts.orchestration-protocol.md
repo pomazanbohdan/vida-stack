@@ -182,6 +182,7 @@ Routing rule:
 
 1. Use `vida/config/instructions/instruction-contracts.agent-system-protocol.md` + project overlay for worker choice.
 2. Use `vida/config/instructions/instruction-contracts.worker-dispatch-protocol.md` for dispatch contract.
+3. Use `vida/config/instructions/runtime-instructions.agent-handoff-context-protocol.md` when handoff/context shaping must be explicit.
 3. For eligible non-trivial read-heavy work, prefer worker-first execution whenever the active worker mode is not `disabled`.
 4. For `execution_flow` under active worker mode, orchestration-first routing is mandatory; do not treat workers as optional helpers around an otherwise local-first development path.
 5. In `hybrid`, prefer external free fanout first, then the configured bridge fallback, then internal senior escalation only when route policy or evidence requires it.
@@ -189,6 +190,7 @@ Routing rule:
 7. In `disabled`, keep analysis local and obey bounded-read policy.
 8. Keep writer ownership singular under the orchestrator even when read-only fanout is active.
 9. Prefer independent verification by a different cli worker when route metadata marks independent verification as required and a distinct eligible verifier exists.
+10. Use `vida/config/instructions/runtime-instructions.verification-lane-protocol.md` when closure depends on explicit author/coach/verifier/prover separation.
 
 ## Conflict Resolution
 
@@ -299,5 +301,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts.orchestration-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-10T03:06:28+02:00'
+updated_at: '2026-03-10T14:41:13+02:00'
 changelog_ref: instruction-contracts.orchestration-protocol.changelog.jsonl

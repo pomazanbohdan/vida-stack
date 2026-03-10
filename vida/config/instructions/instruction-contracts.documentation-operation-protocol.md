@@ -145,6 +145,13 @@ For canonical markdown artifacts:
 3. Summaries, maps, and pointers may restate orientation-level information, but they must not become a second law-bearing source of truth.
 4. If a documentation task reveals duplicated active law, the bounded task should reduce or remove that duplication when it is safe to do so within scope.
 
+Thematic consolidation rule:
+
+1. Documentation work should prefer coherent thematic artifacts over fragmented topic shards when the topic is materially one subject.
+2. If related information is spread across several weakly connected documents, create or refresh a thematic consolidated artifact in the canonical owner layer.
+3. Consolidation must reduce fragmentation without creating a second competing law source.
+4. The goal is topic coherence, not document proliferation.
+
 ## Validation Rule
 
 Before closure of documentation work:

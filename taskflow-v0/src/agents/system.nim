@@ -152,8 +152,13 @@ proc detectAgentBackends*(cfg: JsonNode): JsonNode =
     else:
       if detectCmd.len == 0:
         detectCmd = name.replace("_cli", "")
-      available = enabled and findExe(detectCmd).len > 0
-      reason = "command:" & detectCmd
+      let binaryPath = getAgentBackendBinaryPath(cfg, name)
+      if binaryPath.len > 0:
+        available = enabled and fileExists(binaryPath)
+        reason = "binary_path:" & binaryPath
+      else:
+        available = enabled and findExe(detectCmd).len > 0
+        reason = "command:" & detectCmd
 
     result[name] = %*{
       "enabled": enabled, "available": available,

@@ -1,0 +1,35 @@
+version: 1
+roles:
+  - role_id: party_chat_facilitator
+    base_role: business_analyst
+    description: Facilitates Party Chat framing, board assembly, DEI checks, and synthesis boundaries.
+  - role_id: party_chat_architect
+    base_role: worker
+    description: Architecture-first council seat for system shape, structure, and boundary design.
+  - role_id: party_chat_runtime_systems
+    base_role: worker
+    description: Runtime and orchestration seat for execution substrate, operations, and state transitions.
+  - role_id: party_chat_quality_verification
+    base_role: verifier
+    description: Verification seat for critique, acceptance criteria, failure signals, and confidence.
+  - role_id: party_chat_delivery_cost
+    base_role: pm
+    description: Delivery and cost trade-off seat for feasibility, rollout shape, and sequencing.
+  - role_id: party_chat_product_scope
+    base_role: pm
+    description: Product scope seat for outcome framing, prioritization, and user-facing consequences.
+  - role_id: party_chat_security_safety
+    base_role: verifier
+    description: Specialty seat for security and safety concerns in Party Chat escalation boards.
+  - role_id: party_chat_sre_observability
+    base_role: coach
+    description: Specialty seat for reliability, observability, and operational readiness concerns.
+  - role_id: party_chat_data_contracts
+    base_role: worker
+    description: Specialty seat for schemas, contracts, and data boundary reasoning.
+  - role_id: party_chat_dx_tooling
+    base_role: worker
+    description: Specialty seat for tooling, developer experience, and operator ergonomics.
+  - role_id: party_chat_pm_process
+    base_role: pm
+    description: Specialty seat for delivery process, sequencing, and escalation workflow.

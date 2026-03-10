@@ -138,6 +138,10 @@ type
     nextTaskBoundaryReport*: string
     nextTaskBoundaryReportGating*: bool
     dependentCoverageAutoupdate*: bool
+    continueAfterReports*: bool
+    specReadyAutoDevelopment*: bool
+    validationReportRequiredBeforeImplementation*: bool
+    resumeAfterValidationGate*: bool
 
   FrameworkSelfDiagnosis* = object
     enabled*: bool

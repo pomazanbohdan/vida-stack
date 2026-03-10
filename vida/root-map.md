@@ -27,6 +27,8 @@ This root map covers:
    - framework template-family discovery
 6. `vida/config/instructions/system-maps.governance-map.md`
    - human governance, approval, contribution, and policy-gate discovery
+7. `vida/config/instructions/system-maps.observability-map.md`
+   - runtime observability, traces, proving, and health discovery
 
 ## Activation Triggers
 
@@ -49,6 +51,8 @@ Read this map when:
    - continue to `vida/config/instructions/system-maps.template-map.md`
 5. Human governance, approval, contribution, or policy-gate lookup:
    - continue to `vida/config/instructions/system-maps.governance-map.md`
+6. Runtime observability, traces, proving, or health lookup:
+   - continue to `vida/config/instructions/system-maps.observability-map.md`
 
 ## Boundary Rule
 
@@ -65,5 +69,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/root-map.md
 created_at: '2026-03-10T09:30:00+02:00'
-updated_at: '2026-03-10T09:30:00+02:00'
+updated_at: '2026-03-10T14:41:12+02:00'
 changelog_ref: root-map.changelog.jsonl

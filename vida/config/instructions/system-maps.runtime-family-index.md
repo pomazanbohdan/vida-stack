@@ -30,6 +30,11 @@ Read this index when:
    - continue to `vida/config/instructions/system-maps.runtime-family-codex.md`
 2. Tracked execution / boot / run-graph / route runtime questions:
    - continue to `vida/config/instructions/system-maps.runtime-family-taskflow.md`
+3. Runtime health / traces / proving / observability questions:
+   - continue to `vida/config/instructions/system-maps.observability-map.md`
+4. Final `taskflow` runtime-consumption wiring:
+   - continue to `vida/config/instructions/system-maps.runtime-family-taskflow.md`
+   - then activate `vida/config/instructions/system-maps.runtime-family-codex.md` for canonical documentation/inventory/readiness consumption evidence
 
 -----
 artifact_path: config/system-maps/runtime-family.index
@@ -40,5 +45,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps.runtime-family-index.md
 created_at: '2026-03-10T08:45:00+02:00'
-updated_at: '2026-03-10T08:45:00+02:00'
+updated_at: '2026-03-10T15:10:43+02:00'
 changelog_ref: system-maps.runtime-family-index.changelog.jsonl

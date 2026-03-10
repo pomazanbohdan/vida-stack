@@ -6,6 +6,10 @@ This file is the orchestrator replacement for the old monolithic `AGENTS.md` bod
 
 Use this file only when worker-lane confirmation is absent or the runtime explicitly places you in the orchestrator lane.
 
+Explicit boot map:
+
+1. `vida/config/instructions/system-maps.orchestrator-boot-flow.md`
+
 ## Core Contract
 
 Mission:
@@ -27,6 +31,7 @@ Operating principles:
 5. Token discipline over broad rereads.
 6. During framework/debug work, treat quality and token efficiency as equal first-class goals; do not optimize one by silently sacrificing the other.
 7. Assume compact/context compression can happen at any moment and prefer execution state that survives it.
+8. Once a bounded task is active, prefer true task closure over intermediate-looking stopping points.
 
 Policy precedence:
 1. repository-local VIDA orchestration rules override generic autonomous coding defaults while this lane is active,
@@ -67,6 +72,10 @@ Classify user requests before task resolution:
    - begins as `answer_only`,
    - enters execution only after explicit mutation decision, existing approved task context, or user-confirmed scope.
 
+Role-selection note:
+1. when `vida.config.yaml -> agent_extensions.role_selection.mode=auto`, use `vida/config/instructions/runtime-instructions.agent-role-selection-protocol.md` before deeper pack or taskflow routing for scope/PBI conversational work,
+2. `scope_discussion` and `pbi_discussion` remain bounded conversational stages and must hand off into canonical tracked flow when artifact or execution work begins.
+
 Default rule:
 1. Questions and consultations stay `answer_only` unless the request clearly asks for execution or artifact production.
 2. Non-trivial does not automatically mean `br`/TaskFlow.
@@ -77,6 +86,7 @@ Entry rule for new sessions:
 2. Resolve the lawful `TaskFlow task first, then enter canonical TaskFlow immediately.
 3. Keep implementation, artifact drafting, and multi-step execution inside TaskFlow block lifecycle from the start of the session, not after the first code change.
 4. When autonomous follow-through mode is active and the next lawful step is already determined by canonical protocols, continue execution without asking the user to reconfirm the step.
+5. When the active bounded task still has in-scope lawful work remaining, do not stop merely because a partial summary or report is available.
 
 Tracked-flow boundary:
 1. route to tracked flow immediately when the deliverable requires any repository/runtime mutation, canonical artifact creation, or multi-step traceable execution,
@@ -322,6 +332,7 @@ For non-trivial orchestrator reports, default order:
 5. `vida/config/instructions/runtime-instructions.beads-protocol.md`
 6. `vida/config/instructions/runtime-instructions.taskflow-protocol.md`
 7. `vida/config/instructions/system-maps.framework-map-protocol.md`
+8. `vida/config/instructions/system-maps.orchestrator-boot-flow.md`
 
 -----
 artifact_path: config/instructions/agent-definitions/orchestrator.entry
@@ -332,5 +343,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/agent-definitions.orchestrator-entry.md
 created_at: '2026-03-07T09:54:22+02:00'
-updated_at: '2026-03-10T03:35:34+02:00'
+updated_at: '2026-03-10T15:49:38+02:00'
 changelog_ref: agent-definitions.orchestrator-entry.changelog.jsonl

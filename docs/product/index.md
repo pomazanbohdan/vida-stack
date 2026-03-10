@@ -26,12 +26,15 @@ Current entrypoints:
 11. [repository-two-project-surface-model.md](/home/unnamed/project/vida-stack/docs/product/spec/repository-two-project-surface-model.md)
 12. [framework-project-documentation-layering.md](/home/unnamed/project/vida-stack/docs/product/spec/framework-project-documentation-layering.md)
 13. [root-map-and-runtime-surface-model.md](/home/unnamed/project/vida-stack/docs/product/spec/root-map-and-runtime-surface-model.md)
+14. [canonical-runtime-layer-matrix.md](/home/unnamed/project/vida-stack/docs/product/spec/canonical-runtime-layer-matrix.md)
+15. [agent-role-skill-profile-flow-model.md](/home/unnamed/project/vida-stack/docs/product/spec/agent-role-skill-profile-flow-model.md)
+16. [agent-role-selection-and-conversation-mode-model.md](/home/unnamed/project/vida-stack/docs/product/spec/agent-role-selection-and-conversation-mode-model.md)
 
 Repository project split:
 
 1. active current project surface:
    - `vida-stack`
-   - mapped through [AGENTS.sidecar.md](/home/unnamed/project/vida-stack/AGENTS.sidecar.md) and current docs under [docs](/home/unnamed/project/vida-stack/docs)
+   - mapped through [AGENTS.sidecar.md](/home/unnamed/project/vida-stack/AGENTS.sidecar.md) -> [project-root-map.md](/home/unnamed/project/vida-stack/docs/project-root-map.md) -> current docs under [docs](/home/unnamed/project/vida-stack/docs)
 2. extracted secondary bundle:
    - `vida-mobile`
    - preserved locally under [projects/vida-mobile](/home/unnamed/project/vida-stack/projects/vida-mobile)
@@ -52,5 +55,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/index.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-10T10:15:00+02:00'
+updated_at: '2026-03-10T15:49:38+02:00'
 changelog_ref: index.changelog.jsonl

@@ -12,6 +12,10 @@ Runtime workspace:
 - logs, state, receipts, and workspace-local execution artifacts belong under `.vida/`
 - old script-era snapshots/checkpoints should not be committed as durable repo content
 
+Output policy:
+- human-facing runtime commands default to `TOON`
+- structured JSON is emitted only when `--json` is explicitly requested
+
 ## Збірка
 
 ```bash
@@ -26,9 +30,11 @@ Nim binary name for this lane: `taskflow-v0`.
 ### `config` — Конфігурація
 
 ```bash
-taskflow-v0 config validate                    # Валідація vida.config.yaml
+taskflow-v0 config validate                    # Валідація vida.config.yaml, включно з agent_extensions
 taskflow-v0 config dump                        # Дамп конфігу як JSON
 taskflow-v0 config protocol-active agent_system  # Чи активний протокол?
+taskflow-v0 role-select bundle --json          # Скомпільований bundle ролей/flow/role-selection
+taskflow-v0 role-select request "<text>" --json  # Автовибір ролі й conversational mode
 ```
 
 Приклади:
@@ -435,5 +441,5 @@ schema_version: '1'
 status: canonical
 source_path: taskflow-v0/README.md
 created_at: '2026-03-10T01:36:00+02:00'
-updated_at: '2026-03-10T03:06:28+02:00'
+updated_at: '2026-03-10T16:53:58+02:00'
 changelog_ref: README.changelog.jsonl

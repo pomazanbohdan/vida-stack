@@ -14,6 +14,18 @@ Do not route raw research notes, raw issue text, raw release notes, or raw chat 
 
 Normalize first, then route.
 
+Research-to-spec progression rule:
+
+1. When a bounded decision depends on fresh research, the lawful sequence is:
+   - complete the bounded research pass,
+   - update the living research artifact,
+   - derive explicit requirements from that research,
+   - normalize those requirements into this intake/spec layer,
+   - only then continue into practical validation, SCP, ICP, FTP, or implementation-facing work.
+2. Do not treat raw findings as a substitute for requirements.
+3. Do not treat requirements as sufficient without an updated intake/spec artifact when downstream work still depends on negotiated scope or contract shape.
+4. When related findings are spread across multiple artifacts or passes, consolidate them into a thematic research/spec surface before downstream practical continuation.
+
 ## Canonical Artifact
 
 1. `.vida/logs/spec-intake/<task_id>.json`
@@ -79,6 +91,40 @@ Normalize each intake into one of:
 6. `assumptions` must be explicit; implicit assumptions are invalid intake state.
 7. `proposed_scope_in` and `proposed_scope_out` must be present before SCP/FTP negotiation or ICP narrowing continues.
 8. `open_decisions` must stay empty before task materialization or writer authorization; if non-empty, the route is still negotiation-bound.
+
+## Research Sufficiency Rule
+
+When `research_findings` materially influence scope, contract, or recommendation:
+
+1. record whether the research pass was comprehensive enough for the current decision,
+2. record what evidence classes were covered:
+   - research docs,
+   - spec docs,
+   - code/runtime evidence,
+   - web validation,
+   - adjacent protocol or process surfaces,
+3. record what remains open or conflicting,
+4. if those gaps are material, route stays incomplete and more research is required before downstream formation.
+5. downstream formation is lawful only when the active intake can point to `100% decision-ready confidence` for the bounded decision it is trying to support.
+6. if unresolved material research questions still exist, keep the intake incomplete rather than promoting it by optimism or momentum.
+
+Autonomous continuation rule:
+
+1. If intake remains incomplete because material research gaps still exist, continue the next required research/validation pass automatically rather than handing off prematurely.
+2. Do not promote the intake to downstream formation while required research is merely deferred by convenience.
+3. Do not promote the intake to practical validation or implementation-facing work until the intake reflects the latest research-backed requirements for the bounded question.
+
+Requirements rule:
+
+1. If research findings materially affect scope, acceptance, routing, or design, the intake must include explicit requirement statements or requirement-ready acceptance checks derived from those findings.
+2. Missing requirement formation keeps the intake incomplete even when evidence collection itself is strong.
+3. Missing spec/intake refresh after requirement changes keeps the route incomplete even when the previous intake had been valid earlier.
+
+Consolidation rule:
+
+1. Intake/spec formation must point back to a coherent thematic source, not to a pile of disconnected notes.
+2. If the bounded topic has become fragmented across multiple research artifacts, create or refresh a consolidated topic artifact before marking the intake ready.
+3. Fragmented evidence without consolidation keeps the intake incomplete when that fragmentation materially weakens decision clarity.
 
 ## User Negotiation Rule
 

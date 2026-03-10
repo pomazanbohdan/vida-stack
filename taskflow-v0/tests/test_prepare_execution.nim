@@ -11,6 +11,24 @@ suite "prepare execution":
   let root = "/tmp/vida_scripts_nim_prepare_execution"
   discard existsOrCreateDir(root)
   putEnv("VIDA_ROOT", root)
+  writeFile(root / "vida.config.yaml", """
+autonomous_execution:
+  validation_report_required_before_implementation: true
+  resume_after_validation_gate: true
+""")
+
+  test "blocks immediately when analysis manifest is missing":
+    let taskId = "unit-task-missing-analysis"
+    let outputDir = root / "prepare-missing-analysis"
+    createDir(outputDir)
+    let promptFile = outputDir / "implementation.prompt.txt"
+    writeFile(promptFile, "Implement the reported bugfix scope.\n")
+    let (exitCode, payload) = buildManifest(taskId, "implementation", promptFile, outputDir, root)
+    check exitCode == 2
+    check payload["status"].getStr() == "analysis_failed"
+    check payload["writer_authorized"].getBool() == false
+    let graph = run_graph.statusPayload(taskId)
+    check graph["resume_hint"]["next_node"].getStr() == "analysis" or graph["resume_hint"]["next_node"].getStr() == "writer"
 
   test "blocks when spec intake requires negotiation":
     let taskId = "unit-task-negotiation"
@@ -104,6 +122,7 @@ suite "prepare execution":
     let taskId = "unit-task-ready"
     let outputDir = root / "prepare-ready"
     createDir(outputDir)
+    writeFile(validationReportPath(outputDir), $(%*{"status": "accepted"}))
     writeFile(outputDir / "analysis.output.json", $(%*{
       "status": "done",
       "question_answered": "yes",
@@ -120,8 +139,9 @@ suite "prepare execution":
     writeFile(promptFile, "Implement the reported bugfix scope.\n")
     let (exitCode, payload) = buildManifest(taskId, "implementation", promptFile, outputDir, root)
     check exitCode == 0
-    check payload["status"].getStr() == "analysis_ready"
+    check payload["status"].getStr() == "validation_gate_passed_ready"
     check payload["writer_authorized"].getBool() == true
+    check payload["validation_gate"]["approved"].getBool() == true
     check payload["prompt_resolution"]["writer_packet_mode"].getStr() == "issue_contract_rendered"
     check fileExists(payload["effective_prompt_file"].getStr())
     check worker_packet.validatePacketText(readFile(payload["effective_prompt_file"].getStr())) == newSeq[string]()
@@ -136,6 +156,7 @@ suite "prepare execution":
     let taskId = "unit-task-existing-packet"
     let outputDir = root / "prepare-existing-packet"
     createDir(outputDir)
+    writeFile(validationReportPath(outputDir), $(%*{"status": "accepted"}))
     writeFile(outputDir / "analysis.output.json", $(%*{
       "status": "done",
       "question_answered": "yes",
@@ -170,6 +191,34 @@ Deliverable:
     check exitCode == 0
     check payload["prompt_resolution"]["writer_packet_mode"].getStr() == "existing_worker_packet"
     check payload["context_governance"]["summary"]["by_source_class"]["web_validated"].getInt() == 1
+
+  test "blocks writer authorization until validation report is accepted":
+    let taskId = "unit-task-validation-gate"
+    let outputDir = root / "prepare-validation-gate"
+    createDir(outputDir)
+    writeFile(outputDir / "analysis.output.json", $(%*{
+      "status": "done",
+      "question_answered": "yes",
+      "recommended_next_action": "proceed_to_writer",
+      "issue_contract": {
+        "classification": "defect_equivalent",
+        "equivalence_assessment": "equivalent_fix",
+        "reported_scope": ["api error handling stack"],
+        "proven_scope": ["error interceptor stack"],
+        "acceptance_checks": ["cargo test"]
+      }
+    }))
+    let promptFile = outputDir / "implementation.prompt.txt"
+    writeFile(promptFile, "Implement the reported bugfix scope.\n")
+    let (exitCode, payload) = buildManifest(taskId, "implementation", promptFile, outputDir, root)
+    check exitCode == 2
+    check payload["status"].getStr() == "validation_report_required"
+    check payload["writer_authorized"].getBool() == false
+    check payload["validation_gate"]["required"].getBool() == true
+    check payload["validation_gate"]["approved"].getBool() == false
+    let graph = run_graph.statusPayload(taskId)
+    check graph["resume_hint"]["next_node"].getStr() == "writer"
+    check graph["resume_hint"]["status"].getStr() == "blocked"
 
   test "blocks writer ready issue contract with unproven in scope symptoms":
     let taskId = "unit-task-unproven-symptoms"

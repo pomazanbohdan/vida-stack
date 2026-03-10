@@ -1,6 +1,6 @@
 # VIDA Partial Development Kernel Scope
 
-Status: draft `v1` root-config implementation scope
+Status: canonical `v1` root-config kernel scope
 
 Revision: `2026-03-09`
 
@@ -299,5 +299,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/partial-development-kernel-scope.md
 created_at: '2026-03-09T12:00:46+02:00'
-updated_at: '2026-03-10T03:06:28+02:00'
+updated_at: '2026-03-10T17:22:42+02:00'
 changelog_ref: partial-development-kernel-scope.changelog.jsonl

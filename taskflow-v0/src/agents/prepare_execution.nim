@@ -16,6 +16,9 @@ proc prepareExecutionManifestPath*(outputDir: string): string =
 proc analysisOutputPath*(outputDir: string): string =
   outputDir / "analysis.output.json"
 
+proc validationReportPath*(outputDir: string): string =
+  outputDir / "implementation.validation-report.json"
+
 proc projectPreflightDoc(): string =
   let cfg = loadRawConfig()
   let configured = dottedGetStr(cfg, "project_bootstrap.project_operations_doc")
@@ -116,6 +119,27 @@ proc prepareExecutionContextSources*(taskId, taskClass: string, specIntakePayloa
       "notes": taskClass,
     })
 
+proc validationGatePayload*(outputDir: string): JsonNode =
+  let cfg = loadRawConfig()
+  let required = validationReportRequiredBeforeImplementation(cfg)
+  let resumeAfterGate = resumeAfterValidationGateEnabled(cfg)
+  let path = validationReportPath(outputDir)
+  let payload = loadJson(path)
+  let status =
+    if payload.kind == JObject and payload.len > 0:
+      dottedGetStr(payload, "status")
+    else:
+      ""
+  let approved = status.toLowerAscii() in ["accepted", "approved", "pass", "passed"]
+  result = %*{
+    "required": required,
+    "resume_after_validation_gate": resumeAfterGate,
+    "path": path,
+    "exists": fileExists(path),
+    "status": status,
+    "approved": approved,
+  }
+
 proc buildManifest*(taskId, writerTaskClass, promptFile, outputDir: string,
                     workdir: string = ""): tuple[exitCode: int, payload: JsonNode] =
   let (_, writerRoute) = route.routeSnapshot(writerTaskClass, taskId)
@@ -148,7 +172,16 @@ proc buildManifest*(taskId, writerTaskClass, promptFile, outputDir: string,
     "draft_execution_spec_path": draftPath,
     "analysis_manifest": analysisPayload,
     "prompt_resolution": {"writer_packet_mode": "existing_prompt"},
+    "validation_gate": validationGatePayload(outputDir),
   }
+
+  if analysisPayload.len == 0 or dottedGetStr(analysisPayload, "status") != "done":
+    manifest["status"] = %"analysis_failed"
+    manifest["writer_authorized"] = %false
+    discard run_graph.updateNode(taskId, writerTaskClass, "writer", "blocked", writerTaskClass,
+      %*{"reason": "missing_or_invalid_analysis_manifest"})
+    discard writeManifest(prepareExecutionManifestPath(outputDir), manifest)
+    return (2, manifest)
 
   let draftPayload = loadJson(draftPath)
   let normalizedDraft =
@@ -241,7 +274,12 @@ proc buildManifest*(taskId, writerTaskClass, promptFile, outputDir: string,
   if issueErr.len > 0 and not issueOk:
     manifest["issue_contract_error"] = %issueErr
 
-  if issueOk and specIntakeOk and specDeltaOk and draftOk:
+  let validationGate = manifest{"validation_gate"}
+  let validationRequired = dottedGetBool(validationGate, "required", false)
+  let validationApproved = dottedGetBool(validationGate, "approved", false)
+
+  if issueOk and specIntakeOk and specDeltaOk and draftOk and
+      (not validationRequired or validationApproved):
     let originalPrompt = if fileExists(promptFile): readFile(promptFile) else: ""
     if worker_packet.validatePacketText(originalPrompt).len == 0:
       manifest["prompt_resolution"] = %*{
@@ -257,11 +295,31 @@ proc buildManifest*(taskId, writerTaskClass, promptFile, outputDir: string,
       }
       manifest["writer_packet_errors"] = %worker_packet.validatePacketText(readFile(renderedPrompt))
     manifest["writer_authorized"] = %true
-    manifest["status"] = %"analysis_ready"
+    manifest["status"] =
+      (if validationRequired and validationApproved and dottedGetBool(validationGate, "resume_after_validation_gate", false):
+        %"validation_gate_passed_ready"
+       else:
+        %"analysis_ready")
     discard run_graph.updateNode(taskId, writerTaskClass, "writer", "ready", writerTaskClass,
-      %*{"reason": "analysis_ready", "manifest_path": prepareExecutionManifestPath(outputDir)})
+      %*{
+        "reason":
+          (if validationRequired and validationApproved: "validation_gate_passed"
+           else: "analysis_ready"),
+        "manifest_path": prepareExecutionManifestPath(outputDir),
+      })
     discard writeManifest(prepareExecutionManifestPath(outputDir), manifest)
     return (0, manifest)
+
+  if issueOk and specIntakeOk and specDeltaOk and draftOk and validationRequired and not validationApproved:
+    manifest["status"] = %"validation_report_required"
+    manifest["writer_authorized"] = %false
+    discard run_graph.updateNode(taskId, writerTaskClass, "writer", "blocked", writerTaskClass,
+      %*{
+        "reason": "validation_report_required_before_implementation",
+        "validation_report_path": dottedGetStr(validationGate, "path"),
+      })
+    discard writeManifest(prepareExecutionManifestPath(outputDir), manifest)
+    return (2, manifest)
 
   manifest["status"] = %"issue_contract_blocked"
   discard run_graph.updateNode(taskId, writerTaskClass, "writer", "blocked", writerTaskClass,

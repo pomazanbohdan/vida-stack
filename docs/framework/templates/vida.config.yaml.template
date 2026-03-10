@@ -25,6 +25,55 @@ language_policy:
 protocol_activation:
   agent_system: false
 
+agent_extensions:
+  enabled: false
+  map_doc: docs/process/agent-extensions/README.md
+  registries:
+    roles: docs/process/agent-extensions/roles.yaml
+    skills: docs/process/agent-extensions/skills.yaml
+    profiles: docs/process/agent-extensions/profiles.yaml
+    flows: docs/process/agent-extensions/flows.yaml
+  enabled_framework_roles:
+    - orchestrator
+    - worker
+    - business_analyst
+    - pm
+    - coach
+    - verifier
+    - prover
+  enabled_standard_flow_sets:
+    - minimal
+  enabled_project_roles: []
+  enabled_project_skills: []
+  enabled_shared_skills: []
+  enabled_project_profiles: []
+  enabled_project_flows: []
+  default_flow_set: minimal
+  role_selection:
+    mode: auto
+    fallback_role: orchestrator
+    conversation_modes:
+      scope_discussion:
+        enabled: true
+        role: business_analyst
+        single_task_only: true
+        tracked_flow_entry: spec-pack
+        allow_freeform_chat: true
+      pbi_discussion:
+        enabled: true
+        role: pm
+        single_task_only: true
+        tracked_flow_entry: work-pool-pack
+        allow_freeform_chat: true
+  validation:
+    require_registry_files: true
+    require_unique_ids: true
+    require_framework_role_compatibility: true
+    require_skill_role_compatibility: true
+    require_profile_resolution: true
+    require_flow_resolution: true
+    fail_closed_on_validation_error: true
+
 autonomous_execution:
   next_task_boundary_analysis: true
   next_task_boundary_report: brief_plan
@@ -106,6 +155,7 @@ pack_router_keywords:
 #       enabled: true
 #       worker_backend_class: external_cli
 #       detect_command: codex
+#       binary_path: __CODEX_BINARY_PATH__
 #       role: bridge_fallback
 #       orchestration_tier: bridge
 #       cost_priority: fallback

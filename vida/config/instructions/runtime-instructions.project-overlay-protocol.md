@@ -93,6 +93,7 @@ Optional top-level sections:
 3. `project_bootstrap`
 4. `framework_self_diagnosis`
 5. `autonomous_execution`
+6. `agent_extensions`
 
 Supported `language_policy` keys:
 
@@ -128,12 +129,63 @@ Supported `project_bootstrap` keys:
 11. `allow_scaffold_missing`
 12. `require_launch_confirmation`
 
+Supported `agent_extensions` keys:
+
+1. `enabled`
+2. `map_doc`
+3. `registries`
+4. `enabled_framework_roles`
+5. `enabled_standard_flow_sets`
+6. `enabled_project_roles`
+7. `enabled_project_skills`
+8. `enabled_shared_skills`
+9. `enabled_project_profiles`
+10. `enabled_project_flows`
+11. `default_flow_set`
+12. `validation`
+13. `role_selection`
+
+Supported `agent_extensions.registries` keys:
+
+1. `roles`
+2. `skills`
+3. `profiles`
+4. `flows`
+
+Supported `agent_extensions.validation` keys:
+
+1. `require_registry_files`
+2. `require_unique_ids`
+3. `require_framework_role_compatibility`
+4. `require_skill_role_compatibility`
+5. `require_profile_resolution`
+6. `require_flow_resolution`
+7. `fail_closed_on_validation_error`
+
+Supported `agent_extensions.role_selection` keys:
+
+1. `mode`
+2. `fallback_role`
+3. `conversation_modes`
+
+Supported `agent_extensions.role_selection.conversation_modes.<mode_id>` keys:
+
+1. `enabled`
+2. `role`
+3. `single_task_only`
+4. `tracked_flow_entry`
+5. `allow_freeform_chat`
+
 Supported `autonomous_execution` keys:
 
 1. `next_task_boundary_analysis`
 2. `next_task_boundary_report`
 3. `next_task_boundary_report_gating`
 4. `dependent_coverage_autoupdate`
+5. `continue_after_reports`
+6. `spec_ready_auto_development`
+7. `validation_report_required_before_implementation`
+8. `resume_after_validation_gate`
 
 Autonomous execution overlay rule:
 
@@ -141,6 +193,12 @@ Autonomous execution overlay rule:
 2. It may disable user-facing boundary reporting, but it may not disable required internal next-task boundary analysis.
 3. It may not convert a non-gating boundary report into silent scope widening.
 4. Approval gating still belongs to `vida/config/instructions/runtime-instructions.task-approval-loop-protocol.md`.
+5. `continue_after_reports=true` means intermediate lawful reports should auto-advance into the next already-authorized step when no blocker, approval gate, validation gate, explicit user pause, or explicit user request to discuss the report exists.
+6. `continue_after_reports` must not bypass research/spec/approval/verification sequencing; it only removes unnecessary stopping after a lawful intermediate report.
+7. Pre-execution validation reports remain gating even when `continue_after_reports=true`.
+8. `spec_ready_auto_development=true` allows autonomous entry into implementation flow after spec readiness, but only through the normal execution-entry gates.
+9. `validation_report_required_before_implementation=true` inserts a mandatory validation-report gate before each implementation slice or implementation-bearing task.
+10. `resume_after_validation_gate=true` means that once the validation report is accepted and no other stop condition exists, runtime should continue directly into the authorized implementation step instead of stopping again by inertia.
 
 Current supported `agent_system` keys:
 
@@ -174,6 +232,7 @@ Supported worker-level keys:
 18. `quality_tier`
 19. `specialties`
 20. `dispatch`
+21. `binary_path`
 
 Supported worker-level `dispatch` keys:
 
@@ -204,6 +263,21 @@ Supported worker-level `dispatch` keys:
 25. `no_output_timeout_seconds`
 26. `progress_idle_timeout_seconds`
 27. `max_runtime_extension_seconds`
+
+Project agent-extension overlay rule:
+
+1. `agent_extensions` is the project-owned activation and selection surface for project roles, project skills, project profiles, and project flow sets.
+2. Framework-owned role law, role-profile law, and runtime routing law remain in `vida/config/instructions/*`.
+3. Project-owned custom roles, custom skills, custom profiles, and custom flows must live in project-owned registries referenced by `agent_extensions.registries`.
+4. `vida.config.yaml` may enable or disable framework roles and standard flow sets for the active project, but it must not silently redefine framework role authority.
+5. Project extensions are lawful only after validation confirms:
+   - registry files exist,
+   - ids are unique,
+   - project roles resolve to known framework base roles,
+   - project profiles resolve to known roles and skills,
+   - project flows resolve to known roles,
+   - no project extension weakens framework safety boundaries.
+6. `taskflow-v0 config validate` is the bounded runtime proof surface for the current overlay-level validation of `agent_extensions`.
 
 Supported `agent_system.scoring` keys:
 
@@ -372,5 +446,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions.project-overlay-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-10T03:06:28+02:00'
+updated_at: '2026-03-10T15:49:38+02:00'
 changelog_ref: runtime-instructions.project-overlay-protocol.changelog.jsonl

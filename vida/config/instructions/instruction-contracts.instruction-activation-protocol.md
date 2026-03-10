@@ -87,6 +87,13 @@ Canonical examples:
 11. `vida/config/instructions/runtime-instructions.execution-priority-protocol.md`
 12. `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md`
 13. `vida/config/instructions/instruction-contracts.documentation-layer7-migration-protocol.md`
+14. `vida/config/instructions/runtime-instructions.agent-handoff-context-protocol.md`
+15. `vida/config/instructions/runtime-instructions.checkpoint-replay-recovery-protocol.md`
+16. `vida/config/instructions/runtime-instructions.verification-lane-protocol.md`
+17. `vida/config/instructions/agent-definitions.role-profile-protocol.md`
+18. `vida/config/instructions/runtime-instructions.runtime-kernel-bundle-protocol.md`
+19. `vida/config/instructions/runtime-instructions.verification-merge-protocol.md`
+20. `vida/config/instructions/runtime-instructions.direct-runtime-consumption-protocol.md`
 
 Rule:
 
@@ -134,6 +141,15 @@ Rule:
 | project documentation is being migrated toward Layer 7 closure | `documentation-layer7-migration-protocol.md` |
 | worker mode active for eligible work | `agent-system-protocol.md` |
 | bounded conflict escalation is authorized | `problem-party-protocol.md` |
+| worker packet design, handoff boundaries, or context shaping is active | `agent-handoff-context-protocol.md` |
+| restart, resumability, checkpoint, replay, recovery, or duplicate-delivery safety is active | `checkpoint-replay-recovery-protocol.md` |
+| separated authorship, coach, verifier, proving, or closure proof semantics are active | `verification-lane-protocol.md` |
+| role identity/stance is being defined or changed independently of permissions and authority | `agent-definitions.role-profile-protocol.md` |
+| project role/skill/profile/flow extension activation, validation, or compilation is active | `project-agent-extension-protocol.md` |
+| auto-role selection or conversational role modes for scope/PBI work are active | `agent-role-selection-protocol.md` |
+| compiled runtime bundle composition or kernel bundle readiness is active | `runtime-kernel-bundle-protocol.md` |
+| multi-verifier admissibility or merged verification verdicts are active | `verification-merge-protocol.md` |
+| final direct runtime consumption or explicit taskflow -> codex closure evidence is active | `direct-runtime-consumption-protocol.md` |
 | task appears stale, done-but-open, or drifted | `task-state-reconciliation-protocol.md` |
 | silent diagnosis mode enabled | `silent-framework-diagnosis-protocol.md` |
 | explicit framework self-analysis/remediation doctrine needed | `framework-self-analysis-protocol.md` |
@@ -171,6 +187,15 @@ The following canonical protocol-bearing artifacts are explicitly covered by thi
 25. `vida/config/instructions/runtime-instructions.spec-sync-protocol.md`
 26. `vida/config/instructions/runtime-instructions.task-approval-loop-protocol.md`
 27. `vida/config/instructions/runtime-instructions.trace-eval-protocol.md`
+28. `vida/config/instructions/runtime-instructions.agent-handoff-context-protocol.md`
+29. `vida/config/instructions/runtime-instructions.checkpoint-replay-recovery-protocol.md`
+30. `vida/config/instructions/runtime-instructions.verification-lane-protocol.md`
+31. `vida/config/instructions/agent-definitions.role-profile-protocol.md`
+32. `vida/config/instructions/runtime-instructions.project-agent-extension-protocol.md`
+33. `vida/config/instructions/runtime-instructions.agent-role-selection-protocol.md`
+34. `vida/config/instructions/runtime-instructions.runtime-kernel-bundle-protocol.md`
+35. `vida/config/instructions/runtime-instructions.verification-merge-protocol.md`
+36. `vida/config/instructions/runtime-instructions.direct-runtime-consumption-protocol.md`
 
 Coverage rule:
 
@@ -256,5 +281,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts.instruction-activation-protocol.md
 created_at: '2026-03-08T02:15:22+02:00'
-updated_at: '2026-03-10T04:25:26+02:00'
+updated_at: '2026-03-10T17:22:42+02:00'
 changelog_ref: instruction-contracts.instruction-activation-protocol.changelog.jsonl

@@ -41,7 +41,7 @@ Status markers:
 | Category | Layer 1 | Layer 2 | Layer 3 | Layer 4 | Layer 5 | Layer 6 | Layer 7 | Layer 8 |
 |---|---|---|---|---|---|---|---|---|
 | Documentation compliance | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 |
-| Strongest evidence | `codex-v0/docsys_schema.yaml`, `instruction-artifact-model.md`, `projection_manifest.yaml` | `canonical-inventory-law.md`, `project-documentation-system.md`, `current-spec-map.md`, `instruction_catalog.yaml`, canonical registry path | this spec, `project-documentation-system.md`, canonical `check`/`doctor` rules in bootstrap docs | this spec, `AGENTS.sidecar.md`, canonical mutation command contract | `canonical-relation-law.md`, `project-documentation-system.md`, `AGENTS.sidecar.md`, relation commands in `codex-v0/codex.py` | this spec, `framework-map-protocol.md`, `AGENTS.sidecar.md` overview/low-call contract | `canonical-runtime-readiness-law.md`, `instruction-artifact-model.md`, `docs/framework/research/canonical-runtime-readiness-external-patterns.md`, `codex-v0/codex.py` readiness-check, readiness-write, and proofcheck | consumption law is defined as target architecture, but not yet expanded into a fully promoted runtime-consumption product spec |
+| Strongest evidence | `codex-v0/docsys_schema.yaml`, `instruction-artifact-model.md`, `projection_manifest.yaml` | `canonical-inventory-law.md`, `project-documentation-system.md`, `current-spec-map.md`, `instruction_catalog.yaml`, canonical registry path | this spec, `project-documentation-system.md`, canonical `check`/`doctor` rules in documentation tooling maps | this spec, `docs/process/documentation-tooling-map.md`, canonical mutation command contract | `canonical-relation-law.md`, `project-documentation-system.md`, `docs/process/documentation-tooling-map.md`, relation commands in `codex-v0/codex.py` | this spec, `docs/project-root-map.md`, `docs/process/documentation-tooling-map.md` overview/low-call contract | `canonical-runtime-readiness-law.md`, `instruction-artifact-model.md`, `docs/framework/research/canonical-runtime-readiness-external-patterns.md`, `codex-v0/codex.py` readiness-check, readiness-write, and proofcheck | consumption law is defined as target architecture, but not yet expanded into a fully promoted runtime-consumption product spec |
 | Main current gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | no blocking documentation gap | consumption law is defined as target architecture, but not yet expanded into a fully promoted runtime-consumption product spec |
 
 Compliance reading rule:
@@ -115,7 +115,7 @@ Strongest evidence:
 
 1. this spec
 2. `vida/config/instructions/system-maps.framework-map-protocol.md`
-3. `AGENTS.sidecar.md`
+3. `docs/process/documentation-tooling-map.md`
 
 Current conclusion:
 
@@ -132,7 +132,7 @@ Strongest evidence:
 1. `docs/product/spec/canonical-relation-law.md`
 2. `docs/product/spec/project-documentation-system.md`
 3. this spec
-4. `AGENTS.sidecar.md`
+4. `docs/process/documentation-tooling-map.md`
 
 Current conclusion:
 
@@ -148,8 +148,8 @@ Documentation alignment: `✅`
 Strongest evidence:
 
 1. `docs/product/spec/project-documentation-system.md`
-2. `vida/config/instructions/system-maps.framework-map-protocol.md`
-3. `AGENTS.sidecar.md`
+2. `docs/project-root-map.md`
+3. `docs/process/documentation-tooling-map.md`
 
 Current conclusion:
 
@@ -466,7 +466,7 @@ The repository root bootstrap surface must use one explicit canonical mode rathe
 Canonical root-bootstrap rule:
 
 1. `AGENTS.md` is the bootstrap carrier and routing contract,
-2. `AGENTS.sidecar.md` is the canonical metadata-bearing sidecar for bootstrap context,
+2. `AGENTS.sidecar.md` is the canonical project-doc bootstrap carrier,
 3. repository root documents that are not bootstrap carriers must use the normal metadata and changelog contract.
 
 Validation and mutation rule:
@@ -662,6 +662,8 @@ TaskFlow dependency rule:
 1. Layer 8 is directly blocked until `taskflow` becomes the primary runtime engine for the system,
 2. `codex` may prepare canonical inventory and readiness surfaces, but it cannot close Layer 8 by itself,
 3. Layer 8 requires `taskflow` to consume those surfaces as runtime authority.
+4. when `taskflow` enters its final direct runtime-consumption layer, it must activate the bounded `codex` runtime-family surface so the runtime consumes canonical inventory, readiness, bundle, and documentation-consumption evidence through one explicit downstream branch.
+5. this activation does not transfer runtime-consumption authority from `taskflow` to `codex`; it only makes the documentation/inventory consumption path explicit and lawful.
 
 Documentation-first rule for this layer:
 
@@ -727,5 +729,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/canonical-documentation-and-inventory-layers.md
 created_at: '2026-03-10T03:25:00+02:00'
-updated_at: '2026-03-10T04:07:10+02:00'
+updated_at: '2026-03-10T15:10:43+02:00'
 changelog_ref: canonical-documentation-and-inventory-layers.changelog.jsonl

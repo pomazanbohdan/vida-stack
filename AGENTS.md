@@ -131,6 +131,7 @@ For orchestrator lane, use `vida/config/instructions/agent-definitions.orchestra
 5. boot profile read-set,
 6. runtime execution rules.
 7. instruction activation by phase via `vida/config/instructions/instruction-contracts.instruction-activation-protocol.md`.
+8. explicit boot sequencing via `vida/config/instructions/system-maps.orchestrator-boot-flow.md`.
 
 
 ### Worker Boot Pointer
@@ -138,6 +139,7 @@ For orchestrator lane, use `vida/config/instructions/agent-definitions.orchestra
 For worker lane, use:
 1. `vida/config/instructions/agent-definitions.worker-entry.md`
 2. `vida/config/instructions/instruction-contracts.worker-thinking.md`
+3. `vida/config/instructions/system-maps.worker-boot-flow.md`
 
 Workers must not bootstrap repository-wide orchestration policy unless the task packet explicitly asks for framework-lane audit behavior.
 
@@ -170,6 +172,8 @@ Operational references:
 6. `vida/config/instructions/system-maps.protocol-index.md`
 7. `vida/config/instructions/instruction-contracts.instruction-activation-protocol.md`
 8. `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md`
+9. `vida/config/instructions/system-maps.orchestrator-boot-flow.md`
+10. `vida/config/instructions/system-maps.worker-boot-flow.md`
 
 Initialization bootstrap rule:
 1. During project initialization, read `AGENTS.sidecar.md` immediately after `AGENTS.md`, then resolve the framework-owned bootstrap path in `vida/root-map.md` before lane resolution or broad manual inspection.

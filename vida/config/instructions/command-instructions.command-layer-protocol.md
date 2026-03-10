@@ -91,6 +91,33 @@ Typical outputs:
 2. next step,
 3. readiness or close decision.
 
+Report-stage rule:
+
+1. A user-facing report may appear at any command layer only when it serves that layer's canonical purpose rather than replacing the next lawful step.
+2. Reports are lawful at:
+   - `CL1` as scope/intake framing,
+   - `CL2` as evidence/reality status,
+   - `CL3` as contract/decision summary,
+   - `CL4` as artifact/materialization summary,
+   - `CL5` as gate verdict and handoff.
+3. A report is informational by default, not terminal by default.
+4. If the next lawful step is already determined and no blocker exists, the command should continue automatically after the report when autonomous continuation is active.
+5. Explicit user intent to discuss the current report converts that report boundary into a lawful stop point before the next step.
+6. Validation reports that exist to approve or reject upcoming execution are gating reports and must not auto-continue into execution.
+7. When a bounded task still contains unfinished lawful work after a report, the command should continue until that bounded task reaches actual closure rather than stopping at the report boundary.
+
+Research-heavy closure rule:
+
+1. For commands whose `CL2` or `CL3` materially depend on research, external validation, or comparative source analysis, `CL5` may not close while unresolved material research questions remain.
+2. In these commands, the canonical default is autonomous continuation through the next required bounded research step until closure criteria are satisfied or a lawful blocker is reached.
+3. In these commands, downstream practical validation or implementation-facing continuation is forbidden until the bounded sequence below is complete:
+   - `CL2` research/evidence gathering,
+   - research artifact update,
+   - requirement formation,
+   - `CL3` contract/spec/intake formation.
+4. Evidence that exists only in chat, temporary notes, or ad hoc reasoning does not satisfy this sequence.
+5. When a report is produced inside this sequence, default behavior is `report -> next lawful step`, not `report -> stop`, unless a lawful blocker or explicit user pause exists.
+
 ## Command Matrix
 
 | Command | CL1 Intake | CL2 Reality And Inputs | CL3 Contract And Decisions | CL4 Materialization | CL5 Gates And Handoff |
@@ -111,6 +138,26 @@ Rules:
 1. read-heavy layers (`CL1`, `CL2`, parts of `CL3`, parts of `CL5`) are delegation-friendly,
 2. mutation-heavy layers (`CL4`) remain single-writer unless explicit isolation exists,
 3. command decomposition must reference layer ids before introducing worker/task granularity.
+
+Research-to-practice sequence:
+
+1. When a command contains a research-dependent path, the canonical sequence is:
+   - gather bounded evidence in `CL2`,
+   - update the command-owned research/reality artifact,
+   - derive or refresh requirements,
+   - form/refine the command contract/spec in `CL3`,
+   - only then enter practical materialization or downstream execution.
+2. Skipping the artifact, requirements, or contract refresh steps is a protocol violation even if the answer appears obvious.
+3. If a report is emitted between these steps, it must explicitly preserve the next required step and must not silently become a stopping point.
+
+Task-complete default:
+
+1. For any command, once a bounded task is active, the operator should finish all still-lawful in-scope steps before stopping.
+2. Stop early only when:
+   - a blocker or gate is reached,
+   - the next step would widen scope materially,
+   - the user explicitly asked to pause, discuss, or reprioritize.
+3. "Good enough to summarize" is not a lawful stop condition when bounded task-owned work still remains.
 
 Protocol-unit format:
 

@@ -21,6 +21,7 @@
 | Source delta log | `docs/framework/research/agentic-role-profile-source-delta-log.md` | material changes in external guidance | spec deltas, task refresh gates |
 | Parameter registry | `docs/framework/research/agentic-parameter-registry.md` | reusable enumerations and value families | templates, protocols, config, tests |
 | Agent definition system | `docs/framework/research/agentic-agent-definition-system.md` | canonical terminology and relation model for agent definition, instruction contract, and prompt template configuration | agent-definition protocol, instruction schemas, templates, evals |
+| VIDA 1.0 external alignment | `docs/framework/research/vida-1.0-agent-runtime-external-alignment.md` | supervisor/handoff, context-shaping, durable execution, checkpoint, replay, and observability alignment for VIDA 1.0 | runtime-family maps, orchestrator/worker flow specs, replay/recovery law, verification/runtime requirements |
 | Cheap worker packet system | `docs/framework/research/agentic-cheap-worker-packet-system.md` | minimum packet/prompt system for low-cost bounded worker execution | packet templates, worker prompts, readiness gates, conformance tests |
 | Cheap worker prompt pack | `docs/framework/research/agentic-cheap-worker-prompt-pack.md` | concrete reusable prompts for cheap schema/test/kernel/review worker lanes | rendered worker packets, dispatch templates, prompt libraries |
 | Atomic claims registry | `docs/framework/research/agentic-atomic-claims-registry.md` | fine-grained research claims with confidence and affected surfaces | consensus/disagreement layers, decisions, protocols |
@@ -60,6 +61,7 @@
 3. `Normalization layers`
    - parameter registry
    - agent definition system
+   - VIDA 1.0 external alignment
    - terminology glossary
    - atomic claims registry
 4. `Knowledge synthesis layers`
@@ -170,15 +172,16 @@ And use, when relevant:
 - proving-wave and rollout work
 - research-validation and threshold-setting work
 - future external integration planning work
+
 -----
 artifact_path: framework/research/agentic-research-architecture-map
 artifact_type: framework_research_doc
-artifact_version: 1
-artifact_revision: 2026-03-10
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-10'
+schema_version: '1'
 status: canonical
 source_path: docs/framework/research/agentic-research-architecture-map.md
-created_at: 2026-03-09T20:28:59+02:00
-updated_at: 2026-03-10T01:12:03+02:00
+created_at: '2026-03-09T20:28:59+02:00'
+updated_at: '2026-03-10T14:41:12+02:00'
 changelog_ref: agentic-research-architecture-map.changelog.jsonl
 P26-03-09T21: 44:13Z

@@ -29,7 +29,7 @@ Upstream supporting artifacts:
 
 1. `docs/framework/research/agentic-agent-definition-system.md`
 2. `docs/framework/research/agentic-terminology-glossary.md`
-3. future `vida/config/instructions/agent-definitions.role-profile-protocol.md` when role profiles are implemented
+3. `vida/config/instructions/agent-definitions.role-profile-protocol.md`
 
 ## Canonical Terminology
 
@@ -39,6 +39,8 @@ Use exactly this hierarchy:
 2. `Instruction Contract`
 3. `Prompt Template Configuration`
 4. `Skill`
+5. `Role Profile`
+6. `Flow Set`
 
 Rules:
 
@@ -47,6 +49,8 @@ Rules:
 3. `Prompt Template Configuration` renders the contract for a runtime/provider and remains product-owned config.
 4. `Skill` is a separately managed capability artifact, not an implicit field inside the contract or template.
 5. `Role Profile` remains upstream identity/stance input, not the full runtime behavior object by itself.
+6. `Role Profile` canonical contract lives in `vida/config/instructions/agent-definitions.role-profile-protocol.md`.
+7. `Flow Set` is a runtime composition artifact, not a fifth core instruction artifact class.
 
 ## Deterministic Behavior Law
 
@@ -126,10 +130,17 @@ The runtime assembly model is:
 3. prompt template configuration renders the logic for runtime use
 4. skill attachment is separate from the core instruction chain
 5. output contract and proof requirements remain inspectable after rendering
+6. flow selection remains separate from role identity and prompt rendering
 
 Compact formula:
 
 `agent_definition = role_profile + instruction_contract + prompt_template_configuration + skill attachments + permission policy + output/proof contract`
+
+Project extension note:
+
+1. project-owned roles, skills, profiles, and flow sets may be enabled through `vida.config.yaml` and project-owned registries,
+2. those project extensions must remain additive and must resolve back to framework role law, framework instruction contracts, and framework runtime safety invariants,
+3. flow sets are runtime composition artifacts and must not be stored as hidden behavior inside one role profile or one prompt template.
 
 ## Validation Expectations
 
@@ -173,11 +184,11 @@ Minimum proof:
 -----
 artifact_path: config/instructions/agent-definitions/agent-definition.protocol
 artifact_type: agent_definition
-artifact_version: 1
-artifact_revision: 2026-03-09
-schema_version: 1
+artifact_version: '1'
+artifact_revision: '2026-03-09'
+schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/agent-definitions.protocol.md
-created_at: 2026-03-09T12:00:46+02:00
-updated_at: 2026-03-10T00:55:00+02:00
+created_at: '2026-03-09T12:00:46+02:00'
+updated_at: '2026-03-10T15:41:04+02:00'
 changelog_ref: agent-definitions.protocol.changelog.jsonl

@@ -1,0 +1,790 @@
+project:
+  id: mobile-odoo
+  overlay_version: 1
+
+project_bootstrap:
+  enabled: true
+  docs_root: docs
+  process_root: docs/process
+  research_root: docs/research
+  readme_doc: docs/README.md
+  architecture_doc: docs/architecture.md
+  decisions_doc: docs/decisions.md
+  environments_doc: docs/environments.md
+  project_operations_doc: docs/process/project-operations.md
+  agent_system_doc: docs/process/agent-system.md
+  allow_scaffold_missing: true
+  require_launch_confirmation: true
+
+language_policy:
+  user_communication: uk
+  reasoning: en
+  documentation: en
+  todo_protocol: en
+
+protocol_activation:
+  agent_system: true
+
+autonomous_execution:
+  next_task_boundary_analysis: true
+  next_task_boundary_report: brief_plan
+  next_task_boundary_report_gating: false
+  dependent_coverage_autoupdate: true
+
+framework_self_diagnosis:
+  enabled: true
+  silent_mode: true
+  auto_capture_bugs: true
+  parent_issue: vida-stack-2d9
+  defer_fix_until_task_boundary: true
+  session_reflection_required: true
+  platform_direction: agentic_engineering_platform
+  quality_token_efficiency: equal_weight
+  session_reflection_criteria:
+    - architecture_cleanliness
+    - completeness
+    - token_efficiency
+    - orchestration_efficiency
+    - instruction_clarity
+    - instruction_runtime_consistency
+
+pack_router_keywords:
+  research: ресерч,дослід
+  spec: спек,специф
+  pool: пул,беклог,декомпоз
+  pool_strong: форм-таск
+  pool_dependency: залежност
+  dev: розроб,продовж
+  bug: помил,баг,виправ
+  reflect: рефлекс,актуал,онови док
+  reflect_strong: субагент,матриц,ініціаліз,фреймворк,самодіагност
+
+agent_system:
+  init_on_boot: true
+  mode: hybrid
+  state_owner: orchestrator_only
+  max_parallel_agents: 3
+
+  scoring:
+    consecutive_failure_limit: 3
+    promotion_score: 75
+    demotion_score: 45
+    probation_success_runs: 2
+    probation_task_runs: 2
+    retirement_failure_limit: 8
+
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+      role: senior_internal
+      orchestration_tier: senior
+      cost_priority: premium
+      budget_cost_units: 10
+      profiles: internal_fast,internal_arch,internal_review
+      default_profile: internal_fast
+      capability_band: implementation_safe,architecture_safe
+      write_scope: orchestrator_native
+      billing_tier: internal
+      speed_tier: medium
+      quality_tier: high
+      specialties: implementation,architecture,integration
+    codex_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      detect_command: codex
+      role: bridge_fallback
+      orchestration_tier: bridge
+      cost_priority: fallback
+      budget_cost_units: 1
+      models_hint: gpt-5.1-codex-mini,gpt-5.2-codex,gpt-5.3-codex
+      default_model: gpt-5.1-codex-mini
+      capability_band: read_only,review_safe,bounded_write_safe,web_search
+      write_scope: scoped_only
+      max_runtime_seconds: 240
+      min_output_bytes: 260
+      billing_tier: low
+      speed_tier: medium
+      quality_tier: high
+      specialties: code_edit,deep_review,bounded_write
+      dispatch:
+        command: codex
+        pre_static_args:
+          - -c
+          - model_reasoning_effort="high"
+          - -a
+          - never
+        subcommand: exec
+        static_args:
+          - --ephemeral
+          - -s
+          - read-only
+        write_static_args:
+          - --ephemeral
+          - -s
+          - workspace-write
+        workdir_flag: -C
+        model_flag: -m
+        models_cache_path: ~/.codex/models_cache.json
+        web_search_mode: flag
+        web_search_flag: --search
+        web_probe_prompt: Use web search for one current public source and return exactly one line: VIDA_WEB_SEARCH_OK <url>
+        web_probe_expect_substring: VIDA_WEB_SEARCH_OK
+        web_probe_timeout_seconds: 25
+        output_mode: file
+        output_flag: -o
+        prompt_mode: positional
+        startup_timeout_seconds: 90
+        no_output_timeout_seconds: 240
+        progress_idle_timeout_seconds: 120
+        max_runtime_extension_seconds: 90
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      detect_command: qwen
+      role: free_primary
+      orchestration_tier: external_free
+      cost_priority: highest
+      budget_cost_units: 0
+      capability_band: read_only,review_safe,web_search
+      write_scope: none
+      max_runtime_seconds: 180
+      min_output_bytes: 260
+      billing_tier: free
+      speed_tier: medium
+      quality_tier: high
+      specialties: long_context,agentic_coding,review
+      dispatch:
+        command: qwen
+        static_args:
+          - -y
+          - -o
+          - text
+        env:
+          HOME: /home/unnamed/project/vida-stack/.vida/data/qwen-home
+        web_search_mode: provider_configured
+        web_probe_prompt: Use web search for one current public source and return exactly one line: VIDA_WEB_SEARCH_OK <url>
+        web_probe_expect_substring: VIDA_WEB_SEARCH_OK
+        web_probe_timeout_seconds: 25
+        output_mode: stdout
+        prompt_mode: positional
+        startup_timeout_seconds: 90
+        no_output_timeout_seconds: 240
+        progress_idle_timeout_seconds: 120
+        max_runtime_extension_seconds: 90
+    gemini_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      detect_command: gemini
+      role: free_primary
+      orchestration_tier: external_free
+      cost_priority: highest
+      budget_cost_units: 0
+      capability_band: read_only,review_safe
+      write_scope: none
+      max_runtime_seconds: 240
+      min_output_bytes: 260
+      billing_tier: free
+      speed_tier: medium
+      quality_tier: high
+      specialties: research,review,long_context
+      dispatch:
+        command: gemini
+        static_args:
+          - -y
+          - --output-format
+          - text
+        probe_static_args:
+          - -y
+          - --output-format
+          - text
+        probe_prompt: Return exactly one line: GEMINI_OK
+        probe_expect_substring: GEMINI_OK
+        probe_timeout_seconds: 20
+        output_mode: stdout
+        prompt_mode: flag
+        prompt_flag: -p
+        startup_timeout_seconds: 120
+        no_output_timeout_seconds: 300
+        progress_idle_timeout_seconds: 150
+        max_runtime_extension_seconds: 120
+    kilo_cli:
+      enabled: false
+      subagent_backend_class: external_cli
+      detect_command: kilo
+      role: free_primary
+      orchestration_tier: external_free
+      cost_priority: highest
+      budget_cost_units: 0
+      models_hint: kilo/minimax/minimax-m2.5:free
+      default_model: kilo/minimax/minimax-m2.5:free
+      capability_band: read_only,review_safe
+      write_scope: none
+      max_runtime_seconds: 180
+      min_output_bytes: 260
+      billing_tier: free
+      speed_tier: medium
+      quality_tier: medium
+      specialties: planning,spec,review
+      dispatch:
+        command: kilo
+        static_args:
+          - run
+          - --auto
+        env:
+          OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS: "600000"
+        workdir_flag: --dir
+        model_flag: -m
+        output_mode: stdout
+        prompt_mode: positional
+        startup_timeout_seconds: 60
+        no_output_timeout_seconds: 180
+        progress_idle_timeout_seconds: 105
+        max_runtime_extension_seconds: 75
+    opencode_cli:
+      enabled: false
+      subagent_backend_class: external_cli
+      detect_command: opencode
+      role: free_primary
+      orchestration_tier: external_free
+      cost_priority: highest
+      budget_cost_units: 0
+      models_hint: opencode/minimax-m2.5-free,opencode/gpt-5.1-codex-mini
+      default_model: opencode/minimax-m2.5-free
+      capability_band: read_only,review_safe
+      write_scope: none
+      max_runtime_seconds: 180
+      min_output_bytes: 260
+      billing_tier: free
+      speed_tier: fast
+      quality_tier: medium
+      specialties: planning,spec,review
+      dispatch:
+        command: opencode
+        static_args:
+          - run
+        env:
+          OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS: "600000"
+        workdir_flag: --dir
+        model_flag: -m
+        output_mode: stdout
+        prompt_mode: positional
+        startup_timeout_seconds: 60
+        no_output_timeout_seconds: 180
+        progress_idle_timeout_seconds: 105
+        max_runtime_extension_seconds: 75
+    vibe_cli:
+      enabled: false
+      subagent_backend_class: external_cli
+      detect_command: vibe
+      role: free_primary
+      orchestration_tier: external_free
+      cost_priority: highest
+      budget_cost_units: 0
+      capability_band: read_only,review_safe
+      write_scope: none
+      max_runtime_seconds: 180
+      min_output_bytes: 260
+      billing_tier: free
+      speed_tier: medium
+      quality_tier: high
+      specialties: engineering,cli_review,multi_file
+      dispatch:
+        command: vibe
+        workdir_flag: --workdir
+        output_mode: stdout
+        prompt_mode: flag
+        prompt_flag: -p
+        startup_timeout_seconds: 45
+        no_output_timeout_seconds: 120
+        progress_idle_timeout_seconds: 90
+        max_runtime_extension_seconds: 60
+
+  routing:
+    default:
+      subagents: qwen_cli,gemini_cli,codex_cli,internal_subagents
+      write_scope: none
+      graph_strategy: deterministic_then_escalate
+      deterministic_first: yes
+      budget_policy: balanced
+      max_budget_units: 4
+      max_cli_subagent_calls: 5
+      max_verification_passes: 1
+      max_fallback_hops: 2
+      max_total_runtime_seconds: 420
+      verification_gate: subagent_return_contract
+      dispatch_required: external_first_when_eligible
+      external_first_required: yes
+      local_execution_allowed: no
+      local_execution_preferred: no
+      cli_dispatch_required_if_delegating: yes
+      direct_internal_bypass_forbidden: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: write_scope_or_tie_break
+      independent_verification_required: no
+    status_diagnostic:
+      subagents: qwen_cli,gemini_cli,codex_cli,internal_subagents
+      fanout_subagents: qwen_cli,gemini_cli,codex_cli
+      fanout_min_results: 1
+      merge_policy: consensus_with_conflict_flag
+      write_scope: none
+      verification_gate: source_backed_summary
+      max_runtime_seconds: 120
+      min_output_bytes: 180
+      graph_strategy: deterministic_then_escalate
+      deterministic_first: yes
+      budget_policy: strict
+      max_budget_units: 0
+      max_cli_subagent_calls: 2
+      max_verification_passes: 0
+      max_fallback_hops: 2
+      max_total_runtime_seconds: 180
+      dispatch_required: local_or_external_first
+      external_first_required: no
+      local_execution_allowed: yes
+      local_execution_preferred: yes
+      cli_dispatch_required_if_delegating: yes
+      direct_internal_bypass_forbidden: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: provider_exhausted_or_decision_conflict
+      allowed_internal_reasons: provider_exhausted,quality_gap,semantic_conflict_without_majority,provider_exhausted_or_decision_conflict
+      independent_verification_required: no
+    research:
+      subagents: qwen_cli,gemini_cli,codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      profiles:
+        internal_subagents: internal_fast
+      fanout_subagents: qwen_cli,gemini_cli,codex_cli
+      fanout_min_results: 1
+      merge_policy: consensus_with_conflict_flag
+      write_scope: none
+      verification_gate: source_backed_summary
+      max_runtime_seconds: 180
+      min_output_bytes: 260
+      graph_strategy: deterministic_then_escalate
+      deterministic_first: yes
+      budget_policy: strict
+      max_budget_units: 3
+      max_cli_subagent_calls: 3
+      max_verification_passes: 1
+      max_fallback_hops: 2
+      max_total_runtime_seconds: 360
+      dispatch_required: fanout_then_synthesize
+      external_first_required: yes
+      web_search_required: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: subagent_exhausted_or_quality_gap
+      verification_route_task_class: verification_ensemble
+      independent_verification_required: yes
+    research_fast:
+      subagents: qwen_cli,gemini_cli,codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      profiles:
+        internal_subagents: internal_fast
+      fanout_subagents: qwen_cli,gemini_cli,codex_cli
+      fanout_min_results: 1
+      merge_policy: consensus_with_conflict_flag
+      write_scope: none
+      verification_gate: source_backed_summary
+      max_runtime_seconds: 150
+      min_output_bytes: 220
+      max_fallback_hops: 2
+      dispatch_required: fanout_then_synthesize
+      external_first_required: yes
+      web_search_required: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: subagent_exhausted_or_quality_gap
+      verification_route_task_class: verification
+      independent_verification_required: yes
+    ui_research:
+      subagents: qwen_cli,gemini_cli,codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      profiles:
+        internal_subagents: internal_fast
+      fanout_subagents: qwen_cli,gemini_cli,codex_cli
+      fanout_min_results: 1
+      merge_policy: consensus_with_conflict_flag
+      write_scope: none
+      verification_gate: source_backed_summary
+      max_runtime_seconds: 150
+      min_output_bytes: 220
+      max_fallback_hops: 2
+      dispatch_required: fanout_then_synthesize
+      external_first_required: yes
+      web_search_required: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: subagent_exhausted_or_quality_gap
+      verification_route_task_class: verification
+      independent_verification_required: yes
+    research_deep:
+      subagents: qwen_cli,gemini_cli,codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.3-codex
+      profiles:
+        internal_subagents: internal_arch
+      fanout_subagents: qwen_cli,gemini_cli,codex_cli
+      fanout_min_results: 1
+      merge_policy: consensus_with_conflict_flag
+      write_scope: none
+      verification_gate: source_backed_summary
+      max_runtime_seconds: 240
+      min_output_bytes: 320
+      graph_strategy: deterministic_then_escalate
+      deterministic_first: yes
+      budget_policy: balanced
+      max_budget_units: 4
+      max_cli_subagent_calls: 5
+      max_verification_passes: 1
+      max_fallback_hops: 2
+      max_total_runtime_seconds: 480
+      dispatch_required: fanout_then_synthesize
+      external_first_required: yes
+      web_search_required: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: decision_critical_conflict
+      verification_route_task_class: verification_ensemble
+      independent_verification_required: yes
+    analysis:
+      subagents: qwen_cli,codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      profiles:
+        internal_subagents: internal_fast
+      fanout_subagents: qwen_cli,codex_cli
+      fanout_min_results: 1
+      merge_policy: consensus_with_conflict_flag
+      write_scope: none
+      verification_gate: source_backed_summary
+      max_runtime_seconds: 180
+      min_output_bytes: 320
+      max_fallback_hops: 2
+      dispatch_required: fanout_then_synthesize
+      external_first_required: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: semantic_conflict_without_majority
+      verification_route_task_class: verification_ensemble
+      independent_verification_required: no
+    read_only_prep:
+      subagents: qwen_cli,codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      profiles:
+        internal_subagents: internal_fast
+      fanout_subagents: qwen_cli,codex_cli
+      fanout_min_results: 1
+      merge_policy: consensus_with_conflict_flag
+      write_scope: none
+      verification_gate: source_backed_summary
+      max_runtime_seconds: 150
+      min_output_bytes: 220
+      graph_strategy: deterministic_then_escalate
+      deterministic_first: yes
+      budget_policy: strict
+      max_budget_units: 1
+      max_cli_subagent_calls: 2
+      max_verification_passes: 0
+      max_fallback_hops: 2
+      max_total_runtime_seconds: 240
+      dispatch_required: fanout_then_synthesize
+      external_first_required: yes
+      local_execution_allowed: no
+      local_execution_preferred: no
+      cli_dispatch_required_if_delegating: yes
+      direct_internal_bypass_forbidden: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: subagent_exhausted_or_quality_gap
+      independent_verification_required: no
+    meta_analysis:
+      subagents: qwen_cli,gemini_cli,codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      profiles:
+        internal_subagents: internal_review
+      fanout_subagents: qwen_cli,gemini_cli,codex_cli
+      fanout_min_results: 3
+      merge_policy: consensus_with_conflict_flag
+      write_scope: none
+      verification_gate: source_backed_summary
+      max_runtime_seconds: 240
+      min_output_bytes: 320
+      max_fallback_hops: 2
+      dispatch_required: fanout_then_synthesize
+      external_first_required: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: semantic_conflict_without_majority
+      verification_route_task_class: verification_ensemble
+      independent_verification_required: yes
+    review:
+      subagents: qwen_cli,gemini_cli,codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      profiles:
+        internal_subagents: internal_review
+      write_scope: none
+      verification_gate: review_findings
+      max_runtime_seconds: 180
+      min_output_bytes: 260
+      max_fallback_hops: 2
+      dispatch_required: external_first_review
+      external_first_required: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: unresolved_high_risk_findings
+      independent_verification_required: no
+    review_first_pass:
+      subagents: qwen_cli,gemini_cli,codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      profiles:
+        internal_subagents: internal_review
+      write_scope: none
+      verification_gate: review_findings
+      max_runtime_seconds: 180
+      min_output_bytes: 260
+      max_fallback_hops: 2
+      dispatch_required: external_first_review
+      external_first_required: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: unresolved_high_risk_findings
+      independent_verification_required: no
+    ui_review:
+      subagents: qwen_cli,gemini_cli,codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      profiles:
+        internal_subagents: internal_review
+      write_scope: none
+      verification_gate: review_findings
+      max_runtime_seconds: 180
+      min_output_bytes: 240
+      max_fallback_hops: 2
+      dispatch_required: external_first_review
+      external_first_required: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: unresolved_high_risk_findings
+      independent_verification_required: no
+    review_critical:
+      subagents: codex_cli,qwen_cli,gemini_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.2-codex
+      profiles:
+        internal_subagents: internal_review
+      write_scope: none
+      verification_gate: review_findings
+      max_runtime_seconds: 240
+      min_output_bytes: 320
+      max_fallback_hops: 2
+      dispatch_required: bridge_or_critical_review
+      external_first_required: no
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: architecture_or_security_conflict
+      independent_verification_required: no
+    review_ensemble:
+      subagents: gemini_cli,qwen_cli,codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      fanout_subagents: gemini_cli,qwen_cli,codex_cli
+      fanout_min_results: 2
+      merge_policy: consensus_with_conflict_flag
+      write_scope: none
+      verification_gate: review_findings
+      max_runtime_seconds: 180
+      min_output_bytes: 280
+      max_fallback_hops: 2
+      dispatch_required: fanout_then_synthesize
+      external_first_required: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: unresolved_high_risk_findings
+      independent_verification_required: no
+    coach:
+      subagents: codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      fanout_subagents: codex_cli
+      fanout_min_results: 1
+      merge_policy: unanimous_approve_rework_bias
+      write_scope: none
+      verification_gate: coach_review
+      max_runtime_seconds: 180
+      min_output_bytes: 280
+      max_fallback_hops: 2
+      dispatch_required: external_first_review
+      external_first_required: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: unresolved_coach_conflict
+      independent_verification_required: no
+    small_patch:
+      subagents: codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      profiles:
+        internal_subagents: internal_fast
+      analysis_required: yes
+      analysis_route_task_class: analysis
+      analysis_fanout_subagents: qwen_cli
+      analysis_fanout_min_results: 1
+      analysis_merge_policy: consensus_with_conflict_flag
+      analysis_external_first_required: yes
+      analysis_receipt_required: yes
+      analysis_zero_budget_required: yes
+      analysis_default_in_boot: yes
+      coach_required: yes
+      coach_route_task_class: coach
+      write_scope: scoped_only
+      verification_gate: targeted_verification
+      dispatch_required: bridge_write_then_internal_if_expands
+      external_first_required: no
+      graph_strategy: deterministic_then_escalate
+      deterministic_first: no
+      budget_policy: balanced
+      max_budget_units: 3
+      max_cli_subagent_calls: 3
+      max_coach_passes: 2
+      max_verification_passes: 1
+      max_fallback_hops: 2
+      max_total_runtime_seconds: 480
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: scope_expands_beyond_bounded_write
+      verification_route_task_class: review_ensemble
+      independent_verification_required: yes
+    small_patch_write:
+      subagents: codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      profiles:
+        internal_subagents: internal_fast
+      analysis_required: yes
+      analysis_route_task_class: analysis
+      analysis_fanout_subagents: qwen_cli
+      analysis_fanout_min_results: 1
+      analysis_merge_policy: consensus_with_conflict_flag
+      analysis_external_first_required: yes
+      analysis_receipt_required: yes
+      analysis_zero_budget_required: yes
+      analysis_default_in_boot: yes
+      coach_required: yes
+      coach_route_task_class: coach
+      write_scope: scoped_only
+      verification_gate: targeted_verification
+      max_coach_passes: 2
+      max_fallback_hops: 2
+      dispatch_required: bridge_write_then_internal_if_expands
+      external_first_required: no
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: scope_expands_beyond_bounded_write
+      verification_route_task_class: review_ensemble
+      independent_verification_required: yes
+    ui_patch:
+      subagents: codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      profiles:
+        internal_subagents: internal_fast
+      analysis_required: yes
+      analysis_route_task_class: ui_review
+      analysis_fanout_subagents: qwen_cli,gemini_cli
+      analysis_fanout_min_results: 2
+      analysis_merge_policy: consensus_with_conflict_flag
+      analysis_external_first_required: yes
+      analysis_receipt_required: yes
+      analysis_zero_budget_required: yes
+      analysis_default_in_boot: yes
+      coach_required: yes
+      coach_route_task_class: coach
+      write_scope: scoped_only
+      verification_gate: targeted_verification
+      max_coach_passes: 2
+      max_fallback_hops: 2
+      dispatch_required: bridge_write_then_internal_if_expands
+      external_first_required: no
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: scope_expands_beyond_bounded_write
+      verification_route_task_class: review_ensemble
+      independent_verification_required: yes
+    implementation:
+      subagents: codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex
+      profiles:
+        internal_subagents: internal_fast
+      max_runtime_seconds: 420
+      analysis_required: yes
+      analysis_route_task_class: analysis
+      analysis_fanout_subagents: qwen_cli
+      analysis_fanout_min_results: 1
+      analysis_merge_policy: consensus_with_conflict_flag
+      analysis_external_first_required: yes
+      analysis_receipt_required: yes
+      analysis_zero_budget_required: yes
+      analysis_default_in_boot: yes
+      coach_required: yes
+      coach_route_task_class: coach
+      write_scope: scoped_only
+      verification_gate: targeted_verification
+      dispatch_required: external_readonly_then_senior_writer
+      external_first_required: no
+      graph_strategy: deterministic_then_escalate
+      deterministic_first: no
+      budget_policy: balanced
+      max_budget_units: 5
+      max_cli_subagent_calls: 4
+      max_coach_passes: 2
+      max_verification_passes: 1
+      max_fallback_hops: 2
+      max_total_runtime_seconds: 540
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: cross_module_or_architecture_shift
+      verification_route_task_class: review_ensemble
+      independent_verification_required: yes
+    architecture:
+      subagents: qwen_cli,gemini_cli,codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.2-codex
+      profiles:
+        internal_subagents: internal_arch
+      write_scope: none
+      verification_gate: architectural_review
+      max_fallback_hops: 2
+      dispatch_required: external_first_then_senior_arbitration
+      external_first_required: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: architecture_decision_required
+      verification_route_task_class: review_ensemble
+      independent_verification_required: yes
+    verification:
+      subagents: qwen_cli,gemini_cli,codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      profiles:
+        internal_subagents: internal_review
+      write_scope: none
+      verification_gate: verification_summary
+      max_runtime_seconds: 180
+      min_output_bytes: 240
+      max_fallback_hops: 2
+      dispatch_required: external_first_review
+      external_first_required: yes
+      bridge_fallback_subagent: codex_cli
+      internal_escalation_trigger: unresolved_verification_conflict
+      independent_verification_required: no
+    verification_ensemble:
+      subagents: qwen_cli,gemini_cli,codex_cli,internal_subagents
+      models:
+        codex_cli: gpt-5.1-codex-mini
+      profiles:
+        internal_subagents: internal_review
+      fanout_subagents: qwen_cli,gemini_cli,codex_cli
+      fanout_min_results: 3
+      merge_policy: consensus_with_conflict_flag
+      write_scope: none
+      verification_gate: verification_summary
+      max_runtime_seconds: 180
+      min_output_bytes: 260
+      max_fallback_hops: 2
+      dispatch_required: fanout_then_synthesize
+      external_first_required: yes
+      bridge_fallback_subagent: internal_subagents
+      internal_escalation_trigger: unresolved_verification_conflict
+      independent_verification_required: no

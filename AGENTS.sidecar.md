@@ -8,7 +8,7 @@ Purpose: provide the project docs map for the repository being developed on top 
 2. This sidecar is the project docs map only.
 3. It carries project-document discovery pointers and project-document orientation.
 4. It must not become a second framework map or a mixed runtime/bootstrap carrier.
-5. Framework-owned discovery remains in `vida/config/instructions/**`.
+5. Framework-owned discovery starts at `vida/root-map.md` and continues through framework maps under `vida/config/instructions/**`.
 6. It maps the active current project surface only; extracted secondary bundles such as `projects/vida-mobile/**` are out of default bootstrap scope unless the task explicitly targets them.
 
 ## Project Canonical Maps
@@ -25,8 +25,12 @@ Purpose: provide the project docs map for the repository being developed on top 
    - `docs/product/spec/canonical-documentation-and-inventory-layers.md`
 6. Canonical runtime readiness law used by the project:
    - `docs/product/spec/canonical-runtime-readiness-law.md`
-7. Documentation tooling map:
+7. Canonical runtime layer matrix:
+   - `docs/product/spec/canonical-runtime-layer-matrix.md`
+8. Documentation tooling map:
    - `docs/process/documentation-tooling-map.md`
+9. Project agent-extension map:
+   - `docs/process/agent-extensions/README.md`
 
 ## Bootstrap Read Path
 
@@ -36,7 +40,9 @@ Purpose: provide the project docs map for the repository being developed on top 
 4. Continue into the project canonical maps listed below when the task depends on product/spec understanding.
 5. For documentation/product alignment questions, continue to `docs/product/spec/canonical-documentation-and-inventory-layers.md`.
 6. For documentation tooling or operator-command questions, continue to `docs/process/documentation-tooling-map.md`.
-7. This path is mandatory bootstrap context, not an optional later lookup.
+7. For runtime-layering, runtime-readiness, or runtime-architecture questions, continue to `docs/product/spec/canonical-runtime-layer-matrix.md`.
+8. For project role/skill/profile/flow extension questions, continue to `docs/process/agent-extensions/README.md`.
+9. This path is mandatory bootstrap context, not an optional later lookup.
 
 Project-routing rule:
 
@@ -50,6 +56,13 @@ Project-routing rule:
 2. Use this sidecar only for project docs discovery and project-document orientation.
 3. Prefer the project canonical maps here over broad manual repo scanning when the task depends on project/product understanding.
 4. Documentation tooling and operator commands are mapped in `docs/process/documentation-tooling-map.md`.
+5. For documentation-shaped, spec-shaped, canonical-map, or runtime-law documentation work, activate the documentation tooling path early rather than treating it as a late optional step.
+6. The expected early route for such work is:
+   - `AGENTS.sidecar.md`
+   - `docs/project-root-map.md`
+   - `docs/process/documentation-tooling-map.md`
+7. `codex-v0` is the canonical project-side operator/runtime surface for bounded documentation validation, readiness, relation, and proof work once the relevant project/spec context is known.
+8. Do not postpone `codex` usage until after broad manual documentation work when the task already depends on documentation mutation, validation, readiness, or proof-shaped output.
 
 -----
 artifact_path: project/repository/agents.sidecar
@@ -60,5 +73,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: '2026-03-10T09:45:00+02:00'
+updated_at: '2026-03-10T15:37:40+02:00'
 changelog_ref: AGENTS.sidecar.changelog.jsonl
