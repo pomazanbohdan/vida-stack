@@ -83,6 +83,7 @@ Ship the first usable `VIDA` shell that can manage and inspect its own runtime s
    - close
 7. snapshot, export, import, and restore for runtime task state,
 8. bounded help/operator recipes sufficient to operate the shell safely.
+9. a bounded `0.2.2` TaskFlow protocol-binding bridge slice that keeps protocol-binding authority on the DB-first taskflow state spine rather than detached file-log truth.
 
 ### 4.3 Why This Wave Exists
 
@@ -106,6 +107,7 @@ Wave 1 closes only when:
 2. task/taskflow state is queryable and restorable through bounded commands,
 3. boot/status/doctor proof surfaces pass for the scoped implementation,
 4. the resulting shell is usable for driving the next wave.
+5. the first protocol-binding path is queryable from the same authoritative taskflow/runtime state spine rather than only from detached file exports.
 
 ## 5. Wave 2: Project Activation Surface
 
@@ -306,5 +308,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-wave-plan.md
 created_at: '2026-03-11T23:01:49+02:00'
-updated_at: '2026-03-12T07:48:27+02:00'
+updated_at: '2026-03-12T12:23:51+02:00'
 changelog_ref: release-1-wave-plan.changelog.jsonl

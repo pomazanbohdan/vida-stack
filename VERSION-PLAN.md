@@ -12,7 +12,7 @@ Rule:
 
 Design assumptions:
 
-1. `0.2.x` remains the active semantic-freeze and proving line built on bounded proof runtimes, with `v0.2.1` as the current hotfix.
+1. `0.2.x` remains the active semantic-freeze and proving line built on bounded proof runtimes, with `v0.2.1` as the latest published hotfix and `v0.2.2` as the current protocol-binding bridge slice in progress.
 2. `Release 1` and `1.0` point at the first CLI-first compiled autonomous delivery runtime, not at a daemon release.
 3. the public `0.2.x` runtime remains `taskflow-v0` plus `codex-v0`; Rust `taskflow` / `docflow` continue as parallel implementation tracks until the next release line.
 4. `2.0` owns daemon mode, richer observability, dashboards, and vector-search daemon integration.
@@ -27,11 +27,11 @@ Vida Stack now moves through four major product states:
 3. `2.0` — Daemonized Control Plane
 4. `3.0` — Plugins and Marketplace
 
-The current repository is operating in the `0.2.x` proving line, with `v0.2.1` as the latest hotfix while semantic-freeze and closure work continues toward `Release 1` / `1.0`.
+The current repository is operating in the `0.2.x` proving line, with `v0.2.1` as the latest published hotfix and `v0.2.2` as the active next slice for TaskFlow protocol-binding closure while semantic-freeze and closure work continues toward `Release 1` / `1.0`.
 
 ## Version 0.2.x — Semantic-Freeze And Proving Line
 
-`0.2.x` is the active semantic-freeze and proving stack. The current published hotfix on that line is `v0.2.1`.
+`0.2.x` is the active semantic-freeze and proving stack. The current published hotfix on that line is `v0.2.1`, and the active next bounded slice is `v0.2.2`.
 
 Its job is to:
 
@@ -66,6 +66,14 @@ Current `0.2` priorities:
 3. collect golden fixtures and parity artifacts for the binary kernel path,
 4. avoid a forbidden middle path where `1.0` is silently hidden inside the old shell/runtime stack,
 5. prepare a clean `taskflow` / `docflow` / `vida` crate split for the next release line.
+6. bind the first TaskFlow execution path to canonical protocol activation and enforcement without using file-log-only truth.
+
+Current `v0.2.2` target:
+
+1. introduce the TaskFlow protocol-binding bridge as a bounded subrelease,
+2. keep protocol-binding authority on DB/taskflow runtime state,
+3. prove script-era bridge outputs and later Rust parity against that same authoritative state,
+4. avoid a false closure path where exported file logs are treated as runtime truth.
 
 ## Transition Path From 0.2.x To 1.0 / Release 1
 
@@ -273,5 +281,5 @@ schema_version: '1'
 status: canonical
 source_path: VERSION-PLAN.md
 created_at: '2026-03-10T00:30:00+02:00'
-updated_at: '2026-03-12T08:29:00+02:00'
+updated_at: '2026-03-12T12:23:51+02:00'
 changelog_ref: VERSION-PLAN.changelog.jsonl

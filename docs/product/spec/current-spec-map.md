@@ -125,6 +125,9 @@ Purpose: define the current product-spec home, show absorbed historical sources,
 39. [release-build-packaging-law.md](/home/unnamed/project/vida-stack/docs/product/spec/release-build-packaging-law.md)
    Sources: `docs/product/spec/github-public-repository-law.md`, `install/install.sh`, `scripts/build-release.sh`, and the current 0.2.x release-archive minimization decisions
    Config families: public release archive composition, installer/archive boundary, runtime-only package contents, and sidecar scaffold packaging
+40. [taskflow-protocol-runtime-binding-model.md](/home/unnamed/project/vida-stack/docs/product/spec/taskflow-protocol-runtime-binding-model.md)
+   Sources: `docs/product/spec/canonical-runtime-layer-matrix.md`, `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`, `docs/product/spec/compiled-runtime-bundle-contract.md`, `vida/config/instructions/runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`, `vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md`, `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`, and `vida/config/instructions/diagnostic-instructions/analysis.protocol-consistency-audit-protocol.md`
+   Config families: script-era protocol binding bridge, Rust-native protocol runtime crate, activation resolution, gate enforcement, protocol receipts, binding matrices, and the dedicated TaskFlow protocol-binding subrelease
 
 ## Routing Pointers
 
@@ -171,5 +174,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-12T11:06:29+02:00'
+updated_at: '2026-03-12T12:14:09+02:00'
 changelog_ref: current-spec-map.changelog.jsonl
