@@ -19,6 +19,12 @@ Compact rule:
 2. filesystem mirrored,
 3. Git historical.
 
+Placement rule:
+
+1. active runtime configuration and project activation surfaces should converge under `.vida/**`,
+2. root project files may remain source-mode or export-mode surfaces,
+3. they are not the long-term active runtime authority.
+
 ## 2. Configurator Purpose
 
 The configurator exists to manage which runtime behavior is active for one project without requiring direct mutation of sealed framework law.
@@ -30,6 +36,12 @@ It owns:
 3. import/export/sync/reconcile flows,
 4. explicit and automatic activation posture,
 5. controlled lifecycle changes for project-owned surfaces.
+
+Primary runtime homes:
+
+1. `.vida/config/**`
+2. `.vida/project/**`
+3. `.vida/db/**`
 
 ## 3. Minimum Release-1 Entity Set
 
@@ -77,6 +89,11 @@ Project owns:
 9. known project protocols,
 10. promoted executable project protocols.
 
+Runtime-home rule:
+
+1. active runtime-owned project roles, skills, profiles, flows, agents, teams, model/backend policy, and project protocols should live under `.vida/project/**` plus DB truth,
+2. root-tree registries may remain source-mode authoring or export/import surfaces, but they are not the target installed/runtime truth model.
+
 ## 5. Activation Modes
 
 ### 5.1 Explicit Mode
@@ -117,8 +134,8 @@ Release 1 requires bidirectional sync under DB-first authority.
 
 That means:
 
-1. DB changes may project into files,
-2. filesystem changes may be imported back into DB,
+1. DB changes may project into export files,
+2. filesystem export changes may be imported back into DB,
 3. runtime must detect drift and reconcile it lawfully,
 4. Git receives the filesystem projection as backup/history.
 
@@ -164,7 +181,8 @@ Model-facing summaries may be used, but:
 
 1. framework-owned protocol state must enter the operational database only through migration/init paths,
 2. project-owned runtime state may evolve through the lawful configurator lifecycle,
-3. the configurator must not become a bypass around sealed framework law.
+3. the configurator must not become a bypass around sealed framework law,
+4. root `vida.config.yaml` and root-tree activation registries are bridge-compatible only and must not remain the final active runtime placement.
 
 ## 11. Completion Proof
 
@@ -176,14 +194,19 @@ This model is closed enough for Release 1 when:
 4. lifecycle operations are coherent across project-owned classes,
 5. sync/reconcile remains lawful and fail-closed under conflict.
 
+Operator-flow note:
+
+1. the user-facing sequencing of this activation/configurator model is owned by `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`,
+2. this document remains the domain owner for activation/configurator law itself.
+
 -----
 artifact_path: product/spec/project-activation-and-configurator-model
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-11'
+artifact_revision: '2026-03-12'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/project-activation-and-configurator-model.md
 created_at: '2026-03-11T23:01:49+02:00'
-updated_at: '2026-03-11T23:01:49+02:00'
+updated_at: '2026-03-12T21:55:00+02:00'
 changelog_ref: project-activation-and-configurator-model.changelog.jsonl

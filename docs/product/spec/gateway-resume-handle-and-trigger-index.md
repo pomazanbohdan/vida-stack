@@ -95,6 +95,7 @@ The kernel accepts as future direction:
 3. single-use gateway handles with burn-on-success semantics,
 4. distributed locking around resume of the same handle or target,
 5. idempotent resume handlers for duplicate delivery scenarios.
+6. interrupt/resume semantics that treat approval and manual intervention as explicit resumable runtime states.
 
 ## 4. Mapping To Existing VIDA Surfaces
 
@@ -112,6 +113,11 @@ The kernel accepts as future direction:
 4. handle consumption must be inspectable and receipt-backed when decision-relevant
 5. `coach`, `verification`, and `approval` remain separate even if all use resumable gateways
 
+LangGraph alignment note:
+
+1. this model aligns with LangGraph-style interrupts and resumable waits,
+2. VIDA should borrow explicit pause/resume semantics while keeping approval, verification, and closure ownership distinct.
+
 -----
 artifact_path: product/spec/gateway-resume-handle-and-trigger-index
 artifact_type: product_spec
@@ -121,5 +127,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/spec/gateway-resume-handle-and-trigger-index.md
 created_at: 2026-03-09T12:00:46+02:00
-updated_at: 2026-03-09T20:28:59+02:00
+updated_at: 2026-03-12T20:45:00+02:00
 changelog_ref: gateway-resume-handle-and-trigger-index.changelog.jsonl

@@ -455,30 +455,37 @@ Primary donor/runtime sources inspected for parity:
 2. `codex-v0/docsys_policy.yaml`
 3. `codex-v0/docsys_schema.yaml`
 4. `codex-v0/docsys_project.yaml`
-5. `docs/process/documentation-tooling-map.md`
-6. `vida/config/instructions/system-maps/runtime-family.docflow-map.md`
-7. `vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
-8. `taskflow-v0/src/core/direct_consumption.nim`
-9. `install/install.sh`
-10. `scripts/docsys/print-markdown-summary-jsonl.py`
-11. `crates/vida/src/main.rs`
+5. `codex-v0/requirements-python.txt`
+6. `docs/process/documentation-tooling-map.md`
+7. `vida/config/instructions/system-maps/runtime-family.docflow-map.md`
+8. `vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
+9. `taskflow-v0/src/core/direct_consumption.nim`
+10. `install/install.sh`
+11. `scripts/docsys/print-markdown-summary-jsonl.py`
+12. `crates/vida/src/main.rs`
 
 Current donor command and operator surfaces inspected:
 
 1. `python3 codex-v0/codex.py check --profile active-canon`
 2. `python3 codex-v0/codex.py fastcheck --profile active-canon`
-3. `python3 codex-v0/codex.py protocol-coverage-check --profile active-canon`
-4. `python3 codex-v0/codex.py proofcheck --profile active-canon-strict`
-5. `vida docflow help`
-6. `vida docflow <delegated-args>`
+3. `python3 codex-v0/codex.py activation-check --profile active-canon`
+4. `python3 codex-v0/codex.py protocol-coverage-check --profile active-canon`
+5. `python3 codex-v0/codex.py readiness-check --profile active-canon`
+6. `python3 codex-v0/codex.py proofcheck --profile active-canon-strict`
+7. `vida docflow help`
+8. `vida docflow <delegated-args>`
 
 Current artifact and output-shape expectations preserved or intentionally bridged:
 
-1. registry/readiness/proof surfaces remain canonical JSONL evidence outputs
-2. operator surfaces remain low-call and TOON-first where the donor path is human-facing
-3. footer metadata and sidecar changelog lineage remain explicit and lawful
-4. generated evidence artifacts remain secondary to canonical docs/specs/protocols
-5. final consumption remains an explicit `taskflow -> docflow` seam rather than hidden shared state
+1. active-canon donor profiles stay scoped to `docs/product`, `docs/process`, `docs/project-memory`, and `vida/config/instructions`, while temp/install/dist/runtime-package trees remain ignored by default
+2. canonical layer, framework-map, activation-protocol, and protocol-index lookups resolve through the current matrix/map paths rather than renamed legacy flat-file paths
+3. owner-layer expectations no longer treat `docs/framework/plans/**` or `docs/framework/research/**` as active project-doc canon
+4. packaged compatibility environments must carry an explicit Python dependency manifest through `codex-v0/requirements-python.txt`
+5. registry/readiness/proof surfaces remain canonical JSONL evidence outputs
+6. operator surfaces remain low-call and TOON-first where the donor path is human-facing
+7. footer metadata and sidecar changelog lineage remain explicit and lawful
+8. generated evidence artifacts remain secondary to canonical docs/specs/protocols
+9. final consumption remains an explicit `taskflow -> docflow` seam rather than hidden shared state
 
 Approved dependency policy for Wave C0 and Wave C1:
 
@@ -493,6 +500,7 @@ Wave C0 proof rule:
 1. the capability matrix must map every donor command family to one target crate/service owner
 2. the donor map must name the currently inspected files and command surfaces rather than future placeholders
 3. launcher, wrapper, and direct-consumption migration surfaces must stay explicit before Wave C1 implementation expands kernel code
+4. donor profile scope, ignore rules, canonical path rewires, and packaged Python dependencies must remain explicit while `codex-v0` is still an operational bridge
 
 ### Wave C1 — Core, Contracts, Config, And Formats
 
@@ -580,6 +588,28 @@ Exit criteria:
 2. compatibility wrappers are bounded,
 3. no hidden `codex-v0` dependency remains unexplained.
 
+#### Wave C6A Task — Donor Scope, Canonical Paths, And Packaging Parity
+
+Bounded development task opened from the post-epic donor audit:
+
+1. promote the current `codex-v0` bridge-operational scope into explicit Rust-wave requirements instead of leaving it implicit in donor scripts.
+
+Required closure for this task:
+
+1. preserve the narrowed `active-canon` / `active-canon-strict` profile scope and the current ignore-set behavior as typed Rust config/parity inputs,
+2. preserve the current canonical path rewires for layer-matrix, framework-map, activation-protocol, and protocol-index lookups,
+3. preserve the donor ignore-set concretely enough to cover `_temp`, `_vida`, `dist`, `install`, `projects`, `.agents`, `target`, and `.venv` without re-expanding scan scope accidentally,
+4. preserve the current owner-layer expectation that `docs/framework/plans/**` and `docs/framework/research/**` are outside the active project-doc canon,
+5. preserve the packaged Python dependency manifest as an explicit compatibility input while `codex-v0` remains operational,
+6. keep installed and launcher compatibility boundaries explicit rather than rediscovering them later through release regressions.
+
+Task proof:
+
+1. parity tests must show that the Rust config/validation surfaces resolve the same canonical paths as the active donor bridge,
+2. parity tests must show that the Rust config/validation surfaces retain the same active-canon scope and ignore behavior as the active donor bridge,
+3. install/compatibility proofs must show that packaged dependency expectations remain explicit while the Python bridge is still active,
+4. the epic may not treat bridge migration as scoped correctly until donor profile scope, ignore rules, owner-scope boundaries, canonical path rewires, and packaged compatibility inputs are explicit in the implementation program.
+
 ### Wave C7 — TaskFlow Seam And Layer 8 Closure Preparation
 
 Deliverables:
@@ -614,7 +644,8 @@ The next lawful step after this plan is:
 1. add this plan to the active spec canon,
 2. create the command parity ledger and operational migration inventory,
 3. define the separate Layer 8 runtime-consumption spec/template for `DocFlow v1`,
-4. then start Wave C1 with workspace skeleton plus core/contracts/config/format crates.
+4. open the bounded Rust development task for donor-scope/path/packaging parity from Wave C6A so the current bridge contract is not lost during rewrite,
+5. then start Wave C1 with workspace skeleton plus core/contracts/config/format crates.
 
 -----
 artifact_path: product/spec/docflow-v1-runtime-modernization-plan
@@ -625,5 +656,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/docflow-v1-runtime-modernization-plan.md
 created_at: '2026-03-10T23:03:37+02:00'
-updated_at: '2026-03-12T08:16:44+02:00'
+updated_at: '2026-03-12T18:00:02+02:00'
 changelog_ref: docflow-v1-runtime-modernization-plan.changelog.jsonl

@@ -90,6 +90,12 @@ Current state rule:
 5. the installed runtime keeps the same authoritative state path and does not fall back to detached file-log truth,
 6. this closes the first DB-backed proof slice for the `v0.2.2` bridge wave without yet claiming Rust-native crate closure.
 
+Compiled-control-bundle linkage rule:
+
+1. the current protocol-binding compiled payload is not the final top-level Release-1 control bundle by itself,
+2. it is one bounded executable input that must later become the `protocol_binding_registry` section of the strict top-level compiled control bundle,
+3. the final schema must therefore preserve the current protocol row semantics while making the protocol-binding payload one section of a wider runtime control contract instead of a standalone forever-format.
+
 Minimum responsibilities:
 
 1. resolve active protocol set for a bounded runtime scenario,

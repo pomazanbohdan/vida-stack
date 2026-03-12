@@ -1,0 +1,786 @@
+# User-Facing Runtime Flow And Operating Loop Model
+
+Status: active product law
+
+Purpose: define the canonical operator-facing runtime journey for VIDA as one lawful product loop, starting with `install / init / bootstrap`, so Release 1 runtime internals map to an explicit user-visible operating path rather than remaining only as internal architecture fragments.
+
+## 1. Problem
+
+The current canon already defines:
+
+1. compiled runtime direction,
+2. DB-first activation and protocol import,
+3. `.vida/` runtime placement,
+4. fail-closed runtime execution,
+5. status-family and approval surfaces.
+
+What remains under-concretized is the first operator journey:
+
+1. how a user gets from no runtime to a healthy initialized project,
+2. what belongs to `install`,
+3. what belongs to `init`,
+4. what belongs to per-session `bootstrap`,
+5. what the runtime must refuse to do before readiness is achieved.
+
+Without that split:
+
+1. installer behavior, runtime init, and session bootstrap can blur together,
+2. the operator cannot tell which remediation command to run,
+3. architecture remains correct but product operation stays underspecified.
+
+## 2. Goal
+
+The operator-facing loop must distinguish:
+
+1. `install`
+   - get the VIDA runtime onto the machine
+2. `init`
+   - attach and prepare one project-local `.vida/` runtime home
+3. `bootstrap`
+   - start one lawful runtime session against already initialized project state
+
+Compact rule:
+
+1. install the runtime once,
+2. initialize the project once per project lifecycle or after structural drift,
+3. bootstrap every working session,
+4. refuse non-bootstrap work before readiness.
+
+## 3. Stage-1 Scope
+
+This document currently closes these operator stages:
+
+1. `install / init / bootstrap`
+2. `project activation / config`
+3. `intake / planning`
+4. `execution / approval / interrupt-resume`
+
+The later operator stages remain part of the same top-level flow but are still next discussion surfaces:
+
+1. `artifact materialization`
+2. `status / doctor / remediation`
+3. `export / edit / import`
+4. `closure / reopen`
+
+## 4. Stage 1: Install / Init / Bootstrap
+
+### 4.1 Entry Cases
+
+Release 1 must support these bounded entry cases:
+
+1. fresh machine install,
+2. upgrade of an existing installed runtime,
+3. first-time initialization of one project,
+4. re-initialization after migration or broken runtime state,
+5. normal session bootstrap in an already initialized project.
+
+Rule:
+
+1. each case must resolve through a bounded runtime path,
+2. the operator must not need to repair protocol/bootstrap state by manual file surgery.
+
+### 4.2 `install`
+
+`install` is machine-level runtime acquisition.
+
+It owns:
+
+1. downloading or placing the bounded release payload,
+2. installing the primary `vida` entry surface,
+3. installing the bounded runtime-family donor surfaces required by Release 1,
+4. installing the installer-management surface,
+5. ensuring the active installer-management script can be refreshed on forced upgrade,
+6. scaffolding the minimal packaged runtime assets required for first project initialization.
+
+`install` does not own:
+
+1. project activation,
+2. project-specific protocol import,
+3. project-local readiness,
+4. session-level bootstrap.
+
+Install success rule:
+
+1. after install, the operator has a usable `vida` surface,
+2. but the runtime may still be uninitialized for the current project.
+
+### 4.3 `init`
+
+`init` is project-level runtime materialization.
+
+It owns:
+
+1. locating or creating the project-local `.vida/` runtime home,
+2. materializing the minimum model-visible framework/bootstrap surfaces required for the current project,
+3. creating `.vida/config/**`, `.vida/db/**`, `.vida/cache/**`, `.vida/framework/**`, `.vida/project/**`, and adjacent required runtime directories,
+4. scaffolding runtime configuration from canonical templates when absent,
+5. enforcing the bootstrap-carrier split around `AGENTS.md` and `AGENTS.sidecar.md`,
+6. importing required machine-readable framework/protocol payloads into the authoritative project-local DB,
+7. writing import and migration receipts,
+8. establishing the first valid project-local readiness state,
+9. reporting precise remediation when any required import or scaffold step fails.
+
+Bootstrap-carrier rule during `init`:
+
+1. `init` must materialize framework-owned `AGENTS.md` into the project root when it is absent,
+2. `init` must ensure `AGENTS.sidecar.md` exists as the project-doc bootstrap carrier,
+3. if a pre-existing root `AGENTS.md` mixes framework and project rules, `init` must preserve project-owned content by moving or normalizing it into `AGENTS.sidecar.md`,
+4. after normalization, root `AGENTS.md` must remain framework-owned bootstrap only,
+5. `init` must not leave two competing bootstrap carriers in root scope,
+6. if `AGENTS.sidecar.md` is absent, `init` must create it rather than keeping project-routing rules embedded in `AGENTS.md`,
+7. if safe normalization cannot be determined, `init` must fail closed with an explicit bounded remediation path rather than silently guessing how to rewrite the bootstrap carriers.
+
+`init` does not own:
+
+1. normal task execution,
+2. project-delivery work,
+3. interactive planning or approval flow beyond bounded initialization questions.
+
+Initialization success rule:
+
+1. after `init`, the project has one lawful `.vida/` home,
+2. required framework/protocol state exists in DB truth,
+3. non-bootstrap execution is now eligible, subject to later gates.
+
+### 4.4 `bootstrap`
+
+`bootstrap` is session-level runtime entry.
+
+It owns:
+
+1. opening a bounded runtime session against the initialized project,
+2. checking whether required imported state is present and valid,
+3. determining the active init/bundle/runtime posture,
+4. loading the bounded orchestrator or general-agent bootstrap payload,
+5. exposing the minimum help/status/remediation surfaces needed at session start,
+6. refusing to continue into non-bootstrap execution when required state is missing or invalid.
+
+Bootstrap rule:
+
+1. bootstrap happens every working session,
+2. bootstrap must prefer DB truth, embedded artifacts, and derived cache over raw source rereads,
+3. bootstrap must not silently downgrade into a broad source-tree fallback.
+
+### 4.5 Canonical Stage-1 Sequence
+
+The lawful Stage-1 sequence is:
+
+1. `install`
+2. `init`
+3. `bootstrap`
+4. only then `non-bootstrap execution`
+
+Interpretation rule:
+
+1. install alone is not enough for project work,
+2. init alone is not enough for a live session,
+3. bootstrap alone must not try to compensate for missing initialization by guessing.
+
+### 4.6 Runtime Truth During Stage 1
+
+Stage 1 must keep this ownership split explicit:
+
+1. packaged or embedded framework artifacts provide sealed framework input,
+2. `.vida/db/**` is the authoritative project-local runtime truth,
+3. `.vida/cache/**` is derived only,
+4. `.vida/config/**` and `.vida/project/**` are runtime-owned project surfaces,
+5. root project files are bridge or projection surfaces, not final runtime authority.
+
+### 4.7 Fail-Closed Rule
+
+During Stage 1 the runtime must fail closed when any of the following is true:
+
+1. required runtime config scaffold is missing and cannot be materialized,
+2. required protocol-binding or adjacent required framework payloads are missing,
+3. required DB import is missing, invalid, or revision-incompatible,
+4. runtime cannot determine the authoritative initialized state safely.
+
+Fail-closed behavior:
+
+1. allow only bounded bootstrap/remediation/query commands,
+2. block normal execution commands,
+3. render the exact missing prerequisite and the exact bounded remediation path.
+
+### 4.8 Allowed Surfaces Before Readiness
+
+Before Stage-1 readiness is green, the runtime may expose only bounded surfaces such as:
+
+1. `init`
+2. bounded installer-management commands,
+3. `status`,
+4. `doctor`,
+5. bounded protocol-binding and readiness query/remediation commands,
+6. help/recipe surfaces needed to recover to healthy state.
+
+Rule:
+
+1. this allowlist exists so the operator can recover,
+2. it must not silently widen into normal runtime execution.
+
+### 4.9 Stage-1 Status Questions
+
+After bootstrap, the runtime must be able to answer at least:
+
+1. is VIDA installed here,
+2. is this project initialized,
+3. is the `.vida/` runtime home present,
+4. is required framework/protocol state imported,
+5. which init/bundle posture is active,
+6. what remediation is required before work can continue.
+
+These questions must resolve through bounded query/status families rather than ad hoc narration.
+
+### 4.10 Upgrade And Re-Init
+
+`upgrade` and `re-init` remain Stage-1 variants rather than separate product stages.
+
+Upgrade rule:
+
+1. runtime upgrade may refresh the installed payload and installer-management surface,
+2. it must then preserve or lawfully migrate project-local `.vida/` state,
+3. it must not leave the operator in an ambiguous half-upgraded state.
+
+Re-init rule:
+
+1. re-init is lawful when migration, broken state, or missing scaffold requires re-materialization,
+2. re-init must remain bounded and receipt-bearing,
+3. re-init must not silently discard authoritative project-local runtime truth.
+
+## 5. Completion Proof For Stage 1
+
+Stage 1 is closed enough when all are true:
+
+1. the operator can install VIDA and obtain one working entry surface,
+2. the operator can initialize one project into a healthy `.vida/` runtime home,
+3. required machine-readable framework/protocol state imports into DB truth through the init path,
+4. bootstrap can tell whether the project is healthy without broad manual repo traversal,
+5. non-bootstrap execution refuses to proceed when Stage-1 readiness is missing,
+6. the runtime exposes bounded status/doctor/remediation surfaces that explain how to recover.
+
+## 6. Relationship To Other Specs
+
+This model refines and connects:
+
+1. `compiled-autonomous-delivery-runtime-architecture.md`
+   - top-level runtime/product direction
+2. `release-1-wave-plan.md`
+   - Release-1 delivery sequencing
+3. `embedded-runtime-and-editable-projection-model.md`
+   - embedded-versus-projection runtime split
+4. `project-activation-and-configurator-model.md`
+   - project-level DB-first activation after Stage 1
+5. `runtime-paths-and-derived-cache-model.md`
+   - `.vida/` placement and cache boundaries
+6. `status-families-and-query-surface-model.md`
+   - bounded operator query surfaces
+7. `bootstrap-carriers-and-project-activator-model.md`
+   - bootstrap-carrier split, orchestrator-init, agent-init, and project-activator routing
+8. `docs/product/research/execution-approval-and-interrupt-resume-survey.md`
+   - external runtime evidence for Stage-4 pause/resume, approval interruption, and resumable continuation
+
+## 7. Stage 2: Project Activation / Config
+
+### 7.1 Purpose
+
+After Stage 1 has produced a healthy initialized project, the next operator task is to define what runtime posture is active for that project.
+
+Stage 2 owns:
+
+1. project activation state,
+2. project-owned runtime entities,
+3. explicit versus automatic activation mode,
+4. import/export/sync/reconcile of activation surfaces,
+5. bounded status and inspection of effective activation posture.
+
+Compact rule:
+
+1. framework law stays sealed,
+2. project runtime posture is configured on top of it,
+3. DB truth stays authoritative,
+4. execution uses only validated active composition.
+
+### 7.2 What The Operator Is Configuring
+
+Release 1 project activation must cover at least:
+
+1. roles,
+2. skills,
+3. profiles,
+4. flow sets,
+5. agents,
+6. teams,
+7. model classes,
+8. backend classes,
+9. policy surfaces,
+10. project protocols.
+
+Operator rule:
+
+1. these are project-owned runtime inputs,
+2. they do not replace sealed framework safety or core orchestration law.
+
+### 7.3 Where Activation Lives
+
+The known target placement is:
+
+1. `.vida/config/**`
+2. `.vida/project/**`
+3. `.vida/db/**`
+
+Interpretation rule:
+
+1. DB truth is authoritative,
+2. `.vida/config/**` and `.vida/project/**` are runtime-owned project surfaces,
+3. root-tree config and registry files are bridge or projection surfaces only.
+
+### 7.4 Canonical Operator Flow
+
+The currently known lawful Stage-2 flow is:
+
+1. inspect current activation/config status,
+2. choose activation mode:
+   - `explicit`
+   - `automatic`
+3. provide or import the required activation entities,
+4. validate references and compatibility,
+5. activate the selected runtime posture,
+6. inspect effective activation status,
+7. reconcile/export when projection or Git-backed backup is needed,
+8. only then allow later bundle compilation and execution to consume the project posture.
+
+Rule:
+
+1. Stage 2 is not "edit some files and hope runtime picks them up",
+2. Stage 2 is "change runtime posture through the configurator lifecycle and DB-first admission path".
+
+### 7.5 Activation Modes
+
+#### 7.5.1 Explicit Mode
+
+In explicit mode the operator declares the active runtime composition directly.
+
+Known operator expectations:
+
+1. choose the enabled roles,
+2. choose the enabled skills,
+3. choose the active profiles,
+4. choose the enabled flow sets,
+5. choose teams and adjacent policy,
+6. runtime respects that selected set exactly unless validation fails.
+
+#### 7.5.2 Automatic Mode
+
+In automatic mode the runtime may select from the enabled project activation pool.
+
+Known operator expectations:
+
+1. the operator still defines the allowed pool,
+2. runtime may choose dynamically only inside that allowed pool,
+3. runtime must not auto-enable a project-owned surface that was disabled,
+4. automatic mode is bounded selection, not autonomous policy redefinition.
+
+### 7.6 Lifecycle Operations
+
+The known configurator lifecycle is:
+
+1. `import`
+2. `activate`
+3. `update`
+4. `replace`
+5. `disable`
+6. `restore`
+
+Lifecycle rule:
+
+1. every project-owned activation class must fit this lifecycle coherently,
+2. exact per-entity permissions may differ later, but the lifecycle model is already fixed.
+
+### 7.7 Validation And Fail-Closed Behavior
+
+Activation is lawful only when:
+
+1. required entities resolve,
+2. ids remain unique where required,
+3. roles resolve to lawful framework bases,
+4. profiles resolve to known roles,
+5. skill attachments are compatible,
+6. selected flows resolve,
+7. project protocols are distinguished between `known` and `compiled/promoted`,
+8. no project-owned surface bypasses sealed framework law.
+
+Fail-closed rule:
+
+1. invalid activation must block later bundle compilation and execution,
+2. runtime must not silently drop invalid references and continue with a weaker hidden posture,
+3. runtime must surface which activation input is invalid and which bounded remediation step is needed.
+
+### 7.8 Project Protocol Posture
+
+Stage 2 must keep this distinction explicit:
+
+1. `known project protocols`
+2. `compiled executable project protocols`
+
+Operator rule:
+
+1. presence alone is not activation,
+2. project protocols become executable only after lawful promotion, binding, validation, and compilation,
+3. until then they remain visible but non-executable.
+
+### 7.9 Query And Status Surfaces
+
+After Stage 2, the operator must be able to retrieve at least:
+
+1. active roles,
+2. active skills,
+3. active profiles,
+4. active flows,
+5. active teams,
+6. activation mode,
+7. model/backend posture,
+8. project protocol registration and promotion state,
+9. sync/reconcile posture.
+
+These views belong to bounded `config status` and `sync status` families rather than freeform narrative.
+
+### 7.10 Projection, Sync, And Git
+
+Stage 2 keeps the DB-first sync model explicit:
+
+1. DB changes may project outward,
+2. projection edits may be imported back,
+3. runtime must detect and reconcile drift explicitly,
+4. Git preserves the filesystem projection as history or backup lineage,
+5. projected files never outrank DB truth automatically.
+
+### 7.11 Completion Proof For Stage 2
+
+Stage 2 is closed enough when all are true:
+
+1. the operator can inspect project activation posture,
+2. explicit mode works,
+3. automatic mode works inside a bounded allowed pool,
+4. lifecycle operations are coherent,
+5. invalid activation wiring fails closed,
+6. runtime distinguishes known versus executable project protocols,
+7. status and sync surfaces can show the effective activation state.
+
+## 8. Stage 3: Intake / Planning
+
+### 8.1 Purpose
+
+After project activation is healthy, the next operator stage is to turn raw requests, research, and scope discussion into lawful planning state.
+
+Stage 3 owns:
+
+1. intake normalization,
+2. bounded scope discussion,
+3. bounded PBI discussion,
+4. specification and contract formation,
+5. planning/scope/spec/task-graph state,
+6. lawful handoff from planning into tracked work.
+
+Compact rule:
+
+1. do not route raw conversation directly into execution,
+2. normalize intake first,
+3. form bounded planning artifacts,
+4. hand off to tracked work only after the planning contract is lawful.
+
+### 8.2 Entry Conditions
+
+Stage 3 starts when at least one is true:
+
+1. the operator brings a new request or problem statement,
+2. research findings materially affect scope or solution shape,
+3. existing scope or task assumptions need clarification,
+4. a candidate PBI/task must be formed,
+5. planning/scope state must be refreshed after drift.
+
+### 8.3 Conversational Planning Modes
+
+The currently known planning conversation modes are:
+
+1. `scope_discussion`
+   - default lane class: `business_analyst`
+   - target outcome: bounded scope, clarified constraints, acceptance direction
+   - lawful tracked handoff: `spec-pack`
+2. `pbi_discussion`
+   - default lane class: `pm`
+   - target outcome: one bounded task/PBI candidate, delivery cut, ordering, launch readiness
+   - lawful tracked handoff: `work-pool-pack`
+3. `execution_preparation`
+   - default lane class: `solution_architect`
+   - target outcome: architecture-preparation report, dependency map, allowed/prohibited change boundaries, reuse guidance, and developer handoff packet
+   - lawful tracked handoff: `execution-plan`
+
+Rule:
+
+1. these are bounded conversational stages,
+2. they do not silently become execution lanes,
+3. they must hand off into canonical tracked planning/task-formation paths when artifact or execution work begins.
+
+### 8.4 Single-Task Planning Rule
+
+Planning conversation remains bounded.
+
+Rules:
+
+1. one active bounded scope or one active candidate task/PBI at a time,
+2. additional candidates must be parked or forked explicitly,
+3. no silent explosion from one discussion into many tracked tasks,
+4. broader planning requires explicit operator broadening rather than inertia.
+
+### 8.5 Canonical Intake Flow
+
+The known Stage-3 flow is:
+
+1. capture the raw request, research findings, or clarification need,
+2. determine whether the flow is `scope_discussion` or `pbi_discussion`,
+3. normalize the input into a compact intake artifact,
+4. determine intake status:
+   - `ready_for_scp`
+   - `ready_for_icp`
+   - `needs_user_negotiation`
+   - `needs_spec_delta`
+5. if needed, stay in bounded clarification rather than widening scope silently,
+6. form or refresh the specification/contract layer,
+7. when the target work is code-shaped or architecture-sensitive, run `execution_preparation` before developer execution begins,
+8. materialize planning state, execution-preparation state, and task-graph state through lawful tracked paths,
+9. hand off:
+   - `research-pack -> spec-pack`
+   - `spec-pack -> work-pool-pack`
+   - `work-pool-pack -> execution-plan`
+10. expose planning/scope state through bounded query surfaces.
+
+### 8.6 Intake Artifact Rule
+
+Stage 3 must not treat raw chat alone as sufficient runtime truth.
+
+The intake layer must capture at least:
+
+1. source request or research signal,
+2. clarified assumptions,
+3. proposed scope in,
+4. proposed scope out,
+5. constraints,
+6. acceptance direction,
+7. uncertainty or open decisions,
+8. readiness status for deeper spec/task formation.
+
+Rule:
+
+1. if research findings materially change scope, requirements, routing, or design, the intake/spec layer must be refreshed,
+2. planning must not continue on stale intake.
+
+### 8.7 Specification And Planning Outputs
+
+The planning stage must be able to produce or refresh:
+
+1. planning/scope snapshot,
+2. specification snapshot,
+3. PBI/task candidate,
+4. architecture-preparation report,
+5. developer handoff packet,
+6. task-graph or work-pool formation inputs,
+7. explicit distinction between:
+   - implemented now
+   - planned next
+   - blocked / unresolved
+
+### 8.8 Queryability Rule
+
+The operator must be able to retrieve, through bounded query paths:
+
+1. current planning state,
+2. current scope state,
+3. current specification state,
+4. current task-graph state.
+
+Conversational answers about planning must be built on those bounded retrieval paths rather than ad hoc summarization.
+
+### 8.9 Drift And Reconciliation
+
+If approved scope, assumptions, acceptance criteria, dependencies, or task-shape drift materially:
+
+1. planning must not quietly continue on stale state,
+2. the runtime must re-baseline through the lawful intake/spec-delta/spec-review path,
+3. task-pool or work-pool formation must rebuild when the executable pool is no longer lawful.
+
+### 8.10 Completion Proof For Stage 3
+
+Stage 3 is closed enough when all are true:
+
+1. new scope enters through bounded intake rather than raw execution,
+2. `scope_discussion` and `pbi_discussion` remain bounded and lawful,
+3. intake can normalize ambiguity before deeper planning,
+4. planning/scope/spec/task-graph state is queryable,
+5. planning can hand off lawfully into work-pool/execution formation,
+6. drift can trigger explicit re-baselining instead of silent continuation.
+
+## 9. Stage 4: Execution / Approval / Interrupt-Resume
+
+### 9.1 Purpose
+
+After planning has produced a lawful tracked scope, the runtime enters execution.
+
+Stage 4 owns:
+
+1. tracked execution progression,
+2. lane dispatch and route progression,
+3. coach and verification handoffs,
+4. human approval gates,
+5. interrupt/resume behavior,
+6. checkpoint/replay-safe pause and continuation boundaries.
+
+Compact rule:
+
+1. execution proceeds through lawful route and plan state,
+2. approval is blocking when required,
+3. interrupts and resumes are explicit runtime states, not ad hoc chat pauses,
+4. continuation must remain replay-safe and fail-closed.
+
+### 9.2 Entry Conditions
+
+Stage 4 starts only when all are true:
+
+1. Stage 1 readiness is green,
+2. project activation is lawful,
+3. intake/planning produced a lawful tracked target,
+4. required execution-plan and route authorization exist,
+5. if the target task class requires execution preparation, a lawful architecture-preparation report and developer handoff packet exist.
+
+### 9.3 Execution Core
+
+The current execution core is governed by:
+
+1. `task_lifecycle`
+2. `execution_plan`
+3. `route_progression`
+4. `coach_lifecycle`
+5. `verification_lifecycle`
+6. `approval_lifecycle`
+
+Operator interpretation:
+
+1. task state alone does not explain execution,
+2. route, review, verification, and approval are separate control layers,
+3. closure depends on downstream gates rather than on “work seems finished”.
+
+### 9.4 Canonical Execution Flow
+
+The known Stage-4 flow is:
+
+1. start the tracked execution target,
+2. advance through execution-plan steps and route stages,
+3. dispatch bounded lanes as required,
+4. collect coach and verification results where required,
+5. if approval is required, stop at the governance gate,
+6. resume only through explicit approval/rejection/manual continuation signals,
+7. continue to synthesis/closure only when route, verification, and approval state are all lawful.
+
+### 9.5 Approval Gate
+
+Approval is not advisory.
+
+Current rule:
+
+1. `policy_gate_required`
+2. `senior_review_required`
+3. `human_gate_required`
+
+are blocking governance states.
+
+Execution rule:
+
+1. closure-ready state is invalid until a matching approval receipt exists,
+2. approval is route-bound,
+3. stale approval becomes invalid after route drift,
+4. rejection is first-class and blocks continuation until rework or escalation resolves it.
+
+### 9.6 Interrupt And Resume
+
+The accepted runtime direction is explicit interrupt/resume semantics.
+
+Current runtime meaning:
+
+1. manual intervention and approval waits are explicit resumable runtime states,
+2. resume should target the correct continuation point deterministically,
+3. broad-scan resume fallback is not the target lawful path,
+4. handles/checkpoints remain runtime-owned rather than root product-law state.
+
+Research grounding rule:
+
+1. Stage-4 pause/resume semantics should stay aligned with `docs/product/research/execution-approval-and-interrupt-resume-survey.md`,
+2. approval pauses are runtime waits rather than chat-level conventions,
+3. resume must remain bounded, durable, and inspectable.
+
+Practical rule:
+
+1. execution pauses must map back to route, approval, verification, or execution-plan semantics,
+2. resumes must be inspectable and bounded,
+3. resume must not silently invent a new continuation target.
+
+### 9.7 Between-Task Approval Mode
+
+The optional task-approval loop remains a separate mode.
+
+Current rule:
+
+1. it is inactive by default,
+2. when active, it inserts a user approval gate between tasks,
+3. it does not disable autonomous execution inside an already approved task,
+4. when suspended, execution may continue continuously while preserving internal boundary analysis.
+
+### 9.8 Replay-Safe Continuation
+
+Execution-stage pause/resume must remain compatible with checkpoint and replay law.
+
+Rules:
+
+1. checkpoints are derived resumability artifacts, not canonical state,
+2. replay rebuilds derived/runtime surfaces and must not rewrite canonical history,
+3. duplicate delivery must be tolerated where delayed checkpoint writes are possible,
+4. side effects must remain replay-safe or explicitly bounded.
+
+### 9.9 Queryability Rule
+
+During Stage 4 the operator must be able to query at least:
+
+1. active task execution posture,
+2. active route/stage posture,
+3. coach/verification state,
+4. approval state,
+5. blocked or waiting gateway posture,
+6. whether execution is waiting for resume/approval/manual intervention.
+
+These answers must come from bounded runtime/query surfaces rather than freeform chat inference.
+
+### 9.10 Completion Proof For Stage 4
+
+Stage 4 is closed enough when all are true:
+
+1. execution is driven by plan and route state rather than ad hoc continuation,
+2. approval gates block correctly when required,
+3. interrupt/resume semantics are explicit,
+4. between-task approval remains optional rather than hidden default behavior,
+5. replay/checkpoint direction remains consistent with explicit continuation boundaries,
+6. operators can inspect what execution is waiting on before continuation.
+
+## 10. Next Discussion
+
+The next operator-flow stage after this document is:
+
+1. `artifact materialization`
+
+-----
+artifact_path: product/spec/user-facing-runtime-flow-and-operating-loop-model
+artifact_type: product_spec
+artifact_version: '1'
+artifact_revision: '2026-03-12'
+schema_version: '1'
+status: canonical
+source_path: docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md
+created_at: '2026-03-12T21:25:00+02:00'
+updated_at: '2026-03-12T23:59:59+02:00'
+changelog_ref: user-facing-runtime-flow-and-operating-loop-model.changelog.jsonl

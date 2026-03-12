@@ -130,6 +130,11 @@ For VIDA, this pattern strengthens the need for:
 4. explicit verifier or aggregator stages,
 5. graph-aware state and resumability rather than linear chat-only progression.
 
+Related research:
+
+1. [langgraph-runtime-patterns-survey.md](/home/unnamed/project/vida-stack/docs/product/research/langgraph-runtime-patterns-survey.md)
+   - state graphs, interrupts, durable execution, subgraphs, memory, streaming, and replay-safe runtime design
+
 ## 4. Pattern: Reliability, Evaluation, And Governance As System Architecture
 
 ### 4.1 Operational Metrics
@@ -179,6 +184,11 @@ For VIDA, this pattern strengthens the need for:
 3. durable audit and receipt surfaces,
 4. role or agent identity that remains distinct from transient model output,
 5. evaluation surfaces that test workflow quality rather than only answer quality.
+
+Related research:
+
+1. [agent-governance-and-policy-hardening-survey.md](/home/unnamed/project/vida-stack/docs/product/research/agent-governance-and-policy-hardening-survey.md)
+   - official OpenAI, Anthropic, and Microsoft guidance on human-in-the-loop, tool boundaries, approval, verification, closure, and execution-boundary policy hardening
 
 ## 5. Combined Direction
 
@@ -333,5 +343,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/emerging-architectural-patterns-model.md
 created_at: '2026-03-12T11:01:19+02:00'
-updated_at: '2026-03-12T11:07:57+02:00'
+updated_at: '2026-03-12T20:45:00+02:00'
 changelog_ref: emerging-architectural-patterns-model.changelog.jsonl

@@ -34,14 +34,27 @@ Current first-class framework roles include:
 2. `worker`
 3. `business_analyst`
 4. `pm`
-5. `coach`
-6. `verifier`
-7. `prover`
+5. `solution_architect`
+6. `coach`
+7. `verifier`
+8. `prover`
 
 Role note:
 
 1. `business_analyst` and `pm` are first-class framework roles for scope formation, requirement shaping, task formation, and delivery framing before execution lanes begin.
-2. `coach` must remain a separate role and must not collapse into `worker`, `verifier`, or `approver`.
+2. `solution_architect` is the first-class pre-execution architecture-preparation role:
+   - reads the bounded task or PBI,
+   - studies governing specs and active project/runtime constraints,
+   - inspects the relevant codebase and dependency surface,
+   - produces one architecture-preparation report plus developer handoff packet,
+   - defines what can be changed, what must not be changed, reuse points, dependency impact, and expected implementation boundaries before developer execution begins.
+3. `solution_architect` does not replace `business_analyst`, `pm`, `coach`, `verifier`, or the developer/worker lane:
+   - `business_analyst` shapes scope and requirements,
+   - `pm` shapes delivery/task cut and launch readiness,
+   - `solution_architect` prepares implementation architecture and constraints,
+   - `worker` executes implementation,
+   - `coach` and `verifier` remain downstream quality gates.
+4. `coach` must remain a separate role and must not collapse into `worker`, `verifier`, or `approver`.
 
 ## 3. Skill
 
@@ -218,10 +231,10 @@ This model is considered wired when:
 artifact_path: product/spec/agent-role-skill-profile-flow-model
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-10'
+artifact_revision: '2026-03-12'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/agent-role-skill-profile-flow-model.md
 created_at: '2026-03-10T15:45:00+02:00'
-updated_at: '2026-03-10T15:49:38+02:00'
+updated_at: '2026-03-12T23:59:59+02:00'
 changelog_ref: agent-role-skill-profile-flow-model.changelog.jsonl

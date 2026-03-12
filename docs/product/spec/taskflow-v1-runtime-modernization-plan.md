@@ -725,26 +725,43 @@ Primary donor/runtime sources inspected for parity:
 5. `taskflow-v0/src/core/direct_consumption.nim`
 6. `taskflow-v0/src/state/problem_party.nim`
 7. `taskflow-v0/src/state/run_graph.nim`
-8. `crates/vida/src/main.rs`
-9. `crates/vida/src/state_store.rs`
-10. `crates/vida/tests/boot_smoke.rs`
-11. `crates/vida/tests/task_smoke.rs`
+8. `taskflow-v0/src/state/protocol_binding.nim`
+9. `taskflow-v0/helpers/turso_task_store.py`
+10. `taskflow-v0/config/protocol_binding.seed.json`
+11. `taskflow-v0/generated/protocol_binding.compiled.json`
+12. `crates/vida/src/main.rs`
+13. `crates/vida/src/state_store.rs`
+14. `crates/vida/tests/boot_smoke.rs`
+15. `crates/vida/tests/task_smoke.rs`
 
 Current donor command and operator surfaces inspected:
 
-1. `taskflow-v0/src/vida task ready --json`
-2. `taskflow-v0/src/vida task show <id> --json`
-3. `taskflow-v0/src/vida task export-jsonl .beads/issues.jsonl --json`
-4. `vida taskflow help`
-5. `vida taskflow <delegated-args>`
+1. `taskflow-v0/src/vida protocol-binding build --json`
+2. `taskflow-v0/src/vida protocol-binding sync --json`
+3. `taskflow-v0/src/vida protocol-binding status --json`
+4. `taskflow-v0/src/vida protocol-binding check --json`
+5. `taskflow-v0/src/vida task list --json`
+6. `taskflow-v0/src/vida task ready --json`
+7. `taskflow-v0/src/vida task show <id> --json`
+8. `taskflow-v0/src/vida task import-jsonl <path> --json`
+9. `taskflow-v0/src/vida task export-jsonl <path> --json`
+10. `taskflow-v0/src/vida status --json`
+11. `taskflow-v0/src/vida consume final <request-text>`
+12. `vida taskflow help`
+13. `vida taskflow <delegated-args>`
 
 Current artifact and state-shape expectations preserved or intentionally bridged:
 
 1. task/epic records remain inspectable as JSON rows
 2. dependency edges remain explicit and typed rather than implicit
-3. direct-consumption seam remains explicit as `taskflow -> docflow`
-4. run/state outputs must remain replay-safe and fail-closed
-5. CLI/operator output must stay machine-consumable where JSON is already the donor surface
+3. script-era protocol-binding materialization remains deterministic under `taskflow-v0/generated/protocol_binding.compiled.json`
+4. protocol-binding authority is imported into persisted `protocol_binding_state` and `protocol_binding_receipt` rows inside the same TaskFlow state DB rather than detached file logs
+5. runtime commands other than `config`, `protocol-binding`, and `status` fail closed until the protocol-binding import is present
+6. the legacy `br` alias remains retired in favor of `task import-jsonl` and `task export-jsonl`
+7. direct-consumption seam remains explicit as `taskflow -> docflow`
+8. runtime-local `codex-v0/codex.py` discovery remains a bounded compatibility detail, not a rollback of the runtime-family rename
+9. run/state outputs must remain replay-safe and fail-closed
+10. CLI/operator output must stay machine-consumable where JSON is already the donor surface
 
 Approved dependency policy for Wave 0 and Wave 1:
 
@@ -760,6 +777,7 @@ Wave 0 proof rule:
 1. the crate map must match the workspace actually present in `crates/**`
 2. the donor map must name the currently inspected files and commands rather than aspirational future donors
 3. any Wave 1 implementation that changes these boundaries must update this packet first or in the same bounded cycle
+4. if the script-era protocol-binding bridge remains active, its seed payload, compiled payload, DB receipt contract, and fail-closed runtime gate must remain explicit until the Rust runtime owns the same path directly
 
 ### Wave 1 — Core And Contracts
 
@@ -798,12 +816,14 @@ Deliverables:
 3. `taskflow-state-surreal` product storage adapter bootstrap
 4. JSONL artifact families stabilized
 5. TOON rendering profile stabilized
+6. explicit import contract for compiled protocol-description JSON payloads into authoritative runtime state
 
 Exit criteria:
 
 1. JSONL/TOON golden tests pass,
 2. filesystem and `SurrealDB` state write/read/recovery suites pass for admitted scope,
-3. artifact schemas remain deterministic.
+3. artifact schemas remain deterministic,
+4. the runtime state layer can import a deterministic compiled protocol-description JSON payload without reinterpreting markdown law ad hoc.
 
 ### Wave 4 — Flow And Gates
 
@@ -878,6 +898,32 @@ Exit criteria:
 3. remaining parity gaps are explicit,
 4. donor code still in use is enumerated explicitly rather than implied.
 
+#### Wave 8A Task — Protocol Binding And Canonical Task-Surface Parity
+
+Bounded development task opened from the post-epic donor audit:
+
+1. promote the current script-era protocol-binding bridge into explicit Rust-wave scope instead of leaving it as a donor-only detail.
+
+Required closure for this task:
+
+1. define Rust-owned contracts for the current script-era `protocol_binding_state` and `protocol_binding_receipt` authority model,
+2. preserve the compiled protocol-description JSON import path from `taskflow-v0/generated/protocol_binding.compiled.json` into authoritative runtime state instead of treating that file as terminal truth,
+3. preserve the fail-closed runtime gate now enforced before non-`config`/`protocol-binding`/`status` work continues,
+4. preserve the explicit allowlist of pre-binding commands (`config`, `protocol-binding`, `status`) instead of silently widening it during Rust migration,
+5. preserve query parity for `protocol-binding build|sync|status|check`,
+6. preserve status-surface parity so runtime health can still expose `protocol_binding.ok`, binding count, and authority from the same authoritative state,
+7. preserve blocker/remediation parity so missing or invalid protocol-binding state still yields bounded operator instructions rather than generic runtime failure,
+8. preserve canonical task-surface parity for `task import-jsonl` and `task export-jsonl` after the `br` alias retirement,
+9. prove that the Rust runtime can own the same protocol-binding authority without falling back to detached file-log truth.
+
+Task proof:
+
+1. the replacement Rust slice must show one explicit mapping from script-era compiled payload to Rust-owned state/receipt contracts,
+2. parity tests must cover both the blocking path before protocol-binding sync and the healthy path after sync,
+3. parity tests must also cover successful import of the compiled protocol-description JSON payload into authoritative runtime state,
+4. parity tests must cover the bounded status summary and remediation/blocker output surfaces, not just raw receipt persistence,
+5. the epic may not treat protocol-binding as closed until the Rust runtime owns the JSON import, gate, receipt, query, and status/remediation surfaces directly.
+
 ### Wave 9 — Direct Runtime Consumption And DocFlow Closure
 
 Deliverables:
@@ -931,7 +977,8 @@ The next lawful implementation step after this spec is:
 2. implement `taskflow-core`, `taskflow-contracts`, `taskflow-format-jsonl`, and `taskflow-format-toon` first,
 3. add `taskflow-state`, `taskflow-state-fs`, and the minimal `taskflow-state-surreal` bootstrap before provider work,
 4. keep the current Nim runtime and monolithic Rust `vida` line unchanged except for bounded compatibility/proof needs until Wave 1 through Wave 4 are executable,
-5. treat the resulting crate boundaries as the reference template for the active sibling `docflow-rs` line rather than inventing a separate architecture later.
+5. open the bounded Rust development task for protocol-binding/state-gate parity from Wave 8A before that script-era bridge drifts further from the implementation plan,
+6. treat the resulting crate boundaries as the reference template for the active sibling `docflow-rs` line rather than inventing a separate architecture later.
 
 -----
 artifact_path: product/spec/taskflow-v1-runtime-modernization-plan
@@ -942,5 +989,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/taskflow-v1-runtime-modernization-plan.md
 created_at: '2026-03-10T20:59:00+02:00'
-updated_at: '2026-03-12T07:48:27+02:00'
+updated_at: '2026-03-12T18:00:02+02:00'
 changelog_ref: taskflow-v1-runtime-modernization-plan.changelog.jsonl

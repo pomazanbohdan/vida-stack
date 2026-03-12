@@ -90,11 +90,17 @@ Reason:
 | Explicit runtime context object | adopt now | Fits current guard and instruction composition boundaries without moving policy into agents | transition context, assignment context, instruction composition |
 | Middleware/listener layer above core transitions | adopt now | Gives a lawful place for projection and subscription derivation without mutating canonical state in callbacks | derived projection/listener kernel |
 | Structured output contracts with validation | adopt now | Aligns with explicit role output contracts already present in instruction catalog | instruction catalog, role output contracts, proof requirements |
-| Human interrupt/resume semantics | adopt as future direction | Useful for `coach`, `verification`, `approval`, but must stay receipt-backed and fail-closed | manual intervention, approval waits, resumability checkpoints |
+| Human interrupt/resume semantics | adopt now | LangGraph confirms pause/resume is a runtime primitive, not just UI wording; VIDA should keep it receipt-backed and fail-closed | manual intervention, approval waits, resumability checkpoints, governance interrupts |
 | Dynamic runtime capability exposure | adopt now | Already consistent with overlay-derived runtime inventory and bounded capability matching | `agent_inventory.nim`, `assignment_engine.nim` |
 | Stream/update subscriptions for runtime observers | adopt now | Useful as rebuildable operator projection channels, not as canonical state | projection topics, listener topics, status/readiness surfaces |
 | Time-travel and fork-from-checkpoint debugging | adopt as future direction | Valuable for proof repro and doctor/debug replay, but must not redefine canonical truth | replay from checkpoint, proof reproduction, debug forks |
 | Pending checkpoint writes after partial failure | adopt as future direction | Useful for resumable retry without re-running already successful work | future checkpoint write ledger and retry law |
+| Shared-state graph execution with explicit nodes and edges | adopt now | Matches VIDA direction better than transcript-only execution and keeps control-flow explicit | route graph, run graph, compiled control bundle |
+| Reducer-style merge semantics for parallel state updates | adopt as future direction | Needed once specialist fanout and parallel branches become stronger runtime reality | verification aggregation, future fanout merge law |
+| Subgraphs with namespace isolation | adopt now | Strong fit for bounded specialist composition under one orchestrator | specialist subflows, future multi-agent graph runtime |
+| Durable execution with stable execution identity | adopt now | Confirms the need for resumable execution lineage owned by VIDA rather than by vendor threads | run graph, checkpoint lineage, project-local DB truth |
+| Memory as structured runtime state rather than transcript inheritance | adopt now | Fits VIDA's DB-first and governed-context direction | context governance, memory/query surfaces, runtime cache |
+| Replay-safe side-effect discipline | adopt as future direction | Durable execution requires explicit treatment of non-repeatable actions | future execution-boundary policy, replay guards |
 | Vendor auth or request middleware as kernel gateway | reject as-is | Middleware stacks are adapter behavior, not root product law | framework adapter layer only |
 | Provider-owned threads/checkpointers as kernel identity | reject as-is | `vida` must own checkpoint identity and semantics even if adapters bridge later | checkpoint kernel over `vida` state and receipts |
 
@@ -162,7 +168,7 @@ The next external-pattern borrow candidates are:
 
 1. automatic/eventless transitions
 2. deeper listener/projection hooks with explicit subscription channels
-3. interrupt/resume semantics for human approval and manual intervention
+3. richer interrupt/resume semantics for human approval and manual intervention
 4. structured outcome schemas for `writer`, `coach`, `verifier`, and `approver`
 5. history semantics for resumable execution plan and route progression
 6. execution-time checkpoint snapshots attached to bounded proof categories
@@ -173,6 +179,8 @@ The next external-pattern borrow candidates are:
 11. one-time gateway handle consumption and duplicate resume protection
 12. checkpoint commit and replay lineage
 13. explicit verification merge law for parallel verification
+14. subgraph namespace and state-sharing law for specialist compositions
+15. replay-safe side-effect law for durable execution
 
 ## 8. Non-Negotiable VIDA Constraints
 
@@ -190,10 +198,10 @@ Borrowed patterns must not violate these invariants:
 artifact_path: product/spec/external-pattern-borrow-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-10'
+artifact_revision: '2026-03-12'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/external-pattern-borrow-map.md
 created_at: '2026-03-09T12:00:46+02:00'
-updated_at: '2026-03-10T03:06:28+02:00'
+updated_at: '2026-03-12T20:45:00+02:00'
 changelog_ref: external-pattern-borrow-map.changelog.jsonl

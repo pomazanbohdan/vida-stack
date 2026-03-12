@@ -19,7 +19,7 @@ Framework-owned layer:
 4. runtime safety invariants,
 5. standard flow-set semantics,
 6. validation semantics,
-7. first-class framework roles including `orchestrator`, `worker`, `business_analyst`, `pm`, `coach`, `verifier`, and `prover`.
+7. first-class framework roles including `orchestrator`, `worker`, `business_analyst`, `pm`, `solution_architect`, `coach`, `verifier`, and `prover`.
 
 Project-owned layer:
 
@@ -158,10 +158,10 @@ Current bounded proof surfaces:
 artifact_path: config/runtime-instructions/project-agent-extension.protocol
 artifact_type: runtime_instruction
 artifact_version: '1'
-artifact_revision: '2026-03-10'
+artifact_revision: '2026-03-12'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md
 created_at: '2026-03-10T15:45:00+02:00'
-updated_at: '2026-03-11T13:03:43+02:00'
+updated_at: '2026-03-12T23:59:59+02:00'
 changelog_ref: work.project-agent-extension-protocol.changelog.jsonl

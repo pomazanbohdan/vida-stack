@@ -69,6 +69,7 @@ The kernel accepts as future direction:
 4. idempotent handler requirement when duplicate delivery is possible,
 5. replay from checkpoint for projection rebuild,
 6. fork-from-checkpoint for doctor/debug/proof reproduction.
+7. durable execution semantics that distinguish replay-safe from non-replay-safe side effects.
 
 ## 4. Candidate Laws
 
@@ -113,6 +114,11 @@ Replay runs should carry:
 4. grouped projection consistency must not collapse entity ownership
 5. duplicate delivery safety is mandatory once delayed checkpoint commits are introduced
 
+LangGraph alignment note:
+
+1. this model aligns with LangGraph-style durable execution and replay lineage,
+2. VIDA should borrow the resumability and replay discipline, not LangGraph-owned thread identity or framework APIs.
+
 -----
 artifact_path: product/spec/checkpoint-commit-and-replay-model
 artifact_type: product_spec
@@ -122,5 +128,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/checkpoint-commit-and-replay-model.md
 created_at: '2026-03-09T12:00:46+02:00'
-updated_at: '2026-03-12T07:58:34+02:00'
+updated_at: '2026-03-12T20:45:00+02:00'
 changelog_ref: checkpoint-commit-and-replay-model.changelog.jsonl

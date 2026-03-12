@@ -25,6 +25,12 @@ Canonical lane entries:
 2. Worker entry: `vida/config/instructions/agent-definitions/entry.worker-entry.md`
 3. Worker thinking subset: `vida/config/instructions/instruction-contracts/role.worker-thinking.md`
 
+Canonical runtime init targets:
+1. Orchestrator lanes should prefer `vida orchestrator-init` when that runtime surface is available.
+2. Worker/agent lanes should prefer `vida agent-init` when that runtime surface is available.
+3. If project activation/onboarding is pending, bootstrap should route to `vida project-activator` before normal project work.
+4. Source-mode repository bootstrap may still use the current map/entry-contract read path until all runtime init commands are implemented, but the target split remains orchestrator-init vs agent-init vs project-activator.
+
 Language policy:
 1. Framework-owned files stay in English.
 2. User communication, reasoning, and project documentation language follow root `vida.config.yaml` when present.
@@ -136,6 +142,10 @@ For orchestrator lane, use `vida/config/instructions/agent-definitions/entry.orc
 7. instruction activation by phase via `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`.
 8. explicit boot sequencing via `vida/config/instructions/system-maps/bootstrap.orchestrator-boot-flow.md`.
 
+Runtime-init target when available:
+1. `vida orchestrator-init`
+2. It should expose the minimum project snapshot, startup commands, mandatory maps/protocols, readiness state, and bounded remediation/project-activator routing needed by the orchestrator lane.
+
 
 ### Worker Boot Pointer
 
@@ -145,6 +155,14 @@ For worker lane, use:
 3. `vida/config/instructions/system-maps/bootstrap.worker-boot-flow.md`
 
 Workers must not bootstrap repository-wide orchestration policy unless the task packet explicitly asks for framework-lane audit behavior.
+
+Runtime-init target when available:
+1. `vida agent-init`
+2. It should expose only the bounded lane goal, worker protocol subset, and the minimum TaskFlow/DocFlow/runtime commands needed for that agent lane.
+
+Project activator note:
+1. If bootstrap surfaces indicate that onboarding or activation is still pending, run `vida project-activator` before ordinary project work.
+2. Once project activation is completed, that temporary activator instruction should be removed from generated project bootstrap carriers so it does not remain as stale initialization noise.
 
 ---
 
@@ -177,6 +195,7 @@ Operational references:
 8. `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md`
 9. `vida/config/instructions/system-maps/bootstrap.orchestrator-boot-flow.md`
 10. `vida/config/instructions/system-maps/bootstrap.worker-boot-flow.md`
+11. `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`
 
 Initialization bootstrap rule:
 1. During project initialization, read `AGENTS.sidecar.md` immediately after `AGENTS.md`, then resolve the framework-owned bootstrap path in `vida/root-map.md` before lane resolution or broad manual inspection.

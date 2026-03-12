@@ -55,6 +55,16 @@ Current bounded donors and proof sources:
 6. `taskflow-v0/**`
 7. `codex-v0/**`
 8. current Rust `vida` operator shell under `crates/vida/**`
+9. `docs/product/spec/taskflow-protocol-runtime-binding-model.md`
+10. `docs/product/research/instruction-packing-and-caching-survey.md`
+11. `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
+12. `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`
+13. `docs/product/research/runtime-framework-open-questions-and-external-patterns-survey.md`
+14. `docs/product/research/runtime-home-and-surface-migration-research.md`
+15. `docs/product/research/derived-cache-delivery-and-invalidation-research.md`
+16. `docs/product/research/embedded-runtime-bootstrap-and-projection-research.md`
+17. `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
+18. `docs/product/research/execution-preparation-and-developer-handoff-survey.md`
 
 Donor rule:
 
@@ -88,6 +98,31 @@ Ship the first usable `VIDA` shell that can manage and inspect its own runtime s
 11. installer force-refresh semantics:
     - `--force` must not only replace the installed release payload,
     - it must also re-download and refresh the installer-management script so the active management surface cannot stay stale while the runtime payload is replaced.
+12. explicit import of the compiled protocol-description JSON payload into authoritative runtime state rather than treating the generated file as terminal truth.
+13. fail-closed runtime execution gating:
+    - non-bootstrap work must refuse to run when required protocol-binding state is missing or invalid,
+    - the runtime must expose bounded remediation/status surfaces instead of a generic crash.
+14. installer/init bootstrap for the current project:
+    - materialize the minimum model-visible framework bootstrap/config surfaces into the active project root,
+    - enforce the root bootstrap split so `AGENTS.md` stays framework-owned and `AGENTS.sidecar.md` carries project-doc routing,
+    - if a project-specific root `AGENTS.md` already exists, normalize its project-owned content into `AGENTS.sidecar.md`,
+    - if `AGENTS.sidecar.md` is absent, create it as part of init,
+    - then import the runtime-bearing protocol state into the same DB-first taskflow spine.
+15. converge runtime-owned placement under `.vida/`:
+    - active runtime config belongs under `.vida/config/**`,
+    - authoritative DB state belongs under `.vida/db/**`,
+    - runtime-owned project activation belongs under `.vida/project/**`,
+    - bridge-era root files remain migration-only rather than long-term active runtime truth.
+16. Release-1 bootstrap/onboarding split:
+    - expose separate orchestrator-init and agent-init startup surfaces,
+    - route pending project onboarding into `project-activator`,
+    - enrich the project sidecar and project-doc map during activation instead of leaving project structure as transient chat knowledge.
+17. runtime-home migration contract:
+    - classify bridge-era root/runtime surfaces before cutover,
+    - preserve root `AGENTS.md` and `AGENTS.sidecar.md` as bootstrap carriers,
+    - move active runtime config into `.vida/config/**`,
+    - move runtime-owned activation into `.vida/project/**`,
+    - treat root `vida.config.yaml` and source-mode registries as bridge or projection surfaces after lawful import.
 
 ### 4.3 Why This Wave Exists
 
@@ -114,6 +149,11 @@ Wave 1 closes only when:
 5. the first protocol-binding path is queryable from the same authoritative taskflow/runtime state spine rather than only from detached file exports.
 6. installed runtime bootstrap can materialize required config/template state and protocol-binding DB state without ad hoc manual repair.
 7. installer force-refresh can replace both the release payload and the installer-management script in one bounded operation.
+8. the compiled protocol-description JSON payload can be imported into the authoritative runtime state spine and queried back through status/check surfaces.
+9. runtime execution fails closed on missing or invalid protocol-binding state while still exposing bounded remediation instructions and allowlisted bootstrap commands.
+10. project-local init/bootstrap can materialize the required model-visible framework surfaces and converge the matching protocol import without manual patching.
+11. project-local init/bootstrap can normalize the root bootstrap carriers so framework bootstrap remains in `AGENTS.md` and project routing remains in `AGENTS.sidecar.md` without leaving competing root bootstrap law behind.
+12. Release-1 startup can distinguish orchestrator-init, agent-init, and project-activator routing without collapsing them into one ambiguous bootstrap path.
 
 ## 5. Wave 2: Project Activation Surface
 
@@ -138,7 +178,10 @@ Turn the operational shell into a project-aware runtime that can load and manage
 3. explicit selection mode,
 4. automatic selection mode,
 5. import/export/sync between DB truth and filesystem projection,
-6. status families for configuration and activation.
+6. status families for configuration and activation,
+7. `solution_architect` as a first-class activation/runtime role,
+8. `execution_preparation` as the canonical pre-execution stage for code-shaped or architecture-sensitive work,
+9. architecture-preparation and developer-handoff artifacts as bounded execution inputs before worker implementation.
 
 ### 5.3 Why This Wave Exists
 
@@ -160,6 +203,7 @@ Wave 2 closes only when:
 2. filesystem projection remains synchronized under DB-first authority,
 3. explicit and auto configuration modes are both validatable,
 4. invalid activation wiring fails closed.
+5. tasks that require execution preparation can distinguish planning output from developer-ready handoff and fail closed when the required preparation artifacts are missing.
 
 ## 6. Wave 3: Compiled Runtime Bundles
 
@@ -186,6 +230,24 @@ Compile the active framework/project runtime posture into machine-readable bundl
     - stable cache-friendly bundle prefixes,
     - deterministic cache-key inputs,
     - explicit boundary between always-on bundles, activated bundles, and dynamic task context.
+13. compiled bundles must be built from already imported DB-backed protocol/activation state rather than from broad raw markdown traversal at every execution step.
+14. the first cache-friendly bundle contract must keep explicit partitions for:
+    - `always_on_core`
+    - `lane_bundle`
+    - `triggered_domain_bundle`
+    - `task_specific_dynamic_context`
+15. provider-cache compatibility must stay explicit:
+    - stable prefixes are cacheable,
+    - dynamic evidence, receipts, and task deltas are excluded from the cache prefix,
+    - retrieval remains an optional adjunct path rather than a replacement for mandatory invariants.
+16. the first Release-1 compiled control bundle schema must be explicit and strict:
+    - one canonical JSON schema,
+    - one explicit root metadata block,
+    - one explicit split between `control_core`, `activation_bundle`, `protocol_binding_registry`, and `cache_delivery_contract`.
+17. the first derived serving-cache slice must remain subordinate to DB truth:
+    - cache artifacts live under `.vida/cache/**`,
+    - they accelerate CLI/runtime/model-serving hot paths,
+    - they rebuild from authoritative revision tuples rather than becoming a second truth model.
 
 ### 6.3 Why This Wave Exists
 
@@ -210,6 +272,10 @@ Wave 3 closes only when:
 3. invalid inputs block compilation,
 4. runtime can initialize from bundles rather than broad manual protocol traversal,
 5. the first cache-system slice has a bounded contract for stable prefixes, cache-key inputs, and dynamic-context exclusion.
+6. bundle compilation consumes the already-imported DB-backed protocol/activation state rather than re-deriving execution truth from raw markdown at runtime.
+7. the runtime can show which bundle segments are cache-stable versus task-dynamic.
+8. the first cache-system slice proves explicit boundaries between cacheable prefixes, retrieval-only optional context, and non-cacheable runtime evidence.
+9. the Release-1 bundle compiler produces one strict schema-valid control bundle rather than several unrelated machine-readable payloads.
 
 ### 6.6 Research Link And Discussion Task
 
@@ -225,6 +291,12 @@ Bounded implementation discussion task:
    - cache-key derivation inputs,
    - retrieval versus always-on bundle boundary,
    - proof metrics for real token savings without protocol drift.
+2. before policy hardening is treated as closed, define the Release-1 governance-policy contract using:
+   - approval risk bands,
+   - execution-boundary classes,
+   - verification evidence/risk gates,
+   - closure-only blocker semantics,
+   - the vendor-aligned research captured in `docs/product/research/agent-governance-and-policy-hardening-survey.md`.
 
 ## 7. Wave 4: Planning, Execution, Artifact, And Approval Loop
 
@@ -336,5 +408,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-wave-plan.md
 created_at: '2026-03-11T23:01:49+02:00'
-updated_at: '2026-03-12T17:26:00+02:00'
+updated_at: '2026-03-13T00:10:00+02:00'
 changelog_ref: release-1-wave-plan.changelog.jsonl

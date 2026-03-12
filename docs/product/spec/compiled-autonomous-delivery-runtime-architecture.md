@@ -92,6 +92,23 @@ Discussion status rule:
    - `compliance/audit trail`
 4. these deferred surfaces may remain listed as target product surfaces, but they should not yet be treated as fully elaborated operator-surface contracts.
 
+Current concretization note:
+
+1. the first closed operator-flow slice is `install / init / bootstrap`,
+2. that slice is owned in detail by `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`,
+3. the second closed operator-flow slice is `project activation / config`,
+4. that slice is also owned in detail by `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`,
+5. the third closed operator-flow slice is `intake / planning`,
+6. that slice is also owned in detail by `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`,
+7. the fourth closed operator-flow slice is `execution / approval / interrupt-resume`,
+8. that slice is also owned in detail by `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`,
+9. later operator stages still remain active concretization work.
+
+Bootstrap-carrier and activator note:
+
+1. the deeper split between bootstrap carriers, orchestrator-init, agent-init, and project-activator routing is owned by `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`,
+2. this architecture document keeps only the top-level product/runtime direction for those surfaces.
+
 Release-1 project-configuration minimum:
 
 1. Release 1 must already cover the full minimal configuration pool needed for a real project runtime, not a reduced preview mode,
@@ -242,6 +259,9 @@ Release-1 configuration and migration rule:
 3. project-owned protocols, skills, roles, agents, teams, and adjacent project activation elements may be created and updated inside the project layer,
 4. those project-owned elements must still pass the same controlled migration/init and validation path before they become active operational state,
 5. persistence and restoration of this activation/configuration state are required in Release 1, not deferred to a later release.
+6. required framework protocol state must be importable into the operational database from a machine-readable compiled payload rather than only from broad runtime markdown rereads,
+7. non-bootstrap execution must fail closed when that required protocol state is missing or invalid,
+8. the runtime must expose bounded remediation/query paths for that missing or invalid state instead of continuing silently or crashing generically.
 
 Release-1 lifecycle rule:
 
@@ -280,9 +300,15 @@ Release-1 installer/init behavior:
 3. the init flow must discover and record key project paths such as documentation roots and synchronized file surfaces,
 4. the init flow must export a usable project structure view for later synchronization and runtime routing,
 5. the init flow must detect whether `AGENTS.md` already exists,
-6. if `AGENTS.md` exists, project-specific rules must be moved or normalized into the sidecar/project layer rather than left to compete with framework bootstrap law,
-7. sidecar and project instruction surfaces must be checked so that project-specific behavior does not conflict with framework-owned bootstrap and system instructions,
-8. the installer/init protocol must be expressed in a human-readable form suitable for the orchestrating model to execute through runtime tools.
+6. if `AGENTS.md` exists, project-specific rules must be moved or normalized into `AGENTS.sidecar.md` rather than left to compete with framework bootstrap law,
+7. if `AGENTS.sidecar.md` is absent, init must create it as part of the same bootstrap-carrier normalization step,
+8. sidecar and project instruction surfaces must be checked so that project-specific behavior does not conflict with framework-owned bootstrap and system instructions,
+9. after normalization, root `AGENTS.md` remains framework-owned bootstrap only and `AGENTS.sidecar.md` remains the project-doc bootstrap carrier,
+10. if safe normalization cannot be determined, init must fail closed with bounded remediation rather than silently guessing,
+11. the installer/init protocol must be expressed in a human-readable form suitable for the orchestrating model to execute through runtime tools,
+12. the init flow must materialize the minimum model-visible framework bootstrap surfaces into the active project root when they are absent,
+13. the same init/install path must bootstrap the required machine-readable protocol payloads into the DB-first runtime state before non-bootstrap execution is treated as healthy,
+14. if that import is missing or invalid, installer/init and runtime status surfaces must tell the operator exactly which bounded remediation path to run.
 
 Release-1 approval rule:
 
@@ -327,8 +353,8 @@ VIDA already has:
 
 1. canonical framework law in `vida/config/instructions/**`,
 2. active product law in `docs/product/spec/**`,
-3. project activation data in `vida.config.yaml`,
-4. project extension registries in `docs/process/agent-extensions/**`,
+3. bridge-era project activation data in `vida.config.yaml`,
+4. bridge-era project extension registries in `docs/process/agent-extensions/**`,
 5. runtime-family execution surfaces in `TaskFlow`,
 6. documentation/readiness/proof surfaces in `DocFlow`.
 
@@ -388,8 +414,9 @@ Owns:
 
 Primary homes:
 
-1. `vida.config.yaml`
-2. `docs/process/agent-extensions/**`
+1. `.vida/config/**`
+2. `.vida/project/**`
+3. bridge/source-mode fallback surfaces such as root `vida.config.yaml` and `docs/process/agent-extensions/**` only during migration or explicit export/import authoring
 
 Operational-state rule:
 
@@ -397,6 +424,12 @@ Operational-state rule:
 2. framework-owned protocol state projected into that database is protected and updated only through migration/init rules,
 3. project-owned activation elements may evolve more freely, but only within the lawful project layer and under controlled migration/validation,
 4. runtime must distinguish sealed framework state from mutable project activation state.
+
+Placement rule:
+
+1. active runtime configuration and activation should converge into the `.vida/` runtime home,
+2. root project files are not the final active runtime substrate,
+3. root-tree authoring surfaces may remain for source-mode or explicit export/import workflows.
 
 Project-activation discussion note:
 
@@ -422,6 +455,28 @@ Owns:
 3. compiled lane graph,
 4. compiled role/skill/profile/flow activation,
 5. model/backend selection policy,
+6. cache-stable control partitions derived from compiled law.
+
+### 5.4 Derived Serving Cache Plane
+
+Owns:
+
+1. fast CLI/runtime query views,
+2. cache-stable prompt-prefix bundle partitions,
+3. derived activation/control snapshots,
+4. protocol-binding query snapshots,
+5. cache manifests and invalidation tuples.
+
+Primary home:
+
+1. `.vida/cache/**`
+
+Boundary rule:
+
+1. this plane accelerates runtime consumption,
+2. it is derived from embedded/framework inputs and DB-first truth,
+3. it must not become a second operational truth source,
+4. it must fail closed or rebuild when authoritative revision tuples no longer match.
 6. packet schemas,
 7. gate chain,
 8. route constraints,
@@ -577,6 +632,12 @@ Compact rule:
 1. human-readable canon in,
 2. compact executable control bundle out.
 
+Compilation-input rule:
+
+1. runtime compilation may read canonical markdown law as the human-owned source,
+2. but repeated runtime execution must consume imported and validated machine-readable protocol/activation state rather than reinterpreting raw markdown on every step,
+3. if the imported state required for execution is missing or invalid, the runtime must fail closed before non-bootstrap work proceeds.
+
 Compilation output rule:
 
 1. the compiled control plane must know where the engine workspace is,
@@ -629,6 +690,59 @@ The compiled orchestration bundle must contain at least:
     - explicit tradeoffs for cheap routing, deep research, synthesis, verification, and deploy/release work
 12. `fail_closed_rules`
     - what must block rather than degrade silently
+13. `protocol_binding_registry`
+    - imported runtime-bearing protocol state, receipt status, and authoritative execution-gate inputs
+14. `cache_delivery_contract`
+    - stable prefix partitions, cache-key inputs, dynamic-context exclusions, and retrieval-only optional context boundaries
+
+Release-1 cache-delivery rule:
+
+1. the first compiled bundle delivery path must make the boundary explicit between:
+   - cache-stable always-on control,
+   - lane- or trigger-activated bundle slices,
+   - dynamic task/evidence context,
+2. mandatory invariants may not be delegated entirely to retrieval,
+3. dynamic receipts, execution deltas, and operator-specific evidence must stay outside the cache-stable prefix,
+4. provider cache compatibility assumptions and cache-key inputs must remain inspectable rather than implicit.
+
+### 7.1 Release-1 Bundle Schema Direction
+
+For Release 1, the compiled control bundle must converge on one strict, versioned, machine-readable schema rather than several loosely related payload families.
+
+Minimum schema rule:
+
+1. the primary executable form is strict JSON,
+2. TOON, JSONL, or other views may exist as render/export surfaces, but they are secondary to the canonical JSON contract,
+3. schema version, generation timestamp, and source-revision lineage must be explicit in the root object.
+
+Minimum top-level sections:
+
+1. `control_core`
+   - intent classes, routing policy, gate chain, packet contracts, runtime-family branches, and fail-closed rules
+2. `activation_bundle`
+   - role, skill, profile, flow, overlay, and project-activation inputs that are executable at runtime
+3. `protocol_binding_registry`
+   - imported runtime-bearing protocol rows, enforcement classes, proof surfaces, and authoritative binding status
+4. `cache_delivery_contract`
+   - stable-prefix partitions, cache-key inputs, dynamic-context exclusions, and retrieval-only optional-context boundaries
+
+Schema boundary rule:
+
+1. the compiled control bundle is not a dump of all canonical docs,
+2. it is not a dump of all mutable DB state,
+3. it is the executable control contract between canonical law/config and runtime execution.
+
+State split rule:
+
+1. canonical docs/config remain the human-owned source of law,
+2. the compiled control bundle carries executable control state derived from that law,
+3. DB-first runtime state carries mutable operational truth, receipts, telemetry, and recovery history.
+
+Release-1 implementation rule:
+
+1. existing proto-bundle surfaces such as the runtime kernel bundle, compiled agent-extension bundle, and protocol-binding payload must converge into this one top-level schema,
+2. the schema must stay narrow enough that runtime can validate it deterministically and fail closed on missing mandatory sections,
+3. runtime consumers may inspect individual sections, but they must not silently invent missing sections ad hoc.
 
 ## 8. Canonical Runtime Roles Of TaskFlow And DocFlow
 
@@ -696,10 +810,11 @@ Example target:
 3. a `business_analyst` lane with compatible documentation/spec skill payload is activated,
 4. documentation/spec artifacts are created and validated through lawful documentation surfaces,
 5. PM/governance review is requested,
-6. accepted specification activates implementation flow,
-7. the runtime compiles one execution graph and dispatches specialized lanes,
-8. coding, research, verification, and devops proceed under one compiled route,
-9. final output includes working binaries, documentation, and proof/readiness evidence.
+6. accepted specification activates execution-preparation flow,
+7. a `solution_architect` lane prepares one bounded architecture-preparation report and developer handoff packet,
+8. the runtime compiles one execution graph and dispatches specialized lanes from that prepared handoff,
+9. coding, research, verification, and devops proceed under one compiled route,
+10. final output includes working binaries, documentation, and proof/readiness evidence.
 
 ## 10. Role, Skill, Profile, And Flow Composition
 
@@ -708,6 +823,7 @@ The current role/skill/profile/flow model already defines the semantic pieces.
 This architecture adds one requirement:
 
 1. these pieces must become runtime-compiled identity rather than late prompt heuristics.
+2. code-shaped execution must be able to require one explicit preparation stage between planning and worker implementation.
 
 Required compiled identity shape:
 
@@ -722,6 +838,28 @@ Required compiled identity shape:
 9. `cost_quality_constraints`
 
 The orchestrator must consume this compiled identity instead of rediscovering the same logic ad hoc on every request.
+
+## 10.0.1 Execution Preparation Layer
+
+VIDA v1 requires one explicit `Execution Preparation Layer` between planning and implementation for code-shaped or architecture-sensitive work.
+
+It owns:
+
+1. architecture-preparation analysis,
+2. change-boundary shaping,
+3. dependency-impact shaping,
+4. spec-alignment shaping,
+5. developer handoff packet formation.
+
+Default owner:
+
+1. `solution_architect`
+
+Rule:
+
+1. developer execution must not start directly from raw planning output when this layer is required,
+2. the output of this layer is one bounded developer handoff packet rather than freeform architecture commentary,
+3. this layer exists to reduce cross-task architectural drift and keep repeated implementation lanes aligned to one prepared reading of the codebase and governing specs.
 
 ## 10.1 Extensibility Classes
 
@@ -1002,10 +1140,10 @@ That means:
 artifact_path: product/spec/compiled-autonomous-delivery-runtime-architecture
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-11'
+artifact_revision: '2026-03-12'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md
 created_at: '2026-03-11T20:05:00+02:00'
-updated_at: '2026-03-11T22:34:08+02:00'
+updated_at: '2026-03-13T00:00:00+02:00'
 changelog_ref: compiled-autonomous-delivery-runtime-architecture.changelog.jsonl

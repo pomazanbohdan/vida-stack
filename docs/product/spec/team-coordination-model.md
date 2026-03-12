@@ -71,6 +71,9 @@ Pattern rule:
 
 1. projects may choose which patterns are enabled,
 2. the framework/runtime still owns what each pattern means operationally.
+3. a common implementation-preparation pattern is:
+   - `business_analyst -> pm -> solution_architect -> worker -> coach -> verifier`
+4. this pattern exists to keep execution-preparation and architecture-constraint shaping separate from raw coding and separate from downstream review/verification.
 
 ## 6. Participants
 
@@ -161,10 +164,10 @@ This model is operationally closed enough for Release 1 when:
 artifact_path: product/spec/team-coordination-model
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-11'
+artifact_revision: '2026-03-12'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/team-coordination-model.md
 created_at: '2026-03-11T23:01:49+02:00'
-updated_at: '2026-03-11T23:01:49+02:00'
+updated_at: '2026-03-12T23:59:59+02:00'
 changelog_ref: team-coordination-model.changelog.jsonl
