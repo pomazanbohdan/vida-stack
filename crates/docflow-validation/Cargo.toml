@@ -1,0 +1,11 @@
+[package]
+name = "docflow-validation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+docflow-contracts = { path = "../docflow-contracts" }
+docflow-core = { path = "../docflow-core" }
+docflow-markdown = { path = "../docflow-markdown" }

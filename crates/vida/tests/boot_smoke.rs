@@ -1,4 +1,8 @@
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn vida() -> Command {
@@ -13,17 +17,50 @@ fn unique_state_dir() -> String {
     format!("/tmp/vida-test-state-{}-{}", std::process::id(), nanos)
 }
 
+fn write_executable_script(path: &str, body: &str) {
+    fs::write(path, body).expect("script should be written");
+    let mut perms = fs::metadata(path).expect("script metadata").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).expect("script perms should be updated");
+}
+
+fn copy_executable(from: &str, to: &str) {
+    fs::copy(from, to).expect("binary should be copied");
+    let mut perms = fs::metadata(to).expect("copied binary metadata").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(to, perms).expect("copied binary perms should be updated");
+}
+
+fn run_with_retry<F>(mut op: F) -> std::process::Output
+where
+    F: FnMut() -> std::process::Output,
+{
+    let mut last = None;
+    for _ in 0..60 {
+        let output = op();
+        if output.status.success() {
+            return output;
+        }
+        last = Some(output);
+        thread::sleep(Duration::from_millis(100));
+    }
+    last.expect("retry helper should capture at least one output")
+}
+
 #[test]
 fn root_help_succeeds() {
     let output = vida().arg("--help").output().expect("root help should run");
     assert!(output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Usage: vida [COMMAND]"));
     assert!(stdout.contains("boot"));
     assert!(stdout.contains("task"));
     assert!(stdout.contains("memory"));
     assert!(stdout.contains("status"));
     assert!(stdout.contains("doctor"));
+    assert!(stdout.contains("taskflow"));
+    assert!(stdout.contains("docflow"));
 }
 
 #[test]
@@ -119,6 +156,2151 @@ fn command_family_help_succeeds() {
 
         assert!(output.status.success(), "{command} help should succeed");
     }
+}
+
+#[test]
+fn taskflow_proxy_help_is_runtime_specific() {
+    let output = vida()
+        .args(["taskflow", "help"])
+        .output()
+        .expect("taskflow proxy help should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA TaskFlow runtime family"));
+    assert!(stdout.contains("`taskflow-v0 task` is the primary backlog store during the bridge"));
+    assert!(stdout.contains("vida taskflow task ready --json"));
+    assert!(stdout.contains("vida taskflow help [task|consume|run-graph|recovery|doctor]"));
+}
+
+#[test]
+fn taskflow_proxy_help_supports_task_topic() {
+    let output = vida()
+        .args(["taskflow", "help", "task"])
+        .output()
+        .expect("taskflow task topic help should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA TaskFlow help: task"));
+    assert!(stdout.contains("JSONL is import/export compatibility only"));
+    assert!(stdout.contains("vida taskflow task update <task-id> --status in_progress --notes"));
+    assert!(stdout.contains("Parent-child edges preserve epic/task structure"));
+}
+
+#[test]
+fn taskflow_proxy_help_supports_recovery_topic() {
+    let output = vida()
+        .args(["taskflow", "help", "recovery"])
+        .output()
+        .expect("taskflow recovery topic help should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA TaskFlow help: recovery"));
+    assert!(stdout.contains("vida taskflow recovery status <run-id> [--json]"));
+    assert!(stdout.contains("vida taskflow recovery latest [--json]"));
+    assert!(stdout.contains("vida taskflow recovery checkpoint <run-id> [--json]"));
+    assert!(stdout.contains("vida taskflow recovery checkpoint-latest [--json]"));
+    assert!(stdout.contains("vida taskflow recovery gate <run-id> [--json]"));
+    assert!(stdout.contains("vida taskflow recovery gate-latest [--json]"));
+    assert!(stdout.contains("resume_node, resume_status, checkpoint_kind"));
+}
+
+#[test]
+fn taskflow_proxy_help_supports_consume_topic() {
+    let output = vida()
+        .args(["taskflow", "help", "consume"])
+        .output()
+        .expect("taskflow consume topic help should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA TaskFlow help: consume"));
+    assert!(stdout.contains("vida taskflow consume bundle [--json]"));
+    assert!(stdout.contains("vida taskflow consume bundle check [--json]"));
+    assert!(stdout.contains("vida taskflow consume final \"<request>\" --json"));
+    assert!(stdout.contains("Bundle inspection and final closure loop are launcher-owned and in-process"));
+}
+
+#[test]
+fn taskflow_recovery_latest_reports_none_on_empty_booted_state() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let text_output = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "recovery", "latest"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow recovery latest should run")
+    });
+    assert!(text_output.status.success());
+    let text_stdout = String::from_utf8_lossy(&text_output.stdout);
+    assert!(text_stdout.contains("vida taskflow recovery latest"));
+    assert!(text_stdout.contains("recovery: none"));
+
+    let json_output = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "recovery", "latest", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow recovery latest json should run")
+    });
+    assert!(json_output.status.success());
+    let json_stdout = String::from_utf8_lossy(&json_output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json_stdout).expect("recovery latest json should parse");
+    assert_eq!(parsed["surface"], "vida taskflow recovery latest");
+    assert!(parsed["recovery"].is_null());
+}
+
+#[test]
+fn taskflow_consume_bundle_renders_runtime_bundle_json() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let output = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "consume", "bundle", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow consume bundle json should run")
+    });
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("consume bundle json should parse");
+    assert_eq!(parsed["surface"], "vida taskflow consume bundle");
+    assert_eq!(parsed["bundle"]["artifact_name"], "taskflow_runtime_bundle");
+    assert_eq!(parsed["bundle"]["artifact_type"], "runtime_bundle");
+    assert_eq!(
+        parsed["bundle"]["effective_instruction_bundle"]["root_artifact_id"],
+        "framework-agent-definition"
+    );
+    assert_eq!(
+        parsed["bundle"]["boot_compatibility"]["classification"],
+        "compatible"
+    );
+    assert_eq!(
+        parsed["bundle"]["migration_preflight"]["migration_state"],
+        "no_migration_required"
+    );
+    let snapshot_path = parsed["snapshot_path"]
+        .as_str()
+        .expect("consume bundle should report snapshot path");
+    assert!(std::path::Path::new(snapshot_path).is_file());
+}
+
+#[test]
+fn taskflow_consume_bundle_check_reports_ready_runtime_bundle() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let output = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "consume", "bundle", "check", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow consume bundle check json should run")
+    });
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("consume bundle check json should parse");
+    assert_eq!(parsed["surface"], "vida taskflow consume bundle check");
+    assert_eq!(parsed["check"]["ok"], true);
+    assert_eq!(
+        parsed["check"]["root_artifact_id"],
+        "framework-agent-definition"
+    );
+    assert_eq!(parsed["check"]["boot_classification"], "compatible");
+    assert_eq!(parsed["check"]["migration_state"], "no_migration_required");
+    let snapshot_path = parsed["snapshot_path"]
+        .as_str()
+        .expect("consume bundle check should report snapshot path");
+    assert!(std::path::Path::new(snapshot_path).is_file());
+}
+
+#[test]
+fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let output = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "consume", "final", "probe closure", "--json"])
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow consume final json should run")
+    });
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("consume final json should parse");
+    assert_eq!(parsed["surface"], "vida taskflow consume final");
+    assert_eq!(parsed["payload"]["closure_authority"], "taskflow");
+    assert_eq!(parsed["payload"]["request_text"], "probe closure");
+    assert_eq!(parsed["payload"]["role_selection"]["selection_mode"], "auto");
+    assert_eq!(
+        parsed["payload"]["role_selection"]["fallback_role"],
+        "orchestrator"
+    );
+    assert_eq!(
+        parsed["payload"]["role_selection"]["selected_role"],
+        "orchestrator"
+    );
+    assert_eq!(
+        parsed["payload"]["role_selection"]["conversational_mode"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        parsed["payload"]["role_selection"]["tracked_flow_entry"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        parsed["payload"]["role_selection"]["confidence"],
+        "fallback"
+    );
+    assert_eq!(
+        parsed["payload"]["role_selection"]["reason"],
+        "auto_no_keyword_match"
+    );
+    assert_eq!(parsed["payload"]["bundle_check"]["ok"], true);
+    assert_eq!(parsed["payload"]["direct_consumption_ready"], true);
+    assert_eq!(
+        parsed["payload"]["docflow_activation"]["runtime_family"],
+        "docflow"
+    );
+    assert_eq!(
+        parsed["payload"]["docflow_activation"]["evidence"]["check"]["ok"],
+        true
+    );
+    assert_eq!(
+        parsed["payload"]["docflow_activation"]["evidence"]["readiness"]["ok"],
+        true
+    );
+    assert_eq!(
+        parsed["payload"]["docflow_activation"]["evidence"]["proof"]["ok"],
+        true
+    );
+    let snapshot_path = parsed["snapshot_path"]
+        .as_str()
+        .expect("consume final should report snapshot path");
+    assert!(std::path::Path::new(snapshot_path).is_file());
+
+    let status = run_with_retry(|| {
+        vida()
+            .args(["status", "--json"])
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("status json should run after consume final")
+    });
+    assert!(status.status.success());
+    let status_stdout = String::from_utf8_lossy(&status.stdout);
+    let status_json: serde_json::Value =
+        serde_json::from_str(&status_stdout).expect("status json should parse");
+    assert_eq!(status_json["runtime_consumption"]["final_snapshots"], 1);
+    assert_eq!(
+        status_json["runtime_consumption"]["latest_kind"],
+        "final"
+    );
+
+    let doctor = run_with_retry(|| {
+        vida()
+            .args(["doctor", "--json"])
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("doctor json should run after consume final")
+    });
+    assert!(doctor.status.success());
+    let doctor_stdout = String::from_utf8_lossy(&doctor.stdout);
+    let doctor_json: serde_json::Value =
+        serde_json::from_str(&doctor_stdout).expect("doctor json should parse");
+    assert_eq!(doctor_json["runtime_consumption"]["final_snapshots"], 1);
+    assert_eq!(
+        doctor_json["runtime_consumption"]["latest_kind"],
+        "final"
+    );
+}
+
+#[test]
+fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let output = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "consume", "final", "clarify spec scope", "--json"])
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow consume final scope json should run")
+    });
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("consume final scope json should parse");
+    assert_eq!(parsed["payload"]["request_text"], "clarify spec scope");
+    assert_eq!(parsed["payload"]["role_selection"]["selection_mode"], "auto");
+    assert_eq!(
+        parsed["payload"]["role_selection"]["selected_role"],
+        "business_analyst"
+    );
+    assert_eq!(
+        parsed["payload"]["role_selection"]["conversational_mode"],
+        "scope_discussion"
+    );
+    assert_eq!(
+        parsed["payload"]["role_selection"]["tracked_flow_entry"],
+        "spec-pack"
+    );
+    assert_eq!(
+        parsed["payload"]["role_selection"]["single_task_only"],
+        true
+    );
+    assert_eq!(
+        parsed["payload"]["role_selection"]["allow_freeform_chat"],
+        true
+    );
+    assert_eq!(parsed["payload"]["role_selection"]["confidence"], "high");
+    assert_eq!(
+        parsed["payload"]["role_selection"]["reason"],
+        "auto_keyword_match"
+    );
+    let matched_terms = parsed["payload"]["role_selection"]["matched_terms"]
+        .as_array()
+        .expect("matched terms should be an array");
+    assert!(matched_terms.iter().any(|value| value == "clarify"));
+    assert!(matched_terms.iter().any(|value| value == "spec"));
+    assert!(matched_terms.iter().any(|value| value == "scope"));
+}
+
+#[test]
+fn taskflow_recovery_checkpoint_latest_reports_none_on_empty_booted_state() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let text_output = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "recovery", "checkpoint-latest"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow recovery checkpoint-latest should run")
+    });
+    assert!(text_output.status.success());
+    let text_stdout = String::from_utf8_lossy(&text_output.stdout);
+    assert!(text_stdout.contains("vida taskflow recovery checkpoint-latest"));
+    assert!(text_stdout.contains("checkpoint: none"));
+
+    let json_output = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "recovery", "checkpoint-latest", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow recovery checkpoint-latest json should run")
+    });
+    assert!(json_output.status.success());
+    let json_stdout = String::from_utf8_lossy(&json_output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json_stdout).expect("checkpoint latest json should parse");
+    assert_eq!(parsed["surface"], "vida taskflow recovery checkpoint-latest");
+    assert!(parsed["checkpoint"].is_null());
+}
+
+#[test]
+fn taskflow_recovery_gate_latest_reports_none_on_empty_booted_state() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let text_output = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "recovery", "gate-latest"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow recovery gate-latest should run")
+    });
+    assert!(text_output.status.success());
+    let text_stdout = String::from_utf8_lossy(&text_output.stdout);
+    assert!(text_stdout.contains("vida taskflow recovery gate-latest"));
+    assert!(text_stdout.contains("gate: none"));
+
+    let json_output = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "recovery", "gate-latest", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow recovery gate-latest json should run")
+    });
+    assert!(json_output.status.success());
+    let json_stdout = String::from_utf8_lossy(&json_output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json_stdout).expect("gate latest json should parse");
+    assert_eq!(parsed["surface"], "vida taskflow recovery gate-latest");
+    assert!(parsed["gate"].is_null());
+}
+
+#[test]
+fn taskflow_recovery_status_fails_closed_for_missing_run() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let output = vida()
+        .args(["taskflow", "recovery", "status", "missing-run", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow recovery status should run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.trim().is_empty());
+}
+
+#[test]
+fn taskflow_recovery_checkpoint_fails_closed_for_missing_run() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let output = vida()
+        .args(["taskflow", "recovery", "checkpoint", "missing-run", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow recovery checkpoint should run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.trim().is_empty());
+}
+
+#[test]
+fn taskflow_recovery_gate_fails_closed_for_missing_run() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let output = vida()
+        .args(["taskflow", "recovery", "gate", "missing-run", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow recovery gate should run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.trim().is_empty());
+}
+
+#[test]
+fn taskflow_run_graph_status_fails_closed_for_missing_run() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let output = vida()
+        .args(["taskflow", "run-graph", "status", "missing-run", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow run-graph status should run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.trim().is_empty());
+}
+
+#[test]
+fn taskflow_run_graph_latest_reports_none_on_empty_booted_state() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let text_output = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "run-graph", "latest"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow run-graph latest should run")
+    });
+    assert!(text_output.status.success());
+    let text_stdout = String::from_utf8_lossy(&text_output.stdout);
+    assert!(text_stdout.contains("vida taskflow run-graph latest"));
+    assert!(text_stdout.contains("status: none"));
+
+    let json_output = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "run-graph", "latest", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow run-graph latest json should run")
+    });
+    assert!(json_output.status.success());
+    let json_stdout = String::from_utf8_lossy(&json_output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json_stdout).expect("run-graph latest json should parse");
+    assert_eq!(parsed["surface"], "vida taskflow run-graph latest");
+    assert!(parsed["status"].is_null());
+}
+
+#[test]
+fn taskflow_run_graph_bridge_syncs_non_empty_latest_flow_surfaces() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let init = vida()
+        .args(["taskflow", "run-graph", "init", "vida-a", "writer", "analysis"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow run-graph init should run");
+    assert!(init.status.success());
+
+    let update = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            "vida-a",
+            "writer",
+            "writer",
+            "ready",
+            "analysis",
+            "{\"next_node\":\"coach\",\"selected_backend\":\"codex\",\"lane_id\":\"writer_lane\",\"lifecycle_stage\":\"active\",\"policy_gate\":\"policy_gate_required\",\"handoff_state\":\"awaiting_coach\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"execution_cursor\",\"resume_target\":\"dispatch.writer_lane\",\"recovery_ready\":true}",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow run-graph update should run");
+    assert!(update.status.success());
+
+    let run_graph_latest = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "run-graph", "latest", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow run-graph latest should run")
+    });
+    assert!(run_graph_latest.status.success());
+    let run_graph_latest_stdout = String::from_utf8_lossy(&run_graph_latest.stdout);
+    let run_graph_latest_parsed: serde_json::Value =
+        serde_json::from_str(&run_graph_latest_stdout).expect("run-graph latest should parse");
+    assert_eq!(run_graph_latest_parsed["status"]["run_id"], "vida-a");
+    assert_eq!(run_graph_latest_parsed["status"]["active_node"], "writer");
+    assert_eq!(run_graph_latest_parsed["status"]["next_node"], "coach");
+    assert_eq!(run_graph_latest_parsed["status"]["policy_gate"], "policy_gate_required");
+    assert_eq!(run_graph_latest_parsed["status"]["checkpoint_kind"], "execution_cursor");
+
+    let recovery_latest = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "recovery", "latest", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow recovery latest should run")
+    });
+    assert!(recovery_latest.status.success());
+    let recovery_latest_stdout = String::from_utf8_lossy(&recovery_latest.stdout);
+    let recovery_latest_parsed: serde_json::Value =
+        serde_json::from_str(&recovery_latest_stdout).expect("recovery latest should parse");
+    assert_eq!(recovery_latest_parsed["recovery"]["run_id"], "vida-a");
+    assert_eq!(recovery_latest_parsed["recovery"]["resume_node"], "coach");
+    assert_eq!(recovery_latest_parsed["recovery"]["resume_status"], "ready");
+    assert_eq!(
+        recovery_latest_parsed["recovery"]["resume_target"],
+        "dispatch.writer_lane"
+    );
+
+    let checkpoint_latest = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "recovery", "checkpoint-latest", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow checkpoint latest should run")
+    });
+    assert!(checkpoint_latest.status.success());
+    let checkpoint_latest_stdout = String::from_utf8_lossy(&checkpoint_latest.stdout);
+    let checkpoint_latest_parsed: serde_json::Value = serde_json::from_str(&checkpoint_latest_stdout)
+        .expect("checkpoint latest should parse");
+    assert_eq!(checkpoint_latest_parsed["checkpoint"]["run_id"], "vida-a");
+    assert_eq!(
+        checkpoint_latest_parsed["checkpoint"]["checkpoint_kind"],
+        "execution_cursor"
+    );
+    assert_eq!(
+        checkpoint_latest_parsed["checkpoint"]["resume_target"],
+        "dispatch.writer_lane"
+    );
+    assert_eq!(checkpoint_latest_parsed["checkpoint"]["recovery_ready"], true);
+
+    let gate_latest = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "recovery", "gate-latest", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow gate latest should run")
+    });
+    assert!(gate_latest.status.success());
+    let gate_latest_stdout = String::from_utf8_lossy(&gate_latest.stdout);
+    let gate_latest_parsed: serde_json::Value =
+        serde_json::from_str(&gate_latest_stdout).expect("gate latest should parse");
+    assert_eq!(gate_latest_parsed["gate"]["run_id"], "vida-a");
+    assert_eq!(gate_latest_parsed["gate"]["policy_gate"], "policy_gate_required");
+    assert_eq!(gate_latest_parsed["gate"]["handoff_state"], "awaiting_coach");
+    assert_eq!(gate_latest_parsed["gate"]["context_state"], "sealed");
+
+    let status_output = vida()
+        .args(["status", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("status json should run");
+    assert!(status_output.status.success());
+    let status_stdout = String::from_utf8_lossy(&status_output.stdout);
+    let status_parsed: serde_json::Value =
+        serde_json::from_str(&status_stdout).expect("status json should parse");
+    assert_eq!(status_parsed["latest_run_graph_checkpoint"]["run_id"], "vida-a");
+    assert_eq!(status_parsed["latest_run_graph_gate"]["run_id"], "vida-a");
+
+    let doctor_output = vida()
+        .args(["doctor", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("doctor json should run");
+    assert!(doctor_output.status.success());
+    let doctor_stdout = String::from_utf8_lossy(&doctor_output.stdout);
+    let doctor_parsed: serde_json::Value =
+        serde_json::from_str(&doctor_stdout).expect("doctor json should parse");
+    assert_eq!(doctor_parsed["latest_run_graph_status"]["run_id"], "vida-a");
+    assert_eq!(doctor_parsed["latest_run_graph_recovery"]["run_id"], "vida-a");
+    assert_eq!(
+        doctor_parsed["latest_run_graph_checkpoint"]["checkpoint_kind"],
+        "execution_cursor"
+    );
+    assert_eq!(
+        doctor_parsed["latest_run_graph_gate"]["policy_gate"],
+        "policy_gate_required"
+    );
+}
+
+#[test]
+fn status_and_doctor_text_surfaces_report_non_empty_latest_flow_state() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let init = vida()
+        .args(["taskflow", "run-graph", "init", "vida-a", "writer", "analysis"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow run-graph init should run");
+    assert!(init.status.success());
+
+    let update = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            "vida-a",
+            "writer",
+            "writer",
+            "ready",
+            "analysis",
+            "{\"next_node\":\"coach\",\"selected_backend\":\"codex\",\"lane_id\":\"writer_lane\",\"lifecycle_stage\":\"active\",\"policy_gate\":\"policy_gate_required\",\"handoff_state\":\"awaiting_coach\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"execution_cursor\",\"resume_target\":\"dispatch.writer_lane\",\"recovery_ready\":true}",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow run-graph update should run");
+    assert!(update.status.success());
+
+    let status_output = vida()
+        .arg("status")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("status should run");
+    assert!(status_output.status.success());
+    let status_stdout = String::from_utf8_lossy(&status_output.stdout);
+    assert!(status_stdout.contains("latest run graph status: run=vida-a"));
+    assert!(status_stdout.contains("latest run graph recovery: run=vida-a"));
+    assert!(status_stdout.contains("latest run graph checkpoint: run=vida-a"));
+    assert!(status_stdout.contains("latest run graph gate: run=vida-a"));
+    assert!(status_stdout.contains("checkpoint=execution_cursor"));
+    assert!(status_stdout.contains("gate=policy_gate_required"));
+
+    let doctor_output = vida()
+        .arg("doctor")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("doctor should run");
+    assert!(doctor_output.status.success());
+    let doctor_stdout = String::from_utf8_lossy(&doctor_output.stdout);
+    assert!(doctor_stdout.contains("latest run graph status: ok (run=vida-a"));
+    assert!(doctor_stdout.contains("latest run graph recovery: ok (run=vida-a"));
+    assert!(doctor_stdout.contains("latest run graph checkpoint: ok (run=vida-a"));
+    assert!(doctor_stdout.contains("latest run graph gate: ok (run=vida-a"));
+    assert!(doctor_stdout.contains("checkpoint=execution_cursor"));
+    assert!(doctor_stdout.contains("gate=policy_gate_required"));
+}
+
+#[test]
+fn taskflow_direct_run_surfaces_report_non_empty_bridged_flow_state() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let init = vida()
+        .args(["taskflow", "run-graph", "init", "vida-a", "writer", "analysis"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow run-graph init should run");
+    assert!(init.status.success());
+
+    let update = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            "vida-a",
+            "writer",
+            "writer",
+            "ready",
+            "analysis",
+            "{\"next_node\":\"coach\",\"selected_backend\":\"codex\",\"lane_id\":\"writer_lane\",\"lifecycle_stage\":\"active\",\"policy_gate\":\"policy_gate_required\",\"handoff_state\":\"awaiting_coach\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"execution_cursor\",\"resume_target\":\"dispatch.writer_lane\",\"recovery_ready\":true}",
+        ])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow run-graph update should run");
+    assert!(update.status.success());
+
+    let run_graph_status = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "run-graph", "status", "vida-a", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow run-graph status should run")
+    });
+    assert!(run_graph_status.status.success());
+    let run_graph_status_stdout = String::from_utf8_lossy(&run_graph_status.stdout);
+    let run_graph_status_parsed: serde_json::Value =
+        serde_json::from_str(&run_graph_status_stdout).expect("run-graph status should parse");
+    assert_eq!(run_graph_status_parsed["run_id"], "vida-a");
+    assert_eq!(run_graph_status_parsed["status"]["active_node"], "writer");
+    assert_eq!(run_graph_status_parsed["status"]["next_node"], "coach");
+    assert_eq!(run_graph_status_parsed["status"]["selected_backend"], "codex");
+
+    let recovery_status = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "recovery", "status", "vida-a", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow recovery status should run")
+    });
+    assert!(recovery_status.status.success());
+    let recovery_status_stdout = String::from_utf8_lossy(&recovery_status.stdout);
+    let recovery_status_parsed: serde_json::Value =
+        serde_json::from_str(&recovery_status_stdout).expect("recovery status should parse");
+    assert_eq!(recovery_status_parsed["run_id"], "vida-a");
+    assert_eq!(recovery_status_parsed["recovery"]["resume_node"], "coach");
+    assert_eq!(recovery_status_parsed["recovery"]["resume_status"], "ready");
+    assert_eq!(
+        recovery_status_parsed["recovery"]["policy_gate"],
+        "policy_gate_required"
+    );
+
+    let checkpoint_status = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "recovery", "checkpoint", "vida-a", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow checkpoint status should run")
+    });
+    assert!(checkpoint_status.status.success());
+    let checkpoint_status_stdout = String::from_utf8_lossy(&checkpoint_status.stdout);
+    let checkpoint_status_parsed: serde_json::Value =
+        serde_json::from_str(&checkpoint_status_stdout).expect("checkpoint status should parse");
+    assert_eq!(checkpoint_status_parsed["run_id"], "vida-a");
+    assert_eq!(
+        checkpoint_status_parsed["checkpoint"]["checkpoint_kind"],
+        "execution_cursor"
+    );
+    assert_eq!(
+        checkpoint_status_parsed["checkpoint"]["resume_target"],
+        "dispatch.writer_lane"
+    );
+
+    let gate_status = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "recovery", "gate", "vida-a", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("taskflow gate status should run")
+    });
+    assert!(gate_status.status.success());
+    let gate_status_stdout = String::from_utf8_lossy(&gate_status.stdout);
+    let gate_status_parsed: serde_json::Value =
+        serde_json::from_str(&gate_status_stdout).expect("gate status should parse");
+    assert_eq!(gate_status_parsed["run_id"], "vida-a");
+    assert_eq!(gate_status_parsed["gate"]["policy_gate"], "policy_gate_required");
+    assert_eq!(gate_status_parsed["gate"]["handoff_state"], "awaiting_coach");
+    assert_eq!(gate_status_parsed["gate"]["context_state"], "sealed");
+}
+
+#[test]
+fn taskflow_proxy_help_supports_command_help_form() {
+    let output = vida()
+        .args(["taskflow", "run-graph", "--help"])
+        .output()
+        .expect("taskflow command help form should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA TaskFlow help: run-graph"));
+    assert!(stdout.contains("Run-graph is not a second task queue"));
+    assert!(stdout.contains("launcher-owned and in-process"));
+    assert!(stdout.contains("vida taskflow run-graph status <task_id>"));
+    assert!(stdout.contains("vida taskflow run-graph latest [--json]"));
+}
+
+#[test]
+fn taskflow_query_help_is_launcher_owned() {
+    let output = vida()
+        .args(["taskflow", "query", "--help"])
+        .output()
+        .expect("taskflow query help should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA TaskFlow query"));
+    assert!(stdout.contains("deterministic and launcher-owned"));
+    assert!(stdout.contains("what should I run next?"));
+}
+
+#[test]
+fn taskflow_query_recommends_ready_surface_for_next_step_questions() {
+    let output = vida()
+        .args(["taskflow", "query", "what", "should", "I", "run", "next?"])
+        .output()
+        .expect("taskflow query should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA TaskFlow query answer"));
+    assert!(stdout.contains("next-ready-slice"));
+    assert!(stdout.contains("vida taskflow task ready --json"));
+}
+
+#[test]
+fn taskflow_query_recommends_doctor_for_health_questions() {
+    let output = vida()
+        .args(["taskflow", "query", "how", "do", "I", "diagnose", "runtime", "health?"])
+        .output()
+        .expect("taskflow health query should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("diagnose-runtime"));
+    assert!(stdout.contains("vida doctor"));
+}
+
+#[test]
+fn taskflow_query_recommends_gate_surface_for_gate_questions() {
+    let output = vida()
+        .args([
+            "taskflow",
+            "query",
+            "how",
+            "do",
+            "I",
+            "inspect",
+            "the",
+            "policy",
+            "gate?",
+        ])
+        .output()
+        .expect("taskflow gate query should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("inspect-gate"));
+    assert!(stdout.contains("vida taskflow recovery gate <run-id> --json"));
+}
+
+#[test]
+fn taskflow_query_recommends_latest_recovery_surface_for_latest_questions() {
+    let output = vida()
+        .args([
+            "taskflow",
+            "query",
+            "what",
+            "is",
+            "the",
+            "latest",
+            "recovery",
+            "state?",
+        ])
+        .output()
+        .expect("taskflow latest recovery query should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("inspect-latest-resumability"));
+    assert!(stdout.contains("vida taskflow recovery latest --json"));
+}
+
+#[test]
+fn docflow_proxy_help_is_runtime_specific() {
+    let output = vida()
+        .args(["docflow", "help"])
+        .output()
+        .expect("docflow proxy help should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA DocFlow runtime family"));
+    assert!(stdout.contains("fail closed"));
+    assert!(stdout.contains("Usage: docflow <COMMAND>"));
+    assert!(stdout.contains("registry-write"));
+    assert!(stdout.contains("artifact-impact"));
+}
+
+#[test]
+fn taskflow_proxy_executes_resolved_runtime() {
+    let root = unique_state_dir();
+    let script_path = format!("{root}/taskflow-proxy.sh");
+    fs::create_dir_all(&root).expect("temp root should exist");
+    write_executable_script(
+        &script_path,
+        "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'taskflow-proxy:%s|%s\\n' \"$VIDA_ROOT\" \"$*\"\n",
+    );
+
+    let output = vida()
+        .args(["taskflow", "task", "ready", "--json"])
+        .env("VIDA_ROOT", &root)
+        .env("VIDA_TASKFLOW_BIN", &script_path)
+        .output()
+        .expect("taskflow proxy should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(&format!("taskflow-proxy:{root}|task ready --json")));
+}
+
+#[test]
+fn taskflow_proxy_resolves_repo_root_from_nested_project_pwd_without_env() {
+    let root = unique_state_dir();
+    let script_path = format!("{root}/taskflow-proxy.sh");
+    fs::create_dir_all(&root).expect("temp root should exist");
+    write_executable_script(
+        &script_path,
+        "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'taskflow-proxy:%s|%s\\n' \"$VIDA_ROOT\" \"$*\"\n",
+    );
+
+    let output = vida()
+        .args(["taskflow", "task", "ready", "--json"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .env_remove("VIDA_ROOT")
+        .env("VIDA_TASKFLOW_BIN", &script_path)
+        .output()
+        .expect("taskflow proxy should resolve project root from nested cwd");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("/home/unnamed/project/vida-stack|task ready --json"));
+}
+
+#[test]
+fn taskflow_proxy_fails_closed_when_project_root_is_ambiguous() {
+    let root = unique_state_dir();
+    let outer = format!("{root}/outer");
+    let inner = format!("{outer}/inner");
+    let nested = format!("{inner}/work");
+    fs::create_dir_all(format!("{outer}/vida")).expect("outer vida dir should exist");
+    fs::create_dir_all(format!("{inner}/vida")).expect("inner vida dir should exist");
+    fs::create_dir_all(&nested).expect("nested dir should exist");
+    fs::write(format!("{outer}/AGENTS.md"), "outer").expect("outer AGENTS should exist");
+    fs::write(format!("{outer}/vida/root-map.md"), "outer").expect("outer root-map should exist");
+    fs::write(format!("{inner}/AGENTS.md"), "inner").expect("inner AGENTS should exist");
+    fs::write(format!("{inner}/vida/root-map.md"), "inner").expect("inner root-map should exist");
+
+    let output = vida()
+        .args(["taskflow", "task", "ready", "--json"])
+        .current_dir(&nested)
+        .env_remove("VIDA_ROOT")
+        .output()
+        .expect("taskflow proxy should fail closed on ambiguous root");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Ambiguous VIDA project root"));
+}
+
+#[test]
+fn installed_vida_resolves_taskflow_binary_from_its_bin_dir_and_project_root_from_pwd() {
+    let root = unique_state_dir();
+    let install_root = format!("{root}/install");
+    let project_root = format!("{root}/project");
+    let script_path = format!("{install_root}/bin/taskflow-v0");
+    let vida_path = format!("{install_root}/bin/vida");
+    let nested_pwd = format!("{project_root}/work/nested");
+    fs::create_dir_all(format!("{install_root}/bin")).expect("install bin dir should exist");
+    fs::create_dir_all(format!("{project_root}/vida")).expect("project vida dir should exist");
+    fs::create_dir_all(&nested_pwd).expect("nested project dir should exist");
+    fs::write(format!("{project_root}/AGENTS.md"), "project").expect("project AGENTS should exist");
+    fs::write(format!("{project_root}/vida/root-map.md"), "project")
+        .expect("project root-map should exist");
+    copy_executable(env!("CARGO_BIN_EXE_vida"), &vida_path);
+    write_executable_script(
+        &script_path,
+        "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'taskflow-proxy:%s|%s\\n' \"$VIDA_ROOT\" \"$*\"\n",
+    );
+
+    let output = Command::new(&vida_path)
+        .args(["taskflow", "task", "ready", "--json"])
+        .current_dir(&nested_pwd)
+        .env_remove("VIDA_ROOT")
+        .output()
+        .expect("installed vida should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(&format!("taskflow-proxy:{project_root}|task ready --json")));
+}
+
+#[test]
+fn docflow_proxy_fails_closed_for_unsupported_command() {
+    let output = vida()
+        .args(["docflow", "nonexistent-command"])
+        .output()
+        .expect("docflow proxy should run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unrecognized subcommand"));
+}
+
+#[test]
+fn docflow_proxy_runs_check_in_process_when_profile_is_supported() {
+    let output = vida()
+        .args(["docflow", "check", "--profile", "active-canon"])
+        .output()
+        .expect("docflow in-process check should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("docflow-proxy:"));
+}
+
+#[test]
+fn docflow_proxy_runs_fastcheck_in_process_when_profile_is_supported() {
+    let output = vida()
+        .args(["docflow", "fastcheck", "--profile", "active-canon"])
+        .output()
+        .expect("docflow in-process fastcheck should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("docflow-proxy:"));
+}
+
+#[test]
+fn docflow_proxy_runs_activation_check_in_process_when_profile_is_supported() {
+    let output = vida()
+        .args(["docflow", "activation-check", "--profile", "active-canon"])
+        .output()
+        .expect("docflow in-process activation-check should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("docflow-proxy:"));
+}
+
+#[test]
+fn docflow_proxy_runs_protocol_coverage_in_process_when_profile_is_supported() {
+    let output = vida()
+        .args(["docflow", "protocol-coverage-check", "--profile", "active-canon"])
+        .output()
+        .expect("docflow in-process protocol-coverage-check should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("docflow-proxy:"));
+}
+
+#[test]
+fn docflow_proxy_runs_readiness_check_in_process_when_profile_is_supported() {
+    let output = vida()
+        .args(["docflow", "readiness-check", "--profile", "active-canon"])
+        .output()
+        .expect("docflow in-process readiness-check should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("docflow-proxy:"));
+}
+
+#[test]
+fn docflow_proxy_runs_proofcheck_in_process_when_profile_is_supported() {
+    let output = vida()
+        .args(["docflow", "proofcheck", "--profile", "active-canon-strict"])
+        .output()
+        .expect("docflow in-process proofcheck should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("docflow-proxy:"));
+}
+
+#[test]
+fn docflow_proxy_runs_finalize_edit_in_process_when_supported() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(
+        format!("{root}/docs/process/a.md"),
+        "# a\n\n-----\nartifact_path: process/a\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/a.md\nstatus: draft\nchangelog_ref: a.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\n",
+    )
+    .expect("process markdown");
+    fs::write(format!("{root}/docs/process/a.changelog.jsonl"), "").expect("process changelog");
+
+    let output = vida()
+        .args([
+            "docflow",
+            "finalize-edit",
+            "docs/process/a.md",
+            "promote footer metadata",
+            "--status",
+            "canonical",
+        ])
+        .env("VIDA_ROOT", &root)
+        .output()
+        .expect("docflow in-process finalize-edit should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("docflow-proxy:"));
+    assert!(stdout.contains("finalize-edit"));
+    let updated = fs::read_to_string(format!("{root}/docs/process/a.md"))
+        .expect("updated markdown should exist");
+    assert!(updated.contains("status: canonical"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_runs_touch_in_process_when_supported() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(
+        format!("{root}/docs/process/a.md"),
+        "# a\n\n-----\nartifact_path: process/a\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/a.md\nstatus: draft\nchangelog_ref: a.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\n",
+    )
+    .expect("process markdown");
+    fs::write(format!("{root}/docs/process/a.changelog.jsonl"), "").expect("process changelog");
+
+    let output = vida()
+        .args(["docflow", "touch", "docs/process/a.md", "record touch event"])
+        .env("VIDA_ROOT", &root)
+        .output()
+        .expect("docflow in-process touch should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("docflow-proxy:"));
+    assert!(stdout.contains("touch"));
+    let updated = fs::read_to_string(format!("{root}/docs/process/a.changelog.jsonl"))
+        .expect("updated changelog should exist");
+    assert!(updated.contains("\"reason\":\"record touch event\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_runs_rename_artifact_in_process_when_supported() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(
+        format!("{root}/docs/process/a.md"),
+        "# a\n\n-----\nartifact_path: process/a\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/a.md\nstatus: draft\nchangelog_ref: a.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\n",
+    )
+    .expect("process markdown");
+    fs::write(format!("{root}/docs/process/a.changelog.jsonl"), "").expect("process changelog");
+
+    let output = vida()
+        .args([
+            "docflow",
+            "rename-artifact",
+            "docs/process/a.md",
+            "process/b",
+            "rename artifact id",
+            "--bump-version",
+        ])
+        .env("VIDA_ROOT", &root)
+        .output()
+        .expect("docflow in-process rename-artifact should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("docflow-proxy:"));
+    assert!(stdout.contains("rename-artifact"));
+    let updated = fs::read_to_string(format!("{root}/docs/process/a.md"))
+        .expect("updated markdown should exist");
+    assert!(updated.contains("artifact_path: process/b"));
+    assert!(updated.contains("artifact_version: 2"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_runs_init_in_process_when_supported() {
+    let root = unique_state_dir();
+
+    let output = vida()
+        .args([
+            "docflow",
+            "init",
+            "docs/process/new.md",
+            "process/new",
+            "process_doc",
+            "initialize artifact",
+            "--title",
+            "New Artifact",
+            "--purpose",
+            "Boot smoke init",
+        ])
+        .env("VIDA_ROOT", &root)
+        .output()
+        .expect("docflow in-process init should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("docflow-proxy:"));
+    assert!(stdout.contains("init"));
+    let updated =
+        fs::read_to_string(format!("{root}/docs/process/new.md")).expect("markdown should exist");
+    assert!(updated.contains("artifact_path: process/new"));
+    assert!(updated.contains("# New Artifact"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_runs_move_in_process_when_supported() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(
+        format!("{root}/docs/process/a.md"),
+        "# a\n\n-----\nartifact_path: process/a\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/a.md\nstatus: draft\nchangelog_ref: a.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\n",
+    )
+    .expect("process markdown");
+    fs::write(
+        format!("{root}/docs/process/a.changelog.jsonl"),
+        "{\"event\":\"artifact_initialized\",\"artifact_path\":\"process/a\"}\n",
+    )
+    .expect("process changelog");
+
+    let output = vida()
+        .args([
+            "docflow",
+            "move",
+            "docs/process/a.md",
+            "docs/product/spec/a.md",
+            "move artifact",
+        ])
+        .env("VIDA_ROOT", &root)
+        .output()
+        .expect("docflow in-process move should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("docflow-proxy:"));
+    assert!(stdout.contains("move"));
+    let updated = fs::read_to_string(format!("{root}/docs/product/spec/a.md"))
+        .expect("destination markdown should exist");
+    assert!(updated.contains("source_path: docs/product/spec/a.md"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_runs_changelog_in_process_when_supported() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(
+        format!("{root}/docs/process/a.md"),
+        "# a\n\n-----\nartifact_path: process/a\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/a.md\nstatus: draft\nchangelog_ref: a.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\n",
+    )
+    .expect("process markdown");
+    fs::write(
+        format!("{root}/docs/process/a.changelog.jsonl"),
+        "{\"ts\":\"2026-03-11T00:00:00Z\",\"event\":\"artifact_initialized\",\"artifact_path\":\"process/a\"}\n",
+    )
+    .expect("process changelog");
+
+    let output = vida()
+        .args(["docflow", "changelog", "docs/process/a.md", "--format", "jsonl"])
+        .env("VIDA_ROOT", &root)
+        .output()
+        .expect("docflow in-process changelog should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"event\":\"artifact_initialized\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_runs_task_summary_surfaces_in_process_when_supported() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(
+        format!("{root}/docs/process/a.md"),
+        "# a\n\n-----\nartifact_path: process/a\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/a.md\nstatus: draft\nchangelog_ref: a.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\n",
+    )
+    .expect("process markdown");
+    fs::write(
+        format!("{root}/docs/process/a.changelog.jsonl"),
+        "{\"ts\":\"2026-03-11T00:00:00Z\",\"event\":\"artifact_initialized\",\"artifact_path\":\"process/a\",\"task_id\":\"vida-rf1\",\"actor\":\"codex\",\"scope\":\"bridge\",\"tags\":[\"docflow\"]}\n",
+    )
+    .expect("process changelog");
+
+    let changelog_task = vida()
+        .args([
+            "docflow",
+            "changelog-task",
+            "--root",
+            &root,
+            "--task-id",
+            "vida-rf1",
+            "--format",
+            "jsonl",
+        ])
+        .output()
+        .expect("docflow in-process changelog-task should run");
+    assert!(changelog_task.status.success());
+    let changelog_stdout = String::from_utf8_lossy(&changelog_task.stdout);
+    assert!(changelog_stdout.contains("\"task_id\":\"vida-rf1\""));
+
+    let summary = vida()
+        .args([
+            "docflow",
+            "task-summary",
+            "--root",
+            &root,
+            "--task-id",
+            "vida-rf1",
+            "--format",
+            "jsonl",
+        ])
+        .output()
+        .expect("docflow in-process task-summary should run");
+    assert!(summary.status.success());
+    let summary_stdout = String::from_utf8_lossy(&summary.stdout);
+    assert!(summary_stdout.contains("\"summary\":\"task\""));
+    assert!(summary_stdout.contains("\"summary\":\"actor\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_runs_migrate_links_in_process_when_supported() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(
+        format!("{root}/docs/process/a.md"),
+        "# a\n\n[Link](b.md)\n\n-----\nartifact_path: process/a\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/a.md\nstatus: draft\nchangelog_ref: a.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\n",
+    )
+    .expect("process markdown");
+    fs::write(
+        format!("{root}/docs/process/a.changelog.jsonl"),
+        "{\"event\":\"artifact_initialized\",\"artifact_path\":\"process/a\"}\n",
+    )
+    .expect("process changelog");
+    fs::write(format!("{root}/docs/process/c.md"), "# c\n").expect("new target should exist");
+
+    let output = vida()
+        .args([
+            "docflow",
+            "migrate-links",
+            "docs/process/a.md",
+            "b.md",
+            "c.md",
+            "rewrite links",
+            "--format",
+            "jsonl",
+        ])
+        .env("VIDA_ROOT", &root)
+        .output()
+        .expect("docflow in-process migrate-links should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"replacements\":1"));
+    let updated = fs::read_to_string(format!("{root}/docs/process/a.md"))
+        .expect("updated markdown should exist");
+    assert!(updated.contains("[Link](c.md)"));
+    let changelog = fs::read_to_string(format!("{root}/docs/process/a.changelog.jsonl"))
+        .expect("updated changelog should exist");
+    assert!(changelog.contains("\"event\":\"links_migrated\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_use_rust_cli_shell() {
+    let output = vida()
+        .args([
+            "docflow",
+            "overview",
+            "--registry-count",
+            "5",
+            "--relation-count",
+            "2",
+        ])
+        .output()
+        .expect("docflow rust shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("docflow overview"));
+    assert!(stdout.contains("registry_rows: 5"));
+    assert!(stdout.contains("relation_edges: 2"));
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_layer_status_surface() {
+    let output = vida()
+        .args(["docflow", "layer-status", "--layer", "6"])
+        .output()
+        .expect("docflow rust layer-status shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("layer-status"));
+    assert!(stdout.contains("layer: 6"));
+    assert!(stdout.contains("Layer name: Canonical Operator"));
+    assert!(stdout.contains("Status: ✅"));
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_summary_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::create_dir_all(format!("{root}/docs/product/spec")).expect("spec dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+    fs::write(format!("{root}/docs/product/spec/b.md"), "# b\n").expect("spec markdown");
+
+    let output = vida()
+        .args(["docflow", "summary", "--root", &root])
+        .output()
+        .expect("docflow rust summary shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("summary"));
+    assert!(stdout.contains("registry_rows: 2"));
+    assert!(stdout.contains("relation_edges: 2"));
+    assert!(stdout.contains("readiness: blocking"));
+    assert!(stdout.contains("type[process_doc]: 1"));
+    assert!(stdout.contains("type[product_spec]: 1"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_scan_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+
+    let output = vida()
+        .args(["docflow", "scan", "--root", &root])
+        .output()
+        .expect("docflow rust scan shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"artifact_path\":\"docs/process/a.md\""));
+    assert!(stdout.contains("\"artifact_type\":\"process_doc\""));
+    assert!(stdout.contains("\"has_footer\":false"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_fastcheck_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+
+    let output = vida()
+        .args(["docflow", "fastcheck", "--root", &root])
+        .output()
+        .expect("docflow rust fastcheck shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"artifact_path\":\"docs/process/a.md\""));
+    assert!(stdout.contains("\"code\":\"missing_footer\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_doctor_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+
+    let output = vida()
+        .args(["docflow", "doctor", "--root", &root])
+        .output()
+        .expect("docflow rust doctor shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"severity\":\"error\""));
+    assert!(stdout.contains("\"path\":\"docs/process/a.md\""));
+    assert!(stdout.contains("missing_footer"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_activation_check_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/vida/config/instructions"))
+        .expect("instructions dir should be created");
+    fs::write(
+        format!("{root}/vida/config/instructions/runtime-instructions.synthetic-protocol.md"),
+        "# synthetic\n",
+    )
+    .expect("protocol markdown");
+
+    let output = vida()
+        .args(["docflow", "activation-check", "--root", &root])
+        .output()
+        .expect("docflow rust activation-check shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(
+        "\"path\":\"vida/config/instructions/runtime-instructions.synthetic-protocol.md\""
+    ));
+    assert!(stdout.contains("missing_activation_binding"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_protocol_coverage_check_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/vida/config/instructions"))
+        .expect("instructions dir should be created");
+    fs::write(
+        format!("{root}/vida/config/instructions/runtime-instructions.synthetic-protocol.md"),
+        "# synthetic\n",
+    )
+    .expect("protocol markdown");
+
+    let output = vida()
+        .args(["docflow", "protocol-coverage-check", "--root", &root])
+        .output()
+        .expect("docflow rust protocol-coverage-check shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(
+        "\"path\":\"vida/config/instructions/runtime-instructions.synthetic-protocol.md\""
+    ));
+    assert!(stdout.contains("missing_activation_binding"));
+    assert!(stdout.contains("missing_protocol_index_binding"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_proofcheck_surface() {
+    let output = vida()
+        .args(["docflow", "proofcheck", "--layer", "6"])
+        .output()
+        .expect("docflow rust proofcheck shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("proofcheck"));
+    assert!(stdout.contains("layer: 6"));
+    assert!(stdout.contains("files_mode: layer"));
+    assert!(stdout.contains("fastcheck_rows:"));
+    assert!(stdout.contains("protocol_coverage_rows:"));
+    assert!(stdout.contains("readiness_rows:"));
+    assert!(stdout.contains("doctor_error_rows:"));
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_validation_surface() {
+    let output = vida()
+        .args([
+            "docflow",
+            "validate-footer",
+            "--path",
+            "docs/process/test.md",
+            "--content",
+            "# title\n",
+        ])
+        .output()
+        .expect("docflow rust validation shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("validation"));
+    assert!(stdout.contains("issues: 1"));
+    assert!(stdout.contains("verdict: blocking"));
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_readiness_surface() {
+    let output = vida()
+        .args([
+            "docflow",
+            "readiness",
+            "--path",
+            "docs/process/test.md",
+            "--content",
+            "# title\n",
+        ])
+        .output()
+        .expect("docflow rust readiness shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("readiness"));
+    assert!(stdout.contains("rows: 1"));
+    assert!(stdout.contains("verdict: blocking"));
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_check_file_surface() {
+    let path = format!("/tmp/vida-docflow-check-file-{}.md", std::process::id());
+    fs::write(&path, "# title\n").expect("temp markdown should be written");
+
+    let output = vida()
+        .args(["docflow", "check-file", "--path", &path])
+        .output()
+        .expect("docflow rust check-file shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("validation"));
+    assert!(stdout.contains("issues: 1"));
+    assert!(stdout.contains("[missing_footer]"));
+
+    fs::remove_file(path).expect("temp markdown should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_readiness_file_surface() {
+    let path = format!("/tmp/vida-docflow-readiness-file-{}.md", std::process::id());
+    fs::write(&path, "# title\n").expect("temp markdown should be written");
+
+    let output = vida()
+        .args(["docflow", "readiness-file", "--path", &path])
+        .output()
+        .expect("docflow rust readiness-file shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("readiness"));
+    assert!(stdout.contains("rows: 1"));
+    assert!(stdout.contains("verdict: blocking"));
+
+    fs::remove_file(path).expect("temp markdown should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_registry_scan_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::create_dir_all(format!("{root}/docs/product/spec")).expect("spec dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+    fs::write(format!("{root}/docs/product/spec/b.md"), "# b\n").expect("spec markdown");
+
+    let output = vida()
+        .args(["docflow", "registry-scan", "--root", &root])
+        .output()
+        .expect("docflow rust registry-scan shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("registry"));
+    assert!(stdout.contains("total_rows: 2"));
+    assert!(stdout.contains("docs/process/a.md [process_doc]"));
+    assert!(stdout.contains("docs/product/spec/b.md [product_spec]"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_registry_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+
+    let output = vida()
+        .args(["docflow", "registry", "--root", &root])
+        .output()
+        .expect("docflow rust registry shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"artifact_path\":\"docs/process/a.md\""));
+    assert!(stdout.contains("\"artifact_type\":\"process_doc\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_registry_write_surface() {
+    let root = unique_state_dir();
+    let output = format!("{root}/registry.jsonl");
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+
+    let output_run = vida()
+        .args([
+            "docflow",
+            "registry-write",
+            "--root",
+            &root,
+            "--output",
+            &output,
+        ])
+        .output()
+        .expect("docflow rust registry-write shell should run");
+
+    assert!(output_run.status.success());
+    let stdout = String::from_utf8_lossy(&output_run.stdout);
+    assert!(stdout.contains("registry-write"));
+    assert!(stdout.contains("total_rows: 1"));
+    assert!(stdout.contains(&format!("output: {output}")));
+
+    let written = fs::read_to_string(&output).expect("registry jsonl should be written");
+    assert!(written.contains("\"artifact_path\":\"docs/process/a.md\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_registry_write_canonical_surface() {
+    let root = unique_state_dir();
+    let output = format!("{root}/vida/config/codex-registry.current.jsonl");
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+
+    let output_run = vida()
+        .args(["docflow", "registry-write", "--root", &root, "--canonical"])
+        .output()
+        .expect("docflow rust registry-write canonical shell should run");
+
+    assert!(output_run.status.success());
+    let stdout = String::from_utf8_lossy(&output_run.stdout);
+    assert!(stdout.contains("registry-write"));
+    assert!(stdout.contains(&format!("output: {output}")));
+    let written = fs::read_to_string(&output).expect("canonical registry jsonl should be written");
+    assert!(written.contains("\"artifact_path\":\"docs/process/a.md\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_overview_scan_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::create_dir_all(format!("{root}/docs/product/spec")).expect("spec dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+    fs::write(format!("{root}/docs/product/spec/b.md"), "# b\n").expect("spec markdown");
+
+    let output = vida()
+        .args(["docflow", "overview-scan", "--root", &root])
+        .output()
+        .expect("docflow rust overview-scan shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("docflow overview"));
+    assert!(stdout.contains("registry_rows: 2"));
+    assert!(stdout.contains("relation_edges: 2"));
+    assert!(stdout.contains("readiness: ok"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_relations_scan_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::create_dir_all(format!("{root}/docs/product/spec")).expect("spec dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+    fs::write(format!("{root}/docs/product/spec/b.md"), "# b\n").expect("spec markdown");
+
+    let output = vida()
+        .args(["docflow", "relations-scan", "--root", &root])
+        .output()
+        .expect("docflow rust relations-scan shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("relations"));
+    assert!(stdout.contains("total_edges: 2"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_validate_tree_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+
+    let output = vida()
+        .args(["docflow", "validate-tree", "--root", &root])
+        .output()
+        .expect("docflow rust validate-tree shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("validation-tree"));
+    assert!(stdout.contains("scanned_rows: 1"));
+    assert!(stdout.contains("issues: 1"));
+    assert!(stdout.contains("verdict: blocking"));
+    assert!(stdout.contains("docs/process/a.md [missing_footer]"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_readiness_tree_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+
+    let output = vida()
+        .args(["docflow", "readiness-tree", "--root", &root])
+        .output()
+        .expect("docflow rust readiness-tree shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("readiness-tree"));
+    assert!(stdout.contains("scanned_rows: 1"));
+    assert!(stdout.contains("rows: 1"));
+    assert!(stdout.contains("verdict: blocking"));
+    assert!(stdout.contains("docs/process/a.md [blocking]"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_readiness_check_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+
+    let output = vida()
+        .args(["docflow", "readiness-check", "--root", &root])
+        .output()
+        .expect("docflow rust readiness-check shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"artifact_path\":\"docs/process/a.md\""));
+    assert!(stdout.contains("\"verdict\":\"blocking\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_readiness_write_surface() {
+    let root = unique_state_dir();
+    let output = format!("{root}/readiness.jsonl");
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+
+    let output_run = vida()
+        .args([
+            "docflow",
+            "readiness-write",
+            "--root",
+            &root,
+            "--output",
+            &output,
+        ])
+        .output()
+        .expect("docflow rust readiness-write shell should run");
+
+    assert!(output_run.status.success());
+    let stdout = String::from_utf8_lossy(&output_run.stdout);
+    assert!(stdout.contains("readiness-write"));
+    assert!(stdout.contains("rows: 1"));
+    assert!(stdout.contains(&format!("output: {output}")));
+
+    let written = fs::read_to_string(&output).expect("readiness jsonl should be written");
+    assert!(written.contains("\"artifact_path\":\"docs/process/a.md\""));
+    assert!(written.contains("\"verdict\":\"blocking\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_readiness_write_canonical_surface() {
+    let root = unique_state_dir();
+    let output = format!("{root}/vida/config/codex-readiness.current.jsonl");
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::write(format!("{root}/docs/process/a.md"), "# a\n").expect("process markdown");
+
+    let output_run = vida()
+        .args(["docflow", "readiness-write", "--root", &root, "--canonical"])
+        .output()
+        .expect("docflow rust readiness-write canonical shell should run");
+
+    assert!(output_run.status.success());
+    let stdout = String::from_utf8_lossy(&output_run.stdout);
+    assert!(stdout.contains("readiness-write"));
+    assert!(stdout.contains(&format!("output: {output}")));
+    let written = fs::read_to_string(&output).expect("canonical readiness jsonl should be written");
+    assert!(written.contains("\"artifact_path\":\"docs/process/a.md\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_links_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::create_dir_all(format!("{root}/docs/product/spec")).expect("spec dir should be created");
+    fs::write(
+        format!("{root}/docs/process/a.md"),
+        "# a\n\n[b](../product/spec/b.md)\n\n-----\nartifact_path: docs/process/a.md\n",
+    )
+    .expect("process markdown");
+    fs::write(
+        format!("{root}/docs/product/spec/b.md"),
+        "# b\n\n-----\nartifact_path: docs/product/spec/b.md\n",
+    )
+    .expect("spec markdown");
+
+    let output = vida()
+        .args(["docflow", "links", "--path", "docs/process/a.md"])
+        .env("VIDA_ROOT", &root)
+        .output()
+        .expect("docflow rust links shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"path\":\"docs/process/a.md\""));
+    assert!(stdout.contains("\"target\":\"../product/spec/b.md\""));
+    assert!(stdout.contains("\"resolved\":\"docs/product/spec/b.md\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_deps_map_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::create_dir_all(format!("{root}/docs/product/spec")).expect("spec dir should be created");
+    fs::write(
+        format!("{root}/docs/process/a.md"),
+        "# a\n\n[b](../product/spec/b.md)\n\n-----\nartifact_path: docs/process/a.md\nprojection_ref: docs/product/spec/b.md\n",
+    )
+    .expect("process markdown");
+    fs::write(
+        format!("{root}/docs/product/spec/b.md"),
+        "# b\n\n-----\nartifact_path: docs/product/spec/b.md\n",
+    )
+    .expect("spec markdown");
+
+    let output = vida()
+        .args(["docflow", "deps-map", "--path", "docs/process/a.md"])
+        .env("VIDA_ROOT", &root)
+        .output()
+        .expect("docflow rust deps-map shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"edge_type\":\"markdown_link\""));
+    assert!(stdout.contains("\"edge_type\":\"projection_ref\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_artifact_impact_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::create_dir_all(format!("{root}/docs/product/spec")).expect("spec dir should be created");
+    fs::write(
+        format!("{root}/docs/process/a.md"),
+        "# a\n\n[b](../product/spec/b.md)\n\n-----\nartifact_path: docs/process/a.md\nprojection_ref: docs/product/spec/b.md\n",
+    )
+    .expect("process markdown");
+    fs::write(
+        format!("{root}/docs/product/spec/b.md"),
+        "# b\n\n-----\nartifact_path: docs/product/spec/b.md\n",
+    )
+    .expect("spec markdown");
+
+    let output = vida()
+        .args([
+            "docflow",
+            "artifact-impact",
+            "--artifact",
+            "docs/product/spec/b.md",
+            "--root",
+            &root,
+        ])
+        .output()
+        .expect("docflow rust artifact-impact shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"command\":\"artifact-impact\""));
+    assert!(stdout.contains("\"path\":\"docs/process/a.md\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn docflow_proxy_can_run_rust_task_impact_surface() {
+    let root = unique_state_dir();
+    fs::create_dir_all(format!("{root}/docs/process")).expect("process dir should be created");
+    fs::create_dir_all(format!("{root}/docs/product/spec")).expect("spec dir should be created");
+    fs::write(
+        format!("{root}/docs/process/a.md"),
+        "# a\n\n[b](../product/spec/b.md)\n\n-----\nartifact_path: docs/process/a.md\n",
+    )
+    .expect("process markdown");
+    fs::write(
+        format!("{root}/docs/process/a.changelog.jsonl"),
+        "{\"task_id\":\"vida-rf1.2.6\",\"artifact_path\":\"docs/process/a.md\"}\n",
+    )
+    .expect("process changelog");
+    fs::write(
+        format!("{root}/docs/product/spec/b.md"),
+        "# b\n\n-----\nartifact_path: docs/product/spec/b.md\ncontract_ref: docs/process/a.md\n",
+    )
+    .expect("spec markdown");
+
+    let output = vida()
+        .args([
+            "docflow",
+            "task-impact",
+            "--task-id",
+            "vida-rf1.2.6",
+            "--root",
+            &root,
+        ])
+        .output()
+        .expect("docflow rust task-impact shell should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"command\":\"task-impact\""));
+    assert!(stdout.contains("\"source_artifact\":\"docs/process/a.md\""));
+    assert!(stdout.contains("\"path\":\"docs/product/spec/b.md\""));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
 }
 
 #[test]
@@ -327,6 +2509,18 @@ fn doctor_surface_reports_integrity_checks() {
     assert!(stdout.contains(
         "authoritative state spine: ok (state-v1, 8 entity surfaces, mutation root vida task)"
     ));
+    assert!(stdout.contains("task store: ok (0 total, 0 open, 0 in_progress, 0 closed, 0 epics, 0 ready)"));
+    assert!(stdout.contains(
+        "run graph: ok (execution_plans=0, routed_runs=0, governance=0, resumability=0, reconciliation=0)"
+    ));
+    assert!(stdout.contains("latest run graph status: ok (none)"));
+    assert!(stdout.contains("latest run graph recovery: ok (none)"));
+    assert!(stdout.contains("latest run graph checkpoint: ok (none)"));
+    assert!(stdout.contains("latest run graph gate: ok (none)"));
+    assert!(stdout.contains("launcher/runtime paths: ok (vida="));
+    assert!(stdout.contains("project_root="));
+    assert!(stdout.contains("taskflow_runtime="));
+    assert!(stdout.contains("dependency graph: ok (0 issues)"));
     assert!(stdout.contains("boot compatibility: ok (compatible (normal_boot_allowed))"));
     assert!(stdout.contains(
         "migration preflight: ok (compatible / no_migration_required (normal_boot_allowed))"
@@ -334,7 +2528,141 @@ fn doctor_surface_reports_integrity_checks() {
     assert!(stdout.contains(
         "migration receipts: ok (compatibility=1, application=0, verification=0, cutover=0, rollback=0)"
     ));
+    assert!(stdout.contains("task reconciliation: ok (none)"));
+    assert!(stdout.contains("task reconciliation rollup: ok (0 receipts)"));
+    assert!(stdout.contains("taskflow snapshot bridge: ok (idle (no snapshot bridge receipts))"));
     assert!(stdout.contains("effective instruction bundle: ok (framework-agent-definition -> framework-instruction-contract -> framework-prompt-template-config)"));
+}
+
+#[test]
+fn status_surface_supports_json_summary() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let output = vida()
+        .args(["status", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("status json should run");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("status json should parse");
+    assert_eq!(parsed["surface"], "vida status");
+    assert_eq!(parsed["storage_metadata"]["engine"], "surrealdb");
+    assert_eq!(parsed["storage_metadata"]["backend"], "kv-surrealkv");
+    assert_eq!(parsed["storage_metadata"]["namespace"], "vida");
+    assert_eq!(parsed["storage_metadata"]["database"], "primary");
+    assert_eq!(parsed["state_spine"]["state_schema_version"], 1);
+    assert_eq!(parsed["state_spine"]["entity_surface_count"], 8);
+    assert_eq!(parsed["state_spine"]["authoritative_mutation_root"], "vida task");
+    assert_eq!(
+        parsed["latest_effective_bundle_receipt"]["root_artifact_id"],
+        "framework-agent-definition"
+    );
+    assert_eq!(parsed["latest_effective_bundle_receipt"]["artifact_count"], 3);
+    assert_eq!(
+        parsed["boot_compatibility"]["classification"],
+        "compatible"
+    );
+    assert_eq!(
+        parsed["migration_state"]["migration_state"],
+        "no_migration_required"
+    );
+    assert_eq!(parsed["migration_receipts"]["compatibility_receipts"], 1);
+    assert!(parsed["latest_task_reconciliation"].is_null());
+    assert_eq!(parsed["task_reconciliation_rollup"]["total_receipts"], 0);
+    assert!(parsed["task_reconciliation_rollup"]["latest_recorded_at"].is_null());
+    assert!(parsed["task_reconciliation_rollup"]["latest_source_path"].is_null());
+    assert_eq!(parsed["task_reconciliation_rollup"]["total_task_rows"], 0);
+    assert_eq!(parsed["taskflow_snapshot_bridge"]["total_receipts"], 0);
+    assert!(parsed["latest_run_graph_status"].is_null());
+    assert!(parsed["latest_run_graph_recovery"].is_null());
+    assert!(parsed["latest_run_graph_checkpoint"].is_null());
+    assert!(parsed["latest_run_graph_gate"].is_null());
+    assert_eq!(parsed["taskflow_snapshot_bridge"]["export_receipts"], 0);
+    assert_eq!(parsed["taskflow_snapshot_bridge"]["memory_export_receipts"], 0);
+    assert_eq!(parsed["taskflow_snapshot_bridge"]["file_export_receipts"], 0);
+    assert!(parsed["taskflow_snapshot_bridge"]["latest_operation"].is_null());
+    assert!(parsed["taskflow_snapshot_bridge"]["latest_source_path"].is_null());
+}
+
+#[test]
+fn doctor_surface_supports_json_summary() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let output = vida()
+        .args(["doctor", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("doctor json should run");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("doctor json should parse");
+    assert_eq!(parsed["surface"], "vida doctor");
+    assert_eq!(parsed["storage_metadata"]["engine"], "surrealdb");
+    assert_eq!(parsed["storage_metadata"]["backend"], "kv-surrealkv");
+    assert_eq!(parsed["state_spine"]["entity_surface_count"], 8);
+    assert_eq!(parsed["task_store"]["total_count"], 0);
+    assert_eq!(parsed["task_store"]["ready_count"], 0);
+    assert_eq!(parsed["run_graph"]["execution_plan_count"], 0);
+    assert_eq!(parsed["dependency_graph"]["issue_count"], 0);
+    assert_eq!(
+        parsed["boot_compatibility"]["classification"],
+        "compatible"
+    );
+    assert_eq!(
+        parsed["migration_preflight"]["migration_state"],
+        "no_migration_required"
+    );
+    assert_eq!(parsed["migration_receipts"]["compatibility_receipts"], 1);
+    assert!(parsed["latest_task_reconciliation"].is_null());
+    assert_eq!(parsed["task_reconciliation_rollup"]["total_receipts"], 0);
+    assert!(parsed["task_reconciliation_rollup"]["latest_recorded_at"].is_null());
+    assert!(parsed["task_reconciliation_rollup"]["latest_source_path"].is_null());
+    assert_eq!(parsed["task_reconciliation_rollup"]["total_dependency_rows"], 0);
+    assert_eq!(parsed["taskflow_snapshot_bridge"]["total_receipts"], 0);
+    assert!(parsed["latest_run_graph_status"].is_null());
+    assert!(parsed["latest_run_graph_recovery"].is_null());
+    assert!(parsed["latest_run_graph_checkpoint"].is_null());
+    assert!(parsed["latest_run_graph_gate"].is_null());
+    assert_eq!(parsed["taskflow_snapshot_bridge"]["replace_receipts"], 0);
+    assert_eq!(parsed["taskflow_snapshot_bridge"]["memory_replace_receipts"], 0);
+    assert_eq!(parsed["taskflow_snapshot_bridge"]["file_replace_receipts"], 0);
+    assert!(parsed["taskflow_snapshot_bridge"]["latest_source_kind"].is_null());
+    assert_eq!(parsed["taskflow_snapshot_bridge"]["total_stale_removed"], 0);
+    assert_eq!(
+        parsed["effective_instruction_bundle"]["root_artifact_id"],
+        "framework-agent-definition"
+    );
+    assert!(
+        parsed["launcher_runtime_paths"]["vida"]
+            .as_str()
+            .expect("vida path should be a string")
+            .contains("vida")
+    );
+    assert!(
+        parsed["launcher_runtime_paths"]["taskflow_runtime"]
+            .as_str()
+            .expect("taskflow runtime should be a string")
+            .contains("taskflow")
+    );
 }
 
 #[test]
@@ -358,6 +2686,8 @@ fn doctor_surface_supports_color_render_mode() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("\u{1b}[1;36mvida doctor\u{1b}[0m"));
     assert!(stdout.contains("\u{1b}[1;32mok\u{1b}[0m"));
+    assert!(stdout.contains("\u{1b}[1;34mtask store\u{1b}[0m"));
+    assert!(stdout.contains("\u{1b}[1;34mrun graph\u{1b}[0m"));
 }
 
 #[test]

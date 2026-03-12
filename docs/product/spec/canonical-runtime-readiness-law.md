@@ -185,10 +185,10 @@ This layer gives VIDA a pre-runtime gate that can say whether the canonical syst
 
 This spec absorbs and concentrates readiness law previously scattered across:
 
-1. `docs/framework/plans/vida-0.3-instruction-kernel-spec.md`
-2. `docs/framework/plans/vida-0.3-migration-kernel-spec.md`
+1. `docs/process/framework-source-lineage-index.md`
+2. `docs/process/framework-source-lineage-index.md`
 3. `docs/product/spec/instruction-artifact-model.md`
-4. `docs/framework/research/canonical-runtime-readiness-external-patterns.md`
+4. `docs/process/framework-source-lineage-index.md`
 
 -----
 artifact_path: product/spec/canonical-runtime-readiness-law

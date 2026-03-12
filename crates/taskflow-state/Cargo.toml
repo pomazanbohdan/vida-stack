@@ -1,0 +1,11 @@
+[package]
+name = "taskflow-state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+taskflow-contracts = { path = "../taskflow-contracts" }
+taskflow-core = { path = "../taskflow-core" }
+thiserror.workspace = true
+

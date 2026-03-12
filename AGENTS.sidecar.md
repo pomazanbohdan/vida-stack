@@ -20,9 +20,9 @@ Purpose: provide the project docs map for the repository being developed on top 
 3. Product spec map:
    - `docs/product/spec/current-spec-map.md`
 4. Project documentation system:
-   - `docs/product/spec/project-documentation-system.md`
+   - `docs/product/spec/project-documentation-law.md`
 5. Documentation/product alignment matrix:
-   - `docs/product/spec/canonical-documentation-and-inventory-layers.md`
+   - `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
 6. Canonical runtime readiness law used by the project:
    - `docs/product/spec/canonical-runtime-readiness-law.md`
 7. Canonical runtime layer matrix:
@@ -38,7 +38,7 @@ Purpose: provide the project docs map for the repository being developed on top 
 2. Use this sidecar as the project docs map during the mandatory two-map initialization step.
 3. Continue first to `docs/project-root-map.md` when the task depends on active current-project understanding.
 4. Continue into the project canonical maps listed below when the task depends on product/spec understanding.
-5. For documentation/product alignment questions, continue to `docs/product/spec/canonical-documentation-and-inventory-layers.md`.
+5. For documentation/product alignment questions, continue to `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`.
 6. For documentation tooling or operator-command questions, continue to `docs/process/documentation-tooling-map.md`.
 7. For runtime-layering, runtime-readiness, or runtime-architecture questions, continue to `docs/product/spec/canonical-runtime-layer-matrix.md`.
 8. For project role/skill/profile/flow extension questions, continue to `docs/process/agent-extensions/README.md`.
@@ -68,10 +68,10 @@ Project-routing rule:
 artifact_path: project/repository/agents.sidecar
 artifact_type: bootstrap_doc
 artifact_version: '1'
-artifact_revision: '2026-03-10'
+artifact_revision: '2026-03-12'
 schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: '2026-03-10T15:37:40+02:00'
+updated_at: '2026-03-12T07:58:34+02:00'
 changelog_ref: AGENTS.sidecar.changelog.jsonl

@@ -18,9 +18,9 @@ scope_boundary:
     - mutation without route authorization
 mandatory_reads:
   - AGENTS.md
-  - vida/config/instructions/agent-definitions.orchestrator-entry.md
-  - vida/config/instructions/instruction-contracts.instruction-activation-protocol.md
-  - vida/config/instructions/instruction-contracts.thinking-protocol.md
+  - vida/config/instructions/agent-definitions/entry.orchestrator-entry.md
+  - vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md
+  - vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md
 input_contract:
   required_inputs:
     - user_request

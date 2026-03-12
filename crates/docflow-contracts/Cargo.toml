@@ -1,0 +1,9 @@
+[package]
+name = "docflow-contracts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+docflow-core = { path = "../docflow-core" }
+serde.workspace = true

@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose a bounded product, tooling, or documentation improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or need
+      description: What need or limitation are you addressing?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the desired behavior or capability.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Add any repo, product, or workflow context that matters.

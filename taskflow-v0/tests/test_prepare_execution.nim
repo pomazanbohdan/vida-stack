@@ -175,8 +175,8 @@ autonomous_execution:
 Runtime Role Packet:
 - worker_lane_confirmed: true
 - worker_role: worker
-- worker_entry: vida/config/instructions/agent-definitions.worker-entry.md
-- worker_thinking: vida/config/instructions/instruction-contracts.worker-thinking.md
+- worker_entry: vida/config/instructions/agent-definitions/entry.worker-entry.md
+- worker_thinking: vida/config/instructions/instruction-contracts/role.worker-thinking.md
 - impact_tail_policy: required_for_non_stc
 - impact_analysis_scope: bounded_to_assigned_scope
 Task: implement

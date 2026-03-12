@@ -1,4 +1,4 @@
-## VIDA Direct Runtime Consumption — final taskflow -> codex consumption loop.
+## VIDA Direct Runtime Consumption — final taskflow -> docflow consumption loop.
 
 import std/[json, os, osproc, strutils]
 import ./[config, role_selection, runtime_bundle, toon, utils]
@@ -47,7 +47,7 @@ proc finalConsumptionPayload*(requestText: string, cfg: JsonNode = loadRawConfig
   let bundleCheck = runtimeKernelBundleReady(bundle)
   let roleSelection = selectAgentRoleForRequest(requestText, cfg)
   let bundleOk = dottedGetBool(bundleCheck, "ok", false)
-  let codexEvidence =
+  let docflowEvidence =
     if bundleOk:
       finalConsumptionEvidence()
     else:
@@ -56,9 +56,9 @@ proc finalConsumptionPayload*(requestText: string, cfg: JsonNode = loadRawConfig
         "readiness": {"ok": false, "exit_code": 2, "output": "skipped_due_to_bundle_failure"},
         "proof": {"ok": false, "exit_code": 2, "output": "skipped_due_to_bundle_failure"},
       }
-  let readinessOk = dottedGetBool(codexEvidence, "readiness.ok", false)
-  let proofOk = dottedGetBool(codexEvidence, "proof.ok", false)
-  let overviewOk = dottedGetBool(codexEvidence, "overview.ok", false)
+  let readinessOk = dottedGetBool(docflowEvidence, "readiness.ok", false)
+  let proofOk = dottedGetBool(docflowEvidence, "proof.ok", false)
+  let overviewOk = dottedGetBool(docflowEvidence, "overview.ok", false)
 
   result = %*{
     "artifact_name": "taskflow_direct_runtime_consumption",
@@ -69,11 +69,11 @@ proc finalConsumptionPayload*(requestText: string, cfg: JsonNode = loadRawConfig
     "runtime_bundle": bundle,
     "bundle_check": bundleCheck,
     "role_selection": roleSelection,
-    "codex_activation": {
+    "docflow_activation": {
       "activated": true,
-      "runtime_family": "codex",
+      "runtime_family": "docflow",
       "owner_runtime": "taskflow",
-      "evidence": codexEvidence,
+      "evidence": docflowEvidence,
     },
     "direct_consumption_ready": bundleOk and readinessOk and proofOk and overviewOk,
   }

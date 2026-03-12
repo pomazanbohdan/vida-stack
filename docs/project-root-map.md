@@ -22,7 +22,7 @@ This map does not cover extracted secondary bundles by default.
    - project process lane
 4. `docs/project-memory/README.md`
    - project-memory lane
-5. `docs/product/spec/canonical-documentation-and-inventory-layers.md`
+5. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
    - documentation/product alignment matrix
 6. `docs/product/spec/canonical-runtime-layer-matrix.md`
    - runtime capability layering matrix for the active project canon
@@ -50,7 +50,7 @@ Do not use this map as the default route for extracted bundles unless the task e
    - continue to `docs/product/index.md`
    - then to `docs/product/spec/current-spec-map.md`
 2. Documentation alignment / documentation-state questions:
-   - continue to `docs/product/spec/canonical-documentation-and-inventory-layers.md`
+   - continue to `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
 3. Runtime layering / runtime architecture / runtime readiness questions:
    - continue to `docs/product/spec/canonical-runtime-layer-matrix.md`
 4. Process/runbook questions for the active project:
@@ -75,10 +75,10 @@ Do not use this map as the default route for extracted bundles unless the task e
 artifact_path: project/root-map
 artifact_type: system_map
 artifact_version: '1'
-artifact_revision: '2026-03-10'
+artifact_revision: '2026-03-12'
 schema_version: '1'
 status: canonical
 source_path: docs/project-root-map.md
 created_at: '2026-03-10T08:45:00+02:00'
-updated_at: '2026-03-10T15:41:04+02:00'
+updated_at: '2026-03-12T07:48:27+02:00'
 changelog_ref: project-root-map.changelog.jsonl

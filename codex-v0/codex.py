@@ -39,8 +39,8 @@ REQUIRED_FOOTER_FIELDS = (
 )
 MARKDOWN_EXTS = {".md", ".MD"}
 FOOTER_REFERENCE_KEYS = ("projection_ref", "contract_ref", "template_ref", "parent_definition_ref")
-LAYER_SPEC_PATH = REPO_ROOT / "docs/product/spec/canonical-documentation-and-inventory-layers.md"
-ACTIVATION_PROTOCOL_PATH = REPO_ROOT / "vida/config/instructions/instruction-contracts.instruction-activation-protocol.md"
+LAYER_SPEC_PATH = REPO_ROOT / "docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md"
+ACTIVATION_PROTOCOL_PATH = REPO_ROOT / "vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md"
 READINESS_REQUIRED_ARTIFACTS = (
     "vida/config/instructions/instruction_catalog.yaml",
     "vida/config/instructions/projection_manifest.yaml",
@@ -54,51 +54,51 @@ READINESS_REQUIRED_ARTIFACTS = (
 LAYER_SCOPE_MAP: dict[int, tuple[str, ...]] = {
     1: (
         "docs/product/spec/instruction-artifact-model.md",
-        "docs/product/spec/project-documentation-system.md",
+        "docs/product/spec/project-documentation-law.md",
         "docs/product/spec/current-spec-map.md",
-        "docs/product/spec/canonical-documentation-and-inventory-layers.md",
+        "docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md",
     ),
     2: (
         "docs/product/spec/canonical-inventory-law.md",
-        "docs/product/spec/project-documentation-system.md",
+        "docs/product/spec/project-documentation-law.md",
         "docs/product/spec/current-spec-map.md",
-        "vida/config/instructions/system-maps.framework-map-protocol.md",
+        "vida/config/instructions/system-maps/framework.map.md",
     ),
     3: (
-        "docs/product/spec/project-documentation-system.md",
-        "docs/product/spec/canonical-documentation-and-inventory-layers.md",
-        "vida/config/instructions/system-maps.framework-map-protocol.md",
-        "vida/config/instructions/instruction-contracts.documentation-operation-protocol.md",
+        "docs/product/spec/project-documentation-law.md",
+        "docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md",
+        "vida/config/instructions/system-maps/framework.map.md",
+        "vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md",
     ),
     4: (
-        "docs/product/spec/canonical-documentation-and-inventory-layers.md",
-        "vida/config/instructions/system-maps.framework-map-protocol.md",
-        "vida/config/instructions/instruction-contracts.documentation-operation-protocol.md",
+        "docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md",
+        "vida/config/instructions/system-maps/framework.map.md",
+        "vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md",
         "AGENTS.sidecar.md",
     ),
     5: (
         "docs/product/spec/canonical-relation-law.md",
-        "docs/product/spec/project-documentation-system.md",
-        "docs/product/spec/canonical-documentation-and-inventory-layers.md",
+        "docs/product/spec/project-documentation-law.md",
+        "docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md",
         "AGENTS.sidecar.md",
     ),
     6: (
-        "docs/product/spec/project-documentation-system.md",
-        "vida/config/instructions/system-maps.framework-map-protocol.md",
+        "docs/product/spec/project-documentation-law.md",
+        "vida/config/instructions/system-maps/framework.map.md",
         "AGENTS.sidecar.md",
-        "vida/config/instructions/instruction-contracts.documentation-operation-protocol.md",
+        "vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md",
     ),
     7: (
         "docs/product/spec/canonical-runtime-readiness-law.md",
         "docs/product/spec/instruction-artifact-model.md",
-        "docs/framework/research/canonical-runtime-readiness-external-patterns.md",
-        "docs/product/spec/canonical-documentation-and-inventory-layers.md",
-        "vida/config/instructions/instruction-contracts.documentation-operation-protocol.md",
+        "docs/process/framework-source-lineage-index.md",
+        "docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md",
+        "vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md",
         "AGENTS.sidecar.md",
     ),
     8: (
-        "docs/product/spec/canonical-documentation-and-inventory-layers.md",
-        "vida/config/instructions/system-maps.framework-map-protocol.md",
+        "docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md",
+        "vida/config/instructions/system-maps/framework.map.md",
         "docs/product/spec/current-spec-map.md",
         "AGENTS.sidecar.md",
     ),
@@ -646,7 +646,7 @@ def validate_protocol_index_coverage(file_path: Path, protocol_index_body: str) 
     if not is_canonical_protocol(file_path):
         return []
     rel = relative_to_root(file_path)
-    if rel == relative_to_root(REPO_ROOT / "vida/config/instructions/system-maps.protocol-index.md"):
+    if rel == relative_to_root(REPO_ROOT / "vida/config/instructions/system-maps/protocol.index.md"):
         return []
     if rel in protocol_index_body or file_path.name in protocol_index_body:
         return []
@@ -733,7 +733,7 @@ def readiness_issue_rows(root: Path | None, profile: str, files: list[Path]) -> 
 
 def protocol_coverage_issue_rows(root: Path | None, profile: str, files: list[Path]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    protocol_index_path = REPO_ROOT / "vida/config/instructions/system-maps.protocol-index.md"
+    protocol_index_path = REPO_ROOT / "vida/config/instructions/system-maps/protocol.index.md"
     _, protocol_index_body, _ = load_markdown(protocol_index_path)
     activation_body = ACTIVATION_PROTOCOL_PATH.read_text(encoding="utf-8")
     scoped_paths = [(path.resolve().parent, path.resolve()) for path in files if path.exists()] if files else scan_targets(root, profile)
@@ -750,7 +750,7 @@ def fastcheck_issue_rows(root: Path | None, profile: str, files: list[Path]) -> 
     scoped_paths = [(path.resolve().parent, path.resolve()) for path in files if path.exists()] if files else scan_targets(root, profile)
     artifact_targets, path_targets = existing_reference_targets()
     activation_body = ACTIVATION_PROTOCOL_PATH.read_text(encoding="utf-8")
-    protocol_index_path = REPO_ROOT / "vida/config/instructions/system-maps.protocol-index.md"
+    protocol_index_path = REPO_ROOT / "vida/config/instructions/system-maps/protocol.index.md"
     _, protocol_index_body, _ = load_markdown(protocol_index_path)
     rows: list[dict[str, object]] = []
     for scope_root, file_path in scoped_paths:
@@ -788,7 +788,7 @@ def doctor_issue_rows_for_targets(targets: list[tuple[Path, Path]], show_warning
     severity_counts: Counter[str] = Counter()
     artifact_targets, path_targets = existing_reference_targets()
     activation_body = ACTIVATION_PROTOCOL_PATH.read_text(encoding="utf-8")
-    protocol_index_path = REPO_ROOT / "vida/config/instructions/system-maps.protocol-index.md"
+    protocol_index_path = REPO_ROOT / "vida/config/instructions/system-maps/protocol.index.md"
     _, protocol_index_body, _ = load_markdown(protocol_index_path)
     for scope_root, file_path in targets:
         record = build_record(scope_root, file_path)

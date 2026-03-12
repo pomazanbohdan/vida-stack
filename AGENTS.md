@@ -17,13 +17,13 @@ Two-map initialization:
 3. `AGENTS.sidecar.md` is the project docs map only; it does not replace the framework map.
 
 Instruction activation note:
-1. Use `vida/config/instructions/instruction-contracts.instruction-activation-protocol.md` as the canonical rule for when instruction surfaces are `always-on`, `lane-entry`, `triggered`, or `closure/reflection` only.
-2. If the active task context is documentation-shaped, activate `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md` immediately at `L0` without waiting for a second manual selection step.
+1. Use `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md` as the canonical rule for when instruction surfaces are `always-on`, `lane-entry`, `triggered`, or `closure/reflection` only.
+2. If the active task context is documentation-shaped, activate `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md` immediately at `L0` without waiting for a second manual selection step.
 
-Canonical role entries:
-1. Orchestrator entry: `vida/config/instructions/agent-definitions.orchestrator-entry.md`
-2. Worker entry: `vida/config/instructions/agent-definitions.worker-entry.md`
-3. Worker thinking subset: `vida/config/instructions/instruction-contracts.worker-thinking.md`
+Canonical lane entries:
+1. Orchestrator entry: `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
+2. Worker entry: `vida/config/instructions/agent-definitions/entry.worker-entry.md`
+3. Worker thinking subset: `vida/config/instructions/instruction-contracts/role.worker-thinking.md`
 
 Language policy:
 1. Framework-owned files stay in English.
@@ -36,8 +36,8 @@ Language policy:
 
 Use this file only to determine which entry contract applies next.
 
-1. If the active task packet or runtime packet explicitly confirms worker lane semantics, follow `vida/config/instructions/agent-definitions.worker-entry.md`.
-2. If worker-lane confirmation is absent or ambiguous, follow `vida/config/instructions/agent-definitions.orchestrator-entry.md`.
+1. If the active task packet or runtime packet explicitly confirms worker lane semantics, follow `vida/config/instructions/agent-definitions/entry.worker-entry.md`.
+2. If worker-lane confirmation is absent or ambiguous, follow `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`.
 3. Worker-lane confirmation may come from:
    - rendered worker prompt/runtime packet,
    - delegated/external worker packet,
@@ -64,22 +64,23 @@ These rules apply across all lanes unless a more specific worker rule narrows be
    - project/product knowledge belongs to `AGENTS.sidecar.md` and the downstream project-owned documentation surfaces it resolves.
 5. **[MUST NOT]** Never auto-commit without explicit user permission.
 6. **[MUST]** Prefer root-cause, architecture-oriented fixes over hotfixes.
-7. **[MUST]** Read and apply `vida/config/instructions/instruction-contracts.thinking-protocol.md` algorithms before analysis/decisions in orchestrator lane.
-8. **[MUST]** If root `vida.config.yaml` exists, apply `vida/config/instructions/runtime-instructions.project-overlay-protocol.md`.
-9. **[MUST]** Keep bootstrap routing in `AGENTS.md`, the project docs map in `AGENTS.sidecar.md`, active instruction canon in `vida/config/instructions/*`, and runtime implementation in `taskflow-v0/*`; keep project-owned behavior in `docs/product/*`, `docs/process/*`, and `scripts/*`.
-10. **[MUST]** Use `rg` as the primary cross-file search tool.
-11. **[MUST]** Never widen scope silently when user intent, ownership layer, or risk posture changes materially.
-12. **[MUST]** Before conclusions that depend on live server/API behavior, validate with real requests and actual payloads.
-13. **[MUST]** Respect LEGACY-ZERO: no obsolete aliases, dual-paths, or compatibility leftovers unless the user explicitly asks for a migration window.
-14. **[MUST]** Explicit VIDA framework self-diagnosis is an orchestrator-only exception path only for direct chat diagnosis: run it directly in the main orchestrator lane, outside TaskFlow, unless the user explicitly requests task tracking; in tracked FSAP/remediation flow, keep primary framing in the orchestrator lane but require delegated verification/proving before closure unless a structured override receipt is recorded.
-15. **[MUST NOT]** Do not execute behavior based only on generic assistant defaults when that behavior is not explicitly described or authorized by the active VIDA/project protocol stack.
-16. **[MUST]** Treat framework/project protocols as an allowlist: if an execution behavior, fallback, or mutation path is not described, route-authorized, or explicitly escalated by the framework, it is forbidden by default.
-17. **[MUST]** Treat compact/context compression as possible at any moment; persist critical task/routing assumptions through canonical receipts, TaskFlow evidence, or context capsules before risky transitions.
-18. **[MUST]** `Thinking mode: ...` is a reporting label only; it must not be used to reveal intermediate chain-of-thought or hidden reasoning steps.
-19. **[MUST]** If a protocol/process gap is discovered during active work, use only a bounded workaround for the current task, record the gap through the canonical framework bug path when silent diagnosis is active, and do not silently invent a permanent process.
-20. **[MUST]** When evidence sources conflict, prefer the highest-evidence source recognized by the active protocol stack before making conclusions or mutations.
-21. **[MUST]** When worker-first execution is active and new delegated lane allocation fails because of agent/thread saturation, attempt reuse of existing eligible agents first; do not fall back to local-only continuation until reuse or explicit saturation recovery has been attempted and recorded.
-22. **[MUST]** If the active task context is documentation-shaped, activate `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md` immediately at `L0`; do not defer documentation protocol activation to a later optional read.
+7. **[MUST]** Read and apply `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md` algorithms before analysis/decisions in orchestrator lane.
+8. **[MUST]** Keep `vida/config/instructions/instruction-contracts/overlay.session-context-continuity-protocol.md` active in orchestrator lane for cross-step context preservation throughout the session.
+9. **[MUST]** If root `vida.config.yaml` exists, apply `vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md`.
+10. **[MUST]** Keep bootstrap routing in `AGENTS.md`, the project docs map in `AGENTS.sidecar.md`, active instruction canon in `vida/config/instructions/*`, and runtime implementation in `taskflow-v0/*`; keep project-owned behavior in `docs/product/*`, `docs/process/*`, and `scripts/*`.
+11. **[MUST]** Use `rg` as the primary cross-file search tool.
+12. **[MUST]** Never widen scope silently when user intent, ownership layer, or risk posture changes materially.
+13. **[MUST]** Before conclusions that depend on live server/API behavior, validate with real requests and actual payloads.
+14. **[MUST]** Respect LEGACY-ZERO: no obsolete aliases, dual-paths, or compatibility leftovers unless the user explicitly asks for a migration window.
+15. **[MUST]** Explicit VIDA framework self-diagnosis is an orchestrator-only exception path only for direct chat diagnosis: run it directly in the main orchestrator lane, outside TaskFlow, unless the user explicitly requests task tracking; in tracked FSAP/remediation flow, keep primary framing in the orchestrator lane but require delegated verification/proving before closure unless a structured override receipt is recorded.
+16. **[MUST NOT]** Do not execute behavior based only on generic assistant defaults when that behavior is not explicitly described or authorized by the active VIDA/project protocol stack.
+17. **[MUST]** Treat framework/project protocols as an allowlist: if an execution behavior, fallback, or mutation path is not described, route-authorized, or explicitly escalated by the framework, it is forbidden by default.
+18. **[MUST]** Treat compact/context compression as possible at any moment; persist critical task/routing assumptions through canonical receipts, TaskFlow evidence, or context capsules before risky transitions.
+19. **[MUST]** `Thinking mode: ...` is a reporting label only; it must not be used to reveal intermediate chain-of-thought or hidden reasoning steps.
+20. **[MUST]** If a protocol/process gap is discovered during active work, use only a bounded workaround for the current task, record the gap through the canonical framework bug path when silent diagnosis is active, and do not silently invent a permanent process.
+21. **[MUST]** When evidence sources conflict, prefer the highest-evidence source recognized by the active protocol stack before making conclusions or mutations.
+22. **[MUST]** When worker-first execution is active and new delegated lane allocation fails because of agent/thread saturation, attempt reuse of existing eligible agents first; do not fall back to local-only continuation until reuse or explicit saturation recovery has been attempted and recorded.
+23. **[MUST]** If the active task context is documentation-shaped, activate `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md` immediately at `L0`; do not defer documentation protocol activation to a later optional read.
 
 Documentation-analysis note:
 1. When documentation-shaped work is active, documentation ownership/model conclusions must be grounded in canonical instruction/spec/map artifacts, not in changelog or generated status artifacts.
@@ -116,30 +117,30 @@ After context compression/clearing:
 3. Read the framework root map through `vida/root-map.md`.
 4. Use `vida/root-map.md` for framework-owned discovery and `AGENTS.sidecar.md` for project-document discovery.
 5. Resolve lane:
-   - worker lane -> `vida/config/instructions/agent-definitions.worker-entry.md`
-   - orchestrator lane -> `vida/config/instructions/agent-definitions.orchestrator-entry.md`
-6. If the active task is clearly about documentation, sidecar lineage, canonical maps, or documentation tooling, activate `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md` immediately.
+   - worker lane -> `vida/config/instructions/agent-definitions/entry.worker-entry.md`
+   - orchestrator lane -> `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
+6. If the active task is clearly about documentation, sidecar lineage, canonical maps, or documentation tooling, activate `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md` immediately.
 7. Complete the selected boot path before resuming work.
 
 ### Orchestrator Boot Pointer
 
-For orchestrator lane, use `vida/config/instructions/agent-definitions.orchestrator-entry.md` as the canonical source for:
+For orchestrator lane, use `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md` as the canonical source for:
 1. L0 contract,
 2. request-intent gate,
 3. TaskFlow engagement gate,
 4. worker-first orchestration,
 5. boot profile read-set,
 6. runtime execution rules.
-7. instruction activation by phase via `vida/config/instructions/instruction-contracts.instruction-activation-protocol.md`.
-8. explicit boot sequencing via `vida/config/instructions/system-maps.orchestrator-boot-flow.md`.
+7. instruction activation by phase via `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`.
+8. explicit boot sequencing via `vida/config/instructions/system-maps/bootstrap.orchestrator-boot-flow.md`.
 
 
 ### Worker Boot Pointer
 
 For worker lane, use:
-1. `vida/config/instructions/agent-definitions.worker-entry.md`
-2. `vida/config/instructions/instruction-contracts.worker-thinking.md`
-3. `vida/config/instructions/system-maps.worker-boot-flow.md`
+1. `vida/config/instructions/agent-definitions/entry.worker-entry.md`
+2. `vida/config/instructions/instruction-contracts/role.worker-thinking.md`
+3. `vida/config/instructions/system-maps/bootstrap.worker-boot-flow.md`
 
 Workers must not bootstrap repository-wide orchestration policy unless the task packet explicitly asks for framework-lane audit behavior.
 
@@ -154,8 +155,8 @@ Workers must not bootstrap repository-wide orchestration policy unless the task 
 
 Instruction precedence:
 1. `AGENTS.md`
-2. lane entry contract (`vida/config/instructions/agent-definitions.orchestrator-entry.md` or `vida/config/instructions/agent-definitions.worker-entry.md`)
-3. canonical protocol for the active domain from `vida/config/instructions/system-maps.protocol-index.md`
+2. lane entry contract (`vida/config/instructions/agent-definitions/entry.orchestrator-entry.md` or `vida/config/instructions/agent-definitions/entry.worker-entry.md`)
+3. canonical protocol for the active domain from `vida/config/instructions/system-maps/protocol.index.md`
 4. project overlay data (`vida.config.yaml`) without weakening framework invariants
 5. command doc / helper wrapper
 6. script implementation details
@@ -165,15 +166,15 @@ Conflict rule:
 
 Operational references:
 1. `vida/root-map.md`
-2. `vida/config/instructions/agent-definitions.orchestrator-entry.md`
-3. `vida/config/instructions/agent-definitions.worker-entry.md`
-4. `vida/config/instructions/instruction-contracts.worker-thinking.md`
-5. `vida/config/instructions/system-maps.framework-map-protocol.md`
-6. `vida/config/instructions/system-maps.protocol-index.md`
-7. `vida/config/instructions/instruction-contracts.instruction-activation-protocol.md`
-8. `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md`
-9. `vida/config/instructions/system-maps.orchestrator-boot-flow.md`
-10. `vida/config/instructions/system-maps.worker-boot-flow.md`
+2. `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
+3. `vida/config/instructions/agent-definitions/entry.worker-entry.md`
+4. `vida/config/instructions/instruction-contracts/role.worker-thinking.md`
+5. `vida/config/instructions/system-maps/framework.map.md`
+6. `vida/config/instructions/system-maps/protocol.index.md`
+7. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
+8. `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md`
+9. `vida/config/instructions/system-maps/bootstrap.orchestrator-boot-flow.md`
+10. `vida/config/instructions/system-maps/bootstrap.worker-boot-flow.md`
 
 Initialization bootstrap rule:
 1. During project initialization, read `AGENTS.sidecar.md` immediately after `AGENTS.md`, then resolve the framework-owned bootstrap path in `vida/root-map.md` before lane resolution or broad manual inspection.

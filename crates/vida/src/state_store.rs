@@ -1,12 +1,27 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Deserializer;
 use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::types::SurrealValue;
 use surrealdb::Surreal;
+use taskflow_contracts::{DependencyEdge as CanonicalDependencyEdge, TaskRecord as CanonicalTaskRecord};
+use taskflow_core::{
+    IssueType as CanonicalIssueType, TaskId as CanonicalTaskId, TaskStatus as CanonicalTaskStatus,
+    Timestamp as CanonicalTimestamp,
+};
+use taskflow_state::InMemoryTaskStore;
+use taskflow_state_fs::{
+    read_snapshot_into_memory as read_canonical_snapshot_into_memory,
+    restore_in_memory_store as restore_canonical_in_memory_store,
+    write_snapshot as write_canonical_snapshot, TaskSnapshot,
+};
+use taskflow_state_surreal::{StateSpineManifestContract, SurrealStoreTarget};
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 const DEFAULT_STATE_DIR: &str = ".vida/data/state";
 pub const STATE_NAMESPACE: &str = "vida";
@@ -14,33 +29,7 @@ pub const STATE_DATABASE: &str = "primary";
 pub const DEFAULT_INSTRUCTION_SOURCE_ROOT: &str = "_vida/instructions";
 pub const DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT: &str = "_vida/framework-memory";
 const REPO_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
-const STATE_SCHEMA: &str = r#"
-DEFINE TABLE task SCHEMALESS;
-DEFINE TABLE task_dependency SCHEMALESS;
-DEFINE TABLE task_blocker SCHEMALESS;
-DEFINE TABLE execution_plan_state SCHEMALESS;
-DEFINE TABLE routed_run_state SCHEMALESS;
-DEFINE TABLE governance_state SCHEMALESS;
-DEFINE TABLE resumability_capsule SCHEMALESS;
-DEFINE TABLE task_reconciliation_summary SCHEMALESS;
-DEFINE TABLE state_spine_manifest SCHEMALESS;
-DEFINE TABLE boot_compatibility_state SCHEMALESS;
-DEFINE TABLE migration_runtime_state SCHEMALESS;
-DEFINE TABLE migration_compatibility_receipt SCHEMALESS;
-DEFINE TABLE migration_application_receipt SCHEMALESS;
-DEFINE TABLE migration_verification_receipt SCHEMALESS;
-DEFINE TABLE migration_cutover_readiness_receipt SCHEMALESS;
-DEFINE TABLE migration_rollback_note SCHEMALESS;
-DEFINE TABLE storage_meta SCHEMALESS;
-UPSERT storage_meta:primary CONTENT {
-  engine: 'surrealdb',
-  backend: 'kv-surrealkv',
-  namespace: 'vida',
-  database: 'primary',
-  state_schema_version: 1,
-  instruction_schema_version: 1
-};
-
+const INSTRUCTION_STATE_SCHEMA: &str = r#"
 DEFINE TABLE instruction_artifact SCHEMALESS;
 DEFINE TABLE instruction_dependency_edge SCHEMALESS;
 DEFINE TABLE instruction_sidecar SCHEMALESS;
@@ -54,6 +43,11 @@ DEFINE TABLE instruction_ingest_receipt SCHEMALESS;
 DEFINE TABLE source_tree_config SCHEMALESS;
 "#;
 
+fn state_schema_document() -> String {
+    let storage_schema = SurrealStoreTarget::new(DEFAULT_STATE_DIR).bootstrap_schema_document();
+    format!("{storage_schema}\n\n{INSTRUCTION_STATE_SCHEMA}")
+}
+
 #[derive(Debug)]
 pub struct StateStore {
     db: Surreal<Db>,
@@ -66,7 +60,7 @@ impl StateStore {
 
         let db: Surreal<Db> = Surreal::new::<SurrealKv>(root.clone()).await?;
         db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
-        db.query(STATE_SCHEMA).await?;
+        db.query(state_schema_document()).await?;
 
         let store = Self { db, root };
         store.ensure_minimal_authoritative_state_spine().await?;
@@ -88,12 +82,50 @@ impl StateStore {
         &self.root
     }
 
-    pub async fn backend_summary(&self) -> Result<String, StateStoreError> {
+    pub async fn storage_metadata_summary(&self) -> Result<StorageMetadataSummary, StateStoreError> {
         let row: Option<StorageMetaRow> = self.db.select(("storage_meta", "primary")).await?;
         let row = row.ok_or(StateStoreError::MissingMetadata)?;
+        let expected = SurrealStoreTarget::new(DEFAULT_STATE_DIR).storage_meta();
+        if row.engine != expected.engine
+            || row.backend != expected.backend
+            || row.namespace != expected.namespace
+            || row.database != expected.database
+            || row.state_schema_version != expected.state_schema_version
+            || row.instruction_schema_version != expected.instruction_schema_version
+        {
+            return Err(StateStoreError::InvalidStorageMetadata {
+                reason: format!(
+                    "expected engine={} backend={} namespace={} database={} state_schema_version={} instruction_schema_version={}, got engine={} backend={} namespace={} database={} state_schema_version={} instruction_schema_version={}",
+                    expected.engine,
+                    expected.backend,
+                    expected.namespace,
+                    expected.database,
+                    expected.state_schema_version,
+                    expected.instruction_schema_version,
+                    row.engine,
+                    row.backend,
+                    row.namespace,
+                    row.database,
+                    row.state_schema_version,
+                    row.instruction_schema_version
+                ),
+            });
+        }
+        Ok(StorageMetadataSummary {
+            engine: row.engine,
+            backend: row.backend,
+            namespace: row.namespace,
+            database: row.database,
+            state_schema_version: row.state_schema_version,
+            instruction_schema_version: row.instruction_schema_version,
+        })
+    }
+
+    pub async fn backend_summary(&self) -> Result<String, StateStoreError> {
+        let summary = self.storage_metadata_summary().await?;
         Ok(format!(
             "{} state-v{} instruction-v{}",
-            row.backend, row.state_schema_version, row.instruction_schema_version
+            summary.backend, summary.state_schema_version, summary.instruction_schema_version
         ))
     }
 
@@ -104,22 +136,8 @@ impl StateStore {
             .map(|row| row.initialized_at)
             .unwrap_or_else(|| unix_timestamp_nanos().to_string());
 
-        let content = StateSpineManifestContent {
-            manifest_id: "primary".to_string(),
-            state_schema_version: 1,
-            authoritative_mutation_root: "vida task".to_string(),
-            entity_surfaces: vec![
-                "task".to_string(),
-                "task_dependency".to_string(),
-                "task_blocker".to_string(),
-                "execution_plan_state".to_string(),
-                "routed_run_state".to_string(),
-                "governance_state".to_string(),
-                "resumability_capsule".to_string(),
-                "task_reconciliation_summary".to_string(),
-            ],
-            initialized_at,
-        };
+        let contract = SurrealStoreTarget::new(DEFAULT_STATE_DIR).state_spine_manifest_contract();
+        let content = StateSpineManifestContent::from_contract(contract, initialized_at);
 
         let _: Option<StateSpineManifestContent> = self
             .db
@@ -133,6 +151,26 @@ impl StateStore {
         let row: Option<StateSpineManifestContent> =
             self.db.select(("state_spine_manifest", "primary")).await?;
         let row = row.ok_or(StateStoreError::MissingStateSpineManifest)?;
+        let expected = SurrealStoreTarget::new(DEFAULT_STATE_DIR).state_spine_manifest_contract();
+        if row.manifest_id != expected.manifest_id
+            || row.state_schema_version != expected.state_schema_version
+            || row.authoritative_mutation_root != expected.authoritative_mutation_root
+            || row.entity_surfaces != expected.entity_surfaces
+        {
+            return Err(StateStoreError::InvalidStateSpineManifest {
+                reason: format!(
+                    "expected manifest_id={} state_schema_version={} authoritative_mutation_root={} entity_surfaces={:?}, got manifest_id={} state_schema_version={} authoritative_mutation_root={} entity_surfaces={:?}",
+                    expected.manifest_id,
+                    expected.state_schema_version,
+                    expected.authoritative_mutation_root,
+                    expected.entity_surfaces,
+                    row.manifest_id,
+                    row.state_schema_version,
+                    row.authoritative_mutation_root,
+                    row.entity_surfaces,
+                ),
+            });
+        }
         if row.authoritative_mutation_root.trim().is_empty() {
             return Err(StateStoreError::InvalidStateSpineManifest {
                 reason: "authoritative mutation root is empty".to_string(),
@@ -175,14 +213,15 @@ impl StateStore {
             }
 
             let content = TaskContent::from(record);
-            let existing: Option<TaskRecord> = self.db.select(("task", task_id.as_str())).await?;
+            let existing: Option<TaskStorageRow> =
+                self.db.select(("task", task_id.as_str())).await?;
             match existing {
                 None => imported += 1,
-                Some(current) if current == TaskRecord::from(content.clone()) => unchanged += 1,
+                Some(current) if current == TaskStorageRow::from(content.clone()) => unchanged += 1,
                 Some(_) => updated += 1,
             }
 
-            let _: Option<TaskContent> = self
+            let _: Option<TaskStorageRow> = self
                 .db
                 .upsert(("task", task_id.as_str()))
                 .content(content.clone())
@@ -239,13 +278,21 @@ impl StateStore {
     }
 
     pub async fn show_task(&self, task_id: &str) -> Result<TaskRecord, StateStoreError> {
-        let row: Option<TaskRecord> = self.db.select(("task", task_id)).await?;
-        row.ok_or_else(|| StateStoreError::MissingTask {
-            task_id: task_id.to_string(),
-        })
+        let row: Option<TaskStorageRow> = self.db.select(("task", task_id)).await?;
+        row.map(TaskRecord::from)
+            .ok_or_else(|| StateStoreError::MissingTask {
+                task_id: task_id.to_string(),
+            })
     }
 
     pub async fn ready_tasks(&self) -> Result<Vec<TaskRecord>, StateStoreError> {
+        self.ready_tasks_scoped(None).await
+    }
+
+    pub async fn ready_tasks_scoped(
+        &self,
+        scope_task_id: Option<&str>,
+    ) -> Result<Vec<TaskRecord>, StateStoreError> {
         let mut rows = self.all_tasks().await?;
         rows.sort_by(task_sort_key);
 
@@ -253,9 +300,20 @@ impl StateStore {
             .iter()
             .map(|task| (task.id.clone(), task.status.clone()))
             .collect::<std::collections::BTreeMap<_, _>>();
+        let scope_ids = if let Some(scope_task_id) = scope_task_id {
+            Some(self.ready_scope_ids(&rows, scope_task_id)?)
+        } else {
+            None
+        };
 
         let mut ready = rows
             .into_iter()
+            .filter(|task| {
+                scope_ids
+                    .as_ref()
+                    .map(|ids| ids.contains(&task.id))
+                    .unwrap_or(true)
+            })
             .filter(|task| task.status == "open" || task.status == "in_progress")
             .filter(|task| task.issue_type != "epic")
             .filter(|task| {
@@ -275,13 +333,627 @@ impl StateStore {
         Ok(ready)
     }
 
+    fn ready_scope_ids(
+        &self,
+        rows: &[TaskRecord],
+        scope_task_id: &str,
+    ) -> Result<BTreeSet<String>, StateStoreError> {
+        if !rows.iter().any(|task| task.id == scope_task_id) {
+            return Err(StateStoreError::MissingTask {
+                task_id: scope_task_id.to_string(),
+            });
+        }
+
+        let mut children = BTreeMap::<String, Vec<String>>::new();
+        for task in rows {
+            for dependency in &task.dependencies {
+                if dependency.edge_type != "parent-child" {
+                    continue;
+                }
+                children
+                    .entry(dependency.depends_on_id.clone())
+                    .or_default()
+                    .push(task.id.clone());
+            }
+        }
+
+        let mut scope_ids = BTreeSet::new();
+        let mut stack = vec![scope_task_id.to_string()];
+        while let Some(current) = stack.pop() {
+            if !scope_ids.insert(current.clone()) {
+                continue;
+            }
+            if let Some(descendants) = children.get(&current) {
+                stack.extend(descendants.iter().cloned());
+            }
+        }
+
+        Ok(scope_ids)
+    }
+
+    pub async fn task_dependencies(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<TaskDependencyStatus>, StateStoreError> {
+        let task = self.show_task(task_id).await?;
+        let by_id = self
+            .all_tasks()
+            .await?
+            .into_iter()
+            .map(|task| (task.id.clone(), task))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        let mut dependencies = task
+            .dependencies
+            .into_iter()
+            .map(|dependency| {
+                let depends_on_id = dependency.depends_on_id.clone();
+                let dependency_status = by_id
+                    .get(&depends_on_id)
+                    .map(|task| task.status.clone())
+                    .unwrap_or_else(|| "missing".to_string());
+                TaskDependencyStatus {
+                    issue_id: dependency.issue_id,
+                    depends_on_id,
+                    edge_type: dependency.edge_type,
+                    dependency_status,
+                    dependency_issue_type: by_id.get(&dependency.depends_on_id).map(|task| task.issue_type.clone()),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        dependencies.sort_by(|left, right| {
+            left.edge_type
+                .cmp(&right.edge_type)
+                .then_with(|| left.depends_on_id.cmp(&right.depends_on_id))
+        });
+        Ok(dependencies)
+    }
+
+    pub async fn reverse_dependencies(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<TaskDependencyStatus>, StateStoreError> {
+        let _ = self.show_task(task_id).await?;
+        let tasks = self.all_tasks().await?;
+        let by_id = tasks
+            .iter()
+            .cloned()
+            .map(|task| (task.id.clone(), task))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        let mut reverse = tasks
+            .into_iter()
+            .flat_map(|task| {
+                let issue_id = task.id.clone();
+                let issue_status = task.status.clone();
+                let issue_type = task.issue_type.clone();
+                task.dependencies
+                    .into_iter()
+                    .filter(move |dependency| dependency.depends_on_id == task_id)
+                    .map(move |dependency| TaskDependencyStatus {
+                        issue_id: issue_id.clone(),
+                        depends_on_id: dependency.depends_on_id,
+                        edge_type: dependency.edge_type,
+                        dependency_status: issue_status.clone(),
+                        dependency_issue_type: Some(issue_type.clone()),
+                    })
+            })
+            .collect::<Vec<_>>();
+
+        reverse.sort_by(|left, right| {
+            left.edge_type
+                .cmp(&right.edge_type)
+                .then_with(|| left.issue_id.cmp(&right.issue_id))
+        });
+
+        for item in &mut reverse {
+            item.dependency_issue_type = by_id.get(&item.issue_id).map(|task| task.issue_type.clone());
+            item.dependency_status = by_id
+                .get(&item.issue_id)
+                .map(|task| task.status.clone())
+                .unwrap_or_else(|| "missing".to_string());
+        }
+
+        Ok(reverse)
+    }
+
+    pub async fn blocked_tasks(&self) -> Result<Vec<BlockedTaskRecord>, StateStoreError> {
+        let tasks = self.all_tasks().await?;
+        let by_id = tasks
+            .iter()
+            .cloned()
+            .map(|task| (task.id.clone(), task))
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        let mut blocked = tasks
+            .into_iter()
+            .filter(|task| task.status == "open" || task.status == "in_progress")
+            .filter(|task| task.issue_type != "epic")
+            .filter_map(|task| {
+                let blockers = task
+                    .dependencies
+                    .iter()
+                    .filter(|dependency| dependency.edge_type != "parent-child")
+                    .filter_map(|dependency| {
+                        let blocker_task = by_id.get(&dependency.depends_on_id)?;
+                        if blocker_task.status == "closed" {
+                            return None;
+                        }
+                        Some(TaskDependencyStatus {
+                            issue_id: dependency.issue_id.clone(),
+                            depends_on_id: dependency.depends_on_id.clone(),
+                            edge_type: dependency.edge_type.clone(),
+                            dependency_status: blocker_task.status.clone(),
+                            dependency_issue_type: Some(blocker_task.issue_type.clone()),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                (!blockers.is_empty()).then_some(BlockedTaskRecord {
+                    task,
+                    blockers,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        blocked.sort_by(|left, right| task_ready_sort_key(&left.task, &right.task));
+        Ok(blocked)
+    }
+
+    pub async fn task_dependency_tree(
+        &self,
+        task_id: &str,
+    ) -> Result<TaskDependencyTreeNode, StateStoreError> {
+        let tasks = self.all_tasks().await?;
+        let by_id = tasks
+            .into_iter()
+            .map(|task| (task.id.clone(), task))
+            .collect::<BTreeMap<_, _>>();
+        let mut active = BTreeSet::new();
+        Self::build_task_dependency_tree(&by_id, task_id, &mut active)
+    }
+
+    fn build_task_dependency_tree(
+        by_id: &BTreeMap<String, TaskRecord>,
+        task_id: &str,
+        active: &mut BTreeSet<String>,
+    ) -> Result<TaskDependencyTreeNode, StateStoreError> {
+        let task = by_id
+            .get(task_id)
+            .cloned()
+            .ok_or_else(|| StateStoreError::MissingTask {
+                task_id: task_id.to_string(),
+            })?;
+
+        active.insert(task.id.clone());
+        let mut dependencies = Vec::new();
+        for dependency in &task.dependencies {
+            let mut edge = TaskDependencyTreeEdge {
+                issue_id: dependency.issue_id.clone(),
+                depends_on_id: dependency.depends_on_id.clone(),
+                edge_type: dependency.edge_type.clone(),
+                dependency_status: "missing".to_string(),
+                dependency_issue_type: None,
+                node: None,
+                cycle: false,
+                missing: false,
+            };
+
+            if active.contains(&dependency.depends_on_id) {
+                edge.cycle = true;
+            } else if let Some(child) = by_id.get(&dependency.depends_on_id) {
+                edge.dependency_status = child.status.clone();
+                edge.dependency_issue_type = Some(child.issue_type.clone());
+                let child_id = child.id.clone();
+                let child_node = Self::build_task_dependency_tree(by_id, &child_id, active)?;
+                edge.node = Some(Box::new(child_node));
+            } else {
+                edge.missing = true;
+            }
+
+            dependencies.push(edge);
+        }
+        active.remove(&task.id);
+
+        dependencies.sort_by(|left, right| {
+            left.edge_type
+                .cmp(&right.edge_type)
+                .then_with(|| left.depends_on_id.cmp(&right.depends_on_id))
+        });
+
+        Ok(TaskDependencyTreeNode { task, dependencies })
+    }
+
+    pub async fn validate_task_graph(&self) -> Result<Vec<TaskGraphIssue>, StateStoreError> {
+        let tasks = self.all_tasks().await?;
+        Ok(Self::validate_task_graph_rows(&tasks))
+    }
+
+    pub async fn add_task_dependency(
+        &self,
+        issue_id: &str,
+        depends_on_id: &str,
+        edge_type: &str,
+        created_by: &str,
+    ) -> Result<TaskDependencyRecord, StateStoreError> {
+        let mut tasks = self.all_tasks().await?;
+        let target_exists = tasks.iter().any(|task| task.id == depends_on_id);
+        if !target_exists {
+            return Err(StateStoreError::MissingTask {
+                task_id: depends_on_id.to_string(),
+            });
+        }
+
+        let task_index = tasks
+            .iter()
+            .position(|task| task.id == issue_id)
+            .ok_or_else(|| StateStoreError::MissingTask {
+                task_id: issue_id.to_string(),
+            })?;
+
+        if tasks[task_index].dependencies.iter().any(|dependency| {
+            dependency.depends_on_id == depends_on_id && dependency.edge_type == edge_type
+        }) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "dependency already exists: {} -> {} ({})",
+                    issue_id, depends_on_id, edge_type
+                ),
+            });
+        }
+
+        let dependency = TaskDependencyRecord {
+            issue_id: issue_id.to_string(),
+            depends_on_id: depends_on_id.to_string(),
+            edge_type: edge_type.to_string(),
+            created_at: unix_timestamp_nanos().to_string(),
+            created_by: created_by.to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        };
+        tasks[task_index].dependencies.push(dependency.clone());
+        tasks[task_index].updated_at = unix_timestamp_nanos().to_string();
+        tasks[task_index].dependencies.sort_by(|left, right| {
+            left.edge_type
+                .cmp(&right.edge_type)
+                .then_with(|| left.depends_on_id.cmp(&right.depends_on_id))
+        });
+
+        let issues = Self::validate_task_graph_rows(&tasks);
+        if !issues.is_empty() {
+            let first = issues.first().expect("issues is not empty");
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "dependency mutation would create invalid graph: {} on {}",
+                    first.issue_type, first.issue_id
+                ),
+            });
+        }
+
+        self.persist_task_record(tasks[task_index].clone()).await?;
+        Ok(dependency)
+    }
+
+    pub async fn remove_task_dependency(
+        &self,
+        issue_id: &str,
+        depends_on_id: &str,
+        edge_type: &str,
+    ) -> Result<TaskDependencyRecord, StateStoreError> {
+        let task = self.show_task(issue_id).await?;
+        let removed = task
+            .dependencies
+            .iter()
+            .find(|dependency| {
+                dependency.depends_on_id == depends_on_id && dependency.edge_type == edge_type
+            })
+            .cloned()
+            .ok_or_else(|| StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "dependency does not exist: {} -> {} ({})",
+                    issue_id, depends_on_id, edge_type
+                ),
+            })?;
+
+        let mut updated = task;
+        updated.dependencies.retain(|dependency| {
+            !(dependency.depends_on_id == depends_on_id && dependency.edge_type == edge_type)
+        });
+        updated.updated_at = unix_timestamp_nanos().to_string();
+
+        self.persist_task_record(updated).await?;
+        Ok(removed)
+    }
+
+    pub async fn critical_path(&self) -> Result<TaskCriticalPath, StateStoreError> {
+        let tasks = self.all_tasks().await?;
+        let issues = Self::validate_task_graph_rows(&tasks);
+        if !issues.is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: "task graph is invalid; run `vida task validate-graph` first".to_string(),
+            });
+        }
+
+        let by_id = tasks
+            .iter()
+            .cloned()
+            .map(|task| (task.id.clone(), task))
+            .collect::<BTreeMap<_, _>>();
+        let active_ids = tasks
+            .iter()
+            .filter(|task| (task.status == "open" || task.status == "in_progress") && task.issue_type != "epic")
+            .map(|task| task.id.clone())
+            .collect::<Vec<_>>();
+
+        let mut memo = BTreeMap::<String, Vec<String>>::new();
+        let mut active = BTreeSet::new();
+        let mut best = Vec::new();
+        for task_id in active_ids {
+            let path = Self::critical_path_for_task(&by_id, &task_id, &mut memo, &mut active)?;
+            if compare_task_paths(&path, &best).is_gt() {
+                best = path;
+            }
+        }
+
+        let nodes = best
+            .into_iter()
+            .filter_map(|task_id| by_id.get(&task_id))
+            .map(|task| TaskCriticalPathNode {
+                id: task.id.clone(),
+                title: task.title.clone(),
+                status: task.status.clone(),
+                issue_type: task.issue_type.clone(),
+                priority: task.priority,
+            })
+            .collect::<Vec<_>>();
+
+        Ok(TaskCriticalPath {
+            length: nodes.len(),
+            root_task_id: nodes.first().map(|node| node.id.clone()),
+            terminal_task_id: nodes.last().map(|node| node.id.clone()),
+            nodes,
+        })
+    }
+
+    fn validate_task_graph_rows(tasks: &[TaskRecord]) -> Vec<TaskGraphIssue> {
+        let by_id = tasks
+            .iter()
+            .map(|task| (task.id.clone(), task))
+            .collect::<BTreeMap<_, _>>();
+        let mut issues = Vec::new();
+
+        for task in tasks {
+            let parent_edges = task
+                .dependencies
+                .iter()
+                .filter(|dependency| dependency.edge_type == "parent-child")
+                .collect::<Vec<_>>();
+            if parent_edges.len() > 1 {
+                issues.push(TaskGraphIssue {
+                    issue_type: "multiple_parent_edges".to_string(),
+                    issue_id: task.id.clone(),
+                    depends_on_id: None,
+                    edge_type: Some("parent-child".to_string()),
+                    detail: format!(
+                        "task has {} parent-child edges; only one parent is allowed",
+                        parent_edges.len()
+                    ),
+                });
+            }
+
+            for dependency in &task.dependencies {
+                if !by_id.contains_key(&dependency.depends_on_id) {
+                    issues.push(TaskGraphIssue {
+                        issue_type: "missing_dependency_target".to_string(),
+                        issue_id: task.id.clone(),
+                        depends_on_id: Some(dependency.depends_on_id.clone()),
+                        edge_type: Some(dependency.edge_type.clone()),
+                        detail: "dependency target is missing from the authoritative runtime store"
+                            .to_string(),
+                    });
+                }
+                if dependency.depends_on_id == task.id {
+                    issues.push(TaskGraphIssue {
+                        issue_type: "self_dependency".to_string(),
+                        issue_id: task.id.clone(),
+                        depends_on_id: Some(dependency.depends_on_id.clone()),
+                        edge_type: Some(dependency.edge_type.clone()),
+                        detail: "task must not depend on itself".to_string(),
+                    });
+                }
+            }
+        }
+
+        let mut parent_children = BTreeMap::<String, Vec<String>>::new();
+        for task in tasks {
+            for dependency in &task.dependencies {
+                if dependency.edge_type == "parent-child" {
+                    parent_children
+                        .entry(dependency.depends_on_id.clone())
+                        .or_default()
+                        .push(task.id.clone());
+                }
+            }
+        }
+
+        let mut visited = BTreeSet::new();
+        let mut active = BTreeSet::new();
+        for task in tasks {
+            Self::validate_parent_child_cycles(
+                &task.id,
+                &parent_children,
+                &mut visited,
+                &mut active,
+                &mut issues,
+            );
+        }
+
+        issues.sort_by(|left, right| {
+            left.issue_type
+                .cmp(&right.issue_type)
+                .then_with(|| left.issue_id.cmp(&right.issue_id))
+                .then_with(|| left.depends_on_id.cmp(&right.depends_on_id))
+        });
+        issues.dedup();
+        issues
+    }
+
+    fn critical_path_for_task(
+        by_id: &BTreeMap<String, TaskRecord>,
+        task_id: &str,
+        memo: &mut BTreeMap<String, Vec<String>>,
+        active: &mut BTreeSet<String>,
+    ) -> Result<Vec<String>, StateStoreError> {
+        if let Some(path) = memo.get(task_id) {
+            return Ok(path.clone());
+        }
+        if !active.insert(task_id.to_string()) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!("critical-path cycle detected at {task_id}"),
+            });
+        }
+
+        let task = by_id
+            .get(task_id)
+            .ok_or_else(|| StateStoreError::MissingTask {
+                task_id: task_id.to_string(),
+            })?;
+        let mut best_dependency_path = Vec::new();
+        for dependency in &task.dependencies {
+            if dependency.edge_type == "parent-child" {
+                continue;
+            }
+            let Some(dep_task) = by_id.get(&dependency.depends_on_id) else {
+                continue;
+            };
+            if dep_task.status == "closed" || dep_task.issue_type == "epic" {
+                continue;
+            }
+
+            let candidate =
+                Self::critical_path_for_task(by_id, &dep_task.id, memo, active)?;
+            if compare_task_paths(&candidate, &best_dependency_path).is_gt() {
+                best_dependency_path = candidate;
+            }
+        }
+
+        active.remove(task_id);
+        best_dependency_path.push(task_id.to_string());
+        memo.insert(task_id.to_string(), best_dependency_path.clone());
+        Ok(best_dependency_path)
+    }
+
+    fn validate_parent_child_cycles(
+        task_id: &str,
+        parent_children: &BTreeMap<String, Vec<String>>,
+        visited: &mut BTreeSet<String>,
+        active: &mut BTreeSet<String>,
+        issues: &mut Vec<TaskGraphIssue>,
+    ) {
+        if active.contains(task_id) {
+            issues.push(TaskGraphIssue {
+                issue_type: "parent_child_cycle".to_string(),
+                issue_id: task_id.to_string(),
+                depends_on_id: Some(task_id.to_string()),
+                edge_type: Some("parent-child".to_string()),
+                detail: "parent-child ancestry contains a cycle".to_string(),
+            });
+            return;
+        }
+        if visited.contains(task_id) {
+            return;
+        }
+
+        visited.insert(task_id.to_string());
+        active.insert(task_id.to_string());
+        if let Some(children) = parent_children.get(task_id) {
+            for child in children {
+                Self::validate_parent_child_cycles(child, parent_children, visited, active, issues);
+            }
+        }
+        active.remove(task_id);
+    }
+
+    async fn persist_task_record(&self, task: TaskRecord) -> Result<(), StateStoreError> {
+        let task_id = task.id.clone();
+        let row = TaskStorageRow::from(task.clone());
+        let _: Option<TaskStorageRow> = self.db.upsert(("task", task_id.as_str())).content(row).await?;
+        self.replace_task_dependency_rows(&task_id, &task.dependencies).await?;
+        Ok(())
+    }
+
+    async fn replace_task_dependency_rows(
+        &self,
+        task_id: &str,
+        dependencies: &[TaskDependencyRecord],
+    ) -> Result<(), StateStoreError> {
+        let _ = self
+            .db
+            .query(format!(
+                "DELETE task_dependency WHERE issue_id = '{}';",
+                escape_surql_literal(task_id)
+            ))
+            .await?;
+
+        for dependency in dependencies {
+            let dep_id = format!(
+                "{}--{}--{}",
+                sanitize_record_id(task_id),
+                sanitize_record_id(&dependency.depends_on_id),
+                sanitize_record_id(&dependency.edge_type)
+            );
+            let _: Option<TaskDependencyRecord> = self
+                .db
+                .upsert(("task_dependency", dep_id.as_str()))
+                .content(dependency.clone())
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn delete_task_record(&self, task_id: &str) -> Result<(), StateStoreError> {
+        let _: Option<TaskStorageRow> = self.db.delete(("task", task_id)).await?;
+        let _ = self
+            .db
+            .query(format!(
+                "DELETE task_dependency WHERE issue_id = '{}';",
+                escape_surql_literal(task_id)
+            ))
+            .await?;
+        Ok(())
+    }
+
+    async fn write_task_reconciliation_summary(
+        &self,
+        input: TaskReconciliationSummaryInput,
+    ) -> Result<(), StateStoreError> {
+        let receipt_id = format!("task-reconciliation-{}", unix_timestamp_nanos());
+        let _: Option<TaskReconciliationSummaryRow> = self
+            .db
+            .upsert(("task_reconciliation_summary", receipt_id.as_str()))
+            .content(TaskReconciliationSummaryRow {
+                receipt_id,
+                operation: input.operation,
+                source_kind: input.source_kind,
+                source_path: input.source_path,
+                task_count: input.task_count,
+                dependency_count: input.dependency_count,
+                stale_removed_count: input.stale_removed_count,
+                recorded_at: unix_timestamp_nanos().to_string(),
+            })
+            .await?;
+        Ok(())
+    }
+
     async fn all_tasks(&self) -> Result<Vec<TaskRecord>, StateStoreError> {
         let mut query = self
             .db
             .query("SELECT * FROM task ORDER BY priority ASC, id ASC;")
             .await?;
-        let rows: Vec<TaskRecord> = query.take(0)?;
-        Ok(rows)
+        let rows: Vec<TaskStorageRow> = query.take(0)?;
+        Ok(rows.into_iter().map(TaskRecord::from).collect())
     }
 
     pub async fn evaluate_boot_compatibility(
@@ -290,12 +962,12 @@ impl StateStore {
         let mut reasons = Vec::new();
         let mut hard_failures = 0usize;
 
-        if self.backend_summary().await.is_err() {
-            reasons.push("storage metadata missing".to_string());
+        if let Err(error) = self.storage_metadata_summary().await {
+            reasons.push(error.to_string());
             hard_failures += 1;
         }
-        if self.state_spine_summary().await.is_err() {
-            reasons.push("authoritative state spine missing".to_string());
+        if let Err(error) = self.state_spine_summary().await {
+            reasons.push(error.to_string());
             hard_failures += 1;
         }
         let active_root = match self.active_instruction_root().await {
@@ -368,6 +1040,12 @@ impl StateStore {
         &self,
     ) -> Result<MigrationPreflightSummary, StateStoreError> {
         let mut blockers = Vec::new();
+        if let Err(error) = self.storage_metadata_summary().await {
+            blockers.push(error.to_string());
+        }
+        if let Err(error) = self.state_spine_summary().await {
+            blockers.push(error.to_string());
+        }
         let source_version_tuple = match self.active_instruction_root().await {
             Ok(root_artifact_id) => match self
                 .inspect_effective_instruction_bundle(&root_artifact_id)
@@ -473,6 +1151,542 @@ impl StateStore {
                 .count_table_rows("migration_cutover_readiness_receipt")
                 .await?,
             rollback_notes: self.count_table_rows("migration_rollback_note").await?,
+        })
+    }
+
+    pub async fn task_store_summary(&self) -> Result<TaskStoreSummary, StateStoreError> {
+        let tasks = self.all_tasks().await?;
+        let open_count = tasks.iter().filter(|task| task.status == "open").count();
+        let in_progress_count = tasks
+            .iter()
+            .filter(|task| task.status == "in_progress")
+            .count();
+        let closed_count = tasks.iter().filter(|task| task.status == "closed").count();
+        let epic_count = tasks.iter().filter(|task| task.issue_type == "epic").count();
+        let ready_count = self.ready_tasks().await?.len();
+
+        Ok(TaskStoreSummary {
+            total_count: tasks.len(),
+            open_count,
+            in_progress_count,
+            closed_count,
+            epic_count,
+            ready_count,
+        })
+    }
+
+    #[allow(dead_code)]
+    async fn build_taskflow_snapshot(&self) -> Result<TaskSnapshot, StateStoreError> {
+        let tasks = self.all_tasks().await?;
+        let mut snapshot_tasks = Vec::with_capacity(tasks.len());
+        let mut snapshot_dependencies = Vec::new();
+
+        for task in tasks {
+            snapshot_dependencies.extend(task.dependencies.iter().map(task_dependency_to_canonical_edge));
+            snapshot_tasks.push(task_record_to_canonical_snapshot_row(&task)?);
+        }
+
+        snapshot_tasks.sort_by(|left, right| left.id.0.cmp(&right.id.0));
+        snapshot_dependencies.sort_by(|left, right| {
+            left.issue_id
+                .0
+                .cmp(&right.issue_id.0)
+                .then_with(|| left.depends_on_id.0.cmp(&right.depends_on_id.0))
+                .then_with(|| left.dependency_type.cmp(&right.dependency_type))
+        });
+
+        Ok(TaskSnapshot {
+            tasks: snapshot_tasks,
+            dependencies: snapshot_dependencies,
+        })
+    }
+
+    #[allow(dead_code)]
+    pub async fn export_taskflow_snapshot(&self) -> Result<TaskSnapshot, StateStoreError> {
+        let snapshot = self.build_taskflow_snapshot().await?;
+        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
+            operation: "export_snapshot".to_string(),
+            source_kind: "canonical_snapshot_object".to_string(),
+            source_path: None,
+            task_count: snapshot.tasks.len(),
+            dependency_count: snapshot.dependencies.len(),
+            stale_removed_count: 0,
+        })
+        .await?;
+        Ok(snapshot)
+    }
+
+    #[allow(dead_code)]
+    pub async fn export_taskflow_in_memory_store(
+        &self,
+    ) -> Result<InMemoryTaskStore, StateStoreError> {
+        let snapshot = self.build_taskflow_snapshot().await?;
+        let restored = restore_canonical_in_memory_store(&snapshot);
+        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
+            operation: "export_snapshot".to_string(),
+            source_kind: "canonical_snapshot_memory".to_string(),
+            source_path: None,
+            task_count: snapshot.tasks.len(),
+            dependency_count: snapshot.dependencies.len(),
+            stale_removed_count: 0,
+        })
+        .await?;
+        Ok(restored)
+    }
+
+    #[allow(dead_code)]
+    pub async fn write_taskflow_snapshot(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<(), StateStoreError> {
+        let snapshot = self.build_taskflow_snapshot().await?;
+        let source_path = path.as_ref().display().to_string();
+        write_canonical_snapshot(path, &snapshot)?;
+        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
+            operation: "export_snapshot".to_string(),
+            source_kind: "canonical_snapshot_file".to_string(),
+            source_path: Some(source_path),
+            task_count: snapshot.tasks.len(),
+            dependency_count: snapshot.dependencies.len(),
+            stale_removed_count: 0,
+        })
+        .await?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn read_taskflow_snapshot_into_memory(
+        path: impl AsRef<Path>,
+    ) -> Result<InMemoryTaskStore, StateStoreError> {
+        Ok(read_canonical_snapshot_into_memory(path)?)
+    }
+
+    #[allow(dead_code)]
+    pub async fn import_taskflow_snapshot(
+        &self,
+        snapshot: &TaskSnapshot,
+    ) -> Result<(), StateStoreError> {
+        let task_records = task_records_from_canonical_snapshot_for_additive_import(
+            snapshot,
+            &self.all_tasks().await?,
+        )?;
+        for task in task_records {
+            self.persist_task_record(task).await?;
+        }
+        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
+            operation: "import_snapshot".to_string(),
+            source_kind: "canonical_snapshot_memory".to_string(),
+            source_path: None,
+            task_count: snapshot.tasks.len(),
+            dependency_count: snapshot.dependencies.len(),
+            stale_removed_count: 0,
+        })
+        .await?;
+
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub async fn import_taskflow_snapshot_file(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<(), StateStoreError> {
+        let source_path = path.as_ref().display().to_string();
+        let snapshot = taskflow_state_fs::read_snapshot(path)?;
+        let task_records = task_records_from_canonical_snapshot_for_additive_import(
+            &snapshot,
+            &self.all_tasks().await?,
+        )?;
+        for task in task_records {
+            self.persist_task_record(task).await?;
+        }
+        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
+            operation: "import_snapshot".to_string(),
+            source_kind: "canonical_snapshot_file".to_string(),
+            source_path: Some(source_path),
+            task_count: snapshot.tasks.len(),
+            dependency_count: snapshot.dependencies.len(),
+            stale_removed_count: 0,
+        })
+        .await?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub async fn replace_with_taskflow_snapshot(
+        &self,
+        snapshot: &TaskSnapshot,
+    ) -> Result<(), StateStoreError> {
+        let task_records = task_records_from_canonical_snapshot(snapshot)?;
+        let keep_ids = task_records
+            .iter()
+            .map(|task| task.id.clone())
+            .collect::<BTreeSet<_>>();
+
+        for task in task_records {
+            self.persist_task_record(task).await?;
+        }
+
+        let mut stale_removed_count = 0usize;
+        for task_id in self
+            .all_tasks()
+            .await?
+            .into_iter()
+            .map(|task| task.id)
+            .collect::<Vec<_>>()
+        {
+            if !keep_ids.contains(&task_id) {
+                self.delete_task_record(&task_id).await?;
+                stale_removed_count += 1;
+            }
+        }
+
+        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
+            operation: "replace_snapshot".to_string(),
+            source_kind: "canonical_snapshot_memory".to_string(),
+            source_path: None,
+            task_count: snapshot.tasks.len(),
+            dependency_count: snapshot.dependencies.len(),
+            stale_removed_count,
+        })
+        .await?;
+
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub async fn replace_with_taskflow_snapshot_file(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<(), StateStoreError> {
+        let source_path = path.as_ref().display().to_string();
+        let snapshot = taskflow_state_fs::read_snapshot(path)?;
+        let task_records = task_records_from_canonical_snapshot(&snapshot)?;
+        let keep_ids = task_records
+            .iter()
+            .map(|task| task.id.clone())
+            .collect::<BTreeSet<_>>();
+        for task in task_records {
+            self.persist_task_record(task).await?;
+        }
+        let mut stale_removed_count = 0usize;
+        for task_id in self
+            .all_tasks()
+            .await?
+            .into_iter()
+            .map(|task| task.id)
+            .collect::<Vec<_>>()
+        {
+            if !keep_ids.contains(&task_id) {
+                self.delete_task_record(&task_id).await?;
+                stale_removed_count += 1;
+            }
+        }
+        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
+            operation: "replace_snapshot".to_string(),
+            source_kind: "canonical_snapshot_file".to_string(),
+            source_path: Some(source_path),
+            task_count: snapshot.tasks.len(),
+            dependency_count: snapshot.dependencies.len(),
+            stale_removed_count,
+        })
+        .await?;
+        Ok(())
+    }
+
+    pub async fn run_graph_summary(&self) -> Result<RunGraphSummary, StateStoreError> {
+        Ok(RunGraphSummary {
+            execution_plan_count: self.count_table_rows("execution_plan_state").await?,
+            routed_run_count: self.count_table_rows("routed_run_state").await?,
+            governance_count: self.count_table_rows("governance_state").await?,
+            resumability_count: self.count_table_rows("resumability_capsule").await?,
+            reconciliation_count: self.count_table_rows("task_reconciliation_summary").await?,
+        })
+    }
+
+    #[allow(dead_code)]
+    pub async fn record_run_graph_status(
+        &self,
+        status: &RunGraphStatus,
+    ) -> Result<(), StateStoreError> {
+        let updated_at = unix_timestamp_nanos().to_string();
+        let _: Option<ExecutionPlanStateRow> = self
+            .db
+            .upsert(("execution_plan_state", status.run_id.as_str()))
+            .content(ExecutionPlanStateRow {
+                run_id: status.run_id.clone(),
+                task_id: status.task_id.clone(),
+                task_class: status.task_class.clone(),
+                active_node: status.active_node.clone(),
+                next_node: status.next_node.clone(),
+                status: status.status.clone(),
+                updated_at: updated_at.clone(),
+            })
+            .await?;
+        let _: Option<RoutedRunStateRow> = self
+            .db
+            .upsert(("routed_run_state", status.run_id.as_str()))
+            .content(RoutedRunStateRow {
+                run_id: status.run_id.clone(),
+                route_task_class: status.route_task_class.clone(),
+                selected_backend: status.selected_backend.clone(),
+                lane_id: status.lane_id.clone(),
+                lifecycle_stage: status.lifecycle_stage.clone(),
+                updated_at: updated_at.clone(),
+            })
+            .await?;
+        let _: Option<GovernanceStateRow> = self
+            .db
+            .upsert(("governance_state", status.run_id.as_str()))
+            .content(GovernanceStateRow {
+                run_id: status.run_id.clone(),
+                policy_gate: status.policy_gate.clone(),
+                handoff_state: status.handoff_state.clone(),
+                context_state: status.context_state.clone(),
+                updated_at: updated_at.clone(),
+            })
+            .await?;
+        let _: Option<ResumabilityCapsuleRow> = self
+            .db
+            .upsert(("resumability_capsule", status.run_id.as_str()))
+            .content(ResumabilityCapsuleRow {
+                run_id: status.run_id.clone(),
+                checkpoint_kind: status.checkpoint_kind.clone(),
+                resume_target: status.resume_target.clone(),
+                recovery_ready: status.recovery_ready,
+                updated_at,
+            })
+            .await?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub async fn run_graph_status(
+        &self,
+        run_id: &str,
+    ) -> Result<RunGraphStatus, StateStoreError> {
+        let execution: Option<ExecutionPlanStateRow> = self
+            .db
+            .select(("execution_plan_state", run_id))
+            .await?;
+        let execution = execution.ok_or_else(|| StateStoreError::MissingTask {
+            task_id: format!("run_graph:{run_id}"),
+        })?;
+        let routed: Option<RoutedRunStateRow> = self
+            .db
+            .select(("routed_run_state", run_id))
+            .await?;
+        let routed = routed.ok_or_else(|| StateStoreError::MissingTask {
+            task_id: format!("run_graph_route:{run_id}"),
+        })?;
+        let governance: Option<GovernanceStateRow> = self
+            .db
+            .select(("governance_state", run_id))
+            .await?;
+        let governance = governance.ok_or_else(|| StateStoreError::MissingTask {
+            task_id: format!("run_graph_governance:{run_id}"),
+        })?;
+        let resumability: Option<ResumabilityCapsuleRow> = self
+            .db
+            .select(("resumability_capsule", run_id))
+            .await?;
+        let resumability = resumability.ok_or_else(|| StateStoreError::MissingTask {
+            task_id: format!("run_graph_resumability:{run_id}"),
+        })?;
+
+        Ok(RunGraphStatus {
+            run_id: execution.run_id,
+            task_id: execution.task_id,
+            task_class: execution.task_class,
+            active_node: execution.active_node,
+            next_node: execution.next_node,
+            status: execution.status,
+            route_task_class: routed.route_task_class,
+            selected_backend: routed.selected_backend,
+            lane_id: routed.lane_id,
+            lifecycle_stage: routed.lifecycle_stage,
+            policy_gate: governance.policy_gate,
+            handoff_state: governance.handoff_state,
+            context_state: governance.context_state,
+            checkpoint_kind: resumability.checkpoint_kind,
+            resume_target: resumability.resume_target,
+            recovery_ready: resumability.recovery_ready,
+        })
+    }
+
+    pub async fn latest_run_graph_status(
+        &self,
+    ) -> Result<Option<RunGraphStatus>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT run_id, updated_at FROM execution_plan_state ORDER BY updated_at DESC LIMIT 1;",
+            )
+            .await?;
+        let rows: Vec<RunGraphLatestRow> = query.take(0)?;
+        let Some(latest) = rows.into_iter().next() else {
+            return Ok(None);
+        };
+        Ok(Some(self.run_graph_status(&latest.run_id).await?))
+    }
+
+    pub async fn latest_run_graph_recovery_summary(
+        &self,
+    ) -> Result<Option<RunGraphRecoverySummary>, StateStoreError> {
+        let Some(status) = self.latest_run_graph_status().await? else {
+            return Ok(None);
+        };
+        Ok(Some(RunGraphRecoverySummary::from_status(status)))
+    }
+
+    pub async fn latest_run_graph_checkpoint_summary(
+        &self,
+    ) -> Result<Option<RunGraphCheckpointSummary>, StateStoreError> {
+        let Some(status) = self.latest_run_graph_status().await? else {
+            return Ok(None);
+        };
+        Ok(Some(RunGraphCheckpointSummary::from_status(status)))
+    }
+
+    pub async fn latest_run_graph_gate_summary(
+        &self,
+    ) -> Result<Option<RunGraphGateSummary>, StateStoreError> {
+        let Some(status) = self.latest_run_graph_status().await? else {
+            return Ok(None);
+        };
+        Ok(Some(RunGraphGateSummary::from_status(status)))
+    }
+
+    pub async fn run_graph_recovery_summary(
+        &self,
+        run_id: &str,
+    ) -> Result<RunGraphRecoverySummary, StateStoreError> {
+        let status = self.run_graph_status(run_id).await?;
+        Ok(RunGraphRecoverySummary::from_status(status))
+    }
+
+    pub async fn run_graph_checkpoint_summary(
+        &self,
+        run_id: &str,
+    ) -> Result<RunGraphCheckpointSummary, StateStoreError> {
+        let status = self.run_graph_status(run_id).await?;
+        Ok(RunGraphCheckpointSummary::from_status(status))
+    }
+
+    pub async fn run_graph_gate_summary(
+        &self,
+        run_id: &str,
+    ) -> Result<RunGraphGateSummary, StateStoreError> {
+        let status = self.run_graph_status(run_id).await?;
+        Ok(RunGraphGateSummary::from_status(status))
+    }
+
+    pub async fn latest_task_reconciliation_summary(
+        &self,
+    ) -> Result<Option<TaskReconciliationSummary>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT receipt_id, operation, source_kind, source_path, task_count, dependency_count, stale_removed_count, recorded_at FROM task_reconciliation_summary ORDER BY recorded_at DESC LIMIT 1;",
+            )
+            .await?;
+        let rows: Vec<TaskReconciliationSummary> = query.take(0)?;
+        Ok(rows.into_iter().next())
+    }
+
+    pub async fn task_reconciliation_rollup(
+        &self,
+    ) -> Result<TaskReconciliationRollup, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT operation, source_kind, source_path, task_count, dependency_count, stale_removed_count, recorded_at FROM task_reconciliation_summary ORDER BY recorded_at DESC;",
+            )
+            .await?;
+        let rows: Vec<TaskReconciliationRollupRow> = query.take(0)?;
+        let mut by_operation = BTreeMap::<String, usize>::new();
+        let mut by_source_kind = BTreeMap::<String, usize>::new();
+        let latest_recorded_at = rows.first().map(|row| row.recorded_at.clone());
+        let latest_source_path = rows.first().and_then(|row| row.source_path.clone());
+        let mut total_task_rows = 0usize;
+        let mut total_dependency_rows = 0usize;
+        let mut total_stale_removed = 0usize;
+
+        for row in &rows {
+            *by_operation.entry(row.operation.clone()).or_insert(0) += 1;
+            *by_source_kind.entry(row.source_kind.clone()).or_insert(0) += 1;
+            total_task_rows += row.task_count;
+            total_dependency_rows += row.dependency_count;
+            total_stale_removed += row.stale_removed_count;
+        }
+
+        Ok(TaskReconciliationRollup {
+            total_receipts: by_operation.values().sum(),
+            latest_recorded_at,
+            latest_source_path,
+            total_task_rows,
+            total_dependency_rows,
+            total_stale_removed,
+            by_operation,
+            by_source_kind,
+            rows,
+        })
+    }
+
+    pub async fn taskflow_snapshot_bridge_summary(
+        &self,
+    ) -> Result<TaskflowSnapshotBridgeSummary, StateStoreError> {
+        let latest_receipt = self.latest_task_reconciliation_summary().await?;
+        let rollup = self.task_reconciliation_rollup().await?;
+        Ok(TaskflowSnapshotBridgeSummary {
+            total_receipts: rollup.total_receipts,
+            export_receipts: *rollup.by_operation.get("export_snapshot").unwrap_or(&0),
+            import_receipts: *rollup.by_operation.get("import_snapshot").unwrap_or(&0),
+            replace_receipts: *rollup.by_operation.get("replace_snapshot").unwrap_or(&0),
+            object_export_receipts: count_snapshot_bridge_rows(
+                &rollup.rows,
+                Some("export_snapshot"),
+                Some("canonical_snapshot_object"),
+            ),
+            memory_export_receipts: count_snapshot_bridge_rows(
+                &rollup.rows,
+                Some("export_snapshot"),
+                Some("canonical_snapshot_memory"),
+            ),
+            memory_import_receipts: count_snapshot_bridge_rows(
+                &rollup.rows,
+                Some("import_snapshot"),
+                Some("canonical_snapshot_memory"),
+            ),
+            memory_replace_receipts: count_snapshot_bridge_rows(
+                &rollup.rows,
+                Some("replace_snapshot"),
+                Some("canonical_snapshot_memory"),
+            ),
+            file_export_receipts: count_snapshot_bridge_rows(
+                &rollup.rows,
+                Some("export_snapshot"),
+                Some("canonical_snapshot_file"),
+            ),
+            file_import_receipts: count_snapshot_bridge_rows(
+                &rollup.rows,
+                Some("import_snapshot"),
+                Some("canonical_snapshot_file"),
+            ),
+            file_replace_receipts: count_snapshot_bridge_rows(
+                &rollup.rows,
+                Some("replace_snapshot"),
+                Some("canonical_snapshot_file"),
+            ),
+            total_task_rows: rollup.total_task_rows,
+            total_dependency_rows: rollup.total_dependency_rows,
+            total_stale_removed: rollup.total_stale_removed,
+            latest_operation: latest_receipt.as_ref().map(|receipt| receipt.operation.clone()),
+            latest_source_kind: latest_receipt
+                .as_ref()
+                .map(|receipt| receipt.source_kind.clone()),
+            latest_source_path: rollup.latest_source_path,
+            latest_recorded_at: rollup.latest_recorded_at,
         })
     }
 
@@ -1236,7 +2450,10 @@ UPSERT instruction_ingest_receipt:framework-bundle-seed CONTENT {
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
 struct StorageMetaRow {
+    engine: String,
     backend: String,
+    namespace: String,
+    database: String,
     state_schema_version: u32,
     instruction_schema_version: u32,
 }
@@ -1306,7 +2523,28 @@ pub struct TaskDependencyRecord {
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, Clone)]
 struct TaskContent {
-    id: String,
+    task_id: String,
+    title: String,
+    description: String,
+    status: String,
+    priority: u32,
+    issue_type: String,
+    created_at: String,
+    created_by: String,
+    updated_at: String,
+    closed_at: Option<String>,
+    close_reason: Option<String>,
+    source_repo: String,
+    compaction_level: u32,
+    original_size: u32,
+    notes: Option<String>,
+    labels: Vec<String>,
+    dependencies: Vec<TaskDependencyRecord>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, Clone, PartialEq, Eq)]
+struct TaskStorageRow {
+    task_id: String,
     title: String,
     description: String,
     status: String,
@@ -1346,6 +2584,65 @@ pub struct TaskRecord {
     pub dependencies: Vec<TaskDependencyRecord>,
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskDependencyStatus {
+    pub issue_id: String,
+    pub depends_on_id: String,
+    pub edge_type: String,
+    pub dependency_status: String,
+    pub dependency_issue_type: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct BlockedTaskRecord {
+    pub task: TaskRecord,
+    pub blockers: Vec<TaskDependencyStatus>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskDependencyTreeNode {
+    pub task: TaskRecord,
+    pub dependencies: Vec<TaskDependencyTreeEdge>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskDependencyTreeEdge {
+    pub issue_id: String,
+    pub depends_on_id: String,
+    pub edge_type: String,
+    pub dependency_status: String,
+    pub dependency_issue_type: Option<String>,
+    pub node: Option<Box<TaskDependencyTreeNode>>,
+    pub cycle: bool,
+    pub missing: bool,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TaskGraphIssue {
+    pub issue_type: String,
+    pub issue_id: String,
+    pub depends_on_id: Option<String>,
+    pub edge_type: Option<String>,
+    pub detail: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskCriticalPath {
+    pub length: usize,
+    pub root_task_id: Option<String>,
+    pub terminal_task_id: Option<String>,
+    pub nodes: Vec<TaskCriticalPathNode>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskCriticalPathNode {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub issue_type: String,
+    pub priority: u32,
+}
+
 #[derive(Debug)]
 pub struct TaskImportSummary {
     pub source_path: String,
@@ -1366,7 +2663,7 @@ impl TaskImportSummary {
 impl From<TaskJsonlRecord> for TaskContent {
     fn from(value: TaskJsonlRecord) -> Self {
         Self {
-            id: value.id,
+            task_id: value.id,
             title: value.title,
             description: value.description,
             status: value.status,
@@ -1391,10 +2688,58 @@ impl From<TaskJsonlRecord> for TaskContent {
     }
 }
 
-impl From<TaskContent> for TaskRecord {
+impl From<TaskContent> for TaskStorageRow {
     fn from(value: TaskContent) -> Self {
         Self {
-            id: value.id,
+            task_id: value.task_id,
+            title: value.title,
+            description: value.description,
+            status: value.status,
+            priority: value.priority,
+            issue_type: value.issue_type,
+            created_at: value.created_at,
+            created_by: value.created_by,
+            updated_at: value.updated_at,
+            closed_at: value.closed_at,
+            close_reason: value.close_reason,
+            source_repo: value.source_repo,
+            compaction_level: value.compaction_level,
+            original_size: value.original_size,
+            notes: value.notes,
+            labels: value.labels,
+            dependencies: value.dependencies,
+        }
+    }
+}
+
+impl From<TaskStorageRow> for TaskRecord {
+    fn from(value: TaskStorageRow) -> Self {
+        Self {
+            id: value.task_id,
+            title: value.title,
+            description: value.description,
+            status: value.status,
+            priority: value.priority,
+            issue_type: value.issue_type,
+            created_at: value.created_at,
+            created_by: value.created_by,
+            updated_at: value.updated_at,
+            closed_at: value.closed_at,
+            close_reason: value.close_reason,
+            source_repo: value.source_repo,
+            compaction_level: value.compaction_level,
+            original_size: value.original_size,
+            notes: value.notes,
+            labels: value.labels,
+            dependencies: value.dependencies,
+        }
+    }
+}
+
+impl From<TaskRecord> for TaskStorageRow {
+    fn from(value: TaskRecord) -> Self {
+        Self {
+            task_id: value.id,
             title: value.title,
             description: value.description,
             status: value.status,
@@ -1619,11 +2964,33 @@ struct StateSpineManifestContent {
     initialized_at: String,
 }
 
+impl StateSpineManifestContent {
+    fn from_contract(contract: StateSpineManifestContract, initialized_at: String) -> Self {
+        Self {
+            manifest_id: contract.manifest_id,
+            state_schema_version: contract.state_schema_version,
+            authoritative_mutation_root: contract.authoritative_mutation_root,
+            entity_surfaces: contract.entity_surfaces,
+            initialized_at,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct StateSpineSummary {
     pub authoritative_mutation_root: String,
     pub entity_surface_count: usize,
     pub state_schema_version: u32,
+}
+
+#[allow(dead_code)]
+pub struct StorageMetadataSummary {
+    pub engine: String,
+    pub backend: String,
+    pub namespace: String,
+    pub database: String,
+    pub state_schema_version: u32,
+    pub instruction_schema_version: u32,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
@@ -1702,9 +3069,426 @@ impl MigrationReceiptSummary {
     }
 }
 
+#[derive(Debug)]
+struct TaskReconciliationSummaryInput {
+    operation: String,
+    source_kind: String,
+    source_path: Option<String>,
+    task_count: usize,
+    dependency_count: usize,
+    stale_removed_count: usize,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct TaskReconciliationSummaryRow {
+    receipt_id: String,
+    operation: String,
+    source_kind: String,
+    source_path: Option<String>,
+    task_count: usize,
+    dependency_count: usize,
+    stale_removed_count: usize,
+    recorded_at: String,
+}
+
+#[derive(Debug)]
+pub struct TaskStoreSummary {
+    pub total_count: usize,
+    pub open_count: usize,
+    pub in_progress_count: usize,
+    pub closed_count: usize,
+    pub epic_count: usize,
+    pub ready_count: usize,
+}
+
+impl TaskStoreSummary {
+    pub fn as_display(&self) -> String {
+        format!(
+            "{} total, {} open, {} in_progress, {} closed, {} epics, {} ready",
+            self.total_count,
+            self.open_count,
+            self.in_progress_count,
+            self.closed_count,
+            self.epic_count,
+            self.ready_count
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct RunGraphSummary {
+    pub execution_plan_count: usize,
+    pub routed_run_count: usize,
+    pub governance_count: usize,
+    pub resumability_count: usize,
+    pub reconciliation_count: usize,
+}
+
+impl RunGraphSummary {
+    pub fn as_display(&self) -> String {
+        format!(
+            "execution_plans={}, routed_runs={}, governance={}, resumability={}, reconciliation={}",
+            self.execution_plan_count,
+            self.routed_run_count,
+            self.governance_count,
+            self.resumability_count,
+            self.reconciliation_count
+        )
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct ExecutionPlanStateRow {
+    run_id: String,
+    task_id: String,
+    task_class: String,
+    active_node: String,
+    next_node: Option<String>,
+    status: String,
+    updated_at: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct RoutedRunStateRow {
+    run_id: String,
+    route_task_class: String,
+    selected_backend: String,
+    lane_id: String,
+    lifecycle_stage: String,
+    updated_at: String,
+}
+
+#[derive(Debug, serde::Deserialize, SurrealValue)]
+struct RunGraphLatestRow {
+    run_id: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct GovernanceStateRow {
+    run_id: String,
+    policy_gate: String,
+    handoff_state: String,
+    context_state: String,
+    updated_at: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct ResumabilityCapsuleRow {
+    run_id: String,
+    checkpoint_kind: String,
+    resume_target: String,
+    recovery_ready: bool,
+    updated_at: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, serde::Serialize)]
+pub struct RunGraphStatus {
+    pub run_id: String,
+    pub task_id: String,
+    pub task_class: String,
+    pub active_node: String,
+    pub next_node: Option<String>,
+    pub status: String,
+    pub route_task_class: String,
+    pub selected_backend: String,
+    pub lane_id: String,
+    pub lifecycle_stage: String,
+    pub policy_gate: String,
+    pub handoff_state: String,
+    pub context_state: String,
+    pub checkpoint_kind: String,
+    pub resume_target: String,
+    pub recovery_ready: bool,
+}
+
+#[allow(dead_code)]
+impl RunGraphStatus {
+    pub fn as_display(&self) -> String {
+        format!(
+            "run={} task={} class={} node={} status={} next={} route={} backend={} lane={} lifecycle={} gate={} handoff={} context={} checkpoint={} resume_target={} recovery_ready={}",
+            self.run_id,
+            self.task_id,
+            self.task_class,
+            self.active_node,
+            self.status,
+            self.next_node.as_deref().unwrap_or("none"),
+            self.route_task_class,
+            self.selected_backend,
+            self.lane_id,
+            self.lifecycle_stage,
+            self.policy_gate,
+            self.handoff_state,
+            self.context_state,
+            self.checkpoint_kind,
+            self.resume_target,
+            self.recovery_ready
+        )
+    }
+}
+
+#[derive(Debug, serde::Serialize, PartialEq, Eq)]
+pub struct RunGraphRecoverySummary {
+    pub run_id: String,
+    pub task_id: String,
+    pub resume_node: Option<String>,
+    pub resume_status: String,
+    pub checkpoint_kind: String,
+    pub resume_target: String,
+    pub policy_gate: String,
+    pub handoff_state: String,
+    pub recovery_ready: bool,
+}
+
+impl RunGraphRecoverySummary {
+    fn from_status(status: RunGraphStatus) -> Self {
+        Self {
+            run_id: status.run_id,
+            task_id: status.task_id,
+            resume_node: status.next_node,
+            resume_status: status.status,
+            checkpoint_kind: status.checkpoint_kind,
+            resume_target: status.resume_target,
+            policy_gate: status.policy_gate,
+            handoff_state: status.handoff_state,
+            recovery_ready: status.recovery_ready,
+        }
+    }
+
+    pub fn as_display(&self) -> String {
+        format!(
+            "run={} task={} resume_node={} resume_status={} checkpoint={} resume_target={} gate={} handoff={} recovery_ready={}",
+            self.run_id,
+            self.task_id,
+            self.resume_node.as_deref().unwrap_or("none"),
+            self.resume_status,
+            self.checkpoint_kind,
+            self.resume_target,
+            self.policy_gate,
+            self.handoff_state,
+            self.recovery_ready
+        )
+    }
+}
+
+#[derive(Debug, serde::Serialize, PartialEq, Eq)]
+pub struct RunGraphCheckpointSummary {
+    pub run_id: String,
+    pub task_id: String,
+    pub checkpoint_kind: String,
+    pub resume_target: String,
+    pub recovery_ready: bool,
+}
+
+impl RunGraphCheckpointSummary {
+    fn from_status(status: RunGraphStatus) -> Self {
+        Self {
+            run_id: status.run_id,
+            task_id: status.task_id,
+            checkpoint_kind: status.checkpoint_kind,
+            resume_target: status.resume_target,
+            recovery_ready: status.recovery_ready,
+        }
+    }
+
+    pub fn as_display(&self) -> String {
+        format!(
+            "run={} task={} checkpoint={} resume_target={} recovery_ready={}",
+            self.run_id,
+            self.task_id,
+            self.checkpoint_kind,
+            self.resume_target,
+            self.recovery_ready
+        )
+    }
+}
+
+#[derive(Debug, serde::Serialize, PartialEq, Eq)]
+pub struct RunGraphGateSummary {
+    pub run_id: String,
+    pub task_id: String,
+    pub policy_gate: String,
+    pub handoff_state: String,
+    pub context_state: String,
+}
+
+impl RunGraphGateSummary {
+    fn from_status(status: RunGraphStatus) -> Self {
+        Self {
+            run_id: status.run_id,
+            task_id: status.task_id,
+            policy_gate: status.policy_gate,
+            handoff_state: status.handoff_state,
+            context_state: status.context_state,
+        }
+    }
+
+    pub fn as_display(&self) -> String {
+        format!(
+            "run={} task={} gate={} handoff={} context={}",
+            self.run_id, self.task_id, self.policy_gate, self.handoff_state, self.context_state
+        )
+    }
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub struct TaskReconciliationSummary {
+    pub receipt_id: String,
+    pub operation: String,
+    pub source_kind: String,
+    pub source_path: Option<String>,
+    pub task_count: usize,
+    pub dependency_count: usize,
+    pub stale_removed_count: usize,
+    pub recorded_at: String,
+}
+
+impl TaskReconciliationSummary {
+    pub fn as_display(&self) -> String {
+        let source_path = self.source_path.as_deref().unwrap_or("none");
+        format!(
+            "{} via {} (tasks={}, dependencies={}, stale_removed={}, source_path={})",
+            self.operation,
+            self.source_kind,
+            self.task_count,
+            self.dependency_count,
+            self.stale_removed_count,
+            source_path
+        )
+    }
+}
+
+#[derive(Debug, serde::Deserialize, SurrealValue)]
+struct TaskReconciliationRollupRow {
+    operation: String,
+    source_kind: String,
+    source_path: Option<String>,
+    task_count: usize,
+    dependency_count: usize,
+    stale_removed_count: usize,
+    recorded_at: String,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct TaskReconciliationRollup {
+    pub total_receipts: usize,
+    pub latest_recorded_at: Option<String>,
+    pub latest_source_path: Option<String>,
+    pub total_task_rows: usize,
+    pub total_dependency_rows: usize,
+    pub total_stale_removed: usize,
+    pub by_operation: BTreeMap<String, usize>,
+    pub by_source_kind: BTreeMap<String, usize>,
+    #[serde(skip)]
+    rows: Vec<TaskReconciliationRollupRow>,
+}
+
+impl TaskReconciliationRollup {
+    pub fn as_display(&self) -> String {
+        if self.total_receipts == 0 {
+            return "0 receipts".to_string();
+        }
+
+        let operations = self
+            .by_operation
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let source_kinds = self
+            .by_source_kind
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let latest_recorded_at = self
+            .latest_recorded_at
+            .as_deref()
+            .unwrap_or("none");
+        let latest_source_path = self
+            .latest_source_path
+            .as_deref()
+            .unwrap_or("none");
+
+        format!(
+            "{} receipts (tasks={}, dependencies={}, stale_removed={}, operations: {}; source_kinds: {}; latest_recorded_at={}; latest_source_path={})",
+            self.total_receipts,
+            self.total_task_rows,
+            self.total_dependency_rows,
+            self.total_stale_removed,
+            operations,
+            source_kinds,
+            latest_recorded_at,
+            latest_source_path
+        )
+    }
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct TaskflowSnapshotBridgeSummary {
+    pub total_receipts: usize,
+    pub export_receipts: usize,
+    pub import_receipts: usize,
+    pub replace_receipts: usize,
+    pub object_export_receipts: usize,
+    pub memory_export_receipts: usize,
+    pub memory_import_receipts: usize,
+    pub memory_replace_receipts: usize,
+    pub file_export_receipts: usize,
+    pub file_import_receipts: usize,
+    pub file_replace_receipts: usize,
+    pub total_task_rows: usize,
+    pub total_dependency_rows: usize,
+    pub total_stale_removed: usize,
+    pub latest_operation: Option<String>,
+    pub latest_source_kind: Option<String>,
+    pub latest_source_path: Option<String>,
+    pub latest_recorded_at: Option<String>,
+}
+
+impl TaskflowSnapshotBridgeSummary {
+    pub fn as_display(&self) -> String {
+        if self.total_receipts == 0 {
+            return "idle (no snapshot bridge receipts)".to_string();
+        }
+
+        format!(
+            "receipts={} export={} import={} replace={} object={} memory={} file={} tasks={} dependencies={} stale_removed={} latest={} via {} source_path={}",
+            self.total_receipts,
+            self.export_receipts,
+            self.import_receipts,
+            self.replace_receipts,
+            self.object_export_receipts,
+            self.memory_export_receipts + self.memory_import_receipts + self.memory_replace_receipts,
+            self.file_export_receipts + self.file_import_receipts + self.file_replace_receipts,
+            self.total_task_rows,
+            self.total_dependency_rows,
+            self.total_stale_removed,
+            self.latest_operation.as_deref().unwrap_or("none"),
+            self.latest_source_kind.as_deref().unwrap_or("none"),
+            self.latest_source_path.as_deref().unwrap_or("none"),
+        )
+    }
+}
+
 #[derive(Debug, serde::Deserialize, SurrealValue)]
 struct CountRow {
     total: usize,
+}
+
+fn count_snapshot_bridge_rows(
+    rows: &[TaskReconciliationRollupRow],
+    operation: Option<&str>,
+    source_kind: Option<&str>,
+) -> usize {
+    rows.iter()
+        .filter(|row| operation.map(|expected| row.operation == expected).unwrap_or(true))
+        .filter(|row| source_kind.map(|expected| row.source_kind == expected).unwrap_or(true))
+        .count()
 }
 
 impl InstructionIngestSummary {
@@ -1735,7 +3519,14 @@ pub enum StateStoreError {
     },
     MissingSourceTreeConfig,
     MissingStateSpineManifest,
+    InvalidStorageMetadata {
+        reason: String,
+    },
     InvalidStateSpineManifest {
+        reason: String,
+    },
+    #[allow(dead_code)]
+    InvalidCanonicalTaskflowExport {
         reason: String,
     },
     MissingInstructionRuntimeState,
@@ -1790,11 +3581,17 @@ impl std::fmt::Display for StateStoreError {
             }
             Self::InvalidTaskRecord { reason } => write!(f, "invalid task record: {reason}"),
             Self::MissingSourceTreeConfig => write!(f, "source tree config record is missing"),
+            Self::InvalidStorageMetadata { reason } => {
+                write!(f, "storage metadata record is invalid: {reason}")
+            }
             Self::MissingStateSpineManifest => {
                 write!(f, "authoritative state spine manifest is missing")
             }
             Self::InvalidStateSpineManifest { reason } => {
                 write!(f, "authoritative state spine manifest is invalid: {reason}")
+            }
+            Self::InvalidCanonicalTaskflowExport { reason } => {
+                write!(f, "canonical taskflow export is invalid: {reason}")
             }
             Self::MissingInstructionRuntimeState => {
                 write!(f, "instruction runtime state record is missing")
@@ -1877,6 +3674,222 @@ fn sanitize_record_id(value: &str) -> String {
         .collect()
 }
 
+#[allow(dead_code)]
+fn parse_canonical_timestamp(value: &str) -> Result<CanonicalTimestamp, StateStoreError> {
+    if let Ok(parsed) = OffsetDateTime::parse(value, &Rfc3339) {
+        return Ok(CanonicalTimestamp(parsed));
+    }
+
+    let nanos = value
+        .parse::<i128>()
+        .map_err(|_| StateStoreError::InvalidCanonicalTaskflowExport {
+            reason: format!("updated_at is not RFC3339 or unix nanos: {value}"),
+        })?;
+    let parsed =
+        OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|error| {
+            StateStoreError::InvalidCanonicalTaskflowExport {
+                reason: format!("updated_at unix nanos is invalid ({value}): {error}"),
+            }
+        })?;
+    Ok(CanonicalTimestamp(parsed))
+}
+
+#[allow(dead_code)]
+fn parse_canonical_task_status(value: &str) -> Result<CanonicalTaskStatus, StateStoreError> {
+    match value {
+        "open" => Ok(CanonicalTaskStatus::Open),
+        "in_progress" => Ok(CanonicalTaskStatus::InProgress),
+        "closed" => Ok(CanonicalTaskStatus::Closed),
+        "blocked" => Ok(CanonicalTaskStatus::Blocked),
+        other => Err(StateStoreError::InvalidCanonicalTaskflowExport {
+            reason: format!("unsupported taskflow-core status mapping: {other}"),
+        }),
+    }
+}
+
+#[allow(dead_code)]
+fn parse_canonical_issue_type(value: &str) -> Result<CanonicalIssueType, StateStoreError> {
+    match value {
+        "epic" => Ok(CanonicalIssueType::Epic),
+        "task" => Ok(CanonicalIssueType::Task),
+        "bug" => Ok(CanonicalIssueType::Bug),
+        "spike" => Ok(CanonicalIssueType::Spike),
+        other => Err(StateStoreError::InvalidCanonicalTaskflowExport {
+            reason: format!("unsupported taskflow-core issue_type mapping: {other}"),
+        }),
+    }
+}
+
+#[allow(dead_code)]
+fn task_dependency_to_canonical_edge(dependency: &TaskDependencyRecord) -> CanonicalDependencyEdge {
+    CanonicalDependencyEdge {
+        issue_id: CanonicalTaskId::new(&dependency.issue_id),
+        depends_on_id: CanonicalTaskId::new(&dependency.depends_on_id),
+        dependency_type: dependency.edge_type.clone(),
+    }
+}
+
+#[allow(dead_code)]
+fn task_record_to_canonical_snapshot_row(
+    task: &TaskRecord,
+) -> Result<CanonicalTaskRecord, StateStoreError> {
+    Ok(CanonicalTaskRecord {
+        id: CanonicalTaskId::new(&task.id),
+        title: task.title.clone(),
+        status: parse_canonical_task_status(&task.status)?,
+        issue_type: parse_canonical_issue_type(&task.issue_type)?,
+        updated_at: parse_canonical_timestamp(&task.updated_at)?,
+    })
+}
+
+fn canonical_task_status_label(status: CanonicalTaskStatus) -> &'static str {
+    match status {
+        CanonicalTaskStatus::Open => "open",
+        CanonicalTaskStatus::InProgress => "in_progress",
+        CanonicalTaskStatus::Closed => "closed",
+        CanonicalTaskStatus::Blocked => "blocked",
+    }
+}
+
+fn canonical_issue_type_label(issue_type: CanonicalIssueType) -> &'static str {
+    match issue_type {
+        CanonicalIssueType::Epic => "epic",
+        CanonicalIssueType::Task => "task",
+        CanonicalIssueType::Bug => "bug",
+        CanonicalIssueType::Spike => "spike",
+    }
+}
+
+fn canonical_timestamp_label(timestamp: &CanonicalTimestamp) -> String {
+    timestamp
+        .0
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| timestamp.0.unix_timestamp_nanos().to_string())
+}
+
+fn canonical_edge_to_task_dependency_record(
+    dependency: &CanonicalDependencyEdge,
+) -> TaskDependencyRecord {
+    TaskDependencyRecord {
+        issue_id: dependency.issue_id.0.clone(),
+        depends_on_id: dependency.depends_on_id.0.clone(),
+        edge_type: dependency.dependency_type.clone(),
+        created_at: "canonical-taskflow-snapshot".to_string(),
+        created_by: "taskflow-state-fs".to_string(),
+        metadata: "{}".to_string(),
+        thread_id: String::new(),
+    }
+}
+
+fn canonical_snapshot_row_to_task_record(
+    task: &CanonicalTaskRecord,
+) -> Result<TaskRecord, StateStoreError> {
+    let task_id = task.id.0.trim().to_string();
+    if task_id.is_empty() {
+        return Err(StateStoreError::InvalidCanonicalTaskflowExport {
+            reason: "canonical taskflow snapshot task id is empty".to_string(),
+        });
+    }
+
+    let updated_at = canonical_timestamp_label(&task.updated_at);
+    let status = canonical_task_status_label(task.status).to_string();
+    let (closed_at, close_reason) = if matches!(task.status, CanonicalTaskStatus::Closed) {
+        (
+            Some(updated_at.clone()),
+            Some("imported_from_canonical_taskflow_snapshot".to_string()),
+        )
+    } else {
+        (None, None)
+    };
+    Ok(TaskRecord {
+        id: task_id,
+        title: task.title.clone(),
+        description: String::new(),
+        status,
+        priority: 0,
+        issue_type: canonical_issue_type_label(task.issue_type).to_string(),
+        created_at: updated_at.clone(),
+        created_by: "taskflow-state-fs".to_string(),
+        updated_at,
+        closed_at,
+        close_reason,
+        source_repo: "taskflow-state-fs".to_string(),
+        compaction_level: 0,
+        original_size: 0,
+        notes: None,
+        labels: Vec::new(),
+        dependencies: Vec::new(),
+    })
+}
+
+fn task_records_from_canonical_snapshot(
+    snapshot: &TaskSnapshot,
+) -> Result<Vec<TaskRecord>, StateStoreError> {
+    let task_records = task_records_from_canonical_snapshot_rows(snapshot)?;
+    let issues = StateStore::validate_task_graph_rows(&task_records);
+    if let Some(first) = issues.first() {
+        return Err(StateStoreError::InvalidCanonicalTaskflowExport {
+            reason: format!(
+                "snapshot graph is invalid: {} on {}",
+                first.issue_type, first.issue_id
+            ),
+        });
+    }
+
+    Ok(task_records)
+}
+
+fn task_records_from_canonical_snapshot_for_additive_import(
+    snapshot: &TaskSnapshot,
+    existing_tasks: &[TaskRecord],
+) -> Result<Vec<TaskRecord>, StateStoreError> {
+    let imported_tasks = task_records_from_canonical_snapshot_rows(snapshot)?;
+    let mut merged_tasks = existing_tasks
+        .iter()
+        .cloned()
+        .map(|task| (task.id.clone(), task))
+        .collect::<BTreeMap<_, _>>();
+    for task in &imported_tasks {
+        merged_tasks.insert(task.id.clone(), task.clone());
+    }
+
+    let merged_rows = merged_tasks.into_values().collect::<Vec<_>>();
+    let issues = StateStore::validate_task_graph_rows(&merged_rows);
+    if let Some(first) = issues.first() {
+        return Err(StateStoreError::InvalidCanonicalTaskflowExport {
+            reason: format!(
+                "snapshot graph is invalid after additive merge: {} on {}",
+                first.issue_type, first.issue_id
+            ),
+        });
+    }
+
+    Ok(imported_tasks)
+}
+
+fn task_records_from_canonical_snapshot_rows(
+    snapshot: &TaskSnapshot,
+) -> Result<Vec<TaskRecord>, StateStoreError> {
+    let mut dependencies_by_issue = BTreeMap::<String, Vec<TaskDependencyRecord>>::new();
+    for dependency in &snapshot.dependencies {
+        dependencies_by_issue
+            .entry(dependency.issue_id.0.clone())
+            .or_default()
+            .push(canonical_edge_to_task_dependency_record(dependency));
+    }
+
+    let mut task_records = Vec::with_capacity(snapshot.tasks.len());
+    for task in &snapshot.tasks {
+        let mut task_record = canonical_snapshot_row_to_task_record(task)?;
+        if let Some(dependencies) = dependencies_by_issue.remove(&task.id.0) {
+            task_record.dependencies = dependencies;
+        }
+        task_records.push(task_record);
+    }
+
+    Ok(task_records)
+}
+
 fn task_sort_key(left: &TaskRecord, right: &TaskRecord) -> std::cmp::Ordering {
     left.priority
         .cmp(&right.priority)
@@ -1898,6 +3911,12 @@ fn task_ready_sort_key(left: &TaskRecord, right: &TaskRecord) -> std::cmp::Order
         .cmp(&right_rank)
         .then_with(|| left.priority.cmp(&right.priority))
         .then_with(|| left.id.cmp(&right.id))
+}
+
+fn compare_task_paths(left: &[String], right: &[String]) -> std::cmp::Ordering {
+    left.len()
+        .cmp(&right.len())
+        .then_with(|| left.join("->").cmp(&right.join("->")))
 }
 
 #[derive(Default)]
@@ -2189,7 +4208,6 @@ fn collect_patch_ids(patches: &[InstructionDiffPatchRow]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn sample_tasks_jsonl() -> String {
         [
             r#"{"id":"vida-root","title":"Root epic","description":"epic","status":"open","priority":1,"issue_type":"epic","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","source_repo":".","compaction_level":0,"original_size":0,"labels":["wave"],"dependencies":[]}"#,
@@ -2224,6 +4242,30 @@ hierarchy: framework,contracts
         assert_eq!(metadata.activation_class.as_deref(), Some("always_on"));
         assert_eq!(metadata.required_follow_on, vec!["next-one", "next-two"]);
         assert_eq!(metadata.hierarchy, vec!["framework", "contracts"]);
+    }
+
+    #[test]
+    fn runtime_state_schema_contains_surreal_adapter_bootstrap_document() {
+        let target = SurrealStoreTarget::new("/tmp/vida-state");
+        let bootstrap_document = target.bootstrap_schema_document();
+
+        assert!(state_schema_document().contains(&bootstrap_document));
+    }
+
+    #[test]
+    fn runtime_state_spine_manifest_defaults_match_surreal_adapter_contract() {
+        let contract = SurrealStoreTarget::new("/tmp/vida-state").state_spine_manifest_contract();
+        let content =
+            StateSpineManifestContent::from_contract(contract.clone(), "123456789".to_string());
+
+        assert_eq!(content.manifest_id, contract.manifest_id);
+        assert_eq!(content.state_schema_version, contract.state_schema_version);
+        assert_eq!(
+            content.authoritative_mutation_root,
+            contract.authoritative_mutation_root
+        );
+        assert_eq!(content.entity_surfaces, contract.entity_surfaces);
+        assert_eq!(content.initialized_at, "123456789");
     }
 
     #[tokio::test]
@@ -2354,17 +4396,192 @@ hierarchy: framework,contracts
         assert_eq!(first.initialized_at, second.initialized_at);
 
         drop(store);
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
 
-        let existing = StateStore::open_existing(root.clone())
-            .await
-            .expect("open existing store");
+        let mut existing = None;
+        for _ in 0..10 {
+            match StateStore::open_existing(root.clone()).await {
+                Ok(store) => {
+                    existing = Some(store);
+                    break;
+                }
+                Err(StateStoreError::Db(_)) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                Err(other) => panic!("open existing store: {other}"),
+            }
+        }
+        let existing = existing.expect("open existing store");
         let summary = existing
             .state_spine_summary()
             .await
             .expect("state spine summary should load from existing store");
         assert_eq!(summary.entity_surface_count, 8);
         assert_eq!(summary.authoritative_mutation_root, "vida task");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn state_spine_summary_fails_closed_on_contract_drift() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-state-spine-drift-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _: Option<StateSpineManifestContent> = store
+            .db
+            .upsert(("state_spine_manifest", "primary"))
+            .content(StateSpineManifestContent {
+                manifest_id: "primary".to_string(),
+                state_schema_version: 1,
+                authoritative_mutation_root: "legacy task".to_string(),
+                entity_surfaces: vec![
+                    "task".to_string(),
+                    "task_dependency".to_string(),
+                    "task_blocker".to_string(),
+                ],
+                initialized_at: "123".to_string(),
+            })
+            .await
+            .expect("update state spine manifest");
+
+        let error = store
+            .state_spine_summary()
+            .await
+            .expect_err("state spine contract drift should fail");
+        match error {
+            StateStoreError::InvalidStateSpineManifest { reason } => {
+                assert!(reason.contains("expected manifest_id=primary"));
+                assert!(reason.contains("authoritative_mutation_root=vida task"));
+                assert!(reason.contains("got manifest_id=primary"));
+                assert!(reason.contains("authoritative_mutation_root=legacy task"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn backend_summary_fails_closed_on_storage_metadata_drift() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-storage-meta-drift-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _: Option<StorageMetaRow> = store
+            .db
+            .upsert(("storage_meta", "primary"))
+            .content(StorageMetaRow {
+                engine: "surrealdb".to_string(),
+                backend: "sqlite".to_string(),
+                namespace: "vida".to_string(),
+                database: "primary".to_string(),
+                state_schema_version: 1,
+                instruction_schema_version: 1,
+            })
+            .await
+            .expect("update storage metadata");
+
+        let error = store
+            .backend_summary()
+            .await
+            .expect_err("storage metadata drift should fail");
+        match error {
+            StateStoreError::InvalidStorageMetadata { reason } => {
+                assert!(reason.contains("expected engine=surrealdb backend=kv-surrealkv"));
+                assert!(reason.contains("namespace=vida"));
+                assert!(reason.contains("database=primary"));
+                assert!(reason.contains("backend=sqlite"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn backend_summary_fails_closed_on_storage_metadata_namespace_drift() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-storage-meta-namespace-drift-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _: Option<StorageMetaRow> = store
+            .db
+            .upsert(("storage_meta", "primary"))
+            .content(StorageMetaRow {
+                engine: "surrealdb".to_string(),
+                backend: "kv-surrealkv".to_string(),
+                namespace: "other".to_string(),
+                database: "secondary".to_string(),
+                state_schema_version: 1,
+                instruction_schema_version: 1,
+            })
+            .await
+            .expect("update storage metadata");
+
+        let error = store
+            .backend_summary()
+            .await
+            .expect_err("storage metadata namespace drift should fail");
+        match error {
+            StateStoreError::InvalidStorageMetadata { reason } => {
+                assert!(reason.contains("expected engine=surrealdb backend=kv-surrealkv"));
+                assert!(reason.contains("namespace=vida"));
+                assert!(reason.contains("database=primary"));
+                assert!(reason.contains("engine=surrealdb"));
+                assert!(reason.contains("namespace=other"));
+                assert!(reason.contains("database=secondary"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn storage_metadata_summary_matches_canonical_surreal_contract() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-storage-meta-summary-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let summary = store
+            .storage_metadata_summary()
+            .await
+            .expect("storage metadata summary should load");
+
+        assert_eq!(summary.engine, "surrealdb");
+        assert_eq!(summary.backend, "kv-surrealkv");
+        assert_eq!(summary.namespace, "vida");
+        assert_eq!(summary.database, "primary");
+        assert_eq!(summary.state_schema_version, 1);
+        assert_eq!(summary.instruction_schema_version, 1);
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -2465,6 +4682,309 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
+    async fn boot_compatibility_reports_storage_metadata_drift_reason() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-boot-compatibility-storage-drift-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("seed framework bundle");
+        store
+            .ingest_instruction_source_tree(DEFAULT_INSTRUCTION_SOURCE_ROOT)
+            .await
+            .expect("ingest source tree");
+        let _: Option<StorageMetaRow> = store
+            .db
+            .upsert(("storage_meta", "primary"))
+            .content(StorageMetaRow {
+                engine: "surrealdb".to_string(),
+                backend: "sqlite".to_string(),
+                namespace: "vida".to_string(),
+                database: "primary".to_string(),
+                state_schema_version: 1,
+                instruction_schema_version: 1,
+            })
+            .await
+            .expect("update storage metadata");
+
+        let compatibility = store
+            .evaluate_boot_compatibility()
+            .await
+            .expect("compatibility evaluation should succeed");
+        assert_eq!(compatibility.classification, "incompatible");
+        assert!(compatibility
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("storage metadata record is invalid")));
+        assert!(compatibility
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("backend=sqlite")));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn boot_compatibility_summary_persists_across_reopen() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-boot-compatibility-reopen-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("seed framework bundle");
+        store
+            .ingest_instruction_source_tree(DEFAULT_INSTRUCTION_SOURCE_ROOT)
+            .await
+            .expect("ingest source tree");
+
+        let compatibility = store
+            .evaluate_boot_compatibility()
+            .await
+            .expect("compatibility evaluation should succeed");
+        assert_eq!(compatibility.classification, "compatible");
+        assert!(compatibility.reasons.is_empty());
+        assert_eq!(compatibility.next_step, "normal_boot_allowed");
+
+        drop(store);
+
+        let mut reopened = None;
+        for _ in 0..10 {
+            match StateStore::open_existing(root.clone()).await {
+                Ok(store) => {
+                    reopened = Some(store);
+                    break;
+                }
+                Err(StateStoreError::Db(_)) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                Err(other) => panic!("open existing store: {other}"),
+            }
+        }
+        let reopened = reopened.expect("open existing store");
+
+        let persisted = reopened
+            .latest_boot_compatibility_summary()
+            .await
+            .expect("latest boot compatibility should load")
+            .expect("persisted boot compatibility should exist");
+        assert_eq!(persisted.classification, "compatible");
+        assert!(persisted.reasons.is_empty());
+        assert_eq!(persisted.next_step, "normal_boot_allowed");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_status_round_trips_and_persists_across_reopen() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-status-reopen-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let status = RunGraphStatus {
+            run_id: "run-vida-a".to_string(),
+            task_id: "vida-a".to_string(),
+            task_class: "writer".to_string(),
+            active_node: "writer".to_string(),
+            next_node: Some("coach".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "analysis".to_string(),
+            selected_backend: "codex".to_string(),
+            lane_id: "writer_lane".to_string(),
+            lifecycle_stage: "active".to_string(),
+            policy_gate: "policy_gate_required".to_string(),
+            handoff_state: "awaiting_coach".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.writer_lane".to_string(),
+            recovery_ready: true,
+        };
+
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("run graph status should record");
+        let loaded = store
+            .run_graph_status("run-vida-a")
+            .await
+            .expect("run graph status should load");
+        assert_eq!(loaded.run_id, "run-vida-a");
+        assert_eq!(loaded.task_id, "vida-a");
+        assert_eq!(loaded.active_node, "writer");
+        assert_eq!(loaded.next_node.as_deref(), Some("coach"));
+        assert_eq!(loaded.route_task_class, "analysis");
+        assert_eq!(loaded.selected_backend, "codex");
+        assert_eq!(loaded.policy_gate, "policy_gate_required");
+        assert_eq!(loaded.handoff_state, "awaiting_coach");
+        assert_eq!(loaded.context_state, "sealed");
+        assert_eq!(loaded.checkpoint_kind, "execution_cursor");
+        assert_eq!(loaded.resume_target, "dispatch.writer_lane");
+        assert!(loaded.recovery_ready);
+        let recovery = store
+            .latest_run_graph_recovery_summary()
+            .await
+            .expect("recovery summary should load")
+            .expect("recovery summary should exist");
+        assert_eq!(recovery.run_id, "run-vida-a");
+        assert_eq!(recovery.task_id, "vida-a");
+        assert_eq!(recovery.resume_node.as_deref(), Some("coach"));
+        assert_eq!(recovery.resume_status, "ready");
+        assert_eq!(recovery.checkpoint_kind, "execution_cursor");
+        assert_eq!(recovery.resume_target, "dispatch.writer_lane");
+        assert_eq!(recovery.policy_gate, "policy_gate_required");
+        assert_eq!(recovery.handoff_state, "awaiting_coach");
+        assert!(recovery.recovery_ready);
+        let direct_recovery = store
+            .run_graph_recovery_summary("run-vida-a")
+            .await
+            .expect("direct recovery summary should load");
+        assert_eq!(direct_recovery, recovery);
+        let checkpoint = store
+            .latest_run_graph_checkpoint_summary()
+            .await
+            .expect("checkpoint summary should load")
+            .expect("checkpoint summary should exist");
+        assert_eq!(checkpoint.run_id, "run-vida-a");
+        assert_eq!(checkpoint.task_id, "vida-a");
+        assert_eq!(checkpoint.checkpoint_kind, "execution_cursor");
+        assert_eq!(checkpoint.resume_target, "dispatch.writer_lane");
+        assert!(checkpoint.recovery_ready);
+        let direct_checkpoint = store
+            .run_graph_checkpoint_summary("run-vida-a")
+            .await
+            .expect("direct checkpoint summary should load");
+        assert_eq!(direct_checkpoint, checkpoint);
+        let gate = store
+            .latest_run_graph_gate_summary()
+            .await
+            .expect("gate summary should load")
+            .expect("gate summary should exist");
+        assert_eq!(gate.run_id, "run-vida-a");
+        assert_eq!(gate.task_id, "vida-a");
+        assert_eq!(gate.policy_gate, "policy_gate_required");
+        assert_eq!(gate.handoff_state, "awaiting_coach");
+        assert_eq!(gate.context_state, "sealed");
+        let direct_gate = store
+            .run_graph_gate_summary("run-vida-a")
+            .await
+            .expect("direct gate summary should load");
+        assert_eq!(direct_gate, gate);
+
+        let summary = store
+            .run_graph_summary()
+            .await
+            .expect("run graph summary should load");
+        assert_eq!(summary.execution_plan_count, 1);
+        assert_eq!(summary.routed_run_count, 1);
+        assert_eq!(summary.governance_count, 1);
+        assert_eq!(summary.resumability_count, 1);
+
+        drop(store);
+
+        let mut reopened = None;
+        for _ in 0..10 {
+            match StateStore::open_existing(root.clone()).await {
+                Ok(store) => {
+                    reopened = Some(store);
+                    break;
+                }
+                Err(StateStoreError::Db(_)) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                Err(other) => panic!("open existing store: {other}"),
+            }
+        }
+        let reopened = reopened.expect("open existing store");
+        let loaded = reopened
+            .run_graph_status("run-vida-a")
+            .await
+            .expect("reopened run graph status should load");
+        assert_eq!(loaded.task_id, "vida-a");
+        assert_eq!(loaded.active_node, "writer");
+        assert_eq!(loaded.next_node.as_deref(), Some("coach"));
+        assert_eq!(loaded.lifecycle_stage, "active");
+        assert_eq!(loaded.handoff_state, "awaiting_coach");
+        assert_eq!(loaded.resume_target, "dispatch.writer_lane");
+        assert!(loaded.recovery_ready);
+        let recovery = reopened
+            .latest_run_graph_recovery_summary()
+            .await
+            .expect("reopened recovery summary should load")
+            .expect("reopened recovery summary should exist");
+        assert_eq!(recovery.resume_node.as_deref(), Some("coach"));
+        assert_eq!(recovery.resume_status, "ready");
+        assert_eq!(recovery.policy_gate, "policy_gate_required");
+        assert_eq!(recovery.handoff_state, "awaiting_coach");
+        assert!(recovery.recovery_ready);
+        let direct_recovery = reopened
+            .run_graph_recovery_summary("run-vida-a")
+            .await
+            .expect("reopened direct recovery summary should load");
+        assert_eq!(direct_recovery, recovery);
+        let checkpoint = reopened
+            .latest_run_graph_checkpoint_summary()
+            .await
+            .expect("reopened checkpoint summary should load")
+            .expect("reopened checkpoint summary should exist");
+        assert_eq!(checkpoint.checkpoint_kind, "execution_cursor");
+        assert_eq!(checkpoint.resume_target, "dispatch.writer_lane");
+        assert!(checkpoint.recovery_ready);
+        let direct_checkpoint = reopened
+            .run_graph_checkpoint_summary("run-vida-a")
+            .await
+            .expect("reopened direct checkpoint summary should load");
+        assert_eq!(direct_checkpoint, checkpoint);
+        let gate = reopened
+            .latest_run_graph_gate_summary()
+            .await
+            .expect("reopened gate summary should load")
+            .expect("reopened gate summary should exist");
+        assert_eq!(gate.policy_gate, "policy_gate_required");
+        assert_eq!(gate.handoff_state, "awaiting_coach");
+        assert_eq!(gate.context_state, "sealed");
+        let direct_gate = reopened
+            .run_graph_gate_summary("run-vida-a")
+            .await
+            .expect("reopened direct gate summary should load");
+        assert_eq!(direct_gate, gate);
+
+        let summary = reopened
+            .run_graph_summary()
+            .await
+            .expect("reopened run graph summary should load");
+        assert_eq!(summary.execution_plan_count, 1);
+        assert_eq!(summary.routed_run_count, 1);
+        assert_eq!(summary.governance_count, 1);
+        assert_eq!(summary.resumability_count, 1);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn migration_preflight_reports_no_migration_required_for_seeded_runtime() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2551,6 +5071,139 @@ hierarchy: framework,contracts
             .blockers
             .iter()
             .any(|blocker| blocker.contains("instruction runtime root unresolved")));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn migration_preflight_blocks_on_state_spine_contract_drift() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-migration-preflight-state-spine-drift-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("seed framework bundle");
+        store
+            .ingest_instruction_source_tree(DEFAULT_INSTRUCTION_SOURCE_ROOT)
+            .await
+            .expect("ingest source tree");
+        let _: Option<StateSpineManifestContent> = store
+            .db
+            .upsert(("state_spine_manifest", "primary"))
+            .content(StateSpineManifestContent {
+                manifest_id: "primary".to_string(),
+                state_schema_version: 1,
+                authoritative_mutation_root: "legacy task".to_string(),
+                entity_surfaces: vec![
+                    "task".to_string(),
+                    "task_dependency".to_string(),
+                    "task_blocker".to_string(),
+                ],
+                initialized_at: "123".to_string(),
+            })
+            .await
+            .expect("update state spine manifest");
+
+        let summary = store
+            .evaluate_migration_preflight()
+            .await
+            .expect("migration preflight should succeed");
+        assert_eq!(summary.compatibility_classification, "incompatible");
+        assert_eq!(summary.migration_state, "migration_blocked");
+        assert!(summary
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("authoritative state spine manifest is invalid")));
+        assert!(summary
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("authoritative_mutation_root=legacy task")));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn migration_preflight_summary_and_receipts_persist_across_reopen() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-migration-preflight-reopen-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .seed_framework_instruction_bundle()
+            .await
+            .expect("seed framework bundle");
+        store
+            .ingest_instruction_source_tree(DEFAULT_INSTRUCTION_SOURCE_ROOT)
+            .await
+            .expect("ingest source tree");
+
+        let summary = store
+            .evaluate_migration_preflight()
+            .await
+            .expect("migration preflight should succeed");
+        assert_eq!(summary.compatibility_classification, "compatible");
+        assert_eq!(summary.migration_state, "no_migration_required");
+
+        drop(store);
+
+        let mut reopened = None;
+        for _ in 0..10 {
+            match StateStore::open_existing(root.clone()).await {
+                Ok(store) => {
+                    reopened = Some(store);
+                    break;
+                }
+                Err(StateStoreError::Db(_)) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                Err(other) => panic!("open existing store: {other}"),
+            }
+        }
+        let reopened = reopened.expect("open existing store");
+
+        let persisted = reopened
+            .latest_migration_preflight_summary()
+            .await
+            .expect("latest migration preflight should load")
+            .expect("persisted migration preflight should exist");
+        assert_eq!(persisted.compatibility_classification, "compatible");
+        assert_eq!(persisted.migration_state, "no_migration_required");
+        assert!(persisted.blockers.is_empty());
+        assert_eq!(
+            persisted.source_version_tuple,
+            vec![
+                "framework-agent-definition@v1".to_string(),
+                "framework-instruction-contract@v1".to_string(),
+                "framework-prompt-template-config@v1".to_string()
+            ]
+        );
+        assert_eq!(persisted.next_step, "normal_boot_allowed");
+
+        let receipts = reopened
+            .migration_receipt_summary()
+            .await
+            .expect("migration receipt summary should load");
+        assert_eq!(receipts.compatibility_receipts, 1);
+        assert_eq!(receipts.application_receipts, 0);
+        assert_eq!(receipts.verification_receipts, 0);
+        assert_eq!(receipts.cutover_readiness_receipts, 0);
+        assert_eq!(receipts.rollback_notes, 0);
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -3199,6 +5852,1916 @@ hierarchy: framework,contracts
             }
             other => panic!("unexpected error: {other}"),
         }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn authoritative_store_exports_taskflow_snapshot_and_round_trips_to_memory() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-export-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root epic\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-a\",\"title\":\"Task A\",\"description\":\"first\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-a\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
+                "{\"id\":\"vida-b\",\"title\":\"Task B\",\"description\":\"second\",\"status\":\"closed\",\"priority\":3,\"issue_type\":\"bug\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-b\",\"depends_on_id\":\"vida-a\",\"type\":\"blocks\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+            ),
+        )
+        .expect("write task jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("import tasks should succeed");
+
+        let snapshot = store
+            .export_taskflow_snapshot()
+            .await
+            .expect("canonical snapshot export should succeed");
+        assert_eq!(snapshot.tasks.len(), 3);
+        assert_eq!(snapshot.tasks[0].id.0, "vida-a");
+        assert_eq!(snapshot.tasks[1].id.0, "vida-b");
+        assert_eq!(snapshot.tasks[2].id.0, "vida-root");
+        assert!(matches!(snapshot.tasks[0].status, CanonicalTaskStatus::InProgress));
+        assert!(matches!(snapshot.tasks[1].status, CanonicalTaskStatus::Closed));
+        assert!(matches!(snapshot.tasks[1].issue_type, CanonicalIssueType::Bug));
+        assert_eq!(snapshot.dependencies.len(), 2);
+        assert_eq!(snapshot.dependencies[0].issue_id.0, "vida-a");
+        assert_eq!(snapshot.dependencies[0].depends_on_id.0, "vida-root");
+        assert_eq!(snapshot.dependencies[1].issue_id.0, "vida-b");
+        assert_eq!(snapshot.dependencies[1].dependency_type, "blocks");
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load")
+            .expect("latest reconciliation receipt should exist");
+        assert_eq!(latest.operation, "export_snapshot");
+        assert_eq!(latest.source_kind, "canonical_snapshot_object");
+        assert_eq!(latest.task_count, 3);
+        assert_eq!(latest.dependency_count, 2);
+        assert_eq!(latest.stale_removed_count, 0);
+
+        let rollup = store
+            .task_reconciliation_rollup()
+            .await
+            .expect("reconciliation rollup should load");
+        assert_eq!(rollup.total_receipts, 1);
+        assert_eq!(rollup.by_operation.get("export_snapshot"), Some(&1));
+        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_object"), Some(&1));
+
+        let memory = store
+            .export_taskflow_in_memory_store()
+            .await
+            .expect("memory export should succeed");
+        let runtime =
+            taskflow_state::TaskStore::get_task(&memory, &CanonicalTaskId::new("vida-b"))
+                .expect("task should exist in memory export");
+        assert_eq!(runtime.title, "Task B");
+        assert!(matches!(runtime.status, CanonicalTaskStatus::Closed));
+        let runtime_dependencies =
+            taskflow_state::TaskStore::list_dependencies(&memory, &CanonicalTaskId::new("vida-b"));
+        assert_eq!(runtime_dependencies.len(), 1);
+        assert_eq!(runtime_dependencies[0].depends_on_id.0, "vida-a");
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load")
+            .expect("latest reconciliation receipt should exist");
+        assert_eq!(latest.operation, "export_snapshot");
+        assert_eq!(latest.source_kind, "canonical_snapshot_memory");
+        assert_eq!(latest.task_count, 3);
+        assert_eq!(latest.dependency_count, 2);
+        assert_eq!(latest.stale_removed_count, 0);
+
+        let rollup = store
+            .task_reconciliation_rollup()
+            .await
+            .expect("reconciliation rollup should load");
+        assert_eq!(rollup.total_receipts, 2);
+        assert_eq!(rollup.by_operation.get("export_snapshot"), Some(&2));
+        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_memory"), Some(&1));
+        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_object"), Some(&1));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn authoritative_store_taskflow_snapshot_export_fails_closed_on_unsupported_issue_type() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-export-invalid-issue-type-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _: Option<TaskStorageRow> = store
+            .db
+            .upsert(("task", "vida-weird"))
+            .content(TaskStorageRow {
+                task_id: "vida-weird".to_string(),
+                title: "Weird".to_string(),
+                description: "unsupported issue type".to_string(),
+                status: "open".to_string(),
+                priority: 1,
+                issue_type: "chore".to_string(),
+                created_at: "2026-03-08T00:00:00Z".to_string(),
+                created_by: "tester".to_string(),
+                updated_at: "2026-03-08T00:00:00Z".to_string(),
+                closed_at: None,
+                close_reason: None,
+                source_repo: ".".to_string(),
+                compaction_level: 0,
+                original_size: 0,
+                notes: None,
+                labels: Vec::new(),
+                dependencies: Vec::new(),
+            })
+            .await
+            .expect("insert weird task");
+
+        let error = store
+            .export_taskflow_snapshot()
+            .await
+            .expect_err("unsupported issue type should fail");
+        match error {
+            StateStoreError::InvalidCanonicalTaskflowExport { reason } => {
+                assert!(reason.contains("unsupported taskflow-core issue_type mapping: chore"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn authoritative_store_writes_taskflow_snapshot_to_disk_and_restores_it() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-file-export-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        let snapshot_path = root.join("taskflow-snapshot.json");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root epic\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-a\",\"title\":\"Task A\",\"description\":\"first\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-a\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+            ),
+        )
+        .expect("write task jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("import tasks should succeed");
+
+        store
+            .write_taskflow_snapshot(&snapshot_path)
+            .await
+            .expect("snapshot should write to disk");
+        assert!(snapshot_path.is_file());
+
+        let restored = StateStore::read_taskflow_snapshot_into_memory(&snapshot_path)
+            .expect("snapshot should restore from disk");
+        let restored_task =
+            taskflow_state::TaskStore::get_task(&restored, &CanonicalTaskId::new("vida-a"))
+                .expect("task should restore from snapshot");
+        assert_eq!(restored_task.title, "Task A");
+        let restored_dependencies =
+            taskflow_state::TaskStore::list_dependencies(&restored, &CanonicalTaskId::new("vida-a"));
+        assert_eq!(restored_dependencies.len(), 1);
+        assert_eq!(restored_dependencies[0].depends_on_id.0, "vida-root");
+
+        let mut receipt_query = store
+            .db
+            .query("SELECT * FROM task_reconciliation_summary ORDER BY recorded_at DESC LIMIT 1;")
+            .await
+            .expect("query reconciliation receipts");
+        let receipts: Vec<TaskReconciliationSummaryRow> =
+            receipt_query.take(0).expect("take reconciliation receipts");
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].operation, "export_snapshot");
+        assert_eq!(receipts[0].source_kind, "canonical_snapshot_file");
+        assert_eq!(
+            receipts[0].source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(receipts[0].task_count, 2);
+        assert_eq!(receipts[0].dependency_count, 1);
+        assert_eq!(receipts[0].stale_removed_count, 0);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn authoritative_store_imports_canonical_taskflow_snapshot() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-import-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let snapshot = TaskSnapshot {
+            tasks: vec![
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-root"),
+                    title: "Root".to_string(),
+                    status: CanonicalTaskStatus::Open,
+                    issue_type: CanonicalIssueType::Epic,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:00Z", &Rfc3339)
+                            .expect("parse root timestamp"),
+                    ),
+                },
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-a"),
+                    title: "Task A".to_string(),
+                    status: CanonicalTaskStatus::InProgress,
+                    issue_type: CanonicalIssueType::Task,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:01Z", &Rfc3339)
+                            .expect("parse task timestamp"),
+                    ),
+                },
+            ],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-a"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
+        };
+
+        store
+            .import_taskflow_snapshot(&snapshot)
+            .await
+            .expect("snapshot import should succeed");
+
+        let imported = store.show_task("vida-a").await.expect("task should import");
+        assert_eq!(imported.title, "Task A");
+        assert_eq!(imported.status, "in_progress");
+        assert_eq!(imported.issue_type, "task");
+        assert_eq!(imported.created_by, "taskflow-state-fs");
+        assert_eq!(imported.source_repo, "taskflow-state-fs");
+        assert_eq!(imported.dependencies.len(), 1);
+        assert_eq!(imported.dependencies[0].depends_on_id, "vida-root");
+        assert_eq!(imported.dependencies[0].created_by, "taskflow-state-fs");
+        assert_eq!(
+            imported.dependencies[0].created_at,
+            "canonical-taskflow-snapshot"
+        );
+
+        let ready = store.ready_tasks().await.expect("ready tasks should load");
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, "vida-a");
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load")
+            .expect("latest reconciliation receipt should exist");
+        assert_eq!(latest.operation, "import_snapshot");
+        assert_eq!(latest.source_kind, "canonical_snapshot_memory");
+        assert_eq!(latest.task_count, 2);
+        assert_eq!(latest.dependency_count, 1);
+        assert_eq!(latest.stale_removed_count, 0);
+
+        let rollup = store
+            .task_reconciliation_rollup()
+            .await
+            .expect("reconciliation rollup should load");
+        assert_eq!(rollup.total_receipts, 1);
+        assert_eq!(rollup.by_operation.get("import_snapshot"), Some(&1));
+        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_memory"), Some(&1));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn authoritative_store_imports_canonical_taskflow_snapshot_from_disk() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-import-file-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let snapshot_path = root.join("snapshot.json");
+        let snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-b"),
+                title: "Task B".to_string(),
+                status: CanonicalTaskStatus::Closed,
+                issue_type: CanonicalIssueType::Bug,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:02Z", &Rfc3339)
+                        .expect("parse task timestamp"),
+                ),
+            }],
+            dependencies: Vec::new(),
+        };
+        taskflow_state_fs::write_snapshot(&snapshot_path, &snapshot)
+            .expect("snapshot should write");
+
+        store
+            .import_taskflow_snapshot_file(&snapshot_path)
+            .await
+            .expect("snapshot file import should succeed");
+
+        let imported = store.show_task("vida-b").await.expect("task should import");
+        assert_eq!(imported.status, "closed");
+        assert_eq!(imported.issue_type, "bug");
+        assert_eq!(imported.created_by, "taskflow-state-fs");
+        assert_eq!(imported.source_repo, "taskflow-state-fs");
+        assert_eq!(imported.closed_at.as_deref(), Some("2026-03-08T00:00:02Z"));
+        assert_eq!(
+            imported.close_reason.as_deref(),
+            Some("imported_from_canonical_taskflow_snapshot")
+        );
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load")
+            .expect("latest reconciliation receipt should exist");
+        assert_eq!(latest.operation, "import_snapshot");
+        assert_eq!(latest.source_kind, "canonical_snapshot_file");
+        assert_eq!(
+            latest.source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(latest.task_count, 1);
+        assert_eq!(latest.dependency_count, 0);
+        assert_eq!(latest.stale_removed_count, 0);
+
+        let rollup = store
+            .task_reconciliation_rollup()
+            .await
+            .expect("reconciliation rollup should load");
+        assert_eq!(rollup.total_receipts, 1);
+        assert_eq!(rollup.by_operation.get("import_snapshot"), Some(&1));
+        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_file"), Some(&1));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn replace_with_taskflow_snapshot_removes_stale_authoritative_tasks() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-replace-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-keep\",\"title\":\"Keep old\",\"description\":\"keep\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n"
+            ),
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-keep"),
+                title: "Keep new".to_string(),
+                status: CanonicalTaskStatus::Closed,
+                issue_type: CanonicalIssueType::Task,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                        .expect("parse timestamp"),
+                ),
+            }],
+            dependencies: Vec::new(),
+        };
+
+        store
+            .replace_with_taskflow_snapshot(&snapshot)
+            .await
+            .expect("replacement import should succeed");
+
+        let kept = store.show_task("vida-keep").await.expect("keep task should remain");
+        assert_eq!(kept.title, "Keep new");
+        assert_eq!(kept.status, "closed");
+        let missing = store.show_task("vida-stale").await.expect_err("stale task should be removed");
+        assert!(matches!(missing, StateStoreError::MissingTask { .. }));
+
+        let mut receipt_query = store
+            .db
+            .query("SELECT * FROM task_reconciliation_summary ORDER BY recorded_at DESC LIMIT 1;")
+            .await
+            .expect("query reconciliation receipts");
+        let receipts: Vec<TaskReconciliationSummaryRow> =
+            receipt_query.take(0).expect("take reconciliation receipts");
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].operation, "replace_snapshot");
+        assert_eq!(receipts[0].source_kind, "canonical_snapshot_memory");
+        assert_eq!(receipts[0].task_count, 1);
+        assert_eq!(receipts[0].stale_removed_count, 1);
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load")
+            .expect("latest reconciliation receipt should exist");
+        assert_eq!(latest.operation, "replace_snapshot");
+        assert_eq!(latest.source_kind, "canonical_snapshot_memory");
+        assert_eq!(latest.task_count, 1);
+        assert_eq!(latest.stale_removed_count, 1);
+        assert!(
+            latest
+                .as_display()
+                .contains("replace_snapshot via canonical_snapshot_memory")
+        );
+
+        let rollup = store
+            .task_reconciliation_rollup()
+            .await
+            .expect("reconciliation rollup should load");
+        assert_eq!(rollup.total_receipts, 1);
+        assert_eq!(rollup.by_operation.get("replace_snapshot"), Some(&1));
+        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_memory"), Some(&1));
+        assert!(rollup.latest_recorded_at.is_some());
+        assert!(
+            rollup
+                .as_display()
+                .contains("1 receipts (tasks=1, dependencies=0, stale_removed=1, operations: replace_snapshot=1; source_kinds: canonical_snapshot_memory=1;")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn replace_with_taskflow_snapshot_removes_stale_dependencies_for_kept_tasks() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-replace-deps-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-blocker\",\"title\":\"Blocker\",\"description\":\"blocker\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-keep\",\"title\":\"Keep\",\"description\":\"keep\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-keep\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"},{\"issue_id\":\"vida-keep\",\"depends_on_id\":\"vida-blocker\",\"type\":\"blocks\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+            ),
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let snapshot = TaskSnapshot {
+            tasks: vec![
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-root"),
+                    title: "Root".to_string(),
+                    status: CanonicalTaskStatus::Open,
+                    issue_type: CanonicalIssueType::Epic,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:00Z", &Rfc3339)
+                            .expect("parse root timestamp"),
+                    ),
+                },
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-keep"),
+                    title: "Keep".to_string(),
+                    status: CanonicalTaskStatus::Open,
+                    issue_type: CanonicalIssueType::Task,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                            .expect("parse keep timestamp"),
+                    ),
+                },
+            ],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-keep"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
+        };
+
+        store
+            .replace_with_taskflow_snapshot(&snapshot)
+            .await
+            .expect("replacement import should succeed");
+
+        let keep = store.show_task("vida-keep").await.expect("keep task should remain");
+        assert_eq!(keep.dependencies.len(), 1);
+        assert_eq!(keep.dependencies[0].depends_on_id, "vida-root");
+        assert_eq!(keep.dependencies[0].edge_type, "parent-child");
+
+        let blockers = store
+            .task_dependencies("vida-keep")
+            .await
+            .expect("dependencies should load");
+        assert_eq!(blockers.len(), 1);
+        assert_eq!(blockers[0].depends_on_id, "vida-root");
+
+        let graph_issues = store
+            .validate_task_graph()
+            .await
+            .expect("graph validation should succeed");
+        assert!(graph_issues.is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn import_taskflow_snapshot_replaces_dependencies_for_updated_tasks_without_removing_unrelated_tasks() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-import-deps-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-blocker\",\"title\":\"Blocker\",\"description\":\"blocker\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-keep\",\"title\":\"Keep\",\"description\":\"keep\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-keep\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"},{\"issue_id\":\"vida-keep\",\"depends_on_id\":\"vida-blocker\",\"type\":\"blocks\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
+                "{\"id\":\"vida-unrelated\",\"title\":\"Unrelated\",\"description\":\"unrelated\",\"status\":\"open\",\"priority\":4,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n"
+            ),
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let snapshot = TaskSnapshot {
+            tasks: vec![
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-root"),
+                    title: "Root".to_string(),
+                    status: CanonicalTaskStatus::Open,
+                    issue_type: CanonicalIssueType::Epic,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:00Z", &Rfc3339)
+                            .expect("parse root timestamp"),
+                    ),
+                },
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-keep"),
+                    title: "Keep".to_string(),
+                    status: CanonicalTaskStatus::Open,
+                    issue_type: CanonicalIssueType::Task,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                            .expect("parse keep timestamp"),
+                    ),
+                },
+            ],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-keep"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
+        };
+
+        store
+            .import_taskflow_snapshot(&snapshot)
+            .await
+            .expect("additive import should succeed");
+
+        let keep = store.show_task("vida-keep").await.expect("keep task should remain");
+        assert_eq!(keep.dependencies.len(), 1);
+        assert_eq!(keep.dependencies[0].depends_on_id, "vida-root");
+        assert_eq!(keep.dependencies[0].edge_type, "parent-child");
+
+        let unrelated = store
+            .show_task("vida-unrelated")
+            .await
+            .expect("unrelated task should remain after additive import");
+        assert_eq!(unrelated.title, "Unrelated");
+
+        let graph_issues = store
+            .validate_task_graph()
+            .await
+            .expect("graph validation should succeed");
+        assert!(graph_issues.is_empty());
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load")
+            .expect("latest reconciliation receipt should exist");
+        assert_eq!(latest.operation, "import_snapshot");
+        assert_eq!(latest.source_kind, "canonical_snapshot_memory");
+        assert_eq!(latest.task_count, 2);
+        assert_eq!(latest.dependency_count, 1);
+
+        let bridge = store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 1);
+        assert_eq!(bridge.import_receipts, 1);
+        assert_eq!(bridge.memory_import_receipts, 1);
+        assert_eq!(bridge.file_import_receipts, 0);
+        assert_eq!(bridge.latest_operation.as_deref(), Some("import_snapshot"));
+        assert_eq!(
+            bridge.latest_source_kind.as_deref(),
+            Some("canonical_snapshot_memory")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn import_taskflow_snapshot_allows_dependencies_on_existing_authoritative_tasks_outside_payload() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-import-existing-target-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        fs::write(
+            &source,
+            "{\"id\":\"vida-root\",\"title\":\"Root\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-child"),
+                title: "Child".to_string(),
+                status: CanonicalTaskStatus::Open,
+                issue_type: CanonicalIssueType::Task,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                        .expect("parse child timestamp"),
+                ),
+            }],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-child"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
+        };
+
+        store
+            .import_taskflow_snapshot(&snapshot)
+            .await
+            .expect("additive import should accept existing authoritative dependency target");
+
+        let child = store
+            .show_task("vida-child")
+            .await
+            .expect("child task should be imported");
+        assert_eq!(child.dependencies.len(), 1);
+        assert_eq!(child.dependencies[0].depends_on_id, "vida-root");
+        assert_eq!(child.dependencies[0].edge_type, "parent-child");
+
+        let graph_issues = store
+            .validate_task_graph()
+            .await
+            .expect("graph validation should succeed");
+        assert!(graph_issues.is_empty());
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load")
+            .expect("latest reconciliation receipt should exist");
+        assert_eq!(latest.operation, "import_snapshot");
+        assert_eq!(latest.source_kind, "canonical_snapshot_memory");
+        assert_eq!(latest.task_count, 1);
+        assert_eq!(latest.dependency_count, 1);
+
+        let bridge = store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 1);
+        assert_eq!(bridge.import_receipts, 1);
+        assert_eq!(bridge.memory_import_receipts, 1);
+        assert_eq!(bridge.file_import_receipts, 0);
+        assert_eq!(bridge.latest_operation.as_deref(), Some("import_snapshot"));
+        assert_eq!(
+            bridge.latest_source_kind.as_deref(),
+            Some("canonical_snapshot_memory")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn import_taskflow_snapshot_fails_closed_before_mutation_on_post_merge_parent_conflict() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-import-parent-conflict-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root-a\",\"title\":\"Root A\",\"description\":\"root a\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-root-b\",\"title\":\"Root B\",\"description\":\"root b\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-child\",\"title\":\"Child old\",\"description\":\"child\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-child\",\"depends_on_id\":\"vida-root-a\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+            ),
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let before_child = store
+            .show_task("vida-child")
+            .await
+            .expect("child should exist before conflicting import");
+        assert_eq!(before_child.title, "Child old");
+        assert_eq!(before_child.dependencies.len(), 1);
+        assert_eq!(before_child.dependencies[0].depends_on_id, "vida-root-a");
+
+        let snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-child"),
+                title: "Child new".to_string(),
+                status: CanonicalTaskStatus::Open,
+                issue_type: CanonicalIssueType::Task,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                        .expect("parse child timestamp"),
+                ),
+            }],
+            dependencies: vec![
+                CanonicalDependencyEdge {
+                    issue_id: CanonicalTaskId::new("vida-child"),
+                    depends_on_id: CanonicalTaskId::new("vida-root-a"),
+                    dependency_type: "parent-child".to_string(),
+                },
+                CanonicalDependencyEdge {
+                    issue_id: CanonicalTaskId::new("vida-child"),
+                    depends_on_id: CanonicalTaskId::new("vida-root-b"),
+                    dependency_type: "parent-child".to_string(),
+                },
+            ],
+        };
+
+        let error = store
+            .import_taskflow_snapshot(&snapshot)
+            .await
+            .expect_err("post-merge multiple-parent conflict should fail");
+        match error {
+            StateStoreError::InvalidCanonicalTaskflowExport { reason } => {
+                assert!(reason.contains("snapshot graph is invalid after additive merge"));
+                assert!(reason.contains("multiple_parent_edges"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let after_child = store
+            .show_task("vida-child")
+            .await
+            .expect("child should still exist after rejected import");
+        assert_eq!(after_child.title, "Child old");
+        assert_eq!(after_child.dependencies.len(), 1);
+        assert_eq!(after_child.dependencies[0].depends_on_id, "vida-root-a");
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load");
+        assert!(latest.is_none(), "rejected import must not emit reconciliation receipt");
+
+        let bridge = store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 0);
+        assert_eq!(bridge.import_receipts, 0);
+        assert_eq!(bridge.memory_import_receipts, 0);
+        assert_eq!(bridge.file_import_receipts, 0);
+        assert!(bridge.latest_operation.is_none());
+        assert!(bridge.latest_source_kind.is_none());
+
+        let graph_issues = store
+            .validate_task_graph()
+            .await
+            .expect("graph validation should succeed");
+        assert!(graph_issues.is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn import_taskflow_snapshot_file_allows_dependencies_on_existing_authoritative_tasks_outside_payload() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-file-import-existing-target-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        let snapshot_path = root.join("snapshot.json");
+        fs::write(
+            &source,
+            "{\"id\":\"vida-root\",\"title\":\"Root\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-child"),
+                title: "Child".to_string(),
+                status: CanonicalTaskStatus::Open,
+                issue_type: CanonicalIssueType::Task,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                        .expect("parse child timestamp"),
+                ),
+            }],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-child"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
+        };
+        taskflow_state_fs::write_snapshot(&snapshot_path, &snapshot).expect("write snapshot");
+
+        store
+            .import_taskflow_snapshot_file(&snapshot_path)
+            .await
+            .expect("file-backed additive import should accept existing authoritative dependency target");
+
+        let child = store
+            .show_task("vida-child")
+            .await
+            .expect("child task should be imported");
+        assert_eq!(child.dependencies.len(), 1);
+        assert_eq!(child.dependencies[0].depends_on_id, "vida-root");
+        assert_eq!(child.dependencies[0].edge_type, "parent-child");
+
+        let graph_issues = store
+            .validate_task_graph()
+            .await
+            .expect("graph validation should succeed");
+        assert!(graph_issues.is_empty());
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load")
+            .expect("latest reconciliation receipt should exist");
+        assert_eq!(latest.operation, "import_snapshot");
+        assert_eq!(latest.source_kind, "canonical_snapshot_file");
+        assert_eq!(latest.source_path.as_deref(), Some(snapshot_path.to_string_lossy().as_ref()));
+        assert_eq!(latest.task_count, 1);
+        assert_eq!(latest.dependency_count, 1);
+
+        let bridge = store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 1);
+        assert_eq!(bridge.import_receipts, 1);
+        assert_eq!(bridge.memory_import_receipts, 0);
+        assert_eq!(bridge.file_import_receipts, 1);
+        assert_eq!(bridge.latest_operation.as_deref(), Some("import_snapshot"));
+        assert_eq!(
+            bridge.latest_source_kind.as_deref(),
+            Some("canonical_snapshot_file")
+        );
+        assert_eq!(
+            bridge.latest_source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn import_taskflow_snapshot_file_fails_closed_before_mutation_on_post_merge_parent_conflict() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-file-import-parent-conflict-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        let snapshot_path = root.join("snapshot.json");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root-a\",\"title\":\"Root A\",\"description\":\"root a\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-root-b\",\"title\":\"Root B\",\"description\":\"root b\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-child\",\"title\":\"Child old\",\"description\":\"child\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-child\",\"depends_on_id\":\"vida-root-a\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+            ),
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-child"),
+                title: "Child new".to_string(),
+                status: CanonicalTaskStatus::Open,
+                issue_type: CanonicalIssueType::Task,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                        .expect("parse child timestamp"),
+                ),
+            }],
+            dependencies: vec![
+                CanonicalDependencyEdge {
+                    issue_id: CanonicalTaskId::new("vida-child"),
+                    depends_on_id: CanonicalTaskId::new("vida-root-a"),
+                    dependency_type: "parent-child".to_string(),
+                },
+                CanonicalDependencyEdge {
+                    issue_id: CanonicalTaskId::new("vida-child"),
+                    depends_on_id: CanonicalTaskId::new("vida-root-b"),
+                    dependency_type: "parent-child".to_string(),
+                },
+            ],
+        };
+        taskflow_state_fs::write_snapshot(&snapshot_path, &snapshot).expect("write snapshot");
+
+        let error = store
+            .import_taskflow_snapshot_file(&snapshot_path)
+            .await
+            .expect_err("post-merge multiple-parent conflict should fail");
+        match error {
+            StateStoreError::InvalidCanonicalTaskflowExport { reason } => {
+                assert!(reason.contains("snapshot graph is invalid after additive merge"));
+                assert!(reason.contains("multiple_parent_edges"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let after_child = store
+            .show_task("vida-child")
+            .await
+            .expect("child should still exist after rejected file import");
+        assert_eq!(after_child.title, "Child old");
+        assert_eq!(after_child.dependencies.len(), 1);
+        assert_eq!(after_child.dependencies[0].depends_on_id, "vida-root-a");
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load");
+        assert!(latest.is_none(), "rejected file import must not emit reconciliation receipt");
+
+        let bridge = store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 0);
+        assert_eq!(bridge.import_receipts, 0);
+        assert_eq!(bridge.memory_import_receipts, 0);
+        assert_eq!(bridge.file_import_receipts, 0);
+        assert!(bridge.latest_operation.is_none());
+        assert!(bridge.latest_source_kind.is_none());
+        assert!(bridge.latest_source_path.is_none());
+
+        let graph_issues = store
+            .validate_task_graph()
+            .await
+            .expect("graph validation should succeed");
+        assert!(graph_issues.is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn additive_imports_accumulate_mixed_memory_and_file_rollup_totals() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-import-mixed-rollup-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        let snapshot_path = root.join("snapshot.json");
+        fs::write(
+            &source,
+            "{\"id\":\"vida-root\",\"title\":\"Root\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let memory_snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-a"),
+                title: "Task A".to_string(),
+                status: CanonicalTaskStatus::Open,
+                issue_type: CanonicalIssueType::Task,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                        .expect("parse task a timestamp"),
+                ),
+            }],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-a"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
+        };
+        store
+            .import_taskflow_snapshot(&memory_snapshot)
+            .await
+            .expect("memory additive import should succeed");
+
+        let file_snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-b"),
+                title: "Task B".to_string(),
+                status: CanonicalTaskStatus::Open,
+                issue_type: CanonicalIssueType::Task,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:06Z", &Rfc3339)
+                        .expect("parse task b timestamp"),
+                ),
+            }],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-b"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
+        };
+        taskflow_state_fs::write_snapshot(&snapshot_path, &file_snapshot).expect("write snapshot");
+        store
+            .import_taskflow_snapshot_file(&snapshot_path)
+            .await
+            .expect("file additive import should succeed");
+
+        let rollup = store
+            .task_reconciliation_rollup()
+            .await
+            .expect("reconciliation rollup should load");
+        assert_eq!(rollup.total_receipts, 2);
+        assert_eq!(rollup.by_operation.get("import_snapshot"), Some(&2));
+        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_memory"), Some(&1));
+        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_file"), Some(&1));
+        assert_eq!(rollup.total_task_rows, 2);
+        assert_eq!(rollup.total_dependency_rows, 2);
+        assert_eq!(rollup.total_stale_removed, 0);
+        assert_eq!(
+            rollup.latest_source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
+
+        let bridge = store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 2);
+        assert_eq!(bridge.import_receipts, 2);
+        assert_eq!(bridge.memory_import_receipts, 1);
+        assert_eq!(bridge.file_import_receipts, 1);
+        assert_eq!(bridge.total_task_rows, 2);
+        assert_eq!(bridge.total_dependency_rows, 2);
+        assert_eq!(bridge.total_stale_removed, 0);
+        assert_eq!(bridge.latest_operation.as_deref(), Some("import_snapshot"));
+        assert_eq!(bridge.latest_source_kind.as_deref(), Some("canonical_snapshot_file"));
+        assert_eq!(
+            bridge.latest_source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
+
+        let tasks = store.all_tasks().await.expect("tasks should load");
+        assert_eq!(tasks.len(), 3);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn import_and_replace_accumulate_cross_operation_rollup_totals() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-import-replace-rollup-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        let snapshot_path = root.join("replace-snapshot.json");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n"
+            ),
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let memory_snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-a"),
+                title: "Task A".to_string(),
+                status: CanonicalTaskStatus::Open,
+                issue_type: CanonicalIssueType::Task,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                        .expect("parse task a timestamp"),
+                ),
+            }],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-a"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
+        };
+        store
+            .import_taskflow_snapshot(&memory_snapshot)
+            .await
+            .expect("memory additive import should succeed");
+
+        let replace_snapshot = TaskSnapshot {
+            tasks: vec![
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-root"),
+                    title: "Root".to_string(),
+                    status: CanonicalTaskStatus::Open,
+                    issue_type: CanonicalIssueType::Epic,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:00Z", &Rfc3339)
+                            .expect("parse root timestamp"),
+                    ),
+                },
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-a"),
+                    title: "Task A replaced".to_string(),
+                    status: CanonicalTaskStatus::Closed,
+                    issue_type: CanonicalIssueType::Task,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:06Z", &Rfc3339)
+                            .expect("parse task a replace timestamp"),
+                    ),
+                },
+            ],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-a"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
+        };
+        taskflow_state_fs::write_snapshot(&snapshot_path, &replace_snapshot)
+            .expect("write replace snapshot");
+        store
+            .replace_with_taskflow_snapshot_file(&snapshot_path)
+            .await
+            .expect("file-backed replace should succeed");
+
+        let rollup = store
+            .task_reconciliation_rollup()
+            .await
+            .expect("reconciliation rollup should load");
+        assert_eq!(rollup.total_receipts, 2);
+        assert_eq!(rollup.by_operation.get("import_snapshot"), Some(&1));
+        assert_eq!(rollup.by_operation.get("replace_snapshot"), Some(&1));
+        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_memory"), Some(&1));
+        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_file"), Some(&1));
+        assert_eq!(rollup.total_task_rows, 3);
+        assert_eq!(rollup.total_dependency_rows, 2);
+        assert_eq!(rollup.total_stale_removed, 1);
+        assert_eq!(
+            rollup.latest_source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
+
+        let bridge = store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 2);
+        assert_eq!(bridge.import_receipts, 1);
+        assert_eq!(bridge.replace_receipts, 1);
+        assert_eq!(bridge.memory_import_receipts, 1);
+        assert_eq!(bridge.file_import_receipts, 0);
+        assert_eq!(bridge.memory_replace_receipts, 0);
+        assert_eq!(bridge.file_replace_receipts, 1);
+        assert_eq!(bridge.total_task_rows, 3);
+        assert_eq!(bridge.total_dependency_rows, 2);
+        assert_eq!(bridge.total_stale_removed, 1);
+        assert_eq!(bridge.latest_operation.as_deref(), Some("replace_snapshot"));
+        assert_eq!(bridge.latest_source_kind.as_deref(), Some("canonical_snapshot_file"));
+        assert_eq!(
+            bridge.latest_source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
+
+        let stale = store.show_task("vida-stale").await.expect_err("stale task should be removed");
+        assert!(matches!(stale, StateStoreError::MissingTask { .. }));
+        let replaced = store.show_task("vida-a").await.expect("task a should remain");
+        assert_eq!(replaced.title, "Task A replaced");
+        assert_eq!(replaced.status, "closed");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn reconciliation_receipts_and_summaries_persist_across_reopen() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-reconciliation-reopen-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        let snapshot_path = root.join("replace-snapshot.json");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n"
+            ),
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let memory_snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-a"),
+                title: "Task A".to_string(),
+                status: CanonicalTaskStatus::Open,
+                issue_type: CanonicalIssueType::Task,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                        .expect("parse task a timestamp"),
+                ),
+            }],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-a"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
+        };
+        store
+            .import_taskflow_snapshot(&memory_snapshot)
+            .await
+            .expect("memory additive import should succeed");
+
+        let replace_snapshot = TaskSnapshot {
+            tasks: vec![
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-root"),
+                    title: "Root".to_string(),
+                    status: CanonicalTaskStatus::Open,
+                    issue_type: CanonicalIssueType::Epic,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:00Z", &Rfc3339)
+                            .expect("parse root timestamp"),
+                    ),
+                },
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-a"),
+                    title: "Task A replaced".to_string(),
+                    status: CanonicalTaskStatus::Closed,
+                    issue_type: CanonicalIssueType::Task,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:06Z", &Rfc3339)
+                            .expect("parse task a replace timestamp"),
+                    ),
+                },
+            ],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-a"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
+        };
+        taskflow_state_fs::write_snapshot(&snapshot_path, &replace_snapshot)
+            .expect("write replace snapshot");
+        store
+            .replace_with_taskflow_snapshot_file(&snapshot_path)
+            .await
+            .expect("file-backed replace should succeed");
+
+        drop(store);
+
+        let mut reopened = None;
+        for _ in 0..10 {
+            match StateStore::open_existing(root.clone()).await {
+                Ok(store) => {
+                    reopened = Some(store);
+                    break;
+                }
+                Err(StateStoreError::Db(_)) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                }
+                Err(other) => panic!("open existing store: {other}"),
+            }
+        }
+        let reopened = reopened.expect("open existing store");
+
+        let latest = reopened
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load")
+            .expect("latest reconciliation receipt should exist");
+        assert_eq!(latest.operation, "replace_snapshot");
+        assert_eq!(latest.source_kind, "canonical_snapshot_file");
+        assert_eq!(
+            latest.source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(latest.stale_removed_count, 1);
+
+        let rollup = reopened
+            .task_reconciliation_rollup()
+            .await
+            .expect("reconciliation rollup should load");
+        assert_eq!(rollup.total_receipts, 2);
+        assert_eq!(rollup.by_operation.get("import_snapshot"), Some(&1));
+        assert_eq!(rollup.by_operation.get("replace_snapshot"), Some(&1));
+        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_memory"), Some(&1));
+        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_file"), Some(&1));
+        assert_eq!(rollup.total_task_rows, 3);
+        assert_eq!(rollup.total_dependency_rows, 2);
+        assert_eq!(rollup.total_stale_removed, 1);
+        assert_eq!(
+            rollup.latest_source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
+
+        let bridge = reopened
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 2);
+        assert_eq!(bridge.import_receipts, 1);
+        assert_eq!(bridge.replace_receipts, 1);
+        assert_eq!(bridge.memory_import_receipts, 1);
+        assert_eq!(bridge.file_replace_receipts, 1);
+        assert_eq!(bridge.total_task_rows, 3);
+        assert_eq!(bridge.total_dependency_rows, 2);
+        assert_eq!(bridge.total_stale_removed, 1);
+        assert_eq!(bridge.latest_operation.as_deref(), Some("replace_snapshot"));
+        assert_eq!(bridge.latest_source_kind.as_deref(), Some("canonical_snapshot_file"));
+        assert_eq!(
+            bridge.latest_source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
+
+        let replaced = reopened.show_task("vida-a").await.expect("task a should remain");
+        assert_eq!(replaced.title, "Task A replaced");
+        let stale = reopened
+            .show_task("vida-stale")
+            .await
+            .expect_err("stale task should remain removed after reopen");
+        assert!(matches!(stale, StateStoreError::MissingTask { .. }));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn replace_with_taskflow_snapshot_file_records_file_receipt_and_rollup() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-replace-file-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        let snapshot_path = root.join("snapshot.json");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-stale\",\"title\":\"Stale\",\"description\":\"stale\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-keep\",\"title\":\"Keep old\",\"description\":\"keep\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n"
+            ),
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-keep"),
+                title: "Keep replacement".to_string(),
+                status: CanonicalTaskStatus::Closed,
+                issue_type: CanonicalIssueType::Task,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                        .expect("parse timestamp"),
+                ),
+            }],
+            dependencies: Vec::new(),
+        };
+        taskflow_state_fs::write_snapshot(&snapshot_path, &snapshot)
+            .expect("snapshot should write");
+
+        store
+            .replace_with_taskflow_snapshot_file(&snapshot_path)
+            .await
+            .expect("replacement file import should succeed");
+
+        let kept = store.show_task("vida-keep").await.expect("keep task should remain");
+        assert_eq!(kept.title, "Keep replacement");
+        let missing = store.show_task("vida-stale").await.expect_err("stale task should be removed");
+        assert!(matches!(missing, StateStoreError::MissingTask { .. }));
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load")
+            .expect("latest reconciliation receipt should exist");
+        assert_eq!(latest.operation, "replace_snapshot");
+        assert_eq!(latest.source_kind, "canonical_snapshot_file");
+        assert_eq!(
+            latest.source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(latest.task_count, 1);
+        assert_eq!(latest.dependency_count, 0);
+        assert_eq!(latest.stale_removed_count, 1);
+
+        let rollup = store
+            .task_reconciliation_rollup()
+            .await
+            .expect("reconciliation rollup should load");
+        assert_eq!(rollup.total_receipts, 1);
+        assert_eq!(rollup.total_task_rows, 1);
+        assert_eq!(rollup.total_dependency_rows, 0);
+        assert_eq!(rollup.total_stale_removed, 1);
+        assert_eq!(rollup.by_operation.get("replace_snapshot"), Some(&1));
+        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_file"), Some(&1));
+        assert_eq!(
+            rollup.latest_source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
+
+        let bridge = store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 1);
+        assert_eq!(bridge.export_receipts, 0);
+        assert_eq!(bridge.import_receipts, 0);
+        assert_eq!(bridge.replace_receipts, 1);
+        assert_eq!(bridge.object_export_receipts, 0);
+        assert_eq!(bridge.memory_export_receipts, 0);
+        assert_eq!(bridge.memory_import_receipts, 0);
+        assert_eq!(bridge.memory_replace_receipts, 0);
+        assert_eq!(bridge.file_export_receipts, 0);
+        assert_eq!(bridge.file_import_receipts, 0);
+        assert_eq!(bridge.file_replace_receipts, 1);
+        assert_eq!(bridge.total_task_rows, 1);
+        assert_eq!(bridge.total_dependency_rows, 0);
+        assert_eq!(bridge.total_stale_removed, 1);
+        assert_eq!(bridge.latest_operation.as_deref(), Some("replace_snapshot"));
+        assert_eq!(bridge.latest_source_kind.as_deref(), Some("canonical_snapshot_file"));
+        assert_eq!(
+            bridge.latest_source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
+        assert!(
+            bridge
+                .as_display()
+                .contains("receipts=1 export=0 import=0 replace=1 object=0 memory=0 file=1 tasks=1 dependencies=0 stale_removed=1 latest=replace_snapshot via canonical_snapshot_file")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn canonical_snapshot_bridge_round_trips_across_authoritative_stores() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let source_root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-bridge-source-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let destination_root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-bridge-destination-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let source_store = StateStore::open(source_root.clone())
+            .await
+            .expect("open source store");
+        let destination_store = StateStore::open(destination_root.clone())
+            .await
+            .expect("open destination store");
+        let source = source_root.join("tasks.jsonl");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root epic\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-a\",\"title\":\"Task A\",\"description\":\"first\",\"status\":\"in_progress\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:01Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-a\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
+                "{\"id\":\"vida-b\",\"title\":\"Task B\",\"description\":\"second\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"bug\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:02Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-b\",\"depends_on_id\":\"vida-a\",\"type\":\"blocks\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+            ),
+        )
+        .expect("write task jsonl");
+        source_store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("import source tasks should succeed");
+
+        let exported = source_store
+            .export_taskflow_snapshot()
+            .await
+            .expect("source snapshot export should succeed");
+        destination_store
+            .replace_with_taskflow_snapshot(&exported)
+            .await
+            .expect("destination replace should succeed");
+        let re_exported = destination_store
+            .export_taskflow_snapshot()
+            .await
+            .expect("destination snapshot export should succeed");
+
+        let exported_task_rows = exported
+            .tasks
+            .iter()
+            .map(|task| {
+                (
+                    task.id.0.clone(),
+                    task.title.clone(),
+                    canonical_task_status_label(task.status).to_string(),
+                    canonical_issue_type_label(task.issue_type).to_string(),
+                    canonical_timestamp_label(&task.updated_at),
+                )
+            })
+            .collect::<Vec<_>>();
+        let re_exported_task_rows = re_exported
+            .tasks
+            .iter()
+            .map(|task| {
+                (
+                    task.id.0.clone(),
+                    task.title.clone(),
+                    canonical_task_status_label(task.status).to_string(),
+                    canonical_issue_type_label(task.issue_type).to_string(),
+                    canonical_timestamp_label(&task.updated_at),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(re_exported_task_rows, exported_task_rows);
+
+        let exported_dependency_rows = exported
+            .dependencies
+            .iter()
+            .map(|dependency| {
+                (
+                    dependency.issue_id.0.clone(),
+                    dependency.depends_on_id.0.clone(),
+                    dependency.dependency_type.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let re_exported_dependency_rows = re_exported
+            .dependencies
+            .iter()
+            .map(|dependency| {
+                (
+                    dependency.issue_id.0.clone(),
+                    dependency.depends_on_id.0.clone(),
+                    dependency.dependency_type.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(re_exported_dependency_rows, exported_dependency_rows);
+
+        let destination_ready = destination_store
+            .ready_tasks()
+            .await
+            .expect("destination ready tasks should load");
+        assert_eq!(destination_ready.len(), 1);
+        assert_eq!(destination_ready[0].id, "vida-a");
+
+        let bridge = destination_store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 2);
+        assert_eq!(bridge.export_receipts, 1);
+        assert_eq!(bridge.replace_receipts, 1);
+        assert_eq!(bridge.import_receipts, 0);
+        assert_eq!(bridge.object_export_receipts, 1);
+        assert_eq!(bridge.memory_export_receipts, 0);
+        assert_eq!(bridge.memory_import_receipts, 0);
+        assert_eq!(bridge.memory_replace_receipts, 1);
+        assert_eq!(bridge.file_export_receipts, 0);
+        assert_eq!(bridge.file_import_receipts, 0);
+        assert_eq!(bridge.file_replace_receipts, 0);
+
+        let _ = fs::remove_dir_all(&source_root);
+        let _ = fs::remove_dir_all(&destination_root);
+    }
+
+    #[tokio::test]
+    async fn file_backed_snapshot_bridge_round_trips_across_authoritative_stores() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let source_root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-file-bridge-source-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let destination_root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-file-bridge-destination-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let source_store = StateStore::open(source_root.clone())
+            .await
+            .expect("open source store");
+        let destination_store = StateStore::open(destination_root.clone())
+            .await
+            .expect("open destination store");
+        let source = source_root.join("tasks.jsonl");
+        let snapshot_path = source_root.join("bridge-snapshot.json");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root epic\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-a\",\"title\":\"Task A\",\"description\":\"first\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:01Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-a\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
+                "{\"id\":\"vida-b\",\"title\":\"Task B\",\"description\":\"second\",\"status\":\"closed\",\"priority\":3,\"issue_type\":\"bug\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:02Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-b\",\"depends_on_id\":\"vida-a\",\"type\":\"blocks\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+            ),
+        )
+        .expect("write task jsonl");
+        source_store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("import source tasks should succeed");
+
+        source_store
+            .write_taskflow_snapshot(&snapshot_path)
+            .await
+            .expect("file-backed snapshot export should succeed");
+        destination_store
+            .replace_with_taskflow_snapshot_file(&snapshot_path)
+            .await
+            .expect("destination file-backed replace should succeed");
+        let re_exported = destination_store
+            .export_taskflow_snapshot()
+            .await
+            .expect("destination snapshot export should succeed");
+
+        let re_exported_task_rows = re_exported
+            .tasks
+            .iter()
+            .map(|task| {
+                (
+                    task.id.0.clone(),
+                    task.title.clone(),
+                    canonical_task_status_label(task.status).to_string(),
+                    canonical_issue_type_label(task.issue_type).to_string(),
+                    canonical_timestamp_label(&task.updated_at),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            re_exported_task_rows,
+            vec![
+                (
+                    "vida-a".to_string(),
+                    "Task A".to_string(),
+                    "open".to_string(),
+                    "task".to_string(),
+                    "2026-03-08T00:00:01Z".to_string(),
+                ),
+                (
+                    "vida-b".to_string(),
+                    "Task B".to_string(),
+                    "closed".to_string(),
+                    "bug".to_string(),
+                    "2026-03-08T00:00:02Z".to_string(),
+                ),
+                (
+                    "vida-root".to_string(),
+                    "Root epic".to_string(),
+                    "open".to_string(),
+                    "epic".to_string(),
+                    "2026-03-08T00:00:00Z".to_string(),
+                ),
+            ]
+        );
+
+        let re_exported_dependency_rows = re_exported
+            .dependencies
+            .iter()
+            .map(|dependency| {
+                (
+                    dependency.issue_id.0.clone(),
+                    dependency.depends_on_id.0.clone(),
+                    dependency.dependency_type.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            re_exported_dependency_rows,
+            vec![
+                (
+                    "vida-a".to_string(),
+                    "vida-root".to_string(),
+                    "parent-child".to_string(),
+                ),
+                (
+                    "vida-b".to_string(),
+                    "vida-a".to_string(),
+                    "blocks".to_string(),
+                ),
+            ]
+        );
+
+        let destination_ready = destination_store
+            .ready_tasks()
+            .await
+            .expect("destination ready tasks should load");
+        assert_eq!(destination_ready.len(), 1);
+        assert_eq!(destination_ready[0].id, "vida-a");
+
+        let bridge = destination_store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 2);
+        assert_eq!(bridge.export_receipts, 1);
+        assert_eq!(bridge.replace_receipts, 1);
+        assert_eq!(bridge.import_receipts, 0);
+        assert_eq!(bridge.object_export_receipts, 1);
+        assert_eq!(bridge.memory_export_receipts, 0);
+        assert_eq!(bridge.memory_import_receipts, 0);
+        assert_eq!(bridge.memory_replace_receipts, 0);
+        assert_eq!(bridge.file_export_receipts, 0);
+        assert_eq!(bridge.file_import_receipts, 0);
+        assert_eq!(bridge.file_replace_receipts, 1);
+        assert_eq!(bridge.latest_operation.as_deref(), Some("export_snapshot"));
+        assert_eq!(bridge.latest_source_kind.as_deref(), Some("canonical_snapshot_object"));
+
+        let _ = fs::remove_dir_all(&source_root);
+        let _ = fs::remove_dir_all(&destination_root);
+    }
+
+    #[tokio::test]
+    async fn import_taskflow_snapshot_fails_closed_before_mutation_on_invalid_graph() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-invalid-graph-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-child"),
+                title: "Child".to_string(),
+                status: CanonicalTaskStatus::Open,
+                issue_type: CanonicalIssueType::Task,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:00Z", &Rfc3339)
+                        .expect("parse timestamp"),
+                ),
+            }],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-child"),
+                depends_on_id: CanonicalTaskId::new("vida-missing"),
+                dependency_type: "blocks".to_string(),
+            }],
+        };
+
+        let error = store
+            .import_taskflow_snapshot(&snapshot)
+            .await
+            .expect_err("invalid graph should fail");
+        match error {
+            StateStoreError::InvalidCanonicalTaskflowExport { reason } => {
+                assert!(reason.contains("snapshot graph is invalid"));
+                assert!(reason.contains("missing_dependency"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let tasks = store.all_tasks().await.expect("tasks should still load");
+        assert!(tasks.is_empty(), "invalid import must not mutate store");
 
         let _ = fs::remove_dir_all(&root);
     }

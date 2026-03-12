@@ -135,7 +135,7 @@ Canonical flat naming rule:
 
 1. active Markdown instruction artifacts stay in the root of `vida/config/instructions/`,
 2. logical family placement is expressed by pseudo-directory prefixes in the filename and in `artifact_path`,
-3. example: `vida/config/instructions/agent-definitions.orchestrator-entry.md`
+3. example: `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
 
 ## 5.1 Authoring Format
 
@@ -167,12 +167,12 @@ Canonical rule:
 
 This spec absorbs and supersedes product-instruction semantics previously scattered across:
 
-1. `docs/framework/plans/vida-0.3-instruction-kernel-spec.md`
-2. `vida/config/instructions/agent-definitions.protocol.md`
+1. `docs/process/framework-source-lineage-index.md`
+2. `vida/config/instructions/agent-definitions/model.agent-definitions-contract.md`
 3. `docs/product/spec/instruction-artifact-model.md`
-4. `vida/config/instructions/prompt-templates.worker-packet-templates.md`
-5. `docs/framework/templates/instruction-contract.yaml`
-6. `docs/framework/templates/prompt-template-config.yaml`
+4. `vida/config/instructions/prompt-templates/worker.packet-templates.md`
+5. deleted historical YAML template/schema input formerly at `docs/framework/templates/instruction-contract.yaml`
+6. deleted historical YAML template/schema input formerly at `docs/framework/templates/prompt-template-config.yaml`
 
 -----
 artifact_path: product/spec/instruction-artifact-model
@@ -183,5 +183,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/instruction-artifact-model.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-10T15:41:04+02:00'
+updated_at: '2026-03-12T08:12:40+02:00'
 changelog_ref: instruction-artifact-model.changelog.jsonl

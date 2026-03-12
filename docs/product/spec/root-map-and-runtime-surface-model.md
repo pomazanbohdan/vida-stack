@@ -2,7 +2,7 @@
 
 Status: active product law
 
-Purpose: define the root-map architecture for VIDA and the canonical treatment of multiple bounded runtime surfaces so that `codex`, `taskflow`, and future runtime families remain independently usable while also being unified under one discoverable VIDA framework map.
+Purpose: define the root-map architecture for VIDA and the canonical treatment of multiple bounded runtime surfaces so that `DocFlow`, `taskflow`, and future runtime families remain independently usable while also being unified under one discoverable VIDA framework map.
 
 ## 1. Core Requirement
 
@@ -22,7 +22,7 @@ VIDA may contain multiple bounded runtime surfaces.
 
 Current known runtime surfaces include:
 
-1. `codex`
+1. `DocFlow`
 2. `taskflow`
 
 Future runtime surfaces are expected.
@@ -37,7 +37,7 @@ Rules:
 
 ## 3. Independent And Unified Posture
 
-For every runtime family such as `codex`, `taskflow`, or a future runtime:
+For every runtime family such as `DocFlow`, `taskflow`, or a future runtime:
 
 1. it must have a bounded identity,
 2. it must have a canonical documentation/map surface of its own,
@@ -138,18 +138,18 @@ The current canonical root-map stack is implemented as:
 2. project root map:
    - `docs/project-root-map.md`
 3. governance map:
-   - `vida/config/instructions/system-maps.governance-map.md`
+   - `vida/config/instructions/system-maps/governance.map.md`
 4. runtime-family index:
-   - `vida/config/instructions/system-maps.runtime-family-index.md`
+   - `vida/config/instructions/system-maps/runtime-family.index.md`
 5. runtime-family maps:
-   - `vida/config/instructions/system-maps.runtime-family-codex.md`
-   - `vida/config/instructions/system-maps.runtime-family-taskflow.md`
+   - `vida/config/instructions/system-maps/runtime-family.docflow-map.md`
+   - `vida/config/instructions/system-maps/runtime-family.taskflow-map.md`
 6. template map:
-   - `vida/config/instructions/system-maps.template-map.md`
+   - `vida/config/instructions/system-maps/template.map.md`
 7. project-owned documentation tooling map:
    - `docs/process/documentation-tooling-map.md`
 8. observability map:
-   - `vida/config/instructions/system-maps.observability-map.md`
+   - `vida/config/instructions/system-maps/observability.map.md`
 
 Rule:
 
@@ -205,7 +205,7 @@ During optimization:
 1. keep one canonical root-map route,
 2. prefer extracting missing map surfaces before moving large trees,
 3. normalize owner layers before directory renames,
-4. ensure `codex`, `taskflow`, and future runtimes remain separately intelligible,
+4. ensure `DocFlow`, `taskflow`, and future runtimes remain separately intelligible,
 5. ensure the unified VIDA framework root map remains the top routing surface for framework discovery.
 
 ## 9. Minimum Outcomes
@@ -268,5 +268,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/root-map-and-runtime-surface-model.md
 created_at: '2026-03-10T05:42:00+02:00'
-updated_at: '2026-03-10T14:41:12+02:00'
+updated_at: '2026-03-10T23:52:08+02:00'
 changelog_ref: root-map-and-runtime-surface-model.changelog.jsonl

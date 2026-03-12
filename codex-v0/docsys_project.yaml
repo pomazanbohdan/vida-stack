@@ -4,12 +4,6 @@ root_bootstrap:
   artifact_type: bootstrap_doc
 layer_owner_rules:
   by_relative_path:
-    - pattern: docs/framework/plans/**
-      layer: framework_plan
-      owner: framework
-    - pattern: docs/framework/research/**
-      layer: framework_research
-      owner: framework
     - pattern: docs/product/spec/**
       layer: product_spec
       owner: product
@@ -41,12 +35,6 @@ layer_owner_rules:
       layer: repository_doc
       owner: project
   by_artifact_prefix:
-    - pattern: framework/plans/
-      layer: framework_plan
-      owner: framework
-    - pattern: framework/research/
-      layer: framework_research
-      owner: framework
     - pattern: product/spec/
       layer: product_spec
       owner: product

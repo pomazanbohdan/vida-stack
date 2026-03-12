@@ -1,0 +1,12 @@
+[package]
+name = "docflow-operator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+docflow-contracts = { path = "../docflow-contracts" }
+docflow-core = { path = "../docflow-core" }
+docflow-readiness = { path = "../docflow-readiness" }
+docflow-relations = { path = "../docflow-relations" }
+

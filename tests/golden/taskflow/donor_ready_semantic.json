@@ -1,0 +1,18 @@
+[
+  {
+    "id": "vida-a",
+    "status": "open",
+    "dependency_targets": [
+      "vida-root"
+    ],
+    "dependency_edge_types": [
+      "parent-child"
+    ]
+  },
+  {
+    "id": "vida-c",
+    "status": "open",
+    "dependency_targets": [],
+    "dependency_edge_types": []
+  }
+]

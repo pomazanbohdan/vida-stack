@@ -105,7 +105,7 @@ manifest = {
     "installed_entrypoints": [
         "vida",
         "taskflow-v0",
-        "codex-v0",
+        "docflow-v0",
     ],
     "bundled_binaries": [
         "bin/taskflow-v0",

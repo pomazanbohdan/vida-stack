@@ -11,28 +11,28 @@ import ../core/[utils, config, toon]
 
 const CommonReads* = @[
   "AGENTS.md",
-  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-algorithm-selector",
-  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-stc",
-  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-pr-cot",
-  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-mar",
-  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-5-solutions",
-  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-meta-analysis",
-  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-bug-reasoning",
-  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-web-search",
-  "vida/config/instructions/instruction-contracts.thinking-protocol.md#section-reasoning-modules",
-  "vida/config/instructions/runtime-instructions.web-validation-protocol.md",
-  "vida/config/instructions/runtime-instructions.beads-protocol.md",
-  "vida/config/instructions/runtime-instructions.project-overlay-protocol.md",
+  "vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md#section-algorithm-selector",
+  "vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md#section-stc",
+  "vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md#section-pr-cot",
+  "vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md#section-mar",
+  "vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md#section-5-solutions",
+  "vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md#section-meta-analysis",
+  "vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md#section-bug-reasoning",
+  "vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md#section-web-search",
+  "vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md#section-reasoning-modules",
+  "vida/config/instructions/runtime-instructions/work.web-validation-protocol.md",
+  "vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md",
+  "vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md",
 ]
 
 const StandardReads* = @[
   "vida/config/instructions/runtime-instructions.todo-protocol.md",
-  "vida/config/instructions/command-instructions.implement-execution-protocol.md",
-  "vida/config/instructions/command-instructions.use-case-packs.md",
+  "vida/config/instructions/command-instructions/execution.implement-execution-protocol.md",
+  "vida/config/instructions/command-instructions/routing.use-case-packs-protocol.md",
 ]
 
 const FullReads* = @[
-  "vida/config/instructions/instruction-contracts.orchestration-protocol.md",
+  "vida/config/instructions/instruction-contracts/core.orchestration-protocol.md",
   "vida/config/instructions/command-instructions.pipelines.md",
 ]
 
@@ -54,11 +54,11 @@ proc profileReads*(profile: string, nonDev: bool, agentSystemActive: bool,
   if profile == "full":
     result.add(FullReads)
   if nonDev:
-    result.add("vida/config/instructions/runtime-instructions.spec-contract-protocol.md")
+    result.add("vida/config/instructions/runtime-instructions/work.spec-contract-protocol.md")
   if fileExists(rootDir / "vida.config.yaml"):
     result.add("vida.config.yaml")
   if agentSystemActive:
-    result.add("vida/config/instructions/instruction-contracts.agent-system-protocol.md")
+    result.add("vida/config/instructions/instruction-contracts/core.agent-system-protocol.md")
 
 # ─────────────────────────── Packet Builder ───────────────────────────
 

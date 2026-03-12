@@ -17,8 +17,8 @@ scope_boundary:
     - silent scope expansion
 mandatory_reads:
   - AGENTS.md
-  - vida/config/instructions/agent-definitions.worker-entry.md
-  - vida/config/instructions/instruction-contracts.worker-thinking.md
+  - vida/config/instructions/agent-definitions/entry.worker-entry.md
+  - vida/config/instructions/instruction-contracts/role.worker-thinking.md
 input_contract:
   required_inputs:
     - worker_packet
@@ -27,6 +27,7 @@ input_contract:
     - verification_command
   forbidden_missing_inputs:
     - worker_lane_confirmed
+    - lane_identity
 decision_rules:
   - when: worker_lane_is_confirmed
     then: follow_worker_contract

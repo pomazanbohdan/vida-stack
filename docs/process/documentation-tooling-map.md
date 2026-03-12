@@ -9,15 +9,15 @@ This map covers project-facing documentation tooling for the active `vida-stack`
 1. documentation inventory/status commands,
 2. documentation mutation/finalization commands,
 3. validation/proof commands,
-4. routing from project-doc work into the bounded `codex` runtime family.
+4. routing from project-doc work into the bounded `DocFlow` runtime family.
 
 ## Canonical Entry Points
 
 1. `AGENTS.sidecar.md`
    - project docs bootstrap map that points here for documentation-tooling tasks
-2. `vida/config/instructions/system-maps.runtime-family-codex.md`
+2. `vida/config/instructions/system-maps/runtime-family.docflow-map.md`
    - runtime-family map for the bounded documentation/operator runtime
-3. `vida/config/instructions/instruction-contracts.documentation-operation-protocol.md`
+3. `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md`
    - framework law for documentation-shaped tasks
 
 ## Read / Status Commands
@@ -83,7 +83,7 @@ Read this map when:
 
 1. This file is project-owned tooling guidance.
 2. Framework documentation law remains in `vida/config/instructions/**`.
-3. Runtime execution for these commands remains the bounded `codex` runtime family surface, not this map itself.
+3. Runtime execution for these commands remains the bounded `DocFlow` runtime family surface, currently surfaced through `codex-v0/codex.py`, not this map itself.
 
 -----
 artifact_path: process/documentation-tooling-map
@@ -94,5 +94,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/documentation-tooling-map.md
 created_at: '2026-03-10T09:45:00+02:00'
-updated_at: '2026-03-10T09:45:00+02:00'
+updated_at: '2026-03-10T23:52:08+02:00'
 changelog_ref: documentation-tooling-map.changelog.jsonl

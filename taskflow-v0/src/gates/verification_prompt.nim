@@ -56,7 +56,7 @@ proc verificationPromptText*(originalPrompt, taskClass, verificationTaskClass: s
     "Runtime Role Packet:",
     "- worker_lane_confirmed: true",
     "- worker_role: worker",
-    "- orchestrator_entry_fallback: vida/config/instructions/agent-definitions.orchestrator-entry.md",
+    "- orchestrator_entry_fallback: vida/config/instructions/agent-definitions/entry.orchestrator-entry.md",
     "- worker_entry: " & $worker_packet.WorkerEntryDoc,
     "- worker_thinking: " & $worker_packet.WorkerThinkingDoc,
     "- impact_tail_policy: required_for_non_stc",

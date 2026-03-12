@@ -1,19 +1,19 @@
 # Vida Stack Version Plan
 
-Purpose: define the versioned product path for Vida Stack from the current script-based reference runtime to the future self-hosted binary, daemonized control plane, and extension ecosystem.
+Purpose: define the versioned product path for Vida Stack from the current transitional runtime substrates to the future compiled autonomous delivery runtime, daemonized control plane, and extension ecosystem.
 
-This document replaces the older `RELEASE-1-*` framing.
+This document stays above the detailed `Release 1` wave package and defines the versioned product path rather than the inner execution program.
 
 Rule:
 
 1. `README.md` explains the product narrative and current direction.
 2. This file defines the versioned scope and transition path.
-3. Runtime bootstrap truth remains in `AGENTS.md`, active instruction canon lives in `vida/config/instructions/*`, and active framework program/research layers live in `docs/framework/{plans,research,history}/**`.
+3. Runtime bootstrap truth remains in `AGENTS.md`, active instruction canon lives in `vida/config/instructions/*`, and active product-law direction lives in `docs/product/spec/**`.
 
 Design assumptions:
 
-1. `0.1` remains the behavioral source of truth until the binary reproduces it.
-2. `1.0` is a self-hosted local binary, not a daemon release.
+1. `0.2.0` remains the active transitional proving release built on bounded runtime substrates.
+2. `Release 1` and `1.0` point at the first CLI-first compiled autonomous delivery runtime, not at a daemon release.
 3. `2.0` owns daemon mode, richer observability, dashboards, and vector-search daemon integration.
 4. `3.0` owns plugins, marketplace, and extension ecosystem concerns.
 
@@ -21,16 +21,16 @@ Design assumptions:
 
 Vida Stack now moves through four major product states:
 
-1. `0.1` — Reference Script Runtime
-2. `1.0` — Self-Hosted Local Binary
+1. `0.2.0` — Transitional Proving Release
+2. `1.0` / `Release 1` — CLI-First Compiled Autonomous Delivery Runtime
 3. `2.0` — Daemonized Control Plane
 4. `3.0` — Plugins and Marketplace
 
-The current repository is finishing the `0.1` line while defining the migration path into `1.0`.
+The current repository is operating in the `0.2.0` proving line while defining and implementing the migration path into `Release 1` / `1.0`.
 
-## Version 0.1 — Reference Script Runtime
+## Version 0.2.0 — Transitional Proving Release
 
-`0.1` is the script-based reference stack.
+`0.2.0` is the active transitional stack.
 
 Its job is to:
 
@@ -39,22 +39,22 @@ Its job is to:
 3. reduce ambiguity before binary migration,
 4. act as the source-of-truth behavior layer for the Rust implementation.
 
-`0.1` is not a toy demo.
-It is the last large script/runtime line before binary productization.
+`0.2.0` is not a toy demo.
+It is the proving release that bridges the current bounded runtime substrates into the compiled autonomous delivery runtime line.
 
 Core characteristics:
 
-1. shell and Python runtime adapters,
-2. protocol-driven execution through `AGENTS.md`, `vida/config/instructions/*`, and framework plan/research evidence,
+1. bounded runtime substrates through `taskflow-v0`, `codex-v0`, and the current Rust `vida` shell,
+2. protocol-driven execution through `AGENTS.md`, `vida/config/instructions/*`, and active product/spec canon,
 3. bounded subagent orchestration,
-4. task-state through `br` and TaskFlow,
+4. task-state and runtime execution through `TaskFlow`,
 5. review, approval, and route-law enforcement,
 6. framework memory, document lifecycle, and operator status as runtime surfaces,
 7. installer and framework-only release packaging.
 
-## Transition Path From 0.1 To 1.0
+## Transition Path From 0.2.0 To 1.0 / Release 1
 
-The transition to `1.0` should move through these internal milestones:
+The transition to `1.0` / `Release 1` should move through these internal milestones:
 
 1. `0.2` — semantic freeze
    - freeze command model,
@@ -100,16 +100,17 @@ The transition to `1.0` should move through these internal milestones:
    - VIDA uses `vida` as its primary operating surface,
    - script runtime becomes reference and migration support
 
-## Version 1.0 — Self-Hosted Local Binary
+## Version 1.0 / Release 1 — CLI-First Compiled Autonomous Delivery Runtime
 
-`1.0` is the first full VIDA product release.
+`1.0` / `Release 1` is the first full VIDA product release.
 
 It should be:
 
 1. one local Rust binary,
 2. one embedded state and memory backend,
 3. one command-first runtime surface,
-4. one self-hosted operating path for developing VIDA itself.
+4. one self-hosted operating path for developing VIDA itself,
+5. one compiled autonomous delivery runtime that consumes compiled law/config bundles instead of re-reading raw canon on every step.
 
 Required `1.0` capabilities:
 
@@ -140,8 +141,8 @@ Core architectural expectations:
 9. the `vida` binary may compose them, but it must not collapse their boundaries.
 10. direct runtime consumption of canonical inventory, readiness, bundles, and projections is blocked until `taskflow` becomes the primary runtime engine for that path; `codex` alone cannot close that layer.
 
-`1.0` is not a daemon release.
-It is a usable, self-hosted, local control binary.
+`1.0` / `Release 1` is not a daemon release.
+It is a usable, self-hosted, CLI-first local control runtime.
 
 Instruction-runtime expectations for `1.0`:
 
@@ -214,9 +215,9 @@ Plugin package examples worth preserving:
 3. `BA` protocol pack,
 4. `SA` protocol pack.
 
-## What Becomes Repository-Minimal In 1.0
+## What Becomes Repository-Minimal In 1.0 / Release 1
 
-By `1.0`, the repository should no longer be the primary startup surface for framework behavior.
+By `1.0` / `Release 1`, the repository should no longer be the primary startup surface for framework behavior.
 
 The intended direction is:
 
@@ -230,9 +231,9 @@ The intended direction is:
 
 The project is currently:
 
-1. finishing the `0.1` reference stack,
-2. reducing ambiguity for semantic freeze,
-3. preparing the architectural move into the `1.0` binary line.
+1. operating on the `0.2.0` proving release,
+2. reducing ambiguity for semantic freeze and Release-1 closure,
+3. preparing the architectural move into the `1.0` / `Release 1` compiled runtime line.
 
 ## Core Principle
 
@@ -253,5 +254,5 @@ schema_version: '1'
 status: canonical
 source_path: VERSION-PLAN.md
 created_at: '2026-03-10T00:30:00+02:00'
-updated_at: '2026-03-10T03:06:28+02:00'
+updated_at: '2026-03-12T08:29:00+02:00'
 changelog_ref: VERSION-PLAN.changelog.jsonl

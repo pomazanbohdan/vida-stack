@@ -1,0 +1,11 @@
+[package]
+name = "docflow-readiness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+docflow-contracts = { path = "../docflow-contracts" }
+docflow-core = { path = "../docflow-core" }
+docflow-validation = { path = "../docflow-validation" }
+

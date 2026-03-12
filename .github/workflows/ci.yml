@@ -59,11 +59,47 @@ jobs:
             nim c -r --nimcache:"_temp/nimcache/tests/${test_name}" "$test_file"
           done
 
-      - name: Run cargo check
+      - name: Run cargo test
         shell: bash
         run: |
           set -euo pipefail
-          cargo check
+          cargo test --workspace
+
+      - name: Build release assets and verify launcher manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/build-release.sh
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifests = sorted(Path("dist/package").glob("*/release-manifest.json"))
+          assert manifests, "release manifest was not generated"
+          data = json.loads(manifests[0].read_text())
+          expected = ["vida", "taskflow-v0", "docflow-v0"]
+          assert data["installed_entrypoints"] == expected, data["installed_entrypoints"]
+          assert data["bundled_binaries"] == ["bin/taskflow-v0"], data["bundled_binaries"]
+          PY
+          bash dist/vida-install.sh help >/tmp/vida-install-help.txt
+          test -s /tmp/vida-install-help.txt
+
+      - name: Run local installer smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          TMP_ROOT="/tmp/vida-ci-install-root"
+          TMP_BIN="/tmp/vida-ci-install-bin"
+          rm -rf "$TMP_ROOT" "$TMP_BIN"
+          mkdir -p "$TMP_BIN"
+          bash dist/vida-install.sh install --archive dist/vida-stack-v0.2.0.tar.gz --root "$TMP_ROOT" --bin-dir "$TMP_BIN" --force
+          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" bash install/install.sh doctor --root "$TMP_ROOT" --bin-dir "$TMP_BIN"
+          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida root >/tmp/vida-root.txt
+          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida docflow --help >/tmp/vida-docflow-help.txt
+          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida taskflow --help >/tmp/vida-taskflow-help.txt
+          grep -q "$TMP_ROOT/current" /tmp/vida-root.txt
+          grep -q "DocFlow v0 launcher" /tmp/vida-docflow-help.txt
+          grep -q "taskflow -> docflow final loop" /tmp/vida-taskflow-help.txt
 
       - name: Run codex validation
         shell: bash

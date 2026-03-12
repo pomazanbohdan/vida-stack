@@ -1,0 +1,22 @@
+[features]
+multi_agent = true
+
+[agents]
+max_threads = 4
+max_depth = 2
+
+[agents.development_implementer]
+description = "Internal implementation lane for bounded code changes and delivery tasks."
+config_file = "agents/development-implementer.toml"
+
+[agents.development_coach]
+description = "Internal coach lane for formative review, rework signals, and quality guidance before independent verification."
+config_file = "agents/development-coach.toml"
+
+[agents.development_verifier]
+description = "Internal verification lane for independent proof checks, defect finding, and closure readiness."
+config_file = "agents/development-verifier.toml"
+
+[agents.development_escalation]
+description = "Internal escalation lane for hard architecture conflicts, blocked routes, and high-cost decisions."
+config_file = "agents/development-escalation.toml"

@@ -23,7 +23,7 @@ project_bootstrap:
   decisions_doc: docs/decisions.md
   environments_doc: docs/environments.md
   project_operations_doc: docs/process/project-operations.md
-  agent_system_doc: docs/process/agent-system.md
+  agent_system_doc: docs/process/agent-system-guide.md
   allow_scaffold_missing: true
   require_launch_confirmation: true
 

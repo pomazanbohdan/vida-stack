@@ -1,0 +1,13 @@
+{
+  "id": "vida-b",
+  "title": "Task B",
+  "status": "in_progress",
+  "priority": 1,
+  "issue_type": "task",
+  "dependency_targets": [
+    "vida-a"
+  ],
+  "dependency_edge_types": [
+    "blocks"
+  ]
+}

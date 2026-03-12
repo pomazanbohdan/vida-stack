@@ -9,8 +9,8 @@ import ../core/[toon, utils]
 
 # ─────────────────────────── Constants ───────────────────────────
 
-const WorkerEntryDoc* = "vida/config/instructions/agent-definitions.worker-entry.md"
-const WorkerThinkingDoc* = "vida/config/instructions/instruction-contracts.worker-thinking.md"
+const WorkerEntryDoc* = "vida/config/instructions/agent-definitions/entry.worker-entry.md"
+const WorkerThinkingDoc* = "vida/config/instructions/instruction-contracts/role.worker-thinking.md"
 
 let RequiredPacketMarkers* = {
   "worker_lane_confirmed: true": "missing worker_lane_confirmed marker",

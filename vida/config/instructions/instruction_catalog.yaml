@@ -4,7 +4,7 @@ version: 1
 revision: 2026-03-09
 compatibility_class: direct_v1_kernel
 canonical_source_refs:
-  - docs/framework/plans/vida-0.3-instruction-kernel-spec.md
+  - docs/process/framework-source-lineage-index.md
   - docs/product/spec/instruction-artifact-model.md
   - vida.config.yaml
 artifact_families:

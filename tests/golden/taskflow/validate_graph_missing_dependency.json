@@ -1,0 +1,9 @@
+[
+  {
+    "issue_type": "missing_dependency_target",
+    "issue_id": "vida-broken",
+    "depends_on_id": "vida-missing",
+    "edge_type": "blocks",
+    "detail": "dependency target is missing from the authoritative runtime store"
+  }
+]

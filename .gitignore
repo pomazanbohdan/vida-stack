@@ -2,7 +2,10 @@ __pycache__/
 *.py[cod]
 .code/agents
 _vida/scripts-nim/vida-legacy
+_vida/
+**/.vida/data/
 target
 _temp
 .venv
 dist
+projects/vida-mobile/

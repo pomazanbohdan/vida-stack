@@ -1,0 +1,9 @@
+[package]
+name = "taskflow-contracts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+taskflow-core = { path = "../taskflow-core" }

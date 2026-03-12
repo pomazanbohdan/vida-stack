@@ -1,0 +1,26 @@
+[package]
+name = "docflow-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "docflow"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+globset.workspace = true
+time.workspace = true
+docflow-contracts = { path = "../docflow-contracts" }
+docflow-config = { path = "../docflow-config" }
+docflow-core = { path = "../docflow-core" }
+docflow-format-jsonl = { path = "../docflow-format-jsonl" }
+docflow-inventory = { path = "../docflow-inventory" }
+docflow-markdown = { path = "../docflow-markdown" }
+docflow-operator = { path = "../docflow-operator" }
+docflow-readiness = { path = "../docflow-readiness" }
+docflow-relations = { path = "../docflow-relations" }
+docflow-validation = { path = "../docflow-validation" }

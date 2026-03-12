@@ -1,0 +1,21 @@
+{
+  "length": 2,
+  "root_task_id": "vida-a",
+  "terminal_task_id": "vida-b",
+  "nodes": [
+    {
+      "id": "vida-a",
+      "title": "Task A",
+      "status": "open",
+      "issue_type": "task",
+      "priority": 2
+    },
+    {
+      "id": "vida-b",
+      "title": "Task B",
+      "status": "in_progress",
+      "issue_type": "task",
+      "priority": 1
+    }
+  ]
+}

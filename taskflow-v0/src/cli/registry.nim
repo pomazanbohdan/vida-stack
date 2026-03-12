@@ -36,7 +36,7 @@ Commands:
   verification Executable verifier admissibility and merge
   verification-prompt Render verification prompt text
   recovery  Checkpoint, gateway, and resumability helpers
-  consume   Direct runtime consumption and taskflow -> codex final loop
+  consume   Direct runtime consumption and taskflow -> docflow final loop
   memory    Framework memory ledger
   context   Context governance
   context-capsule Compact task recovery capsule

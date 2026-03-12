@@ -68,8 +68,8 @@ $ taskflow-v0 boot run standard TASK-42
 
 $ taskflow-v0 boot read-contract lean
 AGENTS.md
-vida/config/instructions/instruction-contracts.thinking-protocol.md#section-algorithm-selector
-vida/config/instructions/instruction-contracts.thinking-protocol.md#section-stc
+vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md#section-algorithm-selector
+vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md#section-stc
 ...
 
 $ taskflow-v0 boot snapshot --json --top-limit 3

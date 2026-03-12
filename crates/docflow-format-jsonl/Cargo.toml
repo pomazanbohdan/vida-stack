@@ -1,0 +1,13 @@
+[package]
+name = "docflow-format-jsonl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+docflow-contracts = { path = "../docflow-contracts" }
+docflow-core = { path = "../docflow-core" }

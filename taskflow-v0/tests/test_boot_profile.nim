@@ -13,9 +13,9 @@ suite "boot profile":
     createDir(root / "vida" / "config" / "instructions")
     createDir(root / ".vida" / "logs" / "boot-receipts")
     writeFile(root / "AGENTS.md", "agents")
-    writeFile(root / "vida" / "config" / "instructions" / "instruction-contracts.thinking-protocol.md", "thinking")
+    writeFile(root / "vida" / "config" / "instructions" / "overlay.step-thinking-protocol.md", "thinking")
     let receiptPath = writeReceipt("lean", "vida-boot-1", true, "present", "ok",
-      @["AGENTS.md", "vida/config/instructions/instruction-contracts.thinking-protocol.md"], root)
+      @["AGENTS.md", "vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md"], root)
     let receipt = loadJson(receiptPath)
     check receipt["contract_files"].len == 2
     check receipt["contract_files"][0]["exists"].getBool() == true

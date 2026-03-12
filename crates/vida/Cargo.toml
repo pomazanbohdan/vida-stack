@@ -10,7 +10,15 @@ path = "src/main.rs"
 [dependencies]
 blake3 = "1.8.2"
 clap = { version = "4.5.38", features = ["derive", "env"] }
+docflow-cli = { path = "../docflow-cli" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
+serde_yaml = "0.9.34"
 surrealdb = { version = "3.0.2", features = ["kv-surrealkv"] }
+taskflow-contracts = { path = "../taskflow-contracts" }
+taskflow-core = { path = "../taskflow-core" }
+taskflow-state = { path = "../taskflow-state" }
+taskflow-state-fs = { path = "../taskflow-state-fs" }
+taskflow-state-surreal = { path = "../taskflow-state-surreal" }
+time = { workspace = true }
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }

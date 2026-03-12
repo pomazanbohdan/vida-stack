@@ -1,0 +1,34 @@
+[
+  {
+    "id": "vida-b",
+    "status": "in_progress",
+    "priority": 1,
+    "issue_type": "task",
+    "dependency_targets": [
+      "vida-a"
+    ],
+    "dependency_edge_types": [
+      "blocks"
+    ]
+  },
+  {
+    "id": "vida-root",
+    "status": "open",
+    "priority": 1,
+    "issue_type": "epic",
+    "dependency_targets": [],
+    "dependency_edge_types": []
+  },
+  {
+    "id": "vida-a",
+    "status": "open",
+    "priority": 2,
+    "issue_type": "task",
+    "dependency_targets": [
+      "vida-root"
+    ],
+    "dependency_edge_types": [
+      "parent-child"
+    ]
+  }
+]
