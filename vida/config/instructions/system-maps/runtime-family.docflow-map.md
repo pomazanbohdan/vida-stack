@@ -11,13 +11,17 @@ Purpose: define the bounded `DocFlow` runtime family surface used for documentat
 
 ## Canonical Surfaces
 
-1. executable/tool entrypoint:
+1. canonical launcher contract:
+   - `vida docflow`
+2. executable/tool entrypoint:
    - `codex-v0/codex.py`
-2. bounded config/policy surfaces:
+3. bundled donor launcher:
+   - `codex-v0`
+4. bounded config/policy surfaces:
    - `codex-v0/docsys_policy.yaml`
    - `codex-v0/docsys_project.yaml`
    - `codex-v0/docsys_schema.yaml`
-3. governing framework protocol:
+5. governing framework protocol:
    - `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md`
 
 ## Activation Triggers
@@ -47,8 +51,14 @@ Read this map when:
 
 1. `DocFlow` is a runtime/tooling surface, not the owner of framework-wide truth.
 2. Documentation law remains in framework and project canonical docs.
-3. `codex-v0/**` is the current transitional donor/runtime surface for that law until `docflow-rs` replaces it.
-4. When activated from the final `taskflow` runtime layer, `DocFlow` resolves canonical inventory, readiness, bundle, and documentation-consumption evidence, but it does not replace `taskflow` as the primary runtime-consumption authority.
+3. `vida docflow` is the canonical launcher bridge for the current donor/runtime surface.
+4. installed `codex-v0` is migration-only compatibility and must route through the same installed `vida docflow` boundary.
+5. `codex-v0/**` is the bundled donor/runtime payload for that law until `docflow-rs` replaces it.
+6. launcher contract is mode-scoped:
+   - repo/dev binary mode = in-process Rust `docflow` shell,
+   - installed mode = compatibility wrapper with `help|overview only`.
+7. broader DocFlow command law still belongs to the donor/runtime family and future `docflow-rs` surface.
+8. When activated from the final `taskflow` runtime layer, `DocFlow` resolves canonical inventory, readiness, bundle, and documentation-consumption evidence, but it does not replace `taskflow` as the primary runtime-consumption authority.
 
 -----
 artifact_path: config/system-maps/runtime-family.docflow

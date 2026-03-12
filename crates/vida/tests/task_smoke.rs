@@ -136,8 +136,10 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
         !ready_stdout.contains("\"id\": \"vida-b\"") && !ready_stdout.contains("\"id\":\"vida-b\"")
     );
 
-    let scoped_ready_stdout =
-        run_and_assert_success(&["task", "ready", "--scope", "vida-root", "--json"], &state_dir);
+    let scoped_ready_stdout = run_and_assert_success(
+        &["task", "ready", "--scope", "vida-root", "--json"],
+        &state_dir,
+    );
     assert!(
         scoped_ready_stdout.contains("\"id\": \"vida-a\"")
             || scoped_ready_stdout.contains("\"id\":\"vida-a\"")
@@ -170,7 +172,8 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
 
     let blocked_stdout = run_and_assert_success(&["task", "blocked", "--json"], &state_dir);
     assert!(
-        blocked_stdout.contains("\"id\": \"vida-b\"") || blocked_stdout.contains("\"id\":\"vida-b\"")
+        blocked_stdout.contains("\"id\": \"vida-b\"")
+            || blocked_stdout.contains("\"id\":\"vida-b\"")
     );
     assert!(
         blocked_stdout.contains("\"depends_on_id\": \"vida-a\"")
@@ -190,8 +193,7 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
             || tree_stdout.contains("\"edge_type\":\"blocks\"")
     );
 
-    let validate_stdout =
-        run_and_assert_success(&["task", "validate-graph", "--json"], &state_dir);
+    let validate_stdout = run_and_assert_success(&["task", "validate-graph", "--json"], &state_dir);
     assert_eq!(validate_stdout.trim(), "[]");
 
     let critical_path_stdout =
@@ -333,8 +335,7 @@ fn dep_add_fails_closed_when_second_parent_child_edge_is_added() {
     assert!(stderr.contains("dependency mutation would create invalid graph"));
     assert!(stderr.contains("multiple_parent_edges"));
 
-    let deps_stdout =
-        run_and_assert_success(&["task", "deps", "vida-child", "--json"], &state_dir);
+    let deps_stdout = run_and_assert_success(&["task", "deps", "vida-child", "--json"], &state_dir);
     assert!(
         deps_stdout.contains("\"depends_on_id\": \"vida-root-a\"")
             || deps_stdout.contains("\"depends_on_id\":\"vida-root-a\"")
@@ -404,8 +405,10 @@ fn donor_ready_output_matches_semantic_parity_fixture() {
     let donor_stdout = String::from_utf8_lossy(&donor_ready.stdout);
 
     let rust_state_dir = format!("{temp_root}/rust-state");
-    let _import_stdout =
-        run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &rust_state_dir);
+    let _import_stdout = run_and_assert_success(
+        &["task", "import-jsonl", &jsonl_path, "--json"],
+        &rust_state_dir,
+    );
     let rust_ready = run_and_assert_success(&["task", "ready", "--json"], &rust_state_dir);
 
     let expected =
@@ -452,8 +455,10 @@ fn donor_show_output_matches_semantic_parity_fixture() {
     let donor_stdout = String::from_utf8_lossy(&donor_show.stdout);
 
     let rust_state_dir = format!("{temp_root}/rust-state");
-    let _import_stdout =
-        run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &rust_state_dir);
+    let _import_stdout = run_and_assert_success(
+        &["task", "import-jsonl", &jsonl_path, "--json"],
+        &rust_state_dir,
+    );
     let rust_show = run_and_assert_success(&["task", "show", "vida-b", "--json"], &rust_state_dir);
 
     let expected =
@@ -462,7 +467,10 @@ fn donor_show_output_matches_semantic_parity_fixture() {
         donor_show_semantic(&donor_stdout),
         normalize_json_fixture(expected)
     );
-    assert_eq!(donor_show_semantic(&rust_show), normalize_json_fixture(expected));
+    assert_eq!(
+        donor_show_semantic(&rust_show),
+        normalize_json_fixture(expected)
+    );
 
     let _ = fs::remove_dir_all(&temp_root);
 }
@@ -507,8 +515,10 @@ fn donor_list_output_matches_semantic_parity_fixture() {
     let donor_stdout = String::from_utf8_lossy(&donor_list.stdout);
 
     let rust_state_dir = format!("{temp_root}/rust-state");
-    let _import_stdout =
-        run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &rust_state_dir);
+    let _import_stdout = run_and_assert_success(
+        &["task", "import-jsonl", &jsonl_path, "--json"],
+        &rust_state_dir,
+    );
     let rust_list = run_and_assert_success(&["task", "list", "--json"], &rust_state_dir);
 
     let expected =
@@ -517,7 +527,10 @@ fn donor_list_output_matches_semantic_parity_fixture() {
         donor_list_semantic(&donor_stdout),
         normalize_json_fixture(expected)
     );
-    assert_eq!(donor_list_semantic(&rust_list), normalize_json_fixture(expected));
+    assert_eq!(
+        donor_list_semantic(&rust_list),
+        normalize_json_fixture(expected)
+    );
 
     let _ = fs::remove_dir_all(&temp_root);
 }

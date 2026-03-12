@@ -9,12 +9,36 @@ fn vida() -> Command {
     Command::new(env!("CARGO_BIN_EXE_vida"))
 }
 
+fn installed_vida() -> (String, Command) {
+    let root = unique_state_dir();
+    let install_root = format!("{root}/vida-install");
+    let bin_dir = format!("{install_root}/bin");
+    fs::create_dir_all(&bin_dir).expect("installed bin dir should exist");
+
+    copy_executable(env!("CARGO_BIN_EXE_vida"), &format!("{bin_dir}/vida"));
+    write_executable_script(
+        &format!("{bin_dir}/taskflow-v0"),
+        "#!/bin/sh\nprintf 'taskflow placeholder\\n'\n",
+    );
+
+    let mut command = Command::new(format!("{bin_dir}/vida"));
+    command.current_dir(&root);
+    (root, command)
+}
+
 fn unique_state_dir() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     format!("/tmp/vida-test-state-{}-{}", std::process::id(), nanos)
+}
+
+fn repo_root() -> String {
+    env!("CARGO_MANIFEST_DIR")
+        .strip_suffix("/crates/vida")
+        .expect("crate manifest dir should end with /crates/vida")
+        .to_string()
 }
 
 fn write_executable_script(path: &str, body: &str) {
@@ -45,6 +69,62 @@ fn copy_file(from: &str, to: &str) {
         fs::create_dir_all(parent).expect("parent dir should exist");
     }
     fs::copy(from, to).expect("file should be copied");
+}
+
+fn create_minimal_release_archive(archive_path: &str) {
+    let stage_root = format!("{}/release-stage", unique_state_dir());
+    let package_root = format!("{stage_root}/vida-stack-v-test");
+    let helper_dir = format!("{package_root}/taskflow-v0/helpers");
+    let codex_dir = format!("{package_root}/codex-v0");
+    let bin_dir = format!("{package_root}/bin");
+    let template_dir = format!("{package_root}/docs/framework/templates");
+
+    fs::create_dir_all(&helper_dir).expect("helper dir should exist");
+    fs::create_dir_all(&codex_dir).expect("codex dir should exist");
+    fs::create_dir_all(&bin_dir).expect("bin dir should exist");
+    fs::create_dir_all(&template_dir).expect("template dir should exist");
+
+    write_executable_script(
+        &format!("{bin_dir}/taskflow-v0"),
+        "#!/bin/sh\nprintf 'taskflow placeholder\\n'\n",
+    );
+    write_file(
+        &format!("{codex_dir}/codex.py"),
+        "print('codex placeholder')\n",
+    );
+    write_file(&format!("{codex_dir}/requirements-python.txt"), "");
+    write_file(&format!("{package_root}/AGENTS.sidecar.md"), "sidecar\n");
+
+    let root = repo_root();
+    copy_file(
+        &format!("{root}/taskflow-v0/helpers/turso_task_store.py"),
+        &format!("{helper_dir}/turso_task_store.py"),
+    );
+    copy_file(
+        &format!("{root}/taskflow-v0/helpers/toon_render.py"),
+        &format!("{helper_dir}/toon_render.py"),
+    );
+    copy_file(
+        &format!("{root}/docs/framework/templates/vida.config.yaml.template"),
+        &format!("{template_dir}/vida.config.yaml.template"),
+    );
+
+    let parent = std::path::Path::new(archive_path)
+        .parent()
+        .expect("archive parent should exist");
+    fs::create_dir_all(parent).expect("archive parent dir should exist");
+
+    let output = Command::new("tar")
+        .args(["-czf", archive_path, "-C", &stage_root, "vida-stack-v-test"])
+        .output()
+        .expect("tar should create release archive");
+    assert!(
+        output.status.success(),
+        "tar should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    fs::remove_dir_all(&stage_root).expect("release stage dir should be removed");
 }
 
 fn run_with_retry<F>(mut op: F) -> std::process::Output
@@ -660,6 +740,34 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
     assert_eq!(
         parsed["payload"]["docflow_activation"]["runtime_family"],
         "docflow"
+    );
+    assert_eq!(
+        parsed["payload"]["docflow_activation"]["evidence"]["registry"]["ok"],
+        true
+    );
+    assert!(
+        parsed["payload"]["docflow_activation"]["evidence"]["registry"]["row_count"]
+            .as_u64()
+            .expect("registry row_count should be numeric")
+            > 0
+    );
+    assert!(
+        parsed["payload"]["docflow_activation"]["evidence"]["overview"]["registry_rows"]
+            .as_u64()
+            .expect("overview registry_rows should be numeric")
+            > 0
+    );
+    assert!(
+        parsed["payload"]["docflow_activation"]["evidence"]["registry"]["surface"]
+            .as_str()
+            .expect("registry surface should be a string")
+            .starts_with("vida docflow registry --root ")
+    );
+    assert!(
+        parsed["payload"]["docflow_activation"]["evidence"]["registry"]["output"]
+            .as_str()
+            .expect("registry output should be a string")
+            .contains("\"artifact_path\":")
     );
     assert_eq!(
         parsed["payload"]["docflow_activation"]["evidence"]["check"]["ok"],
@@ -2561,6 +2669,866 @@ fn taskflow_run_graph_second_advance_updates_status_and_recovery_for_implementat
 }
 
 #[test]
+fn taskflow_run_graph_third_advance_enters_review_ensemble_for_implementation() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let seed = run_with_retry(|| {
+        vida()
+            .args([
+                "taskflow",
+                "run-graph",
+                "seed",
+                "vida-dev",
+                "continue development",
+                "--json",
+            ])
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("run-graph seed should run")
+    });
+    assert!(seed.status.success());
+
+    for step in 0..2 {
+        let advance = run_with_retry(|| {
+            vida()
+                .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .output()
+                .expect("pre-review run-graph advance should run")
+        });
+        assert!(advance.status.success(), "advance step {step} should succeed");
+    }
+
+    let third_advance = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("third run-graph advance should run")
+    });
+    assert!(third_advance.status.success());
+    let third_advance_stdout = String::from_utf8_lossy(&third_advance.stdout);
+    let third_advance_parsed: serde_json::Value = serde_json::from_str(&third_advance_stdout)
+        .expect("third run-graph advance json should parse");
+    assert_eq!(
+        third_advance_parsed["surface"],
+        "vida taskflow run-graph advance"
+    );
+    assert_eq!(
+        third_advance_parsed["payload"]["status"]["active_node"],
+        "review_ensemble"
+    );
+    assert_eq!(
+        third_advance_parsed["payload"]["status"]["next_node"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        third_advance_parsed["payload"]["status"]["lane_id"],
+        "review_ensemble_lane"
+    );
+    assert_eq!(
+        third_advance_parsed["payload"]["status"]["lifecycle_stage"],
+        "review_ensemble_active"
+    );
+    assert_eq!(
+        third_advance_parsed["payload"]["status"]["policy_gate"],
+        "review_findings"
+    );
+    assert_eq!(
+        third_advance_parsed["payload"]["status"]["handoff_state"],
+        "none"
+    );
+    assert_eq!(
+        third_advance_parsed["payload"]["status"]["resume_target"],
+        "none"
+    );
+    assert_eq!(
+        third_advance_parsed["payload"]["status"]["recovery_ready"],
+        false
+    );
+}
+
+#[test]
+fn taskflow_run_graph_third_advance_updates_status_and_recovery_for_review_ensemble() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let seed = run_with_retry(|| {
+        vida()
+            .args([
+                "taskflow",
+                "run-graph",
+                "seed",
+                "vida-dev",
+                "continue development",
+                "--json",
+            ])
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("run-graph seed should run")
+    });
+    assert!(seed.status.success());
+
+    for step in 0..3 {
+        let advance = run_with_retry(|| {
+            vida()
+                .args(["taskflow", "run-graph", "advance", "vida-dev"])
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .output()
+                .expect("run-graph advance should run")
+        });
+        assert!(advance.status.success(), "advance step {step} should succeed");
+    }
+
+    let run_graph = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "run-graph", "status", "vida-dev", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("run-graph status should run")
+    });
+    assert!(run_graph.status.success());
+    let run_graph_stdout = String::from_utf8_lossy(&run_graph.stdout);
+    let run_graph_parsed: serde_json::Value =
+        serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
+    assert_eq!(run_graph_parsed["status"]["active_node"], "review_ensemble");
+    assert_eq!(run_graph_parsed["status"]["next_node"], serde_json::Value::Null);
+    assert_eq!(run_graph_parsed["status"]["lane_id"], "review_ensemble_lane");
+    assert_eq!(run_graph_parsed["status"]["handoff_state"], "none");
+    assert_eq!(run_graph_parsed["status"]["resume_target"], "none");
+    assert_eq!(run_graph_parsed["status"]["recovery_ready"], false);
+
+    let recovery = run_with_retry(|| {
+        vida()
+            .args(["taskflow", "recovery", "status", "vida-dev", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("recovery status should run")
+    });
+    assert!(recovery.status.success());
+    let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
+    let recovery_parsed: serde_json::Value =
+        serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
+    assert_eq!(
+        recovery_parsed["recovery"]["resume_node"],
+        serde_json::Value::Null
+    );
+    assert_eq!(recovery_parsed["recovery"]["resume_target"], "none");
+    assert_eq!(recovery_parsed["recovery"]["handoff_state"], "none");
+    assert_eq!(recovery_parsed["recovery"]["policy_gate"], "review_findings");
+    assert_eq!(recovery_parsed["recovery"]["recovery_ready"], false);
+}
+
+#[test]
+fn taskflow_run_graph_third_advance_fails_closed_for_wrong_review_handoff() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let seed = run_with_retry(|| {
+        vida()
+            .args([
+                "taskflow",
+                "run-graph",
+                "seed",
+                "vida-dev",
+                "continue development",
+                "--json",
+            ])
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("run-graph seed should run")
+    });
+    assert!(seed.status.success());
+
+    for step in 0..2 {
+        let advance = run_with_retry(|| {
+            vida()
+                .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .output()
+                .expect("pre-review run-graph advance should run")
+        });
+        assert!(advance.status.success(), "advance step {step} should succeed");
+    }
+
+    let corrupt = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            "vida-dev",
+            "implementation",
+            "coach",
+            "ready",
+            "implementation",
+            r#"{"next_node":"wrong_review"}"#,
+        ])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph update should run");
+    assert!(corrupt.status.success());
+
+    let output = vida()
+        .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("wrong third advance should run");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("implementation coach handoff"));
+    assert!(stderr.contains("review_ensemble"));
+    assert!(stderr.contains("wrong_review"));
+}
+
+#[test]
+fn taskflow_run_graph_fourth_advance_completes_clean_review_ensemble() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let seed = run_with_retry(|| {
+        vida()
+            .args([
+                "taskflow",
+                "run-graph",
+                "seed",
+                "vida-dev",
+                "continue development",
+                "--json",
+            ])
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("run-graph seed should run")
+    });
+    assert!(seed.status.success());
+
+    for step in 0..3 {
+        let advance = run_with_retry(|| {
+            vida()
+                .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .output()
+                .expect("pre-completion advance should run")
+        });
+        assert!(advance.status.success(), "advance step {step} should succeed");
+    }
+
+    let mark_clean = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            "vida-dev",
+            "implementation",
+            "review_ensemble",
+            "clean",
+            "implementation",
+        ])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph update should run");
+    assert!(mark_clean.status.success());
+
+    let fourth_advance = vida()
+        .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("fourth run-graph advance should run");
+    assert!(fourth_advance.status.success());
+    let stdout = String::from_utf8_lossy(&fourth_advance.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("fourth run-graph advance json should parse");
+    assert_eq!(parsed["payload"]["status"]["active_node"], "review_ensemble");
+    assert_eq!(parsed["payload"]["status"]["status"], "completed");
+    assert_eq!(parsed["payload"]["status"]["lifecycle_stage"], "implementation_complete");
+    assert_eq!(parsed["payload"]["status"]["policy_gate"], "not_required");
+    assert_eq!(parsed["payload"]["status"]["next_node"], serde_json::Value::Null);
+    assert_eq!(parsed["payload"]["status"]["resume_target"], "none");
+    assert_eq!(parsed["payload"]["status"]["recovery_ready"], false);
+}
+
+#[test]
+fn taskflow_run_graph_fourth_advance_updates_status_and_recovery_after_clean_review() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let seed = run_with_retry(|| {
+        vida()
+            .args([
+                "taskflow",
+                "run-graph",
+                "seed",
+                "vida-dev",
+                "continue development",
+                "--json",
+            ])
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("run-graph seed should run")
+    });
+    assert!(seed.status.success());
+
+    for step in 0..3 {
+        let advance = run_with_retry(|| {
+            vida()
+                .args(["taskflow", "run-graph", "advance", "vida-dev"])
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .output()
+                .expect("pre-completion advance should run")
+        });
+        assert!(advance.status.success(), "advance step {step} should succeed");
+    }
+
+    let mark_clean = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            "vida-dev",
+            "implementation",
+            "review_ensemble",
+            "clean",
+            "implementation",
+        ])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph update should run");
+    assert!(mark_clean.status.success());
+
+    let fourth_advance = vida()
+        .args(["taskflow", "run-graph", "advance", "vida-dev"])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("fourth run-graph advance should run");
+    assert!(fourth_advance.status.success());
+
+    let run_graph = vida()
+        .args(["taskflow", "run-graph", "status", "vida-dev", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph status should run");
+    assert!(run_graph.status.success());
+    let run_graph_stdout = String::from_utf8_lossy(&run_graph.stdout);
+    let run_graph_parsed: serde_json::Value =
+        serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
+    assert_eq!(run_graph_parsed["status"]["active_node"], "review_ensemble");
+    assert_eq!(run_graph_parsed["status"]["status"], "completed");
+    assert_eq!(run_graph_parsed["status"]["policy_gate"], "not_required");
+    assert_eq!(run_graph_parsed["status"]["resume_target"], "none");
+    assert_eq!(run_graph_parsed["status"]["recovery_ready"], false);
+
+    let recovery = vida()
+        .args(["taskflow", "recovery", "status", "vida-dev", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("recovery status should run");
+    assert!(recovery.status.success());
+    let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
+    let recovery_parsed: serde_json::Value =
+        serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
+    assert_eq!(recovery_parsed["recovery"]["resume_node"], serde_json::Value::Null);
+    assert_eq!(recovery_parsed["recovery"]["resume_status"], "completed");
+    assert_eq!(recovery_parsed["recovery"]["policy_gate"], "not_required");
+    assert_eq!(recovery_parsed["recovery"]["resume_target"], "none");
+    assert_eq!(recovery_parsed["recovery"]["recovery_ready"], false);
+}
+
+#[test]
+fn taskflow_run_graph_fourth_advance_fails_closed_for_review_findings() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let seed = run_with_retry(|| {
+        vida()
+            .args([
+                "taskflow",
+                "run-graph",
+                "seed",
+                "vida-dev",
+                "continue development",
+                "--json",
+            ])
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("run-graph seed should run")
+    });
+    assert!(seed.status.success());
+
+    for step in 0..3 {
+        let advance = run_with_retry(|| {
+            vida()
+                .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .output()
+                .expect("pre-findings advance should run")
+        });
+        assert!(advance.status.success(), "advance step {step} should succeed");
+    }
+
+    let mark_findings = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            "vida-dev",
+            "implementation",
+            "review_ensemble",
+            "review_findings",
+            "implementation",
+        ])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph update should run");
+    assert!(mark_findings.status.success());
+
+    let output = vida()
+        .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("fourth findings advance should run");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("review findings require explicit scope/rework resolution"));
+    assert!(stderr.contains("review_findings"));
+}
+
+#[test]
+fn taskflow_run_graph_fourth_advance_fails_closed_for_changed_scope() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let seed = run_with_retry(|| {
+        vida()
+            .args([
+                "taskflow",
+                "run-graph",
+                "seed",
+                "vida-dev",
+                "continue development",
+                "--json",
+            ])
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("run-graph seed should run")
+    });
+    assert!(seed.status.success());
+
+    for step in 0..3 {
+        let advance = run_with_retry(|| {
+            vida()
+                .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .output()
+                .expect("pre-scope advance should run")
+        });
+        assert!(advance.status.success(), "advance step {step} should succeed");
+    }
+
+    let mark_changed_scope = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            "vida-dev",
+            "implementation",
+            "review_ensemble",
+            "changed_scope",
+            "implementation",
+        ])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph update should run");
+    assert!(mark_changed_scope.status.success());
+
+    let output = vida()
+        .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("fourth changed-scope advance should run");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("review findings require explicit scope/rework resolution"));
+    assert!(stderr.contains("changed_scope"));
+}
+
+#[test]
+fn taskflow_run_graph_fourth_advance_reenters_analysis_for_explicit_rework() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let seed = run_with_retry(|| {
+        vida()
+            .args([
+                "taskflow",
+                "run-graph",
+                "seed",
+                "vida-dev",
+                "continue development",
+                "--json",
+            ])
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("run-graph seed should run")
+    });
+    assert!(seed.status.success());
+
+    for step in 0..3 {
+        let advance = run_with_retry(|| {
+            vida()
+                .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .output()
+                .expect("pre-rework advance should run")
+        });
+        assert!(advance.status.success(), "advance step {step} should succeed");
+    }
+
+    let mark_rework = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            "vida-dev",
+            "implementation",
+            "review_ensemble",
+            "rework_ready",
+            "implementation",
+            r#"{"next_node":"analysis"}"#,
+        ])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph update should run");
+    assert!(mark_rework.status.success());
+
+    let fourth_advance = vida()
+        .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("fourth rework advance should run");
+    assert!(fourth_advance.status.success());
+    let stdout = String::from_utf8_lossy(&fourth_advance.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("fourth rework advance json should parse");
+    assert_eq!(parsed["payload"]["status"]["active_node"], "analysis");
+    assert_eq!(parsed["payload"]["status"]["next_node"], "coach");
+    assert_eq!(parsed["payload"]["status"]["status"], "ready");
+    assert_eq!(parsed["payload"]["status"]["lane_id"], "analysis_lane");
+    assert_eq!(parsed["payload"]["status"]["lifecycle_stage"], "analysis_active");
+    assert_eq!(parsed["payload"]["status"]["policy_gate"], "targeted_verification");
+    assert_eq!(parsed["payload"]["status"]["handoff_state"], "awaiting_coach");
+    assert_eq!(
+        parsed["payload"]["status"]["resume_target"],
+        "dispatch.coach_lane"
+    );
+    assert_eq!(parsed["payload"]["status"]["recovery_ready"], true);
+}
+
+#[test]
+fn taskflow_run_graph_fourth_rework_advance_updates_status_and_recovery() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let seed = run_with_retry(|| {
+        vida()
+            .args([
+                "taskflow",
+                "run-graph",
+                "seed",
+                "vida-dev",
+                "continue development",
+                "--json",
+            ])
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("run-graph seed should run")
+    });
+    assert!(seed.status.success());
+
+    for step in 0..3 {
+        let advance = run_with_retry(|| {
+            vida()
+                .args(["taskflow", "run-graph", "advance", "vida-dev"])
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .output()
+                .expect("pre-rework advance should run")
+        });
+        assert!(advance.status.success(), "advance step {step} should succeed");
+    }
+
+    let mark_rework = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            "vida-dev",
+            "implementation",
+            "review_ensemble",
+            "rework_ready",
+            "implementation",
+            r#"{"next_node":"analysis"}"#,
+        ])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph update should run");
+    assert!(mark_rework.status.success());
+
+    let fourth_advance = vida()
+        .args(["taskflow", "run-graph", "advance", "vida-dev"])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("fourth rework advance should run");
+    assert!(fourth_advance.status.success());
+
+    let run_graph = vida()
+        .args(["taskflow", "run-graph", "status", "vida-dev", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph status should run");
+    assert!(run_graph.status.success());
+    let run_graph_stdout = String::from_utf8_lossy(&run_graph.stdout);
+    let run_graph_parsed: serde_json::Value =
+        serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
+    assert_eq!(run_graph_parsed["status"]["active_node"], "analysis");
+    assert_eq!(run_graph_parsed["status"]["next_node"], "coach");
+    assert_eq!(run_graph_parsed["status"]["status"], "ready");
+    assert_eq!(run_graph_parsed["status"]["resume_target"], "dispatch.coach_lane");
+    assert_eq!(run_graph_parsed["status"]["recovery_ready"], true);
+
+    let recovery = vida()
+        .args(["taskflow", "recovery", "status", "vida-dev", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("recovery status should run");
+    assert!(recovery.status.success());
+    let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
+    let recovery_parsed: serde_json::Value =
+        serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
+    assert_eq!(recovery_parsed["recovery"]["resume_node"], "coach");
+    assert_eq!(recovery_parsed["recovery"]["resume_status"], "ready");
+    assert_eq!(
+        recovery_parsed["recovery"]["resume_target"],
+        "dispatch.coach_lane"
+    );
+    assert_eq!(recovery_parsed["recovery"]["policy_gate"], "targeted_verification");
+    assert_eq!(recovery_parsed["recovery"]["recovery_ready"], true);
+}
+
+#[test]
+fn taskflow_run_graph_fourth_rework_advance_fails_closed_for_wrong_target() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let seed = run_with_retry(|| {
+        vida()
+            .args([
+                "taskflow",
+                "run-graph",
+                "seed",
+                "vida-dev",
+                "continue development",
+                "--json",
+            ])
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("run-graph seed should run")
+    });
+    assert!(seed.status.success());
+
+    for step in 0..3 {
+        let advance = run_with_retry(|| {
+            vida()
+                .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .output()
+                .expect("pre-rework advance should run")
+        });
+        assert!(advance.status.success(), "advance step {step} should succeed");
+    }
+
+    let mark_rework = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            "vida-dev",
+            "implementation",
+            "review_ensemble",
+            "rework_ready",
+            "implementation",
+            r#"{"next_node":"planning"}"#,
+        ])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("run-graph update should run");
+    assert!(mark_rework.status.success());
+
+    let output = vida()
+        .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("fourth wrong-target advance should run");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("explicit review rework loop"));
+    assert!(stderr.contains("analysis"));
+    assert!(stderr.contains("planning"));
+}
+
+#[test]
 fn taskflow_proxy_help_supports_command_help_form() {
     let output = vida()
         .args(["taskflow", "run-graph", "--help"])
@@ -2711,42 +3679,53 @@ fn docflow_proxy_help_is_runtime_specific() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA DocFlow runtime family"));
-    assert!(stdout.contains("fail closed"));
+    assert!(stdout.contains("repo/dev binary mode"));
+    assert!(stdout.contains("installed mode"));
+    assert!(stdout.contains("help|overview only"));
     assert!(stdout.contains("Usage: docflow <COMMAND>"));
     assert!(stdout.contains("registry-write"));
     assert!(stdout.contains("artifact-impact"));
 }
 
 #[test]
-fn taskflow_proxy_executes_resolved_runtime_for_unhandled_commands() {
+fn taskflow_proxy_unsupported_top_level_subcommand_fails_closed_without_delegating_to_runtime() {
     let root = unique_state_dir();
     let script_path = format!("{root}/taskflow-proxy.sh");
     fs::create_dir_all(&root).expect("temp root should exist");
     write_executable_script(
         &script_path,
-        "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'taskflow-proxy:%s|%s\\n' \"$VIDA_ROOT\" \"$*\"\n",
+        "#!/bin/sh\necho delegated-taskflow-binary-ran >&2\nexit 23\n",
     );
 
     let output = vida()
         .args(["taskflow", "passthrough-probe", "--json"])
-        .env("VIDA_ROOT", &root)
         .env("VIDA_TASKFLOW_BIN", &script_path)
         .output()
-        .expect("taskflow proxy should run");
+        .expect("taskflow fail-closed path should run");
 
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains(&format!("taskflow-proxy:{root}|passthrough-probe --json")));
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "Unsupported `vida taskflow passthrough-probe` subcommand. This launcher-owned top-level taskflow surface fails closed instead of delegating to taskflow-v0."
+        ),
+        "stderr was: {stderr}"
+    );
+    assert!(
+        !stderr.contains("delegated-taskflow-binary-ran"),
+        "stderr was: {stderr}"
+    );
 }
 
 #[test]
-fn taskflow_task_unsupported_subcommand_proxies_to_runtime() {
+fn taskflow_task_unsupported_subcommand_fails_closed_without_delegating_to_runtime() {
     let root = unique_state_dir();
     let script_path = format!("{root}/taskflow-proxy.sh");
     fs::create_dir_all(&root).expect("temp root should exist");
     write_executable_script(
         &script_path,
-        "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'taskflow-proxy:%s|%s\\n' \"$VIDA_ROOT\" \"$*\"\n",
+        "#!/bin/sh\necho delegated-taskflow-binary-ran >&2\nexit 23\n",
     );
 
     let output = vida()
@@ -2754,13 +3733,21 @@ fn taskflow_task_unsupported_subcommand_proxies_to_runtime() {
         .env("VIDA_ROOT", &root)
         .env("VIDA_TASKFLOW_BIN", &script_path)
         .output()
-        .expect("taskflow task fallback proxy should run");
+        .expect("taskflow task fail-closed path should run");
 
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains(&format!(
-        "taskflow-proxy:{root}|task donor-only-probe --json"
-    )));
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "Unsupported `vida taskflow task` subcommand. This launcher-owned task surface fails closed instead of delegating to taskflow-v0."
+        ),
+        "stderr was: {stderr}"
+    );
+    assert!(
+        !stderr.contains("delegated-taskflow-binary-ran"),
+        "stderr was: {stderr}"
+    );
 }
 
 #[test]
@@ -3071,6 +4058,166 @@ else:
 }
 
 #[test]
+fn installed_vida_ready_filters_blocked_siblings_via_helper_backed_task_store() {
+    let repo_root = env!("CARGO_MANIFEST_DIR")
+        .strip_suffix("/crates/vida")
+        .expect("crate manifest dir should end with /crates/vida");
+    let helper_source = format!("{repo_root}/taskflow-v0/helpers/turso_task_store.py");
+    let python_source = format!("{repo_root}/.venv/bin/python3");
+
+    let root = unique_state_dir();
+    let install_root = format!("{root}/install");
+    let project_root = format!("{root}/project");
+    let script_path = format!("{install_root}/bin/taskflow-v0");
+    let vida_path = format!("{install_root}/bin/vida");
+    let helper_path = format!("{install_root}/taskflow-v0/helpers/turso_task_store.py");
+    let python_path = format!("{install_root}/.venv/bin/python3");
+    let nested_pwd = format!("{project_root}/work/nested");
+    let seed_path = format!("{project_root}/seed.jsonl");
+    fs::create_dir_all(format!("{install_root}/bin")).expect("install bin dir should exist");
+    fs::create_dir_all(format!("{install_root}/taskflow-v0/helpers"))
+        .expect("install helper dir should exist");
+    fs::create_dir_all(format!("{install_root}/.venv/bin"))
+        .expect("install python dir should exist");
+    fs::create_dir_all(format!("{project_root}/vida")).expect("project vida dir should exist");
+    fs::create_dir_all(&nested_pwd).expect("nested project dir should exist");
+    fs::write(format!("{project_root}/AGENTS.md"), "project").expect("project AGENTS should exist");
+    fs::write(format!("{project_root}/vida/root-map.md"), "project")
+        .expect("project root-map should exist");
+    copy_executable(env!("CARGO_BIN_EXE_vida"), &vida_path);
+    write_executable_script(
+        &script_path,
+        "#!/bin/sh\necho delegated-taskflow-binary-ran >&2\nexit 23\n",
+    );
+    write_executable_script(
+        &python_path,
+        &format!("#!/bin/sh\nexec {python_source} \"$@\"\n"),
+    );
+    copy_file(&helper_source, &helper_path);
+    fs::write(
+        &seed_path,
+        concat!(
+            "{\"id\":\"vida-root\",\"title\":\"Root epic\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+            "{\"id\":\"vida-ready\",\"title\":\"Ready task\",\"description\":\"ready\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-ready\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
+            "{\"id\":\"vida-blocker\",\"title\":\"Blocker task\",\"description\":\"blocker\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+            "{\"id\":\"vida-blocked\",\"title\":\"Blocked task\",\"description\":\"blocked\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-blocked\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"},{\"issue_id\":\"vida-blocked\",\"depends_on_id\":\"vida-blocker\",\"type\":\"blocks\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+        ),
+    )
+    .expect("seed jsonl should be written");
+
+    let import = Command::new(&vida_path)
+        .args(["taskflow", "task", "import-jsonl", &seed_path, "--json"])
+        .current_dir(&nested_pwd)
+        .env_remove("VIDA_ROOT")
+        .output()
+        .expect("installed import should run");
+    assert!(import.status.success());
+
+    let ready = Command::new(&vida_path)
+        .args(["taskflow", "task", "ready", "--json"])
+        .current_dir(&nested_pwd)
+        .env_remove("VIDA_ROOT")
+        .output()
+        .expect("installed ready should run");
+
+    assert!(ready.status.success());
+    let stdout = String::from_utf8_lossy(&ready.stdout);
+    let stderr = String::from_utf8_lossy(&ready.stderr);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("installed ready json should parse");
+    let rows = parsed
+        .as_array()
+        .expect("installed ready payload should be an array");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["id"], "vida-blocker");
+    assert_eq!(rows[1]["id"], "vida-ready");
+    assert!(rows.iter().any(|row| row["id"] == "vida-ready"));
+    assert!(rows.iter().any(|row| row["id"] == "vida-blocker"));
+    assert!(!rows.iter().any(|row| row["id"] == "vida-blocked"));
+    assert!(!stderr.contains("delegated-taskflow-binary-ran"));
+}
+
+#[test]
+fn installed_vida_ready_orders_multiple_rows_and_filters_blocked_siblings() {
+    let repo_root = env!("CARGO_MANIFEST_DIR")
+        .strip_suffix("/crates/vida")
+        .expect("crate manifest dir should end with /crates/vida");
+    let helper_source = format!("{repo_root}/taskflow-v0/helpers/turso_task_store.py");
+    let python_source = format!("{repo_root}/.venv/bin/python3");
+
+    let root = unique_state_dir();
+    let install_root = format!("{root}/install");
+    let project_root = format!("{root}/project");
+    let script_path = format!("{install_root}/bin/taskflow-v0");
+    let vida_path = format!("{install_root}/bin/vida");
+    let helper_path = format!("{install_root}/taskflow-v0/helpers/turso_task_store.py");
+    let python_path = format!("{install_root}/.venv/bin/python3");
+    let nested_pwd = format!("{project_root}/work/nested");
+    let seed_path = format!("{project_root}/seed-ordering.jsonl");
+    fs::create_dir_all(format!("{install_root}/bin")).expect("install bin dir should exist");
+    fs::create_dir_all(format!("{install_root}/taskflow-v0/helpers"))
+        .expect("install helper dir should exist");
+    fs::create_dir_all(format!("{install_root}/.venv/bin"))
+        .expect("install python dir should exist");
+    fs::create_dir_all(format!("{project_root}/vida")).expect("project vida dir should exist");
+    fs::create_dir_all(&nested_pwd).expect("nested project dir should exist");
+    fs::write(format!("{project_root}/AGENTS.md"), "project").expect("project AGENTS should exist");
+    fs::write(format!("{project_root}/vida/root-map.md"), "project")
+        .expect("project root-map should exist");
+    copy_executable(env!("CARGO_BIN_EXE_vida"), &vida_path);
+    write_executable_script(
+        &script_path,
+        "#!/bin/sh\necho delegated-taskflow-binary-ran >&2\nexit 23\n",
+    );
+    write_executable_script(
+        &python_path,
+        &format!("#!/bin/sh\nexec {python_source} \"$@\"\n"),
+    );
+    copy_file(&helper_source, &helper_path);
+    fs::write(
+        &seed_path,
+        concat!(
+            "{\"id\":\"vida-root\",\"title\":\"Root epic\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+            "{\"id\":\"vida-in-progress\",\"title\":\"In progress task\",\"description\":\"active\",\"status\":\"in_progress\",\"priority\":5,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-in-progress\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
+            "{\"id\":\"vida-blocker\",\"title\":\"Blocker task\",\"description\":\"blocker\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+            "{\"id\":\"vida-ready\",\"title\":\"Ready task\",\"description\":\"ready\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-ready\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
+            "{\"id\":\"vida-blocked\",\"title\":\"Blocked task\",\"description\":\"blocked\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-blocked\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"},{\"issue_id\":\"vida-blocked\",\"depends_on_id\":\"vida-blocker\",\"type\":\"blocks\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+        ),
+    )
+    .expect("seed ordering jsonl should be written");
+
+    let import = Command::new(&vida_path)
+        .args(["taskflow", "task", "import-jsonl", &seed_path, "--json"])
+        .current_dir(&nested_pwd)
+        .env_remove("VIDA_ROOT")
+        .output()
+        .expect("installed import should run");
+    assert!(import.status.success());
+
+    let ready = Command::new(&vida_path)
+        .args(["taskflow", "task", "ready", "--json"])
+        .current_dir(&nested_pwd)
+        .env_remove("VIDA_ROOT")
+        .output()
+        .expect("installed ready should run");
+
+    assert!(ready.status.success());
+    let stdout = String::from_utf8_lossy(&ready.stdout);
+    let stderr = String::from_utf8_lossy(&ready.stderr);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("installed ready ordering json should parse");
+    let rows = parsed
+        .as_array()
+        .expect("installed ready ordering payload should be an array");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["id"], "vida-in-progress");
+    assert_eq!(rows[1]["id"], "vida-blocker");
+    assert_eq!(rows[2]["id"], "vida-ready");
+    assert!(!rows.iter().any(|row| row["id"] == "vida-blocked"));
+    assert!(!stderr.contains("delegated-taskflow-binary-ran"));
+}
+
+#[test]
 fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_in_project_and_installed_modes(
 ) {
     let repo_root = env!("CARGO_MANIFEST_DIR")
@@ -3325,6 +4472,20 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
         "--json",
     ]);
     assert!(installed_create_child.status.success());
+
+    let installed_ready = installed_mode(&["taskflow", "task", "ready", "--json"]);
+    assert!(installed_ready.status.success());
+    let installed_ready_stdout = String::from_utf8_lossy(&installed_ready.stdout);
+    let installed_ready_stderr = String::from_utf8_lossy(&installed_ready.stderr);
+    let installed_ready_json: serde_json::Value =
+        serde_json::from_str(&installed_ready_stdout).expect("installed ready json should parse");
+    let installed_ready_rows = installed_ready_json
+        .as_array()
+        .expect("installed ready payload should be an array");
+    assert_eq!(installed_ready_rows.len(), 1);
+    assert_eq!(installed_ready_rows[0]["id"], "vida-child");
+    assert_eq!(installed_ready_rows[0]["display_id"], "vida-rf1.1.1");
+    assert!(!installed_ready_stderr.contains("delegated-taskflow-binary-ran"));
 
     let installed_list = installed_mode(&["taskflow", "task", "list", "--all", "--json"]);
     assert!(installed_list.status.success());
@@ -4659,6 +5820,45 @@ fn docflow_proxy_can_run_rust_task_impact_surface() {
 }
 
 #[test]
+fn installed_docflow_compatibility_mode_supports_overview_only() {
+    let (root, mut command) = installed_vida();
+    let output = command
+        .args([
+            "docflow",
+            "overview",
+            "--registry-count",
+            "5",
+            "--relation-count",
+            "2",
+        ])
+        .output()
+        .expect("installed docflow overview should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("docflow overview"));
+    assert!(stdout.contains("registry_rows: 5"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
+fn installed_docflow_compatibility_mode_rejects_non_overview_commands() {
+    let (root, mut command) = installed_vida();
+    let output = command
+        .args(["docflow", "check", "--profile", "active-canon"])
+        .output()
+        .expect("installed docflow check should run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("compatibility wrapper"));
+    assert!(stderr.contains("help|overview only"));
+
+    fs::remove_dir_all(root).expect("temp root should be removed");
+}
+
+#[test]
 fn memory_surface_reports_effective_bundle() {
     let state_dir = unique_state_dir();
     let boot = vida()
@@ -5075,6 +6275,106 @@ fn doctor_surface_fails_closed_on_uninitialized_state_dir() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("authoritative state directory is missing"));
+}
+
+#[test]
+fn installer_doctor_fails_closed_when_installed_helpers_are_missing() {
+    let root = unique_state_dir();
+    let install_root = format!("{root}/install");
+    let bin_dir = format!("{root}/bin");
+    let current_root = format!("{install_root}/current");
+    let installer_script = format!("{install_root}/installer/install.sh");
+
+    fs::create_dir_all(format!("{install_root}/installer")).expect("installer dir should exist");
+    fs::create_dir_all(format!("{current_root}/bin")).expect("current bin dir should exist");
+    fs::create_dir_all(format!("{current_root}/.venv/bin")).expect("venv dir should exist");
+    fs::create_dir_all(format!("{current_root}/codex-v0")).expect("codex dir should exist");
+    fs::create_dir_all(format!("{current_root}/taskflow-v0/helpers"))
+        .expect("helper dir should exist");
+    fs::create_dir_all(&bin_dir).expect("bin dir should exist");
+
+    write_executable_script(&format!("{bin_dir}/vida"), "#!/bin/sh\nexit 0\n");
+    write_executable_script(&format!("{bin_dir}/taskflow-v0"), "#!/bin/sh\nexit 0\n");
+    write_executable_script(&format!("{bin_dir}/codex-v0"), "#!/bin/sh\nexit 0\n");
+    write_executable_script(&installer_script, "#!/bin/sh\nexit 0\n");
+    write_executable_script(
+        &format!("{current_root}/bin/taskflow-v0"),
+        "#!/bin/sh\nexit 0\n",
+    );
+    write_executable_script(
+        &format!("{current_root}/.venv/bin/python3"),
+        "#!/bin/sh\nexit 0\n",
+    );
+    write_file(
+        &format!("{current_root}/codex-v0/codex.py"),
+        "print('ok')\n",
+    );
+    write_file(&format!("{current_root}/AGENTS.sidecar.md"), "sidecar\n");
+    write_file(
+        &format!("{current_root}/taskflow-v0/helpers/turso_task_store.py"),
+        "print('helper')\n",
+    );
+    write_file(&format!("{install_root}/env.sh"), "export VIDA_HOME=test\n");
+
+    let output = Command::new("bash")
+        .args([
+            "install/install.sh",
+            "doctor",
+            "--root",
+            &install_root,
+            "--bin-dir",
+            &bin_dir,
+        ])
+        .current_dir(repo_root())
+        .output()
+        .expect("installer doctor should run");
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("Missing installed helper:"));
+    assert!(stdout.contains("current/taskflow-v0/helpers/toon_render.py"));
+    assert!(stderr.contains("Doctor found missing installation surfaces."));
+}
+
+#[test]
+fn installer_install_populates_both_taskflow_helpers_in_current_layout() {
+    let root = unique_state_dir();
+    let install_root = format!("{root}/install");
+    let bin_dir = format!("{root}/bin");
+    let archive_path = format!("{root}/vida-stack-v-test.tar.gz");
+    create_minimal_release_archive(&archive_path);
+
+    let output = Command::new("bash")
+        .args([
+            "install/install.sh",
+            "install",
+            "--archive",
+            &archive_path,
+            "--root",
+            &install_root,
+            "--bin-dir",
+            &bin_dir,
+        ])
+        .current_dir(repo_root())
+        .env("HOME", format!("{root}/home"))
+        .output()
+        .expect("installer install should run");
+
+    assert!(
+        output.status.success(),
+        "install should succeed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(std::path::Path::new(&format!(
+        "{install_root}/current/taskflow-v0/helpers/turso_task_store.py"
+    ))
+    .exists());
+    assert!(std::path::Path::new(&format!(
+        "{install_root}/current/taskflow-v0/helpers/toon_render.py"
+    ))
+    .exists());
 }
 
 #[test]

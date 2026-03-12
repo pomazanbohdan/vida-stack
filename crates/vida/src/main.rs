@@ -13,7 +13,7 @@ use std::{
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use docflow_cli::{
     CheckArgs as DocflowCheckArgs, Cli as DocflowCli, Command as DocflowCommand,
-    ProofcheckArgs as DocflowProofcheckArgs,
+    ProofcheckArgs as DocflowProofcheckArgs, RegistryScanArgs,
 };
 use state_store::{
     BlockedTaskRecord, ProtocolBindingState, RunGraphStatus, StateStore, StateStoreError,
@@ -532,11 +532,10 @@ fn run_taskflow_query(args: &[String]) -> ExitCode {
 fn print_docflow_proxy_help() {
     println!("VIDA DocFlow runtime family");
     println!();
-    println!("Behavior:");
-    println!("  vida routes the active DocFlow command map in-process through the Rust CLI.");
-    println!(
-        "  Unsupported commands fail closed instead of silently falling through to donor wrappers."
-    );
+    println!("Mode-scoped launcher contract:");
+    println!("  repo/dev binary mode: vida routes the active DocFlow command map in-process through the Rust CLI.");
+    println!("  installed mode: compatibility wrapper with `help|overview only`.");
+    println!("  unsupported or out-of-mode commands fail closed instead of silently falling through to donor wrappers.");
     println!();
     println!("Implemented in-process command surface:");
     let mut command = DocflowCli::command();
@@ -545,6 +544,26 @@ fn print_docflow_proxy_help() {
     if !help.ends_with('\n') {
         println!();
     }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum DocflowLauncherMode {
+    RepoDev,
+    InstalledCompatibility,
+}
+
+fn current_docflow_launcher_mode() -> DocflowLauncherMode {
+    if resolve_installed_runtime_root().is_some() {
+        DocflowLauncherMode::InstalledCompatibility
+    } else {
+        DocflowLauncherMode::RepoDev
+    }
+}
+
+fn installed_docflow_command_allowed(args: &[String]) -> bool {
+    args.is_empty()
+        || matches!(args, [command] if command == "help")
+        || matches!(args, [command, ..] if command == "overview")
 }
 
 fn looks_like_project_root(path: &Path) -> bool {
@@ -1366,6 +1385,7 @@ fn proxy_state_dir() -> PathBuf {
         .unwrap_or_else(state_store::default_state_dir)
 }
 
+
 fn run_taskflow_python_json(
     program: &str,
     script: &Path,
@@ -1757,6 +1777,158 @@ fn derive_advanced_run_graph_status(
                 recovery_ready: true,
             },
         });
+    }
+
+    if existing.task_class == "implementation"
+        && existing.route_task_class == "implementation"
+        && existing.active_node == "coach"
+    {
+        if implementation.is_null() {
+            return Err(
+                "run-graph advance failed: implementation route is unavailable in the active overlay."
+                    .to_string(),
+            );
+        }
+
+        let verification_node = json_string_field(&implementation, "verification_route_task_class")
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "verification".to_string());
+        if existing.next_node.as_deref() != Some(verification_node.as_str()) {
+            return Err(format!(
+                "run-graph advance expected next node `{verification_node}` for the implementation coach handoff, got `{}`",
+                existing.next_node.as_deref().unwrap_or("none")
+            ));
+        }
+
+        let verification = summarize_agent_route(&config, &verification_node);
+
+        return Ok(TaskflowRunGraphAdvancePayload {
+            status: RunGraphStatus {
+                run_id: existing.run_id,
+                task_id: existing.task_id,
+                task_class: existing.task_class,
+                active_node: verification_node.clone(),
+                next_node: None,
+                status: "ready".to_string(),
+                route_task_class: existing.route_task_class,
+                selected_backend: existing.selected_backend,
+                lane_id: format!("{verification_node}_lane"),
+                lifecycle_stage: format!("{verification_node}_active"),
+                policy_gate: json_string_field(&verification, "verification_gate")
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| existing.policy_gate.clone()),
+                handoff_state: "none".to_string(),
+                context_state: "sealed".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "none".to_string(),
+                recovery_ready: false,
+            },
+        });
+    }
+
+    if existing.task_class == "implementation"
+        && existing.route_task_class == "implementation"
+    {
+        let verification_node = json_string_field(&implementation, "verification_route_task_class")
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "verification".to_string());
+        if existing.active_node != verification_node {
+            // fall through
+        } else {
+        match existing.status.as_str() {
+            "rework_ready" => {
+                let analysis_node = json_string_field(&implementation, "analysis_route_task_class")
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| "analysis".to_string());
+                if existing.next_node.as_deref() != Some(analysis_node.as_str()) {
+                    return Err(format!(
+                        "run-graph advance expected next node `{analysis_node}` for the explicit review rework loop, got `{}`",
+                        existing.next_node.as_deref().unwrap_or("none")
+                    ));
+                }
+
+                let coach_required = json_bool_field(&implementation, "coach_required").unwrap_or(false);
+                let coach_node = json_string_field(&implementation, "coach_route_task_class")
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| "coach".to_string());
+                let next_node = coach_required.then_some(coach_node.clone());
+                let policy_gate = if coach_required {
+                    json_string_field(&implementation, "verification_gate")
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or_else(|| "not_required".to_string())
+                } else {
+                    "not_required".to_string()
+                };
+                let handoff_state = if let Some(next) = next_node.as_deref() {
+                    format!("awaiting_{next}")
+                } else {
+                    "none".to_string()
+                };
+                let resume_target = if let Some(next) = next_node.as_deref() {
+                    format!("dispatch.{next}_lane")
+                } else {
+                    "none".to_string()
+                };
+                let recovery_ready = next_node.is_some()
+                    || json_bool_field(&implementation, "independent_verification_required")
+                        .unwrap_or(false);
+
+                return Ok(TaskflowRunGraphAdvancePayload {
+                    status: RunGraphStatus {
+                        run_id: existing.run_id,
+                        task_id: existing.task_id,
+                        task_class: existing.task_class,
+                        active_node: analysis_node.clone(),
+                        next_node,
+                        status: "ready".to_string(),
+                        route_task_class: existing.route_task_class,
+                        selected_backend: existing.selected_backend,
+                        lane_id: format!("{analysis_node}_lane"),
+                        lifecycle_stage: "analysis_active".to_string(),
+                        policy_gate,
+                        handoff_state,
+                        context_state: "sealed".to_string(),
+                        checkpoint_kind: "execution_cursor".to_string(),
+                        resume_target,
+                        recovery_ready,
+                    },
+                });
+            }
+            "clean" => {
+                return Ok(TaskflowRunGraphAdvancePayload {
+                    status: RunGraphStatus {
+                        run_id: existing.run_id,
+                        task_id: existing.task_id,
+                        task_class: existing.task_class,
+                        active_node: existing.active_node,
+                        next_node: None,
+                        status: "completed".to_string(),
+                        route_task_class: existing.route_task_class,
+                        selected_backend: existing.selected_backend,
+                        lane_id: existing.lane_id,
+                        lifecycle_stage: "implementation_complete".to_string(),
+                        policy_gate: "not_required".to_string(),
+                        handoff_state: "none".to_string(),
+                        context_state: existing.context_state,
+                        checkpoint_kind: existing.checkpoint_kind,
+                        resume_target: "none".to_string(),
+                        recovery_ready: false,
+                    },
+                });
+            }
+            "review_findings" | "changed_scope" => {
+                return Err(format!(
+                    "run-graph advance blocked: implementation review findings require explicit scope/rework resolution before completion; got status `{}`",
+                    existing.status
+                ));
+            }
+            other => {
+                return Err(format!(
+                    "run-graph advance expected `{verification_node}` status `clean` before completing implementation, got `{other}`"
+                ));
+            }
+        }
+        }
     }
 
     if matches!(
@@ -3148,7 +3320,10 @@ async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
             Ok(root) => match run_taskflow_task_bridge(&root, &args.args) {
                 Ok(code) => code,
                 Err(error) if error == "unsupported_taskflow_task_bridge" => {
-                    route_taskflow_proxy_binary(&args.args)
+                    eprintln!(
+                        "Unsupported `vida taskflow task` subcommand. This launcher-owned task surface fails closed instead of delegating to taskflow-v0."
+                    );
+                    ExitCode::from(2)
                 }
                 Err(error) => {
                     eprintln!("{error}");
@@ -3197,26 +3372,11 @@ async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
         }
     }
 
-    route_taskflow_proxy_binary(&args.args)
-}
-
-fn route_taskflow_proxy_binary(args: &[String]) -> ExitCode {
-    match resolve_taskflow_binary() {
-        Ok(binary) => match resolve_repo_root() {
-            Ok(root) => {
-                let root_display = root.display().to_string();
-                run_proxy(&binary, args, &[("VIDA_ROOT", &root_display)])
-            }
-            Err(error) => {
-                eprintln!("{error}");
-                ExitCode::from(1)
-            }
-        },
-        Err(error) => {
-            eprintln!("{error}");
-            ExitCode::from(1)
-        }
-    }
+    let subcommand = args.args.first().map(String::as_str).unwrap_or("unknown");
+    eprintln!(
+        "Unsupported `vida taskflow {subcommand}` subcommand. This launcher-owned top-level taskflow surface fails closed instead of delegating to taskflow-v0."
+    );
+    ExitCode::from(2)
 }
 
 async fn route_taskflow_doctor(args: &[String]) -> ExitCode {
@@ -3242,6 +3402,16 @@ fn run_docflow_proxy(args: ProxyArgs) -> ExitCode {
     if proxy_requested_help(&args.args) {
         print_docflow_proxy_help();
         return ExitCode::SUCCESS;
+    }
+
+    if current_docflow_launcher_mode() == DocflowLauncherMode::InstalledCompatibility
+        && !installed_docflow_command_allowed(&args.args)
+    {
+        eprintln!(
+            "Installed `vida docflow` is a compatibility wrapper with `help|overview only`. \
+Repo/dev binaries keep the full in-process Rust DocFlow shell."
+        );
+        return ExitCode::from(2);
     }
 
     let argv = std::iter::once("docflow".to_string())
@@ -4595,6 +4765,7 @@ struct RuntimeConsumptionEvidence {
 struct RuntimeConsumptionOverview {
     surface: String,
     ok: bool,
+    registry_rows: usize,
     check_rows: usize,
     readiness_rows: usize,
     proof_blocking: bool,
@@ -5557,8 +5728,19 @@ fn build_docflow_runtime_evidence() -> (
     RuntimeConsumptionEvidence,
     RuntimeConsumptionEvidence,
     RuntimeConsumptionEvidence,
+    RuntimeConsumptionEvidence,
     RuntimeConsumptionOverview,
 ) {
+    let registry_root = resolve_repo_root()
+        .expect("docflow registry evidence should resolve the repo root")
+        .display()
+        .to_string();
+    let registry_output = docflow_cli::run(DocflowCli {
+        command: DocflowCommand::Registry(RegistryScanArgs {
+            root: registry_root.clone(),
+            exclude_globs: vec![],
+        }),
+    });
     let check_output = docflow_cli::run(DocflowCli {
         command: DocflowCommand::Check(DocflowCheckArgs {
             root: None,
@@ -5578,11 +5760,18 @@ fn build_docflow_runtime_evidence() -> (
         }),
     });
 
+    let registry_rows = count_nonempty_lines(&registry_output);
     let check_rows = count_nonempty_lines(&check_output);
     let readiness_rows = count_nonempty_lines(&readiness_output);
     let proof_ok = proof_output.contains("✅ OK: proofcheck");
     let proof_blocking = !proof_ok;
 
+    let registry = RuntimeConsumptionEvidence {
+        surface: format!("vida docflow registry --root {}", registry_root),
+        ok: registry_rows > 0 && !registry_output.contains("\"artifact_type\":\"inventory_error\""),
+        row_count: registry_rows,
+        output: registry_output,
+    };
     let check = RuntimeConsumptionEvidence {
         surface: "vida docflow check --profile active-canon".to_string(),
         ok: check_output.trim().is_empty(),
@@ -5603,13 +5792,14 @@ fn build_docflow_runtime_evidence() -> (
     };
     let overview = RuntimeConsumptionOverview {
         surface: "vida taskflow direct runtime-consumption overview".to_string(),
-        ok: check.ok && readiness.ok && proof.ok,
+        ok: registry.ok && check.ok && readiness.ok && proof.ok,
+        registry_rows,
         check_rows,
         readiness_rows,
         proof_blocking,
     };
 
-    (check, readiness, proof, overview)
+    (registry, check, readiness, proof, overview)
 }
 
 fn write_runtime_consumption_snapshot(
@@ -5962,7 +6152,8 @@ async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                 Ok(store) => match build_taskflow_consume_bundle_payload(&store).await {
                     Ok(runtime_bundle) => {
                         let bundle_check = taskflow_consume_bundle_check(&runtime_bundle);
-                        let (check, readiness, proof, overview) = build_docflow_runtime_evidence();
+                        let (registry, check, readiness, proof, overview) =
+                            build_docflow_runtime_evidence();
                         let payload = TaskflowDirectConsumptionPayload {
                             artifact_name: "taskflow_direct_runtime_consumption".to_string(),
                             artifact_type: "runtime_consumption".to_string(),
@@ -5979,6 +6170,7 @@ async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             },
                             request_text,
                             direct_consumption_ready: bundle_check.ok
+                                && registry.ok
                                 && check.ok
                                 && readiness.ok
                                 && proof.ok,
@@ -5990,6 +6182,7 @@ async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 owner_runtime: "taskflow".to_string(),
                                 evidence: serde_json::json!({
                                     "overview": overview,
+                                    "registry": registry,
                                     "check": check,
                                     "readiness": readiness,
                                     "proof": proof,

@@ -121,14 +121,35 @@ jobs:
           VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" bash dist/vida-install.sh doctor --root "$TMP_ROOT" --bin-dir "$TMP_BIN"
           VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida root >/tmp/vida-root.txt
           VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida doctor >/tmp/vida-doctor.txt
-          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida codex --help >/tmp/vida-codex-help.txt
+          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida docflow help >/tmp/vida-docflow-help.txt
+          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida docflow overview --help >/tmp/vida-docflow-overview.txt
           VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" codex-v0 --help >/tmp/codex-v0-help.txt
           VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida taskflow --help >/tmp/vida-taskflow-help.txt
+          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida taskflow task ready --json >/tmp/vida-taskflow-ready-default.json
+          cat > "$TMP_ROOT/taskflow-python-wrapper.sh" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf '%s\n' "\$1" > /tmp/vida-taskflow-helper-path.txt
+          exec "$TMP_ROOT/current/.venv/bin/python3" "\$@"
+          EOF
+          chmod +x "$TMP_ROOT/taskflow-python-wrapper.sh"
+          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" VIDA_V0_TURSO_PYTHON="$TMP_ROOT/taskflow-python-wrapper.sh" PATH="$TMP_BIN:$PATH" vida taskflow task ready --json >/tmp/vida-taskflow-ready.json
+          if VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida docflow summary --format toon >/tmp/vida-docflow-summary.txt 2>/tmp/vida-docflow-summary.err; then
+            echo "vida docflow summary unexpectedly succeeded in installed mode" >&2
+            exit 1
+          fi
           grep -q "$TMP_ROOT/current" /tmp/vida-root.txt
           grep -q "Doctor check passed" /tmp/vida-doctor.txt
-          grep -q "Codex v0 launcher" /tmp/vida-codex-help.txt
-          grep -q "Codex v0 launcher" /tmp/codex-v0-help.txt
-          grep -q "vida taskflow <args...>" /tmp/vida-taskflow-help.txt
+          grep -q "VIDA DocFlow compatibility bridge" /tmp/vida-docflow-help.txt
+          grep -q "vida docflow overview \\[args...\\]" /tmp/vida-docflow-help.txt
+          grep -q "codex.py overview" /tmp/vida-docflow-overview.txt
+          grep -q "Codex v0 compatibility wrapper" /tmp/codex-v0-help.txt
+          grep -q 'canonical installed launcher contract' /tmp/codex-v0-help.txt
+          grep -q "unsupported installed-mode command: summary" /tmp/vida-docflow-summary.err
+          grep -q "taskflow-v0 <command> \\[args...\\]" /tmp/vida-taskflow-help.txt
+          grep -q '^\[\]$' /tmp/vida-taskflow-ready-default.json
+          grep -q '^\[\]$' /tmp/vida-taskflow-ready.json
+          grep -q "$TMP_ROOT/current/taskflow-v0/helpers/turso_task_store.py" /tmp/vida-taskflow-helper-path.txt
           grep -q "<fill-your-project-name>" "$TMP_ROOT/current/AGENTS.sidecar.md"
 
       - name: Run codex validation

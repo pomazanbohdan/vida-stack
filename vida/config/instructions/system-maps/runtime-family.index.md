@@ -28,6 +28,7 @@ Read this index when:
 
 1. Documentation/docsys runtime questions:
    - continue to `vida/config/instructions/system-maps/runtime-family.docflow-map.md`
+   - canonical launcher contract: `vida docflow`
 2. Tracked execution / boot / run-graph / route runtime questions:
    - continue to `vida/config/instructions/system-maps/runtime-family.taskflow-map.md`
 3. Runtime health / traces / proving / observability questions:
