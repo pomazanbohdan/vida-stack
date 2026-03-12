@@ -23,6 +23,7 @@ It does not change the architectural target:
 - the public archive now ships only install-ready runtime surfaces and direct dependencies
 - the archive no longer carries repository-development ballast such as `docs/**`, `crates/**`, `install/**`, `scripts/**`, or the `taskflow-v0/**` source subtree
 - the installed `vida` launcher now routes `doctor`, `upgrade`, `install`, and `use` through an installer-management surface outside the versioned archive
+- installed `vida docflow` is now documented as an explicit compatibility boundary: `help|overview only`
 - the packaged `AGENTS.sidecar.md` is now a clean scaffold meant to be filled by the external project owner
 
 ## ✅ Practical Outcome
@@ -51,5 +52,5 @@ schema_version: '1'
 status: canonical
 source_path: install/release-notes-v0.2.1.md
 created_at: '2026-03-12T14:10:00+02:00'
-updated_at: '2026-03-12T14:10:00+02:00'
+updated_at: '2026-03-12T16:37:07+02:00'
 changelog_ref: release-notes-v0.2.1.changelog.jsonl

@@ -31,6 +31,8 @@ Canonical entrypoints:
    - project-owned provenance index for deleted framework-formation plans/research documents and their promoted canonical homes
 9. `docs/process/framework-three-layer-refactoring-audit.md`
    - unified-format consolidated report for the first three refactored framework layers: `core`, orchestration shell, and runtime-family execution
+10. `docs/process/release-formatting-protocol.md`
+   - canonical project process for rendering clean public GitHub release pages from canonical release-note artifacts
 
 -----
 artifact_path: process/readme
@@ -41,5 +43,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/README.md
 created_at: '2026-03-10T00:00:00+02:00'
-updated_at: '2026-03-12T08:38:03+02:00'
+updated_at: '2026-03-12T16:37:07+02:00'
 changelog_ref: README.changelog.jsonl
