@@ -2,7 +2,7 @@
 ##
 ## Replaces `beads-runtime.sh` (204 lines) + `beads-verify-runtime.py` (266 lines)
 ## + `beads-log.sh` + `beads-compact.sh` + `beads-workflow.sh`.
-## Single-writer rule: read-only ops use br directly,
+## Single-writer rule: read-only ops use the task store directly,
 ## mutations route through queue-backed writer.
 
 import std/[json, os, strutils, times, algorithm, sequtils, options]

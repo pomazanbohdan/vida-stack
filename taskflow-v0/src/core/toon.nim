@@ -1,16 +1,25 @@
 import std/[json, os, osproc, strutils, times]
-import ./utils
+import ./[config, utils]
 
-const DefaultToonPython = currentSourcePath().parentDir().parentDir().parentDir().parentDir().parentDir() / ".venv" / "bin" / "python3"
-const ToonHelperPath = currentSourcePath().parentDir().parentDir().parentDir() / "helpers" / "toon_render.py"
+const CompileTimeDefaultToonPython = currentSourcePath().parentDir().parentDir().parentDir().parentDir().parentDir() / ".venv" / "bin" / "python3"
+const CompileTimeToonHelperPath = currentSourcePath().parentDir().parentDir().parentDir() / "helpers" / "toon_render.py"
 
 proc toonPython*(): string =
   let overridePath = getEnv("VIDA_V0_TOON_PYTHON")
   if overridePath.len > 0:
     return overridePath
-  if fileExists(DefaultToonPython):
-    return DefaultToonPython
+  let runtimePython = vidaRoot() / ".venv" / "bin" / "python3"
+  if fileExists(runtimePython):
+    return runtimePython
+  if fileExists(CompileTimeDefaultToonPython):
+    return CompileTimeDefaultToonPython
   return "python3"
+
+proc toonHelperPath*(): string =
+  let runtimeHelperPath = vidaRoot() / "taskflow-v0" / "helpers" / "toon_render.py"
+  if fileExists(runtimeHelperPath):
+    return runtimeHelperPath
+  CompileTimeToonHelperPath
 
 proc renderToon*(payload: JsonNode): string =
   let uniqueStamp = safeName($epochTime(), "tmp").replace(".", "-")
@@ -19,7 +28,7 @@ proc renderToon*(payload: JsonNode): string =
   try:
     execProcess(
       toonPython(),
-      args = @[ToonHelperPath, tempPath],
+      args = @[toonHelperPath(), tempPath],
       options = {poUsePath, poStdErrToStdOut}
     ).strip()
   finally:

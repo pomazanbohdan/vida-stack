@@ -3,7 +3,7 @@
 import std/[json, os, osproc, strutils]
 import ./[config, role_selection, runtime_bundle, toon, utils]
 
-const CodexScriptPath = currentSourcePath().parentDir().parentDir().parentDir().parentDir() / "codex-v0" / "codex.py"
+const CompileTimeCodexScriptPath = currentSourcePath().parentDir().parentDir().parentDir().parentDir() / "codex-v0" / "codex.py"
 
 proc runtimeConsumptionDir*(): string =
   vidaWorkspacePath("state", "runtime-consumption")
@@ -15,14 +15,23 @@ proc codexPython*(): string =
   let envPython = getEnv("VIDA_CODEX_PYTHON")
   if envPython.len > 0:
     return envPython
+  let runtimePython = vidaRoot() / ".venv" / "bin" / "python3"
+  if fileExists(runtimePython):
+    return runtimePython
   let python = findExe("python3")
   if python.len > 0:
     return python
   "python3"
 
+proc codexScriptPath*(): string =
+  let runtimeCodex = vidaRoot() / "codex-v0" / "codex.py"
+  if fileExists(runtimeCodex):
+    return runtimeCodex
+  CompileTimeCodexScriptPath
+
 proc runCodexCheck(command: seq[string]): JsonNode =
   putEnv("VIDA_ROOT", vidaRoot())
-  var fullCommand = quoteShell(codexPython()) & " " & quoteShell(CodexScriptPath)
+  var fullCommand = quoteShell(codexPython()) & " " & quoteShell(codexScriptPath())
   for arg in command:
     fullCommand &= " " & quoteShell(arg)
   let output = execCmdEx(fullCommand, options = {poUsePath, poStdErrToStdOut})

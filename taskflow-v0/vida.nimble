@@ -1,5 +1,5 @@
 # Package
-version       = "0.2.1"
+version       = "0.2.2"
 author        = "VIDA Stack"
 description   = "VIDA v0 runtime — Nim alternative to Python/Shell scripts"
 license       = "MIT"
@@ -20,3 +20,5 @@ requires "regex >= 0.25.0"        # Pattern matching for pack_router_keywords
 task test, "Run unit tests":
   exec "nim c -r tests/test_utils.nim"
   exec "nim c -r tests/test_config.nim"
+  exec "nim c -r tests/test_task.nim"
+  exec "nim c -r tests/test_protocol_binding.nim"

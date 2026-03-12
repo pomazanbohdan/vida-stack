@@ -1,7 +1,8 @@
 import ../core/[direct_consumption, kernel_runtime, role_selection, runtime_bundle]
 import ../boot/profile as bootProfile
 import ../state/[run_graph, todo, task, reconcile, memory, context, context_capsule,
-  beads, recovery, draft_execution_spec, spec_intake, spec_delta, problem_party]
+  beads, recovery, draft_execution_spec, spec_intake, spec_delta, problem_party,
+  protocol_binding]
 import ../agents/[registry as agentRegistry, leases, system, pool, route]
 import ../agents/prepare_execution as prepareExecutionRuntime
 import ../gates/[execution_auth, worker_packet, coach_review, coach_decision, verification_prompt, verification_merge]
@@ -22,14 +23,18 @@ proc runCli*(args: seq[string]): int =
   let command = args[0]
   let subArgs = if args.len > 1: args[1..^1] else: @[]
 
+  if command notin ["config", "protocol-binding", "status"] and
+      protocol_binding.enforceProtocolBinding() != 0:
+    return 1
+
   case command
   of "config": cmdConfig(subArgs)
+  of "protocol-binding": protocol_binding.cmdProtocolBinding(subArgs)
   of "kernel": kernel_runtime.cmdKernel(subArgs)
   of "boot": bootProfile.cmdProfile(subArgs)
   of "snapshot": bootProfile.cmdProfile(@["snapshot"] & subArgs)
   of "run-graph": run_graph.cmdRunGraph(subArgs)
   of "task": task.cmdTask(subArgs)
-  of "br": task.cmdBrCompat(subArgs)
   of "todo": todo.cmdTodo(subArgs)
   of "reconcile": reconcile.cmdReconcile(subArgs)
   of "system": system.cmdSystem(subArgs)

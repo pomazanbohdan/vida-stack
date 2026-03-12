@@ -105,7 +105,10 @@ curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/insta
 - 🗂️ installs versioned sources under `~/.local/share/vida-stack/releases/<tag>`
 - 🔁 updates `~/.local/share/vida-stack/current`
 - 🧪 creates an installer-managed Python `venv` for **DocFlow** (current donor surface: `codex-v0`) and `pyturso`
+- 🧩 ships the project-local `.codex/` runtime configuration surface
 - 📍 deploys a clean `AGENTS.sidecar.md` scaffold for the external project owner
+- 🧱 scaffolds `vida.config.yaml` from the packaged template when the installed release root does not already have one
+- 🗃️ builds `taskflow-v0/generated/protocol_binding.compiled.json` and imports protocol-binding state into `.vida/state/taskflow-state.db`
 - 🧰 writes launchers into `~/.local/bin`:
   - `vida`
   - `taskflow-v0`
@@ -115,9 +118,9 @@ curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/insta
 ### Upgrade / doctor
 
 ```bash
-vida upgrade --version v0.2.1
+vida upgrade --version v0.2.2
 vida doctor
-vida use --version v0.2.1
+vida use --version v0.2.2
 ```
 
 ---

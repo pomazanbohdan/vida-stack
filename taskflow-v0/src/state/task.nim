@@ -1,4 +1,4 @@
-## VIDA v0 task surface — DB-backed replacement for basic br reads.
+## VIDA v0 task surface — DB-backed task store with JSONL ingest/export.
 
 import std/[json, strutils]
 import ../core/[toon, turso_task_store, utils]
@@ -439,45 +439,4 @@ proc cmdTask*(args: seq[string]): int =
 
   else:
     echo "Unknown task subcommand: " & args[0]
-    return 1
-
-proc cmdBrCompat*(args: seq[string]): int =
-  if args.len == 0:
-    echo """Usage:
-  taskflow-v0 br import [path] [--json]
-  taskflow-v0 br export [path] [--json]
-
-Defaults:
-  import -> .beads/issues.jsonl
-  export -> .beads/issues.jsonl"""
-    return 1
-
-  case args[0]
-  of "import":
-    let path = if args.len > 1 and not args[1].startsWith("--"): args[1] else: ".beads/issues.jsonl"
-    let asJson = "--json" in args
-    let payload = importIssuesJsonl(path)
-    if asJson:
-      echo pretty(payload)
-    else:
-      echo policyValue(payload{"status"}, "error") & ": imported=" &
-           $policyInt(payload{"imported_count"}, 0) & " unchanged=" &
-           $policyInt(payload{"unchanged_count"}, 0) & " updated=" &
-           $policyInt(payload{"updated_count"}, 0)
-    return if policyValue(payload{"status"}, "") == "ok": 0 else: 1
-
-  of "export":
-    let path = if args.len > 1 and not args[1].startsWith("--"): args[1] else: ".beads/issues.jsonl"
-    let asJson = "--json" in args
-    let payload = exportIssuesJsonl(path)
-    if asJson:
-      echo pretty(payload)
-    else:
-      echo policyValue(payload{"status"}, "error") & ": exported=" &
-           $policyInt(payload{"exported_count"}, 0) & " target=" &
-           policyValue(payload{"target_path"}, path)
-    return if policyValue(payload{"status"}, "") == "ok": 0 else: 1
-
-  else:
-    echo "Usage: taskflow-v0 br <import|export> [path] [--json]"
     return 1

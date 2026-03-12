@@ -1,0 +1,86 @@
+{
+  "status": "ok",
+  "ok": true,
+  "scenario": "v0.2.2-taskflow-wave1-primary",
+  "primary_state_authority": "taskflow_v0_state_db",
+  "seed_path": "/home/unnamed/project/vida-stack/taskflow-v0/config/protocol_binding.seed.json",
+  "protocol_index_path": "/home/unnamed/project/vida-stack/vida/config/instructions/system-maps/protocol.index.md",
+  "materialization_owner": "taskflow-v0/src/state/protocol_binding.nim",
+  "remediation_commands": [
+    "taskflow-v0 protocol-binding sync --json",
+    "vida taskflow protocol-binding sync --json"
+  ],
+  "bindings": [
+    {
+      "protocol_id": "bridge.instruction-activation-protocol",
+      "source_path": "vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md",
+      "activation_class": "always_on",
+      "runtime_owner": "taskflow-v0/protocol-binding/activation-bridge",
+      "enforcement_type": "activation-resolution",
+      "proof_surface": "python3 codex-v0/codex.py activation-check --profile active-canon",
+      "primary_state_authority": "taskflow_v0_state_db",
+      "binding_status": "script-bound",
+      "active": true,
+      "blockers": [],
+      "scenario": "v0.2.2-taskflow-wave1-primary",
+      "synced_at": ""
+    },
+    {
+      "protocol_id": "work.taskflow-protocol",
+      "source_path": "vida/config/instructions/runtime-instructions/work.taskflow-protocol.md",
+      "activation_class": "triggered_domain",
+      "runtime_owner": "taskflow-v0/cli/taskflow",
+      "enforcement_type": "execution-discipline",
+      "proof_surface": "taskflow-v0 consume bundle --json",
+      "primary_state_authority": "taskflow_v0_state_db",
+      "binding_status": "script-bound",
+      "active": true,
+      "blockers": [],
+      "scenario": "v0.2.2-taskflow-wave1-primary",
+      "synced_at": ""
+    },
+    {
+      "protocol_id": "runtime.task-state-telemetry-protocol",
+      "source_path": "vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md",
+      "activation_class": "triggered_domain",
+      "runtime_owner": "taskflow-v0/state/task+turso-task-store",
+      "enforcement_type": "state-telemetry",
+      "proof_surface": "taskflow-v0 status --json",
+      "primary_state_authority": "taskflow_v0_state_db",
+      "binding_status": "script-bound",
+      "active": true,
+      "blockers": [],
+      "scenario": "v0.2.2-taskflow-wave1-primary",
+      "synced_at": ""
+    },
+    {
+      "protocol_id": "work.execution-health-check-protocol",
+      "source_path": "vida/config/instructions/runtime-instructions/work.execution-health-check-protocol.md",
+      "activation_class": "triggered_domain",
+      "runtime_owner": "taskflow-v0/boot+status",
+      "enforcement_type": "health-gate",
+      "proof_surface": "taskflow-v0 boot summary session --json",
+      "primary_state_authority": "taskflow_v0_state_db",
+      "binding_status": "script-bound",
+      "active": true,
+      "blockers": [],
+      "scenario": "v0.2.2-taskflow-wave1-primary",
+      "synced_at": ""
+    },
+    {
+      "protocol_id": "work.task-state-reconciliation-protocol",
+      "source_path": "vida/config/instructions/runtime-instructions/work.task-state-reconciliation-protocol.md",
+      "activation_class": "closure_reflection",
+      "runtime_owner": "taskflow-v0/reconcile",
+      "enforcement_type": "state-reconciliation",
+      "proof_surface": "taskflow-v0 reconcile status <task_id> --json",
+      "primary_state_authority": "taskflow_v0_state_db",
+      "binding_status": "script-bound",
+      "active": true,
+      "blockers": [],
+      "scenario": "v0.2.2-taskflow-wave1-primary",
+      "synced_at": ""
+    }
+  ],
+  "binding_count": 5
+}

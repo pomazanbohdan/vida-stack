@@ -1,6 +1,6 @@
 import ../config/loader
 
-const Version* = "0.2.1"
+const Version* = "0.2.2"
 
 proc printHelp*() =
   echo """
@@ -15,7 +15,7 @@ Commands:
   boot      Boot profile, packets, and snapshots
   run-graph Run graph ledger
   task      DB-backed task surface with JSONL ingest
-  br        Legacy import/export compatibility over taskflow-v0 task store
+  protocol-binding DB-backed protocol-binding import/status/check
   todo      TODO task views
   reconcile Task-state reconcile status
   draft-execution-spec Draft execution spec validator

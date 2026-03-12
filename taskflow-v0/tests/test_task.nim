@@ -4,13 +4,37 @@ import std/[json, os, osproc, sequtils, strtabs, strutils, unittest]
 import ../src/state/task
 
 suite "task":
+  proc detectRepoRoot(): string =
+    let cwd = getCurrentDir()
+    if dirExists(cwd / "taskflow-v0"):
+      return cwd
+    cwd.parentDir()
+
+  let repoRoot = detectRepoRoot()
   let root = "/tmp/vida_scripts_nim_task"
   discard existsOrCreateDir(root)
   putEnv("VIDA_ROOT", root)
-  putEnv("VIDA_V0_TURSO_PYTHON", getCurrentDir() / ".venv" / "bin" / "python3")
+  putEnv("VIDA_V0_TURSO_PYTHON", repoRoot / ".venv" / "bin" / "python3")
+
+  proc seedProtocolBindingFiles() =
+    for relPath in @[
+      "taskflow-v0/config/protocol_binding.seed.json",
+      "taskflow-v0/helpers/turso_task_store.py",
+      "vida/config/instructions/system-maps/protocol.index.md",
+      "vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md",
+      "vida/config/instructions/runtime-instructions/work.taskflow-protocol.md",
+      "vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md",
+      "vida/config/instructions/runtime-instructions/work.execution-health-check-protocol.md",
+      "vida/config/instructions/runtime-instructions/work.task-state-reconciliation-protocol.md",
+    ]:
+      let src = repoRoot / relPath
+      let dst = root / relPath
+      createDir(parentDir(dst))
+      if not fileExists(dst):
+        copyFile(src, dst)
 
   proc seedIssues(lines: seq[JsonNode]) =
-    let dbPath = root / ".vida" / "state" / "vida-legacy.db"
+    let dbPath = root / ".vida" / "state" / "taskflow-state.db"
     let issuesPath = root / ".beads" / "issues.jsonl"
     if fileExists(dbPath):
       removeFile(dbPath)
@@ -199,12 +223,21 @@ suite "task":
     check second["id"].getStr() == "vida-stack-2d9.1.3"
     check second["display_id"].getStr() == "vida-2d9.1.3"
 
-  test "taskflow-v0 br import export aliases work":
-    let rootDir = getCurrentDir()
+  test "taskflow-v0 task import export commands work through the DB surface":
     let binPath = root / "taskflow-v0-test-bin"
-    let compile = execCmdEx("nim c --nimcache:/tmp/vida-nimcache-task-br -o:" & binPath.quoteShell &
-      " " & (rootDir / "taskflow-v0" / "src" / "vida.nim").quoteShell)
+    let compile = execCmdEx("nim c --nimcache:/tmp/vida-nimcache-task-cli -o:" & binPath.quoteShell &
+      " " & (repoRoot / "taskflow-v0" / "src" / "vida.nim").quoteShell)
     check compile.exitCode == 0
+
+    seedProtocolBindingFiles()
+    let syncResult = execCmdEx(
+      binPath.quoteShell & " protocol-binding sync --json",
+      env = newStringTable({
+        "VIDA_ROOT": root,
+        "VIDA_V0_TURSO_PYTHON": repoRoot / ".venv" / "bin" / "python3",
+      })
+    )
+    check syncResult.exitCode == 0
 
     let source = root / ".beads" / "alias-import.jsonl"
     writeFile(source, $(%*{
@@ -216,10 +249,10 @@ suite "task":
     }) & "\n")
 
     let importResult = execCmdEx(
-      binPath.quoteShell & " br import " & source.quoteShell & " --json",
+      binPath.quoteShell & " task import-jsonl " & source.quoteShell & " --json",
       env = newStringTable({
         "VIDA_ROOT": root,
-        "VIDA_V0_TURSO_PYTHON": rootDir / ".venv" / "bin" / "python3",
+        "VIDA_V0_TURSO_PYTHON": repoRoot / ".venv" / "bin" / "python3",
       })
     )
     check importResult.exitCode == 0
@@ -228,10 +261,10 @@ suite "task":
 
     let exportPath = root / ".beads" / "alias-export.jsonl"
     let exportResult = execCmdEx(
-      binPath.quoteShell & " br export " & exportPath.quoteShell & " --json",
+      binPath.quoteShell & " task export-jsonl " & exportPath.quoteShell & " --json",
       env = newStringTable({
         "VIDA_ROOT": root,
-        "VIDA_V0_TURSO_PYTHON": rootDir / ".venv" / "bin" / "python3",
+        "VIDA_V0_TURSO_PYTHON": repoRoot / ".venv" / "bin" / "python3",
       })
     )
     check exportResult.exitCode == 0

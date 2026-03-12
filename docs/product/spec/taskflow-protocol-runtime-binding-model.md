@@ -75,15 +75,20 @@ Canonical shape:
 
 Current implemented bridge surface:
 
-1. `vida taskflow protocol-binding sync [--json]`
-2. `vida taskflow protocol-binding status [--json]`
-3. `vida taskflow protocol-binding check [--json]`
+1. `taskflow-v0 protocol-binding build [--json]`
+2. `taskflow-v0 protocol-binding sync [--json]`
+3. `taskflow-v0 protocol-binding status [--json]`
+4. `taskflow-v0 protocol-binding check [--json]`
+5. installed and launcher-owned delegation may still expose the same bounded surface through `vida taskflow ...` or installer bootstrap, but `taskflow-v0` is the script-era primary owner for `v0.2.2`
 
 Current state rule:
 
 1. the implemented bridge stores binding rows and receipts in the authoritative TaskFlow state store,
-2. root `vida status --json` and `vida doctor --json` expose the latest `protocol_binding` rollup from that same runtime truth,
-3. this closes the first DB-backed proof slice for the `v0.2.2` bridge wave without yet claiming Rust-native crate closure.
+2. the bridge first materializes a deterministic compiled JSON payload under `taskflow-v0/generated/protocol_binding.compiled.json`,
+3. installer bootstrap and repo-local sync import that compiled payload into `taskflow-state.db`,
+4. runtime execution fails closed when the DB-backed protocol-binding state is missing or invalid,
+5. the installed runtime keeps the same authoritative state path and does not fall back to detached file-log truth,
+6. this closes the first DB-backed proof slice for the `v0.2.2` bridge wave without yet claiming Rust-native crate closure.
 
 Minimum responsibilities:
 
@@ -98,15 +103,19 @@ Minimum responsibilities:
 3. report missing runtime owners for active protocols,
 4. emit a deterministic binding snapshot for review and later Rust parity tests.
 
-Recommended location:
+Current implementation location:
 
-1. `scripts/`
-2. or a bounded `taskflow-v0` tooling surface if the output is taskflow-specific
+1. bounded `taskflow-v0` tooling surface
+2. `taskflow-v0/config/protocol_binding.seed.json` as the script-era metadata owner
+3. `taskflow-v0/generated/protocol_binding.compiled.json` as the deterministic compiled bridge artifact
+4. `taskflow-v0/helpers/turso_task_store.py` as the DB materialization layer
+5. `scripts/precommit-build-json.sh` as the thin JSON-artifact build hook
 
 Recommended output artifacts:
 
 1. DB-backed TaskFlow binding rows or equivalent state-store records under the authoritative runtime state root
-2. bounded JSON export snapshots derived from that runtime truth for proof, parity, or operator inspection
+2. one deterministic compiled bridge payload under `taskflow-v0/generated/protocol_binding.compiled.json`
+3. bounded JSON export snapshots derived from that runtime truth for proof, parity, or operator inspection
 
 Invalid pattern:
 
@@ -189,6 +198,7 @@ Primary state rule:
 1. `state_surfaces` must identify the DB/taskflow authority first,
 2. exported snapshots may be listed only as secondary proof or operator surfaces,
 3. file-log-only state surfaces are invalid for this subrelease.
+4. for the current script-era implementation, the authoritative DB path is `.vida/state/taskflow-state.db`.
 
 ## 6. Binding Sources
 
@@ -308,5 +318,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/taskflow-protocol-runtime-binding-model.md
 created_at: '2026-03-12T12:15:00+02:00'
-updated_at: '2026-03-12T12:35:32+02:00'
+updated_at: '2026-03-12T19:00:00+02:00'
 changelog_ref: taskflow-protocol-runtime-binding-model.changelog.jsonl

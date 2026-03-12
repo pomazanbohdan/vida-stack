@@ -139,7 +139,7 @@ $ vida beads verify --strict
 
 ### `task` — DB-backed task surface
 
-Runtime SSOT for this lane lives in `.vida/state/vida-legacy.db`.
+Runtime SSOT for this lane lives in `.vida/state/taskflow-state.db`.
 `.beads/issues.jsonl` is treated as an ingest/bootstrap artifact, not the live read store.
 
 Output policy:
@@ -430,7 +430,7 @@ src/
 - Claims in the Python/shell framework remain canonical until a tracked parity migration explicitly replaces them.
 - task read surfaces now come from the DB-backed `taskflow-v0 task` store
 - The Rust `vida` binary (`crates/vida/`) supports `--state-dir` / `VIDA_STATE_DIR`
-- `.beads/issues.jsonl` is an ingest/export artifact; primary task reads in this lane come from `.vida/state/vida-legacy.db`
+- `.beads/issues.jsonl` is an ingest/export artifact; primary task reads in this lane come from `.vida/state/taskflow-state.db`
 
 -----
 artifact_path: implementation/taskflow-v0/readme

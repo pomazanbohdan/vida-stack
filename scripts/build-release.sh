@@ -36,6 +36,9 @@ PACKAGE_ROOT="$DIST_DIR/package"
 STAGE_DIR="$PACKAGE_ROOT/$ARCHIVE_BASE"
 TASKFLOW_BIN="$STAGE_DIR/bin/taskflow-v0"
 TASKFLOW_HELPERS_DIR="$STAGE_DIR/taskflow-v0/helpers"
+TASKFLOW_CONFIG_DIR="$STAGE_DIR/taskflow-v0/config"
+TASKFLOW_GENERATED_DIR="$STAGE_DIR/taskflow-v0/generated"
+INSTALL_ASSETS_DIR="$STAGE_DIR/install/assets"
 INSTALLER_ASSET="$DIST_DIR/vida-install.sh"
 MANIFEST_OUT="$DIST_DIR/${ARCHIVE_BASE}.manifest.json"
 RELEASE_NOTES_SRC="$ROOT_DIR/install/release-notes-${VERSION}.md"
@@ -43,13 +46,14 @@ RELEASE_NOTES_OUT="$DIST_DIR/release-notes.md"
 NIMCACHE_DIR="$DIST_DIR/nimcache/release"
 
 rm -rf "$DIST_DIR"
-mkdir -p "$STAGE_DIR/bin" "$TASKFLOW_HELPERS_DIR"
+mkdir -p "$STAGE_DIR/bin" "$TASKFLOW_HELPERS_DIR" "$TASKFLOW_CONFIG_DIR" "$TASKFLOW_GENERATED_DIR" "$INSTALL_ASSETS_DIR"
 
 cp "$ROOT_DIR/AGENTS.md" "$STAGE_DIR/AGENTS.md"
 awk '
   /^-----$/ { exit }
   { print }
 ' "$ROOT_DIR/install/assets/AGENTS.sidecar.scaffold.md" > "$STAGE_DIR/AGENTS.sidecar.md"
+cp -R "$ROOT_DIR/.codex" "$STAGE_DIR/.codex"
 cp -R "$ROOT_DIR/vida" "$STAGE_DIR/vida"
 cp -R "$ROOT_DIR/codex-v0" "$STAGE_DIR/codex-v0"
 
@@ -60,6 +64,9 @@ nim c -d:release --nimcache:"$NIMCACHE_DIR" -o:"$TASKFLOW_BIN" "$ROOT_DIR/taskfl
 chmod +x "$TASKFLOW_BIN"
 cp "$ROOT_DIR/taskflow-v0/helpers/turso_task_store.py" "$TASKFLOW_HELPERS_DIR/turso_task_store.py"
 cp "$ROOT_DIR/taskflow-v0/helpers/toon_render.py" "$TASKFLOW_HELPERS_DIR/toon_render.py"
+cp "$ROOT_DIR/taskflow-v0/config/protocol_binding.seed.json" "$TASKFLOW_CONFIG_DIR/protocol_binding.seed.json"
+cp "$ROOT_DIR/docs/framework/templates/vida.config.yaml.template" "$INSTALL_ASSETS_DIR/vida.config.yaml.template"
+VIDA_ROOT="$STAGE_DIR" "$TASKFLOW_BIN" protocol-binding build --json > /dev/null
 
 python3 - <<PY
 import json
@@ -75,15 +82,19 @@ manifest = {
     "included_roots": [
         "AGENTS.md",
         "AGENTS.sidecar.md",
+        ".codex/",
         "bin/taskflow-v0",
         "codex-v0/",
+        "install/assets/",
         "taskflow-v0/helpers/",
+        "taskflow-v0/config/",
+        "taskflow-v0/generated/",
         "vida/",
     ],
     "installed_entrypoints": [
         "vida",
+        "vida docflow",
         "taskflow-v0",
-        "codex-v0",
     ],
     "bundled_binaries": [
         "bin/taskflow-v0",
@@ -92,6 +103,14 @@ manifest = {
         "taskflow-v0",
         "codex-v0",
     ],
+    "launcher_contracts": {
+        "taskflow": "vida taskflow",
+        "docflow": "vida docflow"
+    },
+    "installed_compatibility_contracts": {
+        "vida docflow": "help|overview only",
+        "codex-v0": "migration-only wrapper -> vida docflow"
+    },
 }
 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 PY

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import re
 import time
+import uuid
 from pathlib import Path
 
 import turso
@@ -93,8 +95,48 @@ def connect_db(path: str, *, init_schema: bool = False):
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS protocol_binding_state (
+                scenario TEXT NOT NULL,
+                protocol_id TEXT NOT NULL,
+                source_path TEXT NOT NULL,
+                activation_class TEXT NOT NULL,
+                runtime_owner TEXT NOT NULL,
+                enforcement_type TEXT NOT NULL,
+                proof_surface TEXT NOT NULL,
+                primary_state_authority TEXT NOT NULL,
+                binding_status TEXT NOT NULL,
+                active INTEGER NOT NULL,
+                blockers TEXT NOT NULL,
+                synced_at TEXT NOT NULL,
+                PRIMARY KEY (scenario, protocol_id)
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS protocol_binding_receipt (
+                receipt_id TEXT PRIMARY KEY,
+                scenario TEXT NOT NULL,
+                total_bindings INTEGER NOT NULL,
+                active_bindings INTEGER NOT NULL,
+                script_bound_count INTEGER NOT NULL,
+                rust_bound_count INTEGER NOT NULL,
+                fully_runtime_bound_count INTEGER NOT NULL,
+                unbound_count INTEGER NOT NULL,
+                blocking_issue_count INTEGER NOT NULL,
+                primary_state_authority TEXT NOT NULL,
+                recorded_at TEXT NOT NULL
+            )
+            """
+        )
         con.commit()
     return con
+
+
+def now_utc() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def import_jsonl(db_path: str, source_path: str) -> dict:
@@ -437,6 +479,289 @@ def close_task(db_path: str, task_id: str, *, reason: str) -> dict:
     return {"status": "ok", "closed": True, "task": payload}
 
 
+def normalize_protocol_binding_row(row: dict, *, scenario: str, primary_state_authority: str, synced_at: str) -> dict:
+    protocol_id = str(row.get("protocol_id", "")).strip()
+    if not protocol_id:
+        raise SystemExit("invalid protocol binding row: missing protocol_id")
+    blockers = row.get("blockers", []) or []
+    if not isinstance(blockers, list):
+        blockers = [str(blockers)]
+    normalized_blockers = [str(item).strip() for item in blockers if str(item).strip()]
+    binding_status = str(row.get("binding_status", "")).strip() or "unbound"
+    if normalized_blockers:
+        binding_status = "unbound"
+    return {
+        "protocol_id": protocol_id,
+        "source_path": str(row.get("source_path", "")).strip(),
+        "activation_class": str(row.get("activation_class", "")).strip(),
+        "runtime_owner": str(row.get("runtime_owner", "")).strip(),
+        "enforcement_type": str(row.get("enforcement_type", "")).strip(),
+        "proof_surface": str(row.get("proof_surface", "")).strip(),
+        "primary_state_authority": str(row.get("primary_state_authority", "")).strip() or primary_state_authority,
+        "binding_status": binding_status,
+        "active": bool(row.get("active", True)),
+        "blockers": normalized_blockers,
+        "scenario": str(row.get("scenario", "")).strip() or scenario,
+        "synced_at": str(row.get("synced_at", "")).strip() or synced_at,
+    }
+
+
+def protocol_binding_sync(db_path: str, source_path: str) -> dict:
+    payload = json.loads(Path(source_path).read_text(encoding="utf-8"))
+    scenario = str(payload.get("scenario", "")).strip()
+    primary_state_authority = str(payload.get("primary_state_authority", "")).strip()
+    rows = payload.get("bindings", []) or []
+    if not scenario:
+        raise SystemExit("invalid protocol binding payload: missing scenario")
+    if not primary_state_authority:
+        raise SystemExit("invalid protocol binding payload: missing primary_state_authority")
+    if not isinstance(rows, list) or not rows:
+        raise SystemExit("invalid protocol binding payload: missing bindings")
+
+    con = connect_db(db_path, init_schema=True)
+    cur = con.cursor()
+    cur.execute("DELETE FROM protocol_binding_state WHERE scenario = ?", [scenario])
+
+    synced_at = now_utc()
+    active_bindings = 0
+    script_bound_count = 0
+    rust_bound_count = 0
+    fully_runtime_bound_count = 0
+    unbound_count = 0
+    blocking_issue_count = 0
+    normalized_rows: list[dict] = []
+
+    for row in rows:
+        normalized = normalize_protocol_binding_row(
+            row,
+            scenario=scenario,
+            primary_state_authority=primary_state_authority,
+            synced_at=synced_at,
+        )
+        normalized_rows.append(normalized)
+        if normalized["active"]:
+            active_bindings += 1
+        if normalized["binding_status"] == "script-bound":
+            script_bound_count += 1
+        elif normalized["binding_status"] == "rust-bound":
+            rust_bound_count += 1
+        elif normalized["binding_status"] == "fully-runtime-bound":
+            fully_runtime_bound_count += 1
+        else:
+            unbound_count += 1
+        blocking_issue_count += len(normalized["blockers"])
+        cur.execute(
+            """
+            INSERT INTO protocol_binding_state(
+                scenario, protocol_id, source_path, activation_class, runtime_owner,
+                enforcement_type, proof_surface, primary_state_authority,
+                binding_status, active, blockers, synced_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(scenario, protocol_id) DO UPDATE SET
+              source_path=excluded.source_path,
+              activation_class=excluded.activation_class,
+              runtime_owner=excluded.runtime_owner,
+              enforcement_type=excluded.enforcement_type,
+              proof_surface=excluded.proof_surface,
+              primary_state_authority=excluded.primary_state_authority,
+              binding_status=excluded.binding_status,
+              active=excluded.active,
+              blockers=excluded.blockers,
+              synced_at=excluded.synced_at
+            """,
+            [
+                normalized["scenario"],
+                normalized["protocol_id"],
+                normalized["source_path"],
+                normalized["activation_class"],
+                normalized["runtime_owner"],
+                normalized["enforcement_type"],
+                normalized["proof_surface"],
+                normalized["primary_state_authority"],
+                normalized["binding_status"],
+                1 if normalized["active"] else 0,
+                json.dumps(normalized["blockers"], ensure_ascii=True, separators=(",", ":")),
+                normalized["synced_at"],
+            ],
+        )
+
+    receipt = {
+        "receipt_id": f"protocol-binding-{uuid.uuid4().hex}",
+        "scenario": scenario,
+        "total_bindings": len(normalized_rows),
+        "active_bindings": active_bindings,
+        "script_bound_count": script_bound_count,
+        "rust_bound_count": rust_bound_count,
+        "fully_runtime_bound_count": fully_runtime_bound_count,
+        "unbound_count": unbound_count,
+        "blocking_issue_count": blocking_issue_count,
+        "primary_state_authority": primary_state_authority,
+        "recorded_at": synced_at,
+    }
+    cur.execute(
+        """
+        INSERT INTO protocol_binding_receipt(
+            receipt_id, scenario, total_bindings, active_bindings, script_bound_count,
+            rust_bound_count, fully_runtime_bound_count, unbound_count,
+            blocking_issue_count, primary_state_authority, recorded_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            receipt["receipt_id"],
+            receipt["scenario"],
+            receipt["total_bindings"],
+            receipt["active_bindings"],
+            receipt["script_bound_count"],
+            receipt["rust_bound_count"],
+            receipt["fully_runtime_bound_count"],
+            receipt["unbound_count"],
+            receipt["blocking_issue_count"],
+            receipt["primary_state_authority"],
+            receipt["recorded_at"],
+        ],
+    )
+    con.commit()
+    con.close()
+    return {
+        "status": "ok",
+        "ok": unbound_count == 0 and blocking_issue_count == 0,
+        "scenario": scenario,
+        "primary_state_authority": primary_state_authority,
+        "receipt": receipt,
+        "rows": normalized_rows,
+        "source_path": str(source_path),
+        "db_path": db_path,
+    }
+
+
+def load_protocol_binding_rows(cur, scenario: str) -> list[dict]:
+    rows = []
+    for row in cur.execute(
+        """
+        SELECT protocol_id, source_path, activation_class, runtime_owner, enforcement_type,
+               proof_surface, primary_state_authority, binding_status, active,
+               blockers, scenario, synced_at
+        FROM protocol_binding_state
+        WHERE scenario = ?
+        ORDER BY protocol_id ASC
+        """,
+        [scenario],
+    ).fetchall():
+        blockers = []
+        if row[9]:
+            try:
+                blockers = json.loads(row[9])
+            except json.JSONDecodeError:
+                blockers = [str(row[9])]
+        rows.append(
+            {
+                "protocol_id": row[0],
+                "source_path": row[1],
+                "activation_class": row[2],
+                "runtime_owner": row[3],
+                "enforcement_type": row[4],
+                "proof_surface": row[5],
+                "primary_state_authority": row[6],
+                "binding_status": row[7],
+                "active": bool(row[8]),
+                "blockers": blockers,
+                "scenario": row[10],
+                "synced_at": row[11],
+            }
+        )
+    return rows
+
+
+def latest_protocol_binding_receipt(cur, *, scenario: str | None = None) -> dict | None:
+    sql = """
+        SELECT receipt_id, scenario, total_bindings, active_bindings, script_bound_count,
+               rust_bound_count, fully_runtime_bound_count, unbound_count,
+               blocking_issue_count, primary_state_authority, recorded_at
+        FROM protocol_binding_receipt
+    """
+    params: list[object] = []
+    if scenario:
+        sql += " WHERE scenario = ?"
+        params.append(scenario)
+    sql += " ORDER BY recorded_at DESC LIMIT 1"
+    row = cur.execute(sql, params).fetchone()
+    if row is None:
+        return None
+    return {
+        "receipt_id": row[0],
+        "scenario": row[1],
+        "total_bindings": int(row[2]),
+        "active_bindings": int(row[3]),
+        "script_bound_count": int(row[4]),
+        "rust_bound_count": int(row[5]),
+        "fully_runtime_bound_count": int(row[6]),
+        "unbound_count": int(row[7]),
+        "blocking_issue_count": int(row[8]),
+        "primary_state_authority": row[9],
+        "recorded_at": row[10],
+    }
+
+
+def protocol_binding_status(db_path: str, *, scenario: str | None, include_rows: bool) -> dict:
+    con = connect_db(db_path, init_schema=True)
+    cur = con.cursor()
+    receipt = latest_protocol_binding_receipt(cur, scenario=scenario)
+    rows: list[dict] = []
+    if receipt is not None and include_rows:
+        rows = load_protocol_binding_rows(cur, receipt["scenario"])
+    con.close()
+    ok = bool(receipt) and int(receipt["unbound_count"]) == 0 and int(receipt["blocking_issue_count"]) == 0
+    return {
+        "status": "ok",
+        "ok": ok,
+        "has_receipt": receipt is not None,
+        "receipt": receipt,
+        "rows": rows,
+        "db_path": db_path,
+    }
+
+
+def protocol_binding_check(
+    db_path: str,
+    *,
+    scenario: str | None,
+    expected_count: int,
+    required_authority: str | None,
+) -> dict:
+    payload = protocol_binding_status(db_path, scenario=scenario, include_rows=True)
+    blocking_reasons: list[str] = []
+    receipt = payload.get("receipt")
+    if receipt is None:
+        blocking_reasons.append("missing_protocol_binding_receipt")
+    else:
+        if expected_count > 0 and int(receipt["total_bindings"]) != expected_count:
+            blocking_reasons.append(
+                f"unexpected_binding_count:{receipt['total_bindings']}!=expected:{expected_count}"
+            )
+        if int(receipt["unbound_count"]) > 0:
+            blocking_reasons.append(f"unbound_bindings:{receipt['unbound_count']}")
+        if int(receipt["blocking_issue_count"]) > 0:
+            blocking_reasons.append(f"blocking_issues:{receipt['blocking_issue_count']}")
+        if required_authority and str(receipt["primary_state_authority"]).strip() != required_authority:
+            blocking_reasons.append(
+                f"unexpected_primary_state_authority:{receipt['primary_state_authority']}"
+            )
+    for row in payload.get("rows", []):
+        for blocker in row.get("blockers", []):
+            blocking_reasons.append(f"{row['protocol_id']}:{blocker}")
+    return {
+        "status": "ok",
+        "ok": len(blocking_reasons) == 0,
+        "receipt": receipt,
+        "rows": payload.get("rows", []),
+        "blocking_reasons": blocking_reasons,
+        "remediation_commands": [],
+        "db_path": db_path,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", required=True)
@@ -481,6 +806,18 @@ def main() -> int:
     p_close.add_argument("task_id")
     p_close.add_argument("--reason", required=True)
 
+    p_protocol_sync = sub.add_parser("protocol-binding-sync")
+    p_protocol_sync.add_argument("source")
+
+    p_protocol_status = sub.add_parser("protocol-binding-status")
+    p_protocol_status.add_argument("--scenario", default="")
+    p_protocol_status.add_argument("--rows", action="store_true")
+
+    p_protocol_check = sub.add_parser("protocol-binding-check")
+    p_protocol_check.add_argument("--scenario", default="")
+    p_protocol_check.add_argument("--expected-count", type=int, default=0)
+    p_protocol_check.add_argument("--required-authority", default="")
+
     args = parser.parse_args()
     if args.command == "import-jsonl":
         payload = import_jsonl(args.db, args.source)
@@ -516,10 +853,29 @@ def main() -> int:
         )
     elif args.command == "close":
         payload = close_task(args.db, args.task_id, reason=args.reason)
+    elif args.command == "protocol-binding-sync":
+        payload = protocol_binding_sync(args.db, args.source)
+    elif args.command == "protocol-binding-status":
+        payload = protocol_binding_status(
+            args.db,
+            scenario=args.scenario or None,
+            include_rows=args.rows,
+        )
+    elif args.command == "protocol-binding-check":
+        payload = protocol_binding_check(
+            args.db,
+            scenario=args.scenario or None,
+            expected_count=args.expected_count,
+            required_authority=args.required_authority or None,
+        )
     else:
         payload = ready_tasks(args.db)
 
     print(json.dumps(payload, ensure_ascii=True))
+    if args.command == "protocol-binding-check":
+        return 0 if payload.get("ok") else 1
+    if args.command == "protocol-binding-sync":
+        return 0 if payload.get("ok") else 1
     return 0
 
 

@@ -37,14 +37,22 @@ For the `0.2.x` proving line, the archive may contain only:
 
 1. `AGENTS.md`
 2. a clean `AGENTS.sidecar.md` scaffold for the external project owner
-3. `vida/`
+3. `.codex/`
+   - packaged project-local runtime configuration surface consumed by installed execution
+4. `vida/`
    - framework bootstrap carriers
    - framework protocol/config surfaces
-4. `bin/taskflow-v0`
+5. `bin/taskflow-v0`
    - the compiled tracked-execution proof runtime
-5. `codex-v0/`
+6. `codex-v0/`
    - the current documentation/inventory proof runtime
-6. direct runtime dependency files required by the shipped runtimes
+7. bounded `taskflow-v0/` runtime support subtree
+   - `helpers/`
+   - `config/protocol_binding.seed.json`
+   - `generated/protocol_binding.compiled.json`
+8. bounded install assets required by installed runtime bootstrap
+   - `install/assets/vida.config.yaml.template`
+9. direct runtime dependency files required by the shipped runtimes
    - for example Python requirements used to materialize the packaged `codex-v0` runtime
 
 ## Explicit Exclusion Rule
@@ -54,9 +62,9 @@ For the `0.2.x` archive, exclude at minimum:
 1. `docs/**`
 2. `crates/**`
 3. `scripts/**`
-4. `install/**` as a versioned archive subtree
+4. `install/**` except the packaged runtime-bootstrap template assets required by the installed release
 5. repository-local `vida.config.yaml`
-6. `taskflow-v0/**` source subtree
+6. `taskflow-v0/**` source subtree beyond the packaged helper/config/generated runtime support surfaces
 7. `.beads/**`
 8. `.vida/**`
 9. `_temp/**`
@@ -98,8 +106,11 @@ For the active proving line:
 
 1. the shipped public proof runtimes are the compiled `taskflow-v0` binary and the packaged `codex-v0` runtime subtree,
 2. `vida/` provides the framework bootstrap and protocol substrate they depend on,
-3. Rust `crates/**` are parallel implementation work and must stay outside the `0.2.x` archive,
-4. project docs remain canonical for repository development, but they are not part of the shipped runtime payload.
+3. `.codex/` is included because the installed runtime consumes that project-local configuration surface directly,
+4. `taskflow-v0/helpers`, `taskflow-v0/config/protocol_binding.seed.json`, and `taskflow-v0/generated/protocol_binding.compiled.json` are included because installed TaskFlow bootstrap and fail-closed protocol-binding consume them directly,
+5. `install/assets/vida.config.yaml.template` is included because the installer must scaffold `vida.config.yaml` into the installed release root when it is absent,
+6. Rust `crates/**` are parallel implementation work and must stay outside the `0.2.x` archive,
+7. project docs remain canonical for repository development, but they are not part of the shipped runtime payload.
 
 -----
 artifact_path: product/spec/release-build-packaging-law
@@ -110,5 +121,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-build-packaging-law.md
 created_at: '2026-03-12T12:28:00+02:00'
-updated_at: '2026-03-12T12:28:00+02:00'
+updated_at: '2026-03-12T19:00:00+02:00'
 changelog_ref: release-build-packaging-law.changelog.jsonl

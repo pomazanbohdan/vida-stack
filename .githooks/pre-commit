@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(git rev-parse --show-toplevel)"
-cd "$repo_root"
-
-mapfile -t staged_md < <(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.md$|\.MD$' || true)
-
-if [ "${#staged_md[@]}" -eq 0 ]; then
-  exit 0
-fi
-
-python3 codex-v0/codex.py check --root "$repo_root" "${staged_md[@]}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec "$ROOT_DIR/scripts/precommit-build-json.sh"

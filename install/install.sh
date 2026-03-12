@@ -29,8 +29,8 @@ Options:
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- install
-  curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- upgrade --version v0.2.1
-  bash install/install.sh use --version v0.2.1
+  curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- upgrade --version v0.2.2
+  bash install/install.sh use --version v0.2.2
   bash install/install.sh doctor
 EOF
 }
@@ -242,19 +242,20 @@ VIDA_HOME="${VIDA_HOME:-'"$INSTALL_ROOT"'}"
 VIDA_ROOT="${VIDA_ROOT:-$VIDA_HOME/current}"
 if [[ "${1:-}" == "help" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   cat <<'\''USAGE'\''
-Codex v0 launcher
+Codex v0 compatibility wrapper
 
 Usage:
-  codex-v0 <command> [args...]
+  codex-v0 help
+  codex-v0 overview [args...]
 
 Notes:
-  - this launcher runs the bundled `codex-v0` documentation/runtime surface
-  - the current v0.2.x user-facing release surfaces are `taskflow-v0` and `codex-v0`
-  - use `vida codex` for the top-level wrapper entrypoint
+  - `vida docflow` is the canonical installed launcher contract
+  - installed `codex-v0` is migration-only compatibility
+  - installed-mode compatibility remains `help|overview only`
 USAGE
   exit 0
 fi
-exec "$VIDA_ROOT/.venv/bin/python3" "$VIDA_ROOT/codex-v0/codex.py" "$@"
+exec "'"$BIN_DIR"'/vida" docflow "$@"
 '
   write_wrapper "$BIN_DIR/vida" '
 VIDA_HOME="${VIDA_HOME:-'"$INSTALL_ROOT"'}"
@@ -265,11 +266,26 @@ VIDA launcher
 
 Usage:
   vida taskflow <args...>
-  vida codex <args...>
+  vida docflow <args...>
   vida doctor
   vida upgrade [--version TAG]
   vida use --version TAG
   vida root
+USAGE
+}
+
+docflow_usage() {
+  cat <<'\''USAGE'\''
+VIDA DocFlow compatibility bridge
+
+Usage:
+  vida docflow help
+  vida docflow overview [args...]
+
+Notes:
+  - installed-mode `vida docflow` compatibility contract is `help|overview only`
+  - the bundled donor runtime remains `codex-v0/codex.py`
+  - unsupported commands fail closed instead of passing through raw donor args
 USAGE
 }
 
@@ -279,9 +295,22 @@ case "$sub" in
     shift
     exec "'"$BIN_DIR"'/taskflow-v0" "$@"
     ;;
-  codex)
+  docflow)
     shift
-    exec "'"$BIN_DIR"'/codex-v0" "$@"
+    docflow_sub="${1:-help}"
+    case "$docflow_sub" in
+      help|--help|-h)
+        docflow_usage
+        ;;
+      overview)
+        exec "$VIDA_ROOT/.venv/bin/python3" "$VIDA_ROOT/codex-v0/codex.py" "$@"
+        ;;
+      *)
+        printf "vida docflow: unsupported installed-mode command: %s\n\n" "$docflow_sub" >&2
+        docflow_usage >&2
+        exit 1
+        ;;
+    esac
     ;;
   doctor|upgrade|install|use)
     exec "$VIDA_HOME/installer/install.sh" "$sub" --root "$VIDA_HOME" --bin-dir "'"$BIN_DIR"'" "${@:2}"
@@ -319,6 +348,52 @@ prepare_python_env() {
   "$venv_dir/bin/python3" -m ensurepip --upgrade >/dev/null 2>&1 || true
   "$venv_dir/bin/python3" -m pip install --upgrade pip
   "$venv_dir/bin/python3" -m pip install -r "$requirements"
+}
+
+ensure_runtime_config_scaffold() {
+  local release_root="$1"
+  local target_config="$release_root/vida.config.yaml"
+  local packaged_template="$release_root/install/assets/vida.config.yaml.template"
+  local source_tree_template="$release_root/docs/framework/templates/vida.config.yaml.template"
+  local template_path=""
+
+  if [[ -f "$target_config" ]]; then
+    return 0
+  fi
+
+  if [[ -f "$packaged_template" ]]; then
+    template_path="$packaged_template"
+  elif [[ -f "$source_tree_template" ]]; then
+    template_path="$source_tree_template"
+  else
+    fail "Missing runtime config template: expected ${packaged_template} or ${source_tree_template}"
+  fi
+
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    log "Would scaffold ${target_config} from ${template_path}"
+    return 0
+  fi
+
+  cp "$template_path" "$target_config"
+}
+
+bootstrap_protocol_binding() {
+  local release_root="$1"
+  local runtime_bin="$release_root/bin/taskflow-v0"
+  [[ -x "$runtime_bin" ]] || fail "Missing bundled taskflow binary for protocol binding bootstrap: $runtime_bin"
+
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    log "Would build protocol-binding compiled payload under ${release_root}/taskflow-v0/generated"
+    log "Would sync protocol-binding state into ${release_root}/.vida/state/taskflow-state.db"
+    return 0
+  fi
+
+  log "Building protocol-binding compiled payload"
+  VIDA_ROOT="$release_root" "$runtime_bin" protocol-binding build --json >/dev/null
+  log "Syncing protocol-binding state into the TaskFlow DB"
+  VIDA_ROOT="$release_root" "$runtime_bin" protocol-binding sync --json >/dev/null
+  log "Validating protocol-binding state"
+  VIDA_ROOT="$release_root" "$runtime_bin" protocol-binding check --json >/dev/null
 }
 
 install_management_script() {
@@ -426,15 +501,19 @@ install_release() {
 
   prepare_python_env "$release_root"
   install_management_script "$version" "$installer_dir"
+  ensure_runtime_config_scaffold "$release_root"
   write_env_file "$env_file"
   install_profile_hooks "$env_file"
   install_wrappers
+  bootstrap_protocol_binding "$release_root"
   activate_release "$release_root" "$current_link"
   cleanup_old_releases "$releases_dir"
 
   log "Installed VIDA ${version} into ${release_root}"
   log "Active release: ${current_link}"
-  log "Launchers: ${BIN_DIR}/vida ${BIN_DIR}/taskflow-v0 ${BIN_DIR}/codex-v0"
+  log "Launchers: ${BIN_DIR}/vida ${BIN_DIR}/taskflow-v0"
+  log "Installed compatibility wrapper: ${BIN_DIR}/codex-v0 -> vida docflow"
+  log "Canonical DocFlow bridge: vida docflow -> codex-v0/codex.py"
 }
 
 doctor() {
@@ -443,7 +522,6 @@ doctor() {
   [[ -L "$current_link" || -d "$current_link" ]] || { log "Missing active release link: $current_link"; missing=1; }
   [[ -x "${BIN_DIR}/vida" ]] || { log "Missing launcher: ${BIN_DIR}/vida"; missing=1; }
   [[ -x "${BIN_DIR}/taskflow-v0" ]] || { log "Missing launcher: ${BIN_DIR}/taskflow-v0"; missing=1; }
-  [[ -x "${BIN_DIR}/codex-v0" ]] || { log "Missing launcher: ${BIN_DIR}/codex-v0"; missing=1; }
   [[ -f "${INSTALL_ROOT}/env.sh" ]] || { log "Missing env file: ${INSTALL_ROOT}/env.sh"; missing=1; }
   [[ -x "${INSTALL_ROOT}/installer/install.sh" ]] || { log "Missing installer management script: ${INSTALL_ROOT}/installer/install.sh"; missing=1; }
 
@@ -451,11 +529,25 @@ doctor() {
     [[ -x "${current_link}/bin/taskflow-v0" ]] || { log "Missing bundled taskflow binary"; missing=1; }
     [[ -x "${current_link}/.venv/bin/python3" ]] || { log "Missing installer-managed Python runtime"; missing=1; }
     [[ -f "${current_link}/codex-v0/codex.py" ]] || { log "Missing bundled codex runtime surface"; missing=1; }
+    [[ -f "${current_link}/.codex/config.toml" ]] || { log "Missing bundled .codex config: ${current_link}/.codex/config.toml"; missing=1; }
+    [[ -d "${current_link}/.codex/agents" ]] || { log "Missing bundled .codex agents directory: ${current_link}/.codex/agents"; missing=1; }
     [[ -f "${current_link}/AGENTS.sidecar.md" ]] || { log "Missing packaged project sidecar scaffold"; missing=1; }
+    [[ -f "${current_link}/vida.config.yaml" ]] || { log "Missing scaffolded runtime config: ${current_link}/vida.config.yaml"; missing=1; }
+    [[ -f "${current_link}/install/assets/vida.config.yaml.template" ]] || { log "Missing packaged runtime config template: ${current_link}/install/assets/vida.config.yaml.template"; missing=1; }
+    [[ -f "${current_link}/taskflow-v0/helpers/turso_task_store.py" ]] || { log "Missing installed helper: ${current_link}/taskflow-v0/helpers/turso_task_store.py"; missing=1; }
+    [[ -f "${current_link}/taskflow-v0/helpers/toon_render.py" ]] || { log "Missing installed helper: ${current_link}/taskflow-v0/helpers/toon_render.py"; missing=1; }
+    [[ -f "${current_link}/taskflow-v0/config/protocol_binding.seed.json" ]] || { log "Missing installed protocol-binding seed: ${current_link}/taskflow-v0/config/protocol_binding.seed.json"; missing=1; }
+    [[ -f "${current_link}/taskflow-v0/generated/protocol_binding.compiled.json" ]] || { log "Missing installed protocol-binding compiled payload: ${current_link}/taskflow-v0/generated/protocol_binding.compiled.json"; missing=1; }
+    [[ -f "${current_link}/.vida/state/taskflow-state.db" ]] || { log "Missing protocol-binding DB state: ${current_link}/.vida/state/taskflow-state.db"; missing=1; }
   fi
 
   if [[ "$missing" -eq 1 ]]; then
     fail "Doctor found missing installation surfaces."
+  fi
+
+  if [[ -e "$current_link" ]]; then
+    VIDA_ROOT="$current_link" "${current_link}/bin/taskflow-v0" protocol-binding check --json >/dev/null || \
+      fail "Doctor found protocol-binding state drift or missing import."
   fi
 
   log "Doctor check passed for ${INSTALL_ROOT}"
