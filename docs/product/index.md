@@ -41,6 +41,7 @@ Current entrypoints:
 26. [github-public-repository-law.md](/home/unnamed/project/vida-stack/docs/product/spec/github-public-repository-law.md)
 27. [release-build-packaging-law.md](/home/unnamed/project/vida-stack/docs/product/spec/release-build-packaging-law.md)
 28. [taskflow-protocol-runtime-binding-model.md](/home/unnamed/project/vida-stack/docs/product/spec/taskflow-protocol-runtime-binding-model.md)
+29. [instruction-packing-and-caching-survey.md](/home/unnamed/project/vida-stack/docs/product/research/instruction-packing-and-caching-survey.md)
 
 Repository project split:
 
@@ -67,5 +68,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/index.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-12T12:14:09+02:00'
+updated_at: '2026-03-12T17:03:32+02:00'
 changelog_ref: index.changelog.jsonl

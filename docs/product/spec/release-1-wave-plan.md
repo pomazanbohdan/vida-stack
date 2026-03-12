@@ -85,6 +85,9 @@ Ship the first usable `VIDA` shell that can manage and inspect its own runtime s
 8. bounded help/operator recipes sufficient to operate the shell safely.
 9. a bounded `0.2.2` TaskFlow protocol-binding bridge slice that keeps protocol-binding authority on the DB-first taskflow state spine rather than detached file-log truth.
 10. deterministic compiled protocol-binding JSON materialization plus installer bootstrap into the same authoritative state spine.
+11. installer force-refresh semantics:
+    - `--force` must not only replace the installed release payload,
+    - it must also re-download and refresh the installer-management script so the active management surface cannot stay stale while the runtime payload is replaced.
 
 ### 4.3 Why This Wave Exists
 
@@ -110,6 +113,7 @@ Wave 1 closes only when:
 4. the resulting shell is usable for driving the next wave.
 5. the first protocol-binding path is queryable from the same authoritative taskflow/runtime state spine rather than only from detached file exports.
 6. installed runtime bootstrap can materialize required config/template state and protocol-binding DB state without ad hoc manual repair.
+7. installer force-refresh can replace both the release payload and the installer-management script in one bounded operation.
 
 ## 5. Wave 2: Project Activation Surface
 
@@ -178,18 +182,24 @@ Compile the active framework/project runtime posture into machine-readable bundl
 11. explicit separation between:
     - known project protocols,
     - compiled executable project protocols.
+12. a bounded cache-system slice for compiled instruction delivery:
+    - stable cache-friendly bundle prefixes,
+    - deterministic cache-key inputs,
+    - explicit boundary between always-on bundles, activated bundles, and dynamic task context.
 
 ### 6.3 Why This Wave Exists
 
 1. Release 1 must not depend on large raw protocol rereads per step,
 2. bundle compilation is the bridge between human-readable canon and cheap orchestration runtime,
-3. later execution/artifact waves depend on compiled runtime identity.
+3. later execution/artifact waves depend on compiled runtime identity,
+4. cache-friendly bundle delivery is the first practical token-efficiency layer once compilation exists.
 
 ### 6.4 Out Of Scope
 
 1. universal project protocol auto-compilation,
 2. host-project semantic indexing,
-3. background bundle refresh daemons.
+3. background bundle refresh daemons,
+4. fine-tuning or prompt-compression-first optimization before cache-safe compiled bundles exist.
 
 ### 6.5 Completion Proof
 
@@ -198,7 +208,23 @@ Wave 3 closes only when:
 1. orchestrator and agent bundles can be built from active law/config state,
 2. bundle contents are inspectable,
 3. invalid inputs block compilation,
-4. runtime can initialize from bundles rather than broad manual protocol traversal.
+4. runtime can initialize from bundles rather than broad manual protocol traversal,
+5. the first cache-system slice has a bounded contract for stable prefixes, cache-key inputs, and dynamic-context exclusion.
+
+### 6.6 Research Link And Discussion Task
+
+Research reference:
+
+1. [instruction-packing-and-caching-survey.md](/home/unnamed/project/vida-stack/docs/product/research/instruction-packing-and-caching-survey.md)
+
+Bounded implementation discussion task:
+
+1. before Rust-native cache/runtime implementation begins, define the cache-system contract for Release 1:
+   - compiled bundle format for cache-friendly delivery,
+   - provider-cache compatibility assumptions,
+   - cache-key derivation inputs,
+   - retrieval versus always-on bundle boundary,
+   - proof metrics for real token savings without protocol drift.
 
 ## 7. Wave 4: Planning, Execution, Artifact, And Approval Loop
 
@@ -310,5 +336,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-wave-plan.md
 created_at: '2026-03-11T23:01:49+02:00'
-updated_at: '2026-03-12T19:00:00+02:00'
+updated_at: '2026-03-12T17:26:00+02:00'
 changelog_ref: release-1-wave-plan.changelog.jsonl

@@ -13,8 +13,9 @@ Rules:
 Current state:
 
 1. this lane is currently retained as a bounded promoted-research home,
-2. no additional active research artifacts are required here for the current canonical product surface,
-3. the lane remains valid as an entrypoint even when the retained content is only this root document.
+2. current promoted research entrypoints:
+   - `docs/product/research/instruction-packing-and-caching-survey.md`
+3. research in this lane may inform active product specs without becoming product law automatically.
 
 -----
 artifact_path: product/research/readme
@@ -25,5 +26,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/research/README.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-12T07:12:23+02:00'
+updated_at: '2026-03-12T17:03:32+02:00'
 changelog_ref: README.changelog.jsonl

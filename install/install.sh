@@ -39,6 +39,96 @@ log() {
   printf '[vida-installer] %s\n' "$*"
 }
 
+print_install_summary() {
+  local version="$1"
+  local release_root="$2"
+  local current_link="$3"
+  local env_file="$4"
+  local action_label="installed"
+  local action_emoji="🎉"
+
+  case "$COMMAND" in
+    upgrade)
+      action_label="updated"
+      action_emoji="🩹"
+      ;;
+    init|install)
+      action_label="installed"
+      action_emoji="🎉"
+      ;;
+  esac
+
+  cat <<EOF
+
+${action_emoji} VIDA ${version} ${action_label} successfully
+✅ Active release: ${current_link}
+📦 Release root: ${release_root}
+🧭 Launchers: ${BIN_DIR}/vida ${BIN_DIR}/taskflow-v0
+🪄 Compatibility wrapper: ${BIN_DIR}/codex-v0 -> vida docflow
+🔧 Shell env: ${env_file}
+🩹 Active patch line: ${version}
+
+Try it now:
+  source "${env_file}"
+  vida doctor
+  vida taskflow protocol-binding check --json
+  vida taskflow status --json
+  vida docflow help
+
+Examples:
+  vida root
+  vida taskflow help
+  vida taskflow task list --json
+  vida docflow overview --format toon
+EOF
+}
+
+print_project_init_summary() {
+  local project_root="$1"
+
+  cat <<EOF
+
+🧭 Current project bootstrap is ready
+📁 Project root: ${project_root}
+📚 Copied into the project:
+  - AGENTS.md
+  - AGENTS.sidecar.md
+  - vida/
+  - .codex/
+  - vida.config.yaml
+
+Next steps:
+  cd "${project_root}"
+  vida doctor
+  vida root
+  rg --files vida/config/instructions | head
+
+Project usage examples:
+  vida taskflow protocol-binding check --json
+  vida taskflow task list --json
+  vida docflow help
+EOF
+}
+
+print_already_installed_summary() {
+  local version="$1"
+  local release_root="$2"
+  local current_link="$3"
+
+  cat <<EOF
+
+🎉 VIDA ${version} is already the active installed version
+✅ Active release: ${current_link}
+📦 Release root: ${release_root}
+🧭 Nothing to download or replace
+
+Try:
+  vida doctor
+  vida init
+  vida taskflow protocol-binding check --json
+EOF
+}
+
 fail() {
   printf '[vida-installer] ERROR: %s\n' "$*" >&2
   exit 1
@@ -278,6 +368,7 @@ usage() {
 VIDA launcher
 
 Usage:
+  vida init
   vida taskflow <args...>
   vida docflow <args...>
   vida doctor
@@ -325,7 +416,7 @@ case "$sub" in
         ;;
     esac
     ;;
-  doctor|upgrade|install|use)
+  doctor|upgrade|install|init|use)
     exec "$VIDA_HOME/installer/install.sh" "$sub" --root "$VIDA_HOME" --bin-dir "'"$BIN_DIR"'" "${@:2}"
     ;;
   root)
@@ -388,6 +479,67 @@ ensure_runtime_config_scaffold() {
   fi
 
   cp "$template_path" "$target_config"
+}
+
+copy_project_file() {
+  local source_path="$1"
+  local target_path="$2"
+  local label="$3"
+
+  [[ -f "$source_path" ]] || fail "Missing project bootstrap source: $source_path"
+
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    log "Would copy ${label} into ${target_path}"
+    return 0
+  fi
+
+  if [[ -e "$target_path" && "$FORCE" != "yes" ]]; then
+    log "Keeping existing ${label}: ${target_path}"
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$target_path")"
+  cp "$source_path" "$target_path"
+}
+
+copy_project_tree() {
+  local source_path="$1"
+  local target_path="$2"
+  local label="$3"
+
+  [[ -d "$source_path" ]] || fail "Missing project bootstrap tree: $source_path"
+
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    log "Would copy ${label} into ${target_path}"
+    return 0
+  fi
+
+  if [[ -e "$target_path" && "$FORCE" != "yes" ]]; then
+    log "Keeping existing ${label}: ${target_path}"
+    return 0
+  fi
+
+  rm -rf "$target_path"
+  mkdir -p "$(dirname "$target_path")"
+  cp -R "$source_path" "$target_path"
+}
+
+bootstrap_current_project() {
+  local release_root="$1"
+  local project_root="${VIDA_PROJECT_ROOT:-$PWD}"
+  local template_path="$release_root/install/assets/vida.config.yaml.template"
+
+  [[ -d "$project_root" ]] || fail "Missing target project directory: $project_root"
+
+  copy_project_file "$release_root/AGENTS.md" "$project_root/AGENTS.md" "framework bootstrap carrier"
+  copy_project_file "$release_root/AGENTS.sidecar.md" "$project_root/AGENTS.sidecar.md" "project sidecar scaffold"
+  copy_project_tree "$release_root/vida" "$project_root/vida" "framework protocol tree"
+  copy_project_tree "$release_root/.codex" "$project_root/.codex" "project-local Codex configuration"
+  copy_project_file "$template_path" "$project_root/vida.config.yaml" "project runtime config scaffold"
+
+  if [[ "$DRY_RUN" != "yes" ]]; then
+    print_project_init_summary "$project_root"
+  fi
 }
 
 bootstrap_protocol_binding() {
@@ -473,15 +625,27 @@ install_release() {
   local version="$1"
   local temp_dir archive_path checksum_path extract_dir releases_dir current_link release_root env_file
   local installer_dir
+  releases_dir="${INSTALL_ROOT}/releases"
+  current_link="${INSTALL_ROOT}/current"
+  release_root="${releases_dir}/${version}"
+  installer_dir="${INSTALL_ROOT}/installer"
+  env_file="${INSTALL_ROOT}/env.sh"
+
+  if [[ "$FORCE" != "yes" && -d "$release_root" ]]; then
+    local active_release=""
+    if [[ -e "$current_link" ]]; then
+      active_release="$(readlink -f "$current_link" 2>/dev/null || true)"
+    fi
+    if [[ -n "$active_release" && "$active_release" == "$release_root" ]]; then
+      print_already_installed_summary "$version" "$release_root" "$current_link"
+      return 0
+    fi
+  fi
+
   temp_dir="$(mktemp -d)"
   archive_path="${temp_dir}/vida-stack-${version}.tar.gz"
   checksum_path="${temp_dir}/vida-stack-${version}.sha256"
   extract_dir="${temp_dir}/extract"
-  releases_dir="${INSTALL_ROOT}/releases"
-  current_link="${INSTALL_ROOT}/current"
-  release_root="${releases_dir}/${version}"
-  env_file="${INSTALL_ROOT}/env.sh"
-  installer_dir="${INSTALL_ROOT}/installer"
 
   trap "rm -rf '$temp_dir'" RETURN
 
@@ -527,6 +691,7 @@ install_release() {
   log "Launchers: ${BIN_DIR}/vida ${BIN_DIR}/taskflow-v0"
   log "Installed compatibility wrapper: ${BIN_DIR}/codex-v0 -> vida docflow"
   log "Canonical DocFlow bridge: vida docflow -> codex-v0/codex.py"
+  print_install_summary "$version" "$release_root" "$current_link" "$env_file"
 }
 
 doctor() {
@@ -589,10 +754,16 @@ main() {
     doctor)
       doctor
       ;;
-    install|init|upgrade)
+    install|upgrade)
       VERSION="$(resolve_version)"
       [[ -n "$VERSION" ]] || fail "Unable to resolve release version"
       install_release "$VERSION"
+      ;;
+    init)
+      VERSION="$(resolve_version)"
+      [[ -n "$VERSION" ]] || fail "Unable to resolve release version"
+      install_release "$VERSION"
+      bootstrap_current_project "${INSTALL_ROOT}/current"
       ;;
     use)
       [[ "$VERSION" != "latest" ]] || fail "use requires --version <tag>"

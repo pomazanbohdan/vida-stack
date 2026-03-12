@@ -267,6 +267,88 @@ class InstallDocflowBridgeTest(unittest.TestCase):
                 template_path.read_text(encoding="utf-8"),
             )
 
+    def test_bootstrap_current_project_copies_framework_protocol_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            release_root = tmp_path / "release"
+            project_root = tmp_path / "project"
+            project_root.mkdir()
+
+            (release_root / "install" / "assets").mkdir(parents=True)
+            (release_root / "vida" / "config" / "instructions").mkdir(parents=True)
+            (release_root / ".codex" / "agents").mkdir(parents=True)
+
+            (release_root / "AGENTS.md").write_text("framework bootstrap\n", encoding="utf-8")
+            (release_root / "AGENTS.sidecar.md").write_text("project sidecar\n", encoding="utf-8")
+            (release_root / "vida" / "config" / "instructions" / "example.md").write_text(
+                "protocol body\n", encoding="utf-8"
+            )
+            (release_root / ".codex" / "config.toml").write_text("[core]\n", encoding="utf-8")
+            (release_root / ".codex" / "agents" / "orchestrator.toml").write_text("role='orchestrator'\n", encoding="utf-8")
+            (release_root / "install" / "assets" / "vida.config.yaml.template").write_text(
+                "project:\n  id: sample\n", encoding="utf-8"
+            )
+
+            command = textwrap.dedent(
+                f"""\
+                set -euo pipefail
+                source <(sed '$d' {INSTALLER})
+                VIDA_PROJECT_ROOT="{project_root}"
+                bootstrap_current_project "{release_root}"
+                """
+            )
+            subprocess.run(
+                ["bash", "-lc", command],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            self.assertEqual((project_root / "AGENTS.md").read_text(encoding="utf-8"), "framework bootstrap\n")
+            self.assertEqual((project_root / "AGENTS.sidecar.md").read_text(encoding="utf-8"), "project sidecar\n")
+            self.assertEqual(
+                (project_root / "vida" / "config" / "instructions" / "example.md").read_text(encoding="utf-8"),
+                "protocol body\n",
+            )
+            self.assertEqual((project_root / ".codex" / "config.toml").read_text(encoding="utf-8"), "[core]\n")
+            self.assertEqual(
+                (project_root / "vida.config.yaml").read_text(encoding="utf-8"),
+                "project:\n  id: sample\n",
+            )
+
+    def test_install_release_skips_download_when_version_is_already_active(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            install_root = tmp_path / "vida-home"
+            release_root = install_root / "releases" / "v9.9.9"
+            current_link = install_root / "current"
+            release_root.mkdir(parents=True)
+            current_link.parent.mkdir(parents=True, exist_ok=True)
+            current_link.symlink_to(release_root, target_is_directory=True)
+
+            command = textwrap.dedent(
+                f"""\
+                set -euo pipefail
+                source <(sed '$d' {INSTALLER})
+                INSTALL_ROOT="{install_root}"
+                COMMAND=upgrade
+                FORCE=no
+                install_release v9.9.9
+                """
+            )
+            result = subprocess.run(
+                ["bash", "-lc", command],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            self.assertIn("already the active installed version", result.stdout)
+            self.assertIn("Nothing to download or replace", result.stdout)
+            self.assertEqual(result.stderr, "")
+
 
 if __name__ == "__main__":
     unittest.main()

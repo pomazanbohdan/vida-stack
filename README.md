@@ -96,6 +96,7 @@ The current VIDA direction is grounded in orchestrator-led multi-agent product e
 mkdir myproject
 cd myproject
 curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- install
+vida init
 ```
 
 ### What the installer does
@@ -115,9 +116,24 @@ curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/insta
   - `codex-v0`
 - 🐚 wires `VIDA_HOME`, `VIDA_ROOT`, and `PATH` into `bash` / `zsh`
 
+### Bootstrap the current project folder
+
+```bash
+vida init
+```
+
+This copies the current project bootstrap surfaces into the working directory:
+
+- `AGENTS.md`
+- `AGENTS.sidecar.md`
+- `vida/`
+- `.codex/`
+- `vida.config.yaml`
+
 ### Upgrade / doctor
 
 ```bash
+vida init
 vida upgrade --version v0.2.2
 vida doctor
 vida use --version v0.2.2
