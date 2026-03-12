@@ -12,49 +12,64 @@ Rule:
 
 Design assumptions:
 
-1. `0.2.0` remains the active transitional proving release built on bounded runtime substrates.
+1. `0.2.0` remains the active semantic-freeze and proving release built on bounded proof runtimes.
 2. `Release 1` and `1.0` point at the first CLI-first compiled autonomous delivery runtime, not at a daemon release.
-3. `2.0` owns daemon mode, richer observability, dashboards, and vector-search daemon integration.
-4. `3.0` owns plugins, marketplace, and extension ecosystem concerns.
+3. the public `0.2.0` runtime remains `taskflow-v0` plus `codex-v0`; Rust `taskflow` / `docflow` continue as parallel implementation tracks until the next release line.
+4. `2.0` owns daemon mode, richer observability, dashboards, and vector-search daemon integration.
+5. `3.0` owns plugins, marketplace, and extension ecosystem concerns.
 
 ## Product Direction
 
 Vida Stack now moves through four major product states:
 
-1. `0.2.0` — Transitional Proving Release
+1. `0.2.0` — Semantic-Freeze And Proving Release
 2. `1.0` / `Release 1` — CLI-First Compiled Autonomous Delivery Runtime
 3. `2.0` — Daemonized Control Plane
 4. `3.0` — Plugins and Marketplace
 
-The current repository is operating in the `0.2.0` proving line while defining and implementing the migration path into `Release 1` / `1.0`.
+The current repository is operating in the `0.2.0` proving line while executing the semantic-freeze and closure work required for `Release 1` / `1.0`.
 
-## Version 0.2.0 — Transitional Proving Release
+## Version 0.2.0 — Semantic-Freeze And Proving Release
 
-`0.2.0` is the active transitional stack.
+`0.2.0` is the active semantic-freeze and proving stack.
 
 Its job is to:
 
 1. prove protocol behavior on real work,
 2. harden task-state, routing, verification, memory, and lifecycle rules,
 3. reduce ambiguity before binary migration,
-4. act as the source-of-truth behavior layer for the Rust implementation.
+4. act as the source-of-truth behavior layer for the next compiled runtime implementation.
 
 `0.2.0` is not a toy demo.
-It is the proving release that bridges the current bounded runtime substrates into the compiled autonomous delivery runtime line.
+It is the semantic-freeze and proving release that bridges the current bounded proof runtimes into the compiled autonomous delivery runtime line.
 
 Core characteristics:
 
-1. bounded runtime substrates through `taskflow-v0`, `codex-v0`, and the current Rust `vida` shell,
+1. bounded proof runtimes through `taskflow-v0` and `codex-v0`,
 2. protocol-driven execution through `AGENTS.md`, `vida/config/instructions/*`, and active product/spec canon,
-3. bounded subagent orchestration,
-4. task-state and runtime execution through `TaskFlow`,
+3. source-of-truth authority in `docs/product/spec/**`, `vida/config/**`, and `vida/config/instructions/**`,
+4. bounded subagent orchestration,
 5. review, approval, and route-law enforcement,
 6. framework memory, document lifecycle, and operator status as runtime surfaces,
-7. installer and framework-only release packaging.
+7. installer and framework-only release packaging,
+8. active parallel Rust `taskflow` / `docflow` implementation tracks for `Release 1`, not the current public runtime.
+
+Current `0.2` priorities:
+
+1. freeze the system vocabulary:
+   - commands,
+   - states,
+   - approvals,
+   - receipts,
+   - memory kinds
+2. close canonical maps and instruction canon so runtime is not the source of meaning,
+3. collect golden fixtures and parity artifacts for the binary kernel path,
+4. avoid a forbidden middle path where `1.0` is silently hidden inside the old shell/runtime stack,
+5. prepare a clean `taskflow` / `docflow` / `vida` crate split for the next release line.
 
 ## Transition Path From 0.2.0 To 1.0 / Release 1
 
-The transition to `1.0` / `Release 1` should move through these internal milestones:
+The transition to `1.0` / `Release 1` moves through these internal milestones, with the repository currently inside the `0.2.x` semantic-freeze and closure phase:
 
 1. `0.2` — semantic freeze
    - freeze command model,
@@ -70,7 +85,7 @@ The transition to `1.0` / `Release 1` should move through these internal milesto
    - define project and user instruction overlay rules without weakening framework law
 3. `0.4` — binary foundation
    - create Rust workspace,
-   - split `taskflow` and `codex` into separate crates from the start,
+   - split `taskflow` and `docflow` into separate crates from the start,
    - add embedded SurrealDB,
    - add fast build profile,
    - ship minimal `vida` binary shell,
@@ -104,6 +119,8 @@ The transition to `1.0` / `Release 1` should move through these internal milesto
 
 `1.0` / `Release 1` is the first full VIDA product release.
 
+It is the point where the active public runtime moves from the `0.2.0` proof runtimes to the compiled Rust runtime line.
+
 It should be:
 
 1. one local Rust binary,
@@ -125,7 +142,7 @@ Required `1.0` capabilities:
 9. hard startup checks for schema, instruction, and compatibility migrations
 10. framework-owned instruction updates with compatibility validation for project and user overlays
 11. `taskflow` available as a reusable library crate and as its own CLI surface
-12. `codex` available as a reusable library crate and as its own CLI surface
+12. `docflow` available as a reusable library crate and as its own CLI surface
 13. the top-level `vida` CLI composed over those crates rather than replacing them
 
 Core architectural expectations:
@@ -233,7 +250,9 @@ The project is currently:
 
 1. operating on the `0.2.0` proving release,
 2. reducing ambiguity for semantic freeze and Release-1 closure,
-3. preparing the architectural move into the `1.0` / `Release 1` compiled runtime line.
+3. using `taskflow-v0` and `codex-v0` as the current public proof runtimes,
+4. treating canonical specs, config, and instruction canon as the source of truth,
+5. preparing the architectural move into the `1.0` / `Release 1` compiled runtime line through active parallel Rust implementation tracks.
 
 ## Core Principle
 

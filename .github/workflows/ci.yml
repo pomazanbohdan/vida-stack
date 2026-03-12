@@ -77,9 +77,10 @@ jobs:
           manifests = sorted(Path("dist/package").glob("*/release-manifest.json"))
           assert manifests, "release manifest was not generated"
           data = json.loads(manifests[0].read_text())
-          expected = ["vida", "taskflow-v0", "docflow-v0"]
+          expected = ["vida", "taskflow-v0", "codex-v0"]
           assert data["installed_entrypoints"] == expected, data["installed_entrypoints"]
           assert data["bundled_binaries"] == ["bin/taskflow-v0"], data["bundled_binaries"]
+          assert data["installer_managed_runtimes"] == ["taskflow-v0", "codex-v0"], data["installer_managed_runtimes"]
           PY
           bash dist/vida-install.sh help >/tmp/vida-install-help.txt
           test -s /tmp/vida-install-help.txt
@@ -90,16 +91,20 @@ jobs:
           set -euo pipefail
           TMP_ROOT="/tmp/vida-ci-install-root"
           TMP_BIN="/tmp/vida-ci-install-bin"
+          ARCHIVE_PATH="$(find dist -maxdepth 1 -name 'vida-stack-v*.tar.gz' | head -n 1)"
+          test -n "$ARCHIVE_PATH"
           rm -rf "$TMP_ROOT" "$TMP_BIN"
           mkdir -p "$TMP_BIN"
-          bash dist/vida-install.sh install --archive dist/vida-stack-v0.2.0.tar.gz --root "$TMP_ROOT" --bin-dir "$TMP_BIN" --force
+          bash dist/vida-install.sh install --archive "$ARCHIVE_PATH" --root "$TMP_ROOT" --bin-dir "$TMP_BIN" --force
           VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" bash install/install.sh doctor --root "$TMP_ROOT" --bin-dir "$TMP_BIN"
           VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida root >/tmp/vida-root.txt
-          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida docflow --help >/tmp/vida-docflow-help.txt
+          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida codex --help >/tmp/vida-codex-help.txt
+          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" codex-v0 --help >/tmp/codex-v0-help.txt
           VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida taskflow --help >/tmp/vida-taskflow-help.txt
           grep -q "$TMP_ROOT/current" /tmp/vida-root.txt
-          grep -q "DocFlow v0 launcher" /tmp/vida-docflow-help.txt
-          grep -q "taskflow -> docflow final loop" /tmp/vida-taskflow-help.txt
+          grep -q "Codex v0 launcher" /tmp/vida-codex-help.txt
+          grep -q "Codex v0 launcher" /tmp/codex-v0-help.txt
+          grep -q "vida taskflow <args...>" /tmp/vida-taskflow-help.txt
 
       - name: Run codex validation
         shell: bash

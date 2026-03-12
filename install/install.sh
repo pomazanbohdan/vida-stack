@@ -237,24 +237,24 @@ VIDA_HOME="${VIDA_HOME:-'"$INSTALL_ROOT"'}"
 VIDA_ROOT="${VIDA_ROOT:-$VIDA_HOME/current}"
 exec "$VIDA_ROOT/bin/taskflow-v0" "$@"
 '
-  write_wrapper "$BIN_DIR/docflow-v0" '
+  write_wrapper "$BIN_DIR/codex-v0" '
 VIDA_HOME="${VIDA_HOME:-'"$INSTALL_ROOT"'}"
 VIDA_ROOT="${VIDA_ROOT:-$VIDA_HOME/current}"
 if [[ "${1:-}" == "help" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   cat <<'\''USAGE'\''
-DocFlow v0 launcher
+Codex v0 launcher
 
 Usage:
-  docflow-v0 <command> [args...]
+  codex-v0 <command> [args...]
 
 Notes:
-  - this transitional launcher forwards into the installed VIDA Rust DocFlow surface
-  - canonical user-facing entrypoint is `vida docflow`
-  - target runtime remains `docflow-rs`
+  - this launcher runs the bundled `codex-v0` documentation/runtime surface
+  - the current v0.2.0 user-facing release surfaces are `taskflow-v0` and `codex-v0`
+  - use `vida codex` for the top-level wrapper entrypoint
 USAGE
   exit 0
 fi
-exec "$VIDA_ROOT/bin/vida" docflow "$@"
+exec "$VIDA_ROOT/.venv/bin/python3" "$VIDA_ROOT/codex-v0/codex.py" "$@"
 '
   write_wrapper "$BIN_DIR/vida" '
 VIDA_HOME="${VIDA_HOME:-'"$INSTALL_ROOT"'}"
@@ -265,7 +265,7 @@ VIDA launcher
 
 Usage:
   vida taskflow <args...>
-  vida docflow <args...>
+  vida codex <args...>
   vida doctor
   vida upgrade [--version TAG]
   vida use --version TAG
@@ -279,9 +279,9 @@ case "$sub" in
     shift
     exec "'"$BIN_DIR"'/taskflow-v0" "$@"
     ;;
-  docflow)
+  codex)
     shift
-    exec "'"$BIN_DIR"'/docflow-v0" "$@"
+    exec "'"$BIN_DIR"'/codex-v0" "$@"
     ;;
   doctor|upgrade|install|use)
     exec "$VIDA_ROOT/install/install.sh" "$sub" "${@:2}"
@@ -405,7 +405,7 @@ install_release() {
 
   log "Installed VIDA ${version} into ${release_root}"
   log "Active release: ${current_link}"
-  log "Launchers: ${BIN_DIR}/vida ${BIN_DIR}/taskflow-v0 ${BIN_DIR}/docflow-v0"
+  log "Launchers: ${BIN_DIR}/vida ${BIN_DIR}/taskflow-v0 ${BIN_DIR}/codex-v0"
 }
 
 doctor() {
@@ -414,12 +414,13 @@ doctor() {
   [[ -L "$current_link" || -d "$current_link" ]] || { log "Missing active release link: $current_link"; missing=1; }
   [[ -x "${BIN_DIR}/vida" ]] || { log "Missing launcher: ${BIN_DIR}/vida"; missing=1; }
   [[ -x "${BIN_DIR}/taskflow-v0" ]] || { log "Missing launcher: ${BIN_DIR}/taskflow-v0"; missing=1; }
-  [[ -x "${BIN_DIR}/docflow-v0" ]] || { log "Missing launcher: ${BIN_DIR}/docflow-v0"; missing=1; }
+  [[ -x "${BIN_DIR}/codex-v0" ]] || { log "Missing launcher: ${BIN_DIR}/codex-v0"; missing=1; }
   [[ -f "${INSTALL_ROOT}/env.sh" ]] || { log "Missing env file: ${INSTALL_ROOT}/env.sh"; missing=1; }
 
   if [[ -e "$current_link" ]]; then
     [[ -x "${current_link}/bin/taskflow-v0" ]] || { log "Missing bundled taskflow binary"; missing=1; }
-    [[ -x "${current_link}/bin/vida" ]] || { log "Missing bundled vida binary"; missing=1; }
+    [[ -x "${current_link}/.venv/bin/python3" ]] || { log "Missing installer-managed Python runtime"; missing=1; }
+    [[ -f "${current_link}/codex-v0/codex.py" ]] || { log "Missing bundled codex runtime surface"; missing=1; }
   fi
 
   if [[ "$missing" -eq 1 ]]; then

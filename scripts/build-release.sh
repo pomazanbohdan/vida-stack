@@ -105,10 +105,14 @@ manifest = {
     "installed_entrypoints": [
         "vida",
         "taskflow-v0",
-        "docflow-v0",
+        "codex-v0",
     ],
     "bundled_binaries": [
         "bin/taskflow-v0",
+    ],
+    "installer_managed_runtimes": [
+        "taskflow-v0",
+        "codex-v0",
     ],
 }
 (stage_dir / "release-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

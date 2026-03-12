@@ -1,6 +1,6 @@
 <div align="center">
   <h1>🌌 Vida Stack</h1>
-  <p><b>The active repository for <code>VIDA 0.2.0</code>: a documentation-first control plane evolving into a compiled autonomous delivery runtime.</b></p>
+  <p><b>The active repository for <code>VIDA 0.2.0</code>: the semantic-freeze and proving release for the next compiled autonomous delivery runtime.</b></p>
   
   <p>
     <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen" alt="Status"></a>
@@ -13,7 +13,7 @@
 </div>
 
 > [!NOTE]
-> **Current project capability:** the repository already has enough working runtime, docs, and config surfaces to continue building itself toward full target functionality.
+> **Current project capability:** `VIDA 0.2.0` already has enough proving infrastructure to keep hardening semantics, routing, and documentation law before the next public runtime release.
 > - agent orchestration already works through the chief/root orchestrator and internal delegated lanes;
 > - agent roles, project activation, and bounded team topology can already be configured;
 > - framework and project specifications already govern documentation discipline and runtime routing;
@@ -23,24 +23,32 @@
 > - consolidated audit: [docs/process/framework-three-layer-refactoring-audit.md](docs/process/framework-three-layer-refactoring-audit.md)
 > - proven environment/status conditions: [docs/process/vida1-development-conditions.md](docs/process/vida1-development-conditions.md)
 
-> [!TIP]
-> **External agentic-engineering baseline:** the current VIDA direction is intentionally grounded in orchestrator-led multi-agent patterns from official vendor docs.
-> - **OpenAI Agents SDK:** manager-style orchestration with agents-as-tools and explicit handoffs, plus guardrails and tracing.  
->   Sources: [OpenAI Agents SDK overview](https://openai.github.io/openai-agents-python/), [OpenAI agent orchestration](https://openai.github.io/openai-agents-python/multi_agent/), [OpenAI tools](https://openai.github.io/openai-agents-python/tools/)
-> - **Anthropic Claude Code:** specialized subagents plus hooks and bounded task delegation.  
->   Sources: [Claude Code subagents](https://docs.anthropic.com/en/docs/claude-code/sub-agents), [Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hooks), [Claude Code settings](https://docs.anthropic.com/en/docs/claude-code/settings)
-> - **Microsoft Semantic Kernel / Agent Framework:** explicit agent orchestration patterns and coordination architecture.  
->   Sources: [Semantic Kernel agent architecture](https://learn.microsoft.com/en-us/semantic-kernel/frameworks/agent/agent-architecture), [Semantic Kernel agent orchestration](https://learn.microsoft.com/en-us/semantic-kernel/frameworks/agent/agent-orchestration/), [Azure AI agent design patterns](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns)
+## ✨ Framework Features
 
-> [!TIP]
-> **Canonical thinking algorithms:** VIDA keeps step-scoped thinking as an explicit framework surface instead of leaving reasoning as an undocumented habit.
-> - `STC` — Stepwise Think-Critique for low-risk local steps
-> - `PR-CoT` — Poly-Reflective Validation for 5-perspective review
-> - `MAR` — Multi-Agent Reflexion for heavier structured refinement
-> - `5-SOL` — 5-Solutions comparison for competing viable directions
-> - `META` — block-composed meta-analysis for high-risk or protocol-heavy work
-> - `Error Search` — bug-first reasoning lane for regressions, incidents, and root-cause work
-> - canonical owner: [vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md](vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md)
+### Step-Scoped Thinking Algorithms
+
+VIDA keeps reasoning as an explicit framework surface instead of leaving it as an undocumented habit.
+
+- `STC` — Stepwise Think-Critique for low-risk local steps
+- `PR-CoT` — Poly-Reflective Validation for 5-perspective review
+- `MAR` — Multi-Agent Reflexion for heavier structured refinement
+- `5-SOL` — 5-Solutions comparison for competing viable directions
+- `META` — block-composed meta-analysis for high-risk or protocol-heavy work
+- `Error Search` — bug-first reasoning lane for regressions, incidents, and root-cause work
+- canonical owner: [vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md](vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md)
+
+### Product-Formation Standards
+
+The current VIDA direction is grounded in orchestrator-led multi-agent product engineering patterns from official vendor specifications.
+
+- **OpenAI Agents SDK** — manager-style orchestration with agents-as-tools, explicit handoffs, guardrails, and tracing.  
+  Sources: [OpenAI Agents SDK overview](https://openai.github.io/openai-agents-python/), [OpenAI agent orchestration](https://openai.github.io/openai-agents-python/multi_agent/), [OpenAI tools](https://openai.github.io/openai-agents-python/tools/)
+- **Anthropic Claude Code** — specialized subagents, hooks, and bounded delegation with explicit tool permissions.  
+  Sources: [Claude Code subagents](https://docs.anthropic.com/en/docs/claude-code/sub-agents), [Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hooks), [Claude Code settings](https://docs.anthropic.com/en/docs/claude-code/settings)
+- **Microsoft Semantic Kernel / Agent Framework** — explicit orchestration patterns and coordination architecture for multi-agent runtime design.  
+  Sources: [Semantic Kernel agent architecture](https://learn.microsoft.com/en-us/semantic-kernel/frameworks/agent/agent-architecture), [Semantic Kernel agent orchestration](https://learn.microsoft.com/en-us/semantic-kernel/frameworks/agent/agent-orchestration/), [Azure AI agent design patterns](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns)
+
+### Framework Protocol Categories
 
 | Framework protocol category | Current purpose |
 |---|---|
@@ -51,7 +59,7 @@
 | `Runtime / State Machines` | materialize execution state, route progression, approval, coach, and verification lifecycles |
 
 > [!IMPORTANT]
-> **Transitional Architecture Notice:** `taskflow-v0` and `codex-v0` remain the active `0.2.0` runtime substrates, while the target product direction is the `Release 1` compiled autonomous delivery runtime. Product authority still lives in canonical maps, specs, and framework law under `docs/product/spec/` and `vida/config/`.
+> **Transitional Architecture Notice:** `taskflow-v0` and `codex-v0` are the separate proof runtimes shipped with `0.2.0`. The source of truth remains the canonical product/spec and instruction surfaces under `docs/product/spec/`, `vida/config/`, and `vida/config/instructions/`. Rust `taskflow` / `docflow` remain active parallel implementation tracks for the next release, not the current public runtime.
 
 ---
 
@@ -59,10 +67,10 @@
 
 **Vida Stack** is building a real control plane for agent-driven product engineering.
 
-Instead of treating prompts, scripts, task lists, and docs as disconnected artifacts, VIDA unifies them into one lawful operating model:
+Instead of treating prompts, scripts, task lists, and docs as disconnected artifacts, VIDA keeps one lawful operating model with clear proof/runtime boundaries:
 
-- ⚙️ **Task execution** through `taskflow-v0`
-- 📚 **Canonical documentation and inventory** through `codex-v0`
+- ⚙️ **Task execution proof runtime** through `taskflow-v0`
+- 📚 **Documentation/inventory proof runtime** through `codex-v0`
 - 🧭 **Boot, routing, and map-driven discovery** through `AGENTS.md`, `AGENTS.sidecar.md`, and framework maps
 - ✅ **Verification, approval, and proof gates**
 - 🧠 **Durable runtime state, receipts, and checkpoints**
@@ -113,7 +121,7 @@ vida use --version v0.2.0
 
 ### ⚙️ `taskflow-v0`
 
-The current runtime substrate for tracked execution.
+The current tracked-execution proof runtime for `0.2.0`.
 
 It already covers:
 
@@ -126,7 +134,7 @@ It already covers:
 
 ### 📚 `codex-v0`
 
-The current canonical documentation and inventory engine.
+The current documentation and inventory proof runtime for `0.2.0`.
 
 It already covers:
 
@@ -138,11 +146,11 @@ It already covers:
 
 ### 🌌 `vida`
 
-The top-level product direction.
+The top-level product surface and release direction.
 
-In `0.2.0`, the install surface already gives you a `vida` launcher so the release can be operated as one product while keeping bounded internal tools separate.
+In `0.2.0`, the installer already gives you a `vida` launcher, but the public proving runtime still operates through the bounded `taskflow-v0` and `codex-v0` proof surfaces.
 
-The current product target behind that launcher is:
+The next product target behind that launcher is:
 
 - `Release 1`: host-shell CLI integration for one visible `VIDA` operator surface
 - `Release 2`: host-project integration where the same runtime embeds into another project environment
@@ -215,17 +223,17 @@ taskflow-v0 consume final "Runtime closure proof path"
 
 ## 🧠 Architecture Direction
 
-`VIDA 0.2.0` is the proving release.
+`VIDA 0.2.0` is the semantic-freeze and proving release.
 
 Its job is to make the transitional product trustworthy enough that `Release 1` can be built on stable semantics instead of moving heuristics.
 
 That means:
 
-- `taskflow` owns runtime execution
-- `codex` owns bounded documentation and inventory truth checks
-- framework law stays in maps, specs, and protocols
-- future `vida` compiles these bounded systems into one CLI-first autonomous delivery runtime
-- the first target closure is a usable host-shell `VIDA` surface that can drive later implementation waves through itself
+- `taskflow-v0` and `codex-v0` remain the current public proof runtimes
+- source-of-truth law stays in `docs/product/spec/`, `vida/config/`, and `vida/config/instructions/`
+- current release work hardens semantics before compiled runtime substitution
+- Rust `taskflow` and `docflow` remain active parallel implementation tracks for `Release 1`
+- future `vida` composes those compiled runtimes into one CLI-first autonomous delivery runtime
 
 ---
 

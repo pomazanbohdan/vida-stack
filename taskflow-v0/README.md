@@ -16,28 +16,28 @@ Output policy:
 - human-facing runtime commands default to `TOON`
 - structured JSON is emitted only when `--json` is explicitly requested
 
-## Збірка
+## Build
 
 ```bash
 cd taskflow-v0
 nim c -d:release -o:taskflow-v0 src/vida.nim
 ```
 
-## Команди
+## Commands
 
 Nim binary name for this lane: `taskflow-v0`.
 
-### `config` — Конфігурація
+### `config` — Configuration
 
 ```bash
-taskflow-v0 config validate                    # Валідація vida.config.yaml, включно з agent_extensions
-taskflow-v0 config dump                        # Дамп конфігу як JSON
-taskflow-v0 config protocol-active agent_system  # Чи активний протокол?
-taskflow-v0 role-select bundle --json          # Скомпільований bundle ролей/flow/role-selection
-taskflow-v0 role-select request "<text>" --json  # Автовибір ролі й conversational mode
+taskflow-v0 config validate                    # Validate vida.config.yaml, including agent_extensions
+taskflow-v0 config dump                        # Dump config as JSON
+taskflow-v0 config protocol-active agent_system  # Check whether the protocol is active
+taskflow-v0 role-select bundle --json          # Compiled bundle of roles / flow / role-selection
+taskflow-v0 role-select request "<text>" --json  # Auto-select role and conversational mode
 ```
 
-Приклади:
+Examples:
 ```bash
 $ taskflow-v0 config validate
 ✅ vida.config.yaml is valid
@@ -49,7 +49,7 @@ $ taskflow-v0 config dump | jq '.agent_system.mode'
 "hybrid"
 ```
 
-### `boot` — Boot профілі та пакети
+### `boot` — Boot profiles and packets
 
 ```bash
 taskflow-v0 boot run <lean|standard|full> [task_id] [--non-dev]
@@ -59,7 +59,7 @@ taskflow-v0 boot summary <subject>
 taskflow-v0 boot snapshot [--json] [--top-limit N] [--ready-limit N]
 ```
 
-Приклади:
+Examples:
 ```bash
 $ taskflow-v0 boot run standard TASK-42
 ✅ Boot profile: standard
@@ -76,7 +76,7 @@ $ taskflow-v0 boot snapshot --json --top-limit 3
 { "generated_at": "2026-03-08T20:00:00Z", ... }
 ```
 
-### `run-graph` — Граф виконання
+### `run-graph` — Execution graph
 
 ```bash
 taskflow-v0 run-graph init <task_id> <task_class> [route_task_class]
@@ -84,10 +84,10 @@ taskflow-v0 run-graph update <task_id> <task_class> <node> <status> [route_task_
 taskflow-v0 run-graph status <task_id>
 ```
 
-Ноди: `analysis`, `writer`, `coach`, `problem_party`, `verifier`, `approval`, `synthesis`
-Статуси: `pending`, `ready`, `running`, `completed`, `blocked`, `failed`, `skipped`
+Nodes: `analysis`, `writer`, `coach`, `problem_party`, `verifier`, `approval`, `synthesis`
+Statuses: `pending`, `ready`, `running`, `completed`, `blocked`, `failed`, `skipped`
 
-Приклади:
+Examples:
 ```bash
 $ taskflow-v0 run-graph init TASK-42 implementation
 .vida/state/run-graphs/TASK-42.json
@@ -106,11 +106,11 @@ $ taskflow-v0 run-graph status TASK-42
 ### `beads` — JSONL Runtime
 
 ```bash
-taskflow-v0 beads mode                  # Поточний режим
-taskflow-v0 beads set-mode <mode>       # Зміна режиму (jsonl_safe / direct)
-taskflow-v0 beads stats                 # Статистика issues
-taskflow-v0 beads snapshot-age          # Вік snapshot (секунди)
-taskflow-v0 beads verify [--strict]     # Верифікація логів
+taskflow-v0 beads mode                  # Current mode
+taskflow-v0 beads set-mode <mode>       # Change mode (jsonl_safe / direct)
+taskflow-v0 beads stats                 # Issue statistics
+taskflow-v0 beads snapshot-age          # Snapshot age (seconds)
+taskflow-v0 beads verify [--strict]     # Verify logs
 ```
 
 ### `todo` — TaskFlow views from beads execution log
@@ -125,7 +125,7 @@ taskflow-v0 todo compact <task_id> [limit]
 taskflow-v0 todo tracks <task_id>
 ```
 
-Приклади:
+Examples:
 ```bash
 $ taskflow-v0 beads mode
 jsonl_safe
@@ -167,7 +167,7 @@ taskflow-v0 task next-display-id vida-2d9 --json
 taskflow-v0 task next-display-id vida-2d9.1 --json
 ```
 
-### `system` — Субагент система
+### `system` — Subagent system
 
 ```bash
 vida system snapshot [task_id]
@@ -176,7 +176,7 @@ vida system mode
 vida system budget-summary [task_class]
 ```
 
-Приклади:
+Examples:
 ```bash
 $ vida system mode
 { "effective_mode": "hybrid", "reasons": ["requested_mode=hybrid"] }
@@ -191,14 +191,14 @@ $ vida system budget-summary implementation
 { "run_count": 12, "cheap_lane_attempted": 8, "bridge_fallback_used": 2 }
 ```
 
-### `registry` — Реєстр можливостей
+### `registry` — Capability registry
 
 ```bash
 vida registry build
 vida registry check <task_class> <agent_backend>
 ```
 
-Приклади:
+Examples:
 ```bash
 $ vida registry build
 .vida/state/capability-registry.json
@@ -220,7 +220,7 @@ $ vida registry check implementation gemini_cli
 }
 ```
 
-### `route` — Маршрутизація
+### `route` — Routing
 
 ```bash
 vida route resolve <task_id> <task_class> [--write-scope <scope>]
@@ -228,7 +228,7 @@ vida route receipt <task_id>
 vida route mutation-snapshot <task_id>
 ```
 
-Приклади:
+Examples:
 ```bash
 $ vida route resolve TASK-42 implementation --write-scope scoped_only
 {
@@ -239,7 +239,7 @@ $ vida route resolve TASK-42 implementation --write-scope scoped_only
 }
 ```
 
-### `lease` — Управління лізами
+### `lease` — Lease management
 
 ```bash
 vida lease acquire <resource_type> <resource_id> <holder> [--ttl-seconds N]
@@ -248,7 +248,7 @@ vida lease release <resource_type> <resource_id> <holder>
 vida lease list
 ```
 
-Приклади:
+Examples:
 ```bash
 $ vida lease acquire agent_backend_pool claude_cli orchestrator --ttl-seconds 1800
 { "status": "acquired", "lease": { "fencing_token": 1, ... } }
@@ -263,7 +263,7 @@ $ vida lease release agent_backend_pool claude_cli orchestrator
 { "status": "released" }
 ```
 
-### `pool` — Пул agent backend-ів
+### `pool` — Agent backend pool
 
 ```bash
 vida pool borrow <task_class> <holder> [--ttl-seconds N]
@@ -271,7 +271,7 @@ vida pool release <agent_backend> <holder>
 vida pool status
 ```
 
-Приклади:
+Examples:
 ```bash
 $ vida pool borrow analysis orchestrator
 {
@@ -287,7 +287,7 @@ $ vida pool release claude_cli orchestrator
 { "status": "released", "agent_backend": "claude_cli" }
 ```
 
-### `auth` — Авторизація виконання
+### `auth` — Execution authorization
 
 ```bash
 vida auth check <task_id> <task_class> [--local-write] [--block-id <id>]
@@ -296,7 +296,7 @@ vida auth authorize-internal <task_id> <task_class> <reason> <scope> <notes> [ev
 vida auth authorize-skip <task_id> <task_class> <reason> <notes> [evidence] [actor]
 ```
 
-Приклади:
+Examples:
 ```bash
 $ vida auth check TASK-42 implementation
 {
@@ -312,14 +312,14 @@ $ vida auth authorize-skip TASK-42 implementation no_eligible_analysis_lane "fra
 .vida/logs/execution-auth-overrides/TASK-42.implementation.json
 ```
 
-### `worker` — Валідація worker пакетів
+### `worker` — Worker packet validation
 
 ```bash
 vida worker check <prompt_file|->
 vida worker check-output <prompt_file|-> <output_file|->
 ```
 
-Приклади:
+Examples:
 ```bash
 $ vida worker check worker-prompt.md
 { "status": "ok", "errors": [] }
@@ -338,7 +338,7 @@ vida coach check <task_id>
 vida coach authorize-skip <task_id> <reason> <notes> [evidence] [actor]
 ```
 
-Приклади:
+Examples:
 ```bash
 $ vida coach check TASK-42
 { "status": "ok", "authorized_via": "", "blockers": [] }
@@ -347,14 +347,14 @@ $ vida coach authorize-skip TASK-42 no_eligible_coach "no coach available"
 .vida/logs/coach-review-overrides/TASK-42.json
 ```
 
-### `memory` — Пам'ять фреймворку
+### `memory` — Framework memory
 
 ```bash
 vida memory status
 vida memory record <lesson|correction|anomaly> --summary <text> [--source-task <id>] [--details-json <json>]
 ```
 
-Приклади:
+Examples:
 ```bash
 $ vida memory status
 { "entries": [...], "summary": { "lesson_count": 5, "correction_count": 2 } }
@@ -369,7 +369,7 @@ $ vida memory record lesson --summary "Always verify imports in Nim" --source-ta
 vida context status
 ```
 
-### `status` — Огляд системи
+### `status` — System overview
 
 ```bash
 $ taskflow-v0 status
@@ -381,21 +381,21 @@ Issues: 47 total, 23 unique
 Snapshot age: 120s
 ```
 
-## Глобальні флаги
+## Global flags
 
 ```bash
-taskflow-v0 --help       # Допомога
-taskflow-v0 --version    # Версія (v0.2.0)
+taskflow-v0 --help       # Help
+taskflow-v0 --version    # Version (v0.2.0)
 ```
 
-## Змінні середовища
+## Environment variables
 
-| Змінна | Опис |
+| Variable | Description |
 |---|---|
-| `VIDA_ROOT` | Override project root (або через `.env`) |
+| `VIDA_ROOT` | Override project root (or via `.env`) |
 | `VIDA_RUN_GRAPH_STATE_DIR` | Override run-graph state directory |
 
-## Структура
+## Structure
 
 ```
 src/
@@ -424,12 +424,12 @@ src/
     └── beads.nim      # Beads JSONL runtime
 ```
 
-## Примітки
+## Notes
 
 - This directory is an experiment, not the active production framework runtime.
 - Claims in the Python/shell framework remain canonical until a tracked parity migration explicitly replaces them.
 - task read surfaces now come from the DB-backed `taskflow-v0 task` store
-- Rust `vida` binary (`crates/vida/`) підтримує `--state-dir` / `VIDA_STATE_DIR`
+- The Rust `vida` binary (`crates/vida/`) supports `--state-dir` / `VIDA_STATE_DIR`
 - `.beads/issues.jsonl` is an ingest/export artifact; primary task reads in this lane come from `.vida/state/vida-legacy.db`
 
 -----
@@ -441,5 +441,5 @@ schema_version: '1'
 status: canonical
 source_path: taskflow-v0/README.md
 created_at: '2026-03-10T01:36:00+02:00'
-updated_at: '2026-03-10T16:53:58+02:00'
+updated_at: '2026-03-12T10:35:00+02:00'
 changelog_ref: README.changelog.jsonl
