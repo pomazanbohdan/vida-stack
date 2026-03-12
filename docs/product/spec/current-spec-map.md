@@ -119,6 +119,9 @@ Purpose: define the current product-spec home, show absorbed historical sources,
 37. [github-public-repository-law.md](/home/unnamed/project/vida-stack/docs/product/spec/github-public-repository-law.md)
    Sources: `docs/product/spec/project-documentation-law.md`, `docs/product/spec/project-document-naming-law.md`, root repository narrative/governance files, and official GitHub public-repository/community-health documentation
    Config families: root repository entrypoints, `.github/**`, public-repository community surfaces, code ownership, issue/PR templates, security disclosure, and release/tag publication posture
+38. [release-build-packaging-law.md](/home/unnamed/project/vida-stack/docs/product/spec/release-build-packaging-law.md)
+   Sources: `docs/product/spec/github-public-repository-law.md`, `install/install.sh`, `scripts/build-release.sh`, and the current 0.2.x release-archive minimization decisions
+   Config families: public release archive composition, installer/archive boundary, runtime-only package contents, and sidecar scaffold packaging
 
 ## Routing Pointers
 

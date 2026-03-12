@@ -38,6 +38,7 @@ Current entrypoints:
 23. [project-protocol-promotion-law.md](/home/unnamed/project/vida-stack/docs/product/spec/project-protocol-promotion-law.md)
 24. [project-document-naming-law.md](/home/unnamed/project/vida-stack/docs/product/spec/project-document-naming-law.md)
 25. [github-public-repository-law.md](/home/unnamed/project/vida-stack/docs/product/spec/github-public-repository-law.md)
+26. [release-build-packaging-law.md](/home/unnamed/project/vida-stack/docs/product/spec/release-build-packaging-law.md)
 
 Repository project split:
 

@@ -1,10 +1,10 @@
 <div align="center">
   <h1>🌌 Vida Stack</h1>
-  <p><b>The active repository for <code>VIDA 0.2.0</code>: the semantic-freeze and proving release for the next compiled autonomous delivery runtime.</b></p>
+  <p><b>The active repository for <code>VIDA 0.2.1</code>: the latest hotfix on the semantic-freeze and proving line for the next compiled autonomous delivery runtime.</b></p>
   
   <p>
     <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen" alt="Status"></a>
-    <a href="#"><img src="https://img.shields.io/badge/Release-0.2.0-blue" alt="Release"></a>
+    <a href="#"><img src="https://img.shields.io/badge/Release-0.2.1-blue" alt="Release"></a>
     <a href="#"><img src="https://img.shields.io/badge/Runtime-taskflow--v0-orange" alt="Runtime"></a>
     <a href="#"><img src="https://img.shields.io/badge/Docsys-codex--v0-teal" alt="Docsys"></a>
     <a href="#"><img src="https://img.shields.io/badge/Target-VIDA_1.0-purple" alt="Target"></a>
@@ -13,7 +13,7 @@
 </div>
 
 > [!NOTE]
-> **Current project capability:** `VIDA 0.2.0` already has enough proving infrastructure to keep hardening semantics, routing, and documentation law before the next public runtime release.
+> **Current project capability:** `VIDA 0.2.1` already has enough proving infrastructure to keep hardening semantics, routing, and documentation law before the next public runtime release.
 > - agent orchestration already works through the chief/root orchestrator and internal delegated lanes;
 > - agent roles, project activation, and bounded team topology can already be configured;
 > - framework and project specifications already govern documentation discipline and runtime routing;
@@ -22,6 +22,31 @@
 > **Internal validation status:** the current framework/spec stack has already passed internal documentation/runtime validation through `check`, `activation-check`, `protocol-coverage-check`, `doctor`, and `proofcheck`.
 > - consolidated audit: [docs/process/framework-three-layer-refactoring-audit.md](docs/process/framework-three-layer-refactoring-audit.md)
 > - proven environment/status conditions: [docs/process/vida1-development-conditions.md](docs/process/vida1-development-conditions.md)
+
+## ✨ What Is VIDA?
+
+**Vida Stack** is building a real control plane for agent-driven product engineering.
+
+Instead of treating prompts, scripts, task lists, and docs as disconnected artifacts, VIDA keeps one lawful operating model with clear proof/runtime boundaries:
+
+- ⚙️ **Task execution proof runtime** through `taskflow-v0`
+- 📚 **Documentation/inventory proof runtime** through `codex-v0`
+- 🧭 **Boot, routing, and map-driven discovery** through `AGENTS.md`, `AGENTS.sidecar.md`, and framework maps
+- ✅ **Verification, approval, and proof gates**
+- 🧠 **Durable runtime state, receipts, and checkpoints**
+- 🔄 **Migration, compatibility, and release discipline**
+
+At the top level, VIDA is not designed as a `/commands`-first interaction shell.
+It is designed as a trigger-driven protocol system where conversational operator intent activates the lawful runtime path, which makes it possible to drive complex development processes through bounded natural-language control instead of a rigid command-only interface.
+The repository itself is also a live demonstration surface for those agentic-autonomous engineering standards rather than only a passive specification set.
+
+The current target is one visible `VIDA` system where:
+
+- 🧩 framework and project law stay canonical in docs and config
+- 🗃️ operational truth is DB-first with synchronized filesystem projection
+- 🎭 roles, skills, profiles, flows, and teams become explicit project activation state
+- 📦 orchestration consumes compiled runtime bundles instead of re-reading raw canon on every step
+- 🚦 planning, execution, artifacts, and approvals become bounded operator-facing surfaces
 
 ## ✨ Framework Features
 
@@ -59,30 +84,7 @@ The current VIDA direction is grounded in orchestrator-led multi-agent product e
 | `Runtime / State Machines` | materialize execution state, route progression, approval, coach, and verification lifecycles |
 
 > [!IMPORTANT]
-> **Transitional Architecture Notice:** `taskflow-v0` and `codex-v0` are the separate proof runtimes shipped with `0.2.0`. The source of truth remains the canonical product/spec and instruction surfaces under `docs/product/spec/`, `vida/config/`, and `vida/config/instructions/`. Rust `taskflow` / `docflow` remain active parallel implementation tracks for the next release, not the current public runtime.
-
----
-
-## ✨ What Is VIDA?
-
-**Vida Stack** is building a real control plane for agent-driven product engineering.
-
-Instead of treating prompts, scripts, task lists, and docs as disconnected artifacts, VIDA keeps one lawful operating model with clear proof/runtime boundaries:
-
-- ⚙️ **Task execution proof runtime** through `taskflow-v0`
-- 📚 **Documentation/inventory proof runtime** through `codex-v0`
-- 🧭 **Boot, routing, and map-driven discovery** through `AGENTS.md`, `AGENTS.sidecar.md`, and framework maps
-- ✅ **Verification, approval, and proof gates**
-- 🧠 **Durable runtime state, receipts, and checkpoints**
-- 🔄 **Migration, compatibility, and release discipline**
-
-The current target is one visible `VIDA` system where:
-
-- 🧩 framework and project law stay canonical in docs and config
-- 🗃️ operational truth is DB-first with synchronized filesystem projection
-- 🎭 roles, skills, profiles, flows, and teams become explicit project activation state
-- 📦 orchestration consumes compiled runtime bundles instead of re-reading raw canon on every step
-- 🚦 planning, execution, artifacts, and approvals become bounded operator-facing surfaces
+> **Transitional Architecture Notice:** `taskflow-v0` and `codex-v0` are the separate proof runtimes shipped on the `0.2.x` line, with `v0.2.1` as the current hotfix. The source of truth remains the canonical product/spec and instruction surfaces under `docs/product/spec/`, `vida/config/`, and `vida/config/instructions/`. Rust `taskflow` / `docflow` remain active parallel implementation tracks for the next release, not the current public runtime.
 
 ---
 
@@ -91,6 +93,8 @@ The current target is one visible `VIDA` system where:
 ### One-line install
 
 ```bash
+mkdir myproject
+cd myproject
 curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- install
 ```
 
@@ -101,6 +105,7 @@ curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/insta
 - 🗂️ installs versioned sources under `~/.local/share/vida-stack/releases/<tag>`
 - 🔁 updates `~/.local/share/vida-stack/current`
 - 🧪 creates an installer-managed Python `venv` for `codex-v0` and `pyturso`
+- 📍 deploys a clean `AGENTS.sidecar.md` scaffold for the external project owner
 - 🧰 writes launchers into `~/.local/bin`:
   - `vida`
   - `taskflow-v0`
@@ -110,9 +115,9 @@ curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/insta
 ### Upgrade / doctor
 
 ```bash
-vida upgrade --version v0.2.0
+vida upgrade --version v0.2.1
 vida doctor
-vida use --version v0.2.0
+vida use --version v0.2.1
 ```
 
 ---
@@ -121,7 +126,7 @@ vida use --version v0.2.0
 
 ### ⚙️ `taskflow-v0`
 
-The current tracked-execution proof runtime for `0.2.0`.
+The current tracked-execution proof runtime for the `0.2.x` proving line.
 
 It already covers:
 
@@ -134,7 +139,7 @@ It already covers:
 
 ### 📚 `codex-v0`
 
-The current documentation and inventory proof runtime for `0.2.0`.
+The current documentation and inventory proof runtime for the `0.2.x` proving line.
 
 It already covers:
 
@@ -148,7 +153,7 @@ It already covers:
 
 The top-level product surface and release direction.
 
-In `0.2.0`, the installer already gives you a `vida` launcher, but the public proving runtime still operates through the bounded `taskflow-v0` and `codex-v0` proof surfaces.
+In the current `0.2.x` proving line, the installer already gives you a `vida` launcher, but the public runtime still operates through the bounded `taskflow-v0` and `codex-v0` proof surfaces.
 
 The next product target behind that launcher is:
 
@@ -223,7 +228,7 @@ taskflow-v0 consume final "Runtime closure proof path"
 
 ## 🧠 Architecture Direction
 
-`VIDA 0.2.0` is the semantic-freeze and proving release.
+`VIDA 0.2.x` is the semantic-freeze and proving line, with `v0.2.1` as the current hotfix release.
 
 Its job is to make the transitional product trustworthy enough that `Release 1` can be built on stable semantics instead of moving heuristics.
 

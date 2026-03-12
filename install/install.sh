@@ -29,8 +29,8 @@ Options:
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- install
-  curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- upgrade --version v0.2.0
-  bash install/install.sh use --version v0.2.0
+  curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- upgrade --version v0.2.1
+  bash install/install.sh use --version v0.2.1
   bash install/install.sh doctor
 EOF
 }
@@ -249,7 +249,7 @@ Usage:
 
 Notes:
   - this launcher runs the bundled `codex-v0` documentation/runtime surface
-  - the current v0.2.0 user-facing release surfaces are `taskflow-v0` and `codex-v0`
+  - the current v0.2.x user-facing release surfaces are `taskflow-v0` and `codex-v0`
   - use `vida codex` for the top-level wrapper entrypoint
 USAGE
   exit 0
@@ -284,7 +284,7 @@ case "$sub" in
     exec "'"$BIN_DIR"'/codex-v0" "$@"
     ;;
   doctor|upgrade|install|use)
-    exec "$VIDA_ROOT/install/install.sh" "$sub" "${@:2}"
+    exec "$VIDA_HOME/installer/install.sh" "$sub" --root "$VIDA_HOME" --bin-dir "'"$BIN_DIR"'" "${@:2}"
     ;;
   root)
     printf "%s\n" "$VIDA_ROOT"
@@ -303,8 +303,11 @@ esac
 prepare_python_env() {
   local release_root="$1"
   local venv_dir="$release_root/.venv"
-  local requirements="$release_root/install/requirements-python.txt"
-  [[ -f "$requirements" ]] || fail "Missing installer requirements: $requirements"
+  local requirements="$release_root/codex-v0/requirements-python.txt"
+  if [[ ! -f "$requirements" ]]; then
+    requirements="$release_root/install/requirements-python.txt"
+  fi
+  [[ -f "$requirements" ]] || fail "Missing runtime requirements: $requirements"
 
   if [[ "$DRY_RUN" == "yes" ]]; then
     log "Would create Python venv in ${venv_dir}"
@@ -316,6 +319,29 @@ prepare_python_env() {
   "$venv_dir/bin/python3" -m ensurepip --upgrade >/dev/null 2>&1 || true
   "$venv_dir/bin/python3" -m pip install --upgrade pip
   "$venv_dir/bin/python3" -m pip install -r "$requirements"
+}
+
+install_management_script() {
+  local version="$1"
+  local target_dir="$2"
+  local target="$target_dir/install.sh"
+
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    log "Would install management script into ${target}"
+    return 0
+  fi
+
+  mkdir -p "$target_dir"
+
+  if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+    cp "${BASH_SOURCE[0]}" "$target"
+  elif [[ -z "$ARCHIVE_FILE" ]]; then
+    curl -fsSL "https://github.com/${REPO_SLUG}/releases/download/${version}/vida-install.sh" -o "$target"
+  else
+    fail "Unable to install management script from the current invocation while using a local archive."
+  fi
+
+  chmod +x "$target"
 }
 
 cleanup_old_releases() {
@@ -358,6 +384,7 @@ activate_release() {
 install_release() {
   local version="$1"
   local temp_dir archive_path checksum_path extract_dir releases_dir current_link release_root env_file
+  local installer_dir
   temp_dir="$(mktemp -d)"
   archive_path="${temp_dir}/vida-stack-${version}.tar.gz"
   checksum_path="${temp_dir}/vida-stack-${version}.sha256"
@@ -366,6 +393,7 @@ install_release() {
   current_link="${INSTALL_ROOT}/current"
   release_root="${releases_dir}/${version}"
   env_file="${INSTALL_ROOT}/env.sh"
+  installer_dir="${INSTALL_ROOT}/installer"
 
   trap "rm -rf '$temp_dir'" RETURN
 
@@ -397,6 +425,7 @@ install_release() {
   mv "$extracted_root" "$release_root"
 
   prepare_python_env "$release_root"
+  install_management_script "$version" "$installer_dir"
   write_env_file "$env_file"
   install_profile_hooks "$env_file"
   install_wrappers
@@ -416,11 +445,13 @@ doctor() {
   [[ -x "${BIN_DIR}/taskflow-v0" ]] || { log "Missing launcher: ${BIN_DIR}/taskflow-v0"; missing=1; }
   [[ -x "${BIN_DIR}/codex-v0" ]] || { log "Missing launcher: ${BIN_DIR}/codex-v0"; missing=1; }
   [[ -f "${INSTALL_ROOT}/env.sh" ]] || { log "Missing env file: ${INSTALL_ROOT}/env.sh"; missing=1; }
+  [[ -x "${INSTALL_ROOT}/installer/install.sh" ]] || { log "Missing installer management script: ${INSTALL_ROOT}/installer/install.sh"; missing=1; }
 
   if [[ -e "$current_link" ]]; then
     [[ -x "${current_link}/bin/taskflow-v0" ]] || { log "Missing bundled taskflow binary"; missing=1; }
     [[ -x "${current_link}/.venv/bin/python3" ]] || { log "Missing installer-managed Python runtime"; missing=1; }
     [[ -f "${current_link}/codex-v0/codex.py" ]] || { log "Missing bundled codex runtime surface"; missing=1; }
+    [[ -f "${current_link}/AGENTS.sidecar.md" ]] || { log "Missing packaged project sidecar scaffold"; missing=1; }
   fi
 
   if [[ "$missing" -eq 1 ]]; then

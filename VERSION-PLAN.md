@@ -12,9 +12,9 @@ Rule:
 
 Design assumptions:
 
-1. `0.2.0` remains the active semantic-freeze and proving release built on bounded proof runtimes.
+1. `0.2.x` remains the active semantic-freeze and proving line built on bounded proof runtimes, with `v0.2.1` as the current hotfix.
 2. `Release 1` and `1.0` point at the first CLI-first compiled autonomous delivery runtime, not at a daemon release.
-3. the public `0.2.0` runtime remains `taskflow-v0` plus `codex-v0`; Rust `taskflow` / `docflow` continue as parallel implementation tracks until the next release line.
+3. the public `0.2.x` runtime remains `taskflow-v0` plus `codex-v0`; Rust `taskflow` / `docflow` continue as parallel implementation tracks until the next release line.
 4. `2.0` owns daemon mode, richer observability, dashboards, and vector-search daemon integration.
 5. `3.0` owns plugins, marketplace, and extension ecosystem concerns.
 
@@ -22,16 +22,16 @@ Design assumptions:
 
 Vida Stack now moves through four major product states:
 
-1. `0.2.0` — Semantic-Freeze And Proving Release
+1. `0.2.x` — Semantic-Freeze And Proving Line
 2. `1.0` / `Release 1` — CLI-First Compiled Autonomous Delivery Runtime
 3. `2.0` — Daemonized Control Plane
 4. `3.0` — Plugins and Marketplace
 
-The current repository is operating in the `0.2.0` proving line while executing the semantic-freeze and closure work required for `Release 1` / `1.0`.
+The current repository is operating in the `0.2.x` proving line, with `v0.2.1` as the latest hotfix while semantic-freeze and closure work continues toward `Release 1` / `1.0`.
 
-## Version 0.2.0 — Semantic-Freeze And Proving Release
+## Version 0.2.x — Semantic-Freeze And Proving Line
 
-`0.2.0` is the active semantic-freeze and proving stack.
+`0.2.x` is the active semantic-freeze and proving stack. The current published hotfix on that line is `v0.2.1`.
 
 Its job is to:
 
@@ -40,7 +40,7 @@ Its job is to:
 3. reduce ambiguity before binary migration,
 4. act as the source-of-truth behavior layer for the next compiled runtime implementation.
 
-`0.2.0` is not a toy demo.
+`0.2.x` is not a toy demo.
 It is the semantic-freeze and proving release that bridges the current bounded proof runtimes into the compiled autonomous delivery runtime line.
 
 Core characteristics:
@@ -67,7 +67,7 @@ Current `0.2` priorities:
 4. avoid a forbidden middle path where `1.0` is silently hidden inside the old shell/runtime stack,
 5. prepare a clean `taskflow` / `docflow` / `vida` crate split for the next release line.
 
-## Transition Path From 0.2.0 To 1.0 / Release 1
+## Transition Path From 0.2.x To 1.0 / Release 1
 
 The transition to `1.0` / `Release 1` moves through these internal milestones, with the repository currently inside the `0.2.x` semantic-freeze and closure phase:
 
@@ -119,7 +119,7 @@ The transition to `1.0` / `Release 1` moves through these internal milestones, w
 
 `1.0` / `Release 1` is the first full VIDA product release.
 
-It is the point where the active public runtime moves from the `0.2.0` proof runtimes to the compiled Rust runtime line.
+It is the point where the active public runtime moves from the `0.2.x` proof runtimes to the compiled Rust runtime line.
 
 It should be:
 
@@ -248,7 +248,7 @@ The intended direction is:
 
 The project is currently:
 
-1. operating on the `0.2.0` proving release,
+1. operating on the `0.2.x` proving line,
 2. reducing ambiguity for semantic freeze and Release-1 closure,
 3. using `taskflow-v0` and `codex-v0` as the current public proof runtimes,
 4. treating canonical specs, config, and instruction canon as the source of truth,

@@ -43,6 +43,8 @@ Use this file only to determine which entry contract applies next.
    - delegated/external worker packet,
    - canonical worker dispatch flow.
 4. Default fallback is orchestrator, never worker.
+5. This fallback resolves only the initial lane and bootstrap authority.
+6. It must not be read as permission for sustained local-only development when worker-first coordination is active.
 
 Hard rule:
 1. Worker lanes must not inherit the full orchestrator playbook by default.

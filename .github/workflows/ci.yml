@@ -34,7 +34,7 @@ jobs:
           python3 -m venv .venv
           .venv/bin/python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
           .venv/bin/python3 -m pip install --upgrade pip
-          .venv/bin/python3 -m pip install -r install/requirements-python.txt
+          .venv/bin/python3 -m pip install -r codex-v0/requirements-python.txt
 
       - name: Install Nim dependencies
         shell: bash
@@ -65,22 +65,44 @@ jobs:
           set -euo pipefail
           cargo test --workspace
 
-      - name: Build release assets and verify launcher manifest
+      - name: Build release assets and verify runtime-only package
         shell: bash
         run: |
           set -euo pipefail
           bash scripts/build-release.sh
           python3 - <<'PY'
           import json
+          import tarfile
           from pathlib import Path
 
-          manifests = sorted(Path("dist/package").glob("*/release-manifest.json"))
+          manifests = sorted(Path("dist").glob("vida-stack-v*.manifest.json"))
           assert manifests, "release manifest was not generated"
           data = json.loads(manifests[0].read_text())
-          expected = ["vida", "taskflow-v0", "codex-v0"]
-          assert data["installed_entrypoints"] == expected, data["installed_entrypoints"]
+          expected_roots = ["AGENTS.md", "AGENTS.sidecar.md", "bin/taskflow-v0", "codex-v0/", "vida/"]
+          assert data["included_roots"] == expected_roots, data["included_roots"]
           assert data["bundled_binaries"] == ["bin/taskflow-v0"], data["bundled_binaries"]
           assert data["installer_managed_runtimes"] == ["taskflow-v0", "codex-v0"], data["installer_managed_runtimes"]
+          archive = sorted(Path("dist").glob("vida-stack-v*.tar.gz"))[0]
+          with tarfile.open(archive, "r:gz") as tf:
+            names = tf.getnames()
+          assert any(name.endswith("/AGENTS.md") for name in names), names[:20]
+          assert any(name.endswith("/AGENTS.sidecar.md") for name in names), names[:20]
+          assert any(name.endswith("/bin/taskflow-v0") for name in names), names[:20]
+          assert any("/codex-v0/codex.py" in name for name in names), names[:20]
+          assert any("/vida/root-map.md" in name for name in names), names[:20]
+          forbidden_roots = ("docs", "crates", "install", "scripts", "taskflow-v0")
+          leaked = []
+          for name in names:
+            parts = name.split("/", 1)
+            if len(parts) < 2:
+              continue
+            rel = parts[1].rstrip("/")
+            if not rel:
+              continue
+            first = rel.split("/", 1)[0]
+            if first in forbidden_roots:
+              leaked.append(name)
+          assert not leaked, leaked
           PY
           bash dist/vida-install.sh help >/tmp/vida-install-help.txt
           test -s /tmp/vida-install-help.txt
@@ -96,15 +118,18 @@ jobs:
           rm -rf "$TMP_ROOT" "$TMP_BIN"
           mkdir -p "$TMP_BIN"
           bash dist/vida-install.sh install --archive "$ARCHIVE_PATH" --root "$TMP_ROOT" --bin-dir "$TMP_BIN" --force
-          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" bash install/install.sh doctor --root "$TMP_ROOT" --bin-dir "$TMP_BIN"
+          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" bash dist/vida-install.sh doctor --root "$TMP_ROOT" --bin-dir "$TMP_BIN"
           VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida root >/tmp/vida-root.txt
+          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida doctor >/tmp/vida-doctor.txt
           VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida codex --help >/tmp/vida-codex-help.txt
           VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" codex-v0 --help >/tmp/codex-v0-help.txt
           VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida taskflow --help >/tmp/vida-taskflow-help.txt
           grep -q "$TMP_ROOT/current" /tmp/vida-root.txt
+          grep -q "Doctor check passed" /tmp/vida-doctor.txt
           grep -q "Codex v0 launcher" /tmp/vida-codex-help.txt
           grep -q "Codex v0 launcher" /tmp/codex-v0-help.txt
           grep -q "vida taskflow <args...>" /tmp/vida-taskflow-help.txt
+          grep -q "<fill-your-project-name>" "$TMP_ROOT/current/AGENTS.sidecar.md"
 
       - name: Run codex validation
         shell: bash

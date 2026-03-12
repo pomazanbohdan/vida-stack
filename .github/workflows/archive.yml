@@ -66,7 +66,7 @@ jobs:
           python3 -m venv .venv
           .venv/bin/python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
           .venv/bin/python3 -m pip install --upgrade pip
-          .venv/bin/python3 -m pip install -r install/requirements-python.txt
+          .venv/bin/python3 -m pip install -r codex-v0/requirements-python.txt
 
       - name: Install Nim dependencies
         shell: bash

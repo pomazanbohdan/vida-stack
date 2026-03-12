@@ -35,71 +35,49 @@ DIST_DIR="$ROOT_DIR/dist"
 PACKAGE_ROOT="$DIST_DIR/package"
 STAGE_DIR="$PACKAGE_ROOT/$ARCHIVE_BASE"
 TASKFLOW_BIN="$STAGE_DIR/bin/taskflow-v0"
+TASKFLOW_HELPERS_DIR="$STAGE_DIR/taskflow-v0/helpers"
 INSTALLER_ASSET="$DIST_DIR/vida-install.sh"
+MANIFEST_OUT="$DIST_DIR/${ARCHIVE_BASE}.manifest.json"
 RELEASE_NOTES_SRC="$ROOT_DIR/install/release-notes-${VERSION}.md"
 RELEASE_NOTES_OUT="$DIST_DIR/release-notes.md"
 NIMCACHE_DIR="$DIST_DIR/nimcache/release"
 
 rm -rf "$DIST_DIR"
-mkdir -p "$STAGE_DIR/bin"
+mkdir -p "$STAGE_DIR/bin" "$TASKFLOW_HELPERS_DIR"
 
-copy_items=(
-  AGENTS.md
-  AGENTS.sidecar.md
-  CONTRIBUTING.md
-  LICENSE
-  README.md
-  VERSION-PLAN.md
-  Cargo.toml
-  Makefile
-  vida.config.yaml
-  crates
-  docs
-  install
-  scripts
-  taskflow-v0
-  codex-v0
-  vida
-)
-
-for item in "${copy_items[@]}"; do
-  cp -R "$ROOT_DIR/$item" "$STAGE_DIR/$item"
-done
+cp "$ROOT_DIR/AGENTS.md" "$STAGE_DIR/AGENTS.md"
+awk '
+  /^-----$/ { exit }
+  { print }
+' "$ROOT_DIR/install/assets/AGENTS.sidecar.scaffold.md" > "$STAGE_DIR/AGENTS.sidecar.md"
+cp -R "$ROOT_DIR/vida" "$STAGE_DIR/vida"
+cp -R "$ROOT_DIR/codex-v0" "$STAGE_DIR/codex-v0"
 
 find "$STAGE_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$STAGE_DIR" -type f -name '*.pyc' -delete
-if [[ -d "$STAGE_DIR/taskflow-v0/tests" ]]; then
-  find "$STAGE_DIR/taskflow-v0/tests" -maxdepth 1 -type f ! -name '*.nim' -delete
-fi
 
 nim c -d:release --nimcache:"$NIMCACHE_DIR" -o:"$TASKFLOW_BIN" "$ROOT_DIR/taskflow-v0/src/vida.nim"
 chmod +x "$TASKFLOW_BIN"
-chmod +x "$STAGE_DIR/install/install.sh"
+cp "$ROOT_DIR/taskflow-v0/helpers/turso_task_store.py" "$TASKFLOW_HELPERS_DIR/turso_task_store.py"
+cp "$ROOT_DIR/taskflow-v0/helpers/toon_render.py" "$TASKFLOW_HELPERS_DIR/toon_render.py"
 
 python3 - <<PY
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-stage_dir = Path(${STAGE_DIR@Q})
+manifest_path = Path(${MANIFEST_OUT@Q})
 manifest = {
     "artifact_name": ${ARCHIVE_BASE@Q},
     "version": ${VERSION@Q},
     "built_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-    "package_root": stage_dir.name,
+    "package_root": ${ARCHIVE_BASE@Q},
     "included_roots": [
         "AGENTS.md",
         "AGENTS.sidecar.md",
-        "README.md",
-        "LICENSE",
-        "VERSION-PLAN.md",
-        "vida.config.yaml",
-        "crates/",
-        "docs/",
-        "install/",
-        "scripts/",
-        "taskflow-v0/",
+        "bin/taskflow-v0",
         "codex-v0/",
+        "taskflow-v0/helpers/",
         "vida/",
     ],
     "installed_entrypoints": [
@@ -115,7 +93,7 @@ manifest = {
         "codex-v0",
     ],
 }
-(stage_dir / "release-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 PY
 
 (

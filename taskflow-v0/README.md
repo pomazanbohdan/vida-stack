@@ -1,6 +1,6 @@
 # VIDA v0 — Transitional Nim Runtime
 
-Transitional Nim product package for rolling back and validating the VIDA `v0.2.0` architecture.
+Transitional Nim product package for rolling back and validating the active VIDA `0.2.x` proving line, with `v0.2.1` as the current hotfix.
 
 Current status:
 - transitional product runtime, not the final `vida-v1` substrate
@@ -373,7 +373,7 @@ vida context status
 
 ```bash
 $ taskflow-v0 status
-VIDA Runtime v0.2.0
+VIDA Runtime v0.2.1
 VIDA_ROOT: /home/unnamed/project/vida-stack
 Config: /home/unnamed/project/vida-stack/vida.config.yaml
 Beads mode: jsonl_safe
@@ -385,7 +385,7 @@ Snapshot age: 120s
 
 ```bash
 taskflow-v0 --help       # Help
-taskflow-v0 --version    # Version (v0.2.0)
+taskflow-v0 --version    # Version (v0.2.1)
 ```
 
 ## Environment variables

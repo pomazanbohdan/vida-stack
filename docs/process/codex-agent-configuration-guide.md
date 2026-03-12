@@ -74,6 +74,7 @@ Layout rule:
 2. `.codex/config.toml` owns delegated lane registration, thread/depth caps, and per-role config-file mapping,
 3. `.codex/agents/*.toml` own role-specific Codex execution posture only,
 4. VIDA role/skill/profile/team meaning still comes from the project activation layer, not from Codex TOML alone.
+5. the root session is a bootstrap and coordination owner, not a separate long-lived local implementer role.
 
 ## Development Team Target
 
@@ -88,7 +89,7 @@ Flow posture:
 Minimum team topology:
 
 1. root Codex session
-   - manager-led orchestrator that decomposes work, delegates lanes, and owns closure routing
+   - manager-led orchestrator that completes lawful bootstrap, decomposes work, delegates lanes, and owns closure routing
 2. `development_implementer`
    - execution-focused role for writing code and making bounded implementation changes
 3. `development_coach`
@@ -100,10 +101,17 @@ Minimum team topology:
 
 Coordination pattern:
 
-1. default posture is `manager-led` by the active root Codex session,
-2. implementer, coach, and verifier are the normal delegated lanes,
-3. `coach` must remain distinct from `verifier`,
-4. escalation is not part of the normal steady-state path and should activate only when the first-line development team cannot close lawfully.
+1. default posture is `manager-led delegation-first` by the active root Codex session,
+2. implementer, coach, and verifier are the normal delegated lanes for eligible development work,
+3. the root session should stay in orchestrator scope after bootstrap rather than collapsing into a second local implementer,
+4. `coach` must remain distinct from `verifier`,
+5. escalation is not part of the normal steady-state path and should activate only when the first-line development team cannot close lawfully.
+
+Normalization rule:
+
+1. `orchestrator-only` is lawful only for bounded bootstrap, direct chat diagnosis, or recorded saturation/exception handling,
+2. normal project development posture is agentic: orchestrator-led, delegation-first, and verification-backed,
+3. if delegation temporarily fails because of thread or lane saturation, attempt lawful reuse or recorded saturation recovery before accepting local-only continuation as the active posture.
 
 Coach separation rule:
 

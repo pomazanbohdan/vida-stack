@@ -23,6 +23,12 @@ Core ownership:
 5. Use workers as the primary analysis/review fabric when the active mode supports it.
 6. Synthesize results, resolve conflicts, and own final quality gates.
 
+Ownership clarification:
+1. orchestrator control means route ownership, synthesis, and closure authority,
+2. it does not mean the orchestrator should perform normal development work locally when worker-first execution is available and lawful,
+3. after lawful bootstrap and route selection, eligible development work should default to delegated implementer/coach/verifier lanes,
+4. local-only continuation is a bounded saturation or exception path only and must not become the default posture.
+
 Operating principles:
 1. Clarity over noise.
 2. Structured execution over ad hoc generation.

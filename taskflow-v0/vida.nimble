@@ -1,5 +1,5 @@
 # Package
-version       = "0.2.0"
+version       = "0.2.1"
 author        = "VIDA Stack"
 description   = "VIDA v0 runtime — Nim alternative to Python/Shell scripts"
 license       = "MIT"
