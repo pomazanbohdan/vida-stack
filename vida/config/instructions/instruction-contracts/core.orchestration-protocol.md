@@ -138,8 +138,9 @@ Before routing work, normalize the request into:
    - require admissibility through `core.capability-registry`,
    - require governed context through `core.context-governance`,
    - require node-level resumability through `core.run-graph` when continuity matters.
-7. Keep writer ownership singular and fail closed when route requirements, verifier posture, or lawful escalation evidence are missing.
-8. Synthesize the resulting analysis or execution outputs into one orchestration-owned result and close only through the canonical tracked-flow owners when tracked execution was engaged.
+7. For code-shaped implementation or patch work, run the lawful coach lane before independent verification when an eligible coach lane exists; if coach is unavailable, record an explicit blocker or override receipt before verifier routing.
+8. Keep writer ownership singular and fail closed when route requirements, coach/verifier posture, or lawful escalation evidence are missing.
+9. Synthesize the resulting analysis or execution outputs into one orchestration-owned result and close only through the canonical tracked-flow owners when tracked execution was engaged.
 
 ## Pack Routing Note
 
@@ -153,7 +154,7 @@ Before routing work, normalize the request into:
 1. orchestration is closure-ready only when request intent, writer ownership, route posture, and dependency order are explicit enough to justify the selected path,
 2. when worker-first routing is required, closure depends on route-valid execution rather than undocumented local substitution,
 3. when tracked execution is required, orchestration closure depends on the canonical tracked-flow owners rather than chat-only completion claims,
-4. unresolved route requirements, missing verifier posture, or missing lawful escalation receipts must block closure,
+4. unresolved route requirements, missing coach/verifier posture, or missing lawful escalation receipts must block closure,
 5. final orchestration proof must remain bounded to explicit request intent, writer ownership, route posture, dependency order, and closure dependencies rather than ad hoc completion claims.
 
 ## Constraints

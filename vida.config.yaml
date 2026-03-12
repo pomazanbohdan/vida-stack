@@ -221,12 +221,12 @@ agent_system:
       budget_cost_units: 10
       profiles: internal_fast,internal_arch,internal_review
       default_profile: internal_fast
-      capability_band: implementation_safe,architecture_safe
+      capability_band: implementation_safe,architecture_safe,review_safe
       write_scope: orchestrator_native
       billing_tier: internal
       speed_tier: medium
       quality_tier: high
-      specialties: implementation,architecture,integration
+      specialties: implementation,architecture,integration,review,verification
   routing:
     default:
       subagents: internal_subagents

@@ -7,6 +7,7 @@ Purpose: define the canonical runtime law for authorship, coaching, verification
 1. Verification is a first-class lane, not a narrative afterthought.
 2. Consensus or coach feedback does not replace independent verification.
 3. When route law requires separated authorship and verification, the runtime must preserve that separation explicitly.
+4. For code-shaped implementation or patch work, formative coach review must run before independent verification when an eligible coach lane exists.
 
 ## Canonical Lane Roles
 
@@ -25,6 +26,18 @@ Rules:
 2. `verifier` should differ from the `author` lane when an eligible verifier exists,
 3. proof burden scales with route law, risk, and task class.
 
+## Coach-First Rule For Code Work
+
+For implementation-shaped or patch-shaped work:
+
+1. `coach` is the canonical pre-verification lane for spec conformance, bounded critique, and rework shaping,
+2. `verifier` should validate only after coach review has either:
+   - produced accepted feedback,
+   - produced explicit no-change confirmation,
+   - or been explicitly bypassed by blocker or override receipt,
+3. the runtime must not treat direct author-to-verifier routing as the default path when coach is lawful and eligible,
+4. if coach is unavailable, the absence must be recorded explicitly before verification proceeds.
+
 ## Required Verification Inputs
 
 Each verification lane must have:
@@ -42,7 +55,8 @@ No routed work is closure-ready when:
 1. required proof is absent,
 2. proof exists only in chat,
 3. coach feedback exists but independent verification is still required,
-4. the verifier cannot inspect the author output contract or proof boundary.
+4. the verifier cannot inspect the author output contract or proof boundary,
+5. code-shaped work required coach review but no accepted coach result, explicit no-change result, or recorded bypass exists.
 
 ## Runtime Integration
 

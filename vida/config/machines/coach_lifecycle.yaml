@@ -7,7 +7,7 @@ entity_type: CoachReview
 canonical_source_refs:
   - docs/process/framework-source-lineage-index.md
   - docs/product/spec/canonical-machine-map.md
-purpose: Post-write formative review loop, distinct from verification.
+purpose: Post-write formative review loop before independent verification, distinct from verification itself.
 initial_state: not_requested
 states:
   - not_requested

@@ -32,18 +32,15 @@ suite "kernel config loader":
     check inventory["artifact_type"].getStr() == "runtime_agent_inventory"
     let agents = inventory["agents"]
     check agents.len > 0
-    var foundCodex = false
-    var foundQwen = false
+    var foundInternal = false
     for agent in agents:
       let agentId = agent["id"].getStr()
-      if agentId == "codex_cli":
-        foundCodex = true
+      if agentId == "internal_subagents":
+        foundInternal = true
         check "writer" in agent["workflow_roles"].getElems().mapIt(it.getStr())
-      if agentId == "qwen_cli":
-        foundQwen = true
         check "coach" in agent["workflow_roles"].getElems().mapIt(it.getStr())
-    check foundCodex
-    check foundQwen
+        check "verifier" in agent["workflow_roles"].getElems().mapIt(it.getStr())
+    check foundInternal
 
 suite "assignment engine":
   test "resolves writer lane for implementation task class":
@@ -53,17 +50,17 @@ suite "assignment engine":
     )
     check payload["ok"].getBool() == true
     check payload["lane"].getStr() == "writer_lane"
-    check payload["selected_agent_backend"].getStr() == "codex_cli"
+    check payload["selected_agent_backend"].getStr() == "internal_subagents"
     check payload["inventory_source"].getStr() == "overlay_runtime"
 
-  test "resolves verification lane independently from writer":
+  test "resolves verification lane under internal-only posture":
     let payload = resolveAssignmentForTaskClass(
       "review_ensemble",
-      %*{"effective_mode": "hybrid", "exclude_agents": ["codex_cli"]},
+      %*{"effective_mode": "hybrid"},
     )
     check payload["ok"].getBool() == true
     check payload["lane"].getStr() == "verification_lane"
-    check payload["selected_agent_backend"].getStr() in ["qwen_cli", "gemini_cli", "internal_subagents"]
+    check payload["selected_agent_backend"].getStr() == "internal_subagents"
 
   test "fails for unknown task class":
     let payload = resolveAssignmentForTaskClass("unknown_task_class")
