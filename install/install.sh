@@ -60,6 +60,19 @@ checksum_cmd() {
   fail "Missing required checksum command: sha256sum or shasum"
 }
 
+parse_latest_release_tag() {
+  python3 -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+tag = payload.get("tag_name", "")
+if not tag:
+    raise SystemExit("Missing tag_name in latest-release payload")
+print(tag)
+'
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     install|init|upgrade|use|doctor|help)
@@ -117,7 +130,7 @@ resolve_version() {
   fi
 
   curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/latest" \
-    | awk -F'"' '/"tag_name":/ { print $4; exit }'
+    | parse_latest_release_tag
 }
 
 download_release_archive() {

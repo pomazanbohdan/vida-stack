@@ -190,6 +190,48 @@ class InstallDocflowBridgeTest(unittest.TestCase):
         self.assertIn('"codex-v0": "migration-only wrapper -> vida docflow"', manifest_body)
         self.assertNotIn('"codex-v0"', installed_entrypoints_body)
 
+    def test_resolve_version_parses_latest_release_without_short_pipe_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bin = tmp_path / "bin"
+            fake_bin.mkdir()
+            fake_curl = fake_bin / "curl"
+            fake_curl.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    cat <<'EOF'
+                    {"tag_name":"v9.9.9","name":"Test Release"}
+                    EOF
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_curl.chmod(fake_curl.stat().st_mode | stat.S_IEXEC)
+
+            command = textwrap.dedent(
+                f"""\
+                set -euo pipefail
+                export PATH="{fake_bin}:$PATH"
+                source <(sed '$d' {INSTALLER})
+                VERSION=latest
+                ARCHIVE_FILE=""
+                REPO_SLUG="example/repo"
+                resolve_version
+                """
+            )
+            result = subprocess.run(
+                ["bash", "-lc", command],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            self.assertEqual(result.stdout.strip(), "v9.9.9")
+            self.assertEqual(result.stderr, "")
+
     def test_runtime_config_scaffold_falls_back_to_framework_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
