@@ -1,14 +1,16 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Deserializer;
 use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::types::SurrealValue;
 use surrealdb::Surreal;
-use taskflow_contracts::{DependencyEdge as CanonicalDependencyEdge, TaskRecord as CanonicalTaskRecord};
+use taskflow_contracts::{
+    DependencyEdge as CanonicalDependencyEdge, TaskRecord as CanonicalTaskRecord,
+};
 use taskflow_core::{
     IssueType as CanonicalIssueType, TaskId as CanonicalTaskId, TaskStatus as CanonicalTaskStatus,
     Timestamp as CanonicalTimestamp,
@@ -41,6 +43,8 @@ DEFINE TABLE instruction_runtime_state SCHEMALESS;
 DEFINE TABLE instruction_source_artifact SCHEMALESS;
 DEFINE TABLE instruction_ingest_receipt SCHEMALESS;
 DEFINE TABLE source_tree_config SCHEMALESS;
+DEFINE TABLE protocol_binding_state SCHEMALESS;
+DEFINE TABLE protocol_binding_receipt SCHEMALESS;
 "#;
 
 fn state_schema_document() -> String {
@@ -82,7 +86,9 @@ impl StateStore {
         &self.root
     }
 
-    pub async fn storage_metadata_summary(&self) -> Result<StorageMetadataSummary, StateStoreError> {
+    pub async fn storage_metadata_summary(
+        &self,
+    ) -> Result<StorageMetadataSummary, StateStoreError> {
         let row: Option<StorageMetaRow> = self.db.select(("storage_meta", "primary")).await?;
         let row = row.ok_or(StateStoreError::MissingMetadata)?;
         let expected = SurrealStoreTarget::new(DEFAULT_STATE_DIR).storage_meta();
@@ -397,7 +403,9 @@ impl StateStore {
                     depends_on_id,
                     edge_type: dependency.edge_type,
                     dependency_status,
-                    dependency_issue_type: by_id.get(&dependency.depends_on_id).map(|task| task.issue_type.clone()),
+                    dependency_issue_type: by_id
+                        .get(&dependency.depends_on_id)
+                        .map(|task| task.issue_type.clone()),
                 }
             })
             .collect::<Vec<_>>();
@@ -448,7 +456,9 @@ impl StateStore {
         });
 
         for item in &mut reverse {
-            item.dependency_issue_type = by_id.get(&item.issue_id).map(|task| task.issue_type.clone());
+            item.dependency_issue_type = by_id
+                .get(&item.issue_id)
+                .map(|task| task.issue_type.clone());
             item.dependency_status = by_id
                 .get(&item.issue_id)
                 .map(|task| task.status.clone())
@@ -490,10 +500,7 @@ impl StateStore {
                     })
                     .collect::<Vec<_>>();
 
-                (!blockers.is_empty()).then_some(BlockedTaskRecord {
-                    task,
-                    blockers,
-                })
+                (!blockers.is_empty()).then_some(BlockedTaskRecord { task, blockers })
             })
             .collect::<Vec<_>>();
 
@@ -682,7 +689,9 @@ impl StateStore {
             .collect::<BTreeMap<_, _>>();
         let active_ids = tasks
             .iter()
-            .filter(|task| (task.status == "open" || task.status == "in_progress") && task.issue_type != "epic")
+            .filter(|task| {
+                (task.status == "open" || task.status == "in_progress") && task.issue_type != "epic"
+            })
             .map(|task| task.id.clone())
             .collect::<Vec<_>>();
 
@@ -831,8 +840,7 @@ impl StateStore {
                 continue;
             }
 
-            let candidate =
-                Self::critical_path_for_task(by_id, &dep_task.id, memo, active)?;
+            let candidate = Self::critical_path_for_task(by_id, &dep_task.id, memo, active)?;
             if compare_task_paths(&candidate, &best_dependency_path).is_gt() {
                 best_dependency_path = candidate;
             }
@@ -878,8 +886,13 @@ impl StateStore {
     async fn persist_task_record(&self, task: TaskRecord) -> Result<(), StateStoreError> {
         let task_id = task.id.clone();
         let row = TaskStorageRow::from(task.clone());
-        let _: Option<TaskStorageRow> = self.db.upsert(("task", task_id.as_str())).content(row).await?;
-        self.replace_task_dependency_rows(&task_id, &task.dependencies).await?;
+        let _: Option<TaskStorageRow> = self
+            .db
+            .upsert(("task", task_id.as_str()))
+            .content(row)
+            .await?;
+        self.replace_task_dependency_rows(&task_id, &task.dependencies)
+            .await?;
         Ok(())
     }
 
@@ -1162,7 +1175,10 @@ impl StateStore {
             .filter(|task| task.status == "in_progress")
             .count();
         let closed_count = tasks.iter().filter(|task| task.status == "closed").count();
-        let epic_count = tasks.iter().filter(|task| task.issue_type == "epic").count();
+        let epic_count = tasks
+            .iter()
+            .filter(|task| task.issue_type == "epic")
+            .count();
         let ready_count = self.ready_tasks().await?.len();
 
         Ok(TaskStoreSummary {
@@ -1182,7 +1198,11 @@ impl StateStore {
         let mut snapshot_dependencies = Vec::new();
 
         for task in tasks {
-            snapshot_dependencies.extend(task.dependencies.iter().map(task_dependency_to_canonical_edge));
+            snapshot_dependencies.extend(
+                task.dependencies
+                    .iter()
+                    .map(task_dependency_to_canonical_edge),
+            );
             snapshot_tasks.push(task_record_to_canonical_snapshot_row(&task)?);
         }
 
@@ -1461,35 +1481,24 @@ impl StateStore {
     }
 
     #[allow(dead_code)]
-    pub async fn run_graph_status(
-        &self,
-        run_id: &str,
-    ) -> Result<RunGraphStatus, StateStoreError> {
-        let execution: Option<ExecutionPlanStateRow> = self
-            .db
-            .select(("execution_plan_state", run_id))
-            .await?;
+    pub async fn run_graph_status(&self, run_id: &str) -> Result<RunGraphStatus, StateStoreError> {
+        let execution: Option<ExecutionPlanStateRow> =
+            self.db.select(("execution_plan_state", run_id)).await?;
         let execution = execution.ok_or_else(|| StateStoreError::MissingTask {
             task_id: format!("run_graph:{run_id}"),
         })?;
-        let routed: Option<RoutedRunStateRow> = self
-            .db
-            .select(("routed_run_state", run_id))
-            .await?;
+        let routed: Option<RoutedRunStateRow> =
+            self.db.select(("routed_run_state", run_id)).await?;
         let routed = routed.ok_or_else(|| StateStoreError::MissingTask {
             task_id: format!("run_graph_route:{run_id}"),
         })?;
-        let governance: Option<GovernanceStateRow> = self
-            .db
-            .select(("governance_state", run_id))
-            .await?;
+        let governance: Option<GovernanceStateRow> =
+            self.db.select(("governance_state", run_id)).await?;
         let governance = governance.ok_or_else(|| StateStoreError::MissingTask {
             task_id: format!("run_graph_governance:{run_id}"),
         })?;
-        let resumability: Option<ResumabilityCapsuleRow> = self
-            .db
-            .select(("resumability_capsule", run_id))
-            .await?;
+        let resumability: Option<ResumabilityCapsuleRow> =
+            self.db.select(("resumability_capsule", run_id)).await?;
         let resumability = resumability.ok_or_else(|| StateStoreError::MissingTask {
             task_id: format!("run_graph_resumability:{run_id}"),
         })?;
@@ -1514,9 +1523,7 @@ impl StateStore {
         })
     }
 
-    pub async fn latest_run_graph_status(
-        &self,
-    ) -> Result<Option<RunGraphStatus>, StateStoreError> {
+    pub async fn latest_run_graph_status(&self) -> Result<Option<RunGraphStatus>, StateStoreError> {
         let mut query = self
             .db
             .query(
@@ -1681,7 +1688,9 @@ impl StateStore {
             total_task_rows: rollup.total_task_rows,
             total_dependency_rows: rollup.total_dependency_rows,
             total_stale_removed: rollup.total_stale_removed,
-            latest_operation: latest_receipt.as_ref().map(|receipt| receipt.operation.clone()),
+            latest_operation: latest_receipt
+                .as_ref()
+                .map(|receipt| receipt.operation.clone()),
             latest_source_kind: latest_receipt
                 .as_ref()
                 .map(|receipt| receipt.source_kind.clone()),
@@ -1701,6 +1710,163 @@ impl StateStore {
             .await?;
         let rows: Vec<EffectiveBundleReceiptSummary> = query.take(0)?;
         Ok(rows.into_iter().next())
+    }
+
+    pub async fn record_protocol_binding_snapshot(
+        &self,
+        scenario: &str,
+        primary_state_authority: &str,
+        bindings: &[ProtocolBindingState],
+    ) -> Result<ProtocolBindingReceipt, StateStoreError> {
+        if scenario.trim().is_empty() {
+            return Err(StateStoreError::InvalidProtocolBinding {
+                reason: "scenario is required".to_string(),
+            });
+        }
+        if primary_state_authority.trim().is_empty() {
+            return Err(StateStoreError::InvalidProtocolBinding {
+                reason: "primary_state_authority is required".to_string(),
+            });
+        }
+        if bindings.is_empty() {
+            return Err(StateStoreError::InvalidProtocolBinding {
+                reason: "at least one protocol binding row is required".to_string(),
+            });
+        }
+
+        let recorded_at = unix_timestamp_nanos().to_string();
+        let receipt_id = format!("protocol-binding-{recorded_at}");
+        let scenario_literal = escape_surql_literal(scenario);
+        self.db
+            .query(format!(
+                "DELETE protocol_binding_state WHERE scenario = '{scenario_literal}';"
+            ))
+            .await?;
+
+        let mut active_bindings = 0usize;
+        let mut script_bound_count = 0usize;
+        let mut rust_bound_count = 0usize;
+        let mut fully_runtime_bound_count = 0usize;
+        let mut unbound_count = 0usize;
+        let mut blocking_issue_count = 0usize;
+
+        for binding in bindings {
+            let record = ProtocolBindingStateRow::from_state(
+                scenario,
+                primary_state_authority,
+                recorded_at.clone(),
+                binding.clone(),
+            );
+            if record.active {
+                active_bindings += 1;
+            }
+            match record.binding_status.as_str() {
+                "script-bound" => script_bound_count += 1,
+                "rust-bound" => rust_bound_count += 1,
+                "fully-runtime-bound" => fully_runtime_bound_count += 1,
+                _ => unbound_count += 1,
+            }
+            blocking_issue_count += record.blockers.len();
+            let row_id = format!(
+                "{}--{}",
+                sanitize_record_id(scenario),
+                sanitize_record_id(&record.protocol_id)
+            );
+            let _: Option<ProtocolBindingStateRow> = self
+                .db
+                .upsert(("protocol_binding_state", row_id.as_str()))
+                .content(record)
+                .await?;
+        }
+
+        let receipt = ProtocolBindingReceipt {
+            receipt_id,
+            scenario: scenario.to_string(),
+            total_bindings: bindings.len(),
+            active_bindings,
+            script_bound_count,
+            rust_bound_count,
+            fully_runtime_bound_count,
+            unbound_count,
+            blocking_issue_count,
+            primary_state_authority: primary_state_authority.to_string(),
+            recorded_at,
+        };
+        let _: Option<ProtocolBindingReceipt> = self
+            .db
+            .upsert(("protocol_binding_receipt", receipt.receipt_id.as_str()))
+            .content(receipt.clone())
+            .await?;
+        Ok(receipt)
+    }
+
+    pub async fn latest_protocol_binding_receipt(
+        &self,
+    ) -> Result<Option<ProtocolBindingReceipt>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT receipt_id, scenario, total_bindings, active_bindings, script_bound_count, rust_bound_count, fully_runtime_bound_count, unbound_count, blocking_issue_count, primary_state_authority, recorded_at FROM protocol_binding_receipt ORDER BY recorded_at DESC LIMIT 1;",
+            )
+            .await?;
+        let rows: Vec<ProtocolBindingReceipt> = query.take(0)?;
+        Ok(rows.into_iter().next())
+    }
+
+    pub async fn latest_protocol_binding_rows(
+        &self,
+    ) -> Result<Vec<ProtocolBindingState>, StateStoreError> {
+        let Some(receipt) = self.latest_protocol_binding_receipt().await? else {
+            return Ok(Vec::new());
+        };
+        let mut query = self
+            .db
+            .query(format!(
+                "SELECT protocol_id, source_path, activation_class, runtime_owner, enforcement_type, proof_surface, primary_state_authority, binding_status, active, blockers, scenario, synced_at FROM protocol_binding_state WHERE scenario = '{}' ORDER BY protocol_id ASC;",
+                escape_surql_literal(&receipt.scenario)
+            ))
+            .await?;
+        let rows: Vec<ProtocolBindingStateRow> = query.take(0)?;
+        Ok(rows
+            .into_iter()
+            .map(ProtocolBindingState::from_row)
+            .collect())
+    }
+
+    pub async fn protocol_binding_summary(
+        &self,
+    ) -> Result<ProtocolBindingSummary, StateStoreError> {
+        let latest_receipt = self.latest_protocol_binding_receipt().await?;
+        Ok(match latest_receipt {
+            Some(receipt) => ProtocolBindingSummary {
+                total_receipts: self.count_table_rows("protocol_binding_receipt").await?,
+                total_bindings: receipt.total_bindings,
+                active_bindings: receipt.active_bindings,
+                script_bound_count: receipt.script_bound_count,
+                rust_bound_count: receipt.rust_bound_count,
+                fully_runtime_bound_count: receipt.fully_runtime_bound_count,
+                unbound_count: receipt.unbound_count,
+                blocking_issue_count: receipt.blocking_issue_count,
+                latest_receipt_id: Some(receipt.receipt_id),
+                latest_scenario: Some(receipt.scenario),
+                latest_recorded_at: Some(receipt.recorded_at),
+                primary_state_authority: Some(receipt.primary_state_authority),
+            },
+            None => ProtocolBindingSummary {
+                total_receipts: 0,
+                total_bindings: 0,
+                active_bindings: 0,
+                script_bound_count: 0,
+                rust_bound_count: 0,
+                fully_runtime_bound_count: 0,
+                unbound_count: 0,
+                blocking_issue_count: 0,
+                latest_receipt_id: None,
+                latest_scenario: None,
+                latest_recorded_at: None,
+                primary_state_authority: None,
+            },
+        })
     }
 
     async fn count_table_rows(&self, table: &str) -> Result<usize, StateStoreError> {
@@ -3405,14 +3571,8 @@ impl TaskReconciliationRollup {
             .map(|(key, value)| format!("{key}={value}"))
             .collect::<Vec<_>>()
             .join(", ");
-        let latest_recorded_at = self
-            .latest_recorded_at
-            .as_deref()
-            .unwrap_or("none");
-        let latest_source_path = self
-            .latest_source_path
-            .as_deref()
-            .unwrap_or("none");
+        let latest_recorded_at = self.latest_recorded_at.as_deref().unwrap_or("none");
+        let latest_source_path = self.latest_source_path.as_deref().unwrap_or("none");
 
         format!(
             "{} receipts (tasks={}, dependencies={}, stale_removed={}, operations: {}; source_kinds: {}; latest_recorded_at={}; latest_source_path={})",
@@ -3475,6 +3635,172 @@ impl TaskflowSnapshotBridgeSummary {
     }
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct ProtocolBindingStateRow {
+    protocol_id: String,
+    source_path: String,
+    activation_class: String,
+    runtime_owner: String,
+    enforcement_type: String,
+    proof_surface: String,
+    primary_state_authority: String,
+    binding_status: String,
+    active: bool,
+    blockers: Vec<String>,
+    scenario: String,
+    synced_at: String,
+}
+
+impl ProtocolBindingStateRow {
+    fn from_state(
+        scenario: &str,
+        primary_state_authority: &str,
+        synced_at: String,
+        state: ProtocolBindingState,
+    ) -> Self {
+        Self {
+            protocol_id: state.protocol_id,
+            source_path: state.source_path,
+            activation_class: state.activation_class,
+            runtime_owner: state.runtime_owner,
+            enforcement_type: state.enforcement_type,
+            proof_surface: state.proof_surface,
+            primary_state_authority: if state.primary_state_authority.trim().is_empty() {
+                primary_state_authority.to_string()
+            } else {
+                state.primary_state_authority
+            },
+            binding_status: state.binding_status,
+            active: state.active,
+            blockers: state.blockers,
+            scenario: scenario.to_string(),
+            synced_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct ProtocolBindingState {
+    pub protocol_id: String,
+    pub source_path: String,
+    pub activation_class: String,
+    pub runtime_owner: String,
+    pub enforcement_type: String,
+    pub proof_surface: String,
+    pub primary_state_authority: String,
+    pub binding_status: String,
+    pub active: bool,
+    pub blockers: Vec<String>,
+    pub scenario: String,
+    pub synced_at: String,
+}
+
+impl ProtocolBindingState {
+    fn from_row(row: ProtocolBindingStateRow) -> Self {
+        Self {
+            protocol_id: row.protocol_id,
+            source_path: row.source_path,
+            activation_class: row.activation_class,
+            runtime_owner: row.runtime_owner,
+            enforcement_type: row.enforcement_type,
+            proof_surface: row.proof_surface,
+            primary_state_authority: row.primary_state_authority,
+            binding_status: row.binding_status,
+            active: row.active,
+            blockers: row.blockers,
+            scenario: row.scenario,
+            synced_at: row.synced_at,
+        }
+    }
+
+    pub fn as_display(&self) -> String {
+        let blockers = if self.blockers.is_empty() {
+            "none".to_string()
+        } else {
+            self.blockers.join(",")
+        };
+        format!(
+            "{} status={} active={} activation={} enforcement={} owner={} blockers={}",
+            self.protocol_id,
+            self.binding_status,
+            self.active,
+            self.activation_class,
+            self.enforcement_type,
+            self.runtime_owner,
+            blockers
+        )
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub struct ProtocolBindingReceipt {
+    pub receipt_id: String,
+    pub scenario: String,
+    pub total_bindings: usize,
+    pub active_bindings: usize,
+    pub script_bound_count: usize,
+    pub rust_bound_count: usize,
+    pub fully_runtime_bound_count: usize,
+    pub unbound_count: usize,
+    pub blocking_issue_count: usize,
+    pub primary_state_authority: String,
+    pub recorded_at: String,
+}
+
+impl ProtocolBindingReceipt {
+    pub fn as_display(&self) -> String {
+        format!(
+            "{} scenario={} active={} script_bound={} rust_bound={} fully_runtime_bound={} unbound={} blocking_issues={} authority={}",
+            self.receipt_id,
+            self.scenario,
+            self.active_bindings,
+            self.script_bound_count,
+            self.rust_bound_count,
+            self.fully_runtime_bound_count,
+            self.unbound_count,
+            self.blocking_issue_count,
+            self.primary_state_authority
+        )
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct ProtocolBindingSummary {
+    pub total_receipts: usize,
+    pub total_bindings: usize,
+    pub active_bindings: usize,
+    pub script_bound_count: usize,
+    pub rust_bound_count: usize,
+    pub fully_runtime_bound_count: usize,
+    pub unbound_count: usize,
+    pub blocking_issue_count: usize,
+    pub latest_receipt_id: Option<String>,
+    pub latest_scenario: Option<String>,
+    pub latest_recorded_at: Option<String>,
+    pub primary_state_authority: Option<String>,
+}
+
+impl ProtocolBindingSummary {
+    pub fn as_display(&self) -> String {
+        if self.total_receipts == 0 {
+            return "idle (no protocol-binding receipts)".to_string();
+        }
+        format!(
+            "receipts={} bindings={} active={} script_bound={} rust_bound={} fully_runtime_bound={} unbound={} blocking_issues={} latest_scenario={} authority={}",
+            self.total_receipts,
+            self.total_bindings,
+            self.active_bindings,
+            self.script_bound_count,
+            self.rust_bound_count,
+            self.fully_runtime_bound_count,
+            self.unbound_count,
+            self.blocking_issue_count,
+            self.latest_scenario.as_deref().unwrap_or("none"),
+            self.primary_state_authority.as_deref().unwrap_or("none"),
+        )
+    }
+}
+
 #[derive(Debug, serde::Deserialize, SurrealValue)]
 struct CountRow {
     total: usize,
@@ -3486,8 +3812,16 @@ fn count_snapshot_bridge_rows(
     source_kind: Option<&str>,
 ) -> usize {
     rows.iter()
-        .filter(|row| operation.map(|expected| row.operation == expected).unwrap_or(true))
-        .filter(|row| source_kind.map(|expected| row.source_kind == expected).unwrap_or(true))
+        .filter(|row| {
+            operation
+                .map(|expected| row.operation == expected)
+                .unwrap_or(true)
+        })
+        .filter(|row| {
+            source_kind
+                .map(|expected| row.source_kind == expected)
+                .unwrap_or(true)
+        })
         .count()
 }
 
@@ -3531,6 +3865,9 @@ pub enum StateStoreError {
     },
     MissingInstructionRuntimeState,
     InvalidInstructionRuntimeState {
+        reason: String,
+    },
+    InvalidProtocolBinding {
         reason: String,
     },
     MissingSourceRoot {
@@ -3598,6 +3935,9 @@ impl std::fmt::Display for StateStoreError {
             }
             Self::InvalidInstructionRuntimeState { reason } => {
                 write!(f, "instruction runtime state is invalid: {reason}")
+            }
+            Self::InvalidProtocolBinding { reason } => {
+                write!(f, "protocol binding state is invalid: {reason}")
             }
             Self::MissingSourceRoot { slice, path } => {
                 write!(f, "source root for {slice} is missing: {}", path.display())
@@ -3680,17 +4020,17 @@ fn parse_canonical_timestamp(value: &str) -> Result<CanonicalTimestamp, StateSto
         return Ok(CanonicalTimestamp(parsed));
     }
 
-    let nanos = value
-        .parse::<i128>()
-        .map_err(|_| StateStoreError::InvalidCanonicalTaskflowExport {
-            reason: format!("updated_at is not RFC3339 or unix nanos: {value}"),
-        })?;
-    let parsed =
-        OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|error| {
-            StateStoreError::InvalidCanonicalTaskflowExport {
-                reason: format!("updated_at unix nanos is invalid ({value}): {error}"),
-            }
-        })?;
+    let nanos =
+        value
+            .parse::<i128>()
+            .map_err(|_| StateStoreError::InvalidCanonicalTaskflowExport {
+                reason: format!("updated_at is not RFC3339 or unix nanos: {value}"),
+            })?;
+    let parsed = OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|error| {
+        StateStoreError::InvalidCanonicalTaskflowExport {
+            reason: format!("updated_at unix nanos is invalid ({value}): {error}"),
+        }
+    })?;
     Ok(CanonicalTimestamp(parsed))
 }
 
@@ -5892,9 +6232,18 @@ hierarchy: framework,contracts
         assert_eq!(snapshot.tasks[0].id.0, "vida-a");
         assert_eq!(snapshot.tasks[1].id.0, "vida-b");
         assert_eq!(snapshot.tasks[2].id.0, "vida-root");
-        assert!(matches!(snapshot.tasks[0].status, CanonicalTaskStatus::InProgress));
-        assert!(matches!(snapshot.tasks[1].status, CanonicalTaskStatus::Closed));
-        assert!(matches!(snapshot.tasks[1].issue_type, CanonicalIssueType::Bug));
+        assert!(matches!(
+            snapshot.tasks[0].status,
+            CanonicalTaskStatus::InProgress
+        ));
+        assert!(matches!(
+            snapshot.tasks[1].status,
+            CanonicalTaskStatus::Closed
+        ));
+        assert!(matches!(
+            snapshot.tasks[1].issue_type,
+            CanonicalIssueType::Bug
+        ));
         assert_eq!(snapshot.dependencies.len(), 2);
         assert_eq!(snapshot.dependencies[0].issue_id.0, "vida-a");
         assert_eq!(snapshot.dependencies[0].depends_on_id.0, "vida-root");
@@ -5918,15 +6267,17 @@ hierarchy: framework,contracts
             .expect("reconciliation rollup should load");
         assert_eq!(rollup.total_receipts, 1);
         assert_eq!(rollup.by_operation.get("export_snapshot"), Some(&1));
-        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_object"), Some(&1));
+        assert_eq!(
+            rollup.by_source_kind.get("canonical_snapshot_object"),
+            Some(&1)
+        );
 
         let memory = store
             .export_taskflow_in_memory_store()
             .await
             .expect("memory export should succeed");
-        let runtime =
-            taskflow_state::TaskStore::get_task(&memory, &CanonicalTaskId::new("vida-b"))
-                .expect("task should exist in memory export");
+        let runtime = taskflow_state::TaskStore::get_task(&memory, &CanonicalTaskId::new("vida-b"))
+            .expect("task should exist in memory export");
         assert_eq!(runtime.title, "Task B");
         assert!(matches!(runtime.status, CanonicalTaskStatus::Closed));
         let runtime_dependencies =
@@ -5951,8 +6302,14 @@ hierarchy: framework,contracts
             .expect("reconciliation rollup should load");
         assert_eq!(rollup.total_receipts, 2);
         assert_eq!(rollup.by_operation.get("export_snapshot"), Some(&2));
-        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_memory"), Some(&1));
-        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_object"), Some(&1));
+        assert_eq!(
+            rollup.by_source_kind.get("canonical_snapshot_memory"),
+            Some(&1)
+        );
+        assert_eq!(
+            rollup.by_source_kind.get("canonical_snapshot_object"),
+            Some(&1)
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -6049,8 +6406,10 @@ hierarchy: framework,contracts
             taskflow_state::TaskStore::get_task(&restored, &CanonicalTaskId::new("vida-a"))
                 .expect("task should restore from snapshot");
         assert_eq!(restored_task.title, "Task A");
-        let restored_dependencies =
-            taskflow_state::TaskStore::list_dependencies(&restored, &CanonicalTaskId::new("vida-a"));
+        let restored_dependencies = taskflow_state::TaskStore::list_dependencies(
+            &restored,
+            &CanonicalTaskId::new("vida-a"),
+        );
         assert_eq!(restored_dependencies.len(), 1);
         assert_eq!(restored_dependencies[0].depends_on_id.0, "vida-root");
 
@@ -6158,7 +6517,10 @@ hierarchy: framework,contracts
             .expect("reconciliation rollup should load");
         assert_eq!(rollup.total_receipts, 1);
         assert_eq!(rollup.by_operation.get("import_snapshot"), Some(&1));
-        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_memory"), Some(&1));
+        assert_eq!(
+            rollup.by_source_kind.get("canonical_snapshot_memory"),
+            Some(&1)
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -6230,7 +6592,10 @@ hierarchy: framework,contracts
             .expect("reconciliation rollup should load");
         assert_eq!(rollup.total_receipts, 1);
         assert_eq!(rollup.by_operation.get("import_snapshot"), Some(&1));
-        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_file"), Some(&1));
+        assert_eq!(
+            rollup.by_source_kind.get("canonical_snapshot_file"),
+            Some(&1)
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -6281,10 +6646,16 @@ hierarchy: framework,contracts
             .await
             .expect("replacement import should succeed");
 
-        let kept = store.show_task("vida-keep").await.expect("keep task should remain");
+        let kept = store
+            .show_task("vida-keep")
+            .await
+            .expect("keep task should remain");
         assert_eq!(kept.title, "Keep new");
         assert_eq!(kept.status, "closed");
-        let missing = store.show_task("vida-stale").await.expect_err("stale task should be removed");
+        let missing = store
+            .show_task("vida-stale")
+            .await
+            .expect_err("stale task should be removed");
         assert!(matches!(missing, StateStoreError::MissingTask { .. }));
 
         let mut receipt_query = store
@@ -6309,11 +6680,9 @@ hierarchy: framework,contracts
         assert_eq!(latest.source_kind, "canonical_snapshot_memory");
         assert_eq!(latest.task_count, 1);
         assert_eq!(latest.stale_removed_count, 1);
-        assert!(
-            latest
-                .as_display()
-                .contains("replace_snapshot via canonical_snapshot_memory")
-        );
+        assert!(latest
+            .as_display()
+            .contains("replace_snapshot via canonical_snapshot_memory"));
 
         let rollup = store
             .task_reconciliation_rollup()
@@ -6321,7 +6690,10 @@ hierarchy: framework,contracts
             .expect("reconciliation rollup should load");
         assert_eq!(rollup.total_receipts, 1);
         assert_eq!(rollup.by_operation.get("replace_snapshot"), Some(&1));
-        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_memory"), Some(&1));
+        assert_eq!(
+            rollup.by_source_kind.get("canonical_snapshot_memory"),
+            Some(&1)
+        );
         assert!(rollup.latest_recorded_at.is_some());
         assert!(
             rollup
@@ -6395,7 +6767,10 @@ hierarchy: framework,contracts
             .await
             .expect("replacement import should succeed");
 
-        let keep = store.show_task("vida-keep").await.expect("keep task should remain");
+        let keep = store
+            .show_task("vida-keep")
+            .await
+            .expect("keep task should remain");
         assert_eq!(keep.dependencies.len(), 1);
         assert_eq!(keep.dependencies[0].depends_on_id, "vida-root");
         assert_eq!(keep.dependencies[0].edge_type, "parent-child");
@@ -6417,7 +6792,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn import_taskflow_snapshot_replaces_dependencies_for_updated_tasks_without_removing_unrelated_tasks() {
+    async fn import_taskflow_snapshot_replaces_dependencies_for_updated_tasks_without_removing_unrelated_tasks(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6480,7 +6856,10 @@ hierarchy: framework,contracts
             .await
             .expect("additive import should succeed");
 
-        let keep = store.show_task("vida-keep").await.expect("keep task should remain");
+        let keep = store
+            .show_task("vida-keep")
+            .await
+            .expect("keep task should remain");
         assert_eq!(keep.dependencies.len(), 1);
         assert_eq!(keep.dependencies[0].depends_on_id, "vida-root");
         assert_eq!(keep.dependencies[0].edge_type, "parent-child");
@@ -6525,7 +6904,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn import_taskflow_snapshot_allows_dependencies_on_existing_authoritative_tasks_outside_payload() {
+    async fn import_taskflow_snapshot_allows_dependencies_on_existing_authoritative_tasks_outside_payload(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6697,7 +7077,10 @@ hierarchy: framework,contracts
             .latest_task_reconciliation_summary()
             .await
             .expect("latest reconciliation summary should load");
-        assert!(latest.is_none(), "rejected import must not emit reconciliation receipt");
+        assert!(
+            latest.is_none(),
+            "rejected import must not emit reconciliation receipt"
+        );
 
         let bridge = store
             .taskflow_snapshot_bridge_summary()
@@ -6720,7 +7103,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn import_taskflow_snapshot_file_allows_dependencies_on_existing_authoritative_tasks_outside_payload() {
+    async fn import_taskflow_snapshot_file_allows_dependencies_on_existing_authoritative_tasks_outside_payload(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6766,7 +7150,9 @@ hierarchy: framework,contracts
         store
             .import_taskflow_snapshot_file(&snapshot_path)
             .await
-            .expect("file-backed additive import should accept existing authoritative dependency target");
+            .expect(
+            "file-backed additive import should accept existing authoritative dependency target",
+        );
 
         let child = store
             .show_task("vida-child")
@@ -6789,7 +7175,10 @@ hierarchy: framework,contracts
             .expect("latest reconciliation receipt should exist");
         assert_eq!(latest.operation, "import_snapshot");
         assert_eq!(latest.source_kind, "canonical_snapshot_file");
-        assert_eq!(latest.source_path.as_deref(), Some(snapshot_path.to_string_lossy().as_ref()));
+        assert_eq!(
+            latest.source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
         assert_eq!(latest.task_count, 1);
         assert_eq!(latest.dependency_count, 1);
 
@@ -6815,7 +7204,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn import_taskflow_snapshot_file_fails_closed_before_mutation_on_post_merge_parent_conflict() {
+    async fn import_taskflow_snapshot_file_fails_closed_before_mutation_on_post_merge_parent_conflict(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6893,7 +7283,10 @@ hierarchy: framework,contracts
             .latest_task_reconciliation_summary()
             .await
             .expect("latest reconciliation summary should load");
-        assert!(latest.is_none(), "rejected file import must not emit reconciliation receipt");
+        assert!(
+            latest.is_none(),
+            "rejected file import must not emit reconciliation receipt"
+        );
 
         let bridge = store
             .taskflow_snapshot_bridge_summary()
@@ -6992,8 +7385,14 @@ hierarchy: framework,contracts
             .expect("reconciliation rollup should load");
         assert_eq!(rollup.total_receipts, 2);
         assert_eq!(rollup.by_operation.get("import_snapshot"), Some(&2));
-        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_memory"), Some(&1));
-        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_file"), Some(&1));
+        assert_eq!(
+            rollup.by_source_kind.get("canonical_snapshot_memory"),
+            Some(&1)
+        );
+        assert_eq!(
+            rollup.by_source_kind.get("canonical_snapshot_file"),
+            Some(&1)
+        );
         assert_eq!(rollup.total_task_rows, 2);
         assert_eq!(rollup.total_dependency_rows, 2);
         assert_eq!(rollup.total_stale_removed, 0);
@@ -7014,7 +7413,10 @@ hierarchy: framework,contracts
         assert_eq!(bridge.total_dependency_rows, 2);
         assert_eq!(bridge.total_stale_removed, 0);
         assert_eq!(bridge.latest_operation.as_deref(), Some("import_snapshot"));
-        assert_eq!(bridge.latest_source_kind.as_deref(), Some("canonical_snapshot_file"));
+        assert_eq!(
+            bridge.latest_source_kind.as_deref(),
+            Some("canonical_snapshot_file")
+        );
         assert_eq!(
             bridge.latest_source_path.as_deref(),
             Some(snapshot_path.to_string_lossy().as_ref())
@@ -7119,8 +7521,14 @@ hierarchy: framework,contracts
         assert_eq!(rollup.total_receipts, 2);
         assert_eq!(rollup.by_operation.get("import_snapshot"), Some(&1));
         assert_eq!(rollup.by_operation.get("replace_snapshot"), Some(&1));
-        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_memory"), Some(&1));
-        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_file"), Some(&1));
+        assert_eq!(
+            rollup.by_source_kind.get("canonical_snapshot_memory"),
+            Some(&1)
+        );
+        assert_eq!(
+            rollup.by_source_kind.get("canonical_snapshot_file"),
+            Some(&1)
+        );
         assert_eq!(rollup.total_task_rows, 3);
         assert_eq!(rollup.total_dependency_rows, 2);
         assert_eq!(rollup.total_stale_removed, 1);
@@ -7144,15 +7552,24 @@ hierarchy: framework,contracts
         assert_eq!(bridge.total_dependency_rows, 2);
         assert_eq!(bridge.total_stale_removed, 1);
         assert_eq!(bridge.latest_operation.as_deref(), Some("replace_snapshot"));
-        assert_eq!(bridge.latest_source_kind.as_deref(), Some("canonical_snapshot_file"));
+        assert_eq!(
+            bridge.latest_source_kind.as_deref(),
+            Some("canonical_snapshot_file")
+        );
         assert_eq!(
             bridge.latest_source_path.as_deref(),
             Some(snapshot_path.to_string_lossy().as_ref())
         );
 
-        let stale = store.show_task("vida-stale").await.expect_err("stale task should be removed");
+        let stale = store
+            .show_task("vida-stale")
+            .await
+            .expect_err("stale task should be removed");
         assert!(matches!(stale, StateStoreError::MissingTask { .. }));
-        let replaced = store.show_task("vida-a").await.expect("task a should remain");
+        let replaced = store
+            .show_task("vida-a")
+            .await
+            .expect("task a should remain");
         assert_eq!(replaced.title, "Task A replaced");
         assert_eq!(replaced.status, "closed");
 
@@ -7282,8 +7699,14 @@ hierarchy: framework,contracts
         assert_eq!(rollup.total_receipts, 2);
         assert_eq!(rollup.by_operation.get("import_snapshot"), Some(&1));
         assert_eq!(rollup.by_operation.get("replace_snapshot"), Some(&1));
-        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_memory"), Some(&1));
-        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_file"), Some(&1));
+        assert_eq!(
+            rollup.by_source_kind.get("canonical_snapshot_memory"),
+            Some(&1)
+        );
+        assert_eq!(
+            rollup.by_source_kind.get("canonical_snapshot_file"),
+            Some(&1)
+        );
         assert_eq!(rollup.total_task_rows, 3);
         assert_eq!(rollup.total_dependency_rows, 2);
         assert_eq!(rollup.total_stale_removed, 1);
@@ -7305,13 +7728,19 @@ hierarchy: framework,contracts
         assert_eq!(bridge.total_dependency_rows, 2);
         assert_eq!(bridge.total_stale_removed, 1);
         assert_eq!(bridge.latest_operation.as_deref(), Some("replace_snapshot"));
-        assert_eq!(bridge.latest_source_kind.as_deref(), Some("canonical_snapshot_file"));
+        assert_eq!(
+            bridge.latest_source_kind.as_deref(),
+            Some("canonical_snapshot_file")
+        );
         assert_eq!(
             bridge.latest_source_path.as_deref(),
             Some(snapshot_path.to_string_lossy().as_ref())
         );
 
-        let replaced = reopened.show_task("vida-a").await.expect("task a should remain");
+        let replaced = reopened
+            .show_task("vida-a")
+            .await
+            .expect("task a should remain");
         assert_eq!(replaced.title, "Task A replaced");
         let stale = reopened
             .show_task("vida-stale")
@@ -7371,9 +7800,15 @@ hierarchy: framework,contracts
             .await
             .expect("replacement file import should succeed");
 
-        let kept = store.show_task("vida-keep").await.expect("keep task should remain");
+        let kept = store
+            .show_task("vida-keep")
+            .await
+            .expect("keep task should remain");
         assert_eq!(kept.title, "Keep replacement");
-        let missing = store.show_task("vida-stale").await.expect_err("stale task should be removed");
+        let missing = store
+            .show_task("vida-stale")
+            .await
+            .expect_err("stale task should be removed");
         assert!(matches!(missing, StateStoreError::MissingTask { .. }));
 
         let latest = store
@@ -7400,7 +7835,10 @@ hierarchy: framework,contracts
         assert_eq!(rollup.total_dependency_rows, 0);
         assert_eq!(rollup.total_stale_removed, 1);
         assert_eq!(rollup.by_operation.get("replace_snapshot"), Some(&1));
-        assert_eq!(rollup.by_source_kind.get("canonical_snapshot_file"), Some(&1));
+        assert_eq!(
+            rollup.by_source_kind.get("canonical_snapshot_file"),
+            Some(&1)
+        );
         assert_eq!(
             rollup.latest_source_path.as_deref(),
             Some(snapshot_path.to_string_lossy().as_ref())
@@ -7425,7 +7863,10 @@ hierarchy: framework,contracts
         assert_eq!(bridge.total_dependency_rows, 0);
         assert_eq!(bridge.total_stale_removed, 1);
         assert_eq!(bridge.latest_operation.as_deref(), Some("replace_snapshot"));
-        assert_eq!(bridge.latest_source_kind.as_deref(), Some("canonical_snapshot_file"));
+        assert_eq!(
+            bridge.latest_source_kind.as_deref(),
+            Some("canonical_snapshot_file")
+        );
         assert_eq!(
             bridge.latest_source_path.as_deref(),
             Some(snapshot_path.to_string_lossy().as_ref())
@@ -7711,7 +8152,10 @@ hierarchy: framework,contracts
         assert_eq!(bridge.file_import_receipts, 0);
         assert_eq!(bridge.file_replace_receipts, 1);
         assert_eq!(bridge.latest_operation.as_deref(), Some("export_snapshot"));
-        assert_eq!(bridge.latest_source_kind.as_deref(), Some("canonical_snapshot_object"));
+        assert_eq!(
+            bridge.latest_source_kind.as_deref(),
+            Some("canonical_snapshot_object")
+        );
 
         let _ = fs::remove_dir_all(&source_root);
         let _ = fs::remove_dir_all(&destination_root);

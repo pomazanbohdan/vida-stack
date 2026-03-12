@@ -73,6 +73,18 @@ Canonical shape:
 3. produces machine-readable binding snapshots and gap reports,
 4. remains bridge-only and must not become the long-term owner of protocol-runtime law.
 
+Current implemented bridge surface:
+
+1. `vida taskflow protocol-binding sync [--json]`
+2. `vida taskflow protocol-binding status [--json]`
+3. `vida taskflow protocol-binding check [--json]`
+
+Current state rule:
+
+1. the implemented bridge stores binding rows and receipts in the authoritative TaskFlow state store,
+2. root `vida status --json` and `vida doctor --json` expose the latest `protocol_binding` rollup from that same runtime truth,
+3. this closes the first DB-backed proof slice for the `v0.2.2` bridge wave without yet claiming Rust-native crate closure.
+
 Minimum responsibilities:
 
 1. resolve active protocol set for a bounded runtime scenario,
@@ -296,5 +308,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/taskflow-protocol-runtime-binding-model.md
 created_at: '2026-03-12T12:15:00+02:00'
-updated_at: '2026-03-12T12:23:51+02:00'
+updated_at: '2026-03-12T12:35:32+02:00'
 changelog_ref: taskflow-protocol-runtime-binding-model.changelog.jsonl
