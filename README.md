@@ -6,7 +6,7 @@
     <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen" alt="Status"></a>
     <a href="#"><img src="https://img.shields.io/badge/Release-0.2.1-blue" alt="Release"></a>
     <a href="#"><img src="https://img.shields.io/badge/Runtime-taskflow--v0-orange" alt="Runtime"></a>
-    <a href="#"><img src="https://img.shields.io/badge/Docsys-codex--v0-teal" alt="Docsys"></a>
+    <a href="#"><img src="https://img.shields.io/badge/Docsys-DocFlow-teal" alt="Docsys"></a>
     <a href="#"><img src="https://img.shields.io/badge/Target-VIDA_1.0-purple" alt="Target"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MPL--2.0-brightgreen" alt="License"></a>
   </p>
@@ -30,7 +30,7 @@
 Instead of treating prompts, scripts, task lists, and docs as disconnected artifacts, VIDA keeps one lawful operating model with clear proof/runtime boundaries:
 
 - ⚙️ **Task execution proof runtime** through `taskflow-v0`
-- 📚 **Documentation/inventory proof runtime** through `codex-v0`
+- 📚 **Documentation/inventory proof runtime** through **DocFlow** (current donor surface: `codex-v0`)
 - 🧭 **Boot, routing, and map-driven discovery** through `AGENTS.md`, `AGENTS.sidecar.md`, and framework maps
 - ✅ **Verification, approval, and proof gates**
 - 🧠 **Durable runtime state, receipts, and checkpoints**
@@ -84,7 +84,7 @@ The current VIDA direction is grounded in orchestrator-led multi-agent product e
 | `Runtime / State Machines` | materialize execution state, route progression, approval, coach, and verification lifecycles |
 
 > [!IMPORTANT]
-> **Transitional Architecture Notice:** `taskflow-v0` and `codex-v0` are the separate proof runtimes shipped on the `0.2.x` line, with `v0.2.1` as the current hotfix. The source of truth remains the canonical product/spec and instruction surfaces under `docs/product/spec/`, `vida/config/`, and `vida/config/instructions/`. Rust `taskflow` / `docflow` remain active parallel implementation tracks for the next release, not the current public runtime.
+> **Transitional Architecture Notice:** `taskflow-v0` and **DocFlow** (current donor surface: `codex-v0`) are the separate proof runtimes shipped on the `0.2.x` line, with `v0.2.1` as the current hotfix. The source of truth remains the canonical product/spec and instruction surfaces under `docs/product/spec/`, `vida/config/`, and `vida/config/instructions/`. Rust `taskflow` / `docflow` remain active parallel implementation tracks for the next release, not the current public runtime.
 
 ---
 
@@ -104,7 +104,7 @@ curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/insta
 - 🔐 verifies release checksums
 - 🗂️ installs versioned sources under `~/.local/share/vida-stack/releases/<tag>`
 - 🔁 updates `~/.local/share/vida-stack/current`
-- 🧪 creates an installer-managed Python `venv` for `codex-v0` and `pyturso`
+- 🧪 creates an installer-managed Python `venv` for **DocFlow** (current donor surface: `codex-v0`) and `pyturso`
 - 📍 deploys a clean `AGENTS.sidecar.md` scaffold for the external project owner
 - 🧰 writes launchers into `~/.local/bin`:
   - `vida`
@@ -135,9 +135,9 @@ It already covers:
 - checkpoint / replay / recovery behavior
 - verification merge and admissibility
 - DB-backed task store with JSONL import
-- final `taskflow -> codex` runtime-consumption wiring
+- final `taskflow -> DocFlow` runtime-consumption wiring
 
-### 📚 `codex-v0`
+### 📚 `DocFlow`
 
 The current documentation and inventory proof runtime for the `0.2.x` proving line.
 
@@ -153,7 +153,7 @@ It already covers:
 
 The top-level product surface and release direction.
 
-In the current `0.2.x` proving line, the installer already gives you a `vida` launcher, but the public runtime still operates through the bounded `taskflow-v0` and `codex-v0` proof surfaces.
+In the current `0.2.x` proving line, the installer already gives you a `vida` launcher, but the public runtime still operates through the bounded `taskflow-v0` and **DocFlow** proof surfaces. The current DocFlow donor path remains `codex-v0/codex.py`.
 
 The next product target behind that launcher is:
 
@@ -234,7 +234,7 @@ Its job is to make the transitional product trustworthy enough that `Release 1` 
 
 That means:
 
-- `taskflow-v0` and `codex-v0` remain the current public proof runtimes
+- `taskflow-v0` and **DocFlow** remain the current public proof runtimes
 - source-of-truth law stays in `docs/product/spec/`, `vida/config/`, and `vida/config/instructions/`
 - current release work hardens semantics before compiled runtime substitution
 - Rust `taskflow` and `docflow` remain active parallel implementation tracks for `Release 1`
