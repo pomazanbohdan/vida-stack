@@ -15,7 +15,6 @@ requires "results >= 0.5.0"       # Result[T, E] error handling without exceptio
 requires "dotenv >= 2.0.0"        # .env file loading (VIDA_ROOT etc.)
 requires "checksums >= 0.2.0"     # SHA256 for boot receipt file hashes
 requires "regex >= 0.25.0"        # Pattern matching for pack_router_keywords
-requires "termstyle >= 0.2.0"     # Colored terminal output (bold, red, green etc.)
 
 # Tasks
 task test, "Run unit tests":

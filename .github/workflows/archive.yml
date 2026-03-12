@@ -99,10 +99,10 @@ jobs:
             gh release edit "${RELEASE_TAG}" \
               --title "${title}" \
               --notes-file dist/release-notes.md
-            gh release upload "${RELEASE_TAG}" dist/*.zip dist/*.tar.gz dist/*.sha256 dist/vida-install.sh --clobber
+            gh release upload "${RELEASE_TAG}" dist/*.zip dist/*.tar.gz dist/*.sha256 dist/*.manifest.json dist/vida-install.sh --clobber
           else
             gh release create "${RELEASE_TAG}" \
-              dist/*.zip dist/*.tar.gz dist/*.sha256 dist/vida-install.sh \
+              dist/*.zip dist/*.tar.gz dist/*.sha256 dist/*.manifest.json dist/vida-install.sh \
               --title "${title}" \
               --notes-file dist/release-notes.md
           fi
