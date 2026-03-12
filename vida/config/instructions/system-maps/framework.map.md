@@ -82,6 +82,12 @@ Core-cluster routing rule:
 2. use `vida/config/instructions/system-maps/framework.core-protocols-map.md` when the task is about how the core protocols fit together as one package,
 3. keep tooling, project-environment notes, and backend-specific lifecycle law outside the core cluster map and outside the core protocols.
 
+Protocol-domain routing rule:
+
+1. domain-level classification of protocol-bearing artifacts does not belong inside `protocol.index` rows or owner-layer maps,
+2. use `vida/config/instructions/system-maps/framework.protocol-domains-map.md` when the task is about which protocol family a topic belongs to, especially when distinguishing orchestration architecture from adjacent protocol families such as thinking, documentation, diagnostics, naming, or artifact governance,
+3. keep this topology map as the higher framework architecture owner and the protocol-domains map as the thinner domain-classification surface.
+
 Protocol-layer routing rule:
 
 1. one-pass placement of a protocol-bearing artifact into the correct owner layer does not belong inside individual protocols,
@@ -135,6 +141,7 @@ VIDA uses one normalized documentation/runtime stack:
 3. `Framework Map / Index Layer`
    - `vida/root-map.md`
    - this file
+   - `vida/config/instructions/system-maps/framework.protocol-domains-map.md`
    - `vida/config/instructions/system-maps/protocol.index.md`
    - `vida/config/instructions/system-maps/governance.map.md`
    - thin indexes/pointers only
@@ -391,10 +398,10 @@ Conflict rule:
 artifact_path: config/system-maps/framework.map
 artifact_type: system_map
 artifact_version: '1'
-artifact_revision: '2026-03-09'
+artifact_revision: '2026-03-12'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps/framework.map.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-11T15:48:00+02:00'
+updated_at: '2026-03-12T11:05:54+02:00'
 changelog_ref: framework.map.changelog.jsonl

@@ -259,11 +259,11 @@ bash beads-bg-sync.sh stop
 3. Do not use aggressive intervals below 120 sec in normal workflow.
 4. Prefer event-driven sync (`beads-workflow` auto-sync) + sparse background JSONL snapshots over high-frequency polling.
 
-Silent diagnosis TaskFlow handoff:
+Silent diagnosis execution persistence:
 
-1. If silent diagnosis is active and a framework gap was captured during the current task, `reflect`/`finish` should reference the capture artifact or resulting framework task id.
-2. Current-task completion is allowed with a bounded workaround, but framework capture must not be left only in chat.
-3. When the current task is paused rather than closed, store the pending framework follow-up in the context capsule so post-compact recovery can resume the correct next action.
+1. If silent diagnosis is active and a framework gap was already captured, `reflect`/`finish` should reference the capture artifact or resulting framework task id.
+2. This protocol owns only execution-side persistence of that capture in TaskFlow evidence and context capsules.
+3. Silent diagnosis policy, capture timing, and follow-up routing remain owned by `vida/config/instructions/diagnostic-instructions/analysis.silent-framework-diagnosis-protocol.md`.
 
 ## 6) Gates
 
@@ -280,7 +280,7 @@ Silent diagnosis TaskFlow handoff:
 4.2. If silent framework diagnosis is active and a framework gap was detected, compact-safe evidence must include the capture artifact path or follow-up framework task id.
 5. Execution gate: if no active block exists, execution must not proceed.
 6. Plan integrity gate: run `bash todo-plan-validate.sh <task_id>` after `block-plan` batch and before execution start. Use `--diff-aware` when the worktree already contains target-scope changes; coverage is evaluated against the whole task plan so already-completed blocks still count.
-6.1. For framework-only tasks, compact evidence is valid when work is confined to `legacy helper surfaces` and the block records concrete actions plus canonical artifacts or task IDs. Runtime verification may downgrade missing artifact warnings to informational severity for these tasks in non-strict mode.
+6.1. For framework-only tasks, compact evidence is valid when work is confined to migration-only helper surfaces and the block records concrete actions plus canonical artifacts or task IDs. Runtime verification may downgrade missing artifact warnings to informational severity for these tasks in non-strict mode.
 6.2. Silent diagnosis gate: when active, task closure is invalid if a detected framework gap was only discussed in chat and not captured in canonical execution evidence, context capsule, or framework task state.
 
 ## 7) Anti-Patterns
@@ -389,5 +389,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/work.taskflow-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-11T13:04:19+02:00'
+updated_at: '2026-03-12T11:42:16+02:00'
 changelog_ref: work.taskflow-protocol.changelog.jsonl

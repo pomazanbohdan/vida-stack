@@ -63,9 +63,9 @@ Update the development-conditions document after success in any of these classes
 
 ## Relationship To Other Protocols
 
-1. `runtime-instructions/bridge.spec-sync-protocol.md` governs framework/spec synchronization after autonomous changes.
+1. `vida/config/instructions/runtime-instructions/bridge.spec-sync-protocol.md` governs framework/spec synchronization after autonomous changes.
 2. This protocol governs project-owned operational development evidence after successful implementation steps.
-3. `work.documentation-operation-protocol.md` still governs how canonical documentation mutations are performed lawfully.
+3. `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md` still governs how canonical documentation mutations are performed lawfully.
 
 ## Closure Rule
 
@@ -84,5 +84,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/work.development-evidence-sync-protocol.md
 created_at: '2026-03-11T09:20:00+02:00'
-updated_at: '2026-03-11T13:02:54+02:00'
+updated_at: '2026-03-12T11:44:42+02:00'
 changelog_ref: work.development-evidence-sync-protocol.changelog.jsonl

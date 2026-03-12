@@ -18,18 +18,18 @@ This protocol promotes the research-layer `Agent Definition System` into framewo
 Required runtime artifacts:
 
 1. `vida/config/instructions/agent-definitions/model.agent-definitions-contract.md`
-2. `docs/product/spec/instruction-artifact-model.md`
-3. `docs/product/spec/skill-management-and-activation-law.md`
-4. `vida/config/instructions/`
-5. `vida/config/instructions/`
-6. `vida/config/instructions/`
+2. `vida/config/instructions/agent-definitions/role.role-profile-contract.md`
+3. `docs/product/spec/instruction-artifact-model.md`
+4. `docs/product/spec/skill-management-and-activation-law.md`
+5. `vida/config/instructions/prompt-templates/worker.packet-templates.md`
+6. `vida/config/instructions/prompt-templates/cheap-worker.prompt-pack-reference.md`
 7. `vida/config/instructions/skills/`
 
 Upstream supporting artifacts:
 
 1. `docs/process/framework-source-lineage-index.md`
-2. `docs/process/framework-source-lineage-index.md`
-3. `vida/config/instructions/agent-definitions/role.role-profile-contract.md`
+2. `docs/product/spec/agent-role-skill-profile-flow-model.md`
+3. `vida/config/instructions/system-maps/template.map.md`
 
 ## Canonical Terminology
 
@@ -190,5 +190,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/agent-definitions/model.agent-definitions-contract.md
 created_at: '2026-03-09T12:00:46+02:00'
-updated_at: '2026-03-12T07:48:27+02:00'
+updated_at: '2026-03-12T11:47:59+02:00'
 changelog_ref: model.agent-definitions-contract.changelog.jsonl

@@ -83,7 +83,7 @@ Project extension rule:
 
 1. `vida/config/instructions/agent-definitions/model.agent-definitions-contract.md`
 2. `docs/product/spec/instruction-artifact-model.md`
-3. `docs/process/framework-source-lineage-index.md`
+3. `docs/product/spec/agent-role-skill-profile-flow-model.md`
 4. `docs/process/framework-source-lineage-index.md`
 
 -----
@@ -95,5 +95,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/agent-definitions/role.role-profile-contract.md
 created_at: '2026-03-10T15:05:00+02:00'
-updated_at: '2026-03-11T12:33:22+02:00'
+updated_at: '2026-03-12T11:47:59+02:00'
 changelog_ref: role.role-profile-contract.changelog.jsonl

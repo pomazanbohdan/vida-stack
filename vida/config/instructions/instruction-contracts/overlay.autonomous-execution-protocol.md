@@ -155,9 +155,9 @@ Autonomous follow-through must stop and return control to routing/slicing when a
 1. keep all work inside TaskFlow block lifecycle,
 2. keep one writer owner per writable scope,
 3. continue automatically only across lawfully connected tasks/blocks,
-4. prefer `beads-workflow.sh block-finish` for done steps so the next block can activate deterministically,
-5. run `todo-plan-validate.sh` when extending or reshaping planned blocks,
-6. use `task-state-reconcile.py` before closing or skipping drifted tasks,
+4. use the canonical tracked-execution block-finish surface so the next block can activate deterministically,
+5. use the canonical planning-validation surface when extending or reshaping planned blocks,
+6. use the canonical task-state reconciliation surface before closing or skipping drifted tasks,
 7. preserve compact-safe state through TaskFlow evidence and context capsules.
 8. prefer continuing to the next lawful task/block over pausing for user confirmation when no stop condition is active.
 8.1. if spec-ready auto development is enabled, treat ready spec state as sufficient to enter implementation routing without a new user prompt.
@@ -222,10 +222,10 @@ Use autonomous execution mode like this:
 artifact_path: config/instructions/instruction-contracts/overlay.autonomous-execution.protocol
 artifact_type: instruction_contract
 artifact_version: '1'
-artifact_revision: '2026-03-09'
+artifact_revision: '2026-03-12'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/overlay.autonomous-execution-protocol.md
 created_at: '2026-03-09T12:00:46+02:00'
-updated_at: '2026-03-11T12:32:40+02:00'
+updated_at: '2026-03-12T11:27:53+02:00'
 changelog_ref: overlay.autonomous-execution-protocol.changelog.jsonl

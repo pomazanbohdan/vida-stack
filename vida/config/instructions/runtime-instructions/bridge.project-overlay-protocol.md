@@ -50,16 +50,17 @@ Overlay is evaluated after core VIDA boot is available.
 
 Activation order:
 
-1. load framework invariants (`AGENTS.md` + core protocols),
+1. complete the mandatory bootstrap and lane-entry path (`AGENTS.md`, `AGENTS.sidecar.md`, `vida/root-map.md`, selected lane entry, and activation law),
 2. detect `vida.config.yaml`,
 3. parse overlay,
 4. read `protocol_activation.*`,
-5. activate matching protocol bundles,
+5. activate only the matching protocol bundles authorized by the activation law and overlay values,
 6. initialize runtime state for activated bundles.
 
 Rule:
 
 1. overlay activates protocol domains; it does not redefine framework source files.
+2. overlay evaluation must not assume that `core` protocols are preloaded unless the active route or trigger matrix has already activated them.
 
 Schema validation gate:
 
@@ -441,10 +442,10 @@ taskflow-v0 boot snapshot --json
 artifact_path: config/runtime-instructions/project-overlay.protocol
 artifact_type: runtime_instruction
 artifact_version: '1'
-artifact_revision: '2026-03-09'
+artifact_revision: '2026-03-12'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-11T12:52:05+02:00'
+updated_at: '2026-03-12T11:27:53+02:00'
 changelog_ref: bridge.project-overlay-protocol.changelog.jsonl

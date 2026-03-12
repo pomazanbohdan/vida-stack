@@ -275,7 +275,7 @@ Use when at least one is true:
 2. For `artifact_flow`, use tracked execution + pack.
 3. For `execution_flow`, use tracked execution and the canonical execution protocol.
 4. For `mixed`, start in answer mode and transition only when execution is clearly required.
-5. Route all framework-owned changes to `AGENTS.md` and `legacy helper surfaces`.
+5. Route bootstrap/router changes to `AGENTS.md` and route other framework-owned instruction changes to their canonical framework surfaces under `vida/config/instructions/**`; treat `legacy helper surfaces` as migration-only references rather than default mutation targets.
 6. Concrete runtime commands for task readiness, task mutation, and task closure belong to the active tracked-execution runtime-family surfaces, not to this entry contract.
 7. During active task execution, use the canonical tracked-execution blocks and keep near-term planning lean.
 8. Explicit VIDA/framework self-diagnosis is executed directly by the main orchestrator and bypasses tracked-execution/pack flow by default only for untracked chat diagnosis.
@@ -307,10 +307,10 @@ For non-trivial orchestrator reports, default order:
 artifact_path: config/instructions/agent-definitions/entry.orchestrator.entry
 artifact_type: agent_definition
 artifact_version: '1'
-artifact_revision: '2026-03-11'
+artifact_revision: '2026-03-12'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/agent-definitions/entry.orchestrator-entry.md
 created_at: '2026-03-07T09:54:22+02:00'
-updated_at: '2026-03-11T12:57:07+02:00'
+updated_at: '2026-03-12T11:14:53+02:00'
 changelog_ref: entry.orchestrator-entry.changelog.jsonl

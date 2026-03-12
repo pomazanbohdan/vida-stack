@@ -78,7 +78,7 @@ FSAP must separate findings into two ownership buckets:
 
 Rule:
 
-1. Do not "fix project pain" inside `legacy helper surfaces`.
+1. Do not "fix project pain" inside migration-only helper surfaces.
 2. Do not store framework policy in `docs/*`.
 3. If one symptom spans both layers, produce split actions per ownership layer.
 
@@ -125,7 +125,7 @@ Rule:
      - schema validation,
      - or structured option matrix
 7. `FSAP-6 Canonical Update`
-   - update framework files in `legacy helper surfaces`.
+   - update framework-owned instruction and runtime policy files in their canonical framework surfaces under `AGENTS.md`, `vida/config/instructions/**`, and runtime-family homes when applicable.
    - if project fixes are in scope, update `docs/*` / `scripts/*` separately in the same request.
    - do not leave a mandatory finding in advisory wording when the framework can enforce it mechanically.
 8. `FSAP-7 Verification`
@@ -200,7 +200,7 @@ Report in this structure:
 5. Auto-routing explicit VIDA self-diagnosis into TaskFlow when the user asked for direct diagnosis only.
 6. Delegating the primary FSAP analysis away from the main orchestrator without an explicit reason.
 7. Using the self-diagnosis exception to close tracked FSAP/remediation work without delegated verification or a structured override receipt.
-7. Starting token-cost diagnosis with broad queue discovery before trying the compact boot snapshot or another exact-key status source.
+8. Starting token-cost diagnosis with broad queue discovery before trying the compact boot snapshot or another exact-key status source.
 8. Leaving mandatory framework behavior as a recommendation when the runtime could block or verify it directly.
 
 -----
@@ -212,5 +212,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/diagnostic-instructions/analysis.framework-self-analysis-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-11T13:34:06+02:00'
+updated_at: '2026-03-12T11:46:06+02:00'
 changelog_ref: analysis.framework-self-analysis-protocol.changelog.jsonl

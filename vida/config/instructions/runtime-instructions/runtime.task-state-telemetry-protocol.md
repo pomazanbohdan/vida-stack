@@ -51,7 +51,7 @@ Reconciliation rule:
 
 Wrapper rule:
 
-1. `legacy helper surfaces` wrappers operate in JSONL-first mode while `beads_mutate` owns task writes.
+1. Migration-only helper wrappers operate in JSONL-first mode while `beads_mutate` owns task writes.
 2. Direct `br`/SQLite usage is diagnostic-only until the mutator path is fully retired.
 3. All mutating task-state writes must pass through one queue-backed single-writer path; concurrent callers may enqueue but must not mutate task state outside that serialized path.
 
@@ -207,5 +207,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-11T13:19:44+02:00'
+updated_at: '2026-03-12T11:43:59+02:00'
 changelog_ref: runtime.task-state-telemetry-protocol.changelog.jsonl

@@ -5,8 +5,9 @@ Purpose: one canonical protocol for internet research and reality validation.
 Scope:
 
 1. Mandatory for all VIDA flows when external assumptions may affect decisions.
-2. Mandatory read during boot (`AGENTS.md` LEAN/STANDARD/FULL BOOT).
-3. Used by `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md` and `vida/config/instructions/runtime-instructions/work.spec-contract-protocol.md` as single source for step-level and spec-level external validation.
+2. Part of the orchestrator lean-execution boot read set through `entry.orchestrator-entry.md`, `bootstrap.orchestrator-boot-flow.md`, and `bridge.instruction-activation-protocol.md`.
+3. Worker lanes use this protocol only when the active packet or activating companion protocol requires external validation for the bounded decision.
+4. Used by `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md` and `vida/config/instructions/runtime-instructions/work.spec-contract-protocol.md` as single source for step-level and spec-level external validation.
 
 ## Core Contract
 
@@ -189,10 +190,10 @@ Stop and request clarification/evidence if:
 artifact_path: config/runtime-instructions/web-validation.protocol
 artifact_type: runtime_instruction
 artifact_version: '1'
-artifact_revision: '2026-03-11'
+artifact_revision: '2026-03-12'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/work.web-validation-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-11T13:04:26+02:00'
+updated_at: '2026-03-12T11:24:40+02:00'
 changelog_ref: work.web-validation-protocol.changelog.jsonl

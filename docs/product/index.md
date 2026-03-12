@@ -30,15 +30,16 @@ Current entrypoints:
 15. [agent-role-skill-profile-flow-model.md](/home/unnamed/project/vida-stack/docs/product/spec/agent-role-skill-profile-flow-model.md)
 16. [agent-lane-selection-and-conversation-mode-model.md](/home/unnamed/project/vida-stack/docs/product/spec/agent-lane-selection-and-conversation-mode-model.md)
 17. [compiled-autonomous-delivery-runtime-architecture.md](/home/unnamed/project/vida-stack/docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md)
-18. [release-1-wave-plan.md](/home/unnamed/project/vida-stack/docs/product/spec/release-1-wave-plan.md)
-19. [compiled-runtime-bundle-contract.md](/home/unnamed/project/vida-stack/docs/product/spec/compiled-runtime-bundle-contract.md)
-20. [project-activation-and-configurator-model.md](/home/unnamed/project/vida-stack/docs/product/spec/project-activation-and-configurator-model.md)
-21. [team-coordination-model.md](/home/unnamed/project/vida-stack/docs/product/spec/team-coordination-model.md)
-22. [status-families-and-query-surface-model.md](/home/unnamed/project/vida-stack/docs/product/spec/status-families-and-query-surface-model.md)
-23. [project-protocol-promotion-law.md](/home/unnamed/project/vida-stack/docs/product/spec/project-protocol-promotion-law.md)
-24. [project-document-naming-law.md](/home/unnamed/project/vida-stack/docs/product/spec/project-document-naming-law.md)
-25. [github-public-repository-law.md](/home/unnamed/project/vida-stack/docs/product/spec/github-public-repository-law.md)
-26. [release-build-packaging-law.md](/home/unnamed/project/vida-stack/docs/product/spec/release-build-packaging-law.md)
+18. [emerging-architectural-patterns-model.md](/home/unnamed/project/vida-stack/docs/product/spec/emerging-architectural-patterns-model.md)
+19. [release-1-wave-plan.md](/home/unnamed/project/vida-stack/docs/product/spec/release-1-wave-plan.md)
+20. [compiled-runtime-bundle-contract.md](/home/unnamed/project/vida-stack/docs/product/spec/compiled-runtime-bundle-contract.md)
+21. [project-activation-and-configurator-model.md](/home/unnamed/project/vida-stack/docs/product/spec/project-activation-and-configurator-model.md)
+22. [team-coordination-model.md](/home/unnamed/project/vida-stack/docs/product/spec/team-coordination-model.md)
+23. [status-families-and-query-surface-model.md](/home/unnamed/project/vida-stack/docs/product/spec/status-families-and-query-surface-model.md)
+24. [project-protocol-promotion-law.md](/home/unnamed/project/vida-stack/docs/product/spec/project-protocol-promotion-law.md)
+25. [project-document-naming-law.md](/home/unnamed/project/vida-stack/docs/product/spec/project-document-naming-law.md)
+26. [github-public-repository-law.md](/home/unnamed/project/vida-stack/docs/product/spec/github-public-repository-law.md)
+27. [release-build-packaging-law.md](/home/unnamed/project/vida-stack/docs/product/spec/release-build-packaging-law.md)
 
 Repository project split:
 
@@ -65,5 +66,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/index.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-12T07:58:34+02:00'
+updated_at: '2026-03-12T11:05:54+02:00'
 changelog_ref: index.changelog.jsonl

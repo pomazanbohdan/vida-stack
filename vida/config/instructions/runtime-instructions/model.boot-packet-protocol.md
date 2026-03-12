@@ -47,10 +47,11 @@ Boot packet is a runtime convenience artifact.
 Canonical policy still lives in:
 
 1. `AGENTS.md`
-2. `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md`
-3. `vida/config/instructions/instruction-contracts/overlay.session-context-continuity-protocol.md` when continuity-triggered
-4. `vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md`
-5. `taskflow-v0`
+2. `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
+3. `vida/config/instructions/system-maps/bootstrap.orchestrator-boot-flow.md`
+4. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
+5. `vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md`
+6. `taskflow-v0`
 
 ## Current Version
 
@@ -70,10 +71,10 @@ Characteristics:
 artifact_path: config/runtime-instructions/boot-packet.protocol
 artifact_type: runtime_instruction
 artifact_version: '1'
-artifact_revision: '2026-03-11'
+artifact_revision: '2026-03-12'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/model.boot-packet-protocol.md
 created_at: '2026-03-07T06:22:32+02:00'
-updated_at: '2026-03-11T12:57:07+02:00'
+updated_at: '2026-03-12T11:27:53+02:00'
 changelog_ref: model.boot-packet-protocol.changelog.jsonl

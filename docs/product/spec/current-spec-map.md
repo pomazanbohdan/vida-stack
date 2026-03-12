@@ -95,31 +95,34 @@ Purpose: define the current product-spec home, show absorbed historical sources,
 29. [compiled-autonomous-delivery-runtime-architecture.md](/home/unnamed/project/vida-stack/docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md)
    Sources: `docs/product/spec/canonical-runtime-layer-matrix.md`, `docs/product/spec/root-map-and-runtime-surface-model.md`, `docs/product/spec/agent-role-skill-profile-flow-model.md`, `docs/product/spec/agent-lane-selection-and-conversation-mode-model.md`, `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`, `docs/product/spec/docflow-v1-runtime-modernization-plan.md`, `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`, `vida/config/instructions/runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`, `vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md`, and current OpenAI/Anthropic/Microsoft official orchestration baselines
    Config families: `vida/config/instructions/**`, `vida.config.yaml`, `docs/process/agent-extensions/**`, `taskflow-v0/**`, `codex-v0/**`, and future compiled orchestration bundle surfaces
-30. [release-1-wave-plan.md](/home/unnamed/project/vida-stack/docs/product/spec/release-1-wave-plan.md)
+30. [emerging-architectural-patterns-model.md](/home/unnamed/project/vida-stack/docs/product/spec/emerging-architectural-patterns-model.md)
+   Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/canonical-runtime-layer-matrix.md`, `docs/product/spec/team-coordination-model.md`, `docs/product/spec/status-families-and-query-surface-model.md`, OpenAI Prompt Caching docs, Anthropic Prompt Caching docs, LiteLLM docs, Portkey AI Gateway docs, Helicone AI Gateway docs, `vllm-project/semantic-router`, and the current production-pattern synthesis around runtime-owned tool execution, graph-based multi-agent orchestration, reliability/evaluation/governance, caching, and gateway-layer improvements
+   Config families: runtime loop ownership, specialist-agent topology, routing, verifier aggregation, persistent workflow state, production observability, evaluation posture, governance/security expectations, caching strategy, and gateway/proxy control surfaces across `vida/config/instructions/**`, `taskflow-v0/**`, and future compiled runtime surfaces
+31. [release-1-wave-plan.md](/home/unnamed/project/vida-stack/docs/product/spec/release-1-wave-plan.md)
    Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`, `docs/product/spec/docflow-v1-runtime-modernization-plan.md`, `vida/config/instructions/runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`, `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`, and current Rust/TaskFlow operator-shell donor proofs
    Config families: Release-1 execution sequencing across `vida/config/**`, `taskflow-v0/**`, `codex-v0/**`, and current Rust `vida` operator surfaces
-31. [compiled-runtime-bundle-contract.md](/home/unnamed/project/vida-stack/docs/product/spec/compiled-runtime-bundle-contract.md)
+32. [compiled-runtime-bundle-contract.md](/home/unnamed/project/vida-stack/docs/product/spec/compiled-runtime-bundle-contract.md)
    Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/agent-role-skill-profile-flow-model.md`, `docs/product/spec/agent-lane-selection-and-conversation-mode-model.md`, `vida/config/instructions/runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`, `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`, and current OpenAI/Anthropic/Microsoft official orchestration baselines
    Config families: compiled control bundles, `vida.config.yaml`, runtime init/boot activation, bundle validation, and future machine-readable orchestration bundle surfaces
-32. [project-activation-and-configurator-model.md](/home/unnamed/project/vida-stack/docs/product/spec/project-activation-and-configurator-model.md)
+33. [project-activation-and-configurator-model.md](/home/unnamed/project/vida-stack/docs/product/spec/project-activation-and-configurator-model.md)
    Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/agent-role-skill-profile-flow-model.md`, `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`, root `vida.config.yaml`, and the current DB-first activation decisions for Release 1
    Config families: DB-first project activation, roles/skills/profiles/flows/agents/teams/model/backend policy, sync/reconcile surfaces, and project lifecycle control
-33. [team-coordination-model.md](/home/unnamed/project/vida-stack/docs/product/spec/team-coordination-model.md)
+34. [team-coordination-model.md](/home/unnamed/project/vida-stack/docs/product/spec/team-coordination-model.md)
    Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/agent-role-skill-profile-flow-model.md`, `docs/product/spec/agent-lane-selection-and-conversation-mode-model.md`, and current OpenAI/Anthropic/Microsoft official multi-agent coordination baselines
    Config families: team composition, coordination pattern, activation, shared policy, handoff/context posture, and closure semantics
-34. [status-families-and-query-surface-model.md](/home/unnamed/project/vida-stack/docs/product/spec/status-families-and-query-surface-model.md)
+35. [status-families-and-query-surface-model.md](/home/unnamed/project/vida-stack/docs/product/spec/status-families-and-query-surface-model.md)
    Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`, `docs/product/spec/docflow-v1-runtime-modernization-plan.md`, and current `vida` boot/status/doctor/memory shell surfaces
    Config families: CLI query/status families, operator-facing render surfaces, bounded runtime snapshots, and status-family routing
-35. [project-protocol-promotion-law.md](/home/unnamed/project/vida-stack/docs/product/spec/project-protocol-promotion-law.md)
+36. [project-protocol-promotion-law.md](/home/unnamed/project/vida-stack/docs/product/spec/project-protocol-promotion-law.md)
    Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/compiled-runtime-bundle-contract.md`, `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`, and the current project activation versus executable bundle admission decisions
    Config families: known versus compiled project protocol admission, project discovery/mapping, executable bundle promotion, and fail-closed protocol binding
-36. [project-document-naming-law.md](/home/unnamed/project/vida-stack/docs/product/spec/project-document-naming-law.md)
+37. [project-document-naming-law.md](/home/unnamed/project/vida-stack/docs/product/spec/project-document-naming-law.md)
    Sources: `docs/product/spec/project-documentation-law.md`, `docs/product/spec/framework-project-documentation-layer-model.md`, `docs/product/spec/instruction-artifact-model.md`, and the current project-doc naming standardization decisions for `docs/**`
    Config families: `docs/product/spec/**`, `docs/process/**`, `docs/product/research/**`, `docs/project-memory/**`, lane-root naming, reserved filename handling, and bounded rename-wave law for project-owned documentation
-37. [github-public-repository-law.md](/home/unnamed/project/vida-stack/docs/product/spec/github-public-repository-law.md)
+38. [github-public-repository-law.md](/home/unnamed/project/vida-stack/docs/product/spec/github-public-repository-law.md)
    Sources: `docs/product/spec/project-documentation-law.md`, `docs/product/spec/project-document-naming-law.md`, root repository narrative/governance files, and official GitHub public-repository/community-health documentation
    Config families: root repository entrypoints, `.github/**`, public-repository community surfaces, code ownership, issue/PR templates, security disclosure, and release/tag publication posture
-38. [release-build-packaging-law.md](/home/unnamed/project/vida-stack/docs/product/spec/release-build-packaging-law.md)
+39. [release-build-packaging-law.md](/home/unnamed/project/vida-stack/docs/product/spec/release-build-packaging-law.md)
    Sources: `docs/product/spec/github-public-repository-law.md`, `install/install.sh`, `scripts/build-release.sh`, and the current 0.2.x release-archive minimization decisions
    Config families: public release archive composition, installer/archive boundary, runtime-only package contents, and sidecar scaffold packaging
 
@@ -168,5 +171,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-12T07:58:34+02:00'
+updated_at: '2026-03-12T11:06:29+02:00'
 changelog_ref: current-spec-map.changelog.jsonl
