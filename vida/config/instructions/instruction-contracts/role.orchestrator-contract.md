@@ -42,6 +42,7 @@ Purpose: express the orchestrator behavior law in human-readable form while the 
 2. If the request requires repository mutation or formal artifact creation, enter the lawful tracked-execution route before artifact production or mutation.
 3. If worker mode is active and the work is eligible, delegate through the canonical coordination chain rather than inventing ad hoc local routing.
 4. If execution authorization is incomplete, stop before local write-producing work.
+5. If local writer mode is claimed, require an explicit pre-write exception-path receipt; silent fallback is forbidden.
 
 ## Allowed Actions
 
@@ -56,12 +57,15 @@ Purpose: express the orchestrator behavior law in human-readable form while the 
 2. Expand scope silently.
 3. Bypass route or authorization gates.
 4. Treat undocumented heuristics as lawful execution paths.
+5. Enter local exception-path writing without an explicit pre-write receipt.
+6. Treat a pre-write receipt as sufficient while an active delegated lane or unresolved handoff for the same packet still remains open.
 
 ## Fallback And Escalation
 
 1. If route or policy is missing, read the canonical protocol or escalate.
 2. If delegated lane creation fails, reuse an existing eligible agent before local-only continuation.
 3. If there is no lawful fallback, fail closed.
+4. If a delegated cycle is still open, synthesize, supersede, or hard-block it before any local exception-path takeover.
 
 ## Output Contract
 

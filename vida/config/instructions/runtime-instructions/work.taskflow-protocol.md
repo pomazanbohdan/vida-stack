@@ -42,6 +42,23 @@ Hard rule:
 18. If two consecutive iterations produce no new artifact, evidence, or state delta, end the block as no-progress and re-plan or escalate before continuing.
 19. Re-reading the same broad file set without a narrower hypothesis counts as no progress.
 20. Parallel tracks may accumulate into review pools only at explicit merge checkpoints.
+21. Closure of one bounded block/leaf does not authorize task-line closure while a parent bounded unit remains open.
+22. After any non-terminal bounded leaf closes, TaskFlow must rebuild the parent bounded unit and persist exactly one of:
+   - the next lawful bounded leaf,
+   - an explicit blocker/escalation receipt,
+   - full chain closure
+23. A closure-style report or finish path is invalid if the task line remains open and no continuation receipt was persisted after the last closed leaf.
+24. If more than one lawful next bounded leaf exists after rebuild, route selection through `vida/config/instructions/runtime-instructions/work.execution-priority-protocol.md` is mandatory before continuation.
+25. After bounded read-only discovery inside an active write-producing task, if the next lawful step is packet shaping or worker dispatch, TaskFlow must advance execution state to that step or persist an explicit blocker; progress-only commentary is not valid continuation evidence.
+26. A worker wait timeout or empty poll result does not change task state by itself; while the task remains `in_work`, TaskFlow must either continue waiting lawfully, advance to the next lawful step, or persist an explicit blocker/override receipt.
+27. A user-facing summary or progress marker does not count as an execution-state transition; while the task remains `in_work`, summary must be followed by the next lawful execution action or explicit blocker handling in the same active cycle.
+28. A delegated implementer result marked `partial`, unresolved, or otherwise non-closure-ready must reopen route selection for that bounded packet; TaskFlow must not treat that result as permission for root-session writing in the same scope without an explicit exception-path receipt.
+29. An exception-path receipt is not sufficient while a delegated lane or handoff for the same bounded packet remains open; TaskFlow must first persist supersession, hard-blocker, or equivalent takeover evidence before local root-session writing becomes lawful.
+30. "very small one-file fix" is not an execution-state exception by itself; write-producing work still follows the same exception-path and open-delegation gates.
+31. `continue development` does not authorize TaskFlow to silently rebind the active task line to the first locally failing test, compiler error, or narrow repair symptom unless the active packet/leaf evidence already names that symptom as the current bounded unit.
+32. A green bounded validation command (`cargo test`, targeted test, compile pass, etc.) proves only the scoped proof target it actually ran; it does not close the parent task line until TaskFlow rebuilds the parent bounded unit and persists the next leaf, explicit blocker, or full chain closure.
+33. `continue the next task` does not authorize TaskFlow to silently bind execution to the first ready candidate in ordering unless task/continuation receipts already prove that candidate is the uniquely intended bounded unit.
+34. When one bounded item closes during an active continuation request and TaskFlow/continuation evidence already names the next lawful bounded item, TaskFlow must treat that signal as continuation evidence rather than as a stop/report boundary.
 
 ## 1.1) Diagnostic Integration Boundary
 
@@ -69,6 +86,13 @@ This algorithm is mandatory for non-trivial work (3+ steps).
 6. Pre-register planned steps via `block-plan`.
 7. Validate plan integrity before execution (`todo-plan-validate.sh`; use `--diff-aware` when the worktree already contains target-scope changes). Diff-aware validation must accept coverage from the full task plan, not only remaining non-done blocks, so completed blocks do not create false drift failures.
 8. Execute with evidence + verification at each step.
+9. After each step that closes a bounded leaf but not the task line, run a post-leaf rebuild before reporting or route suspension.
+10. After each step that establishes dispatch-ready state for a write-producing packet, either dispatch the packet or record an explicit blocker/override receipt before any progress-only report.
+11. After each wait/poll timeout for a delegated lane, either continue lawful waiting, take the next lawful bounded action, or record an explicit blocker; do not emit a timeout-driven pause report as if execution had reached a natural boundary.
+12. After any user-facing summary inside an active task, immediately continue with the next lawful bounded action unless the task became explicitly blocked or closed.
+13. After any partial implementer return, immediately reroute through fresh packet shaping, review/escalation routing, or explicit blocker/exception handling before further writes in the same scope.
+14. Before any local repair/proof action that claims to advance an already-active development task, confirm the active task/packet receipt and parent bounded unit explicitly; do not replace them with a symptom-driven local proxy such as "the first failing test".
+15. After any bounded item closes during a continuing development line, if the next lawful item is already evidenced, the next execution-state change must be bind/shape/dispatch of that item or an explicit blocker; summary-only closure is invalid.
 
 ### 2.1 Q-Gate Output Contract
 
@@ -110,6 +134,11 @@ For long-horizon execution, TaskFlow must reduce context growth and repetitive l
    - evidence source,
    - validation strategy.
 5. if none of those can change lawfully, escalate instead of continuing.
+6. after a successful bounded leaf closure, the next attempt must change execution state by either starting the next lawful leaf or recording an explicit blocker/escalation receipt; summary-only continuation is invalid.
+7. after dispatch-ready state is reached, the next attempt must change execution state by dispatching the packet or recording an explicit blocker/override receipt; summary-only continuation is invalid.
+8. after wait timeout is reached, the next attempt must change execution state by renewed waiting, bounded inspection, next-step execution, or explicit blocker/override receipt; timeout-summary-only continuation is invalid.
+9. after summary is emitted while `in_work=1`, the next attempt must change execution state by continuing the lawful next step or recording an explicit blocker/override receipt; summary-as-last-action is invalid.
+10. after partial implementer return is received, the next attempt must change execution state by reroute, rework-packet dispatch, escalation, or explicit blocker/exception receipt; root-session local completion by inertia is invalid.
 
 ## 3) Parallel Tracks Mode (Workers)
 

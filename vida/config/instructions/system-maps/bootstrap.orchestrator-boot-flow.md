@@ -28,7 +28,7 @@ Rules:
 ## Step 1. Enter The Orchestrator Lane
 
 1. Read `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`.
-2. Apply `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`.
+2. Apply `vida/config/instructions/instruction-contracts/bridge.instruction-activation-runtime-capsule.md`, consulting `bridge.instruction-activation-protocol.md` when activation semantics are unclear.
 3. If the task is documentation-shaped, activate `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md` immediately.
 
 ## Step 2. Classify Request Intent
@@ -45,6 +45,12 @@ Intent authority:
 1. `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
 2. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md` when orchestration route selection beyond `answer_only` is required
 
+Clean-session execution rule:
+
+1. if a fresh or resumed session starts with execution intent such as `continue development`, the next required result is an explicit orchestrator-first route receipt, not local implementation,
+2. if that receipt is not yet visible, bootstrap is incomplete and write-producing execution must not start,
+3. generic execution intent must not be interpreted as permission to skip orchestration-first routing on a clean session.
+
 ## Step 3. Select Boot Profile
 
 Use the orchestrator entry contract to choose one boot profile:
@@ -59,20 +65,15 @@ Profile selection authority:
 
 ## Step 4. Lean Boot Minimum Read Set
 
-The `Lean` boot profile requires:
+For the compact runtime-facing Lean view, use:
 
-1. `AGENTS.md`
-2. this map
-3. `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
-4. the canonical compact task-state snapshot surface when the request is development-related
-5. `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md` selected sections
-6. `vida/config/instructions/instruction-contracts/overlay.session-context-continuity-protocol.md`
-7. `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md`
-8. `vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md`
-9. root `vida.config.yaml` when present
-10. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md` when `protocol_activation.agent_system=true`
-11. `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md` only when non-`answer_only` flow and the compact snapshot is insufficient
-12. `vida/config/instructions/diagnostic-instructions/analysis.silent-framework-diagnosis-protocol.md` only when silent diagnosis is enabled
+1. `vida/config/instructions/system-maps/bootstrap.orchestrator-runtime-capsule.md`
+
+Owner notes:
+
+1. `entry.orchestrator-entry.md` remains the owner of boot-profile selection and lean-boot semantics,
+2. this map remains the owner of the explicit end-to-end orchestrator boot route,
+3. when a Lean edge case is unclear, fall back to the owner surfaces rather than improvising.
 
 ## Step 5. Standard Boot Expansion
 
@@ -82,10 +83,13 @@ The `Lean` boot profile requires:
 2. `vida/config/instructions/command-instructions/routing.use-case-packs-protocol.md` when a pack path is required
 3. `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md` when implementation flow is in scope
 4. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md` when request intent classification, orchestration route selection, or worker-first coordination is required beyond `answer_only`
-5. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md` when node-level resumability, route control limits, or checkpoint-visible continuation is active
-6. `vida/config/instructions/runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md` when restart, resumability, checkpoint, replay, or duplicate-delivery safety is active
-7. `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md` when separated authorship, verifier-independence, or closure-proof semantics are active
-8. `vida/config/instructions/runtime-instructions/work.verification-merge-protocol.md` when review-pool or merged verification admissibility is active
+5. `vida/config/instructions/instruction-contracts/core.skill-activation-protocol.md` when a visible skill catalog exists or skill-bound work is active
+6. `vida/config/instructions/instruction-contracts/core.packet-decomposition-protocol.md` when bounded packet shaping or leaf-depth selection is active
+7. `vida/config/instructions/instruction-contracts/core.agent-prompt-stack-protocol.md` when packet/routing work depends on explicit prompt-layer precedence
+8. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md` when node-level resumability, route control limits, or checkpoint-visible continuation is active
+9. `vida/config/instructions/runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md` when restart, resumability, checkpoint, replay, or duplicate-delivery safety is active
+10. `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md` when separated authorship, verifier-independence, or closure-proof semantics are active
+11. `vida/config/instructions/runtime-instructions/work.verification-merge-protocol.md` when review-pool or merged verification admissibility is active
 
 ## Step 6. Full Boot Expansion
 
@@ -108,8 +112,18 @@ After intent classification:
 
 1. use `vida/config/instructions/system-maps/protocol.index.md` for domain protocol lookup,
 2. use `vida/config/instructions/system-maps/runtime-family.index.md` for runtime-family routing,
-3. keep additional reads trigger-bound under `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`,
+3. keep additional reads trigger-bound under `vida/config/instructions/instruction-contracts/bridge.instruction-activation-runtime-capsule.md`, consulting the owner activation protocol for edge cases,
 4. do not assume that implementation, recovery, verification, or resumability owners are active merely because execution flow exists; load them only when their trigger conditions are satisfied.
+
+Pre-execution gate:
+
+1. before any write-producing action on a clean session, the orchestrator must be able to name:
+   - the active bounded unit,
+   - the lawful next slice,
+   - the lane sequence,
+   - the proof target,
+   - and the reason the root session is still acting as orchestrator
+2. if any of those are missing, fail closed before implementation.
 
 ## Boundary Rule
 

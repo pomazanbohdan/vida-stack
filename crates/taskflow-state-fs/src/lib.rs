@@ -152,8 +152,14 @@ mod tests {
         assert_eq!(snapshot.tasks[0].id.0, "vida-rf1-taskflow-core");
         assert_eq!(snapshot.tasks[1].id.0, "vida-rf1-taskflow-runtime");
         assert_eq!(snapshot.dependencies.len(), 2);
-        assert_eq!(snapshot.dependencies[0].depends_on_id.0, "vida-rf1-taskflow-core");
-        assert_eq!(snapshot.dependencies[1].depends_on_id.0, "vida-rf1-taskflow-state");
+        assert_eq!(
+            snapshot.dependencies[0].depends_on_id.0,
+            "vida-rf1-taskflow-core"
+        );
+        assert_eq!(
+            snapshot.dependencies[1].depends_on_id.0,
+            "vida-rf1-taskflow-state"
+        );
     }
 
     #[test]

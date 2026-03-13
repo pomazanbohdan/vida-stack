@@ -45,6 +45,7 @@ DEFINE TABLE instruction_ingest_receipt SCHEMALESS;
 DEFINE TABLE source_tree_config SCHEMALESS;
 DEFINE TABLE protocol_binding_state SCHEMALESS;
 DEFINE TABLE protocol_binding_receipt SCHEMALESS;
+DEFINE TABLE launcher_activation_snapshot SCHEMALESS;
 "#;
 
 fn state_schema_document() -> String {
@@ -57,6 +58,8 @@ pub struct StateStore {
     db: Surreal<Db>,
     root: PathBuf,
 }
+
+const LAUNCHER_ACTIVATION_SNAPSHOT_ID: &str = "launcher_live";
 
 impl StateStore {
     pub async fn open(root: PathBuf) -> Result<Self, StateStoreError> {
@@ -84,6 +87,37 @@ impl StateStore {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub async fn write_launcher_activation_snapshot(
+        &self,
+        snapshot: &LauncherActivationSnapshot,
+    ) -> Result<(), StateStoreError> {
+        snapshot.validate()?;
+        let _: Option<LauncherActivationSnapshot> = self
+            .db
+            .upsert((
+                "launcher_activation_snapshot",
+                LAUNCHER_ACTIVATION_SNAPSHOT_ID,
+            ))
+            .content(snapshot.clone())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn read_launcher_activation_snapshot(
+        &self,
+    ) -> Result<LauncherActivationSnapshot, StateStoreError> {
+        let row: Option<LauncherActivationSnapshot> = self
+            .db
+            .select((
+                "launcher_activation_snapshot",
+                LAUNCHER_ACTIVATION_SNAPSHOT_ID,
+            ))
+            .await?;
+        let row = row.ok_or(StateStoreError::MissingLauncherActivationSnapshot)?;
+        row.validate()?;
+        Ok(row)
     }
 
     pub async fn storage_metadata_summary(
@@ -3395,12 +3429,80 @@ impl RunGraphStatus {
             self.recovery_ready
         )
     }
+
+    pub fn delegation_gate(&self) -> RunGraphDelegationGateSummary {
+        RunGraphDelegationGateSummary::from_status(self)
+    }
+}
+
+#[derive(Debug, serde::Serialize, PartialEq, Eq, Clone)]
+pub struct RunGraphDelegationGateSummary {
+    pub active_node: String,
+    pub lifecycle_stage: String,
+    pub delegated_cycle_open: bool,
+    pub delegated_cycle_state: String,
+    pub local_exception_takeover_gate: String,
+    pub reporting_pause_gate: String,
+}
+
+impl RunGraphDelegationGateSummary {
+    fn from_status(status: &RunGraphStatus) -> Self {
+        let handoff_pending = status.next_node.is_some()
+            || status.handoff_state != "none"
+            || status.resume_target != "none";
+        let delegated_lane_active = !handoff_pending
+            && status.status != "completed"
+            && status.active_node != "planning"
+            && status.lifecycle_stage.ends_with("_active");
+        let (delegated_cycle_open, delegated_cycle_state) = if handoff_pending {
+            (true, "handoff_pending".to_string())
+        } else if delegated_lane_active {
+            (true, "delegated_lane_active".to_string())
+        } else {
+            (false, "clear".to_string())
+        };
+        let local_exception_takeover_gate = if delegated_cycle_open {
+            "blocked_open_delegated_cycle".to_string()
+        } else {
+            "delegated_cycle_clear".to_string()
+        };
+        let reporting_pause_gate = if delegated_cycle_open {
+            "non_blocking_only".to_string()
+        } else if status.status == "completed" {
+            "closure_candidate".to_string()
+        } else {
+            "continuation_check_required".to_string()
+        };
+
+        Self {
+            active_node: status.active_node.clone(),
+            lifecycle_stage: status.lifecycle_stage.clone(),
+            delegated_cycle_open,
+            delegated_cycle_state,
+            local_exception_takeover_gate,
+            reporting_pause_gate,
+        }
+    }
+
+    pub fn as_display(&self) -> String {
+        format!(
+            "node={} lifecycle={} delegated_cycle_open={} delegated_cycle_state={} local_exception_takeover_gate={} reporting_pause_gate={}",
+            self.active_node,
+            self.lifecycle_stage,
+            self.delegated_cycle_open,
+            self.delegated_cycle_state,
+            self.local_exception_takeover_gate,
+            self.reporting_pause_gate
+        )
+    }
 }
 
 #[derive(Debug, serde::Serialize, PartialEq, Eq)]
 pub struct RunGraphRecoverySummary {
     pub run_id: String,
     pub task_id: String,
+    pub active_node: String,
+    pub lifecycle_stage: String,
     pub resume_node: Option<String>,
     pub resume_status: String,
     pub checkpoint_kind: String,
@@ -3408,13 +3510,17 @@ pub struct RunGraphRecoverySummary {
     pub policy_gate: String,
     pub handoff_state: String,
     pub recovery_ready: bool,
+    pub delegation_gate: RunGraphDelegationGateSummary,
 }
 
 impl RunGraphRecoverySummary {
     fn from_status(status: RunGraphStatus) -> Self {
+        let delegation_gate = status.delegation_gate();
         Self {
             run_id: status.run_id,
             task_id: status.task_id,
+            active_node: status.active_node,
+            lifecycle_stage: status.lifecycle_stage,
             resume_node: status.next_node,
             resume_status: status.status,
             checkpoint_kind: status.checkpoint_kind,
@@ -3422,21 +3528,26 @@ impl RunGraphRecoverySummary {
             policy_gate: status.policy_gate,
             handoff_state: status.handoff_state,
             recovery_ready: status.recovery_ready,
+            delegation_gate,
         }
     }
 
     pub fn as_display(&self) -> String {
         format!(
-            "run={} task={} resume_node={} resume_status={} checkpoint={} resume_target={} gate={} handoff={} recovery_ready={}",
+            "run={} task={} active_node={} lifecycle={} resume_node={} resume_status={} checkpoint={} resume_target={} gate={} handoff={} recovery_ready={} takeover_gate={} report_pause_gate={}",
             self.run_id,
             self.task_id,
+            self.active_node,
+            self.lifecycle_stage,
             self.resume_node.as_deref().unwrap_or("none"),
             self.resume_status,
             self.checkpoint_kind,
             self.resume_target,
             self.policy_gate,
             self.handoff_state,
-            self.recovery_ready
+            self.recovery_ready,
+            self.delegation_gate.local_exception_takeover_gate,
+            self.delegation_gate.reporting_pause_gate
         )
     }
 }
@@ -3477,26 +3588,41 @@ impl RunGraphCheckpointSummary {
 pub struct RunGraphGateSummary {
     pub run_id: String,
     pub task_id: String,
+    pub active_node: String,
+    pub lifecycle_stage: String,
     pub policy_gate: String,
     pub handoff_state: String,
     pub context_state: String,
+    pub delegation_gate: RunGraphDelegationGateSummary,
 }
 
 impl RunGraphGateSummary {
     fn from_status(status: RunGraphStatus) -> Self {
+        let delegation_gate = status.delegation_gate();
         Self {
             run_id: status.run_id,
             task_id: status.task_id,
+            active_node: status.active_node,
+            lifecycle_stage: status.lifecycle_stage,
             policy_gate: status.policy_gate,
             handoff_state: status.handoff_state,
             context_state: status.context_state,
+            delegation_gate,
         }
     }
 
     pub fn as_display(&self) -> String {
         format!(
-            "run={} task={} gate={} handoff={} context={}",
-            self.run_id, self.task_id, self.policy_gate, self.handoff_state, self.context_state
+            "run={} task={} active_node={} lifecycle={} gate={} handoff={} context={} takeover_gate={} report_pause_gate={}",
+            self.run_id,
+            self.task_id,
+            self.active_node,
+            self.lifecycle_stage,
+            self.policy_gate,
+            self.handoff_state,
+            self.context_state,
+            self.delegation_gate.local_exception_takeover_gate,
+            self.delegation_gate.reporting_pause_gate
         )
     }
 }
@@ -3623,7 +3749,9 @@ impl TaskflowSnapshotBridgeSummary {
             self.import_receipts,
             self.replace_receipts,
             self.object_export_receipts,
-            self.memory_export_receipts + self.memory_import_receipts + self.memory_replace_receipts,
+            self.memory_export_receipts
+                + self.memory_import_receipts
+                + self.memory_replace_receipts,
             self.file_export_receipts + self.file_import_receipts + self.file_replace_receipts,
             self.total_task_rows,
             self.total_dependency_rows,
@@ -3747,23 +3875,6 @@ pub struct ProtocolBindingReceipt {
     pub recorded_at: String,
 }
 
-impl ProtocolBindingReceipt {
-    pub fn as_display(&self) -> String {
-        format!(
-            "{} scenario={} active={} script_bound={} rust_bound={} fully_runtime_bound={} unbound={} blocking_issues={} authority={}",
-            self.receipt_id,
-            self.scenario,
-            self.active_bindings,
-            self.script_bound_count,
-            self.rust_bound_count,
-            self.fully_runtime_bound_count,
-            self.unbound_count,
-            self.blocking_issue_count,
-            self.primary_state_authority
-        )
-    }
-}
-
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ProtocolBindingSummary {
     pub total_receipts: usize,
@@ -3870,6 +3981,10 @@ pub enum StateStoreError {
     InvalidProtocolBinding {
         reason: String,
     },
+    MissingLauncherActivationSnapshot,
+    InvalidLauncherActivationSnapshot {
+        reason: String,
+    },
     MissingSourceRoot {
         slice: String,
         path: PathBuf,
@@ -3939,6 +4054,12 @@ impl std::fmt::Display for StateStoreError {
             Self::InvalidProtocolBinding { reason } => {
                 write!(f, "protocol binding state is invalid: {reason}")
             }
+            Self::MissingLauncherActivationSnapshot => {
+                write!(f, "launcher activation snapshot is missing")
+            }
+            Self::InvalidLauncherActivationSnapshot { reason } => {
+                write!(f, "launcher activation snapshot is invalid: {reason}")
+            }
             Self::MissingSourceRoot { slice, path } => {
                 write!(f, "source root for {slice} is missing: {}", path.display())
             }
@@ -3967,6 +4088,68 @@ impl From<io::Error> for StateStoreError {
 impl From<surrealdb::Error> for StateStoreError {
     fn from(error: surrealdb::Error) -> Self {
         Self::Db(error)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub struct LauncherActivationSnapshot {
+    pub source: String,
+    pub source_config_path: String,
+    pub source_config_digest: String,
+    pub captured_at: String,
+    pub compiled_bundle: serde_json::Value,
+    pub pack_router_keywords: serde_json::Value,
+}
+
+impl LauncherActivationSnapshot {
+    fn validate(&self) -> Result<(), StateStoreError> {
+        if self.source != "state_store" {
+            return Err(StateStoreError::InvalidLauncherActivationSnapshot {
+                reason: format!("unsupported source `{}`", self.source),
+            });
+        }
+        if self.source_config_path.trim().is_empty() {
+            return Err(StateStoreError::InvalidLauncherActivationSnapshot {
+                reason: "source_config_path is empty".to_string(),
+            });
+        }
+        if self.source_config_digest.trim().is_empty() {
+            return Err(StateStoreError::InvalidLauncherActivationSnapshot {
+                reason: "source_config_digest is empty".to_string(),
+            });
+        }
+        if !self.compiled_bundle.is_object() {
+            return Err(StateStoreError::InvalidLauncherActivationSnapshot {
+                reason: "compiled_bundle must be an object".to_string(),
+            });
+        }
+        if !self.pack_router_keywords.is_object() {
+            return Err(StateStoreError::InvalidLauncherActivationSnapshot {
+                reason: "pack_router_keywords must be an object".to_string(),
+            });
+        }
+        let fallback_role = self.compiled_bundle["role_selection"]["fallback_role"]
+            .as_str()
+            .unwrap_or_default();
+        if fallback_role.is_empty() {
+            return Err(StateStoreError::InvalidLauncherActivationSnapshot {
+                reason: "role_selection.fallback_role is empty".to_string(),
+            });
+        }
+        let selection_mode = self.compiled_bundle["role_selection"]["mode"]
+            .as_str()
+            .unwrap_or_default();
+        if selection_mode.is_empty() {
+            return Err(StateStoreError::InvalidLauncherActivationSnapshot {
+                reason: "role_selection.mode is empty".to_string(),
+            });
+        }
+        if !self.compiled_bundle["agent_system"].is_object() {
+            return Err(StateStoreError::InvalidLauncherActivationSnapshot {
+                reason: "compiled_bundle.agent_system must be an object".to_string(),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -4429,7 +4612,7 @@ fn apply_patch_operation(
         other => {
             return Err(StateStoreError::InvalidPatchOperation {
                 reason: format!("unsupported op: {other}"),
-            })
+            });
         }
     }
 
@@ -5198,6 +5381,15 @@ hierarchy: framework,contracts
         assert_eq!(recovery.policy_gate, "policy_gate_required");
         assert_eq!(recovery.handoff_state, "awaiting_coach");
         assert!(recovery.recovery_ready);
+        assert!(recovery.delegation_gate.delegated_cycle_open);
+        assert_eq!(
+            recovery.delegation_gate.delegated_cycle_state,
+            "handoff_pending"
+        );
+        assert_eq!(
+            recovery.delegation_gate.local_exception_takeover_gate,
+            "blocked_open_delegated_cycle"
+        );
         let direct_recovery = store
             .run_graph_recovery_summary("run-vida-a")
             .await
@@ -5228,6 +5420,11 @@ hierarchy: framework,contracts
         assert_eq!(gate.policy_gate, "policy_gate_required");
         assert_eq!(gate.handoff_state, "awaiting_coach");
         assert_eq!(gate.context_state, "sealed");
+        assert!(gate.delegation_gate.delegated_cycle_open);
+        assert_eq!(
+            gate.delegation_gate.local_exception_takeover_gate,
+            "blocked_open_delegated_cycle"
+        );
         let direct_gate = store
             .run_graph_gate_summary("run-vida-a")
             .await
@@ -5280,6 +5477,7 @@ hierarchy: framework,contracts
         assert_eq!(recovery.policy_gate, "policy_gate_required");
         assert_eq!(recovery.handoff_state, "awaiting_coach");
         assert!(recovery.recovery_ready);
+        assert!(recovery.delegation_gate.delegated_cycle_open);
         let direct_recovery = reopened
             .run_graph_recovery_summary("run-vida-a")
             .await
@@ -5306,6 +5504,7 @@ hierarchy: framework,contracts
         assert_eq!(gate.policy_gate, "policy_gate_required");
         assert_eq!(gate.handoff_state, "awaiting_coach");
         assert_eq!(gate.context_state, "sealed");
+        assert!(gate.delegation_gate.delegated_cycle_open);
         let direct_gate = reopened
             .run_graph_gate_summary("run-vida-a")
             .await
@@ -5322,6 +5521,87 @@ hierarchy: framework,contracts
         assert_eq!(summary.resumability_count, 1);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    fn sample_run_graph_status() -> RunGraphStatus {
+        RunGraphStatus {
+            run_id: "run-vida-a".to_string(),
+            task_id: "vida-a".to_string(),
+            task_class: "writer".to_string(),
+            active_node: "writer".to_string(),
+            next_node: Some("coach".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "analysis".to_string(),
+            selected_backend: "codex".to_string(),
+            lane_id: "writer_lane".to_string(),
+            lifecycle_stage: "active".to_string(),
+            policy_gate: "policy_gate_required".to_string(),
+            handoff_state: "awaiting_coach".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.writer_lane".to_string(),
+            recovery_ready: true,
+        }
+    }
+
+    #[test]
+    fn delegation_gate_marks_handoff_pending_when_resume_target_is_open() {
+        let status = sample_run_graph_status();
+
+        let gate = status.delegation_gate();
+
+        assert!(gate.delegated_cycle_open);
+        assert_eq!(gate.delegated_cycle_state, "handoff_pending");
+        assert_eq!(
+            gate.local_exception_takeover_gate,
+            "blocked_open_delegated_cycle"
+        );
+        assert_eq!(gate.reporting_pause_gate, "non_blocking_only");
+    }
+
+    #[test]
+    fn delegation_gate_marks_active_lane_without_handoff_as_delegated_lane_active() {
+        let mut status = sample_run_graph_status();
+        status.active_node = "review_ensemble".to_string();
+        status.next_node = None;
+        status.status = "in_progress".to_string();
+        status.lane_id = "review_ensemble_lane".to_string();
+        status.lifecycle_stage = "review_active".to_string();
+        status.policy_gate = "review_findings".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+
+        let gate = status.delegation_gate();
+
+        assert!(gate.delegated_cycle_open);
+        assert_eq!(gate.delegated_cycle_state, "delegated_lane_active");
+        assert_eq!(
+            gate.local_exception_takeover_gate,
+            "blocked_open_delegated_cycle"
+        );
+        assert_eq!(gate.reporting_pause_gate, "non_blocking_only");
+    }
+
+    #[test]
+    fn delegation_gate_marks_completed_cycle_as_clear_and_closure_candidate() {
+        let mut status = sample_run_graph_status();
+        status.active_node = "review_ensemble".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lane_id = "review_ensemble_lane".to_string();
+        status.lifecycle_stage = "implementation_complete".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+
+        let gate = status.delegation_gate();
+
+        assert!(!gate.delegated_cycle_open);
+        assert_eq!(gate.delegated_cycle_state, "clear");
+        assert_eq!(gate.local_exception_takeover_gate, "delegated_cycle_clear");
+        assert_eq!(gate.reporting_pause_gate, "closure_candidate");
     }
 
     #[tokio::test]

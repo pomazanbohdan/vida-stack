@@ -33,15 +33,29 @@ Canonical entrypoints:
    - project-owned repeatable start checklist for development orchestrator sessions
 10. `docs/process/project-orchestrator-reusable-prompt.md`
    - project-owned reusable root-session prompt for repeated orchestrator development sessions
-11. `docs/process/project-skill-initialization-and-activation-protocol.md`
+11. `docs/process/project-orchestrator-startup-bundle.md`
+   - compact project-side startup bundle that aggregates the routine orchestrator read set over the current project capsules
+12. `docs/process/project-packet-and-lane-runtime-capsule.md`
+   - compact runtime-facing projection of project packet and delegated-lane law for routine orchestrator startup
+13. `docs/process/project-start-readiness-runtime-capsule.md`
+   - compact runtime-facing projection of project startup readiness, including skill activation and boot-readiness gates
+14. `docs/process/project-packet-rendering-runtime-capsule.md`
+   - compact runtime-facing projection of project packet rendering and prompt-stack interpretation for routine startup and dispatch preparation
+15. `docs/process/project-skill-initialization-and-activation-protocol.md`
    - project-owned mandatory rule for inspecting the available skill catalog and activating relevant skills before bounded work begins
-12. `vida/config/instructions/instruction-contracts/meta.protocol-naming-grammar-protocol.md`
+16. `docs/process/project-development-packet-template-protocol.md`
+   - project-owned canonical packet-template family for session framing, delivery-task packets, execution-block refinement, and coach/verifier/escalation handoffs
+17. `docs/process/project-agent-prompt-stack-protocol.md`
+   - project-owned prompt-stack model that fixes the precedence between framework bootstrap, project role prompts, dynamic packets, skill overlays, and runtime state
+18. `docs/process/project-boot-readiness-validation-protocol.md`
+   - project-owned bounded validation sequence that proves a development orchestration session is boot-ready before first dispatch
+19. `vida/config/instructions/instruction-contracts/meta.protocol-naming-grammar-protocol.md`
    - canonical framework naming law and sequential rename-wave protocol for instruction artifacts
-13. `docs/process/framework-source-lineage-index.md`
+20. `docs/process/framework-source-lineage-index.md`
    - project-owned provenance index for deleted framework-formation plans/research documents and their promoted canonical homes
-14. `docs/process/framework-three-layer-refactoring-audit.md`
+21. `docs/process/framework-three-layer-refactoring-audit.md`
    - unified-format consolidated report for the first three refactored framework layers: `core`, orchestration shell, and runtime-family execution
-15. `docs/process/release-formatting-protocol.md`
+22. `docs/process/release-formatting-protocol.md`
    - canonical project process for rendering clean public GitHub release pages from canonical release-note artifacts
 
 -----

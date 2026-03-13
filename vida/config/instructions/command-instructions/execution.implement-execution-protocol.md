@@ -126,6 +126,10 @@ Canonical layer source: `vida/config/instructions/command-instructions/routing.c
      - record progress against `definition_of_done`,
      - update run-graph node state and control counters,
      - write a resumable checkpoint when the task remains open.
+   - if the current `execution_block` closes but the parent `delivery_task_card.definition_of_done` is still unmet:
+     - keep execution inside the same task,
+     - rebuild the next lawful `execution_block` or proof slice,
+     - continue under the same task instead of entering closure-style reporting.
 10. `IEP-5.5 Coach Review` (when the selected route declares `coach_required=yes`)
    - run the post-write coach ensemble against the current implementation,
    - default policy is two independent cheaper coaches when the route exposes enough eligible lanes,
@@ -135,6 +139,7 @@ Canonical layer source: `vida/config/instructions/command-instructions/routing.c
    - runtime may recover coach evidence from ordered fallback sources, but only a valid machine-readable coach verdict may approve the route,
    - any structured rework handoff must include coach feedback provenance before the next writer pass consumes it,
    - if coach returns `return_for_rework`: emit the structured fresh-start rework handoff, rerun `prepare-execution`, and go back to `IEP-5 Implement Loop` using the effective prompt from that handoff instead of prior writer context,
+   - if coach/review evidence proves a compile blocker in the current mutated packet, treat that as rework-routing evidence, not as implicit permission for root-session local repair; local repair still requires an explicit pre-write exception-path receipt from the orchestration layer,
    - if the coach quorum approves: continue to final verification.
 11. `IEP-6 Verify And Review`
    - regression checks + independent review + API live validation (when applicable).
@@ -151,7 +156,12 @@ Canonical layer source: `vida/config/instructions/command-instructions/routing.c
    - missing approval receipt keeps the task in `approval_pending`,
    - rejection receipt blocks closure-ready state and feeds the next rework/escalation decision.
 12. `IEP-7 Close And Continue`
-   - close task in the DB-backed runtime, sync logs, auto-pick next `ready` task,
+   - first reconcile the just-finished `execution_block` against the parent `delivery_task_card`,
+   - if the parent task is still open:
+     - do not close the task,
+     - do not run next-task boundary analysis yet,
+     - shape the next lawful in-task leaf or fail closed with an explicit blocker/escalation receipt,
+   - only after the parent task is actually closed: close task in the DB-backed runtime, sync logs, auto-pick next `ready` task,
    - before starting that next task, run the `vida/config/instructions/instruction-contracts/overlay.autonomous-execution-protocol.md` boundary step when continuous autonomy is active:
      - inspect nearby specs/protocols and controlling code for the next slice,
      - produce a brief implementation-plan report outside the next task's TaskFlow gating,
@@ -179,6 +189,7 @@ Hard law:
 7. For write-producing routes in `hybrid`, the canonical default is `analysis -> writer -> coach -> review` when `coach_required=yes`; otherwise it remains `analysis -> writer -> review`. Bounded writer dispatch without the analysis receipt is invalid.
 8. Continuous autonomy does not authorize skipping the post-task boundary analysis/report step before the next task starts.
 9. Boundary-discovered spec/task drift must be reconciled before the next task is treated as lawfully executable.
+9.1. `execution_block` closure inside an open `delivery_task` does not trigger `IEP-7` task-boundary behavior; it must return to in-task reconciliation first.
 10. Execution without an active bounded `delivery_task_card` is protocol-invalid even if broader spec context exists.
 11. Runtime control exhaustion must stop the current path; it does not authorize one more silent retry.
 12. A resumable implementation run is lawful only when the current `execution_block`, control counters, next verification target, and next resumable node are checkpoint-visible.
@@ -289,5 +300,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/command-instructions/execution.implement-execution-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-13T07:44:24+02:00'
+updated_at: '2026-03-13T12:39:11+02:00'
 changelog_ref: execution.implement-execution-protocol.changelog.jsonl

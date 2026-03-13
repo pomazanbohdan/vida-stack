@@ -34,7 +34,11 @@ Run protocol self-diagnosis when any are true:
 5. repeated local debugging continued without the required escalation path,
 6. worker-first law was bypassed without lawful exhaustion/blocker evidence,
 7. TaskFlow execution drifted outside an active block,
-8. task/task-pool progression no longer matches canonical next-task sources.
+8. task/task-pool progression no longer matches canonical next-task sources,
+9. a closed `execution_block` was mistaken for parent-task or session closure even though lawful in-task continuation still existed.
+10. the orchestrator stopped after dispatching a delegated lane even though no delegated return, blocker, or supersession had yet been synthesized.
+11. the orchestrator silently narrowed `continue development` to a local symptom repair and stopped after that symptom turned green without rebuilding the parent bounded unit.
+12. the orchestrator closed one bounded item and stopped even though the next lawful bounded item had already been identified by continuation evidence.
 
 ## Mandatory Checks
 
@@ -42,9 +46,13 @@ Minimum self-diagnosis checks:
 
 1. `execution_continuity`
    - did reporting or narration incorrectly stop lawful next-task execution?
+   - did the orchestrator mistake `execution_block` closure for `delivery_task` closure and stop before rebuilding the next lawful in-task leaf?
    - or did the orchestrator skip a required next-task boundary gate when that variant was active?
    - or did the orchestrator preserve a boundary gate after the user disabled it?
    - or did the orchestrator skip the mandatory non-gating boundary analysis/report/update pass before entering the next task?
+   - or did the orchestrator stop after dispatch, treating `agents are running` as a natural pause before the first synthesized return or blocker?
+   - or did the orchestrator treat a local green test/compile result as task closure without re-binding or rebuilding the parent bounded unit?
+   - or did the orchestrator stop after one item closed even though verifier/subagent/taskflow evidence already named the next lawful item?
 2. `task_coverage`
    - do all new executable spec requirements map to an existing updated task or a newly created task?
    - did boundary-discovered executable scope produce updated or newly created dependent task/spec coverage before continuation?
@@ -65,6 +73,7 @@ Canonical diagnosis classes:
 1.1. `missing_boundary_gate`
 1.2. `stale_boundary_gate`
 1.3. `missing_boundary_analysis`
+1.4. `boundary_level_mismatch`
 2. `missing_task_coverage`
 3. `stale_spec_drift`
 4. `verification_gap`
@@ -90,7 +99,11 @@ When continuous autonomous execution is active:
 1. a user-facing progress report is not a stop condition,
 2. a report must not become an implicit approval gate,
 3. if the orchestrator stops after reporting without another lawful blocker, that is `reporting_barrier_drift`,
-4. if the orchestrator advances into the next task without the required task-boundary analysis/report/update pass, that is `missing_boundary_analysis`.
+4. if the orchestrator advances into the next task without the required task-boundary analysis/report/update pass, that is `missing_boundary_analysis`,
+5. if the orchestrator stops because it confused `execution_block` closure with parent-task closure, that is `boundary_level_mismatch`.
+6. if the orchestrator stops after delegated dispatch while the cycle is merely in-flight, that is also `reporting_barrier_drift`.
+7. if the orchestrator collapses an active development context into a symptom-only local fix and stops after that bounded success, that is `boundary_level_mismatch` or `invalid_fallback` depending on whether active task binding was lost.
+8. if the orchestrator stops after one bounded item closes even though continuation evidence already identified the next lawful item, that is `boundary_level_mismatch` and `reporting_barrier_drift`.
 
 ## Catch-Review Rule
 
@@ -115,5 +128,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/diagnostic-instructions/analysis.protocol-self-diagnosis-protocol.md
 created_at: '2026-03-09T12:00:46+02:00'
-updated_at: '2026-03-11T13:34:23+02:00'
+updated_at: '2026-03-13T12:39:11+02:00'
 changelog_ref: analysis.protocol-self-diagnosis-protocol.changelog.jsonl

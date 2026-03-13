@@ -211,7 +211,10 @@ mod tests {
     fn derives_deterministic_namespace_and_database_roots() {
         let target = SurrealStoreTarget::new("/tmp/vida-state");
 
-        assert_eq!(target.namespace_root(), PathBuf::from("/tmp/vida-state/vida"));
+        assert_eq!(
+            target.namespace_root(),
+            PathBuf::from("/tmp/vida-state/vida")
+        );
         assert_eq!(
             target.database_root(),
             PathBuf::from("/tmp/vida-state/vida/primary")
@@ -264,7 +267,10 @@ mod tests {
         let statements = target.bootstrap_schema_statements();
 
         assert_eq!(statements.len(), DEFAULT_STATE_TABLES.len() + 1);
-        assert_eq!(statements.first().expect("first statement"), "DEFINE TABLE task SCHEMALESS;");
+        assert_eq!(
+            statements.first().expect("first statement"),
+            "DEFINE TABLE task SCHEMALESS;"
+        );
         assert_eq!(
             statements.last().expect("last statement"),
             "UPSERT storage_meta:primary CONTENT { engine: 'surrealdb', backend: 'kv-surrealkv', namespace: 'vida', database: 'primary', state_schema_version: 1, instruction_schema_version: 1 };"

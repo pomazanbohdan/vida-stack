@@ -48,11 +48,17 @@ Purpose: provide the project docs map for the repository being developed on top 
 10. After bootstrap, prefer the default `taskflow-v0` shell command only when it resolves through the project-local wrapper/runtime path; do not reintroduce installed shim roots that point outside this repository.
 11. For project task-shaping, development-team, or delegated execution questions, continue early to `docs/process/team-development-and-orchestration-protocol.md`.
 12. For cheaper orchestrator-first project execution, continue early to `docs/process/project-orchestrator-operating-protocol.md`.
-13. For repeatable development-session startup and reusable upper-lane wording, continue early to:
+13. For repeatable development-session startup, prefer the compact startup bundle:
+   - `docs/process/project-orchestrator-startup-bundle.md`
+14. Expand to the full session-start protocol and reusable prompt when the bundle does not settle the startup question:
    - `docs/process/project-orchestrator-session-start-protocol.md`
    - `docs/process/project-orchestrator-reusable-prompt.md`
-14. For mandatory skill inventory and activation before work begins, continue early to `docs/process/project-skill-initialization-and-activation-protocol.md`.
-15. This path set is mandatory bootstrap context, not an optional later lookup.
+15. For mandatory skill inventory and activation before work begins, continue early to `docs/process/project-skill-initialization-and-activation-protocol.md`.
+16. For canonical packet shapes, prompt-stack interpretation, and bounded boot validation, continue early to:
+   - `docs/process/project-development-packet-template-protocol.md`
+   - `docs/process/project-agent-prompt-stack-protocol.md`
+   - `docs/process/project-boot-readiness-validation-protocol.md`
+17. This path set is mandatory bootstrap context, not an optional later lookup.
 
 Project-routing rule:
 
@@ -78,9 +84,11 @@ Project-routing rule:
 11. For development work, assume `delivery_task` is the default decomposition leaf and use `execution_block` only when one-owner bounded closure still fails.
 12. For normal write-producing work, assume delegated agents are the default execution path once a lawful packet exists.
 13. For cheaper orchestrator lanes, prefer the project orchestrator operating protocol over broad free-form planning.
-14. For new or resumed development orchestration sessions, use the project session-start protocol and reusable prompt rather than reconstructing ad hoc startup wording.
+14. For new or resumed development orchestration sessions, prefer the compact project startup bundle for routine reads and expand to the full session-start protocol and reusable prompt only when the bundle does not settle the question.
 15. Do not pre-split the whole backlog into `execution_block` leaves during bootstrap; keep launch readiness at `delivery_task` depth and refine just-in-time for the next active item.
 16. Before bounded work begins, inspect the current available skill catalog and activate the minimal relevant skill set or make `no_applicable_skill` explicit.
+17. Use the canonical project packet-template and prompt-stack protocols rather than inventing packet structure or prompt-layer precedence ad hoc.
+18. Treat boot readiness as incomplete until the project boot-readiness validation protocol can be satisfied for the current session.
 
 -----
 artifact_path: project/repository/agents.sidecar

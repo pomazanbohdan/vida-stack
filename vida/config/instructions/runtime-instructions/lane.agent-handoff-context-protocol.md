@@ -188,6 +188,33 @@ It must identify:
 2. which proof or verification command closes the slice,
 3. what remains outside the receiver's ownership.
 
+## Handoff Closure Rule
+
+1. A handoff remains open until the receiver lane returns a result that is synthesized or explicitly superseded by a newer canonical handoff/redirect receipt.
+2. Open handoff state is a closure-relevant runtime fact, not a narrative detail.
+3. While a bounded handoff remains open, the sender/orchestrator must not emit a `final` user-facing closure report for the represented request/task.
+4. If the sender performs bounded local workaround work while a handoff is still open, that does not silently close the handoff; the orchestrator must still reconcile or supersede it explicitly before final closure.
+
+Progress-report rule:
+
+1. while a bounded handoff remains open, a user-facing progress report may be emitted only as non-blocking commentary,
+2. that report must not become the last action of the active execution turn when `in_work=1`,
+3. this applies equally to ordinary delegated packets and rework handoffs.
+4. a just-dispatched handoff is already an open handoff for this rule even before the first worker return arrives,
+5. therefore `dispatch complete, agents running` is not a lawful pause boundary by itself.
+
+Reclaim rule:
+
+1. a delegated lane is reclaimable only after its handoff is synthesized or explicitly superseded,
+2. a completed-but-unsynthesized handoff is not reclaimable yet,
+3. saturation recovery must check open handoff state before treating a delegated lane as closeable/reusable.
+
+Exception-path interaction rule:
+
+1. an open delegated handoff for the same bounded packet blocks root-session local exception-path writing by default,
+2. pre-write exception receipts do not silently close or bypass that handoff,
+3. the orchestrator must first synthesize, supersede, or hard-block the delegated handoff before local takeover becomes lawful.
+
 ## External Alignment Note
 
 This protocol's historical external-alignment lineage is preserved in:

@@ -102,6 +102,8 @@ Execution contract:
 6. If user changes focus mid-execution, use `redirect` instead of ad hoc partial logging so source block closure and next active block remain explicit in telemetry.
 7. Redirected source blocks are execution history, not pending backlog. Runtime TaskFlow views should surface them as `superseded`.
 8. When the active route is implementation-shaped, each `checkpoint`, `block-finish`, or equivalent resumable boundary must persist the continuation packet required by recovery law.
+9. When a bounded leaf closes and the parent chain remains open, `block-finish` is not complete until post-leaf rebuild has persisted either a lawful `next_step`/`next_leaf_id` or an explicit blocker/escalation receipt.
+10. A closed leaf with open parent chain and no persisted continuation receipt is an invalid telemetry state and must fail closed.
 
 Implementation continuation packet for telemetry/checkpoint surfaces:
 
@@ -118,6 +120,15 @@ Implementation continuation packet for telemetry/checkpoint surfaces:
    - `reset_count`
    - `budget_units_consumed` when budgeted
 9. current blocker or next-step reason when the task remains open
+
+Post-leaf continuation receipt for non-terminal chains:
+
+1. `parent_unit_id`
+2. `closed_leaf_id`
+3. `next_leaf_id` or explicit blocker/escalation marker
+4. `selection_basis`
+5. `proof_target_for_next_leaf` when a next leaf exists
+6. `resume_hint`
 
 Auto-sync level:
 
@@ -188,6 +199,7 @@ Operational hooks:
 2. Hydrate capsule on compact `post` before any task continuation.
 3. Emit telemetry events: `context_capsule_written`, `context_hydrated`, `context_hydration_failed`, `context_drift_checked`.
 4. For implementation-shaped work, treat missing continuation-packet fields as hydration failure, not as soft warning.
+5. For non-terminal chains, treat missing post-leaf continuation receipt as hydration failure, not as soft warning.
 
 ## 7) Quality Gates
 
@@ -208,6 +220,7 @@ Finish gate:
 2. If critical contradictions exist, finish is blocked.
 3. At least one `self_reflection` entry is required in strict mode.
 4. When a task appears done-but-open or stale-in-progress, run `python3 task-state-reconcile.py status <task_id>` before closure or reopen decisions.
+5. When a leaf is marked closed but the represented task line remains open, finish/checkpoint/closure reporting must fail unless telemetry contains either a persisted next-leaf receipt or an explicit blocker/escalation receipt.
 
 ## 8) Files
 

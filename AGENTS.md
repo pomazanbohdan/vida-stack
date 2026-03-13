@@ -17,7 +17,7 @@ Two-map initialization:
 3. `AGENTS.sidecar.md` is the project docs map only; it does not replace the framework map.
 
 Instruction activation note:
-1. Use `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md` as the canonical rule for when instruction surfaces are `always-on`, `lane-entry`, `triggered`, or `closure/reflection` only.
+1. Use `vida/config/instructions/instruction-contracts/bridge.instruction-activation-runtime-capsule.md` as the compact runtime-facing activation surface and `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md` as the canonical owner for when instruction surfaces are `always-on`, `lane-entry`, `triggered`, or `closure/reflection` only.
 2. If the active task context is documentation-shaped, activate `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md` immediately at `L0` without waiting for a second manual selection step.
 
 Canonical lane entries:
@@ -72,9 +72,9 @@ These rules apply across all lanes unless a more specific worker rule narrows be
    - project/product knowledge belongs to `AGENTS.sidecar.md` and the downstream project-owned documentation surfaces it resolves.
 5. **[MUST NOT]** Never auto-commit without explicit user permission.
 6. **[MUST]** Prefer root-cause, architecture-oriented fixes over hotfixes.
-7. **[MUST]** Read and apply `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md` algorithms before analysis/decisions in orchestrator lane.
+7. **[MUST]** Read and apply step-thinking before analysis/decisions in orchestrator lane, using `vida/config/instructions/instruction-contracts/overlay.step-thinking-runtime-capsule.md` as the compact runtime-facing projection and the full owner file `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md` when deeper section semantics are needed.
 8. **[MUST]** Keep `vida/config/instructions/instruction-contracts/overlay.session-context-continuity-protocol.md` active in orchestrator lane for cross-step context preservation throughout the session.
-9. **[MUST]** If root `vida.config.yaml` exists, apply `vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md`.
+9. **[MUST]** If root `vida.config.yaml` exists, apply `vida/config/instructions/runtime-instructions/bridge.project-overlay-runtime-capsule.md` as the compact runtime-facing surface and consult `vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md` as the canonical owner when schema or governance semantics matter.
 10. **[MUST]** Keep bootstrap routing in `AGENTS.md`, the project docs map in `AGENTS.sidecar.md`, active instruction canon in `vida/config/instructions/*`, and runtime implementation in `taskflow-v0/*`; keep project-owned behavior in `docs/product/*`, `docs/process/*`, and `scripts/*`.
 11. **[MUST]** Use `rg` as the primary cross-file search tool.
 12. **[MUST]** Never widen scope silently when user intent, ownership layer, or risk posture changes materially.
@@ -89,6 +89,7 @@ These rules apply across all lanes unless a more specific worker rule narrows be
 21. **[MUST]** When evidence sources conflict, prefer the highest-evidence source recognized by the active protocol stack before making conclusions or mutations.
 22. **[MUST]** When worker-first execution is active and new delegated lane allocation fails because of agent/thread saturation, attempt reuse of existing eligible agents first; do not fall back to local-only continuation until reuse or explicit saturation recovery has been attempted and recorded.
 23. **[MUST]** If the active task context is documentation-shaped, activate `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md` immediately at `L0`; do not defer documentation protocol activation to a later optional read.
+24. **[MUST]** Orchestrator entry into local writer / exception-path mode requires an explicit pre-write receipt recorded before the first local mutation; silent or retroactive exception-path justification is forbidden.
 
 Documentation-analysis note:
 1. When documentation-shaped work is active, documentation ownership/model conclusions must be grounded in canonical instruction/spec/map artifacts, not in changelog or generated status artifacts.
@@ -148,8 +149,8 @@ For orchestrator lane, use `vida/config/instructions/agent-definitions/entry.orc
 4. worker-first orchestration,
 5. boot profile read-set,
 6. runtime execution rules.
-7. instruction activation by phase via `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`.
-8. explicit boot sequencing via `vida/config/instructions/system-maps/bootstrap.orchestrator-boot-flow.md`.
+7. instruction activation by phase via `vida/config/instructions/instruction-contracts/bridge.instruction-activation-runtime-capsule.md`, with detailed owner law in `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`.
+8. compact runtime boot sequencing via `vida/config/instructions/system-maps/bootstrap.orchestrator-runtime-capsule.md`, with detailed owner semantics in `vida/config/instructions/system-maps/bootstrap.orchestrator-boot-flow.md`.
 
 Runtime-init target when available:
 1. `vida orchestrator-init`
@@ -200,11 +201,13 @@ Operational references:
 4. `vida/config/instructions/instruction-contracts/role.worker-thinking.md`
 5. `vida/config/instructions/system-maps/framework.map.md`
 6. `vida/config/instructions/system-maps/protocol.index.md`
-7. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
-8. `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md`
-9. `vida/config/instructions/system-maps/bootstrap.orchestrator-boot-flow.md`
-10. `vida/config/instructions/system-maps/bootstrap.worker-boot-flow.md`
-11. `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`
+7. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-runtime-capsule.md`
+8. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
+9. `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md`
+10. `vida/config/instructions/system-maps/bootstrap.orchestrator-boot-flow.md`
+11. `vida/config/instructions/system-maps/bootstrap.worker-boot-flow.md`
+12. `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`
+13. `vida/config/instructions/runtime-instructions/bridge.project-overlay-runtime-capsule.md`
 
 Initialization bootstrap rule:
 1. During project initialization, read `AGENTS.sidecar.md` immediately after `AGENTS.md`, then resolve the framework-owned bootstrap path in `vida/root-map.md` before lane resolution or broad manual inspection.

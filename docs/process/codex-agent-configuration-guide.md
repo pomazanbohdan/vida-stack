@@ -108,7 +108,9 @@ Packet posture:
 4. the default decomposition leaf is `delivery_task`,
 5. `execution_block` is reserved for packets that still fail one-owner bounded closure,
 6. normal write-producing work should be delegated once a lawful packet exists,
-7. available skills must be inspected and relevant skills activated before bounded work begins.
+7. available skills must be inspected and relevant skills activated before bounded work begins,
+8. packet rendering should follow the project packet-template protocol rather than free-form delegation text,
+9. packet interpretation should follow the project prompt-stack protocol so role prompt, packet, skill, and runtime-state precedence stay explicit.
 
 Coordination pattern:
 
@@ -117,6 +119,7 @@ Coordination pattern:
 3. the root session should stay in orchestrator scope after bootstrap rather than collapsing into a second local implementer,
 4. `coach` must remain distinct from `verifier`,
 5. escalation is not part of the normal steady-state path and should activate only when the first-line development team cannot close lawfully.
+6. a user request to continue development does not reassign the root session into `development_implementer`.
 
 Top-level orchestrator note:
 
@@ -128,6 +131,8 @@ Normalization rule:
 1. `orchestrator-only` is lawful only for bounded bootstrap, direct chat diagnosis, or recorded saturation/exception handling,
 2. normal project development posture is agentic: orchestrator-led, delegation-first, and verification-backed,
 3. if delegation temporarily fails because of thread or lane saturation, attempt lawful reuse or recorded saturation recovery before accepting local-only continuation as the active posture.
+4. generic implementation intent is not a lane-change receipt and must not by itself authorize root-session coding.
+5. recorded saturation recovery must explicitly check whether any delegated Codex lanes already completed or were superseded and can now be closed/reclaimed before "agent limits" remains a valid blocker.
 
 Coach separation rule:
 
@@ -224,9 +229,13 @@ At the current repository cut:
 7. for the project packet-level team operating protocol, read `docs/process/team-development-and-orchestration-protocol.md`,
 8. for the project top-level orchestrator operating protocol, read `docs/process/project-orchestrator-operating-protocol.md`,
 9. for repeatable orchestrator startup and reusable prompt wording, read:
+   - `docs/process/project-orchestrator-startup-bundle.md`
    - `docs/process/project-orchestrator-session-start-protocol.md`
    - `docs/process/project-orchestrator-reusable-prompt.md`
-10. for mandatory skill initialization and activation, read `docs/process/project-skill-initialization-and-activation-protocol.md`.
+10. for mandatory skill initialization and activation, read `docs/process/project-skill-initialization-and-activation-protocol.md`,
+11. for canonical packet templates, read `docs/process/project-development-packet-template-protocol.md`,
+12. for prompt-stack precedence, read `docs/process/project-agent-prompt-stack-protocol.md`,
+13. for bounded boot validation, read `docs/process/project-boot-readiness-validation-protocol.md`.
 
 -----
 artifact_path: process/codex-agent-configuration-guide

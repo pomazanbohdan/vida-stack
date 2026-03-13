@@ -112,10 +112,11 @@ No session is launch-ready until both are true:
 
 ## Routing
 
-1. for orchestrator startup, read `docs/process/project-orchestrator-session-start-protocol.md`,
-2. for top-level routing, read `docs/process/project-orchestrator-operating-protocol.md`,
-3. for delegated packet/team law, read `docs/process/team-development-and-orchestration-protocol.md`,
-4. for Codex role/runtime settings, read `docs/process/codex-agent-configuration-guide.md`.
+1. for routine startup skill/readiness gating, read `docs/process/project-start-readiness-runtime-capsule.md`,
+2. for orchestrator startup, read `docs/process/project-orchestrator-session-start-protocol.md`,
+3. for top-level routing, read `docs/process/project-orchestrator-operating-protocol.md`,
+4. for delegated packet/team law, read `docs/process/team-development-and-orchestration-protocol.md`,
+5. for Codex role/runtime settings, read `docs/process/codex-agent-configuration-guide.md`.
 
 -----
 artifact_path: process/project-skill-initialization-and-activation-protocol

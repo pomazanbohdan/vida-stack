@@ -12,7 +12,8 @@ This protocol defines:
 2. the packet shape used for delegated development lanes,
 3. how one backlog item is decomposed into delivery-task packets,
 4. how orchestrator, implementer, coach, verifier, and escalation cooperate,
-5. closure rules for packet-level work.
+5. closure rules for packet-level work,
+6. how packet shapes, prompt-stack precedence, and boot-readiness rules stay explicit.
 
 This protocol does not define:
 
@@ -32,6 +33,7 @@ Project development runs as:
 5. verification-backed,
 6. skill-aware before bounded work begins,
 7. fail-closed on missing packet data or shared-scope ambiguity.
+8. explorer/read-only findings feed packet shaping, not root-session write ownership.
 
 ## Team Topology
 
@@ -92,6 +94,11 @@ Readiness rule:
 
 1. if any of `goal`, `owned_paths`, `definition_of_done`, `verification_command`, or `blocking_question` is missing, the packet is invalid,
 2. invalid packets must be reshaped by the orchestrator before delegation.
+
+Template rule:
+
+1. render project packets using `docs/process/project-development-packet-template-protocol.md`,
+2. do not treat prose-only delegation as a valid substitute for the canonical packet family.
 
 ## Decomposition Rule
 
@@ -165,12 +172,22 @@ The orchestrator must:
 6. keep writer ownership singular,
 7. synthesize coach and verifier returns,
 8. decide closure or rework.
+9. reroute partial implementer returns instead of absorbing the same write scope locally by inertia.
+10. keep delegated lane state explicit and avoid closure-style final reporting while delegated work remains open.
+11. preserve the full write-producing lane cycle after bounded read-only findings instead of collapsing directly into local patching.
 
 The orchestrator must not:
 
 1. act as the default local writer for normal development work,
 2. delegate a packet with ambiguous writable scope,
-3. skip coach or verifier when the packet still requires them.
+3. skip coach or verifier when the packet still requires them,
+4. stop after an interim report while the bounded packet still has an owed next step,
+5. enter local write work without an explicit recorded exception path.
+6. treat a partial implementer return as implicit permission to finish the packet locally in the same write scope.
+7. emit final closure for the packet while implementer/coach/verifier/escalation handoff state is still open or unsynthesized.
+8. treat explorer findings as implicit permission to skip implementer/coach/verifier routing for normal write-producing work.
+9. treat delayed or hanging delegated lanes as permission to absorb the packet locally while the delegated cycle still remains open.
+10. silently replace the active packet with the first locally failing test or compile error and then treat that narrower symptom fix as packet closure.
 
 ### Implementer
 
@@ -180,6 +197,7 @@ The implementer must:
 2. activate the relevant skills before packet work begins,
 3. stay inside assigned write scope,
 4. return changed files, verification result, blockers, and residual risks.
+5. make partial or unresolved state explicit when the packet is not closure-ready.
 
 The implementer must not:
 
@@ -236,6 +254,37 @@ For write-producing packets, the default sequence is:
 4. verifier
 5. orchestrator synthesis
 
+Explorer-to-writer rule:
+
+1. when explorer or other read-only lanes find a bounded writable gap, that result feeds the next packet,
+2. the next lawful write-producing sequence still remains implementer -> coach -> verifier -> synthesis unless a recorded exception path says otherwise,
+3. “the gap is already obvious” is not a valid reason to collapse into local patching.
+
+Partial-return reroute rule:
+
+1. if implementer returns non-closure-ready state, the next step is orchestrator reroute rather than implicit root-session writing,
+2. reroute may produce:
+   - fresh implementer rework packet,
+   - coach review packet when bounded critique is the blocker,
+   - verifier/escalation packet when closure law requires it,
+   - or explicit exception-path receipt for local repair
+3. same-scope local completion by the root session is forbidden unless that exception path is recorded first.
+4. if coach/review/verifier then finds a concrete compile blocker in those same mutated files, the packet still remains under reroute law; the finding does not silently transfer repair authority to the root session.
+5. "leave no broken packet behind" is a valid risk observation but not a substitute for an explicit exception-path receipt.
+
+Delegated-closure rule:
+
+1. if a delegated lane is still active or its handoff remains unresolved, packet closure is not ready,
+2. local workaround work does not by itself close the delegated lane,
+3. final packet closure requires either:
+   - synthesized delegated returns,
+   - explicit supersession/redirection receipt,
+   - or explicit blocker/escalation state
+4. open delegated state also blocks root-session takeover for the same packet unless supersession or hard-blocker evidence is recorded first,
+5. a pre-write exception-path receipt alone does not bypass an otherwise still-lawful delegated cycle,
+6. progress reporting during rework or post-dispatch in-flight state remains non-blocking only,
+7. when one packet closes and synthesized team evidence already names the next lawful packet, use that result for immediate rerouting/continuation rather than closure-style reporting.
+
 For read-heavy or proof-only packets, the orchestrator may use:
 
 1. orchestrator shaping
@@ -266,8 +315,12 @@ Local orchestrator-only work is lawful only for:
 1. shaping or reshaping packets,
 2. bounded read-only analysis,
 3. proof-only checks,
-4. very small one-file fixes where delegation would cost more than the change itself,
-5. recorded saturation or escalation exceptions.
+4. recorded saturation or escalation exceptions.
+
+Clarification:
+
+1. "very small one-file fix" is not by itself a lawful reason to bypass delegation, exception-path gating, or open delegated-cycle law,
+2. if the work is write-producing, local root-session handling still needs the same exception/supersession gates as any other packet.
 
 Forbidden shortcut:
 
@@ -312,6 +365,8 @@ After bootstrap, development agents must know immediately:
 6. the default `taskflow-v0` shell command is expected to resolve to the project-local wrapper/runtime path for this repository rather than an installed shim rooted elsewhere.
 7. the default decomposition leaf is `delivery_task`, with `execution_block` reserved for packets that still violate one-owner bounded closure.
 8. delegated agents are the normal path for write-producing work once a lawful packet exists.
+9. packet interpretation follows the project prompt-stack protocol rather than ad hoc precedence guesses.
+10. no session is write-ready until the project boot-readiness validation protocol passes.
 
 ## Routing
 
@@ -319,12 +374,15 @@ After bootstrap, development agents must know immediately:
 2. for repeatable orchestrator startup, read `docs/process/project-orchestrator-session-start-protocol.md`,
 3. for reusable upper-lane wording, read `docs/process/project-orchestrator-reusable-prompt.md`,
 4. for mandatory skill activation, read `docs/process/project-skill-initialization-and-activation-protocol.md`,
-5. for project Codex configuration, read `docs/process/codex-agent-configuration-guide.md`,
-6. for project agent-system posture, read `docs/process/agent-system-guide.md`,
-7. for project role/skill/profile/flow registries, read `docs/process/agent-extensions/README.md`,
-8. for canonical spec-to-task decomposition law, read `vida/config/instructions/command-instructions/planning.form-task-protocol.md`,
-9. for delegated packet invariants, read `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`,
-10. for Release-1 restart backlog ownership, read `docs/product/spec/release-1-restart-backlog.md`.
+5. for canonical packet templates, read `docs/process/project-development-packet-template-protocol.md`,
+6. for prompt-stack precedence, read `docs/process/project-agent-prompt-stack-protocol.md`,
+7. for bounded boot validation, read `docs/process/project-boot-readiness-validation-protocol.md`,
+8. for project Codex configuration, read `docs/process/codex-agent-configuration-guide.md`,
+9. for project agent-system posture, read `docs/process/agent-system-guide.md`,
+10. for project role/skill/profile/flow registries, read `docs/process/agent-extensions/README.md`,
+11. for canonical spec-to-task decomposition law, read `vida/config/instructions/command-instructions/planning.form-task-protocol.md`,
+12. for delegated packet invariants, read `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`,
+13. for Release-1 restart backlog ownership, read `docs/product/spec/release-1-restart-backlog.md`.
 
 -----
 artifact_path: process/team-development-and-orchestration-protocol

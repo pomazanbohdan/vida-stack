@@ -1085,7 +1085,8 @@ fn doctor_rows_for(
 }
 
 fn read_activation_protocol() -> std::io::Result<String> {
-    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vida/config/instructions");
+    let base =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vida/config/instructions");
     let candidates = [
         base.join("bridge.instruction-activation-protocol.md"),
         base.join("instruction-contracts/bridge.instruction-activation-protocol.md"),
@@ -1123,7 +1124,9 @@ fn activation_issue_for(path: &str, activation_body: &str) -> Option<DoctorRow> 
     if !is_activation_governed_protocol(path) {
         return None;
     }
-    if path == "vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md" {
+    if path
+        == "vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md"
+    {
         return None;
     }
     if activation_body.contains(path)
@@ -1309,10 +1312,16 @@ fn render_proofcheck_layer(layer: usize, paths: &[String]) -> String {
         format!("  doctor_warning_rows: {doctor_warning_rows}"),
     ];
     for row in &fast_rows {
-        lines.push(format!("  fastcheck: {} [{}]", row.artifact_path.0, row.code));
+        lines.push(format!(
+            "  fastcheck: {} [{}]",
+            row.artifact_path.0, row.code
+        ));
     }
     for row in &protocol_rows {
-        lines.push(format!("  protocol_coverage: {} [{}]", row.path, row.issues));
+        lines.push(format!(
+            "  protocol_coverage: {} [{}]",
+            row.path, row.issues
+        ));
     }
     for row in &readiness_rows {
         lines.push(format!(
@@ -1382,15 +1391,17 @@ fn render_proofcheck_profile(profile: &str) -> Result<String, String> {
             lines.push(format!("  - {} [{}]", row.path, row.issues));
         }
     }
-    lines.push(if fast_rows.is_empty()
-        && protocol_rows.is_empty()
-        && readiness_rows.is_empty()
-        && doctor_error_rows == 0
-    {
-        "✅ OK: proofcheck".to_string()
-    } else {
-        "❌ BLOCKING: proofcheck".to_string()
-    });
+    lines.push(
+        if fast_rows.is_empty()
+            && protocol_rows.is_empty()
+            && readiness_rows.is_empty()
+            && doctor_error_rows == 0
+        {
+            "✅ OK: proofcheck".to_string()
+        } else {
+            "❌ BLOCKING: proofcheck".to_string()
+        },
+    );
     Ok(lines.join("\n"))
 }
 
@@ -1807,7 +1818,12 @@ fn changelog_task_rows(
             Err(_) => continue,
         };
         for row in rows {
-            if row.get("task_id").and_then(Value::as_str).unwrap_or_default() != task_id {
+            if row
+                .get("task_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                != task_id
+            {
                 continue;
             }
             matched.push(serde_json::json!({
@@ -1862,7 +1878,12 @@ fn task_summary_payload(
             Err(_) => continue,
         };
         for row in rows {
-            if row.get("task_id").and_then(Value::as_str).unwrap_or_default() != task_id {
+            if row
+                .get("task_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                != task_id
+            {
                 continue;
             }
             events += 1;
@@ -2050,11 +2071,14 @@ fn check_rows(root: Option<&str>, profile: &str) -> Result<Vec<CheckRow>, String
     let mut issues = Vec::new();
     let activation_body = read_activation_protocol().map_err(|err| err.to_string())?;
     let targets = if profile.is_empty() {
-        let root = root.map(std::path::PathBuf::from).unwrap_or_else(|| runtime.clone());
+        let root = root
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| runtime.clone());
         collect_check_targets(&root, Vec::<String>::new()).map_err(|err| err.to_string())?
     } else {
         let policy = runtime.join("codex-v0/docsys_policy.yaml");
-        let roots = resolve_profile_roots(Some(&runtime), &policy, profile).map_err(|err| err.to_string())?;
+        let roots = resolve_profile_roots(Some(&runtime), &policy, profile)
+            .map_err(|err| err.to_string())?;
         let excludes = resolve_scan_ignored_globs(&policy).map_err(|err| err.to_string())?;
         let mut rows = Vec::new();
         for root in roots {
@@ -2073,11 +2097,16 @@ fn check_rows(root: Option<&str>, profile: &str) -> Result<Vec<CheckRow>, String
             .into_iter()
             .map(|issue| issue.code)
             .collect::<Vec<_>>();
-        if is_activation_governed_protocol(&rel) && activation_issue_for(&rel, &activation_body).is_some() {
+        if is_activation_governed_protocol(&rel)
+            && activation_issue_for(&rel, &activation_body).is_some()
+        {
             row_issues.push(format!("missing_activation_binding:{rel}"));
         }
         if !row_issues.is_empty() {
-            issues.push(CheckRow { path: rel, issues: row_issues });
+            issues.push(CheckRow {
+                path: rel,
+                issues: row_issues,
+            });
         } else if footer.is_empty() && content.contains("-----") {
             issues.push(CheckRow {
                 path: rel,
@@ -2088,10 +2117,7 @@ fn check_rows(root: Option<&str>, profile: &str) -> Result<Vec<CheckRow>, String
     Ok(issues)
 }
 
-fn fastcheck_rows(
-    root: Option<&str>,
-    profile: &str,
-) -> Result<Vec<ValidationIssue>, String> {
+fn fastcheck_rows(root: Option<&str>, profile: &str) -> Result<Vec<ValidationIssue>, String> {
     let targets = resolve_profile_targets(root, profile)?;
     let mut issues = Vec::new();
     for (scope_root, file_path) in targets {
@@ -2102,10 +2128,7 @@ fn fastcheck_rows(
     Ok(issues)
 }
 
-fn activation_rows(
-    root: Option<&str>,
-    profile: &str,
-) -> Result<Vec<DoctorRow>, String> {
+fn activation_rows(root: Option<&str>, profile: &str) -> Result<Vec<DoctorRow>, String> {
     let activation_body = read_activation_protocol().map_err(|err| err.to_string())?;
     let targets = resolve_profile_targets(root, profile)?;
     let mut rows = Vec::new();
@@ -2118,10 +2141,7 @@ fn activation_rows(
     Ok(rows)
 }
 
-fn protocol_coverage_rows(
-    root: Option<&str>,
-    profile: &str,
-) -> Result<Vec<DoctorRow>, String> {
+fn protocol_coverage_rows(root: Option<&str>, profile: &str) -> Result<Vec<DoctorRow>, String> {
     let activation_body = read_activation_protocol().map_err(|err| err.to_string())?;
     let protocol_index_body = read_protocol_index().map_err(|err| err.to_string())?;
     let targets = resolve_profile_targets(root, profile)?;
@@ -2210,14 +2230,8 @@ fn finalize_edit(args: FinalizeEditArgs) -> Result<String, String> {
     let mut changed_files = Vec::new();
     for raw_path in markdown_files {
         let path = resolve_runtime_path(raw_path);
-        if !path.exists() {
-            return Err(format!("markdown file not found: {}", path.display()));
-        }
-        let content = fs::read_to_string(&path).map_err(|err| err.to_string())?;
-        let artifact = docflow_markdown::split_footer(&content)
-            .map_err(|err| err.to_string())?;
-        let mut footer =
-            footer_entries(&content).ok_or_else(|| format!("missing footer: {}", path.display()))?;
+        let loaded = load_markdown_with_footer(&path)?;
+        let mut footer = loaded.footer;
         let applied_updates = apply_finalize_updates(
             &mut footer,
             &args.status,
@@ -2226,61 +2240,37 @@ fn finalize_edit(args: FinalizeEditArgs) -> Result<String, String> {
             &args.set_values,
         )?;
         set_footer_value(&mut footer, "updated_at", &now_iso());
-        let rendered = render_footer_entries(&footer);
-        let markdown = docflow_markdown::render_artifact(&docflow_markdown::MarkdownArtifact {
-            body: artifact.body,
-            footer: Some(rendered),
-        });
-        fs::write(&path, markdown).map_err(|err| err.to_string())?;
-    append_changelog_event(
-        &path,
-        &footer,
-        &args.event,
-        change_note,
+        write_markdown_with_footer(&path, loaded.artifact.body, &footer)?;
+        append_changelog_event(
+            &path,
+            &footer,
+            &args.event,
+            change_note,
             &args.task_id,
-        &args.actor,
-        &args.scope,
-        &args.tags,
-        &applied_updates,
-        &BTreeMap::new(),
-    )?;
+            &args.actor,
+            &args.scope,
+            &args.tags,
+            &applied_updates,
+            &BTreeMap::new(),
+        )?;
         changed_files.push(path);
     }
-
-    let problems = quiet_check_paths(&changed_files);
-    let mut lines = vec![
-        "finalize-edit".to_string(),
-        format!("  files: {}", changed_files.len()),
-        format!("  note: {change_note}"),
-    ];
-    if problems.is_empty() {
-        lines.push("  validation: ok".to_string());
-    } else {
-        lines.push("  validation: blocking".to_string());
-        for (path, issues) in problems {
-            lines.push(format!("  - {} [{}]", path, issues.join(",")));
-        }
-    }
-    Ok(lines.join("\n"))
+    Ok(render_mutation_result(
+        "finalize-edit",
+        &[
+            format!("  files: {}", changed_files.len()),
+            format!("  note: {change_note}"),
+        ],
+        &changed_files,
+    ))
 }
 
 fn touch(args: TouchArgs) -> Result<String, String> {
     let path = resolve_runtime_path(&args.markdown_file);
-    if !path.exists() {
-        return Err(format!("markdown file not found: {}", path.display()));
-    }
-    let content = fs::read_to_string(&path).map_err(|err| err.to_string())?;
-    let artifact = docflow_markdown::split_footer(&content)
-        .map_err(|err| err.to_string())?;
-    let mut footer =
-        footer_entries(&content).ok_or_else(|| format!("missing footer: {}", path.display()))?;
+    let loaded = load_markdown_with_footer(&path)?;
+    let mut footer = loaded.footer;
     set_footer_value(&mut footer, "updated_at", &now_iso());
-    let rendered = render_footer_entries(&footer);
-    let markdown = docflow_markdown::render_artifact(&docflow_markdown::MarkdownArtifact {
-        body: artifact.body,
-        footer: Some(rendered),
-    });
-    fs::write(&path, markdown).map_err(|err| err.to_string())?;
+    write_markdown_with_footer(&path, loaded.artifact.body, &footer)?;
     append_changelog_event(
         &path,
         &footer,
@@ -2293,33 +2283,20 @@ fn touch(args: TouchArgs) -> Result<String, String> {
         &[],
         &BTreeMap::new(),
     )?;
-
-    let problems = quiet_check_paths(std::slice::from_ref(&path));
-    let mut lines = vec![
-        "touch".to_string(),
-        format!("  file: {}", normalize_path_for_repo(&path)),
-        format!("  note: {}", args.change_note),
-    ];
-    if problems.is_empty() {
-        lines.push("  validation: ok".to_string());
-    } else {
-        lines.push("  validation: blocking".to_string());
-        for (path, issues) in problems {
-            lines.push(format!("  - {} [{}]", path, issues.join(",")));
-        }
-    }
-    Ok(lines.join("\n"))
+    Ok(render_mutation_result(
+        "touch",
+        &[
+            format!("  file: {}", normalize_path_for_repo(&path)),
+            format!("  note: {}", args.change_note),
+        ],
+        std::slice::from_ref(&path),
+    ))
 }
 
 fn rename_artifact(args: RenameArtifactArgs) -> Result<String, String> {
     let path = resolve_runtime_path(&args.markdown_file);
-    if !path.exists() {
-        return Err(format!("markdown file not found: {}", path.display()));
-    }
-    let content = fs::read_to_string(&path).map_err(|err| err.to_string())?;
-    let artifact = docflow_markdown::split_footer(&content).map_err(|err| err.to_string())?;
-    let mut footer =
-        footer_entries(&content).ok_or_else(|| format!("missing footer: {}", path.display()))?;
+    let loaded = load_markdown_with_footer(&path)?;
+    let mut footer = loaded.footer;
     let previous_artifact_path = footer
         .iter()
         .find_map(|(key, value)| (key == "artifact_path").then_some(value.clone()))
@@ -2339,12 +2316,7 @@ fn rename_artifact(args: RenameArtifactArgs) -> Result<String, String> {
         set_footer_value(&mut footer, "artifact_version", &next.to_string());
     }
     set_footer_value(&mut footer, "updated_at", &now_iso());
-    let rendered = render_footer_entries(&footer);
-    let markdown = docflow_markdown::render_artifact(&docflow_markdown::MarkdownArtifact {
-        body: artifact.body,
-        footer: Some(rendered),
-    });
-    fs::write(&path, markdown).map_err(|err| err.to_string())?;
+    write_markdown_with_footer(&path, loaded.artifact.body, &footer)?;
 
     let mut extra_fields = BTreeMap::new();
     extra_fields.insert("previous_artifact_path".to_string(), previous_artifact_path);
@@ -2361,21 +2333,14 @@ fn rename_artifact(args: RenameArtifactArgs) -> Result<String, String> {
         &extra_fields,
     )?;
 
-    let problems = quiet_check_paths(std::slice::from_ref(&path));
-    let mut lines = vec![
-        "rename-artifact".to_string(),
-        format!("  file: {}", normalize_path_for_repo(&path)),
-        format!("  artifact_path: {}", args.artifact_path),
-    ];
-    if problems.is_empty() {
-        lines.push("  validation: ok".to_string());
-    } else {
-        lines.push("  validation: blocking".to_string());
-        for (path, issues) in problems {
-            lines.push(format!("  - {} [{}]", path, issues.join(",")));
-        }
-    }
-    Ok(lines.join("\n"))
+    Ok(render_mutation_result(
+        "rename-artifact",
+        &[
+            format!("  file: {}", normalize_path_for_repo(&path)),
+            format!("  artifact_path: {}", args.artifact_path),
+        ],
+        std::slice::from_ref(&path),
+    ))
 }
 
 fn init_artifact(args: InitArgs) -> Result<String, String> {
@@ -2393,7 +2358,11 @@ fn init_artifact(args: InitArgs) -> Result<String, String> {
         args.artifact_revision.clone()
     };
     let title = if args.title.is_empty() {
-        titleize_stem(path.file_stem().and_then(|s| s.to_str()).unwrap_or("artifact"))
+        titleize_stem(
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("artifact"),
+        )
     } else {
         args.title.clone()
     };
@@ -2410,7 +2379,10 @@ fn init_artifact(args: InitArgs) -> Result<String, String> {
             args.artifact_version.to_string(),
         ),
         ("artifact_revision".to_string(), artifact_revision),
-        ("schema_version".to_string(), args.schema_version.to_string()),
+        (
+            "schema_version".to_string(),
+            args.schema_version.to_string(),
+        ),
         ("status".to_string(), args.status.clone()),
         ("source_path".to_string(), normalize_path_for_repo(&path)),
         ("created_at".to_string(), created_at.clone()),
@@ -2425,12 +2397,7 @@ fn init_artifact(args: InitArgs) -> Result<String, String> {
             ),
         ),
     ];
-    let rendered = render_footer_entries(&footer);
-    let markdown = docflow_markdown::render_artifact(&docflow_markdown::MarkdownArtifact {
-        body,
-        footer: Some(rendered),
-    });
-    fs::write(&path, markdown).map_err(|err| err.to_string())?;
+    write_markdown_with_footer(&path, body, &footer)?;
     append_changelog_event(
         &path,
         &footer,
@@ -2444,22 +2411,15 @@ fn init_artifact(args: InitArgs) -> Result<String, String> {
         &BTreeMap::new(),
     )?;
 
-    let problems = quiet_check_paths(std::slice::from_ref(&path));
-    let mut lines = vec![
-        "init".to_string(),
-        format!("  file: {}", normalize_path_for_repo(&path)),
-        format!("  artifact_path: {}", args.artifact_path),
-        format!("  artifact_type: {}", args.artifact_type),
-    ];
-    if problems.is_empty() {
-        lines.push("  validation: ok".to_string());
-    } else {
-        lines.push("  validation: blocking".to_string());
-        for (path, issues) in problems {
-            lines.push(format!("  - {} [{}]", path, issues.join(",")));
-        }
-    }
-    Ok(lines.join("\n"))
+    Ok(render_mutation_result(
+        "init",
+        &[
+            format!("  file: {}", normalize_path_for_repo(&path)),
+            format!("  artifact_path: {}", args.artifact_path),
+            format!("  artifact_type: {}", args.artifact_type),
+        ],
+        std::slice::from_ref(&path),
+    ))
 }
 
 fn move_artifact(args: MoveArgs) -> Result<String, String> {
@@ -2469,17 +2429,23 @@ fn move_artifact(args: MoveArgs) -> Result<String, String> {
         return Err(format!("markdown file not found: {}", source.display()));
     }
     if destination.exists() {
-        return Err(format!("destination already exists: {}", destination.display()));
+        return Err(format!(
+            "destination already exists: {}",
+            destination.display()
+        ));
     }
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
-    let content = fs::read_to_string(&source).map_err(|err| err.to_string())?;
-    let artifact = docflow_markdown::split_footer(&content).map_err(|err| err.to_string())?;
-    let mut footer =
-        footer_entries(&content).ok_or_else(|| format!("missing footer: {}", source.display()))?;
+    let loaded = load_markdown_with_footer(&source)?;
+    let source_footer = loaded.footer.clone();
+    let mut footer = loaded.footer;
     let source_rel = normalize_path_for_repo(&source);
-    set_footer_value(&mut footer, "source_path", &normalize_path_for_repo(&destination));
+    set_footer_value(
+        &mut footer,
+        "source_path",
+        &normalize_path_for_repo(&destination),
+    );
     set_footer_value(&mut footer, "updated_at", &now_iso());
     set_footer_value(
         &mut footer,
@@ -2492,15 +2458,8 @@ fn move_artifact(args: MoveArgs) -> Result<String, String> {
                 .unwrap_or("artifact")
         ),
     );
-    let rendered = render_footer_entries(&footer);
-    let markdown = docflow_markdown::render_artifact(&docflow_markdown::MarkdownArtifact {
-        body: artifact.body,
-        footer: Some(rendered),
-    });
-    fs::write(&destination, markdown).map_err(|err| err.to_string())?;
+    write_markdown_with_footer(&destination, loaded.artifact.body, &footer)?;
 
-    let source_footer = footer_entries(&content)
-        .ok_or_else(|| format!("missing footer: {}", source.display()))?;
     let source_changelog = changelog_path_for_path(&source, &source_footer)?;
     let destination_changelog = changelog_path_for_path(&destination, &footer)?;
     if source_changelog.exists() {
@@ -2524,21 +2483,14 @@ fn move_artifact(args: MoveArgs) -> Result<String, String> {
     }
     fs::remove_file(&source).map_err(|err| err.to_string())?;
 
-    let problems = quiet_check_paths(std::slice::from_ref(&destination));
-    let mut lines = vec![
-        "move".to_string(),
-        format!("  source: {}", args.markdown_file),
-        format!("  destination: {}", normalize_path_for_repo(&destination)),
-    ];
-    if problems.is_empty() {
-        lines.push("  validation: ok".to_string());
-    } else {
-        lines.push("  validation: blocking".to_string());
-        for (path, issues) in problems {
-            lines.push(format!("  - {} [{}]", path, issues.join(",")));
-        }
-    }
-    Ok(lines.join("\n"))
+    Ok(render_mutation_result(
+        "move",
+        &[
+            format!("  source: {}", args.markdown_file),
+            format!("  destination: {}", normalize_path_for_repo(&destination)),
+        ],
+        std::slice::from_ref(&destination),
+    ))
 }
 
 fn split_finalize_args(args: &[String]) -> Result<(&[String], &str), String> {
@@ -2549,6 +2501,53 @@ fn split_finalize_args(args: &[String]) -> Result<(&[String], &str), String> {
         .split_last()
         .ok_or_else(|| "expected at least one markdown file and a change note".to_string())?;
     Ok((files, change_note))
+}
+
+struct LoadedMarkdownWithFooter {
+    artifact: docflow_markdown::MarkdownArtifact,
+    footer: Vec<(String, String)>,
+}
+
+fn load_markdown_with_footer(path: &std::path::Path) -> Result<LoadedMarkdownWithFooter, String> {
+    if !path.exists() {
+        return Err(format!("markdown file not found: {}", path.display()));
+    }
+    let content = fs::read_to_string(path).map_err(|err| err.to_string())?;
+    let artifact = docflow_markdown::split_footer(&content).map_err(|err| err.to_string())?;
+    let footer = footer_entries(&content).ok_or_else(|| format!("missing footer: {}", path.display()))?;
+    Ok(LoadedMarkdownWithFooter { artifact, footer })
+}
+
+fn write_markdown_with_footer(
+    path: &std::path::Path,
+    body: String,
+    footer: &[(String, String)],
+) -> Result<(), String> {
+    let rendered = render_footer_entries(footer);
+    let markdown = docflow_markdown::render_artifact(&docflow_markdown::MarkdownArtifact {
+        body,
+        footer: Some(rendered),
+    });
+    fs::write(path, markdown).map_err(|err| err.to_string())
+}
+
+fn render_mutation_result(
+    command: &str,
+    details: &[String],
+    paths: &[std::path::PathBuf],
+) -> String {
+    let problems = quiet_check_paths(paths);
+    let mut lines = vec![command.to_string()];
+    lines.extend(details.iter().cloned());
+    if problems.is_empty() {
+        lines.push("  validation: ok".to_string());
+    } else {
+        lines.push("  validation: blocking".to_string());
+        for (path, issues) in problems {
+            lines.push(format!("  - {} [{}]", path, issues.join(",")));
+        }
+    }
+    lines.join("\n")
 }
 
 fn resolve_runtime_path(path: &str) -> std::path::PathBuf {
@@ -2581,7 +2580,10 @@ fn render_footer_entries(entries: &[(String, String)]) -> String {
 }
 
 fn set_footer_value(entries: &mut Vec<(String, String)>, key: &str, value: &str) {
-    if let Some((_, existing)) = entries.iter_mut().find(|(existing_key, _)| existing_key == key) {
+    if let Some((_, existing)) = entries
+        .iter_mut()
+        .find(|(existing_key, _)| existing_key == key)
+    {
         *existing = value.to_string();
     } else {
         entries.push((key.to_string(), value.to_string()));
@@ -2627,11 +2629,19 @@ fn now_iso() -> String {
         .unwrap_or_else(|_| CheckedAt::now_utc().0.to_string())
 }
 
-fn changelog_path_for_path(path: &std::path::Path, footer: &[(String, String)]) -> Result<std::path::PathBuf, String> {
+fn changelog_path_for_path(
+    path: &std::path::Path,
+    footer: &[(String, String)],
+) -> Result<std::path::PathBuf, String> {
     let changelog_ref = footer
         .iter()
         .find_map(|(key, value)| (key == "changelog_ref").then_some(value.clone()))
-        .ok_or_else(|| format!("footer metadata is missing changelog_ref: {}", path.display()))?;
+        .ok_or_else(|| {
+            format!(
+                "footer metadata is missing changelog_ref: {}",
+                path.display()
+            )
+        })?;
     Ok(path.with_file_name(changelog_ref))
 }
 
@@ -2647,10 +2657,7 @@ fn append_changelog_event(
     applied_updates: &[String],
     extra_fields: &BTreeMap<String, String>,
 ) -> Result<(), String> {
-    let footer_map = footer
-        .iter()
-        .cloned()
-        .collect::<BTreeMap<String, String>>();
+    let footer_map = footer.iter().cloned().collect::<BTreeMap<String, String>>();
     let mut row = serde_json::json!({
         "ts": footer_map.get("updated_at").cloned().unwrap_or_else(now_iso),
         "event": event,
@@ -2719,7 +2726,10 @@ fn quiet_check_paths(paths: &[std::path::PathBuf]) -> Vec<(String, Vec<String>)>
         let content = match fs::read_to_string(path) {
             Ok(content) => content,
             Err(error) => {
-                output.push((normalize_path_for_repo(path), vec![format!("read_error:{error}")]));
+                output.push((
+                    normalize_path_for_repo(path),
+                    vec![format!("read_error:{error}")],
+                ));
                 continue;
             }
         };
@@ -2732,7 +2742,9 @@ fn quiet_check_paths(paths: &[std::path::PathBuf]) -> Vec<(String, Vec<String>)>
             .into_iter()
             .map(|issue| issue.code)
             .collect::<Vec<_>>();
-        if !footer.values().any(|value| value.ends_with(".jsonl")) && !footer.contains_key("changelog_ref") {
+        if !footer.values().any(|value| value.ends_with(".jsonl"))
+            && !footer.contains_key("changelog_ref")
+        {
             issues.push("missing_changelog_ref".into());
         }
         if is_activation_governed_protocol(&rel) {
@@ -2816,30 +2828,38 @@ fn render_task_summary(payload: &TaskSummaryPayload, format: &str) -> String {
             "first_ts": payload.first_ts,
             "last_ts": payload.last_ts,
         })];
-        rows.extend(payload.files_rows.iter().map(|row| serde_json::json!({
-            "summary": "file",
-            "task_id": payload.task_id,
-            "file": row.path,
-            "events": row.events,
-        })));
-        rows.extend(payload.actors.iter().map(|row| serde_json::json!({
-            "summary": "actor",
-            "task_id": payload.task_id,
-            "actor": row.value,
-            "events": row.events,
-        })));
-        rows.extend(payload.scopes.iter().map(|row| serde_json::json!({
-            "summary": "scope",
-            "task_id": payload.task_id,
-            "scope": row.value,
-            "events": row.events,
-        })));
-        rows.extend(payload.tags.iter().map(|row| serde_json::json!({
-            "summary": "tag",
-            "task_id": payload.task_id,
-            "tag": row.value,
-            "events": row.events,
-        })));
+        rows.extend(payload.files_rows.iter().map(|row| {
+            serde_json::json!({
+                "summary": "file",
+                "task_id": payload.task_id,
+                "file": row.path,
+                "events": row.events,
+            })
+        }));
+        rows.extend(payload.actors.iter().map(|row| {
+            serde_json::json!({
+                "summary": "actor",
+                "task_id": payload.task_id,
+                "actor": row.value,
+                "events": row.events,
+            })
+        }));
+        rows.extend(payload.scopes.iter().map(|row| {
+            serde_json::json!({
+                "summary": "scope",
+                "task_id": payload.task_id,
+                "scope": row.value,
+                "events": row.events,
+            })
+        }));
+        rows.extend(payload.tags.iter().map(|row| {
+            serde_json::json!({
+                "summary": "tag",
+                "task_id": payload.task_id,
+                "tag": row.value,
+                "events": row.events,
+            })
+        }));
         return rows
             .into_iter()
             .map(|row| serde_json::to_string(&row).unwrap_or_else(|_| "{}".to_string()))
@@ -2917,8 +2937,12 @@ fn migrate_links(args: MigrateLinksArgs) -> Result<String, String> {
         }
         let content = fs::read_to_string(&file_path).map_err(|err| err.to_string())?;
         let artifact = docflow_markdown::split_footer(&content).map_err(|err| err.to_string())?;
-        let mut footer = footer_entries(&content)
-            .ok_or_else(|| format!("footer metadata missing or invalid: {}", file_path.display()))?;
+        let mut footer = footer_entries(&content).ok_or_else(|| {
+            format!(
+                "footer metadata missing or invalid: {}",
+                file_path.display()
+            )
+        })?;
         let (updated_body, replacements) =
             rewrite_markdown_links(&artifact.body, &args.old_target, &args.new_target);
         if replacements == 0 {
@@ -3442,12 +3466,7 @@ mod tests {
 
     #[test]
     fn proofcheck_command_accepts_active_canon_strict_profile() {
-        let cli = Cli::parse_from([
-            "docflow",
-            "proofcheck",
-            "--profile",
-            "active-canon-strict",
-        ]);
+        let cli = Cli::parse_from(["docflow", "proofcheck", "--profile", "active-canon-strict"]);
         let rendered = run(cli);
         assert!(rendered.contains("context:"));
         assert!(rendered.contains("root: active-canon-strict"));
@@ -3677,12 +3696,7 @@ mod tests {
 
     #[test]
     fn readiness_check_command_accepts_active_canon_profile() {
-        let cli = Cli::parse_from([
-            "docflow",
-            "readiness-check",
-            "--profile",
-            "active-canon",
-        ]);
+        let cli = Cli::parse_from(["docflow", "readiness-check", "--profile", "active-canon"]);
         let rendered = run(cli);
         assert!(!rendered.contains("inventory_error"));
         assert!(!rendered.contains("error"));
@@ -3862,10 +3876,7 @@ mod tests {
         assert!(!source_changelog.exists());
 
         let updated = fs::read_to_string(&destination).expect("destination markdown should exist");
-        assert!(updated.contains(&format!(
-            "source_path: {}",
-            destination.to_string_lossy()
-        )));
+        assert!(updated.contains(&format!("source_path: {}", destination.to_string_lossy())));
         assert!(updated.contains("changelog_ref: a.changelog.jsonl"));
 
         let destination_changelog =

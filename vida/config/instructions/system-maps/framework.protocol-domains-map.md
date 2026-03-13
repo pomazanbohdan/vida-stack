@@ -49,9 +49,12 @@ Canonical owner artifacts:
 
 1. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
 2. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-3. `vida/config/instructions/runtime-instructions/core.capability-registry-protocol.md`
-4. `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
-5. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
+3. `vida/config/instructions/instruction-contracts/core.skill-activation-protocol.md`
+4. `vida/config/instructions/instruction-contracts/core.packet-decomposition-protocol.md`
+5. `vida/config/instructions/instruction-contracts/core.agent-prompt-stack-protocol.md`
+6. `vida/config/instructions/runtime-instructions/core.capability-registry-protocol.md`
+7. `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
+8. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
 
 ### 2. Orchestration Shell And Lane Coordination
 

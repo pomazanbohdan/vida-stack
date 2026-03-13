@@ -63,6 +63,8 @@ Worker-first continuity rule:
 1. AEP does not suspend `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`.
 2. If the active route/mode requires worker-first analysis, review, coach, or verification lanes, autonomous follow-through must keep using them rather than collapsing into local-only continuation.
 3. Local-only continuation during AEP is lawful only when route metadata allows it or when the runtime records explicit worker exhaustion/blocker evidence.
+4. An explicit exception-path receipt remains necessary for local write-producing continuation during AEP.
+5. That receipt is not sufficient while a lawful delegated cycle for the same bounded packet remains open; autonomous continuation must first synthesize, supersede, or hard-block the delegated path.
 
 ## Activation Gate
 
@@ -79,6 +81,7 @@ If any item is false:
 1. remain in normal tracked execution,
 2. stop at task slicing / clarification / blocker capture,
 3. do not claim autonomous follow-through mode is enabled.
+4. on a clean session, do not interpret execution intent as permission for root-session implementation before orchestrator-first route visibility is explicit.
 
 ## Canonical Next-Task Sources
 
@@ -103,6 +106,11 @@ Fallback helper:
 1. if `taskflow-v0 task ready` cannot express lawful ordering because dependency readiness is temporarily unreliable, use `python3 autonomous-next-task.py` with bounded prefix/label scope as the fallback selector,
 2. this helper is a bounded runtime workaround and must not silently override higher-precedence receipts or active TaskFlow state.
 
+Clean-session route visibility rule:
+
+1. before AEP continues implementation on a clean session, the orchestrator must already have an explicit route receipt showing orchestrator-first control and the next lawful delegated or otherwise lawful lane,
+2. absent that receipt, autonomous execution may prepare routing state but must not begin local implementation.
+
 ## Operating Loop
 
 When AEP is enabled, run this loop:
@@ -123,6 +131,15 @@ When AEP is enabled, run this loop:
 10. if the task completes, move to the next ready task in the same pool/plan,
 11. stop only on explicit blocker, gate failure, pool completion, or user redirect.
 12. when implementation entry is validation-gated by overlay, emit the validation report before implementation and resume only after that gate is satisfied.
+
+Execution-block boundary rule:
+
+1. closure of one `execution_block` is not by itself a task boundary, pool boundary, or session boundary,
+2. after an `execution_block` closes, first reconcile against the parent `delivery_task` card:
+   - if the parent `delivery_task` still has unmet `definition_of_done`, rebuild the active bounded unit and select the next lawful `execution_block` or proof step inside the same task,
+   - only if the parent `delivery_task` is actually closed may the orchestrator enter task-boundary analysis for the next task,
+3. do not reinterpret "one execution_block closed" as "the current task is done" merely because a local report is available,
+4. if no clean next block can be shaped inside the still-open parent task, fail closed with an explicit blocker or escalation receipt rather than yielding a closure-style answer.
 
 Normal success-path algorithm:
 
@@ -167,6 +184,7 @@ Autonomous follow-through must stop and return control to routing/slicing when a
 9.1. when the current task closes and a next lawful task exists, run the boundary analysis/report step before starting the next task rather than jumping directly from closure into implementation.
 9.2. boundary analysis/report lives outside TaskFlow execution for the next task; it prepares lawful continuation but does not replace the next task's tracked flow.
 9.3. when the boundary analysis finds dependent executable scope, update existing dependent specs/tasks or create the missing coverage before claiming lawful continuation.
+9.4. do not run next-task boundary analysis merely because one `execution_block` closed; that analysis belongs only after the parent `delivery_task` or equivalent bounded task actually closes.
 10. when the same technical error repeats twice or an external API/format is uncertain, escalate via `vida/config/instructions/diagnostic-instructions/escalation.debug-escalation-protocol.md` instead of continuing blind local retries.
 10.1. under active worker mode, pair that escalation with a bounded external catch/review agent whenever an eligible lane exists.
 10.2. if primary-source lookup still leaves ambiguity after one pass, execute Google/web search on the next pass rather than repeating another blind local attempt.
@@ -191,6 +209,8 @@ Reporting continuity rule:
 7. if an overlay disables user-facing boundary reporting, the internal boundary analysis still remains mandatory.
 8. do not confuse "report emitted" with "task complete"; if the active bounded task still has lawful remaining steps, continue until those steps are done or a real stop condition appears.
 9. do not confuse "task complete" with "epic complete"; if another lawful ready task exists in the same authorized pool, continue automatically into it.
+10. do not confuse "execution_block complete" with "delivery_task complete"; block closure must first return through the parent task's `definition_of_done` before any task-boundary or session-boundary messaging is lawful.
+11. do not treat "rework packet already dispatched" as a safe pause boundary; if the rework lane is in flight, reporting remains non-blocking only.
 
 ## Relationship To Existing Protocols
 
@@ -227,5 +247,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/overlay.autonomous-execution-protocol.md
 created_at: '2026-03-09T12:00:46+02:00'
-updated_at: '2026-03-12T11:27:53+02:00'
+updated_at: '2026-03-13T12:39:11+02:00'
 changelog_ref: overlay.autonomous-execution-protocol.changelog.jsonl

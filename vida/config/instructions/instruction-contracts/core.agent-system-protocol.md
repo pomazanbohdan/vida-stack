@@ -74,6 +74,12 @@ Mode-synced execution rule:
 3. `disabled`
    - no worker-first requirement; the orchestrator may execute locally.
 
+Root-lane identity rule:
+
+1. mode selection does not convert the root session into an implementer by default,
+2. `native` and `hybrid` preserve orchestrator-first control with delegated execution as the normal posture,
+3. `disabled` relaxes worker-first requirement but still does not authorize silent root-session implementation without route law or explicit exception-path evidence.
+
 ## Backend Classes
 
 Framework backend classes are generic:
@@ -92,6 +98,7 @@ Hard rule:
 2. orchestrator owns tracked execution lifecycle,
 3. orchestrator owns build/close/integration transitions,
 4. workers may only return artifacts/results unless explicitly granted bounded repo-write scope.
+5. route ownership must not be reinterpreted as implicit write ownership for the root session.
 
 ## Entry Separation
 
@@ -226,6 +233,33 @@ Project extension rule:
 4. when no lawful worker-first path remains and the mode is not `disabled`, escalation must stay explicit rather than collapsing into undocumented local fallback.
 5. route closure is incomplete when the effective route control limits or verification posture are still implicit.
 6. route closure is incomplete when the chosen orchestration pattern or selection basis is still implicit.
+7. route closure is incomplete when root-session local implementation has been assumed without an explicit exception-path receipt or higher-precedence local-law receipt.
+8. route closure is incomplete when a read-only discovery lane has found a bounded gap but the lawful writer/coaching/verification cycle has not yet been selected explicitly.
+9. route closure is incomplete when a delegated lane or unresolved handoff for the same bounded packet remains open but the root session is being treated as the writer without explicit supersession or hard-blocker evidence.
+
+## Saturation-Recovery Rule
+
+When delegated lane creation fails because of thread, depth, or agent saturation, the orchestrator must run an explicit recovery loop before concluding that no worker-first path is available.
+
+Required recovery order:
+
+1. inspect the current delegated-lane inventory and classify each lane as:
+   - `active`
+   - `waiting`
+   - `completed_unsynthesized`
+   - `superseded`
+   - `blocked`
+2. for every `completed_unsynthesized` or `superseded` lane, synthesize or supersede the return first so the orchestrator knows whether the lane still matters,
+3. close or reclaim lanes that are already completed and no longer needed for active handoff/verification state,
+4. prefer reuse of an existing eligible lane when lawful after that reclaim step,
+5. only after inventory review, reclamation, and failed lawful reuse may saturation remain the active reason for an exception path or escalation.
+
+Hard rules:
+
+1. "agent limit reached" is not a sufficient saturation verdict unless the orchestrator first checked whether any completed or superseded delegated lanes can be closed/reclaimed,
+2. open handoff state still blocks closure and must be reconciled before a lane is treated as reclaimable,
+3. waiting lanes must not be reclaimed merely for convenience if their bounded question is still active,
+4. local-only continuation without this saturation-recovery loop is protocol-invalid unless a higher-precedence emergency rule overrides it.
 
 ## Runtime Surface Note
 

@@ -10,7 +10,9 @@ Bootstrap:
 3. Read vida/root-map.md.
 4. Read taskflow-v0/.env when the task depends on project-local DB-first TaskFlow runtime use.
 5. Read docs/process/project-skill-initialization-and-activation-protocol.md.
-6. Inspect the active available skill catalog and activate the relevant skill set before packet work begins.
+6. Read docs/process/project-development-packet-template-protocol.md.
+7. Read docs/process/project-agent-prompt-stack-protocol.md.
+8. Inspect the active available skill catalog and activate the relevant skill set before packet work begins.
 
 Role:
 1. Execute one bounded delivery-task or execution-block packet.

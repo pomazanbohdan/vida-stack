@@ -21,7 +21,7 @@ When active, the orchestrator must treat silent diagnosis as a background framew
 
 1. Detect framework/runtime problems opportunistically during normal work.
 2. If a framework problem is observed, create or reuse a framework bug immediately.
-3. Continue the current user task with the lightest safe manual workaround when possible.
+3. Continue the current user task with the lightest safe lawful workaround when possible.
 4. Do not silently patch VIDA framework code mid-task unless the user explicitly reprioritizes framework work now.
 5. After the current task boundary, take the captured framework bug into the framework queue and fix it systematically.
 6. Framework bug work must use WVP/web research when the fix depends on external best practice, tool behavior, or architecture claims.
@@ -30,6 +30,13 @@ When active, the orchestrator must treat silent diagnosis as a background framew
 9. Durable lessons, corrections, and anomalies belong in `vida/config/instructions/runtime-instructions/runtime.framework-memory-protocol.md`, not only in chat or transient reflection output.
 10. Silent diagnosis must audit the instruction layer as well as runtime/TaskFlow: `AGENTS.md`, lane entry contracts, and canonical framework protocols are valid diagnosis targets when they reduce quality, clarity, token efficiency, or determinism.
 11. Silent diagnosis must also audit protocol execution drift using `vida/config/instructions/diagnostic-instructions/analysis.protocol-self-diagnosis-protocol.md` when reporting barriers, missing task coverage, skipped catch-review, or route drift are observed.
+12. Timeout-driven pauses, report-after-timeout stopping, or other generic-assistant waiting behavior during `in_work=1` must be captured as framework drift rather than accepted as normal session pacing.
+13. Silent diagnosis does not choose between `diagnosis_path` and `normal_delivery_path` implicitly; when a turn mixes report/diagnosis intent with continued development, path selection must be made explicitly before any write-producing action.
+14. Silent diagnosis pressure, discovered defect visibility, or “scope is already clear” do not authorize local product patching until that path selection and downstream route law are explicit.
+15. If live runtime evidence reports `delegated_cycle_open=true` together with `local_exception_takeover_gate=blocked_open_delegated_cycle`, silent diagnosis must stay in orchestrator/diagnosis posture and treat the state as an open process-conflict boundary rather than as permission for a manual local workaround.
+16. In that state, lawful continuation is limited to bounded delegated-lane inspection, lawful waiting/polling, capture/reuse of the framework bug, explicit blocker or escalation routing, or a user-facing process-conflict report that does not perform local write work.
+17. Implementer delay, hanging subordinate lanes, or partially recovered delivery context do not relax the `blocked_open_delegated_cycle` gate; local write work remains forbidden until canonical supersession, hard blocker evidence, or higher-precedence route law is recorded.
+18. Silent diagnosis must treat "I repaired one failing test and it turned green" as bounded evidence only; it does not prove that the active development context is exhausted unless the parent task/packet was rebuilt and found fully closed.
 
 ## Bug Capture Contract
 

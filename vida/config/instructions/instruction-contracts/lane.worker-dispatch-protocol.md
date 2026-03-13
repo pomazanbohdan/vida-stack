@@ -74,6 +74,8 @@ Before dispatch:
    - `lane_identity: worker`
 13. Include impact-tail policy in the packet when non-STC workers must finish with bounded downstream analysis.
 14. Reject dispatch when writable scopes overlap another active writer lane without explicit serialization.
+15. If the active bounded unit is write-producing and all prior gate conditions are satisfied, dispatch immediately; commentary-only progress updates are not a lawful substitute for dispatch.
+16. If dispatch is not performed after the gate is satisfied, persist an explicit blocker or route override receipt explaining why the dispatch-ready state could not continue.
 
 ## Mandatory Return Contract
 
@@ -96,6 +98,12 @@ Required fields:
 13. `done_verdict`
 14. `stop_reason`
 15. `residual_risks`
+
+Partial-return rule:
+
+1. if the worker returns `partial`, unresolved, or non-closure-ready state, the packet remains owned by orchestrated reroute rather than by implicit root-session local completion,
+2. such a return must preserve enough evidence for a fresh rework packet or escalation decision,
+3. partial return must not be interpreted as permission for the orchestrator to continue writing in the same scope without an explicit exception-path receipt.
 
 ## Lane Boundary
 

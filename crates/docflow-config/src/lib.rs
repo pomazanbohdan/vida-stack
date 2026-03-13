@@ -166,10 +166,18 @@ fn parse_policy_profiles(input: &str) -> Result<ParsedPolicy, DocflowConfigError
     Ok(parsed)
 }
 
-pub fn resolve_profile_roots(root: Option<&Path>, policy_path: &Path, profile: &str) -> Result<Vec<PathBuf>, DocflowConfigError> {
+pub fn resolve_profile_roots(
+    root: Option<&Path>,
+    policy_path: &Path,
+    profile: &str,
+) -> Result<Vec<PathBuf>, DocflowConfigError> {
     let loaded = load_policy_profile(policy_path, profile)?;
     let root = root.unwrap_or_else(|| policy_path.parent().unwrap_or_else(|| Path::new(".")));
-    Ok(loaded.roots.into_iter().map(|item| root.join(item)).collect())
+    Ok(loaded
+        .roots
+        .into_iter()
+        .map(|item| root.join(item))
+        .collect())
 }
 
 pub fn resolve_scan_ignored_globs(policy_path: &Path) -> Result<Vec<String>, DocflowConfigError> {
@@ -184,7 +192,9 @@ pub fn resolve_scan_ignored_globs(policy_path: &Path) -> Result<Vec<String>, Doc
 
 #[cfg(test)]
 mod tests {
-    use super::{DocflowConfigError, load_from_json_str, load_policy_profile, resolve_profile_roots};
+    use super::{
+        DocflowConfigError, load_from_json_str, load_policy_profile, resolve_profile_roots,
+    };
     use std::fs;
 
     #[test]
@@ -241,8 +251,9 @@ profiles:
         assert_eq!(profile.roots, vec!["docs/process", "docs/product"]);
         assert_eq!(profile.scan_ignored_globs, vec!["target/**"]);
 
-        let roots = resolve_profile_roots(Some(std::path::Path::new("/repo")), &temp, "active-canon")
-            .expect("profile roots should resolve");
+        let roots =
+            resolve_profile_roots(Some(std::path::Path::new("/repo")), &temp, "active-canon")
+                .expect("profile roots should resolve");
         assert_eq!(roots[0], std::path::PathBuf::from("/repo/docs/process"));
 
         fs::remove_file(temp).expect("temp policy should be removed");
