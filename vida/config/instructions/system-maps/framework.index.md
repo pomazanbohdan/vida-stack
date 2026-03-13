@@ -18,13 +18,15 @@ Primary entrypoints:
    - canonical registry of domain protocols
 7. [meta-core-protocol-standard-protocol.md](/home/unnamed/project/vida-stack/vida/config/instructions/instruction-contracts/meta.core-protocol-standard-protocol.md)
    - framework-level standard for what a `core` protocol must contain, own, and avoid absorbing
-8. [runtime-family-index.md](/home/unnamed/project/vida-stack/vida/config/instructions/system-maps/runtime-family.index.md)
+8. [agent-system-new-protocol-development-and-update-protocol.md](/home/unnamed/project/vida-stack/vida/config/instructions/instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol.md)
+   - canonical owner for protocol authoring/update discipline and safe optimization rollout of protocol-bearing surfaces
+9. [runtime-family-index.md](/home/unnamed/project/vida-stack/vida/config/instructions/system-maps/runtime-family.index.md)
    - bounded runtime-family discovery surface for `codex`, `taskflow`, and future runtimes
-9. [template-map.md](/home/unnamed/project/vida-stack/vida/config/instructions/system-maps/template.map.md)
+10. [template-map.md](/home/unnamed/project/vida-stack/vida/config/instructions/system-maps/template.map.md)
    - canonical template-family discovery surface
-10. [governance-map.md](/home/unnamed/project/vida-stack/vida/config/instructions/system-maps/governance.map.md)
+11. [governance-map.md](/home/unnamed/project/vida-stack/vida/config/instructions/system-maps/governance.map.md)
    - canonical governance/policy-gate discovery surface
-11. [observability-map.md](/home/unnamed/project/vida-stack/vida/config/instructions/system-maps/observability.map.md)
+12. [observability-map.md](/home/unnamed/project/vida-stack/vida/config/instructions/system-maps/observability.map.md)
    - canonical runtime observability/trace/proving discovery surface
 
 Bootstrap discovery rule:
@@ -36,7 +38,8 @@ Bootstrap discovery rule:
 5. If the task is specifically about protocol-bearing layer placement, continue to [framework-protocol-layers-map.md](/home/unnamed/project/vida-stack/vida/config/instructions/system-maps/framework.protocol-layers-map.md).
 6. If the task is specifically about protocol-domain classification beyond owner layers, continue to [framework-protocol-domains-map.md](/home/unnamed/project/vida-stack/vida/config/instructions/system-maps/framework.protocol-domains-map.md).
 7. If the task is specifically about what a `core` protocol must contain or must not absorb, continue to [meta-core-protocol-standard-protocol.md](/home/unnamed/project/vida-stack/vida/config/instructions/instruction-contracts/meta.core-protocol-standard-protocol.md).
-8. If the resolved target is project/product documentation, hand off discovery to the project-context surface rather than embedding project-document pointers here.
+8. If the task is specifically about framework protocol authoring, update discipline, or safe token-optimization rollout, continue to [agent-system-new-protocol-development-and-update-protocol.md](/home/unnamed/project/vida-stack/vida/config/instructions/instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol.md).
+9. If the resolved target is project/product documentation, hand off discovery to the project-context surface rather than embedding project-document pointers here.
 
 Bootstrap cluster:
 
@@ -59,10 +62,10 @@ Split rule:
 artifact_path: config/system-maps/framework.index
 artifact_type: system_map
 artifact_version: '1'
-artifact_revision: '2026-03-12'
+artifact_revision: '2026-03-13'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps/framework.index.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-12T11:05:54+02:00'
+updated_at: '2026-03-13T23:35:00+02:00'
 changelog_ref: framework.index.changelog.jsonl

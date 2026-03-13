@@ -189,7 +189,7 @@ Purpose:
 2. role/profile identity,
 3. naming grammar,
 4. project extension admission,
-5. new-protocol authoring/update discipline.
+5. new-protocol authoring/update discipline and safe token-optimization rollout.
 
 Canonical owner artifacts:
 
@@ -219,10 +219,10 @@ Use the three routing axes together:
 artifact_path: config/system-maps/framework.protocol-domains-map
 artifact_type: system_map
 artifact_version: '1'
-artifact_revision: '2026-03-12'
+artifact_revision: '2026-03-13'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps/framework.protocol-domains-map.md
 created_at: '2026-03-12T10:59:09+02:00'
-updated_at: '2026-03-12T11:55:06+02:00'
+updated_at: '2026-03-13T23:35:00+02:00'
 changelog_ref: framework.protocol-domains-map.changelog.jsonl
