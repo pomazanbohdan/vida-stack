@@ -97,6 +97,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("Failure modes:");
             println!("  `seed` fails closed when overlay-driven lane selection or agent-system bundle validation fails.");
             println!("  `advance` currently fails closed unless the run is a seeded implementation or seeded scope-discussion dispatch.");
+            println!("  Clean implementation review enters an explicit approval wait; mark approval explicitly through `vida taskflow run-graph update <task-id> implementation review_ensemble approved implementation` before the final completion advance.");
             println!("  Invalid JSON in meta_json fails closed before mutation.");
             println!("  `latest` returns `none`/`null` when no routed run has been recorded yet.");
             println!("  Run-graph state must not be treated as backlog readiness authority.");
@@ -281,6 +282,18 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
             why: "Gate inspection is the bounded recovery projection for policy gate, handoff state, and context state on one routed run.",
             command: "vida taskflow recovery gate <run-id> --json",
             failure_modes: "Gate inspection must not be treated as backlog readiness authority, and missing run ids fail closed.",
+        };
+    }
+
+    if normalized.contains("approval")
+        || normalized.contains("approve")
+        || normalized.contains("approval wait")
+    {
+        return TaskflowQueryAnswer {
+            intent: "record-approval",
+            why: "Implementation runs now stop at an explicit approval wait after clean review and require an explicit approval status before final completion.",
+            command: "vida taskflow run-graph update <task-id> implementation review_ensemble approved implementation",
+            failure_modes: "Approval should be recorded only for the active review node on the intended run; incorrect task ids or route context will fail closed or mutate the wrong run state.",
         };
     }
 

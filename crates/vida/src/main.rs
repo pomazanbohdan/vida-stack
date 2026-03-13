@@ -46,6 +46,7 @@ async fn run(cli: Cli) -> ExitCode {
             print_root_help();
             ExitCode::SUCCESS
         }
+        Some(Command::Init(args)) => run_init(args).await,
         Some(Command::Boot(args)) => run_boot(args).await,
         Some(Command::OrchestratorInit(args)) => run_orchestrator_init(args).await,
         Some(Command::AgentInit(args)) => run_agent_init(args).await,
@@ -2094,6 +2095,10 @@ async fn run_boot(args: BootArgs) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+async fn run_init(args: BootArgs) -> ExitCode {
+    run_boot(args).await
 }
 
 async fn run_memory(args: MemoryArgs) -> ExitCode {
@@ -4429,6 +4434,40 @@ fn blocking_docflow_activation(error: &str) -> RuntimeConsumptionDocflowActivati
         owner_runtime: "taskflow".to_string(),
         evidence: serde_json::json!({
             "error": error,
+            "overview": {
+                "surface": "vida taskflow direct runtime-consumption overview",
+                "ok": false,
+                "registry_rows": 0,
+                "check_rows": 0,
+                "readiness_rows": 0,
+                "proof_blocking": true
+            },
+            "registry": {
+                "surface": "vida docflow registry --root <repo-root>",
+                "ok": false,
+                "row_count": 0,
+                "output": ""
+            },
+            "check": {
+                "surface": "vida docflow check --profile active-canon",
+                "ok": false,
+                "row_count": 0,
+                "output": error
+            },
+            "readiness": {
+                "surface": "vida docflow readiness-check --profile active-canon",
+                "ok": false,
+                "row_count": 0,
+                "verdict": "blocked",
+                "artifact_path": "vida/config/codex-readiness.current.jsonl",
+                "output": error
+            },
+            "proof": {
+                "surface": "vida docflow proofcheck --profile active-canon",
+                "ok": false,
+                "row_count": 0,
+                "output": error
+            }
         }),
     }
 }
@@ -5299,6 +5338,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    Init(BootArgs),
     Boot(BootArgs),
     OrchestratorInit(InitArgs),
     AgentInit(AgentInitArgs),
@@ -5559,6 +5599,7 @@ fn print_root_help() {
     println!("  vida docflow <args...>");
     println!();
     println!("Root commands:");
+    println!("  init      compatibility root bootstrap surface");
     println!(
         "  boot      initialize authoritative state and instruction/framework-memory surfaces"
     );
@@ -5621,6 +5662,24 @@ mod tests {
         assert_eq!(
             runtime.block_on(run(Cli {
                 command: Some(Command::Boot(BootArgs {
+                    state_dir: Some(harness.path().to_path_buf()),
+                    render: RenderMode::Plain,
+                    instruction_source_root: None,
+                    framework_memory_source_root: None,
+                    extra_args: Vec::new(),
+                })),
+            })),
+            ExitCode::SUCCESS
+        );
+    }
+
+    #[test]
+    fn init_command_succeeds() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        assert_eq!(
+            runtime.block_on(run(Cli {
+                command: Some(Command::Init(BootArgs {
                     state_dir: Some(harness.path().to_path_buf()),
                     render: RenderMode::Plain,
                     instruction_source_root: None,
@@ -5702,6 +5761,24 @@ mod tests {
             runtime.block_on(run(cli(&["boot", "unexpected"]))),
             ExitCode::from(2)
         );
+    }
+
+    #[test]
+    fn init_with_extra_argument_fails_closed() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        assert_eq!(
+            runtime.block_on(run(cli(&["init", "unexpected"]))),
+            ExitCode::from(2)
+        );
+    }
+
+    #[test]
+    fn clap_help_lists_init_before_boot() {
+        let mut command = Cli::command();
+        let help = command.render_long_help().to_string();
+        let init_index = help.find("init").expect("init should be present in help");
+        let boot_index = help.find("boot").expect("boot should be present in help");
+        assert!(init_index < boot_index, "init should appear before boot in help");
     }
 
     #[test]

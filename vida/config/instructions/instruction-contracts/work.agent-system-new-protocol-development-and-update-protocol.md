@@ -149,6 +149,74 @@ Import rule:
 10. Updating an existing protocol must follow the same layered discipline as creating a new one.
 11. A command-shaped surface must be decomposed into protocol-scoped parts when one command hides more than one bounded responsibility.
 
+## Safe Token-Optimization Law
+
+Token reduction is lawful only when it preserves owner-law authority, fail-closed meaning, and activation clarity.
+
+Safe-by-default optimization classes:
+
+1. `context_pointer`
+   - point routine runtime/startup reads to a smaller owner-approved surface rather than replaying every full owner document.
+2. `compact_capsule`
+   - create a compact projection that keeps full words and stable field names while deferring edge cases to the owner artifact.
+3. `runtime_ir`
+   - expose machine-readable runtime fields with explicit names rather than prose replay.
+4. `cache_partition`
+   - split always-on, startup, lane, and dynamic context so only the active bounded subset is loaded.
+5. `table_or_field_matrix`
+   - replace repeated narrative routing or gate prose with bounded tables or stable field blocks.
+
+Unsafe-by-default optimization classes:
+
+1. `dictionary_abbreviation`
+   - replacing canonical normative terms with short abbreviations in owner law.
+2. `dsl_replacement`
+   - replacing canonical owner-law prose with compact DSL as the primary authoritative surface.
+3. `semantic_compression_of_normative_text`
+   - summarizing or paraphrasing owner-law rules in a way that may weaken `must`, `forbidden`, `invalid`, `blocked`, or equivalent fail-closed meaning.
+4. `authority_hiding`
+   - moving material owner semantics into a compact surface without preserving the stronger owner artifact as canonical.
+
+Hard rule:
+
+1. token optimization is allowed only for delivery and consumption surfaces,
+2. canonical owner law must stay readable and exact,
+3. if an optimization would make the model reconstruct safety semantics heuristically, it is forbidden.
+
+## Canonical Optimization Boundaries
+
+Optimization must preserve this boundary split:
+
+1. owner protocol
+   - canonical human-readable law
+2. compact capsule or startup bundle
+   - routine read projection only
+3. compiled runtime bundle or runtime IR
+   - execution/consumption projection only
+4. cache delivery partition
+   - derived delivery boundary only
+
+Boundary rule:
+
+1. a compact capsule, bundle view, or runtime IR must not become a second competing law owner,
+2. if a compact surface cannot safely answer an edge case, it must route back to the owner artifact rather than improvising.
+
+## Safe Optimization Acceptance Criteria
+
+An optimization pass is admissible only when all are true:
+
+1. the owner artifact remains canonical,
+2. modal safety language in the owner artifact is preserved,
+3. the compact or compiled surface uses explicit field names rather than opaque abbreviations,
+4. the optimized surface declares when escalation back to the owner artifact is required,
+5. activation/discovery wiring stays explicit,
+6. validation can prove that the optimized surface still routes lawful behavior.
+
+Fail-closed rule:
+
+1. if exact owner meaning cannot be preserved, keep the longer form,
+2. if compression and safety are in tension, prefer safety and record token cost as a residual gap rather than weakening law.
+
 ## Canonical Naming And User Language Rule
 
 Hard rule:
@@ -775,6 +843,7 @@ Packet rule:
 
 1. the packet may be rendered in prose today,
 2. but these fields are canonical and should remain stable enough for future structured validation or template generation.
+3. when token reduction is in scope, prefer stable field names and explicit tables over ad hoc abbreviations.
 
 ## Requirement Inventory Contract
 
@@ -864,11 +933,38 @@ Each major authoring or update pass should be able to produce a compact closure 
 11. `validation_passed`
 12. `requirements_mapped`
 13. `requirements_unmapped`
+14. `optimization_class`
+15. `owner_authority_preserved`
+16. `compact_surface_only`
 
 Receipt rule:
 
 1. the receipt may be emitted in prose today,
 2. but the fields above are canonical and should remain stable enough for future machine validation.
+3. if `optimization_class` is present, `owner_authority_preserved` must be true before green closure is lawful.
+
+## Safe Optimization Rollout Sequence
+
+When protocol/token optimization is the goal, apply changes in this order:
+
+1. `Step 1: owner dedup only`
+   - remove repeated prose from non-owner artifacts while keeping the stronger owner unchanged.
+2. `Step 2: pointer routing`
+   - route routine startup/execution reads toward compact pointers, capsules, or bundles.
+3. `Step 3: compact capsule`
+   - introduce compact projections using full words and explicit routing/escalation back to the owner artifact.
+4. `Step 4: compiled runtime view`
+   - materialize the compact projections into runtime/init/bundle surfaces where applicable.
+5. `Step 5: cache partitioning`
+   - split always-on, startup, lane, triggered, and dynamic context explicitly.
+6. `Step 6: proof and drift audit`
+   - validate that the optimized path preserves lawful routing on representative failure classes before promotion.
+
+Rollout rule:
+
+1. do not jump directly from long prose owner law to opaque DSL,
+2. each step must remain individually safe and reversible,
+3. if one step fails proof, stop there and keep the last safe layer rather than forcing deeper compression.
 
 ## Self-Assessment Receipt
 
@@ -1274,7 +1370,8 @@ When this protocol creates or materially changes a canonical protocol-bearing ar
 1. update the canonical protocol artifact first,
 2. update `vida/config/instructions/system-maps/protocol.index.md`,
 3. run activation/coverage validation appropriate to the changed scope,
-4. do not treat the protocol as framework-green until those updates and checks are complete.
+4. when token optimization is in scope, validate the optimized surface against at least one normal startup path and one failure-shaped path before promotion,
+5. do not treat the protocol as framework-green until those updates and checks are complete.
 
 ## Related
 
@@ -1290,10 +1387,10 @@ When this protocol creates or materially changes a canonical protocol-bearing ar
 artifact_path: config/instructions/instruction-contracts/work.agent-system-new-protocol-development-and-update.protocol
 artifact_type: instruction_contract
 artifact_version: '1'
-artifact_revision: '2026-03-11'
+artifact_revision: '2026-03-13'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol.md
 created_at: '2026-03-11T07:38:29+02:00'
-updated_at: '2026-03-11T12:33:15+02:00'
+updated_at: '2026-03-13T19:20:00+02:00'
 changelog_ref: work.agent-system-new-protocol-development-and-update-protocol.changelog.jsonl

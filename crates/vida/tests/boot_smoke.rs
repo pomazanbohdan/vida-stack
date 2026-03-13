@@ -3622,7 +3622,7 @@ fn taskflow_run_graph_third_advance_fails_closed_for_wrong_review_handoff() {
 }
 
 #[test]
-fn taskflow_run_graph_fourth_advance_completes_clean_review_ensemble() {
+fn taskflow_run_graph_fourth_advance_enters_explicit_approval_wait_after_clean_review() {
     let state_dir = unique_state_dir();
 
     let boot = vida()
@@ -3660,7 +3660,7 @@ fn taskflow_run_graph_fourth_advance_completes_clean_review_ensemble() {
                 .env_remove("VIDA_HOME")
                 .env("VIDA_STATE_DIR", &state_dir)
                 .output()
-                .expect("pre-completion advance should run")
+                .expect("pre-approval advance should run")
         });
         assert!(
             advance.status.success(),
@@ -3701,22 +3701,19 @@ fn taskflow_run_graph_fourth_advance_completes_clean_review_ensemble() {
         parsed["payload"]["status"]["active_node"],
         "review_ensemble"
     );
-    assert_eq!(parsed["payload"]["status"]["status"], "completed");
+    assert_eq!(parsed["payload"]["status"]["status"], "awaiting_approval");
     assert_eq!(
         parsed["payload"]["status"]["lifecycle_stage"],
-        "implementation_complete"
+        "approval_wait"
     );
-    assert_eq!(parsed["payload"]["status"]["policy_gate"], "not_required");
-    assert_eq!(
-        parsed["payload"]["status"]["next_node"],
-        serde_json::Value::Null
-    );
-    assert_eq!(parsed["payload"]["status"]["resume_target"], "none");
-    assert_eq!(parsed["payload"]["status"]["recovery_ready"], false);
+    assert_eq!(parsed["payload"]["status"]["policy_gate"], "approval_required");
+    assert_eq!(parsed["payload"]["status"]["next_node"], "approval");
+    assert_eq!(parsed["payload"]["status"]["resume_target"], "dispatch.approval");
+    assert_eq!(parsed["payload"]["status"]["recovery_ready"], true);
 }
 
 #[test]
-fn taskflow_run_graph_fourth_advance_updates_status_and_recovery_after_clean_review() {
+fn taskflow_run_graph_fifth_advance_updates_status_and_recovery_after_explicit_approval() {
     let state_dir = unique_state_dir();
 
     let boot = vida()
@@ -3754,7 +3751,7 @@ fn taskflow_run_graph_fourth_advance_updates_status_and_recovery_after_clean_rev
                 .env_remove("VIDA_HOME")
                 .env("VIDA_STATE_DIR", &state_dir)
                 .output()
-                .expect("pre-completion advance should run")
+                .expect("pre-approval advance should run")
         });
         assert!(
             advance.status.success(),
@@ -3786,8 +3783,35 @@ fn taskflow_run_graph_fourth_advance_updates_status_and_recovery_after_clean_rev
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
-        .expect("fourth run-graph advance should run");
+        .expect("approval-wait advance should run");
     assert!(fourth_advance.status.success());
+
+    let mark_approved = vida()
+        .args([
+            "taskflow",
+            "run-graph",
+            "update",
+            "vida-dev",
+            "implementation",
+            "review_ensemble",
+            "approved",
+            "implementation",
+        ])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("approval update should run");
+    assert!(mark_approved.status.success());
+
+    let fifth_advance = vida()
+        .args(["taskflow", "run-graph", "advance", "vida-dev"])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("fifth run-graph advance should run");
+    assert!(fifth_advance.status.success());
 
     let run_graph = vida()
         .args(["taskflow", "run-graph", "status", "vida-dev", "--json"])
@@ -3837,6 +3861,21 @@ fn taskflow_run_graph_fourth_advance_updates_status_and_recovery_after_clean_rev
         recovery_parsed["recovery"]["delegation_gate"]["reporting_pause_gate"],
         "closure_candidate"
     );
+}
+
+#[test]
+fn taskflow_query_routes_approval_questions_to_run_graph_update() {
+    let output = vida()
+        .args(["taskflow", "query", "how", "do", "I", "approve", "a", "clean", "review?"])
+        .output()
+        .expect("taskflow approval query should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA TaskFlow query answer"));
+    assert!(stdout.contains("record-approval"));
+    assert!(stdout.contains("vida taskflow run-graph update"));
+    assert!(stdout.contains("review_ensemble approved"));
 }
 
 #[test]
@@ -6550,6 +6589,8 @@ fn docflow_proxy_can_run_rust_artifact_impact_surface() {
             "docs/product/spec/b.md",
             "--root",
             &root,
+            "--format",
+            "jsonl",
         ])
         .output()
         .expect("docflow rust artifact-impact shell should run");
@@ -6591,6 +6632,8 @@ fn docflow_proxy_can_run_rust_task_impact_surface() {
             "vida-rf1.2.6",
             "--root",
             &root,
+            "--format",
+            "jsonl",
         ])
         .output()
         .expect("docflow rust task-impact shell should run");

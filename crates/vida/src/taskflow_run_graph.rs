@@ -1000,6 +1000,22 @@ pub(crate) async fn derive_advanced_run_graph_status(
                     let mut status = run_graph_transition(
                         &existing,
                         existing.active_node.clone(),
+                        Some("approval".to_string()),
+                        existing.lane_id.clone(),
+                        "approval_wait".to_string(),
+                        "approval_required".to_string(),
+                        &existing.checkpoint_kind,
+                        DispatchTargetFormat::Direct,
+                        true,
+                    );
+                    status.status = "awaiting_approval".to_string();
+                    status.context_state = existing.context_state;
+                    return Ok(TaskflowRunGraphAdvancePayload { status });
+                }
+                "approved" => {
+                    let mut status = run_graph_transition(
+                        &existing,
+                        existing.active_node.clone(),
                         None,
                         existing.lane_id.clone(),
                         "implementation_complete".to_string(),
@@ -1020,7 +1036,7 @@ pub(crate) async fn derive_advanced_run_graph_status(
                 }
                 other => {
                     return Err(format!(
-                        "run-graph advance expected `{verification_node}` status `clean` before completing implementation, got `{other}`"
+                        "run-graph advance expected `{verification_node}` status `clean` to enter approval wait or `approved` to complete implementation, got `{other}`"
                     ));
                 }
             }
