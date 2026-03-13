@@ -36,7 +36,7 @@ Historical wrappers are responsible only for:
 Already transitioned or transition-ready in `taskflow-v0`:
 
 1. boot packet/profile/snapshot,
-2. task store and `br` compatibility,
+2. task store and legacy compatibility retirement,
 3. TaskFlow/readiness views,
 4. run-graph,
 5. route resolution,

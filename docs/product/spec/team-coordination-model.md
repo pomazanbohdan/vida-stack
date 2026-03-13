@@ -103,6 +103,35 @@ Activation rule:
 2. it must remain within active project policy,
 3. it must fail closed when no lawful team posture resolves.
 
+### 7.1 Storage And Runtime Home
+
+Release-1 team state must live under the same DB-first activation model as the other project-owned runtime entities.
+
+Placement rule:
+
+1. authoritative team state lives in DB truth,
+2. runtime-owned team projection may live under `.vida/project/teams/**`,
+3. root-tree team registries may exist only as source-mode or export/import surfaces,
+4. projected team files must not outrank DB truth automatically.
+
+### 7.2 Team Lifecycle
+
+Teams use the standard project-owned lifecycle:
+
+1. `import`
+2. `activate`
+3. `update`
+4. `replace`
+5. `disable`
+6. `restore`
+
+Lifecycle interpretation:
+
+1. `replace` may change the team composition, shared policy, or activation policy,
+2. `replace` must not rewrite the framework-owned meaning of the coordination pattern itself,
+3. `disable` removes the team from the active selectable pool without deleting preserved history or import state,
+4. `restore` returns a previously disabled or replaced team definition into lawful selectable posture after validation.
+
 ## 8. Shared Policy
 
 Teams may carry shared policy for:

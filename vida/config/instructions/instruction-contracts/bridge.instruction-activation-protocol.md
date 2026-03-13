@@ -98,6 +98,7 @@ Canonical examples:
 21. `vida/config/instructions/instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol.md`
 22. `vida/config/instructions/instruction-contracts/meta.protocol-naming-grammar-protocol.md`
 23. `vida/config/instructions/instruction-contracts/meta.core-protocol-standard-protocol.md`
+24. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
 
 Rule:
 
@@ -139,6 +140,8 @@ Rule:
 | raw inputs are mixed, scope-bearing, or negotiation-heavy | `work.spec-intake-protocol.md` |
 | non-equivalent change is visible | `work.spec-delta-protocol.md` |
 | implementation route selected | `implement-execution-protocol.md` |
+| request-intent classification, orchestration route selection, or worker-first coordination beyond `answer_only` is active | `core.orchestration-protocol.md` |
+| node-level resumability, route control limits, or checkpoint-visible continuation is active | `core.run-graph-protocol.md` |
 | plan/spec/task pool is settled and the user wants continued execution to completion | `autonomous-execution-protocol.md` |
 | tracked execution must choose between multiple lawful next tasks or handle reprioritization | `execution-priority-protocol.md` |
 | close/handoff health-check gates are active | `execution-health-check-protocol.md` |
@@ -159,7 +162,7 @@ Rule:
 | auto-lane selection or conversational lane modes for scope/PBI work are active | `work.agent-lane-selection-protocol.md` |
 | routed worker admissibility must be proven against typed task-class capabilities before ranking or delegation | `capability-registry-protocol.md` |
 | compiled runtime bundle composition or kernel bundle readiness is active | `runtime-kernel-bundle-protocol.md` |
-| multi-verifier admissibility or merged verification verdicts are active | `work.verification-merge-protocol.md` |
+| review-pool admissibility, multi-verifier admissibility, or merged verification verdicts are active | `work.verification-merge-protocol.md` |
 | final direct runtime consumption or explicit taskflow -> docflow closure evidence is active | `direct-runtime-consumption-protocol.md` |
 | pack boundary admissibility or cross-pack handoff law is active | `work.pack-handoff-protocol.md` |
 | a routed pack is about to be declared complete or pack-complete proof must be checked | `work.pack-completion-gate-protocol.md` |
@@ -308,5 +311,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md
 created_at: '2026-03-08T02:15:22+02:00'
-updated_at: '2026-03-12T11:55:06+02:00'
+updated_at: '2026-03-13T07:44:24+02:00'
 changelog_ref: bridge.instruction-activation-protocol.changelog.jsonl

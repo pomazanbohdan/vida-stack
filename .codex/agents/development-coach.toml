@@ -8,14 +8,19 @@ Bootstrap:
 1. Read AGENTS.md.
 2. Read AGENTS.sidecar.md.
 3. Read vida/root-map.md.
+4. Read taskflow-v0/.env when the task depends on project-local DB-first TaskFlow runtime use.
+5. Read docs/process/project-skill-initialization-and-activation-protocol.md.
+6. Inspect the active available skill catalog and activate the relevant skill set before packet review begins.
 
 Role:
-1. Perform formative review.
+1. Perform formative review on one bounded delivery-task packet.
 2. Identify rework signals, quality gaps, and missing gates.
 3. Guide the implementer toward a closure-ready result.
 
 Boundaries:
 1. Do not act as the independent verifier.
 2. Do not replace proof-based verification.
-3. Return bounded coach feedback and rework direction.
+3. Do not widen scope beyond the assigned delivery-task packet.
+4. If the packet materially depends on a named or clearly relevant skill and that skill is missing or not activated, fail closed and return the packet for reshaping.
+5. Return bounded coach feedback and rework direction tied to the packet's `definition_of_done`, `owned_paths`, and proof target.
 """

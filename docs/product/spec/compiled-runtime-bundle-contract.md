@@ -81,6 +81,47 @@ These inputs compile when active and valid:
 8. project output/render posture,
 9. promoted project protocols admitted for execution.
 
+### 4.3 Compilation Admission And Routing
+
+The runtime must not treat protocols, overlays, and extension registries as unrelated prompt fragments.
+
+Instead, the system must compile one runtime control bundle from:
+
+1. framework `core` law,
+2. orchestration-shell law,
+3. runtime-family capability law,
+4. project activation data from `vida.config.yaml`,
+5. project role/skill/profile/flow registries,
+6. enabled shared skills,
+7. route and gate constraints,
+8. model/backend policy,
+9. runtime-family discovery maps,
+10. current evidence/gate requirements.
+
+Compilation-input rule:
+
+1. runtime compilation may read canonical markdown law as the human-owned source,
+2. but repeated runtime execution must consume imported and validated machine-readable protocol/activation state rather than reinterpreting raw markdown on every step,
+3. if the imported state required for execution is missing or invalid, the runtime must fail closed before non-bootstrap work proceeds.
+
+Compilation output rule:
+
+1. the compiled control plane must know where the engine workspace is,
+2. it must know where synchronized project/config/document surfaces are located,
+3. it must know where the host project codebase is located,
+4. it must route changes and retrieval requests differently depending on that domain classification,
+5. it must know which response protocol and, when defined, which output template family applies to each major operator query/result class.
+
+Project-protocol compilation rule:
+
+1. the project may register many project-owned protocols,
+2. runtime must distinguish between:
+   - `known project protocols`
+   - `compiled executable project protocols`
+3. a known project protocol may be discoverable, triggerable, or readable by the model without becoming part of compiled execution control,
+4. only project protocols that are explicitly activated, mapped, or compiled into runtime control become executable protocol surfaces,
+5. team-management behavior belongs by default to project configuration and compiled framework control rather than to a separate compiled project-execution protocol unless a later canonical rule narrows that boundary.
+
 ## 5. Minimum Root Bundle Shape
 
 Every Release-1 compiled control bundle must expose at least:
@@ -339,5 +380,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/compiled-runtime-bundle-contract.md
 created_at: '2026-03-11T23:01:49+02:00'
-updated_at: '2026-03-12T23:10:00+02:00'
+updated_at: '2026-03-13T08:47:25+02:00'
 changelog_ref: compiled-runtime-bundle-contract.changelog.jsonl

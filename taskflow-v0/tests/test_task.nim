@@ -35,7 +35,7 @@ suite "task":
 
   proc seedIssues(lines: seq[JsonNode]) =
     let dbPath = root / ".vida" / "state" / "taskflow-state.db"
-    let issuesPath = root / ".beads" / "issues.jsonl"
+    let issuesPath = root / ".vida" / "imports" / "tasks.seed.jsonl"
     if fileExists(dbPath):
       removeFile(dbPath)
     createDir(parentDir(issuesPath))
@@ -210,7 +210,7 @@ suite "task":
       %*{"id": "vida-stack-2d9.1.3", "title": "Legacy task", "status": "open", "priority": 2, "issue_type": "task"},
       %*{"id": "vida-child", "display_id": "vida-2d9.2", "title": "Child task", "status": "in_progress", "priority": 1, "issue_type": "task"}
     ])
-    let target = root / ".beads" / "exported.jsonl"
+    let target = root / ".vida" / "exports" / "tasks.exported.jsonl"
     let payload = exportIssuesJsonl(target)
     check payload["status"].getStr() == "ok"
     check payload["exported_count"].getInt() == 2

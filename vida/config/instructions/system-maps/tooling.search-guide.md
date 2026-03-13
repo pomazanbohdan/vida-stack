@@ -108,7 +108,7 @@ required_tool -> fallback_used -> impact
 
 Critical rule:
 
-- If `br` is unavailable, stop execution (no SSOT fallback path).
+- If the DB-backed task runtime is unavailable, stop execution (no SSOT fallback path).
 
 ## Known Tool Limitations (2026-03-02)
 

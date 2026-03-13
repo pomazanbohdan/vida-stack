@@ -31,7 +31,7 @@ These files define process and MUST be committed:
 If a runtime log must be shared for incident analysis:
 
 1. Store a sanitized snapshot under `_temp/`.
-2. Summarize in issue notes (`br update <id> --notes ...`).
+2. Summarize in task notes (`taskflow-v0 task update <id> --notes ...`).
 3. Do not promote raw logs into VCS.
 
 ## 4) Console Output Policy

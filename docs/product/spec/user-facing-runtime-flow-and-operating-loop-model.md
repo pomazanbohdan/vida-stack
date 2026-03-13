@@ -54,13 +54,76 @@ This document currently closes these operator stages:
 2. `project activation / config`
 3. `intake / planning`
 4. `execution / approval / interrupt-resume`
+5. `artifact materialization`
+6. `status / doctor / remediation`
+7. `export / edit / import`
+8. `closure / reopen`
 
-The later operator stages remain part of the same top-level flow but are still next discussion surfaces:
+## 3.1 Minimum Product Surfaces
 
-1. `artifact materialization`
-2. `status / doctor / remediation`
-3. `export / edit / import`
-4. `closure / reopen`
+The user-facing product should remain one visible `VIDA` system while exposing several bounded operational surfaces behind that single product identity.
+
+Minimum user-facing surfaces:
+
+1. `entry surface`
+   - one primary CLI entry in Release 1
+   - CLI plus UI in Release 2
+2. `intake surface`
+   - business conversations, requirements, tasks, and external artifacts enter here
+3. `project configuration surface`
+   - roles, skills, profiles, flows, teams, model/backend policy, and project activation settings
+4. `planning surface`
+   - specifications, PBIs, task graphs, and delivery scope
+5. `execution surface`
+   - active runtime work, lane activity, progress, blockers, and recovery state
+6. `artifact surface`
+   - produced documentation, code artifacts, build outputs, and delivery outputs
+7. `approval surface`
+   - review, correction, acceptance, rejection, and governance checkpoints
+8. `verification surface`
+   - proof, readiness, validation, and closure evidence
+9. `release/devops surface`
+   - build, publish, deployment, environment, and release receipts
+10. `observability surface`
+    - traces, run history, sync activity, routing decisions, and auditability
+
+Discussion status rule:
+
+1. `entry`, `intake`, `project configuration`, `planning`, `execution`, `artifact`, and `approval` surfaces are currently in active concretization,
+2. `verification`, `release/devops`, and `observability` surfaces remain `next discussion` surfaces for now,
+3. the following observability-oriented facets are also explicitly deferred to later discussion before deeper specification:
+   - `run history`
+   - `routing decisions`
+   - `cost usage`
+   - `failure reasons`
+   - `compliance/audit trail`
+4. these deferred surfaces may remain listed as target product surfaces, but they should not yet be treated as fully elaborated operator-surface contracts.
+
+## 3.2 Cross-Stage Operator Journey
+
+The target operator journey is:
+
+1. a human provides business conversation, request, or artifact input,
+2. the runtime classifies the intent,
+3. the runtime activates the lawful role/profile/flow composition,
+4. the runtime routes the work into the proper lane chain,
+5. the proper runtime family is activated to create or validate the needed artifact,
+6. a human may review or correct the result,
+7. approved output becomes the next runtime input without manual internal rewiring,
+8. delivery continues until runtime closure produces both the binary outcome and the required evidence surfaces.
+
+Example target:
+
+1. business conversation arrives,
+2. intake resolves to requirement/spec formation,
+3. a `business_analyst` lane with compatible documentation/spec skill payload is activated,
+4. documentation/spec artifacts are created and validated through lawful documentation surfaces,
+5. PM/governance review is requested,
+6. accepted specification activates execution-preparation flow,
+7. a `solution_architect` lane prepares one bounded architecture-preparation report and developer handoff packet,
+8. the runtime compiles one execution graph and dispatches specialized lanes from that prepared handoff,
+9. coding, research, verification, and devops proceed under one compiled route,
+10. final output includes working binaries, documentation, and proof/readiness evidence.
 
 ## 4. Stage 1: Install / Init / Bootstrap
 
@@ -767,11 +830,218 @@ Stage 4 is closed enough when all are true:
 5. replay/checkpoint direction remains consistent with explicit continuation boundaries,
 6. operators can inspect what execution is waiting on before continuation.
 
-## 10. Next Discussion
+## 10. Stage 5: Artifact Materialization
 
-The next operator-flow stage after this document is:
+### 10.1 Purpose
 
-1. `artifact materialization`
+After Stage 4 has produced a lawful execution result, the runtime must materialize required user-facing artifacts instead of leaving them only in chat memory.
+
+Stage 5 owns:
+
+1. artifact-output class selection,
+2. template or format selection,
+3. bounded artifact rendering from runtime truth,
+4. filesystem or project-visible materialization,
+5. artifact receipts and queryability.
+
+Compact rule:
+
+1. artifacts are rendered from lawful state,
+2. a template deepens rendering but does not replace the governing protocol,
+3. realizable artifacts must become durable outputs rather than chat-only summaries.
+
+### 10.2 Entry Conditions
+
+Stage 5 starts when at least one is true:
+
+1. the execution route requires a document, packet, report, code patch, or other durable output,
+2. approval, review, handoff, or verification requires a materialized artifact,
+3. the user explicitly requested a durable artifact rather than a conversational answer.
+
+### 10.3 Canonical Artifact Flow
+
+The lawful Stage-5 flow is:
+
+1. determine the required output class from route, protocol, or user request,
+2. gather the bounded runtime truth needed for that output,
+3. choose the active template/format:
+   - higher-precedence canonical template when it exists,
+   - project-owned template when lawfully activated,
+   - contextual model rendering only when no stronger template exists,
+4. render the artifact,
+5. materialize it to the bounded project/runtime surface,
+6. emit the matching receipt or status update.
+
+### 10.4 Template And Queryability Rule
+
+Stage 5 must preserve:
+
+1. explicit linkage between artifact class and governing protocol,
+2. inspectable source state for the materialized result,
+3. visibility of where the artifact was written,
+4. the ability to distinguish durable artifacts from chat-only commentary.
+
+### 10.5 Completion Proof For Stage 5
+
+Stage 5 is closed enough when all are true:
+
+1. realizable outputs become durable artifacts,
+2. artifact rendering uses lawful protocol/template precedence,
+3. artifact status can be queried after materialization,
+4. operators can tell which runtime truth produced the artifact.
+
+## 11. Stage 6: Status / Doctor / Remediation
+
+### 11.1 Purpose
+
+After artifacts and execution outputs exist, the operator must be able to inspect bounded runtime posture and recover from non-green states without broad manual digging.
+
+Stage 6 owns:
+
+1. bounded status-family retrieval,
+2. bounded doctor diagnostics,
+3. explicit remediation routing,
+4. renderable recovery guidance grounded in runtime truth.
+
+### 11.2 Required Families
+
+Release 1 Stage 6 must expose at least:
+
+1. `orchestrator status`
+2. `doctor`
+3. `config status`
+4. `flow status`
+5. `tasks status`
+6. `sync status`
+7. `memory status`
+
+### 11.3 Canonical Operator Flow
+
+The lawful Stage-6 flow is:
+
+1. determine which status family the operator actually needs,
+2. query the bounded truth surface for that family,
+3. render the result,
+4. if the result is non-green, route into bounded remediation instructions,
+5. re-query after remediation rather than trusting freeform narration.
+
+### 11.4 Doctor And Remediation Rule
+
+`doctor` is the integrity and failure-localization surface for Release 1.
+
+Rules:
+
+1. doctor must name the failing subsystem or readiness class,
+2. remediation must point to a bounded next action rather than vague advice,
+3. remediation must not depend on a hidden always-on daemon,
+4. status families and doctor outputs must remain distinguishable.
+
+### 11.5 Completion Proof For Stage 6
+
+Stage 6 is closed enough when all are true:
+
+1. each required status family has a bounded query path,
+2. doctor can localize non-green runtime posture,
+3. remediation is explicit and query-grounded,
+4. the operator can recover without broad manual repo traversal.
+
+## 12. Stage 7: Export / Edit / Import
+
+### 12.1 Purpose
+
+Release 1 keeps DB truth authoritative, but it must still support lawful human editing through bounded export/import loops.
+
+Stage 7 owns:
+
+1. export of editable projections,
+2. bounded manual or tool-driven editing outside DB truth,
+3. validation before re-import,
+4. import and reconcile back into authoritative runtime state.
+
+### 12.2 Canonical Export / Edit / Import Flow
+
+The lawful Stage-7 flow is:
+
+1. export the bounded editable surface from runtime truth,
+2. edit only the exported surface or designated source-mode artifact,
+3. validate the edited result against the owning law,
+4. import it back into DB truth,
+5. run reconcile or drift checks when required,
+6. surface updated status after the import result becomes authoritative.
+
+### 12.3 Boundary Rule
+
+Stage 7 must preserve all of:
+
+1. exported files are editable projections rather than primary truth,
+2. imports are explicit and receipt-bearing,
+3. invalid edits fail closed and must not silently weaken active posture,
+4. root-tree bridge files may remain source-mode helpers but must not re-become final runtime truth.
+
+### 12.4 Completion Proof For Stage 7
+
+Stage 7 is closed enough when all are true:
+
+1. a bounded export path exists for editable project/runtime surfaces,
+2. edited exports can be validated before import,
+3. imports update authoritative DB truth explicitly,
+4. drift and reconcile posture remain queryable after import/export activity.
+
+## 13. Stage 8: Closure / Reopen
+
+### 13.1 Purpose
+
+The Release-1 loop needs an explicit ending state and an explicit way back into active work when new evidence or drift appears.
+
+Stage 8 owns:
+
+1. closure readiness,
+2. durable closure evidence,
+3. bounded reopen triggers,
+4. non-silent transition from closed back to actionable state.
+
+### 13.2 Closure Rule
+
+Closure is lawful only when all required downstream gates are green for the scoped target:
+
+1. execution route is complete,
+2. required artifacts are materialized,
+3. required approval and verification receipts exist,
+4. status/doctor posture does not show an unresolved blocking condition,
+5. the resulting deliverable can be reported as closed from runtime truth.
+
+### 13.3 Reopen Rule
+
+Reopen is lawful when at least one is true:
+
+1. new blocking evidence appears,
+2. the closed result drifts from active canonical state,
+3. a required receipt or artifact proves missing or invalid,
+4. the user explicitly requests renewed work on the same target.
+
+Reopen behavior:
+
+1. the prior closure evidence must remain preserved,
+2. reopen must identify the new active blocker or delta,
+3. runtime must not pretend the target was never closed before.
+
+### 13.4 Completion Proof For Stage 8
+
+Stage 8 is closed enough when all are true:
+
+1. closure uses explicit runtime evidence rather than ad hoc chat judgment,
+2. operators can see why a target is closed or not yet closed,
+3. reopen is explicit, bounded, and receipt-bearing,
+4. the runtime can transition from closure back to actionable work without silent state loss.
+
+## 14. Deferred Beyond Release 1
+
+The following remain outside this Release-1 operator loop:
+
+1. UI-native control surfaces,
+2. always-on memory freshness daemons,
+3. full observability/audit histories beyond bounded status and doctor families,
+4. host-project embedding and reactive watcher-driven control.
 
 -----
 artifact_path: product/spec/user-facing-runtime-flow-and-operating-loop-model
@@ -782,5 +1052,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md
 created_at: '2026-03-12T21:25:00+02:00'
-updated_at: '2026-03-12T23:59:59+02:00'
+updated_at: '2026-03-13T08:47:25+02:00'
 changelog_ref: user-facing-runtime-flow-and-operating-loop-model.changelog.jsonl

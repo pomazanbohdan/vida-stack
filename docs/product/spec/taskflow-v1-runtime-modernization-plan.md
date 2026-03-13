@@ -757,7 +757,7 @@ Current artifact and state-shape expectations preserved or intentionally bridged
 3. script-era protocol-binding materialization remains deterministic under `taskflow-v0/generated/protocol_binding.compiled.json`
 4. protocol-binding authority is imported into persisted `protocol_binding_state` and `protocol_binding_receipt` rows inside the same TaskFlow state DB rather than detached file logs
 5. runtime commands other than `config`, `protocol-binding`, and `status` fail closed until the protocol-binding import is present
-6. the legacy `br` alias remains retired in favor of `task import-jsonl` and `task export-jsonl`
+6. the legacy task alias remains retired in favor of `task import-jsonl` and `task export-jsonl`
 7. direct-consumption seam remains explicit as `taskflow -> docflow`
 8. runtime-local `codex-v0/codex.py` discovery remains a bounded compatibility detail, not a rollback of the runtime-family rename
 9. run/state outputs must remain replay-safe and fail-closed
@@ -913,7 +913,7 @@ Required closure for this task:
 5. preserve query parity for `protocol-binding build|sync|status|check`,
 6. preserve status-surface parity so runtime health can still expose `protocol_binding.ok`, binding count, and authority from the same authoritative state,
 7. preserve blocker/remediation parity so missing or invalid protocol-binding state still yields bounded operator instructions rather than generic runtime failure,
-8. preserve canonical task-surface parity for `task import-jsonl` and `task export-jsonl` after the `br` alias retirement,
+8. preserve canonical task-surface parity for `task import-jsonl` and `task export-jsonl` after the legacy task alias retirement,
 9. prove that the Rust runtime can own the same protocol-binding authority without falling back to detached file-log truth.
 
 Task proof:

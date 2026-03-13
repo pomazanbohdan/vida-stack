@@ -6,7 +6,7 @@ Scope:
 
 1. Primary runtime for `/vida-bug-fix`.
 2. Applies to bug batches from test/lint/runtime outputs.
-3. Compatible with `br` SSOT + beads TaskFlow execution.
+3. Compatible with DB-backed task SSOT + TaskFlow execution telemetry.
 
 ## Command Layer Mapping
 

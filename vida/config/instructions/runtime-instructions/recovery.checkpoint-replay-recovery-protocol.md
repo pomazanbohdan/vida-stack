@@ -24,7 +24,7 @@ Current durable surfaces:
 
 ## Ownership Rule
 
-1. task lifecycle remains in `br`,
+1. task lifecycle remains in the DB-backed task runtime,
 2. TaskFlow remains execution telemetry and orchestration substrate,
 3. run-graph remains the canonical node-level resumability ledger,
 4. checkpoint commit and replay lineage remain runtime-owned concerns.
@@ -38,6 +38,7 @@ On compact, restart, or interrupted routed execution:
 3. recover governed context from context governance when required,
 4. re-enter the route through the smallest lawful resumable boundary,
 5. do not resume from chat-memory assumptions alone.
+6. if the last checkpoint shows exhausted stall/reset/budget limits, do not resume the same writer path automatically; route to replan, escalation, or explicit override.
 
 ## Replay Rule
 
@@ -58,6 +59,31 @@ Where delayed checkpoint writes, retry, or duplicate delivery are possible:
 2. proof and verification paths must tolerate safe repeated invocation,
 3. recovery logic must not assume exactly-once side effects unless a stronger lower runtime guarantees it.
 
+## Checkpoint Completeness Rule
+
+A routed implementation checkpoint is resumability-ready only when it records the smallest lawful continuation packet.
+
+Minimum continuation packet:
+
+1. `task_id`
+2. `delivery_task_id`
+3. `execution_block_id` or equivalent bounded writer packet id
+4. `owned_paths` or equivalent write boundary
+5. active node and `resume_hint`
+6. current verification or `review_pool` target
+7. current runtime control counters:
+   - `round_count`
+   - `stall_count`
+   - `reset_count`
+   - `budget_units_consumed` when budgeted
+8. explicit blocker or next-step reason when the task is not closure-ready
+
+Rules:
+
+1. missing continuation fields make recovery fail-closed,
+2. resume must restart from the smallest lawful bounded node, not from a broader milestone reinterpretation,
+3. recovery may refresh context or receipts, but it must not silently widen write scope.
+
 ## Recovery Gate
 
 Recovery is not lawful unless all are true:
@@ -71,6 +97,7 @@ If any item is missing:
 
 1. fail closed,
 2. escalate through the canonical runtime/debug path rather than inventing manual continuation.
+3. treat missing control counters or missing `delivery_task_id` as a non-resumable checkpoint defect.
 
 ## Historical Lineage Note
 
@@ -94,5 +121,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md
 created_at: '2026-03-10T15:05:00+02:00'
-updated_at: '2026-03-12T07:58:34+02:00'
+updated_at: '2026-03-13T07:14:58+02:00'
 changelog_ref: recovery.checkpoint-replay-recovery-protocol.changelog.jsonl

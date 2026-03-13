@@ -8,6 +8,7 @@ Purpose: define the canonical runtime law for authorship, coaching, verification
 2. Consensus or coach feedback does not replace independent verification.
 3. When route law requires separated authorship and verification, the runtime must preserve that separation explicitly.
 4. For code-shaped implementation or patch work, formative coach review must run before independent verification when an eligible coach lane exists.
+5. Single-verifier closure is lawful only when verifier independence is explicit and receipt-visible.
 
 ## Canonical Lane Roles
 
@@ -25,6 +26,7 @@ Rules:
 1. `coach` is not a substitute for `verifier`,
 2. `verifier` should differ from the `author` lane when an eligible verifier exists,
 3. proof burden scales with route law, risk, and task class.
+4. when the verifier cannot differ from the author lane, closure requires an explicit override or `no_eligible_verifier` receipt; same-lane review alone is not independence.
 
 ## Coach-First Rule For Code Work
 
@@ -47,6 +49,30 @@ Each verification lane must have:
 3. evidence references
 4. bounded acceptance criteria
 5. blocker rules
+6. verifier-independence basis:
+   - distinct verifier lane identity,
+   - or explicit override receipt,
+   - or explicit `no_eligible_verifier` blocker/exception receipt
+7. `review_pool` / merge-checkpoint metadata when the task participates in sibling verification merge.
+
+## Verifier Independence Receipt
+
+When closure depends on one verifier result, the runtime must preserve a compact verifier-independence receipt.
+
+Minimum fields:
+
+1. `author_lane_id`
+2. `verifier_lane_id`
+3. `independence_verdict`
+4. `basis`
+5. `override_receipt` when independence is not naturally satisfied
+
+Rules:
+
+1. `independence_verdict=independent` requires that the verifier lane is distinct from the author lane and can inspect the proof target without relying on the author's hidden reasoning.
+2. `independence_verdict=override` is lawful only when the active route or human approval path explicitly allows same-lane or degraded verification.
+3. Missing verifier-independence receipt keeps the task out of closure-ready state even if the verification command passed.
+4. Review-pool members must carry the same receipt before they are admitted to merge admissibility.
 
 ## Closure Rule
 
@@ -57,6 +83,8 @@ No routed work is closure-ready when:
 3. coach feedback exists but independent verification is still required,
 4. the verifier cannot inspect the author output contract or proof boundary,
 5. code-shaped work required coach review but no accepted coach result, explicit no-change result, or recorded bypass exists.
+6. a required single-verifier result lacks a verifier-independence receipt,
+7. a review-pool member lacks merge-checkpoint metadata or admissible independence proof.
 
 ## Runtime Integration
 
@@ -73,6 +101,7 @@ If route metadata requires `independent_verification_required`:
 1. verification must be selected before closure,
 2. absence of an eligible verifier must be recorded explicitly as a blocker or override receipt,
 3. local closure without that proof is protocol-invalid.
+4. for `required_results=1`, admissibility still requires the verifier-independence receipt; “single verifier” does not mean “independence optional”.
 
 ## References
 
@@ -90,5 +119,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md
 created_at: '2026-03-10T15:05:00+02:00'
-updated_at: '2026-03-11T13:04:21+02:00'
+updated_at: '2026-03-13T07:14:58+02:00'
 changelog_ref: work.verification-lane-protocol.changelog.jsonl

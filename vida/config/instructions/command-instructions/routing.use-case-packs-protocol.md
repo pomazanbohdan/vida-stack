@@ -8,7 +8,7 @@ Purpose: define the canonical pack taxonomy and high-level routing intent for bo
 |---|---|---|---|
 | `research-pack` | Unknown domain, external validation needed | user goal, scope limits | source-backed findings, risks, next options |
 | `spec-pack` | Requirement/spec creation or update | target feature, constraints | updated spec scope, AC, edge cases |
-| `work-pool-pack` | build/update task pool between spec and dev | approved scope/spec, priority, dependencies | decomposed task pool in `br` + launch decision |
+| `work-pool-pack` | build/update task pool between spec and dev | approved scope/spec, priority, dependencies | decomposed task pool in the DB-backed task runtime + launch decision |
 | `dev-pack` | start/continue implementation | active `TaskFlow` task, target files | code/test changes + verification |
 | `bug-pool-pack` | bug triage/fix loop | bug evidence, reproduction | root-cause fix + regression checks |
 | `reflection-pack` | decisions/docs drift, scope/AC/dependency drift, or explicit tracked framework reflection flow | accepted decisions, touched docs, drift trigger | synchronized contracts/docs/task-pool or reflection evidence |
@@ -101,7 +101,7 @@ Wrapper retirement and historical-only mapping remain owned by `vida/config/inst
 
 ## Notes
 
-1. `br` remains the only task-state source of truth.
+1. `taskflow-v0 task` remains the only task-state source of truth.
 2. TaskFlow board is execution visibility, not task-state authority.
 3. This file should stay thin; deeper flow, gate, and recovery law must remain in their canonical protocol owners.
 

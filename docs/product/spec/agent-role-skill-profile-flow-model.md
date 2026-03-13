@@ -162,6 +162,22 @@ Instead it must compile one runtime identity from:
 6. selected standard or custom flow set,
 7. route/gate constraints from framework runtime law.
 
+### 8.1 Compiled Runtime Identity Shape
+
+Required compiled identity shape:
+
+1. `base_role`
+2. `validated_project_role`
+3. `validated_project_skills`
+4. `enabled_shared_skills`
+5. `validated_profile`
+6. `selected_flow_set`
+7. `route_constraints`
+8. `gate_constraints`
+9. `cost_quality_constraints`
+
+The orchestrator must consume this compiled identity instead of rediscovering the same logic ad hoc on every request.
+
 ## 9. Validation Rule
 
 Project extensions are valid only when all enabled references resolve and remain compatible.
@@ -236,5 +252,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/agent-role-skill-profile-flow-model.md
 created_at: '2026-03-10T15:45:00+02:00'
-updated_at: '2026-03-12T23:59:59+02:00'
+updated_at: '2026-03-13T08:47:25+02:00'
 changelog_ref: agent-role-skill-profile-flow-model.changelog.jsonl

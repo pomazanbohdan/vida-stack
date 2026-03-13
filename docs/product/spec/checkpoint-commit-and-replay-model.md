@@ -14,7 +14,8 @@ This artifact defines:
 2. grouped projection checkpoint advancement,
 3. delayed checkpoint write handling,
 4. replay and fork lineage boundaries,
-5. idempotency expectations when reprocessing occurs.
+5. idempotency expectations when reprocessing occurs,
+6. bounded continuation packet expectations for resumable execution.
 
 It does not define:
 
@@ -98,6 +99,24 @@ Replay runs should carry:
 3. `replay_scope`
 4. `fork_parent` when applicable
 
+### 4.5 Bounded Continuation Packet
+
+A resumable implementation checkpoint should carry the smallest lawful execution continuation packet rather than relying on transcript reconstruction.
+
+Minimum continuation expectations:
+
+1. `delivery_task_id`
+2. `execution_block_id`
+3. `resume_hint`
+4. current verification or `review_pool` target
+5. current control counters and effective route control limits when the route is budgeted or stall-limited
+
+Rule:
+
+1. recovery should resume from the smallest lawful bounded node,
+2. exhausted control limits should force replan/escalation rather than blind resume,
+3. replay/fork may reuse the continuation packet, but must preserve derived lineage.
+
 ## 5. Mapping To Existing VIDA Surfaces
 
 1. `projection-listener-checkpoint-kernel` -> checkpoint hints and grouped projections
@@ -105,6 +124,7 @@ Replay runs should carry:
 3. `execution_plan` -> pending checkpoint writes and resumability posture
 4. `route_progression` -> replay of route-facing projections only, not route law itself
 5. `run_graph` -> practical runtime resume cursor source in `taskflow-v0`
+6. `task_state_telemetry` -> checkpoint-visible continuation packet and compact hydration contract
 
 ## 6. Invariants
 
@@ -113,6 +133,7 @@ Replay runs should carry:
 3. replay/fork never rewrites canonical receipts
 4. grouped projection consistency must not collapse entity ownership
 5. duplicate delivery safety is mandatory once delayed checkpoint commits are introduced
+6. resumability must not require re-deriving bounded execution intent from chat history.
 
 LangGraph alignment note:
 
@@ -128,5 +149,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/checkpoint-commit-and-replay-model.md
 created_at: '2026-03-09T12:00:46+02:00'
-updated_at: '2026-03-12T20:45:00+02:00'
+updated_at: '2026-03-13T07:44:24+02:00'
 changelog_ref: checkpoint-commit-and-replay-model.changelog.jsonl

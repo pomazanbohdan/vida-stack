@@ -1,6 +1,6 @@
 # VIDA Commands (Slim Runtime)
 
-Purpose: compact command map aligned with `br + packs + protocol` architecture.
+Purpose: compact command map aligned with DB-backed task runtime + packs + protocol architecture.
 
 ## Canonical Entry Points
 
@@ -15,7 +15,7 @@ Purpose: compact command map aligned with `br + packs + protocol` architecture.
 5. `/vida-implement`
    - unified development execution (IEP protocol).
 6. `/vida-status`
-   - read-only status dashboard from `br`.
+   - read-only status dashboard from the DB-backed task runtime.
 
 Thinking is protocol-driven (no separate slash command):
 
@@ -33,7 +33,7 @@ Thinking is protocol-driven (no separate slash command):
 Rules:
 
 1. `/vida-implement` starts only after explicit launch confirmation in `/vida-form-task`.
-2. `br` is the only task-state source of truth.
+2. `taskflow-v0 task` is the only task-state source of truth.
 3. TaskFlow board is execution visibility only.
 4. Project analyze/scan/test/triage behaviors are absorbed into `/vida-status`, `/vida-implement`, and `/vida-bug-fix` protocols.
 

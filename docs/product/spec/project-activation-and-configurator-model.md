@@ -89,6 +89,14 @@ Project owns:
 9. known project protocols,
 10. promoted executable project protocols.
 
+### 4.3 Runtime Composition Vocabulary
+
+1. a `role class` is the canonical role identity/type recognized by the framework, such as business analysis, project coordination, implementation, testing, verification, or operations,
+2. a role class is not the same as a profile, agent instance, or team,
+3. a `profile` is a configured operating variant of a role class,
+4. an `agent` is a runtime executor or lane instance that acts using a selected role class and profile,
+5. a `team` is a coordinated composition that may contain multiple role classes, profiles, and agents.
+
 Runtime-home rule:
 
 1. active runtime-owned project roles, skills, profiles, flows, agents, teams, model/backend policy, and project protocols should live under `.vida/project/**` plus DB truth,
@@ -127,6 +135,47 @@ Lifecycle rule:
 
 1. exact per-entity permission details may differ,
 2. but the configurator must expose one coherent lifecycle model across the main project-owned classes.
+
+### 6.1 Release-1 Permission Classes
+
+Release 1 fixes the minimum permission split for project-owned activation surfaces.
+
+1. `replaceable composition surfaces`
+   - roles
+   - skills
+   - profiles
+   - flow sets
+   - agents
+   - teams
+2. `activation-bound policy surfaces`
+   - model classes
+   - backend classes
+   - policy surfaces
+3. `promotion-gated protocol surfaces`
+   - known project protocols
+   - promoted executable project protocols
+
+Permission rule:
+
+1. `replaceable composition surfaces` support the full lifecycle:
+   - `import`
+   - `activate`
+   - `update`
+   - `replace`
+   - `disable`
+   - `restore`
+2. `activation-bound policy surfaces` support:
+   - `import`
+   - `activate`
+   - `update`
+   - `disable`
+   - `restore`
+3. a policy-surface replacement is lawful only by selecting another validated policy object in the same project-owned policy family; it must not bypass framework safety constraints.
+4. `known project protocols` may be imported, updated, disabled, restored, and mapped without becoming executable.
+5. `promoted executable project protocols` must not be directly replaced while active:
+   - they must first leave executable posture through the bounded promotion/demotion path,
+   - only then may a revised protocol artifact re-enter validation, binding, and compilation.
+6. framework-owned imported protocol state remains inspectable, migratable, and restorable, but it is not a project-replaceable configurator surface.
 
 ## 7. Sync And Reconciliation
 
@@ -208,5 +257,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/project-activation-and-configurator-model.md
 created_at: '2026-03-11T23:01:49+02:00'
-updated_at: '2026-03-12T21:55:00+02:00'
+updated_at: '2026-03-13T08:47:25+02:00'
 changelog_ref: project-activation-and-configurator-model.changelog.jsonl

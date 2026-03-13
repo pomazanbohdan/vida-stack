@@ -4,7 +4,7 @@ Purpose: provide one canonical reconciliation layer that determines whether a tr
 
 ## Core Contract
 
-1. `br` remains SSOT for lifecycle state.
+1. `taskflow-v0 task` remains SSOT for lifecycle state.
 2. TaskFlow remains SSOT for execution telemetry.
 3. TSRP does not introduce a third task-state engine; it classifies consistency across existing artifacts.
 4. Reconciliation is mandatory before closing stale framework tasks by judgment alone.
@@ -13,8 +13,8 @@ Purpose: provide one canonical reconciliation layer that determines whether a tr
 
 TSRP must read only canonical artifacts:
 
-1. `.beads/issues.jsonl`
-2. `taskflow-tool.sh ui-json <task_id>`
+1. `taskflow-v0 task show <task_id> --json`
+2. `taskflow-v0 todo ui-json <task_id>`
 3. `boot-profile.sh verify-receipt <task_id>`
 4. `beads-verify-log.sh --task <task_id>`
 5. `run-graph.py status_payload(<task_id>)`
@@ -32,7 +32,7 @@ TSRP must read only canonical artifacts:
 5. `open_but_satisfied`
    - task remains `open`, but TaskFlow/verification evidence indicates the scoped work is already satisfied.
 6. `drift_detected`
-   - `br`, TaskFlow, and verification artifacts disagree in a way that requires explicit reconciliation.
+   - the DB-backed task surface, TaskFlow telemetry, and verification artifacts disagree in a way that requires explicit reconciliation.
 7. `invalid_state`
    - task is structurally contradictory, for example `closed` with active TaskFlow backlog.
 8. `closed`
@@ -78,7 +78,7 @@ Rule:
 ## Canonical Helper
 
 ```bash
-python3 task-state-reconcile.py status <task_id>
+taskflow-v0 reconcile status <task_id>
 ```
 
 -----

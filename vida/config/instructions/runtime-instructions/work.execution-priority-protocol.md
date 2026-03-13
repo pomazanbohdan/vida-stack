@@ -23,7 +23,7 @@ Use these inputs in order:
 
 1. active blocker/verification/approval receipts,
 2. active TaskFlow block and `next_step`,
-3. `br` lifecycle state and dependency state,
+3. DB-backed task lifecycle state and dependency state,
 4. approved scope/order contract from `vida/config/instructions/command-instructions/planning.form-task-protocol.md`,
 5. canonical wave/plan ordering,
 6. route-required worker findings or verifier/coach results,
@@ -73,7 +73,7 @@ Reprioritization must not happen because:
 When reprioritization is lawful:
 
 1. use `beads-workflow.sh redirect` for block-level focus changes,
-2. update task status only through canonical `br`/beads paths,
+2. update task status only through canonical DB-backed task / TaskFlow paths,
 3. preserve the interrupted task as resumable state when possible,
 4. record the reason in TaskFlow evidence or task notes,
 5. if scope/order contract changes materially, route back through form-task/spec reconciliation instead of silently continuing.
@@ -106,7 +106,7 @@ When `vida/config/instructions/instruction-contracts/overlay.autonomous-executio
 
 ## Anti-Patterns
 
-1. treating all `br ready` tasks as equally valid next work,
+1. treating all `taskflow-v0 task ready` tasks as equally valid next work,
 2. ignoring the active TaskFlow block because another task is already open,
 3. silently promoting framework fixes ahead of product work mid-block,
 4. using chat memory as the only reprioritization record,

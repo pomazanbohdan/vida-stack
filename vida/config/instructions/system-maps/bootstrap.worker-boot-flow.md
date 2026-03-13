@@ -56,6 +56,15 @@ The worker may then read only:
 4. packet-linked local references,
 5. project preflight doc only when the packet requires command execution.
 
+Packet-linked canonical references may include, only when the worker packet/task class explicitly requires them:
+
+1. `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`
+2. `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md`
+3. `vida/config/instructions/runtime-instructions/work.verification-merge-protocol.md`
+4. `vida/config/instructions/runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`
+5. `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md`
+6. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
+
 Forbidden by default:
 
 1. broad framework docs,
@@ -98,5 +107,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps/bootstrap.worker-boot-flow.md
 created_at: '2026-03-10T15:05:00+02:00'
-updated_at: '2026-03-11T13:41:56+02:00'
+updated_at: '2026-03-13T07:44:24+02:00'
 changelog_ref: bootstrap.worker-boot-flow.changelog.jsonl

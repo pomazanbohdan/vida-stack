@@ -20,6 +20,7 @@ This guide does not define:
 3. runtime bundle compilation law,
 4. the full product-law meaning of team coordination,
 5. project documentation execution surfaces that remain non-agentic.
+6. the packet-level team operating protocol, which is owned separately.
 
 ## External Baseline
 
@@ -99,6 +100,16 @@ Minimum team topology:
 5. `development_escalation`
    - high-cost escalation role for hard architecture, conflict, or blocked situations only
 
+Packet posture:
+
+1. delegated Codex roles must consume one bounded `delivery_task` or one bounded `execution_block` packet,
+2. `.codex/**` should be tuned for packet execution, not for epic- or feature-shaped delegation,
+3. packet semantics are owned by `docs/process/team-development-and-orchestration-protocol.md`,
+4. the default decomposition leaf is `delivery_task`,
+5. `execution_block` is reserved for packets that still fail one-owner bounded closure,
+6. normal write-producing work should be delegated once a lawful packet exists,
+7. available skills must be inspected and relevant skills activated before bounded work begins.
+
 Coordination pattern:
 
 1. default posture is `manager-led delegation-first` by the active root Codex session,
@@ -106,6 +117,11 @@ Coordination pattern:
 3. the root session should stay in orchestrator scope after bootstrap rather than collapsing into a second local implementer,
 4. `coach` must remain distinct from `verifier`,
 5. escalation is not part of the normal steady-state path and should activate only when the first-line development team cannot close lawfully.
+
+Top-level orchestrator note:
+
+1. if the project wants a cheaper but logical root orchestrator, the upper-lane operating contract is owned by `docs/process/project-orchestrator-operating-protocol.md`,
+2. `.codex/**` should stay aligned to that upper-lane protocol rather than compensating for weak top-level routing inside agent-specific TOML.
 
 Normalization rule:
 
@@ -204,16 +220,22 @@ At the current repository cut:
 3. for team runtime semantics, read `docs/product/spec/team-coordination-model.md`,
 4. for compiled runtime bundle expectations, read `docs/product/spec/compiled-runtime-bundle-contract.md`,
 5. for framework/runtime validation of project extensions, read `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`,
-6. for canonical coach/verifier separation, read `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md`.
+6. for canonical coach/verifier separation, read `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md`,
+7. for the project packet-level team operating protocol, read `docs/process/team-development-and-orchestration-protocol.md`,
+8. for the project top-level orchestrator operating protocol, read `docs/process/project-orchestrator-operating-protocol.md`,
+9. for repeatable orchestrator startup and reusable prompt wording, read:
+   - `docs/process/project-orchestrator-session-start-protocol.md`
+   - `docs/process/project-orchestrator-reusable-prompt.md`
+10. for mandatory skill initialization and activation, read `docs/process/project-skill-initialization-and-activation-protocol.md`.
 
 -----
 artifact_path: process/codex-agent-configuration-guide
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-12'
+artifact_revision: '2026-03-13'
 schema_version: '1'
 status: canonical
 source_path: docs/process/codex-agent-configuration-guide.md
 created_at: '2026-03-12T08:35:27+02:00'
-updated_at: '2026-03-12T08:47:29+02:00'
+updated_at: '2026-03-13T19:11:00+02:00'
 changelog_ref: codex-agent-configuration-guide.changelog.jsonl

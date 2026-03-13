@@ -286,7 +286,7 @@ fn taskflow_proxy_help_supports_task_topic() {
         "vida taskflow task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description"
     ));
     assert!(stdout.contains("vida taskflow task update <task-id> --status in_progress --notes"));
-    assert!(stdout.contains("vida taskflow task export-jsonl .beads/issues.jsonl --json"));
+    assert!(stdout.contains("vida taskflow task export-jsonl .vida/exports/tasks.snapshot.jsonl --json"));
     assert!(stdout.contains("Parent-child edges preserve epic/task structure"));
 }
 
@@ -3636,7 +3636,7 @@ fn taskflow_query_recommends_export_surface_for_jsonl_questions() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("export-runtime-store"));
-    assert!(stdout.contains("vida taskflow task export-jsonl .beads/issues.jsonl --json"));
+    assert!(stdout.contains("vida taskflow task export-jsonl .vida/exports/tasks.snapshot.jsonl --json"));
 }
 
 #[test]

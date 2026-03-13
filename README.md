@@ -219,6 +219,7 @@ These standards are designed so each layer is independently coherent and future 
 ### Spec navigation
 
 - 📑 [Current Spec Map](docs/product/spec/current-spec-map.md)
+- 🗺️ [Release 1 Program Map](docs/product/spec/release-1-program-map.md)
 - 🎯 [Compiled Autonomous Delivery Runtime Architecture](docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md)
 - 🌊 [Release 1 Wave Plan](docs/product/spec/release-1-wave-plan.md)
 - 🧱 [Runtime Surface Model](docs/product/spec/root-map-and-runtime-surface-model.md)
@@ -238,7 +239,7 @@ python3 codex-v0/codex.py overview
 
 python3 codex-v0/codex.py readiness-check --profile active-canon
 
-taskflow-v0 task import-jsonl .beads/issues.jsonl --json
+taskflow-v0 task import-jsonl .vida/imports/tasks.seed.jsonl --json
 
 taskflow-v0 consume final "Runtime closure proof path"
 ```
@@ -291,5 +292,5 @@ schema_version: '1'
 status: canonical
 source_path: README.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-12T08:27:23+02:00'
+updated_at: '2026-03-13T08:47:25+02:00'
 changelog_ref: README.changelog.jsonl

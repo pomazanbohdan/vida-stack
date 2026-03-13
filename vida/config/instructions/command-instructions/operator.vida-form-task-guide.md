@@ -73,7 +73,7 @@ This command also absorbs epic-planning responsibilities (scope boundary, depend
    - map approved answers into planning fields (`scope_boundary`, `delivery_cut`, `dependency_strategy`, `risk_policy`).
    - stop on unresolved conflicts.
 7. `FT-04 Task Pool Build`:
-   - create/update tasks in `br` with clear descriptions.
+   - create/update tasks in the DB-backed task runtime with clear descriptions.
 8. `FT-05 Dependency Graph + Track Routing`:
    - set dependencies, detect cycles, build sequential/parallel-safe routing.
    - materialize `next_step` chain and validate with `todo-plan-validate.sh`.

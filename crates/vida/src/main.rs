@@ -77,7 +77,7 @@ fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Source of truth:");
             println!("  Runtime store: taskflow-v0 task over the authoritative state store.");
-            println!("  Fallback/export only: .beads/issues.jsonl");
+            println!("  Snapshot export only: .vida/exports/tasks.snapshot.jsonl");
             println!();
             println!("Dependency semantics:");
             println!("  Parent-child edges preserve epic/task structure.");
@@ -96,7 +96,7 @@ fn print_taskflow_proxy_help(topic: Option<&str>) {
                 "  vida taskflow task update <task-id> --status in_progress --notes \"...\" --json"
             );
             println!("  vida taskflow task close <task-id> --reason \"...\" --json");
-            println!("  vida taskflow task export-jsonl .beads/issues.jsonl --json");
+            println!("  vida taskflow task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             println!();
             println!("Failure modes:");
             println!("  Missing or ambiguous runtime root fails closed.");
@@ -113,7 +113,7 @@ fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  Reserve the next child display id: vida taskflow task next-display-id <parent-display-id> --json");
             println!("  Create one bounded child task: vida taskflow task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json");
             println!("  Record real progress after a proven step: vida taskflow task update <task-id> --status <status> --notes \"...\" --json");
-            println!("  Export the current runtime snapshot when needed: vida taskflow task export-jsonl .beads/issues.jsonl --json");
+            println!("  Export the current runtime snapshot when needed: vida taskflow task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             return;
         }
         Some("consume") => {
@@ -250,7 +250,7 @@ fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Source of truth notes:");
     println!("  TaskFlow is the execution/runtime authority.");
     println!("  `taskflow-v0 task` is the primary backlog store during the bridge.");
-    println!("  `.beads/issues.jsonl` remains fallback/export only, not the live runtime store.");
+    println!("  `.vida/exports/tasks.snapshot.jsonl` is export-only, not the live runtime store.");
     println!();
     println!("Runtime routing:");
     println!("  In a project tree, vida resolves the root from the current working directory without manual VIDA_ROOT export.");
@@ -416,7 +416,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "export-runtime-store",
             why: "JSONL export is the bounded compatibility snapshot for the current backlog/runtime state, not the live source of truth.",
-            command: "vida taskflow task export-jsonl .beads/issues.jsonl --json",
+            command: "vida taskflow task export-jsonl .vida/exports/tasks.snapshot.jsonl --json",
             failure_modes: "Export artifacts can drift immediately after they are written, so verify live state through the runtime store when operator decisions depend on freshness.",
         };
     }

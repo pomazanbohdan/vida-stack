@@ -111,7 +111,16 @@ Protocol-gap handling rule:
 
 Reporting prefix:
 1. Start reports with `Thinking mode: <STC|PR-CoT|MAR|5-SOL|META>.`
-2. Do not expose chain-of-thought details.
+2. In user-request conversation mode, immediately after that emit `Requests: active=<n> | in_work=<n> | blocked=<n>`.
+3. In development-orchestration mode, immediately after that emit `Tasks: active=<n> | in_work=<n> | blocked=<n>`.
+4. Immediately after that, emit `Agents: active=<n> | working=<n> | waiting=<n>`.
+5. These counters are mandatory for user-facing reports in normal conversation and during development orchestration.
+6. `in_work` means the agent still owes an active next step after this report without waiting for a new user request.
+7. `blocked` means the open item cannot proceed until an explicit blocker, approval, or missing dependency is resolved.
+8. `active` must equal the currently open bounded items represented by the report; if all represented requests/tasks are closed, `active=0`.
+9. A closure-ready final report for the represented mode must use `in_work=0`; if `in_work>0`, the report is a progress/intermediate report and continued agent action is still expected.
+10. Counters must reflect the current bounded session/task view, not a vague estimate from stale chat memory.
+11. Do not expose chain-of-thought details.
 
 ---
 

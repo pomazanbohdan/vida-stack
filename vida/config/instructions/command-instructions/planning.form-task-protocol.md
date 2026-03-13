@@ -29,7 +29,7 @@ Canonical layer source: `vida/config/instructions/command-instructions/routing.c
 1. study approved spec inputs,
 2. generate task-scope options,
 3. ask structured approval questions,
-4. create/update tasks and dependencies in `br`,
+4. create/update tasks and dependencies in the DB-backed `taskflow-v0 task` surface,
 5. block implementation start until explicit user confirmation,
 6. hand off execution only to `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`.
 7. own epic-level scope boundary and ordering approval before task generation.
@@ -56,8 +56,30 @@ Before task-pool build, FTP must produce and approve scope contract:
 2. dependency ordering and phase fit,
 3. explicit user approval for scope contract.
 
-No task materialization in `br` before scope contract approval.
-No task materialization in `br` from raw research/release/chat text without either normalized `spec_intake`, approved SCP artifact, or approved `issue_contract`.
+No task materialization in the DB-backed task surface before scope contract approval.
+No task materialization in the DB-backed task surface from raw research/release/chat text without either normalized `spec_intake`, approved SCP artifact, or approved `issue_contract`.
+
+## Hierarchy And Granularity Contract
+
+FTP must decompose approved scope top-down before implementation handoff:
+
+1. `epic`
+   - user-visible outcome boundary,
+   - approved by scope contract,
+   - never sent directly to implementation.
+2. `milestone`
+   - one independently verifiable delivery slice that should complete in one implementation/review cycle.
+3. `delivery_task`
+   - one single-owner development contract suitable for one author lane plus downstream coach/verifier lanes.
+4. `execution_block`
+   - TaskFlow micro-step created downstream under `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`.
+
+Granularity rules:
+
+1. split until each `delivery_task` has one dominant goal, explicit non-goals, and one unambiguous done rule,
+2. if a candidate task still spans multiple mutable contracts or mixed frontend/backend/schema/infra ownership without explicit isolation, split again or block it,
+3. task pools may group several sibling `delivery_task` items under one `milestone`, but launch readiness is judged per leaf `delivery_task`, not per epic,
+4. the review queue may batch several merge-ready leaf tasks only when they belong to the same milestone and keep disjoint writable scope.
 
 ## Question Card Protocol (Mandatory)
 
@@ -94,6 +116,32 @@ If the draft execution-spec is not approved, task-pool build is blocked.
 ## Planning-to-TaskFlow Mapping Contract
 
 After cards are approved, FTP must produce execution-ready TaskFlow plan metadata.
+
+## Delivery-Task Card Contract
+
+Before a task may enter the ready queue, FTP must materialize a bounded delivery-task card.
+
+Required fields:
+
+1. `task_id`
+2. `parent_epic`
+3. `milestone_id`
+4. `goal`
+5. `non_goals`
+6. `scope_in`
+7. `scope_out`
+8. `owned_paths` or `owned_areas`
+9. `acceptance_checks`
+10. `validation_commands`
+11. `definition_of_done`
+12. `stop_rules`
+13. `handoff_target`
+
+Readiness rule:
+
+1. a task without a bounded delivery-task card is not ready,
+2. if `definition_of_done`, `validation_commands`, or `owned_paths` are missing, the task must remain blocked,
+3. if the task still requires the worker to infer scope from repository context, the task must remain blocked.
 
 Per planned block, minimum fields:
 
@@ -132,13 +180,14 @@ bash todo-plan-validate.sh <task_id> [--diff-aware]
 6. `FTP-3 User Approval Questions`:
    - run question cards, review the draft execution-spec, and resolve conflicts.
 7. `FTP-4 Task Pool Build`:
-   - create/update `TaskFlow tasks and metadata.
+   - create/update `TaskFlow tasks and metadata as bounded delivery-task cards.
 8. `FTP-5 Dependency Graph + Track Routing`:
    - set `depends_on`, detect cycles;
    - decide sequential vs parallel-safe track routing;
-   - materialize `next_step` chain per track.
+   - materialize `next_step` chain per track;
+   - declare review-pool checkpoints for merge-ready sibling tasks when lawful.
 9. `FTP-6 Readiness Verdict`:
-   - classify tasks: `ready|blocked|deferred`.
+   - classify leaf tasks: `ready|blocked|deferred`.
 10. `FTP-7 Launch Gate`:
    - explicit user confirmation required to start `/vida-implement`.
 
@@ -156,6 +205,10 @@ bash todo-plan-validate.sh <task_id> [--diff-aware]
 10. `BLK_CHANGE_IMPACT_PENDING`.
 11. `BLK_PLAN_DECISIONS_MISSING`.
 12. `BLK_PLAN_INTEGRITY_FAILED`.
+13. `BLK_TASK_TOO_LARGE`.
+14. `BLK_SCOPE_OVERLAP`.
+15. `BLK_VALIDATION_MISSING`.
+16. `BLK_DONE_RULE_MISSING`.
 
 `BLK_CHANGE_IMPACT_PENDING` is raised when approved spec/decisions changed after pool creation.
 Resolution route is owned by `vida/config/instructions/runtime-instructions/work.change-impact-reconciliation-protocol.md`.
@@ -173,6 +226,7 @@ Task-pool rebuild obligations for this owner:
 1. `FTP-6` verdict is `READY_TO_IMPLEMENT`.
 2. No unresolved blocker codes.
 3. User gave explicit launch confirmation in `FTP-7`.
+4. every ready leaf task satisfies the delivery-task card contract.
 
 Execution target:
 
@@ -192,13 +246,16 @@ Without confirmation, `/vida-form-task` ends with `WAITING_USER_CONFIRMATION` an
    - `approved|deferred|revise`.
 5. `Next Action`:
    - exact next command (`/vida-implement ...` or revision path).
+6. `Review Pools`:
+   - `milestone_id + merge-ready task ids + review gate`.
 
 ## Logging Requirements
 
 1. Log each FTP gate as TaskFlow block.
 2. Store question decisions in execution artifacts/evidence.
 3. Record launch confirmation text explicitly.
-4. Run `reflect` + `verify` before reporting completion.
+4. Record epic -> milestone -> leaf-task lineage and any review-pool checkpoints.
+5. Run `reflect` + `verify` before reporting completion.
 
 -----
 artifact_path: config/command-instructions/form-task.protocol
@@ -209,5 +266,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/command-instructions/planning.form-task-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-11T13:25:01+02:00'
+updated_at: '2026-03-13T06:52:32+02:00'
 changelog_ref: planning.form-task-protocol.changelog.jsonl

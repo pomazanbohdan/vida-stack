@@ -8,6 +8,7 @@ Purpose: define how VIDA selects an active agent lane class from user intent, ho
 2. lane-class selection must not weaken framework authority boundaries,
 3. conversational lane modes may remain chat-native only while no tracked mutation or formal artifact handoff is required,
 4. once a conversational mode requires canonical artifact creation or tracked task execution, it must hand off to the lawful pack or tracked-execution path.
+5. this protocol owns conversational/pre-tracked lane-class selection only; execution-agent selection for tracked work remains in `core.agent-system-protocol.md`.
 
 ## Lane Selection Modes
 
@@ -123,5 +124,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/work.agent-lane-selection-protocol.md
 created_at: '2026-03-10T16:40:00+02:00'
-updated_at: '2026-03-11T18:58:59+02:00'
+updated_at: '2026-03-13T07:44:24+02:00'
 changelog_ref: work.agent-lane-selection-protocol.changelog.jsonl

@@ -140,7 +140,7 @@ $ vida beads verify --strict
 ### `task` — DB-backed task surface
 
 Runtime SSOT for this lane lives in `.vida/state/taskflow-state.db`.
-`.beads/issues.jsonl` is treated as an ingest/bootstrap artifact, not the live read store.
+JSONL is treated as a bounded import/export snapshot under `.vida/`, not the live read store.
 
 Output policy:
 - `task list` and `task ready` default to `jsonl`
@@ -153,7 +153,7 @@ Display planning format:
 - subtask: `vida-2d9.1.3`
 
 ```bash
-taskflow-v0 task import-jsonl .beads/issues.jsonl
+taskflow-v0 task import-jsonl .vida/imports/tasks.seed.jsonl
 taskflow-v0 task create vd_epic_demo "Demo epic" --type epic --display-id vida-2d9
 taskflow-v0 task create vd_task_demo "Demo task" --parent-display-id vida-2d9 --auto-display-from vida-2d9
 taskflow-v0 task update vd_task_demo --status in_progress --notes "working" --add-label mode:autonomous
@@ -430,7 +430,7 @@ src/
 - Claims in the Python/shell framework remain canonical until a tracked parity migration explicitly replaces them.
 - task read surfaces now come from the DB-backed `taskflow-v0 task` store
 - The Rust `vida` binary (`crates/vida/`) supports `--state-dir` / `VIDA_STATE_DIR`
-- `.beads/issues.jsonl` is an ingest/export artifact; primary task reads in this lane come from `.vida/state/taskflow-state.db`
+- `.vida/imports/tasks.seed.jsonl` and `.vida/exports/tasks.snapshot.jsonl` are bounded import/export artifacts; primary task reads in this lane come from `.vida/state/taskflow-state.db`
 
 -----
 artifact_path: implementation/taskflow-v0/readme

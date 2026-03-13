@@ -346,18 +346,23 @@ Supported routing-level keys:
 35. `deterministic_first`
 36. `budget_policy`
 37. `max_budget_units`
-38. `max_cli_worker_calls`
-39. `max_coach_passes`
-40. `max_verification_passes`
-41. `max_fallback_hops`
-42. `max_total_runtime_seconds`
-43. `problem_party_required`
-44. `problem_party_task_class`
+38. `max_rounds`
+39. `max_stalls`
+40. `max_resets`
+41. `max_cli_worker_calls`
+42. `max_coach_passes`
+43. `max_verification_passes`
+44. `max_fallback_hops`
+45. `max_total_runtime_seconds`
+46. `problem_party_required`
+47. `problem_party_task_class`
 
 Derived route-receipt note:
 
 1. `dispatch_policy.internal_escalation_allowed` is a runtime-derived receipt field, not a project-owned overlay key.
 2. The runtime derives it from the presence of lawful `allowed_internal_reasons` and the active route policy.
+3. effective route control limits (`max_rounds`, `max_stalls`, `max_resets`, `max_budget_units`, `max_total_runtime_seconds`) must be materialized into the active route receipt even when some values come from runtime defaults rather than explicit overlay data.
+4. route receipts must expose the effective verification posture (`verification_route_task_class`, `independent_verification_required`) together with the effective route control limits so execution and recovery stages do not reconstruct those constraints ad hoc.
 
 Validation scope:
 
@@ -406,7 +411,7 @@ Overlay may configure:
 
 Overlay may not configure:
 
-1. permission to bypass `br` as SSOT,
+1. permission to bypass the DB-backed task runtime as SSOT,
 2. permission to bypass verification gates,
 3. permission to let external workers mutate framework task state directly.
 
@@ -447,5 +452,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-12T11:27:53+02:00'
+updated_at: '2026-03-13T07:44:24+02:00'
 changelog_ref: bridge.project-overlay-protocol.changelog.jsonl

@@ -72,7 +72,7 @@ Layer interpretation:
 ## Execution Rules
 
 1. Start only if launch was explicitly confirmed in `/vida-form-task`.
-2. Work through `br` ready queue sequentially by default.
+2. Work through the DB-backed ready queue sequentially by default.
 3. Workers allowed for read-heavy and review-heavy work.
 4. Keep one write lane unless isolated worktrees are explicitly used.
 5. For server/API behavior, validate assumptions with live requests.

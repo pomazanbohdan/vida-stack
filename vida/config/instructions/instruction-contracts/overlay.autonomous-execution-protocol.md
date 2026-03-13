@@ -84,7 +84,7 @@ If any item is false:
 
 At least one source must define the next lawful work:
 
-1. active `br` ready queue,
+1. active DB-backed ready queue,
 2. TaskFlow next block chain (`next_step`),
 3. canonical plan wave/task ordering,
 4. approved form-task or issue-contract launch output,
@@ -94,13 +94,13 @@ Precedence:
 
 1. blocker/verification receipts,
 2. active TaskFlow block / next block,
-3. `br ready` + dependency state,
+3. `taskflow-v0 task ready` + dependency state,
 4. canonical implementation plan ordering,
 5. chat-level instruction.
 
 Fallback helper:
 
-1. if `br ready` cannot express lawful ordering because dependency readiness is temporarily unreliable, use `python3 autonomous-next-task.py` with bounded prefix/label scope as the fallback selector,
+1. if `taskflow-v0 task ready` cannot express lawful ordering because dependency readiness is temporarily unreliable, use `python3 autonomous-next-task.py` with bounded prefix/label scope as the fallback selector,
 2. this helper is a bounded runtime workaround and must not silently override higher-precedence receipts or active TaskFlow state.
 
 ## Operating Loop

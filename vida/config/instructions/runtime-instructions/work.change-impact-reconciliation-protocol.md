@@ -46,7 +46,7 @@ Reconciliation is mandatory when at least one of the following becomes true:
 2. acceptance criteria changed,
 3. a new dependency or ordering constraint changes execution order,
 4. a decision update invalidates implementation assumptions,
-5. the approved spec and executable `br` queue no longer match,
+5. the approved spec and executable DB-backed task queue no longer match,
 6. active task boundaries no longer match the approved contract.
 
 ## Trigger Sources
@@ -76,7 +76,7 @@ The active owner may discover the trigger in different places:
 Reconciliation is complete only when all are true:
 
 1. the changed contract is explicitly re-baselined,
-2. the executable queue in `br` matches the approved contract,
+2. the executable queue in the DB-backed task runtime matches the approved contract,
 3. dependency ordering is rebuilt when drift changed execution order,
 4. stale drift blockers are cleared by the active owner,
 5. explicit launch confirmation is renewed before implementation resumes when dev execution was affected.

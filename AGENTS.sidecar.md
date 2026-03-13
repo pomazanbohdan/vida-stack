@@ -31,6 +31,8 @@ Purpose: provide the project docs map for the repository being developed on top 
    - `docs/process/documentation-tooling-map.md`
 9. Project agent-extension map:
    - `docs/process/agent-extensions/README.md`
+10. Project-local TaskFlow runtime environment:
+   - `taskflow-v0/.env`
 
 ## Bootstrap Read Path
 
@@ -42,7 +44,15 @@ Purpose: provide the project docs map for the repository being developed on top 
 6. For documentation tooling or operator-command questions, continue to `docs/process/documentation-tooling-map.md`.
 7. For runtime-layering, runtime-readiness, or runtime-architecture questions, continue to `docs/product/spec/canonical-runtime-layer-matrix.md`.
 8. For project role/skill/profile/flow extension questions, continue to `docs/process/agent-extensions/README.md`.
-9. This path is mandatory bootstrap context, not an optional later lookup.
+9. For project-local TaskFlow DB-first execution/bootstrap questions, read `taskflow-v0/.env` and use the project-owned `.vida/state/taskflow-state.db` path rather than any installed shim or legacy task artifact fallback.
+10. After bootstrap, prefer the default `taskflow-v0` shell command only when it resolves through the project-local wrapper/runtime path; do not reintroduce installed shim roots that point outside this repository.
+11. For project task-shaping, development-team, or delegated execution questions, continue early to `docs/process/team-development-and-orchestration-protocol.md`.
+12. For cheaper orchestrator-first project execution, continue early to `docs/process/project-orchestrator-operating-protocol.md`.
+13. For repeatable development-session startup and reusable upper-lane wording, continue early to:
+   - `docs/process/project-orchestrator-session-start-protocol.md`
+   - `docs/process/project-orchestrator-reusable-prompt.md`
+14. For mandatory skill inventory and activation before work begins, continue early to `docs/process/project-skill-initialization-and-activation-protocol.md`.
+15. This path set is mandatory bootstrap context, not an optional later lookup.
 
 Project-routing rule:
 
@@ -63,15 +73,23 @@ Project-routing rule:
    - `docs/process/documentation-tooling-map.md`
 7. `codex-v0` is the canonical project-side operator/runtime surface for bounded documentation validation, readiness, relation, and proof work once the relevant project/spec context is known.
 8. Do not postpone `codex` usage until after broad manual documentation work when the task already depends on documentation mutation, validation, readiness, or proof-shaped output.
+9. For task/backlog lifecycle work, prefer the DB-backed `taskflow-v0 task` surface over legacy task artifacts.
+10. The expected local operator path is plain `taskflow-v0 ...` with project-local defaults already bound to this repository root; manual `VIDA_ROOT=...` overrides are fallback-only.
+11. For development work, assume `delivery_task` is the default decomposition leaf and use `execution_block` only when one-owner bounded closure still fails.
+12. For normal write-producing work, assume delegated agents are the default execution path once a lawful packet exists.
+13. For cheaper orchestrator lanes, prefer the project orchestrator operating protocol over broad free-form planning.
+14. For new or resumed development orchestration sessions, use the project session-start protocol and reusable prompt rather than reconstructing ad hoc startup wording.
+15. Do not pre-split the whole backlog into `execution_block` leaves during bootstrap; keep launch readiness at `delivery_task` depth and refine just-in-time for the next active item.
+16. Before bounded work begins, inspect the current available skill catalog and activate the minimal relevant skill set or make `no_applicable_skill` explicit.
 
 -----
 artifact_path: project/repository/agents.sidecar
 artifact_type: bootstrap_doc
 artifact_version: '1'
-artifact_revision: '2026-03-12'
+artifact_revision: '2026-03-13'
 schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: '2026-03-12T07:58:34+02:00'
+updated_at: '2026-03-13T19:11:00+02:00'
 changelog_ref: AGENTS.sidecar.changelog.jsonl

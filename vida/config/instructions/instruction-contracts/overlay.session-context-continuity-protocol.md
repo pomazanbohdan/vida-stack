@@ -93,7 +93,14 @@ Compact-triggered rule:
 
 1. capture the current request and active bounded task,
 2. identify the intended deliverable for the current step,
-3. hydrate the latest lawful session packet if one exists.
+3. classify whether the new turn is `same_task_continuation`, `branch_of_active_task`, or `separate_task`,
+4. hydrate the latest lawful session packet only when that classification permits reuse.
+
+Thread-divergence rule:
+
+1. `same_task_continuation` may reuse the active session packet normally.
+2. `branch_of_active_task` may reuse only the minimum packet slice needed for the branch and should prefer a bounded branch packet or subagent context over full-session inheritance.
+3. `separate_task` must not inherit the prior task packet by default; create a fresh bounded packet or new task context and carry forward only explicit durable invariants that still apply.
 
 ### Phase 1. Invariant Extraction
 
@@ -307,5 +314,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/overlay.session-context-continuity-protocol.md
 created_at: '2026-03-11T13:10:00+02:00'
-updated_at: '2026-03-11T12:33:03+02:00'
+updated_at: '2026-03-13T07:44:24+02:00'
 changelog_ref: overlay.session-context-continuity-protocol.changelog.jsonl

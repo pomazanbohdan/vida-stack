@@ -6,7 +6,7 @@
 - protocol-binding now materializes a deterministic compiled JSON payload before DB import
 - runtime work now fails closed until protocol-binding state is present in `taskflow-state.db`
 - release archives now carry `.codex/` plus the packaged `vida.config.yaml` template required for installed bootstrap
-- `taskflow-v0 br ...` compatibility alias is removed under LEGACY-ZERO
+- the legacy task compatibility alias is removed under LEGACY-ZERO
 
 ## 📌 Release Positioning
 
@@ -34,7 +34,7 @@ With `v0.2.2`, operators can:
 - build and inspect protocol-binding JSON deterministically before import
 - install the proving runtime into a clean root and get config scaffolding automatically
 - rely on installed TaskFlow bootstrap to populate protocol-binding DB state without manual repair
-- run the current proving runtime without the old `br` compatibility surface
+- run the current proving runtime without the old compatibility alias surface
 
 ## 🧪 Proof Snapshot
 

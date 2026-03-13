@@ -26,11 +26,33 @@ Use:
 2. Working directory: current repository root (`<repo_root>` resolved at runtime).
 3. Protocol unit when applicable: `<command>#CLx` plus whether the unit is read-only or mutation-owning.
 4. Project-specific data/API quirks belong in the host-project overlay or task packet, not in framework dispatch policy.
-5. Verification command: explicit command that proves success.
-6. Code-modification constraints:
+5. Blocking question: one direct question the worker must answer before optional context.
+6. Micro-task contract fields:
+   - `goal`
+   - `non_goals`
+   - `scope_in`
+   - `scope_out`
+   - `owned_paths` or `read_only_paths`
+   - `definition_of_done`
+   - `stop_rules`
+   - `verification_command`
+   - `retry_or_iteration_cap`
+7. Code-modification constraints:
    - Read the target file first before editing.
    - Do not add dependencies absent from the host project's canonical dependency manifest.
    - Keep host-project serialization/data quirks inside the host overlay or task packet.
+
+## Micro-Task Boundary Rule
+
+Delegated worker packets must stay small enough for one bounded worker session.
+
+Rules:
+
+1. do not dispatch a packet that is still shaped like "implement the whole feature",
+2. if a task still requires unrelated frontend/backend/schema/infra changes without explicit write isolation, return it for decomposition instead of dispatching it,
+3. prefer exact file or artifact references over broad repository summaries,
+4. prefer fresh bounded packets over transcript inheritance for each new micro-task,
+5. if the packet still requires the worker to infer `done` from general intent, the packet is invalid.
 
 ## Mandatory Dispatch Gate
 
@@ -38,18 +60,20 @@ Before dispatch:
 
 1. Define bounded scope.
 2. Name the protocol-scoped ownership unit when the work comes from command decomposition.
-3. Define explicit verification command.
-4. Define expected deliverable format.
-5. Confirm dependency prerequisites are in the packet.
-6. Prefer the canonical packet shape from `vida/config/instructions/prompt-templates/worker.packet-templates.md`.
-7. If project overlay activates the agent system, consult the active routing snapshot before choosing backend class.
-8. If routing metadata includes `fanout_workers`, dispatch only those backends for read-only work, require at least `fanout_min_results`, and merge results via the declared `merge_policy`.
-9. If routing metadata marks `independent_verification_required=yes`, use `verification_plan` to select an independent verifier before orchestrator synthesis.
-10. Include one explicit blocking question in the packet and require the worker to answer it directly.
-11. Include worker-lane confirmation markers:
+3. Confirm the micro-task contract is complete (`goal`, `non_goals`, `scope_in`, `scope_out`, `definition_of_done`, `stop_rules`, `verification_command`).
+4. Define explicit verification command.
+5. Define expected deliverable format.
+6. Confirm dependency prerequisites are in the packet.
+7. Prefer the canonical packet shape from `vida/config/instructions/prompt-templates/worker.packet-templates.md`.
+8. If project overlay activates the agent system, consult the active routing snapshot before choosing backend class.
+9. If routing metadata includes `fanout_workers`, dispatch only those backends for read-only work, require at least `fanout_min_results`, and merge results via the declared `merge_policy`.
+10. If routing metadata marks `independent_verification_required=yes`, use `verification_plan` to select an independent verifier before orchestrator synthesis.
+11. Include one explicit blocking question in the packet and require the worker to answer it directly.
+12. Include worker-lane confirmation markers:
    - `worker_lane_confirmed: true`
    - `lane_identity: worker`
-12. Include impact-tail policy in the packet when non-STC workers must finish with bounded downstream analysis.
+13. Include impact-tail policy in the packet when non-STC workers must finish with bounded downstream analysis.
+14. Reject dispatch when writable scopes overlap another active writer lane without explicit serialization.
 
 ## Mandatory Return Contract
 
@@ -69,6 +93,9 @@ Required fields:
 10. `notes`
 11. `recommended_next_action`
 12. `impact_analysis`
+13. `done_verdict`
+14. `stop_reason`
+15. `residual_risks`
 
 ## Lane Boundary
 
@@ -87,5 +114,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md
 created_at: '2026-03-09T22:51:59+02:00'
-updated_at: '2026-03-11T18:58:47+02:00'
+updated_at: '2026-03-13T06:52:32+02:00'
 changelog_ref: lane.worker-dispatch-protocol.changelog.jsonl

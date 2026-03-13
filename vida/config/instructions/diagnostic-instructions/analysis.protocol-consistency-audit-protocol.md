@@ -141,5 +141,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/diagnostic-instructions/analysis.protocol-consistency-audit-protocol.md
 created_at: '2026-03-12T11:55:00+02:00'
-updated_at: '2026-03-12T11:55:06+02:00'
+updated_at: '2026-03-13T07:44:24+02:00'
 changelog_ref: analysis.protocol-consistency-audit-protocol.changelog.jsonl

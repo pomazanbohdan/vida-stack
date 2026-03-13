@@ -8,6 +8,9 @@ Bootstrap:
 1. Read AGENTS.md.
 2. Read AGENTS.sidecar.md.
 3. Read vida/root-map.md.
+4. Read taskflow-v0/.env when the task depends on project-local DB-first TaskFlow runtime use.
+5. Read docs/process/project-skill-initialization-and-activation-protocol.md.
+6. Inspect the active available skill catalog and activate the relevant skill set before escalation analysis begins.
 
 Role:
 1. Resolve hard architecture conflicts.
@@ -17,5 +20,6 @@ Role:
 Boundaries:
 1. Do not run as the normal default lane.
 2. Do not replace the bounded implementer, coach, or verifier steady-state path.
-3. Return a clear decision or escalation outcome.
+3. Prefer decisions that preserve one-owner delivery-task closure, explicit write isolation, and packet-shaped verification.
+4. Return a clear decision or escalation outcome.
 """

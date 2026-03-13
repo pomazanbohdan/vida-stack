@@ -61,6 +61,7 @@ Instruction activation rule:
 2. do not broaden the boot read-set or domain protocol set unless that protocol's trigger matrix authorizes it.
 3. if the active task context is documentation-shaped, activate `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md` immediately without waiting for a second manual selection step.
 4. detailed orchestration-first coordination law is owned by `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`; this entry contract summarizes trigger gates and boot routing only.
+5. when the host project exposes a project-owned top-level orchestrator operating protocol through the project docs map or overlay, apply it as a project-layer narrowing of upper-lane routing and decomposition posture without weakening framework invariants.
 
 ## Request Intent Gate
 
@@ -185,6 +186,8 @@ User-facing reporting rule:
 3. Do not add explicit user-facing worker/process sections by default; worker participation remains an internal execution mechanism.
 4. Quote or summarize worker findings only as supporting evidence when necessary.
 5. Surface raw worker output only when the user explicitly requests it or when unresolved conflict remains decision-relevant.
+6. Use the mandatory reporting block from `AGENTS.md` for user-facing reports.
+7. During development orchestration, refresh those counters from the current bounded task/orchestration state before reporting progress or closure.
 
 ## Log-Read Budget
 
@@ -253,7 +256,11 @@ Use when the request has moderate cross-protocol impact or uncertainty after Lea
 2. Read `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md` only if tracked execution is required.
 3. Read `vida/config/instructions/command-instructions/routing.use-case-packs-protocol.md` only if a pack path is required.
 4. Read `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md` only if implementation flow is in scope.
-5. Do not expand beyond route-triggered protocol surfaces; use `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md` when in doubt.
+5. Read `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md` only if node-level resumability, route control limits, or checkpoint-visible continuation is active.
+6. Read `vida/config/instructions/runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md` only if restart, resumability, checkpoint, replay, or duplicate-delivery safety is active.
+7. Read `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md` only if separated authorship, verifier-independence, or closure-proof semantics are active.
+8. Read `vida/config/instructions/runtime-instructions/work.verification-merge-protocol.md` only if review-pool or merged verification admissibility is active.
+9. Do not expand beyond route-triggered protocol surfaces; use `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md` when in doubt.
 
 ### Full Boot
 
@@ -307,10 +314,10 @@ For non-trivial orchestrator reports, default order:
 artifact_path: config/instructions/agent-definitions/entry.orchestrator.entry
 artifact_type: agent_definition
 artifact_version: '1'
-artifact_revision: '2026-03-12'
+artifact_revision: '2026-03-13'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/agent-definitions/entry.orchestrator-entry.md
 created_at: '2026-03-07T09:54:22+02:00'
-updated_at: '2026-03-12T11:14:53+02:00'
+updated_at: '2026-03-13T18:43:00+02:00'
 changelog_ref: entry.orchestrator-entry.changelog.jsonl

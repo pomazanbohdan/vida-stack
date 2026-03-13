@@ -36,6 +36,9 @@ Minimum fields:
 3. `route_task_class`
 4. `updated_at`
 5. `nodes`
+6. `control_limits`
+7. `control_counters`
+8. `resume_hint`
 
 Required nodes:
 
@@ -46,6 +49,30 @@ Required nodes:
 5. `verifier`
 6. `approval`
 7. `synthesis`
+
+Minimum `control_limits` fields when declared by route or overlay:
+
+1. `max_rounds`
+2. `max_stalls`
+3. `max_resets`
+4. `max_budget_units`
+5. `max_total_runtime_seconds`
+
+Minimum `control_counters` fields:
+
+1. `round_count`
+2. `stall_count`
+3. `reset_count`
+4. `budget_units_consumed`
+5. `runtime_seconds_consumed`
+
+`resume_hint` minimum fields:
+
+1. `next_node`
+2. `delivery_task_id`
+3. `execution_block_id`
+4. `verification_target`
+5. `reason`
 
 Allowed node statuses:
 
@@ -65,6 +92,9 @@ Allowed node statuses:
 4. Do not treat run-graph as a second task-lifecycle state engine; it records stage status inside one task, not queue readiness.
 5. Expose a compact `resume_hint` for boot/operator surfaces so compact recovery can point to the next resumable node.
 6. Operator surfaces may flag suspicious or non-canonical run-graph artifacts when they pollute resumability summaries; the ledger remains canonical, but operator views should not silently treat test pollution as production state.
+7. Refresh `control_counters` at each writer, coach, verifier, and reset boundary.
+8. When a no-progress or budget/stall rule fires, persist that event in the run-graph before recovery or escalation routing.
+9. If a review pool is active, `verification_target` should identify the current single-task verifier path or the declared `review_pool` checkpoint.
 
 ## Boundary Rule
 
@@ -88,6 +118,7 @@ Current minimum runtime integration:
 2. the active coach owner should persist `coach` node state.
 3. the active structured-conflict owner should persist `problem_party` completion and the next `writer` readiness decision when the result unblocks execution.
 4. `verification`, `approval`, and `synthesis` state should also be reflected in the same ledger.
+5. the active execution owner should persist control-limit binding and control-counter updates before and after every resumable writer pass.
 
 ## Operational Proof And Closure
 
@@ -109,5 +140,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/core.run-graph-protocol.md
 created_at: '2026-03-08T02:15:22+02:00'
-updated_at: '2026-03-11T16:26:38+02:00'
+updated_at: '2026-03-13T07:14:58+02:00'
 changelog_ref: core.run-graph-protocol.changelog.jsonl

@@ -24,7 +24,7 @@ Fix boundary:
 
 ## Runtime Contract
 
-1. SSOT for task state: `br` + beads logs.
+1. SSOT for task state: `taskflow-v0 task` + TaskFlow execution logs.
 2. No old phase-command delegation (`/vida-bug-fix-*`).
 3. Root-cause-first only; no hotfix as final solution.
 4. For server/API issues, live validation is mandatory.

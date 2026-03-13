@@ -25,7 +25,7 @@ It does not own:
 
 ## Handoffs And Temp Artifacts
 
-1. TDC v3.1 handoff writes artifacts to file or `br` issue body, not chat summary.
+1. TDC v3.1 handoff writes artifacts to file or the DB-backed task record, not chat summary.
 2. Large command output over bounded human-read size should be redirected to `.vida/scratchpad/` and inspected with focused reads.
 3. Temporary artifacts belong only under `_temp/`.
 

@@ -16,6 +16,7 @@ Current state:
 2. current promoted research entrypoints:
    - `docs/product/research/instruction-packing-and-caching-survey.md`
    - `docs/product/research/agent-governance-and-policy-hardening-survey.md`
+   - `docs/product/research/brainwires-framework-integration-survey.md`
    - `docs/product/research/langgraph-runtime-patterns-survey.md`
    - `docs/product/research/execution-approval-and-interrupt-resume-survey.md`
    - `docs/product/research/runtime-framework-open-questions-and-external-patterns-survey.md`
@@ -37,5 +38,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/research/README.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-13T00:10:00+02:00'
+updated_at: '2026-03-13T08:12:43+02:00'
 changelog_ref: README.changelog.jsonl

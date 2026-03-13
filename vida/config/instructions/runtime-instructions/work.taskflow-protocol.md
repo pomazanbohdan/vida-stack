@@ -1,6 +1,6 @@
 # TaskFlow Protocol (Execution Layer)
 
-Purpose: decompose user requests into executable step-level work while keeping `br` as the single source of truth for task state.
+Purpose: decompose user requests into executable step-level work while keeping `taskflow-v0 task` as the single source of truth for task state.
 
 Output policy:
 
@@ -11,10 +11,10 @@ Output policy:
 ## 1) Layer Model
 
 1. `Intent Layer`: user request (goal, constraints, acceptance).
-2. `Work Layer`: `br` issue lifecycle (`open/in_progress/closed`).
+2. `Work Layer`: DB-backed `taskflow-v0 task` lifecycle (`open/in_progress/closed`).
 3. `Execution Layer`: TaskFlow steps/tracks for actual implementation.
 
-Rule: `br` tracks "what"; TaskFlow tracks "how".
+Rule: the DB-backed task surface tracks "what"; TaskFlow tracks "how".
 
 Task-state truth rule:
 
@@ -37,6 +37,11 @@ Hard rule:
 13. If overlay enables spec-ready auto development, TaskFlow may enter the next implementation-bearing task without a new user prompt only through the lawful execution-entry gates.
 14. If overlay requires validation before implementation, TaskFlow must treat the pre-implementation report as a gating artifact rather than an informational progress report.
 15. If overlay enables resume-after-validation, accepted validation should return TaskFlow to autonomous continuation for the same lawful task chain.
+16. TaskFlow plan plus block evidence is the external working memory for active execution; chat memory alone is not a lawful execution ledger.
+17. Each active block must record a compact state delta (`what changed`, `what remains`, `next step`) before compact, handoff, or agent replacement.
+18. If two consecutive iterations produce no new artifact, evidence, or state delta, end the block as no-progress and re-plan or escalate before continuing.
+19. Re-reading the same broad file set without a narrower hypothesis counts as no progress.
+20. Parallel tracks may accumulate into review pools only at explicit merge checkpoints.
 
 ## 1.1) Diagnostic Integration Boundary
 
@@ -85,6 +90,27 @@ Choose `parallel` only if ALL are true:
 
 If at least one condition fails, use sequential chain (`next_step`) on `main` track.
 
+### 2.3 Anti-Loop And Context-Discipline Contract
+
+For long-horizon execution, TaskFlow must reduce context growth and repetitive loops:
+
+1. research or diagnosis blocks must follow progressive reads:
+   - locate candidate files,
+   - skim structure,
+   - deep-read only the selected owner subset,
+   - record the narrowed working set in block evidence.
+2. each block must finish with either:
+   - a verified artifact change,
+   - a bounded evidence result,
+   - or an explicit blocker/no-progress receipt.
+3. repeated plan narration without a new state delta is protocol-invalid.
+4. after a no-progress receipt, the next attempt must change one of:
+   - task granularity,
+   - route/lane selection,
+   - evidence source,
+   - validation strategy.
+5. if none of those can change lawfully, escalate instead of continuing.
+
 ## 3) Parallel Tracks Mode (Workers)
 
 Use this mode when 2+ independent chunks can run concurrently.
@@ -97,6 +123,7 @@ Track schema:
 4. `depends_on`: upstream step IDs
 5. `verify`: command proving completion
 6. `merge_ready`: `yes/no`
+7. `review_pool` when applicable
 
 Constraints:
 
@@ -104,19 +131,25 @@ Constraints:
 2. If overlap is required, serialize by dependency order.
 3. Merge only after per-track verify passes.
 4. Default track is `main`; default owner is `orchestrator`.
+5. A review pool may group only merge-ready sibling tasks with the same milestone or merge checkpoint.
+6. Review pools must not hide per-task blockers or skip per-task verification evidence.
 
 ## 4) TaskFlow Step Definition
 
 Required fields:
 
 1. `step_id` (`S01`, `S02`, ...)
-2. `task_id` (`br` issue id)
+2. `task_id` (DB-backed task id)
 3. `goal`
 4. `status` (`todo|doing|done|blocked`)
 5. `acceptance_check`
 6. `evidence_ref`
 7. `next_step`
 8. `risk`
+9. `scope_in`
+10. `scope_out`
+11. `definition_of_done`
+12. `stop_rule`
 
 Optional parallel fields:
 
@@ -124,6 +157,7 @@ Optional parallel fields:
 2. `owner`
 3. `depends_on`
 4. `merge_ready`
+5. `review_pool`
 
 ## 5) Operational Commands
 
@@ -201,7 +235,7 @@ bash framework-wave-start.sh <task_id> <pack_id> "<goal>" [constraints]
 
 Use only as a migration-only helper for framework-owned legacy wrapper flow. It preserves:
 
-1. `br` as SSOT,
+1. `taskflow-v0 task` as SSOT,
 2. pack logging,
 3. TaskFlow scaffolding/validation,
 4. boot-profile validation.
@@ -243,7 +277,7 @@ UI sync rule:
 9. Response visibility rule: when reporting task/todo state to user, include IDs and concise descriptions (not IDs only).
 10. `quality-health-check` cadence: run on checkpoint boundaries, pre-handoff, and finish (not after every micro-step).
 11. Runtime scripts should be quiet-by-default for progress chatter; keep human-facing status output in `taskflow-tool current|list` and `quality-health-check`.
-12. Use `python3 task-state-reconcile.py status <task_id>` when a task looks done-but-open, stale-in-progress, or otherwise drifted between `br` and TaskFlow.
+12. Use `taskflow-v0 reconcile status <task_id>` when a task looks done-but-open, stale-in-progress, or otherwise drifted between the task store and TaskFlow.
 
 Background worker policy (token/cost aware):
 
@@ -282,6 +316,7 @@ Silent diagnosis execution persistence:
 6. Plan integrity gate: run `bash todo-plan-validate.sh <task_id>` after `block-plan` batch and before execution start. Use `--diff-aware` when the worktree already contains target-scope changes; coverage is evaluated against the whole task plan so already-completed blocks still count.
 6.1. For framework-only tasks, compact evidence is valid when work is confined to migration-only helper surfaces and the block records concrete actions plus canonical artifacts or task IDs. Runtime verification may downgrade missing artifact warnings to informational severity for these tasks in non-strict mode.
 6.2. Silent diagnosis gate: when active, task closure is invalid if a detected framework gap was only discussed in chat and not captured in canonical execution evidence, context capsule, or framework task state.
+6.3. No-progress gate: after a block records two consecutive no-progress iterations, the next substantive step must be re-plan, redirect, or escalation rather than another same-shape attempt.
 
 ## 7) Anti-Patterns
 
@@ -293,17 +328,17 @@ Silent diagnosis execution persistence:
 
 When a task must pause because another task is now the active dependency:
 
-1. Add dependency: `br dep add <blocked_task_id> <active_task_id>`.
-2. Set blocked status: `br update <blocked_task_id> --status blocked`.
+1. Add dependency through the DB-backed task runtime surface.
+2. Set blocked status: `taskflow-v0 task update <blocked_task_id> --status blocked`.
 3. Record reason in execution log (`checkpoint` or `block-end` risk/next_step fields).
 4. Continue work only on the active dependency task.
 
 When dependency is complete and task becomes runnable again:
 
-1. Reopen status: `br update <blocked_task_id> --status open`.
-2. Verify dependency state with `br show <blocked_task_id> --json`.
-3. Pick next work via `br ready` (unblocked-first rule).
-4. Start resumed task explicitly: `br update <id> --status in_progress`.
+1. Reopen status: `taskflow-v0 task update <blocked_task_id> --status open`.
+2. Verify dependency state with `taskflow-v0 task show <blocked_task_id> --json`.
+3. Pick next work via `taskflow-v0 task ready` (unblocked-first rule).
+4. Start resumed task explicitly: `taskflow-v0 task update <id> --status in_progress`.
 
 ## 9) Execution Mode (Decision vs Autonomous)
 
@@ -389,5 +424,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/work.taskflow-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-12T11:42:16+02:00'
+updated_at: '2026-03-13T06:52:32+02:00'
 changelog_ref: work.taskflow-protocol.changelog.jsonl

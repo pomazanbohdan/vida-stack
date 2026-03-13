@@ -31,7 +31,7 @@ Handoff boundary:
 
 ## Runtime Invariants
 
-1. Task state SSOT: `br` + beads logs only.
+1. Task state SSOT: `taskflow-v0 task` + TaskFlow execution logs only.
 2. No legacy `state/**` and no separate sync-command behavior.
 3. No hidden side-effects outside TaskFlow workflow.
 4. Do not finalize spec without explicit reassessment confirmation.
@@ -71,7 +71,7 @@ Run full SCP contract flow:
 9. `Confidence`: calculate weighted SCP confidence.
 10. `SCP-7 Reassessment`: consolidated confirmation with user.
 11. `SCP-8 Ready Verdict`: ready/conditional/not-ready.
-12. Persist spec and update `br` docs anchor when needed.
+12. Persist spec and update the DB-backed task/docs anchor when needed.
 
 ### Internal Category Decomposition (Built-in)
 

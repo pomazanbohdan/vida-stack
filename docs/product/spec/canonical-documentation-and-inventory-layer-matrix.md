@@ -16,6 +16,7 @@ Status markers:
 |---|---|---|---|---|---|---|---|---|
 | Layer name | Canonical Schema | Canonical Inventory | Canonical Validation | Canonical Mutation | Canonical Relations | Canonical Operator | Canonical Runtime Readiness | Canonical Runtime Consumption |
 | Status | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚪ |
+| Three-level protocol spine | `framework canon` | `framework canon` + `project documentation layer` | `framework canon` + `project documentation layer` | `bootstrap/operator shell` | `bootstrap/operator shell` | `bootstrap/operator shell` | `runtime-family execution readiness seam` | `runtime-family execution` + `TaskFlow` consumption seam |
 | Core value | one canonical vocabulary for identity, status, compatibility, bundle/projection terms, and metadata | one authoritative inventory and canonical registry path for active canon | fail-closed consistency checks and strict quality gates with explicit bootstrap carrier rules | lawful metadata, changelog, link, and file mutation without manual drift | dependency and impact visibility over canonical artifacts | low-call operational views for state, history, and issues | explicit readiness verdict for runtime consumption | VIDA runtime directly consumes canonical inventory and readiness |
 | Required implementation | schema vocabularies, metadata contract, changelog event contract | registry model, canonical registry artifact, coverage rules | check, doctor, strict profiles, consistency gates | touch, finalize, init, move, rename, link migration | deps, deps-map, artifact-impact, task-impact | overview, compact operator surfaces, low-call workflows | readiness checks for tuples, projections, bundles, compatibility | runtime consumption of registry, readiness, and canonical bundles |
 | Builds on | none | Layer 1 | Layers 1-2 | Layers 1-3 | Layers 2-3 | Layers 2-5 | Layers 1-6 | Layers 1-7 |
@@ -28,7 +29,8 @@ Matrix reading rule:
 1. read the matrix left-to-right to see the capability progression,
 2. read any one column top-to-bottom to understand one layer completely,
 3. use the `Detail section` row to jump into the full normative definition below,
-4. treat the lower sections as the expanded law for the abbreviated matrix cells above.
+4. treat the lower sections as the expanded law for the abbreviated matrix cells above,
+5. a documentation layer is lawful only when it forms one coherent capability bundle with its own operator surface, proof surface, and fail-closed boundary.
 
 ## 0.1 Current Documentation Compliance Snapshot
 
@@ -50,7 +52,51 @@ Compliance reading rule:
 2. a layer may be well-documented even if implementation is still partial,
 3. Layer 8 remains documentation-partial because its most detailed law still lives primarily in target-architecture intent rather than in a fully promoted runtime-consumption product-law form.
 
-## 0.1 Current Documentation Alignment Snapshot
+## 0.2 Three-Level Documentation Protocol Spine
+
+This matrix projects documentation capability onto the same upper-level kernel packet that builds VIDA protocol law.
+
+Documentation-side projection:
+
+1. `framework canon`
+   - owns schema, inventory, validation law, and the owner-layer rules that prevent project/process drift
+2. `bootstrap/operator shell`
+   - owns lawful mutation, relation views, low-call operator workflows, and environment-facing documentation handling
+3. `runtime-family execution`
+   - owns readiness and final runtime-consumption semantics where `DocFlow` evidence becomes executable input rather than descriptive markdown only
+
+Primary owner references for this projection:
+
+1. `vida/config/instructions/instruction-contracts/meta.core-protocol-standard-protocol.md`
+2. `docs/product/spec/framework-project-documentation-layer-model.md`
+3. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
+4. `docs/product/spec/functional-matrix-protocol.md`
+5. `docs/process/framework-source-lineage-index.md`
+6. `docs/product/spec/docflow-v1-runtime-modernization-plan.md`
+
+Upper-layer derivation rule:
+
+1. `meta.core-protocol-standard-protocol.md` constrains what foundational kernel law may absorb,
+2. `framework-project-documentation-layer-model.md` fixes the owner-layer placement for documentation-bearing law,
+3. `compiled-autonomous-delivery-runtime-architecture.md` defines `DocFlow` as the bounded sibling runtime family for documentation/readiness/proof,
+4. this matrix is the documentation capability projection of that packet and must remain aligned with `TaskFlow` seam closure.
+
+## 0.3 Documentation Operational Control Matrix
+
+This control matrix strengthens the documentation layer map with owner, proof, and migration surfaces required for active `DocFlow` modernization.
+
+| Layer | Three-level owner | Owner docs | Owner code surface | Operator and proof surface | Migration posture | Fail-closed failure mode | Main current gap |
+|---|---|---|---|---|---|---|---|
+| Layer 1 | `framework canon` | `project-documentation-law.md`; `instruction-artifact-model.md`; `framework-project-documentation-layer-model.md` | `codex-v0/docsys_schema.yaml`; `codex-v0/codex.py`; active `docflow-*` Rust schema track | `codex.py check`; canonical footer and tuple validation | `bridge_backed` | artifact identity and metadata law drift, so later documentation layers lose canonical footing | Rust-native DocFlow schema ownership is still converging with `codex-v0` |
+| Layer 2 | `framework canon` + `project documentation layer` | `canonical-inventory-law.md`; `project-documentation-law.md`; `current-spec-map.md` | `codex-v0/codex.py`; canonical registry artifacts; active `docflow-*` inventory work | inventory views; `overview`; canonical registry checks | `bridge_backed` | canonical inventory becomes incomplete or ambiguous and readiness cannot trust artifact presence | native inventory/query ownership remains bridge-backed by `codex-v0` |
+| Layer 3 | `framework canon` + `project documentation layer` | this matrix; `project-documentation-law.md`; `functional-matrix-protocol.md` | `codex-v0/codex.py check`; `doctor`; strict validation profiles; future `docflow-*` validators | `check`; `doctor`; `proofcheck --layer 7` or active-canon proofs | `bridge_backed` | canonical docs cannot prove consistency and all higher layers must fail closed | Rust-native validation parity is not yet the sole proof path |
+| Layer 4 | `bootstrap/operator shell` | this matrix; `project-documentation-law.md`; `documentation-operation-protocol.md` | `codex-v0/codex.py finalize-edit`; mutation helpers; future `docflow-cli` mutation commands | lawful finalize path; changelog/metadata synchronization proofs | `bridge_backed` | metadata or sidecar law drifts through ad hoc edits and canonical mutation must stop | native `DocFlow` mutation shell is still under active implementation |
+| Layer 5 | `bootstrap/operator shell` | `canonical-relation-law.md`; `project-documentation-law.md`; this matrix | `codex-v0` relation commands; future `docflow-*` relation/index surfaces | `deps`; `deps-map`; `artifact-impact`; `task-impact` | `bridge_backed` | dependency visibility disappears and change radius cannot be audited safely | native relation graph ownership still depends on bridge tooling |
+| Layer 6 | `bootstrap/operator shell` | `documentation-tooling-map.md`; `project-root-map.md`; this matrix | `codex-v0/codex.py`; current project maps; future `docflow-cli` operator shell | `overview`; low-call operator path; bounded summary/status commands | `bridge_backed` | operator cannot inspect canonical state with low-call certainty and safe documentation work slows or stops | `DocFlow` Rust operator shell is not yet the primary operational entrypoint |
+| Layer 7 | `runtime-family execution readiness seam` | `canonical-runtime-readiness-law.md`; `compiled-autonomous-delivery-runtime-architecture.md`; `docflow-v1-runtime-modernization-plan.md` | `codex-v0` readiness surfaces; readiness artifacts under `vida/config/**`; active `docflow-*` readiness track | `readiness-check`; `readiness-write`; grouped `proofcheck` | `bridge_backed` | readiness cannot produce explicit blocker verdicts and runtime consumption must remain blocked | canonical readiness law is green, but native `DocFlow` readiness closure is still in migration |
+| Layer 8 | `runtime-family execution` + `TaskFlow` consumption seam | this matrix; `compiled-autonomous-delivery-runtime-architecture.md`; `docflow-v1-runtime-modernization-plan.md`; `taskflow-v1-runtime-modernization-plan.md` | target `docflow-*` and `taskflow-*` seam in Rust runtime families; current `codex-v0` is evidence-only, not final owner | final runtime-consumption proof is future-bound; current bounded evidence remains readiness plus explicit `TaskFlow` activation | `target_only` | runtime consumes documentation canon without lawful `DocFlow` closure and trust must fail closed | active law for direct runtime consumption still needs native seam closure between `TaskFlow` Layer 9 and `DocFlow` Layer 8 |
+
+## 0.4 Current Documentation Alignment Snapshot
 
 This snapshot evaluates the active documentation and instruction surfaces against the matrix above.
 
@@ -218,7 +264,9 @@ Each layer must satisfy all of the following:
 2. it must be completable using only lower layers that are already closed,
 3. it must not depend on future-layer behavior,
 4. it may deepen or enrich a lower layer, but it must not redefine the lower layer’s responsibility,
-5. it must expose a clear proof of completion.
+5. it must expose a clear proof of completion,
+6. it must be inspectable through its own bounded operator surface,
+7. it must fail closed when its owned prerequisites or proofs are missing.
 
 Documentation-first development rule:
 
@@ -729,5 +777,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md
 created_at: '2026-03-10T03:25:00+02:00'
-updated_at: '2026-03-12T07:58:34+02:00'
+updated_at: '2026-03-13T09:09:25+02:00'
 changelog_ref: canonical-documentation-and-inventory-layer-matrix.changelog.jsonl

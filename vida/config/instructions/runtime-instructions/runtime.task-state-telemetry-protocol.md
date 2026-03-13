@@ -9,20 +9,20 @@ Transition note:
 
 ## 1) SSOT Rule
 
-`br` is the only source of truth for task lifecycle state.
+`taskflow-v0 task` is the only source of truth for task lifecycle state.
 
 Forbidden:
 
 1. Editing markdown checkboxes (`[ ]`, `[x]`) as task state.
 2. Using archived `tasks.md` as readiness source.
-3. Tracking parallel task states outside `br`.
+3. Tracking parallel task states outside the DB-backed TaskFlow task surface.
 
 Required:
 
-1. Find work via `br ready`.
-2. Start with `br update <id> --status in_progress`.
-3. Close with `br close <id> --reason "..."`.
-4. Flush at checkpoints/session end: `br sync --flush-only`.
+1. Find work via `taskflow-v0 task ready`.
+2. Start with `taskflow-v0 task update <id> --status in_progress`.
+3. Close with `taskflow-v0 task close <id> --reason "..."`.
+4. Emit JSONL only as bounded export under `.vida/exports/` when an external snapshot is explicitly required.
 5. Optional background backup worker must use sparse cadence (`>=120s`, default 600s):
 
 ```bash
@@ -40,35 +40,35 @@ Autostart note:
 
 ## 2) Two-Layer Model
 
-1. Task lifecycle/state: `br` in JSONL-first mode (`open`, `in_progress`, `closed`, `deferred`, deps).
+1. Task lifecycle/state: `taskflow-v0 task` over `.vida/state/taskflow-state.db` (`open`, `in_progress`, `closed`, `deferred`, deps).
 2. Execution trace/visibility: TaskFlow blocks in beads logs (`block-plan/start/end/reflect/verify`).
 
 Rule: TaskFlow is not a second task-state engine. It is execution telemetry only.
 
 Reconciliation rule:
 
-1. When `br` lifecycle state and TaskFlow execution state diverge, use `vida/config/instructions/runtime-instructions/work.task-state-reconciliation-protocol.md` to classify the task before mutating lifecycle state.
+1. When DB-backed lifecycle state and TaskFlow execution state diverge, use `vida/config/instructions/runtime-instructions/work.task-state-reconciliation-protocol.md` to classify the task before mutating lifecycle state.
 
 Wrapper rule:
 
 1. Migration-only helper wrappers operate in JSONL-first mode while `beads_mutate` owns task writes.
-2. Direct `br`/SQLite usage is diagnostic-only until the mutator path is fully retired.
-3. All mutating task-state writes must pass through one queue-backed single-writer path; concurrent callers may enqueue but must not mutate task state outside that serialized path.
+2. Direct raw DB usage is diagnostic-only; lifecycle mutation stays on the task runtime surface.
+3. All mutating task-state writes must pass through one runtime-owned single-writer path.
 
 ## 3) Daily Core Commands
 
 ```bash
-br ready
-br update <id> --status in_progress
-br close <id> --reason "All ACs met"
-br sync --flush-only
+taskflow-v0 task ready
+taskflow-v0 task update <id> --status in_progress
+taskflow-v0 task close <id> --reason "All ACs met"
+taskflow-v0 task export-jsonl .vida/exports/tasks.snapshot.jsonl --json
 ```
 
 Mutation serialization rule:
 
-1. Read-only `br` commands may execute directly through the safe wrapper.
-2. Mutating `br` commands (`create|update|close|link|unlink|sync`) and JSONL mutator writes must run through the queue-backed writer path owned by `beads-runtime.sh`.
-3. If queue execution fails, stop with a blocker instead of retrying ad hoc from multiple lanes.
+1. Read-only task commands may execute directly through the runtime helper.
+2. Mutating task commands (`create|update|close`) must run through the runtime-owned task surface.
+3. If the runtime helper fails, stop with a blocker instead of retrying ad hoc from multiple lanes.
 
 Status snapshots:
 
@@ -101,6 +101,23 @@ Execution contract:
 5. Auto-start of next block is allowed only within the same track.
 6. If user changes focus mid-execution, use `redirect` instead of ad hoc partial logging so source block closure and next active block remain explicit in telemetry.
 7. Redirected source blocks are execution history, not pending backlog. Runtime TaskFlow views should surface them as `superseded`.
+8. When the active route is implementation-shaped, each `checkpoint`, `block-finish`, or equivalent resumable boundary must persist the continuation packet required by recovery law.
+
+Implementation continuation packet for telemetry/checkpoint surfaces:
+
+1. `task_id`
+2. `delivery_task_id`
+3. `execution_block_id`
+4. `owned_paths` or equivalent write boundary
+5. active node
+6. `review_pool` or explicit verification target when applicable
+7. `resume_hint`
+8. control summary:
+   - `round_count`
+   - `stall_count`
+   - `reset_count`
+   - `budget_units_consumed` when budgeted
+9. current blocker or next-step reason when the task remains open
 
 Auto-sync level:
 
@@ -157,11 +174,20 @@ Required capsule fields:
 5. `open_risks`
 6. `acceptance_slice`
 
+Required additional fields for implementation-shaped resumable work:
+
+1. `delivery_task_id`
+2. `execution_block_id`
+3. `review_pool` when active
+4. `resume_hint`
+5. `control_status`
+
 Operational hooks:
 
 1. Write capsule on `block-finish` and compact `pre`.
 2. Hydrate capsule on compact `post` before any task continuation.
 3. Emit telemetry events: `context_capsule_written`, `context_hydrated`, `context_hydration_failed`, `context_drift_checked`.
+4. For implementation-shaped work, treat missing continuation-packet fields as hydration failure, not as soft warning.
 
 ## 7) Quality Gates
 
@@ -187,7 +213,7 @@ Finish gate:
 
 1. Execution log: `.vida/logs/beads-execution.jsonl`.
 2. TaskFlow snapshot cache: `.vida/logs/taskflow-sync-<task_id>.json`.
-3. State source: `.beads/issues.jsonl`.
+3. State source: `.vida/state/taskflow-state.db`.
 
 ## 9) Optional Phase Gating
 
@@ -195,7 +221,7 @@ If phase gating is used, handle future work with `deferred` status and open by p
 
 Rule:
 
-1. This does not replace `br ready`.
+1. This does not replace `taskflow-v0 task ready`.
 2. This does not introduce any second state model.
 
 -----
@@ -207,5 +233,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-12T11:43:59+02:00'
+updated_at: '2026-03-13T07:44:24+02:00'
 changelog_ref: runtime.task-state-telemetry-protocol.changelog.jsonl

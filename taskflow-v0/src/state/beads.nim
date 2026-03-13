@@ -1,4 +1,4 @@
-## VIDA Beads Runtime — JSONL-based task state management.
+## VIDA Beads Runtime — JSONL snapshot and execution-log support.
 ##
 ## Replaces `beads-runtime.sh` (204 lines) + `beads-verify-runtime.py` (266 lines)
 ## + `beads-log.sh` + `beads-compact.sh` + `beads-workflow.sh`.
@@ -10,8 +10,8 @@ import ../core/[utils, config, toon]
 
 # ─────────────────────────── Paths ───────────────────────────
 
-proc beadsDir*(): string = vidaRoot() / ".beads"
-proc issuesJsonlPath*(): string = beadsDir() / "issues.jsonl"
+proc beadsDir*(): string = vidaRoot() / ".vida" / "state" / "taskflow-jsonl"
+proc issuesJsonlPath*(): string = beadsDir() / "tasks.snapshot.jsonl"
 proc backupDir*(): string = beadsDir() / "backups"
 proc modeFilePath*(): string = beadsDir() / "runtime-mode.json"
 proc beadsLogPath*(): string = vidaRoot() / ".vida" / "logs" / "beads-execution.jsonl"

@@ -2,13 +2,14 @@
 
 Purpose: define the versioned product path for Vida Stack from the current transitional runtime substrates to the future compiled autonomous delivery runtime, daemonized control plane, and extension ecosystem.
 
-This document stays above the detailed `Release 1` wave package and defines the versioned product path rather than the inner execution program.
+This document stays above the detailed `Release 1` program package and defines the versioned product path rather than the inner execution program.
 
 Rule:
 
 1. `README.md` explains the product narrative and current direction.
 2. This file defines the versioned scope and transition path.
 3. Runtime bootstrap truth remains in `AGENTS.md`, active instruction canon lives in `vida/config/instructions/*`, and active product-law direction lives in `docs/product/spec/**`.
+4. The bounded Release-1 working entrypoint is `docs/product/spec/release-1-program-map.md`, not this version ladder.
 
 Design assumptions:
 
@@ -282,5 +283,5 @@ schema_version: '1'
 status: canonical
 source_path: VERSION-PLAN.md
 created_at: '2026-03-10T00:30:00+02:00'
-updated_at: '2026-03-12T12:23:51+02:00'
+updated_at: '2026-03-13T08:47:25+02:00'
 changelog_ref: VERSION-PLAN.changelog.jsonl

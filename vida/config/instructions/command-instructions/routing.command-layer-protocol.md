@@ -124,10 +124,10 @@ Research-heavy closure rule:
 |---|---|---|---|---|---|
 | `/vida-research` | topic and research mode selection | source collection + WVP when needed | actionable candidate approval boundary | research/feature/decision artifact updates | handoff inputs for `/vida-spec` |
 | `/vida-spec` | spec intake and scope brief | discovery + API/WVP reality checks | design contract + technical contract + conflict resolution | spec persistence + confidence scoring | reassessment + ready verdict |
-| `/vida-form-task` | scope/task-pool intake and preflight | prerequisite and blocker validation | planning contract from question cards | `br` pool build + dependency graph | readiness verdict + launch gate |
+| `/vida-form-task` | scope/task-pool intake and preflight | prerequisite and blocker validation | planning contract from question cards | DB-backed task-pool build + dependency graph | readiness verdict + launch gate |
 | `/vida-implement` | launch intake + context hydration | queue intake + skills + preflight | change-impact decisions | implementation loop | verify/review + close/continue |
 | `/vida-bug-fix` | issue intake + impact normalization | reproduction + root-cause evidence | fix/regression plan | fix implementation | verification + sync + close verdict |
-| `/vida-status` | dashboard scope selection | read-only `br` data collection | queue classification and grouping | report rendering | read-only completion guarantee |
+| `/vida-status` | dashboard scope selection | read-only DB-backed task data collection | queue classification and grouping | report rendering | read-only completion guarantee |
 
 ## Delegation Contract
 

@@ -43,7 +43,7 @@ Each pack handoff must produce:
      - `vida/config/instructions/command-instructions/planning.form-task-protocol.md`
 3. `work-pool-pack -> dev-pack`
    - required outputs:
-     - ready queue in `br`
+     - ready queue in the DB-backed task runtime
      - explicit launch decision
      - dependency state
    - next owner:

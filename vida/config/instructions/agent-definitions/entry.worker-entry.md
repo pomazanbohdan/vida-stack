@@ -60,7 +60,8 @@ Workers may read only the local context needed for the assigned slice:
 1. scoped files/directories,
 2. explicit verification commands,
 3. project preflight doc when the packet requires command execution,
-4. packet-linked local references that are necessary to finish the task.
+4. packet-linked local references that are necessary to finish the task,
+5. `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md` only when the worker packet is implementation-shaped and explicitly links execution-law requirements.
 
 Log-read budget:
 1. prefer exact-key lookup against a specific file,
@@ -124,5 +125,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/agent-definitions/entry.worker-entry.md
 created_at: '2026-03-07T00:25:15+02:00'
-updated_at: '2026-03-11T12:33:27+02:00'
+updated_at: '2026-03-13T07:44:24+02:00'
 changelog_ref: entry.worker-entry.changelog.jsonl

@@ -53,7 +53,7 @@ Rule:
 
 ## Mandatory Gate
 
-Before `br close` of an active task on transitioned slices:
+Before `taskflow-v0 task close` of an active task on transitioned slices:
 
 1. run the relevant verification set defined by the transitioned runtime surfaces,
 2. require the bounded health-check to pass,

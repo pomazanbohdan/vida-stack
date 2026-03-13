@@ -77,6 +77,36 @@ The protocol has been admitted into the machine-readable runtime bundle.
 
 The runtime may now use the promoted protocol directly during execution.
 
+### 4.7 Canonical Release-1 Promotion Path
+
+Release 1 fixes the promotion path as one ordered admission sequence.
+
+Ordered rule:
+
+1. `registered -> mapped -> validated -> bound -> compiled -> executable`
+2. no stage may be skipped,
+3. failing one stage leaves the protocol at the highest previously successful visible state,
+4. visibility in a map or registry is never enough to make the protocol executable.
+
+Stage-transition rule:
+
+1. `registered -> mapped`
+   - requires a canonical owner/path and project discovery evidence
+2. `mapped -> validated`
+   - requires lawful project reference, extension-boundary compliance, and fail-closed validation
+3. `validated -> bound`
+   - requires at least one explicit runtime use point such as a lane, flow, gate, init path, or output class
+4. `bound -> compiled`
+   - requires admission into the machine-readable bundle/compiler inputs
+5. `compiled -> executable`
+   - requires the compiled bundle to become the active runtime posture
+
+Demotion rule:
+
+1. an executable project protocol that is being replaced or withdrawn must leave executable posture before its replacement may promote,
+2. demotion must not silently keep stale bundle truth active,
+3. the runtime must surface whether the protocol is now merely known, still bound, or no longer compiled.
+
 ## 5. Promotion Requirements
 
 A project protocol may enter compiled execution only when all required inputs exist:
