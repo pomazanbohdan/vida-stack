@@ -62,6 +62,7 @@ Source-mode bridge rule:
 
 1. until all runtime init commands are implemented everywhere, source-mode bootstrap may still continue through the current canonical map and entry-contract read path,
 2. but the target runtime contract remains the command split above.
+3. local Rust launcher now implements `vida orchestrator-init` and `vida agent-init`; `project-activator` and some worker-side source-mode flows may still use bounded fallback routing until the remaining activation path is fully runtime-native.
 
 ## 4. Orchestrator Initialization Contract
 

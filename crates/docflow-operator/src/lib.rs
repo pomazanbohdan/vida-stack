@@ -19,6 +19,47 @@ pub fn render_relation_summary(edges: &[RelationEdge]) -> String {
     format!("relations\n  total_edges: {}", edges.len())
 }
 
+pub fn render_artifact_impact(
+    artifact: &str,
+    source: &str,
+    impacts: &[(&str, &str)],
+) -> String {
+    let mut lines = vec![
+        "artifact-impact".to_string(),
+        format!("  artifact: {artifact}"),
+        format!("  source: {source}"),
+        format!("  impacts: {}", impacts.len()),
+    ];
+    for (path, reasons) in impacts {
+        lines.push(format!("  impact: {path} [{reasons}]"));
+    }
+    lines.join("\n")
+}
+
+pub fn render_task_impact(
+    task_id: &str,
+    root: &str,
+    touched: &[&str],
+    impacts: &[(&str, &str, &str)],
+) -> String {
+    let mut lines = vec![
+        "task-impact".to_string(),
+        format!("  task_id: {task_id}"),
+        format!("  root: {root}"),
+        format!("  touched: {}", touched.len()),
+        format!("  indirect_impacts: {}", impacts.len()),
+    ];
+    for path in touched {
+        lines.push(format!("  touched_path: {path}"));
+    }
+    for (source_artifact, path, reasons) in impacts {
+        lines.push(format!(
+            "  indirect_impact: {path} <= {source_artifact} [{reasons}]"
+        ));
+    }
+    lines.join("\n")
+}
+
 pub fn render_layer_status(
     layer: usize,
     current: &[(&str, &str)],
@@ -78,7 +119,10 @@ fn verdict_label(verdict: ReadinessVerdict) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_layer_status, render_overview, render_relation_summary, render_summary};
+    use super::{
+        render_artifact_impact, render_layer_status, render_overview, render_relation_summary,
+        render_summary, render_task_impact,
+    };
     use docflow_contracts::ReadinessRow;
     use docflow_core::{ArtifactPath, CheckedAt, ReadinessVerdict};
     use docflow_relations::RelationEdge;
@@ -104,6 +148,37 @@ mod tests {
             relation_type: "artifact_identity".into(),
         }]);
         assert_eq!(rendered, "relations\n  total_edges: 1");
+    }
+
+    #[test]
+    fn artifact_impact_renders_compact_operator_surface() {
+        let rendered = render_artifact_impact(
+            "process/a",
+            "artifact",
+            &[("docs/process/b.md", "footer_ref,markdown_link")],
+        );
+        assert!(rendered.contains("artifact-impact"));
+        assert!(rendered.contains("artifact: process/a"));
+        assert!(rendered.contains("impacts: 1"));
+        assert!(rendered.contains("impact: docs/process/b.md [footer_ref,markdown_link]"));
+    }
+
+    #[test]
+    fn task_impact_renders_compact_operator_surface() {
+        let rendered = render_task_impact(
+            "vida-stack-r1-b14",
+            "/tmp/root",
+            &["docs/process/a.md"],
+            &[("process/a", "docs/process/b.md", "footer_ref")],
+        );
+        assert!(rendered.contains("task-impact"));
+        assert!(rendered.contains("task_id: vida-stack-r1-b14"));
+        assert!(rendered.contains("touched: 1"));
+        assert!(rendered.contains("indirect_impacts: 1"));
+        assert!(rendered.contains("touched_path: docs/process/a.md"));
+        assert!(rendered.contains(
+            "indirect_impact: docs/process/b.md <= process/a [footer_ref]"
+        ));
     }
 
     #[test]

@@ -8,6 +8,7 @@ Purpose: define the canonical final-layer runtime consumption loop where `taskfl
 2. Direct runtime consumption must start from a runtime-owned compiled bundle, not ad hoc file inference.
 3. The final layer must activate the bounded `DocFlow` branch explicitly.
 4. The resulting final-layer payload must be persisted as a runtime-owned snapshot.
+5. The compiled runtime bundle may carry compact startup/init projections so direct runtime consumption can reuse them without re-reading the full owner markdown stack.
 
 ## Canonical Runtime Surfaces
 

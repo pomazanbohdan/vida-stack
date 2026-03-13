@@ -3,10 +3,37 @@ use std::path::{Path, PathBuf};
 use time::format_description::well_known::Rfc3339;
 
 use crate::{
-    DoctorLauncherSummary, TASKFLOW_PROTOCOL_BINDING_AUTHORITY, TaskflowConsumeBundleCheck,
-    TaskflowConsumeBundlePayload, StateStore, doctor_launcher_summary_for_root,
-    protocol_binding_compiled_payload_import_evidence, read_or_sync_launcher_activation_snapshot,
+    doctor_launcher_summary_for_root, protocol_binding_compiled_payload_import_evidence,
+    read_or_sync_launcher_activation_snapshot, DoctorLauncherSummary, StateStore,
+    TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload, TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
 };
+
+const PROJECT_STARTUP_PROTOCOL_SURFACES: [(&str, &str, &str, &str); 4] = [
+    (
+        "project_orchestrator_startup_bundle",
+        "docs/process/project-orchestrator-startup-bundle.md",
+        "always_on_core",
+        "orchestrator-init",
+    ),
+    (
+        "project_packet_and_lane_runtime_capsule",
+        "docs/process/project-packet-and-lane-runtime-capsule.md",
+        "lane_bundle",
+        "orchestrator-init",
+    ),
+    (
+        "project_start_readiness_runtime_capsule",
+        "docs/process/project-start-readiness-runtime-capsule.md",
+        "lane_bundle",
+        "orchestrator-init",
+    ),
+    (
+        "project_packet_rendering_runtime_capsule",
+        "docs/process/project-packet-rendering-runtime-capsule.md",
+        "lane_bundle",
+        "orchestrator-init",
+    ),
+];
 
 pub(crate) async fn build_taskflow_consume_bundle_payload(
     store: &StateStore,
@@ -105,6 +132,14 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         "receipt_id": effective_instruction_bundle.receipt_id,
         "artifact_count": effective_instruction_bundle.projected_artifacts.len(),
     });
+    let project_protocol_projections = build_project_protocol_projections(vida_root);
+    let mut activation_bundle = activation_snapshot.compiled_bundle.clone();
+    if let serde_json::Value::Object(bundle) = &mut activation_bundle {
+        bundle.insert(
+            "project_protocol_projections".to_string(),
+            project_protocol_projections.clone(),
+        );
+    }
     let metadata = serde_json::json!({
         "bundle_id": format!(
             "taskflow-runtime-bundle-{}",
@@ -126,17 +161,52 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             .as_str()
             .unwrap_or("blocked"),
     });
+    let startup_bundle_revision = project_protocol_projections["startup_bundle"]
+        .get("artifact_revision")
+        .cloned()
+        .unwrap_or(serde_json::Value::String(String::new()));
     let cache_delivery_contract = serde_json::json!({
         "always_on_core": control_core["mandatory_chain_order"],
+        "project_startup_bundle": ["activation_bundle.project_protocol_projections.startup_bundle"],
+        "project_runtime_capsules": ["activation_bundle.project_protocol_projections.startup_capsules"],
         "lane_bundle": ["activation_bundle"],
         "triggered_domain_bundle": ["protocol_binding_registry"],
         "task_specific_dynamic_context": ["task_store", "run_graph"],
+        "invalidation_tuple": {
+            "framework_revision": metadata["framework_revision"],
+            "project_activation_revision": activation_snapshot.source_config_digest,
+            "protocol_binding_revision": metadata["protocol_binding_revision"],
+            "startup_bundle_revision": startup_bundle_revision,
+        },
+        "retrieval_only_optional_context_boundary": [
+            "full_project_owner_protocols",
+            "non_promoted_project_docs",
+            "broad_repo_manual_scan"
+        ],
         "cache_key_inputs": {
             "source_version_tuple": control_core["source_version_tuple"],
             "project_activation_revision": activation_snapshot.source_config_digest,
             "protocol_binding_revision": metadata["protocol_binding_revision"],
+            "startup_bundle_revision": startup_bundle_revision,
         },
     });
+    let orchestrator_init_view = build_orchestrator_init_view(
+        vida_root,
+        &control_core,
+        &project_protocol_projections,
+        &protocol_binding_registry,
+        &cache_delivery_contract,
+        &boot_compatibility.classification,
+        &migration_preflight.migration_state,
+    );
+    let agent_init_view = build_agent_init_view(
+        vida_root,
+        &activation_bundle,
+        &project_protocol_projections,
+        &protocol_binding_registry,
+        &boot_compatibility.classification,
+        &migration_preflight.migration_state,
+    );
 
     Ok(TaskflowConsumeBundlePayload {
         artifact_name: "taskflow_runtime_bundle".to_string(),
@@ -150,9 +220,11 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         launcher_runtime_paths,
         metadata,
         control_core,
-        activation_bundle: activation_snapshot.compiled_bundle,
+        activation_bundle,
         protocol_binding_registry,
         cache_delivery_contract,
+        orchestrator_init_view,
+        agent_init_view,
         boot_compatibility: serde_json::json!({
             "classification": boot_compatibility.classification,
             "reasons": boot_compatibility.reasons,
@@ -269,6 +341,8 @@ pub(crate) fn taskflow_consume_bundle_check(
             "protocol_binding_registry",
         ),
         (&payload.cache_delivery_contract, "cache_delivery_contract"),
+        (&payload.orchestrator_init_view, "orchestrator_init_view"),
+        (&payload.agent_init_view, "agent_init_view"),
     ] {
         if !value.is_object() {
             blockers.push(format!("missing_{family}_family"));
@@ -344,6 +418,23 @@ pub(crate) fn taskflow_consume_bundle_check(
     {
         blockers.push("missing_cache_key_inputs".to_string());
     }
+    if payload
+        .cache_delivery_contract
+        .get("invalidation_tuple")
+        .and_then(serde_json::Value::as_object)
+        .is_none()
+    {
+        blockers.push("missing_invalidation_tuple".to_string());
+    }
+    if payload
+        .cache_delivery_contract
+        .get("retrieval_only_optional_context_boundary")
+        .and_then(serde_json::Value::as_array)
+        .map(|rows| rows.is_empty())
+        .unwrap_or(true)
+    {
+        blockers.push("missing_retrieval_only_optional_context_boundary".to_string());
+    }
 
     TaskflowConsumeBundleCheck {
         ok: blockers.is_empty(),
@@ -406,10 +497,24 @@ pub(crate) fn blocking_runtime_bundle(error: &str) -> TaskflowConsumeBundlePaylo
         }),
         cache_delivery_contract: serde_json::json!({
             "always_on_core": [],
+            "project_startup_bundle": [],
+            "project_runtime_capsules": [],
             "lane_bundle": [],
             "triggered_domain_bundle": [],
             "task_specific_dynamic_context": [],
+            "invalidation_tuple": {},
+            "retrieval_only_optional_context_boundary": [],
             "cache_key_inputs": {},
+            "error": error,
+        }),
+        orchestrator_init_view: serde_json::json!({
+            "surface": "vida orchestrator-init",
+            "status": "blocked",
+            "error": error,
+        }),
+        agent_init_view: serde_json::json!({
+            "surface": "vida agent-init",
+            "status": "blocked",
             "error": error,
         }),
         boot_compatibility: serde_json::json!({
@@ -447,4 +552,210 @@ fn expected_config_path(vida_root: &str) -> String {
         .join("vida.config.yaml")
         .display()
         .to_string()
+}
+
+fn build_project_protocol_projections(vida_root: &Path) -> serde_json::Value {
+    let protocols = PROJECT_STARTUP_PROTOCOL_SURFACES
+        .iter()
+        .map(
+            |(protocol_id, relative_path, cache_partition, runtime_use_point)| {
+                read_project_protocol_projection(
+                    vida_root,
+                    protocol_id,
+                    relative_path,
+                    cache_partition,
+                    runtime_use_point,
+                )
+            },
+        )
+        .collect::<Vec<_>>();
+    let startup_bundle = protocols
+        .iter()
+        .find(|row| row["protocol_id"] == "project_orchestrator_startup_bundle")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let startup_capsules = protocols
+        .iter()
+        .filter(|row| row["protocol_id"] != "project_orchestrator_startup_bundle")
+        .cloned()
+        .collect::<Vec<_>>();
+    let compiled = protocols
+        .iter()
+        .filter(|row| row["promotion_state"]["stage"] == "executable")
+        .cloned()
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "status": if compiled.len() == protocols.len() { "compiled" } else { "blocked" },
+        "known_project_protocols": protocols,
+        "compiled_executable_project_protocols": compiled,
+        "startup_bundle": startup_bundle,
+        "startup_capsules": startup_capsules,
+    })
+}
+
+fn read_project_protocol_projection(
+    vida_root: &Path,
+    protocol_id: &str,
+    relative_path: &str,
+    cache_partition: &str,
+    runtime_use_point: &str,
+) -> serde_json::Value {
+    let path = vida_root.join(relative_path);
+    let raw = std::fs::read_to_string(&path).ok();
+    let metadata = raw
+        .as_deref()
+        .map(parse_markdown_artifact_metadata)
+        .unwrap_or_default();
+    let validated = raw.is_some()
+        && metadata.contains_key("artifact_path")
+        && metadata.contains_key("artifact_revision")
+        && metadata
+            .get("status")
+            .map(|status| status == "canonical")
+            .unwrap_or(false);
+    let stage = if validated { "executable" } else { "validated" };
+    serde_json::json!({
+        "protocol_id": protocol_id,
+        "source_path": relative_path,
+        "artifact_path": metadata.get("artifact_path").cloned().unwrap_or_default(),
+        "artifact_type": metadata.get("artifact_type").cloned().unwrap_or_default(),
+        "artifact_revision": metadata.get("artifact_revision").cloned().unwrap_or_default(),
+        "status": metadata.get("status").cloned().unwrap_or_else(|| if raw.is_some() { "present".to_string() } else { "missing".to_string() }),
+        "cache_partition": cache_partition,
+        "runtime_use_point": runtime_use_point,
+        "promotion_state": {
+            "registered": raw.is_some(),
+            "mapped": raw.is_some(),
+            "validated": validated,
+            "bound": validated,
+            "compiled": validated,
+            "executable": validated,
+            "stage": stage,
+        }
+    })
+}
+
+fn parse_markdown_artifact_metadata(raw: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let Some((_, metadata)) = raw.split_once("\n-----\n") else {
+        return map;
+    };
+    for line in metadata.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        map.insert(
+            key.trim().to_string(),
+            value.trim().trim_matches('\'').to_string(),
+        );
+    }
+    map
+}
+
+fn build_orchestrator_init_view(
+    vida_root: &Path,
+    control_core: &serde_json::Value,
+    project_protocol_projections: &serde_json::Value,
+    protocol_binding_registry: &serde_json::Value,
+    cache_delivery_contract: &serde_json::Value,
+    boot_classification: &str,
+    migration_state: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "surface": "vida orchestrator-init",
+        "status": init_status(boot_classification, migration_state, protocol_binding_registry),
+        "local_runtime_surface": "vida orchestrator-init",
+        "boot_surface": "vida boot",
+        "framework_bootstrap": [
+            "AGENTS.md",
+            "AGENTS.sidecar.md",
+            "vida/root-map.md",
+            "vida/config/instructions/agent-definitions/entry.orchestrator-entry.md"
+        ],
+        "project_startup_bundle": project_protocol_projections["startup_bundle"],
+        "project_startup_capsules": project_protocol_projections["startup_capsules"],
+        "required_cache_partitions": {
+            "always_on_core": cache_delivery_contract["always_on_core"],
+            "project_startup_bundle": cache_delivery_contract["project_startup_bundle"],
+            "project_runtime_capsules": cache_delivery_contract["project_runtime_capsules"],
+            "task_specific_dynamic_context": cache_delivery_contract["task_specific_dynamic_context"],
+        },
+        "minimum_commands": [
+            "vida boot",
+            "vida orchestrator-init --json",
+            "vida taskflow task ready --json",
+            "vida taskflow consume bundle check --json",
+            "python3 codex-v0/codex.py protocol-coverage-check --profile active-canon"
+        ],
+        "project_root": vida_root.display().to_string(),
+        "root_artifact_id": control_core["root_artifact_id"],
+    })
+}
+
+fn build_agent_init_view(
+    vida_root: &Path,
+    activation_bundle: &serde_json::Value,
+    project_protocol_projections: &serde_json::Value,
+    protocol_binding_registry: &serde_json::Value,
+    boot_classification: &str,
+    migration_state: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "surface": "vida agent-init",
+        "status": init_status(boot_classification, migration_state, protocol_binding_registry),
+        "local_runtime_surface": "vida agent-init",
+        "source_mode_fallback_surface": "taskflow-v0 boot run lean <run-id> --non-dev",
+        "worker_entry_contract": "vida/config/instructions/agent-definitions/entry.worker-entry.md",
+        "worker_thinking_subset": "vida/config/instructions/instruction-contracts/role.worker-thinking.md",
+        "minimum_commands": [
+            "vida agent-init --role worker --json",
+            "vida taskflow task show <task-id> --json",
+            "vida taskflow consume bundle check --json",
+            "taskflow-v0 boot run lean <run-id> --non-dev"
+        ],
+        "allowed_non_orchestrator_roles": non_orchestrator_roles(activation_bundle),
+        "worker_lane_markers": [
+            "worker_lane_confirmed: true",
+            "lane_identity: worker"
+        ],
+        "project_runtime_capsules": project_protocol_projections["startup_capsules"],
+        "project_root": vida_root.display().to_string(),
+    })
+}
+
+fn init_status(
+    boot_classification: &str,
+    migration_state: &str,
+    protocol_binding_registry: &serde_json::Value,
+) -> &'static str {
+    if boot_classification == "compatible"
+        && migration_state == "no_migration_required"
+        && protocol_binding_registry["binding_status"] == "bound"
+    {
+        "ready"
+    } else {
+        "degraded"
+    }
+}
+
+fn non_orchestrator_roles(activation_bundle: &serde_json::Value) -> Vec<String> {
+    let mut roles = activation_bundle["enabled_framework_roles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|role| *role != "orchestrator")
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    roles.extend(
+        activation_bundle["project_roles"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row["role_id"].as_str())
+            .map(ToOwned::to_owned),
+    );
+    roles.sort();
+    roles.dedup();
+    roles
 }

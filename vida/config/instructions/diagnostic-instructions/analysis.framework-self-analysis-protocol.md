@@ -22,6 +22,7 @@ FSAP must treat mandatory framework behavior as executable law, not advisory pro
    - already have a runtime enforcement path,
    - be implemented with one during the same improvement cycle,
    - or be reported as an unresolved framework defect.
+6. Safe token-efficiency improvements are canonical only when they preserve owner-law authority and are materialized through compact capsules, startup bundles, compiled runtime bundle partitions, or cache delivery boundaries rather than by ad hoc prose deletion alone.
 
 ## Trigger
 

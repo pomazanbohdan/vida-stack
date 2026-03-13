@@ -139,6 +139,7 @@ For long-horizon execution, TaskFlow must reduce context growth and repetitive l
 8. after wait timeout is reached, the next attempt must change execution state by renewed waiting, bounded inspection, next-step execution, or explicit blocker/override receipt; timeout-summary-only continuation is invalid.
 9. after summary is emitted while `in_work=1`, the next attempt must change execution state by continuing the lawful next step or recording an explicit blocker/override receipt; summary-as-last-action is invalid.
 10. after partial implementer return is received, the next attempt must change execution state by reroute, rework-packet dispatch, escalation, or explicit blocker/exception receipt; root-session local completion by inertia is invalid.
+11. after timeout/interrupt leaves a same-scope dirty worktree or partial delegated diff, the next attempt must still change execution state by reroute, supersession, renewed waiting, escalation, or explicit pre-write exception receipt; pre-existing diff alone is not a lawful local continuation signal.
 
 ## 3) Parallel Tracks Mode (Workers)
 

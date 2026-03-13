@@ -5,7 +5,8 @@ use docflow_core::{ArtifactPath, CheckedAt, ReadinessVerdict};
 use docflow_format_jsonl::encode_line;
 use docflow_inventory::{InventoryScope, build_registry};
 use docflow_operator::{
-    render_layer_status, render_overview, render_relation_summary, render_summary,
+    render_artifact_impact, render_layer_status, render_overview, render_relation_summary,
+    render_summary, render_task_impact,
 };
 use docflow_readiness::{issues_to_readiness_rows, summarize_verdict};
 use docflow_relations::{RelationEdge, artifact_identity_edges};
@@ -294,6 +295,8 @@ pub struct ArtifactImpactArgs {
     pub artifact: String,
     #[arg(long)]
     pub root: Option<String>,
+    #[arg(long = "format", default_value = "toon")]
+    pub format: String,
 }
 
 #[derive(Debug, Args)]
@@ -302,6 +305,8 @@ pub struct TaskImpactArgs {
     pub task_id: String,
     #[arg(long)]
     pub root: String,
+    #[arg(long = "format", default_value = "toon")]
+    pub format: String,
 }
 
 #[derive(Debug, Args)]
@@ -557,28 +562,56 @@ pub fn run(cli: Cli) -> String {
         },
         Command::ArtifactImpact(args) => match artifact_impact_rows(args.file.as_deref(), &args.artifact, args.root.as_deref()) {
             Ok((artifact, source, rows)) => {
-                let context = serde_json::json!({
-                    "command": "artifact-impact",
-                    "source": source,
-                    "artifact": artifact,
-                    "impacts": rows,
-                });
-                serde_json::to_string(&context)
-                    .unwrap_or_else(|error| format!("{{\"artifact\":\"{}\",\"error\":\"{}\"}}", artifact, error))
+                if args.format == "jsonl" {
+                    let context = serde_json::json!({
+                        "command": "artifact-impact",
+                        "source": source,
+                        "artifact": artifact,
+                        "impacts": rows,
+                    });
+                    serde_json::to_string(&context).unwrap_or_else(|error| {
+                        format!("{{\"artifact\":\"{}\",\"error\":\"{}\"}}", artifact, error)
+                    })
+                } else {
+                    let impacts = rows
+                        .iter()
+                        .map(|row| (row.path.as_str(), row.reasons.as_str()))
+                        .collect::<Vec<_>>();
+                    render_artifact_impact(&artifact, &source, &impacts)
+                }
             }
             Err(error) => format!("{{\"artifact\":\"{}\",\"error\":\"{}\"}}", args.artifact, error),
         },
         Command::TaskImpact(args) => match task_impact_rows(&args.root, &args.task_id) {
             Ok((touched, impacts)) => {
-                let context = serde_json::json!({
-                    "command": "task-impact",
-                    "task_id": args.task_id,
-                    "root": args.root,
-                    "touched": touched,
-                    "indirect_impacts": impacts,
-                });
-                serde_json::to_string(&context)
-                    .unwrap_or_else(|error| format!("{{\"task_id\":\"{}\",\"error\":\"{}\"}}", args.task_id, error))
+                if args.format == "jsonl" {
+                    let context = serde_json::json!({
+                        "command": "task-impact",
+                        "task_id": args.task_id,
+                        "root": args.root,
+                        "touched": touched,
+                        "indirect_impacts": impacts,
+                    });
+                    serde_json::to_string(&context).unwrap_or_else(|error| {
+                        format!("{{\"task_id\":\"{}\",\"error\":\"{}\"}}", args.task_id, error)
+                    })
+                } else {
+                    let touched_paths = touched
+                        .iter()
+                        .map(|row| row.path.as_str())
+                        .collect::<Vec<_>>();
+                    let impact_rows = impacts
+                        .iter()
+                        .map(|row| {
+                            (
+                                row.source_artifact.as_str(),
+                                row.path.as_str(),
+                                row.reasons.as_str(),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    render_task_impact(&args.task_id, &args.root, &touched_paths, &impact_rows)
+                }
             }
             Err(error) => format!("{{\"task_id\":\"{}\",\"error\":\"{}\"}}", args.task_id, error),
         },
@@ -3540,6 +3573,150 @@ mod tests {
         ]);
         let rendered = run(cli);
         assert_eq!(rendered, "relations\n  total_edges: 2");
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn artifact_impact_command_defaults_to_operator_surface() {
+        let root = temp_dir("artifact-impact-root");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(
+            root.join("docs/process/a.md"),
+            "# a\n\n-----\nartifact_path: process/a\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/a.md\nstatus: canonical\nchangelog_ref: a.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\n",
+        )
+        .expect("source markdown");
+        fs::write(
+            root.join("docs/process/b.md"),
+            "# b\n\n[Source](a.md)\n\n-----\nartifact_path: process/b\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/b.md\nstatus: canonical\nchangelog_ref: b.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\ncontract_ref: process/a\n",
+        )
+        .expect("dependent markdown");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "artifact-impact",
+            "--artifact",
+            "process/a",
+            "--root",
+            root.to_string_lossy().as_ref(),
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("artifact-impact"));
+        assert!(rendered.contains("artifact: process/a"));
+        assert!(rendered.contains("impacts: 2"));
+        assert!(rendered.contains("impact: docs/process/a.md [footer_ref]"));
+        assert!(rendered.contains("impact: docs/process/b.md [footer_ref]"));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn artifact_impact_command_keeps_json_output_when_requested() {
+        let root = temp_dir("artifact-impact-json-root");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(
+            root.join("docs/process/a.md"),
+            "# a\n\n-----\nartifact_path: process/a\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/a.md\nstatus: canonical\nchangelog_ref: a.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\n",
+        )
+        .expect("source markdown");
+        fs::write(
+            root.join("docs/process/b.md"),
+            "# b\n\n[Source](a.md)\n\n-----\nartifact_path: process/b\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/b.md\nstatus: canonical\nchangelog_ref: b.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\n",
+        )
+        .expect("dependent markdown");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "artifact-impact",
+            "--artifact",
+            "process/a",
+            "--root",
+            root.to_string_lossy().as_ref(),
+            "--format",
+            "jsonl",
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("\"command\":\"artifact-impact\""));
+        assert!(rendered.contains("\"artifact\":\"process/a\""));
+        assert!(rendered.contains("\"path\":\"docs/process/a.md\""));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn task_impact_command_defaults_to_operator_surface() {
+        let root = temp_dir("task-impact-root");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(
+            root.join("docs/process/a.md"),
+            "# a\n\n-----\nartifact_path: process/a\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/a.md\nstatus: canonical\nchangelog_ref: a.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\n",
+        )
+        .expect("source markdown");
+        fs::write(
+            root.join("docs/process/a.changelog.jsonl"),
+            "{\"ts\":\"2026-03-11T00:00:00Z\",\"event\":\"artifact_revision_updated\",\"artifact_path\":\"process/a\",\"task_id\":\"vida-stack-r1-b14\"}\n",
+        )
+        .expect("source changelog");
+        fs::write(
+            root.join("docs/process/b.md"),
+            "# b\n\n[Source](a.md)\n\n-----\nartifact_path: process/b\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/b.md\nstatus: canonical\nchangelog_ref: b.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\ncontract_ref: process/a\n",
+        )
+        .expect("dependent markdown");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "task-impact",
+            "--task-id",
+            "vida-stack-r1-b14",
+            "--root",
+            root.to_string_lossy().as_ref(),
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("task-impact"));
+        assert!(rendered.contains("task_id: vida-stack-r1-b14"));
+        assert!(rendered.contains("touched: 1"));
+        assert!(rendered.contains("indirect_impacts: 1"));
+        assert!(rendered.contains("touched_path: docs/process/a.md"));
+        assert!(rendered.contains("indirect_impact: docs/process/b.md <= process/a [footer_ref]"));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn task_impact_command_keeps_json_output_when_requested() {
+        let root = temp_dir("task-impact-json-root");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(
+            root.join("docs/process/a.md"),
+            "# a\n\n-----\nartifact_path: process/a\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/a.md\nstatus: canonical\nchangelog_ref: a.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\n",
+        )
+        .expect("source markdown");
+        fs::write(
+            root.join("docs/process/a.changelog.jsonl"),
+            "{\"ts\":\"2026-03-11T00:00:00Z\",\"event\":\"artifact_revision_updated\",\"artifact_path\":\"process/a\",\"task_id\":\"vida-stack-r1-b14\"}\n",
+        )
+        .expect("source changelog");
+        fs::write(
+            root.join("docs/process/b.md"),
+            "# b\n\n[Source](a.md)\n\n-----\nartifact_path: process/b\nartifact_type: process_doc\nartifact_version: 1\nartifact_revision: old\nsource_path: docs/process/b.md\nstatus: canonical\nchangelog_ref: b.changelog.jsonl\ncreated_at: 2026-03-11T00:00:00Z\nupdated_at: 2026-03-11T00:00:00Z\n",
+        )
+        .expect("dependent markdown");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "task-impact",
+            "--task-id",
+            "vida-stack-r1-b14",
+            "--root",
+            root.to_string_lossy().as_ref(),
+            "--format",
+            "jsonl",
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("\"command\":\"task-impact\""));
+        assert!(rendered.contains("\"task_id\":\"vida-stack-r1-b14\""));
+        assert!(rendered.contains("\"touched\":[{\"path\":\"docs/process/a.md\"}]"));
+        assert!(rendered.contains("\"indirect_impacts\":[]"));
 
         fs::remove_dir_all(root).expect("temp root should be removed");
     }

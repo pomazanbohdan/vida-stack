@@ -89,6 +89,7 @@ These rules apply across all lanes unless a more specific worker rule narrows be
 21. **[MUST]** When evidence sources conflict, prefer the highest-evidence source recognized by the active protocol stack before making conclusions or mutations.
 22. **[MUST]** When worker-first execution is active and new delegated lane allocation fails because of agent/thread saturation, attempt reuse of existing eligible agents first; do not fall back to local-only continuation until reuse or explicit saturation recovery has been attempted and recorded.
 23. **[MUST]** If the active task context is documentation-shaped, activate `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md` immediately at `L0`; do not defer documentation protocol activation to a later optional read.
+24. **[MUST NOT]** Do not treat a dirty worktree, a same-scope partial diff, or a timed-out delegated write packet as implicit permission for root-session local writing; those are evidence only until explicit supersession, hard blocker evidence, or a pre-write exception receipt authorizes a bounded local path.
 24. **[MUST]** Orchestrator entry into local writer / exception-path mode requires an explicit pre-write receipt recorded before the first local mutation; silent or retroactive exception-path justification is forbidden.
 
 Documentation-analysis note:

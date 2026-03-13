@@ -169,6 +169,7 @@ The root `metadata` block must expose at least:
 8. model policy,
 9. backend policy,
 10. activation scope.
+11. promoted compact project startup projections when they are admitted for execution.
 
 ### 5.4 `protocol_binding_registry`
 
@@ -194,6 +195,7 @@ The root `metadata` block must expose at least:
 5. cache-key inputs,
 6. invalidation tuple,
 7. retrieval-only optional-context boundary.
+8. project startup bundle/capsule partitions when compact startup projections are admitted into the active bundle.
 
 Root-shape rule:
 
@@ -228,6 +230,7 @@ That means:
 1. project roles, skills, profiles, and flows may compile when enabled and valid,
 2. known project protocols do not automatically become executable,
 3. only promoted project protocols admitted by the project protocol promotion rule may enter executable bundles.
+4. compact project startup bundles and runtime capsules may be admitted here as promoted executable project protocols when they are explicitly bound to orchestrator-init or agent-init startup use points.
 
 `activation_bundle` must not contain:
 
@@ -308,6 +311,7 @@ Initialization rule:
 1. init paths must be inspectable,
 2. init output must tell the runtime what law/policy was compiled,
 3. init output must remain usable by an LLM orchestrator without broad manual repo traversal.
+4. local Rust runtime may expose these views directly as `vida orchestrator-init` and `vida agent-init`, while source-mode worker boot may still keep a bounded `taskflow-v0 boot ...` fallback until every lane is fully runtime-native.
 
 ## 11. Inspection Surfaces
 
@@ -322,6 +326,7 @@ Release-1 operator/runtime surfaces must support:
 7. effective `cache_delivery_contract` summary,
 8. effective role/profile/skill/flow composition,
 9. effective gate/policy summary.
+10. effective promoted project startup projections and init views when present.
 
 Inspection rule:
 
@@ -347,9 +352,13 @@ The recommended first Release-1 bundle map is:
    - `cache_delivery_contract`
 2. first cache partitions inside `cache_delivery_contract`:
    - `always_on_core`
+   - `project_startup_bundle`
+   - `project_runtime_capsules`
    - `lane_bundle`
    - `triggered_domain_bundle`
    - `task_specific_dynamic_context`
+   - `invalidation_tuple`
+   - `retrieval_only_optional_context_boundary`
 3. first runtime views:
    - `orchestrator-init`
    - `agent-init`

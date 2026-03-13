@@ -226,6 +226,7 @@ Project narrowing:
 4. before local fix/proof work, be able to name the active parent bounded unit and active packet/leaf from TaskFlow or packet receipts,
 5. do not treat `continue development`, implementer delay, known patch location, or self-diagnosis pressure as substitutes for exception-path or supersession law,
 6. if live runtime still reports blocked takeover for an open delegated cycle, remain in diagnosis/orchestration posture and surface the conflict rather than repair locally.
+7. do not treat a dirty worktree, already-present same-scope diff, or a partially applied delegated patch as implicit permission for local completion; those remain reroute/blocker/supersession evidence until a lawful exception path is recorded before mutation.
 
 ## Saturation Recovery Rule
 

@@ -146,7 +146,8 @@ Rules:
 2. worker failure, partial return, or self-diagnosis pressure does not by itself satisfy this contract,
 3. retroactive narration that "this was exception-path work" is invalid,
 4. "the delegated packet already mutated the scope", "review found a compile blocker", or "local repair prevents leaving the task broken" are not receipts by themselves,
-5. missing exception-path receipt keeps local writing protocol-invalid even if the produced code later looks correct.
+5. a dirty worktree, same-scope partial diff, timed-out delegated write packet, or partially applied delegated patch are evidence only; they do not grant root-session write authority by themselves,
+6. missing exception-path receipt keeps local writing protocol-invalid even if the produced code later looks correct.
 
 Open-delegation gate:
 
@@ -156,7 +157,8 @@ Open-delegation gate:
    - a hard blocker proving the delegated lane cannot continue lawfully,
    - or higher-precedence route law that explicitly permits takeover
 3. "continue development", wait delay, or silent self-diagnosis posture do not satisfy this gate,
-4. do not use an exception-path receipt to bypass an otherwise still-lawful delegated cycle.
+4. do not use an exception-path receipt to bypass an otherwise still-lawful delegated cycle,
+5. same-scope in-flight diffs, dirty worktree evidence, or partially recovered local patches do not close this gate and must be treated as reroute/supersession evidence only.
 
 Silent-diagnosis precedence rule:
 

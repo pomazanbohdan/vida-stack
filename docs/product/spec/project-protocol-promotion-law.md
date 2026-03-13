@@ -100,6 +100,7 @@ Stage-transition rule:
    - requires admission into the machine-readable bundle/compiler inputs
 5. `compiled -> executable`
    - requires the compiled bundle to become the active runtime posture
+6. compact startup bundles or runtime capsules are still subject to the same ordered admission path; compression alone does not make a project protocol executable.
 
 Demotion rule:
 
@@ -117,6 +118,7 @@ A project protocol may enter compiled execution only when all required inputs ex
 4. gate and evidence posture where needed,
 5. fail-closed validation,
 6. no conflict with sealed framework/system law.
+7. for compact startup bundles or runtime capsules, an explicit runtime use point such as `orchestrator-init`, `agent-init`, or cache-delivery partition binding.
 
 ## 6. Framework Boundary
 

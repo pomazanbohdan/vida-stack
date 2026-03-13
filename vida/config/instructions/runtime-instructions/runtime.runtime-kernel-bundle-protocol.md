@@ -11,12 +11,14 @@ Purpose: define the canonical runtime-owned bundle that composes kernel law, rou
 ## Canonical Runtime Surfaces
 
 1. `taskflow-v0/src/core/runtime_bundle.nim`
-2. `taskflow-v0 bundle check --json`
-3. `taskflow-v0 kernel summary --json`
-4. `vida/config/instructions/bundles/default_runtime.yaml`
-5. `docs/product/spec/partial-development-kernel-model.md`
-6. `docs/product/spec/canonical-machine-map.md`
-7. `docs/product/spec/receipt-and-proof-law.md`
+2. `vida orchestrator-init`
+3. `vida agent-init`
+4. `taskflow-v0 bundle check --json`
+5. `taskflow-v0 kernel summary --json`
+6. `vida/config/instructions/bundles/default_runtime.yaml`
+7. `docs/product/spec/partial-development-kernel-model.md`
+8. `docs/product/spec/canonical-machine-map.md`
+9. `docs/product/spec/receipt-and-proof-law.md`
 
 ## Bundle Minimum
 
@@ -29,6 +31,7 @@ The runtime kernel bundle must expose all of:
 5. instruction bundle ordering,
 6. runtime agent inventory,
 7. compiled project role/skill/profile/flow extensions.
+8. compiled init views and compact startup projections when the local runtime exposes them.
 
 ## Closure Rule
 

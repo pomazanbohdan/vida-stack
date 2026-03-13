@@ -188,6 +188,7 @@ The orchestrator must not:
 8. treat explorer findings as implicit permission to skip implementer/coach/verifier routing for normal write-producing work.
 9. treat delayed or hanging delegated lanes as permission to absorb the packet locally while the delegated cycle still remains open.
 10. silently replace the active packet with the first locally failing test or compile error and then treat that narrower symptom fix as packet closure.
+11. treat a dirty worktree, same-scope partial diff, or partially applied delegated patch as implicit transfer of writer ownership back to the root session.
 
 ### Implementer
 

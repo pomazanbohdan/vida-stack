@@ -1,7 +1,7 @@
 mod state_store;
 mod taskflow_layer4;
-mod taskflow_runtime_bundle;
 mod taskflow_run_graph;
+mod taskflow_runtime_bundle;
 mod temp_state;
 
 use std::path::{Path, PathBuf};
@@ -24,11 +24,11 @@ use state_store::{
     TaskDependencyTreeEdge, TaskDependencyTreeNode, TaskGraphIssue, TaskRecord,
 };
 use taskflow_layer4::{print_taskflow_proxy_help, run_taskflow_query, taskflow_help_topic};
-use taskflow_runtime_bundle::{
-    blocking_runtime_bundle, build_taskflow_consume_bundle_payload, taskflow_consume_bundle_check,
-};
 use taskflow_run_graph::{
     run_taskflow_recovery, run_taskflow_run_graph, run_taskflow_run_graph_mutation,
+};
+use taskflow_runtime_bundle::{
+    blocking_runtime_bundle, build_taskflow_consume_bundle_payload, taskflow_consume_bundle_check,
 };
 use time::format_description::well_known::Rfc3339;
 
@@ -47,6 +47,8 @@ async fn run(cli: Cli) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some(Command::Boot(args)) => run_boot(args).await,
+        Some(Command::OrchestratorInit(args)) => run_orchestrator_init(args).await,
+        Some(Command::AgentInit(args)) => run_agent_init(args).await,
         Some(Command::Task(args)) => run_task(args).await,
         Some(Command::Memory(args)) => run_memory(args).await,
         Some(Command::Status(args)) => run_status(args).await,
@@ -899,7 +901,6 @@ pub(crate) fn proxy_state_dir() -> PathBuf {
         .unwrap_or_else(state_store::default_state_dir)
 }
 
-
 pub(crate) async fn open_existing_state_store_with_retry(
     state_dir: PathBuf,
 ) -> Result<StateStore, StateStoreError> {
@@ -1637,6 +1638,259 @@ Repo/dev binaries keep the full in-process Rust DocFlow shell."
         Err(error) => {
             eprintln!("{error}");
             ExitCode::from(2)
+        }
+    }
+}
+
+async fn ensure_launcher_bootstrap(
+    store: &StateStore,
+    instruction_source_root: &Path,
+    framework_memory_source_root: &Path,
+) -> Result<(), String> {
+    store
+        .seed_framework_instruction_bundle()
+        .await
+        .map_err(|error| format!("Failed to seed framework instruction bundle: {error}"))?;
+    store
+        .source_tree_summary()
+        .await
+        .map_err(|error| format!("Failed to read source tree metadata: {error}"))?;
+    store
+        .ingest_instruction_source_tree(&normalize_root_arg(instruction_source_root))
+        .await
+        .map_err(|error| format!("Failed to ingest instruction source tree: {error}"))?;
+    let compatibility = store
+        .evaluate_boot_compatibility()
+        .await
+        .map_err(|error| format!("Failed to evaluate boot compatibility: {error}"))?;
+    if compatibility.classification != "compatible" {
+        return Err(format!(
+            "Boot compatibility check failed: {}",
+            compatibility.reasons.join(", ")
+        ));
+    }
+    let migration = store
+        .evaluate_migration_preflight()
+        .await
+        .map_err(|error| format!("Failed to evaluate migration preflight: {error}"))?;
+    if !migration.blockers.is_empty() {
+        return Err(format!(
+            "Migration preflight failed: {}",
+            migration.blockers.join(", ")
+        ));
+    }
+    let root_artifact_id = store
+        .active_instruction_root()
+        .await
+        .map_err(|error| format!("Failed to read active instruction root: {error}"))?;
+    store
+        .resolve_effective_instruction_bundle(&root_artifact_id)
+        .await
+        .map_err(|error| format!("Failed to resolve effective instruction bundle: {error}"))?;
+    store
+        .ingest_framework_memory_source_tree(&normalize_root_arg(framework_memory_source_root))
+        .await
+        .map_err(|error| format!("Failed to ingest framework memory source tree: {error}"))?;
+    sync_launcher_activation_snapshot(store)
+        .await
+        .map_err(|error| format!("Failed to persist launcher activation snapshot: {error}"))?;
+    let evidence = protocol_binding_compiled_payload_import_evidence(store).await;
+    let rows = build_taskflow_protocol_binding_rows(&evidence)?;
+    store
+        .record_protocol_binding_snapshot(
+            TASKFLOW_PROTOCOL_BINDING_SCENARIO,
+            TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
+            &rows,
+        )
+        .await
+        .map_err(|error| format!("Failed to record protocol-binding snapshot: {error}"))?;
+    Ok(())
+}
+
+async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
+    let state_dir = args
+        .state_dir
+        .unwrap_or_else(state_store::default_state_dir);
+    let instruction_source_root = PathBuf::from(state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT);
+    let framework_memory_source_root =
+        PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
+
+    match StateStore::open(state_dir).await {
+        Ok(store) => {
+            if let Err(error) = ensure_launcher_bootstrap(
+                &store,
+                &instruction_source_root,
+                &framework_memory_source_root,
+            )
+            .await
+            {
+                eprintln!("{error}");
+                return ExitCode::from(1);
+            }
+            match build_taskflow_consume_bundle_payload(&store).await {
+                Ok(bundle) => {
+                    if args.json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "surface": "vida orchestrator-init",
+                                "init": bundle.orchestrator_init_view,
+                                "runtime_bundle_summary": {
+                                    "bundle_id": bundle.metadata["bundle_id"],
+                                    "root_artifact_id": bundle.control_core["root_artifact_id"],
+                                    "activation_source": bundle.activation_source,
+                                    "vida_root": bundle.vida_root,
+                                    "state_dir": store.root().display().to_string(),
+                                },
+                            }))
+                            .expect("orchestrator-init json should render")
+                        );
+                    } else {
+                        print_surface_header(RenderMode::Plain, "vida orchestrator-init");
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "status",
+                            bundle.orchestrator_init_view["status"]
+                                .as_str()
+                                .unwrap_or("unknown"),
+                        );
+                        print_surface_line(RenderMode::Plain, "boot surface", "vida boot");
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "bundle id",
+                            bundle.metadata["bundle_id"].as_str().unwrap_or(""),
+                        );
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "state dir",
+                            &store.root().display().to_string(),
+                        );
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
+    let state_dir = args
+        .state_dir
+        .unwrap_or_else(state_store::default_state_dir);
+    let instruction_source_root = PathBuf::from(state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT);
+    let framework_memory_source_root =
+        PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
+
+    match StateStore::open(state_dir).await {
+        Ok(store) => {
+            if let Err(error) = ensure_launcher_bootstrap(
+                &store,
+                &instruction_source_root,
+                &framework_memory_source_root,
+            )
+            .await
+            {
+                eprintln!("{error}");
+                return ExitCode::from(1);
+            }
+            let bundle = match build_taskflow_consume_bundle_payload(&store).await {
+                Ok(bundle) => bundle,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(1);
+                }
+            };
+            let selection = if let Some(role) = args.role.clone() {
+                let compiled_bundle = &bundle.activation_bundle;
+                if !role_exists_in_lane_bundle(compiled_bundle, &role) || role == "orchestrator" {
+                    eprintln!(
+                        "Agent init requires a non-orchestrator lane role present in the compiled activation bundle."
+                    );
+                    return ExitCode::from(2);
+                }
+                serde_json::json!({
+                    "mode": "explicit_role",
+                    "selected_role": role,
+                    "request_text": args.request_text.clone().unwrap_or_default(),
+                })
+            } else {
+                let request = match args.request_text.as_deref() {
+                    Some(request) if !request.trim().is_empty() => request,
+                    _ => {
+                        eprintln!(
+                            "Agent init requires either a non-orchestrator `--role` or a bounded request text."
+                        );
+                        return ExitCode::from(2);
+                    }
+                };
+                match build_runtime_lane_selection_with_store(&store, request).await {
+                    Ok(selection) => {
+                        if selection.selected_role == "orchestrator" {
+                            eprintln!(
+                                "Agent init resolved to orchestrator posture; provide a non-orchestrator `--role` or a bounded worker request."
+                            );
+                            return ExitCode::from(2);
+                        }
+                        serde_json::to_value(selection).expect("lane selection should serialize")
+                    }
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                }
+            };
+
+            if args.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "surface": "vida agent-init",
+                        "init": bundle.agent_init_view,
+                        "selection": selection,
+                        "runtime_bundle_summary": {
+                            "bundle_id": bundle.metadata["bundle_id"],
+                            "activation_source": bundle.activation_source,
+                            "vida_root": bundle.vida_root,
+                            "state_dir": store.root().display().to_string(),
+                        },
+                    }))
+                    .expect("agent-init json should render")
+                );
+            } else {
+                print_surface_header(RenderMode::Plain, "vida agent-init");
+                print_surface_line(
+                    RenderMode::Plain,
+                    "status",
+                    bundle.agent_init_view["status"]
+                        .as_str()
+                        .unwrap_or("unknown"),
+                );
+                print_surface_line(
+                    RenderMode::Plain,
+                    "selected role",
+                    selection["selected_role"].as_str().unwrap_or("unknown"),
+                );
+                print_surface_line(
+                    RenderMode::Plain,
+                    "fallback surface",
+                    bundle.agent_init_view["source_mode_fallback_surface"]
+                        .as_str()
+                        .unwrap_or(""),
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
         }
     }
 }
@@ -2966,6 +3220,8 @@ struct TaskflowConsumeBundlePayload {
     activation_bundle: serde_json::Value,
     protocol_binding_registry: serde_json::Value,
     cache_delivery_contract: serde_json::Value,
+    orchestrator_init_view: serde_json::Value,
+    agent_init_view: serde_json::Value,
     boot_compatibility: serde_json::Value,
     migration_preflight: serde_json::Value,
     task_store: serde_json::Value,
@@ -5021,7 +5277,7 @@ fn print_task_critical_path(render: RenderMode, path: &TaskCriticalPath, as_json
     }
 }
 
-fn normalize_root_arg(path: &PathBuf) -> String {
+fn normalize_root_arg(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
@@ -5044,6 +5300,8 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Command {
     Boot(BootArgs),
+    OrchestratorInit(InitArgs),
+    AgentInit(AgentInitArgs),
     Task(TaskArgs),
     Memory(MemoryArgs),
     Status(StatusArgs),
@@ -5237,6 +5495,29 @@ struct BootArgs {
 }
 
 #[derive(Args, Debug, Clone, Default)]
+struct InitArgs {
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    state_dir: Option<PathBuf>,
+
+    #[arg(long = "json")]
+    json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+struct AgentInitArgs {
+    request_text: Option<String>,
+
+    #[arg(long = "role")]
+    role: Option<String>,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    state_dir: Option<PathBuf>,
+
+    #[arg(long = "json")]
+    json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
 struct MemoryArgs {
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     state_dir: Option<PathBuf>,
@@ -5281,6 +5562,8 @@ fn print_root_help() {
     println!(
         "  boot      initialize authoritative state and instruction/framework-memory surfaces"
     );
+    println!("  orchestrator-init  render the compiled startup view for the orchestrator lane");
+    println!("  agent-init         render the bounded startup view for a worker/agent lane");
     println!("  task      task import/list/show/ready over the authoritative state store");
     println!("  memory    inspect the effective instruction bundle");
     println!("  status    inspect backend, state spine, and latest receipts");

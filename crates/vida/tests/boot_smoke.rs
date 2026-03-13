@@ -761,6 +761,8 @@ fn taskflow_consume_bundle_renders_runtime_bundle_json() {
     assert!(parsed["bundle"]["activation_bundle"].is_object());
     assert!(parsed["bundle"]["protocol_binding_registry"].is_object());
     assert!(parsed["bundle"]["cache_delivery_contract"].is_object());
+    assert!(parsed["bundle"]["orchestrator_init_view"].is_object());
+    assert!(parsed["bundle"]["agent_init_view"].is_object());
     assert!(parsed["bundle"]["protocol_binding_registry"]["protocols"].is_array());
     assert_eq!(
         parsed["bundle"]["protocol_binding_registry"]["binding_status"],
@@ -772,10 +774,70 @@ fn taskflow_consume_bundle_renders_runtime_bundle_json() {
         true
     );
     assert!(parsed["bundle"]["cache_delivery_contract"]["cache_key_inputs"].is_object());
+    assert!(parsed["bundle"]["cache_delivery_contract"]["invalidation_tuple"].is_object());
+    assert!(parsed["bundle"]["cache_delivery_contract"]
+        ["retrieval_only_optional_context_boundary"]
+        .is_array());
+    assert_eq!(
+        parsed["bundle"]["activation_bundle"]["project_protocol_projections"]["status"],
+        "compiled"
+    );
+    assert_eq!(
+        parsed["bundle"]["orchestrator_init_view"]["surface"],
+        "vida orchestrator-init"
+    );
+    assert_eq!(
+        parsed["bundle"]["agent_init_view"]["surface"],
+        "vida agent-init"
+    );
     let snapshot_path = parsed["snapshot_path"]
         .as_str()
         .expect("consume bundle should report snapshot path");
     assert!(std::path::Path::new(snapshot_path).is_file());
+}
+
+#[test]
+fn orchestrator_init_renders_compiled_startup_view_json() {
+    let state_dir = unique_state_dir();
+
+    let output = run_with_retry(|| {
+        vida()
+            .args(["orchestrator-init", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("orchestrator-init json should run")
+    });
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("orchestrator-init json should parse");
+    assert_eq!(parsed["surface"], "vida orchestrator-init");
+    assert_eq!(parsed["init"]["surface"], "vida orchestrator-init");
+    assert!(parsed["init"]["project_startup_bundle"].is_object());
+    assert!(parsed["init"]["project_startup_capsules"].is_array());
+}
+
+#[test]
+fn agent_init_renders_worker_startup_view_json_for_explicit_role() {
+    let state_dir = unique_state_dir();
+
+    let output = run_with_retry(|| {
+        vida()
+            .args(["agent-init", "--role", "worker", "--json"])
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("agent-init json should run")
+    });
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("agent-init json should parse");
+    assert_eq!(parsed["surface"], "vida agent-init");
+    assert_eq!(parsed["init"]["surface"], "vida agent-init");
+    assert_eq!(parsed["selection"]["selected_role"], "worker");
+    assert!(parsed["init"]["allowed_non_orchestrator_roles"].is_array());
 }
 
 #[test]
@@ -1235,7 +1297,10 @@ fn consume_final_fails_closed_without_lane_bundle_fallback_when_runtime_bundle_b
         serde_json::from_str(&stdout).expect("consume final should render blocking json payload");
     assert_eq!(parsed["payload"]["direct_consumption_ready"], false);
     assert_eq!(parsed["payload"]["role_selection"]["ok"], false);
-    assert_eq!(parsed["payload"]["role_selection"]["selection_mode"], "unresolved");
+    assert_eq!(
+        parsed["payload"]["role_selection"]["selection_mode"],
+        "unresolved"
+    );
     assert_eq!(
         parsed["payload"]["role_selection"]["compiled_bundle"],
         serde_json::Value::Null
