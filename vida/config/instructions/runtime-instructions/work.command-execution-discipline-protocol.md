@@ -58,7 +58,7 @@ It does not own:
 1. Use `rg` as the primary cross-file search tool.
 2. Use `rg --files` for fast file discovery.
 3. Use `grep` or exact-match tools only for exact string or filename pattern matching.
-4. Full tooling/search orientation belongs to `vida/config/instructions/system-maps/tooling.search-guide.md`.
+4. Full tooling/search orientation belongs to `system-maps/tooling.search-guide`.
 
 ## Log-Read Budget
 
@@ -81,7 +81,7 @@ Rules:
 
 Operator examples and concrete command snippets may live in:
 
-1. `vida/config/instructions/command-instructions/operator.runtime-pipeline-guide.md`
+1. `command-instructions/operator.runtime-pipeline-guide`
 2. project runbooks
 3. runtime-family maps and runtime homes
 

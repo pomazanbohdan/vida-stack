@@ -21,7 +21,7 @@ This file does not define:
 
 ## Boundary Rule
 
-1. Framework bootstrap ownership remains in `AGENTS.md`, `AGENTS.sidecar.md`, and `vida/config/instructions/system-maps.*`.
+1. Framework bootstrap ownership remains in `AGENTS.md`, `AGENTS.sidecar.md`, and `system-maps.*`.
 2. This file must not become a second bootstrap router or canonical owner of framework/product discovery paths.
 3. Project-specific operating notes may live here only when they do not compete with framework-owned bootstrap routing.
 
@@ -30,11 +30,12 @@ This file does not define:
 The active project agent-system surface is split across:
 
 1. root overlay activation in `vida.config.yaml`,
-2. project extension map in `docs/process/agent-extensions/README.md`,
-3. product-law model in `docs/product/spec/agent-role-skill-profile-flow-model.md`,
-4. product-law lane-selection model in `docs/product/spec/agent-lane-selection-and-conversation-mode-model.md`,
-5. framework/runtime validation and activation law in `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`,
-6. framework generic routing law in `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`.
+2. project extension bridge map in `docs/process/agent-extensions/README.md`,
+3. active runtime projection family in `.vida/project/agent-extensions/**`,
+4. product-law model in `docs/product/spec/agent-role-skill-profile-flow-model.md`,
+5. product-law lane-selection model in `docs/product/spec/agent-lane-selection-and-conversation-mode-model.md`,
+6. framework/runtime validation and activation law in `runtime-instructions/work.project-agent-extension-protocol.md`,
+7. framework generic routing law in `instruction-contracts/core.agent-system-protocol.md`.
 
 ## Current Project Posture
 
@@ -54,11 +55,12 @@ For the active repository, project-specific agent behavior is expected to be:
 
 ## Routing
 
-1. for project extension registries and ids, read `docs/process/agent-extensions/README.md`,
-2. for canonical role/skill/profile/flow semantics, read `docs/product/spec/agent-role-skill-profile-flow-model.md`,
-3. for auto lane selection and conversational-mode law, read `docs/product/spec/agent-lane-selection-and-conversation-mode-model.md`,
-4. for runtime activation and validation of project extensions, read `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`,
-5. for generic framework agent-system routing and backend-class law, read `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`.
+1. for project extension bridge registries and ids, read `docs/process/agent-extensions/README.md`,
+2. for the active runtime-owned role/skill/profile/flow projections, inspect `.vida/project/agent-extensions/**`,
+3. for canonical role/skill/profile/flow semantics, read `docs/product/spec/agent-role-skill-profile-flow-model.md`,
+4. for auto lane selection and conversational-mode law, read `docs/product/spec/agent-lane-selection-and-conversation-mode-model.md`,
+5. for runtime activation and validation of project extensions, read `runtime-instructions/work.project-agent-extension-protocol.md`,
+6. for generic framework agent-system routing and backend-class law, read `instruction-contracts/core.agent-system-protocol.md`.
 
 -----
 artifact_path: process/agent-system-guide
@@ -69,5 +71,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/agent-system-guide.md
 created_at: '2026-03-10T04:40:00+02:00'
-updated_at: '2026-03-12T08:15:39+02:00'
+updated_at: '2026-03-13T11:20:00+02:00'
 changelog_ref: agent-system-guide.changelog.jsonl

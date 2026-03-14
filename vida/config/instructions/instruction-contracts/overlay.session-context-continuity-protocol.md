@@ -19,7 +19,7 @@ It does not replace the step reasoning canon.
 
 Step-local reasoning remains owned by:
 
-1. `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md`
+1. `instruction-contracts/overlay.step-thinking-protocol`
 
 ## Core Separation Rule
 

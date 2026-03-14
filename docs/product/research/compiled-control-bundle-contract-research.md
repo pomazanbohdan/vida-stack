@@ -10,11 +10,11 @@ What exact executable contract should VIDA use for the top-level compiled contro
 
 Framework-owned inputs:
 
-1. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
-2. `vida/config/instructions/runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`
-3. `vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
-4. `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`
-5. `vida/config/instructions/diagnostic-instructions/analysis.protocol-consistency-audit-protocol.md`
+1. `instruction-contracts/bridge.instruction-activation-protocol.md`
+2. `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`
+3. `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
+4. `runtime-instructions/work.project-agent-extension-protocol.md`
+5. `diagnostic-instructions/analysis.protocol-consistency-audit-protocol.md`
 
 Product/spec inputs:
 

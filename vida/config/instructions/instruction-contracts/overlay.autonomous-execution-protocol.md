@@ -6,8 +6,8 @@ Scope:
 
 1. activates only after the task is already in tracked execution,
 2. applies when the user intent is "continue until done", "follow the plan", "implement all remaining work", or equivalent,
-3. reuses existing execution law from `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`, `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md`, `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`, and `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md` rather than replacing them,
-4. owns the default next-task boundary analysis/report behavior unless `vida/config/instructions/runtime-instructions/bridge.task-approval-loop-protocol.md` inserts an explicit approval gate.
+3. reuses existing execution law from `runtime-instructions/work.taskflow-protocol`, `runtime-instructions/runtime.task-state-telemetry-protocol`, `command-instructions/execution.implement-execution-protocol`, and `instruction-contracts/core.agent-system-protocol` rather than replacing them,
+4. owns the default next-task boundary analysis/report behavior unless `runtime-instructions/bridge.task-approval-loop-protocol` inserts an explicit approval gate.
 
 ## Core Contract
 
@@ -60,7 +60,7 @@ Non-pause rule:
 
 Worker-first continuity rule:
 
-1. AEP does not suspend `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`.
+1. AEP does not suspend `instruction-contracts/core.agent-system-protocol`.
 2. If the active route/mode requires worker-first analysis, review, coach, or verification lanes, autonomous follow-through must keep using them rather than collapsing into local-only continuation.
 3. Local-only continuation during AEP is lawful only when route metadata allows it or when the runtime records explicit worker exhaustion/blocker evidence.
 4. An explicit exception-path receipt remains necessary for local write-producing continuation during AEP.
@@ -91,19 +91,19 @@ At least one source must define the next lawful work:
 2. TaskFlow next block chain (`next_step`),
 3. canonical plan wave/task ordering,
 4. approved form-task or issue-contract launch output,
-5. active pool dependency graph under `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`.
+5. active pool dependency graph under `command-instructions/execution.implement-execution-protocol`.
 
 Precedence:
 
 1. blocker/verification receipts,
 2. active TaskFlow block / next block,
-3. `taskflow-v0 task ready` + dependency state,
+3. `vida taskflow task ready` + dependency state,
 4. canonical implementation plan ordering,
 5. chat-level instruction.
 
 Fallback helper:
 
-1. if `taskflow-v0 task ready` cannot express lawful ordering because dependency readiness is temporarily unreliable, use `python3 autonomous-next-task.py` with bounded prefix/label scope as the fallback selector,
+1. if `vida taskflow task ready` cannot express lawful ordering because dependency readiness is temporarily unreliable, use `python3 autonomous-next-task.py` with bounded prefix/label scope as the fallback selector,
 2. this helper is a bounded runtime workaround and must not silently override higher-precedence receipts or active TaskFlow state.
 
 Clean-session route visibility rule:
@@ -116,7 +116,7 @@ Clean-session route visibility rule:
 When AEP is enabled, run this loop:
 
 1. hydrate task context and verify current route/gates,
-2. apply `vida/config/instructions/runtime-instructions/work.execution-priority-protocol.md` when choosing between multiple lawful next tasks or when reprioritization pressure exists,
+2. apply `runtime-instructions/work.execution-priority-protocol` when choosing between multiple lawful next tasks or when reprioritization pressure exists,
 3. select the next lawful ready task/block from canonical sources,
 4. if the current task just completed or a complex slice just closed, run next-task boundary analysis before entering the next task:
    - study nearby governing specs/protocols,
@@ -162,7 +162,7 @@ Autonomous follow-through must stop and return control to routing/slicing when a
 4. project/framework ownership boundary changes materially,
 5. external reality validation is required but missing,
 6. no lawful next task can be selected from canonical sources,
-7. reprioritization is implied but cannot be justified by `vida/config/instructions/runtime-instructions/work.execution-priority-protocol.md`.
+7. reprioritization is implied but cannot be justified by `runtime-instructions/work.execution-priority-protocol`.
 8. the next required move depends on a product, architectural, or ownership decision that is not already resolved by canonical sources,
 9. a framework/project protocol conflict appears and cannot be resolved by precedence/routing law alone,
 10. the user explicitly says `stop` or otherwise interrupts autonomous continuation.
@@ -185,15 +185,15 @@ Autonomous follow-through must stop and return control to routing/slicing when a
 9.2. boundary analysis/report lives outside TaskFlow execution for the next task; it prepares lawful continuation but does not replace the next task's tracked flow.
 9.3. when the boundary analysis finds dependent executable scope, update existing dependent specs/tasks or create the missing coverage before claiming lawful continuation.
 9.4. do not run next-task boundary analysis merely because one `execution_block` closed; that analysis belongs only after the parent `delivery_task` or equivalent bounded task actually closes.
-10. when the same technical error repeats twice or an external API/format is uncertain, escalate via `vida/config/instructions/diagnostic-instructions/escalation.debug-escalation-protocol.md` instead of continuing blind local retries.
+10. when the same technical error repeats twice or an external API/format is uncertain, escalate via `diagnostic-instructions/escalation.debug-escalation-protocol` instead of continuing blind local retries.
 10.1. under active worker mode, pair that escalation with a bounded external catch/review agent whenever an eligible lane exists.
 10.2. if primary-source lookup still leaves ambiguity after one pass, execute Google/web search on the next pass rather than repeating another blind local attempt.
-11. if `vida/config/instructions/runtime-instructions/bridge.task-approval-loop-protocol.md` is active, stop after the current task completes and present the next task for approval before starting it.
+11. if `runtime-instructions/bridge.task-approval-loop-protocol` is active, stop after the current task completes and present the next task for approval before starting it.
 11.1. if the user enables continuous autonomous execution with next-task reporting, do not stop after progress reports inside the current task, but do present the next task briefly at task boundary before starting it.
 11.2. under that mode, the report must stay concise and task-scoped; it is a task-boundary planning artifact, not a pause after micro-steps or after ordinary progress updates.
 11.3. if the user disables next-task boundary reporting too, the orchestrator must still perform the boundary analysis and dependent-coverage refresh internally, but may skip the user-facing report while continuing directly into the next lawful task.
 12. when planning or spec coverage already exists, prefer updating existing tasks/specs rather than creating new ones.
-13. run `vida/config/instructions/diagnostic-instructions/analysis.protocol-self-diagnosis-protocol.md` checks when behavior suggests reporting barriers, task-coverage drift, verification gaps, or route drift.
+13. run `diagnostic-instructions/analysis.protocol-self-diagnosis-protocol` checks when behavior suggests reporting barriers, task-coverage drift, verification gaps, or route drift.
 14. treat `green -> sync docs/protocols -> validate -> next slice` as the default autonomous success path.
 15. do not reinterpret "task-local closure" as "execution finished" while the epic/program still has lawful ready work.
 16. when a behavior is now proven runnable/buildable/installable, update the canonical development-conditions artifact in the same cycle rather than batching that evidence for later.
@@ -214,10 +214,10 @@ Reporting continuity rule:
 
 ## Relationship To Existing Protocols
 
-1. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md` owns task/block execution lifecycle,
-2. `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md` owns task-state SSOT and workflow commands,
-3. `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md` owns queue selection, implement loop, and continue-to-next-task behavior,
-4. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md` still owns worker routing/fallback law during autonomous continuation,
+1. `runtime-instructions/work.taskflow-protocol` owns task/block execution lifecycle,
+2. `runtime-instructions/runtime.task-state-telemetry-protocol` owns task-state SSOT and workflow commands,
+3. `command-instructions/execution.implement-execution-protocol` owns queue selection, implement loop, and continue-to-next-task behavior,
+4. `instruction-contracts/core.agent-system-protocol` still owns worker routing/fallback law during autonomous continuation,
 5. this file adds the trigger and stop doctrine for using those protocols in sustained follow-through mode.
 
 ## Canonical Entry Pattern

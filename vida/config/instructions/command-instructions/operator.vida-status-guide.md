@@ -7,7 +7,7 @@ Purpose: read-only terminal report for decision-making over current DB-backed ta
 This command maps layers as:
 
 1. `CL1 Intake` -> dashboard scope selection and output mode
-2. `CL2 Reality And Inputs` -> read-only queue collection from `taskflow-v0 task`
+2. `CL2 Reality And Inputs` -> read-only queue collection from `vida taskflow task`
 3. `CL3 Contract And Decisions` -> ready/non-ready grouping and summary classification
 4. `CL4 Materialization` -> terminal report rendering
 5. `CL5 Gates And Handoff` -> explicit read-only completion guarantee
@@ -47,9 +47,9 @@ python3 vida-boot-snapshot.py
 
 ## Data Sources
 
-1. `taskflow-v0 task list --status open --json`
-2. `taskflow-v0 task list --status in_progress --json`
-3. `taskflow-v0 task ready --json`
+1. `vida taskflow task list --status open --json`
+2. `vida taskflow task list --status in_progress --json`
+3. `vida taskflow task ready --json`
 
 ## Constraints
 

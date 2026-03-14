@@ -50,10 +50,10 @@ Current bounded donors and proof sources:
 1. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
 2. `docs/product/spec/docflow-v1-runtime-modernization-plan.md`
 3. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
-4. `vida/config/instructions/runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`
-5. `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`
-6. `taskflow-v0/**`
-7. `codex-v0/**`
+4. `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`
+5. `runtime-instructions/work.project-agent-extension-protocol.md`
+6. bounded compatibility/runtime-support donor surfaces for the active TaskFlow runtime family
+7. bounded compatibility/runtime-support donor surfaces for the active DocFlow runtime family
 8. current Rust `vida` operator shell under `crates/vida/**`
 9. `docs/product/spec/taskflow-protocol-runtime-binding-model.md`
 10. `docs/product/research/instruction-packing-and-caching-survey.md`

@@ -6,7 +6,7 @@ Status:
 
 1. this file is non-canonical reference material,
 2. it does not own protocol law,
-3. the canonical law remains in `vida/config/instructions/instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol.md`.
+3. the canonical law remains in `instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol`.
 
 ## Requirement Inventory Row Template
 

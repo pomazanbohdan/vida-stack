@@ -79,7 +79,7 @@ Reason:
 
 1. `vida` already owns a config-driven kernel contract
 2. product law must stay YAML plus explicit receipts/proofs
-3. runtime implementation must remain swappable between `taskflow-v0` and future `vida-v1`
+3. runtime implementation must remain swappable between the active `TaskFlow` runtime family surfaces and future direct `vida` runtime closure
 
 ## 3. Borrowed From LangChain OSS / LangGraph
 

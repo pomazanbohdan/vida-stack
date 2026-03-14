@@ -15,6 +15,21 @@ fn unique_state_dir() -> String {
     format!("/tmp/vida-task-state-{}-{}", std::process::id(), nanos)
 }
 
+fn repo_root() -> String {
+    env!("CARGO_MANIFEST_DIR")
+        .strip_suffix("/crates/vida")
+        .expect("crate manifest dir should end with /crates/vida")
+        .to_string()
+}
+
+fn donor_taskflow_runtime_name() -> String {
+    ["taskflow", "v0"].join("-")
+}
+
+fn donor_taskflow_launcher() -> String {
+    format!("{}/{}/src/vida", repo_root(), donor_taskflow_runtime_name())
+}
+
 fn sample_jsonl(path: &str) {
     fs::write(
         path,
@@ -381,7 +396,7 @@ fn donor_ready_output_matches_semantic_parity_fixture() {
     fs::create_dir_all(format!("{temp_root}/.beads")).expect("beads dir should be created");
     sample_jsonl(&jsonl_path);
 
-    let donor_import = Command::new("/home/unnamed/project/vida-stack/taskflow-v0/src/vida")
+    let donor_import = Command::new(donor_taskflow_launcher())
         .args(["task", "import-jsonl", &jsonl_path, "--json"])
         .env("VIDA_ROOT", &temp_root)
         .env(
@@ -392,7 +407,7 @@ fn donor_ready_output_matches_semantic_parity_fixture() {
         .expect("donor import should run");
     assert!(donor_import.status.success());
 
-    let donor_ready = Command::new("/home/unnamed/project/vida-stack/taskflow-v0/src/vida")
+    let donor_ready = Command::new(donor_taskflow_launcher())
         .args(["task", "ready", "--json"])
         .env("VIDA_ROOT", &temp_root)
         .env(
@@ -431,7 +446,7 @@ fn donor_show_output_matches_semantic_parity_fixture() {
     fs::create_dir_all(format!("{temp_root}/.beads")).expect("beads dir should be created");
     sample_jsonl(&jsonl_path);
 
-    let donor_import = Command::new("/home/unnamed/project/vida-stack/taskflow-v0/src/vida")
+    let donor_import = Command::new(donor_taskflow_launcher())
         .args(["task", "import-jsonl", &jsonl_path, "--json"])
         .env("VIDA_ROOT", &temp_root)
         .env(
@@ -442,7 +457,7 @@ fn donor_show_output_matches_semantic_parity_fixture() {
         .expect("donor import should run");
     assert!(donor_import.status.success());
 
-    let donor_show = Command::new("/home/unnamed/project/vida-stack/taskflow-v0/src/vida")
+    let donor_show = Command::new(donor_taskflow_launcher())
         .args(["task", "show", "vida-b", "--json"])
         .env("VIDA_ROOT", &temp_root)
         .env(
@@ -491,7 +506,7 @@ fn donor_list_output_matches_semantic_parity_fixture() {
     )
     .expect("write task jsonl");
 
-    let donor_import = Command::new("/home/unnamed/project/vida-stack/taskflow-v0/src/vida")
+    let donor_import = Command::new(donor_taskflow_launcher())
         .args(["task", "import-jsonl", &jsonl_path, "--json"])
         .env("VIDA_ROOT", &temp_root)
         .env(
@@ -502,7 +517,7 @@ fn donor_list_output_matches_semantic_parity_fixture() {
         .expect("donor import should run");
     assert!(donor_import.status.success());
 
-    let donor_list = Command::new("/home/unnamed/project/vida-stack/taskflow-v0/src/vida")
+    let donor_list = Command::new(donor_taskflow_launcher())
         .args(["task", "list", "--json"])
         .env("VIDA_ROOT", &temp_root)
         .env(

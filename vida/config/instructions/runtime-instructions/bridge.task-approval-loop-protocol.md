@@ -6,7 +6,7 @@ Activation rule:
 
 1. This protocol is inactive by default unless the user explicitly asks for between-task approval or the active route contract explicitly requires it.
 2. A direct user switch back to continuous autonomous execution suspends this protocol immediately for subsequent task boundaries.
-3. While suspended, next-task analysis must still happen under `vida/config/instructions/instruction-contracts/overlay.autonomous-execution-protocol.md`; the suspension removes the wait, not the analysis discipline.
+3. While suspended, next-task analysis must still happen under `instruction-contracts/overlay.autonomous-execution-protocol`; the suspension removes the wait, not the analysis discipline.
 4. While suspended, the default brief boundary plan report may remain active unless the user explicitly disables user-facing boundary reporting.
 5. A user may request a hybrid mode: continuous execution inside the current task, but a brief report-and-approval gate only at the boundary before each new task.
 
@@ -82,9 +82,9 @@ Next-task boundary variant:
 2. It inserts a user approval gate between tasks, not between micro-steps.
 3. Inside the approved task, normal autonomous follow-through still applies unless another approval contract overrides it.
 4. A direct user instruction to continue automatically across tasks suspends the between-task wait while keeping all other TaskFlow, verification, and scope controls intact.
-5. When suspended, `vida/config/instructions/instruction-contracts/overlay.autonomous-execution-protocol.md` owns between-task continuation behavior.
+5. When suspended, `instruction-contracts/overlay.autonomous-execution-protocol` owns between-task continuation behavior.
 6. Under the next-task boundary variant, this protocol owns only the single concise boundary gate; all intra-task behavior remains under autonomous execution.
-7. This protocol must not suppress the default boundary analysis/report/update behavior owned by `vida/config/instructions/instruction-contracts/overlay.autonomous-execution-protocol.md`; it may only add or remove the approval wait.
+7. This protocol must not suppress the default boundary analysis/report/update behavior owned by `instruction-contracts/overlay.autonomous-execution-protocol`; it may only add or remove the approval wait.
 
 ## Fail-Closed Rule
 

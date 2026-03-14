@@ -17,19 +17,19 @@ This protocol promotes the research-layer `Agent Definition System` into framewo
 
 Required runtime artifacts:
 
-1. `vida/config/instructions/agent-definitions/model.agent-definitions-contract.md`
-2. `vida/config/instructions/agent-definitions/role.role-profile-contract.md`
+1. `agent-definitions/model.agent-definitions-contract`
+2. `agent-definitions/role.role-profile-contract`
 3. `docs/product/spec/instruction-artifact-model.md`
 4. `docs/product/spec/skill-management-and-activation-law.md`
-5. `vida/config/instructions/prompt-templates/worker.packet-templates.md`
-6. `vida/config/instructions/prompt-templates/cheap-worker.prompt-pack-reference.md`
-7. `vida/config/instructions/skills/`
+5. `prompt-templates/worker.packet-templates`
+6. `prompt-templates/cheap-worker.prompt-pack-reference`
+7. `skills/`
 
 Upstream supporting artifacts:
 
 1. `docs/process/framework-source-lineage-index.md`
 2. `docs/product/spec/agent-role-skill-profile-flow-model.md`
-3. `vida/config/instructions/system-maps/template.map.md`
+3. `system-maps/template.map`
 
 ## Canonical Terminology
 
@@ -49,7 +49,7 @@ Rules:
 3. `Prompt Template Configuration` renders the contract for a runtime/provider and remains product-owned config.
 4. `Skill` is a separately managed capability artifact, not an implicit field inside the contract or template.
 5. `Role Profile` remains upstream identity/stance input, not the full runtime behavior object by itself.
-6. `Role Profile` canonical contract lives in `vida/config/instructions/agent-definitions/role.role-profile-contract.md`.
+6. `Role Profile` canonical contract lives in `agent-definitions/role.role-profile-contract`.
 7. `Flow Set` is a runtime composition artifact, not a fifth core instruction artifact class.
 
 ## Deterministic Behavior Law

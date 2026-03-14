@@ -141,6 +141,7 @@ Full-orchestration rule:
 1. when normal write-producing work is in scope, the full delegated cycle remains the default even after bounded read-only findings or explorer-discovered gaps,
 2. discovering the exact patch location does not by itself authorize local orchestrator patching,
 3. local departure from this full cycle requires an explicit recorded exception path.
+4. a worker wait timeout, empty poll result, or slow delegated response does not compress the full cycle into one generic development lane or root-session coding; the next lawful step is renewed waiting, bounded inspection, reuse, reroute, or explicit escalation.
 
 Keep work local only when:
 
@@ -160,6 +161,7 @@ Lane-identity rule:
 2. resumed execution intent does not convert the root session into a local implementer,
 3. local root-session writing requires an explicit recorded exception path,
 4. absent that receipt, the next lawful action is shaping, delegation, verification routing, or escalation.
+5. if the delegated lane still exists, a same-turn timeout summary is not a supersession receipt.
 
 Escalate only when:
 
@@ -195,9 +197,9 @@ Interpretation rule:
 
 Framework anti-stop, reporting-boundary, continuation, and final-report law is owned by:
 
-1. `vida/config/instructions/instruction-contracts/core.orchestration-runtime-capsule.md`
-2. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-3. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
+1. `instruction-contracts/core.orchestration-runtime-capsule`
+2. `instruction-contracts/core.orchestration-protocol`
+3. `runtime-instructions/work.taskflow-protocol`
 
 Project narrowing:
 
@@ -214,9 +216,9 @@ Project narrowing:
 
 Framework exception-path and open-delegation law is owned by:
 
-1. `vida/config/instructions/instruction-contracts/core.orchestration-runtime-capsule.md`
-2. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-3. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
+1. `instruction-contracts/core.orchestration-runtime-capsule`
+2. `instruction-contracts/core.orchestration-protocol`
+3. `runtime-instructions/work.taskflow-protocol`
 
 Project narrowing:
 

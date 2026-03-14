@@ -28,13 +28,13 @@ Purpose: express the orchestrator behavior law in human-readable form while the 
 ## Mandatory Reads
 
 1. `AGENTS.md`
-2. `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
-3. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
-4. `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md`
-5. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-6. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-7. `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`
-8. `vida/config/instructions/runtime-instructions/lane.agent-handoff-context-protocol.md`
+2. `agent-definitions/entry.orchestrator-entry`
+3. `instruction-contracts/bridge.instruction-activation-protocol`
+4. `instruction-contracts/overlay.step-thinking-protocol`
+5. `instruction-contracts/core.orchestration-protocol`
+6. `instruction-contracts/core.agent-system-protocol`
+7. `instruction-contracts/lane.worker-dispatch-protocol`
+8. `runtime-instructions/lane.agent-handoff-context-protocol`
 
 ## Decision Rules
 

@@ -5,9 +5,9 @@ Purpose: expose the active VIDA runtime families so each bounded runtime surface
 ## Active Runtime Families
 
 1. `docflow`
-   - map: `vida/config/instructions/system-maps/runtime-family.docflow-map.md`
+   - map: `system-maps/runtime-family.docflow-map`
 2. `taskflow`
-   - map: `vida/config/instructions/system-maps/runtime-family.taskflow-map.md`
+   - map: `system-maps/runtime-family.taskflow-map`
 
 Future rule:
 
@@ -27,15 +27,15 @@ Read this index when:
 ## Routing
 
 1. Documentation/docsys runtime questions:
-   - continue to `vida/config/instructions/system-maps/runtime-family.docflow-map.md`
+   - continue to `system-maps/runtime-family.docflow-map`
    - canonical launcher contract: `vida docflow`
 2. Tracked execution / boot / run-graph / route runtime questions:
-   - continue to `vida/config/instructions/system-maps/runtime-family.taskflow-map.md`
+   - continue to `system-maps/runtime-family.taskflow-map`
 3. Runtime health / traces / proving / observability questions:
-   - continue to `vida/config/instructions/system-maps/observability.map.md`
+   - continue to `system-maps/observability.map`
 4. Final `taskflow` runtime-consumption wiring:
-   - continue to `vida/config/instructions/system-maps/runtime-family.taskflow-map.md`
-   - then activate `vida/config/instructions/system-maps/runtime-family.docflow-map.md` for canonical documentation/inventory/readiness consumption evidence
+   - continue to `system-maps/runtime-family.taskflow-map`
+   - then activate `system-maps/runtime-family.docflow-map` for canonical documentation/inventory/readiness consumption evidence
 
 -----
 artifact_path: config/system-maps/runtime-family.index

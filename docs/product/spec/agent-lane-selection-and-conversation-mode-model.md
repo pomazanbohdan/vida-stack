@@ -72,6 +72,12 @@ It sits before it:
    - `scope_discussion` -> `spec-pack`
    - `pbi_discussion` -> `work-pool-pack`
 
+After lane-class selection and before delegated execution, runtime may choose one executor tier from the active host CLI template, but only by this order:
+
+1. satisfy role/task-class admissibility first,
+2. satisfy local score/health gates second,
+3. choose the cheapest remaining tier third.
+
 ## 6. Overlay Activation
 
 Project activation lives in:

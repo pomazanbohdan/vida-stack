@@ -13,12 +13,12 @@ This file does not own:
 
 These laws and operator maps are owned by:
 
-1. `vida/config/instructions/runtime-instructions/work.execution-health-check-protocol.md`
-2. `vida/config/instructions/runtime-instructions/work.command-execution-discipline-protocol.md`
-3. `vida/config/instructions/system-maps/migration.script-runtime-architecture-map.md`
-4. `vida/config/instructions/system-maps/migration.runtime-transition-map.md`
-5. `vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md`
-6. `vida/config/instructions/system-maps/tooling.runtime-operator-tooling-map.md`
+1. `runtime-instructions/work.execution-health-check-protocol`
+2. `runtime-instructions/work.command-execution-discipline-protocol`
+3. `system-maps/migration.script-runtime-architecture-map`
+4. `system-maps/migration.runtime-transition-map`
+5. `runtime-instructions/bridge.project-overlay-protocol`
+6. `system-maps/tooling.runtime-operator-tooling-map`
 
 ## Operator Tooling Map
 

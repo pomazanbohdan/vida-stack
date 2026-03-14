@@ -125,6 +125,14 @@ Example target:
 9. coding, research, verification, and devops proceed under one compiled route,
 10. final output includes working binaries, documentation, and proof/readiness evidence.
 
+Design-first intake rule:
+
+1. when one user request already includes research/specification/planning plus later implementation or code delivery, the intake surface must not jump directly into developer-lane execution,
+2. the runtime must first route that request into a design-first path,
+3. the preferred one-shot launcher surface for that path is `vida taskflow bootstrap-spec "<request>" --json`,
+4. that surface must materialize the feature epic, the spec-pack task, and the canonical design-doc scaffold before normal development-team execution begins,
+5. once the design artifact is finalized and validated through `vida docflow`, normal `TaskFlow` delivery orchestration may continue.
+
 ## 4. Stage 1: Install / Init / Bootstrap
 
 ### 4.1 Entry Cases
@@ -568,6 +576,7 @@ The currently known planning conversation modes are:
    - default lane class: `business_analyst`
    - target outcome: bounded scope, clarified constraints, acceptance direction
    - lawful tracked handoff: `spec-pack`
+   - required first tracked artifacts: one feature epic, one spec-pack task, one bounded design document
 2. `pbi_discussion`
    - default lane class: `pm`
    - target outcome: one bounded task/PBI candidate, delivery cut, ordering, launch readiness
@@ -608,13 +617,15 @@ The known Stage-3 flow is:
    - `needs_spec_delta`
 5. if needed, stay in bounded clarification rather than widening scope silently,
 6. form or refresh the specification/contract layer,
-7. when the target work is code-shaped or architecture-sensitive, run `execution_preparation` before developer execution begins,
-8. materialize planning state, execution-preparation state, and task-graph state through lawful tracked paths,
-9. hand off:
+7. for feature-delivery requests that combine research/specification/planning with code, open one feature epic and one spec-pack task before implementation routing,
+8. keep the bounded design artifact canonical through `vida docflow` and close the spec-pack task only after the design artifact is finalized and validated,
+9. when the target work is code-shaped or architecture-sensitive, run `execution_preparation` before developer execution begins,
+10. materialize planning state, execution-preparation state, and task-graph state through lawful tracked paths,
+11. hand off:
    - `research-pack -> spec-pack`
    - `spec-pack -> work-pool-pack`
    - `work-pool-pack -> execution-plan`
-10. expose planning/scope state through bounded query surfaces.
+12. expose planning/scope state through bounded query surfaces.
 
 ### 8.6 Intake Artifact Rule
 
@@ -1052,5 +1063,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md
 created_at: '2026-03-12T21:25:00+02:00'
-updated_at: '2026-03-13T08:47:25+02:00'
+updated_at: 2026-03-14T12:41:58.831722767Z
 changelog_ref: user-facing-runtime-flow-and-operating-loop-model.changelog.jsonl

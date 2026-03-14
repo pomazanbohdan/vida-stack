@@ -26,6 +26,14 @@ Rule:
 2. `AGENTS.sidecar.md` must orient project docs,
 3. deeper project onboarding and activation must not be hidden inside ad hoc chat behavior.
 
+Carrier ownership rule:
+
+1. one shared framework bootstrap law must govern all bootstrap carriers,
+2. root `AGENTS.md` is the stronger live bootstrap carrier for the current repository,
+3. `system-maps/bootstrap.router-guide` is the synchronized framework-owned bootstrap-router read surface for runtime/help/discovery,
+4. packaged/generated bootstrap carriers are delivery surfaces only and must not become parallel owner layers,
+5. when those carriers diverge, the drift must be repaired in the same change rather than tolerated as dual ownership.
+
 ## 2. Runtime Initialization Split
 
 The runtime target model has three bounded initialization surfaces:
@@ -52,17 +60,23 @@ The file must remain bootstrap-oriented and must not absorb the full downstream 
 Minimum routing content in `AGENTS.md`:
 
 1. read `AGENTS.md`,
-2. read `AGENTS.sidecar.md`,
-3. read `vida/root-map.md`,
-4. resolve lane,
-5. route to `vida orchestrator-init` or `vida agent-init` when those runtime surfaces are available,
-6. if project activation is pending, route to `vida project-activator` before ordinary project work.
+2. determine the bounded bootstrap route,
+3. route to `vida orchestrator-init` or `vida agent-init` when those runtime surfaces are available,
+4. if project activation is pending, route to `vida project-activator` before ordinary project work,
+5. read `AGENTS.sidecar.md` as the project docs map after bootstrap routing establishes or confirms the project path,
+6. use bounded shorthand framework ids only when runtime bootstrap surfaces leave an edge case unresolved.
 
 Source-mode bridge rule:
 
 1. until all runtime init commands are implemented everywhere, source-mode bootstrap may still continue through the current canonical map and entry-contract read path,
 2. but the target runtime contract remains the command split above.
 3. local Rust launcher now implements `vida orchestrator-init` and `vida agent-init`; `project-activator` and some worker-side source-mode flows may still use bounded fallback routing until the remaining activation path is fully runtime-native.
+
+Reference grammar rule:
+
+1. in framework routing prose, a backticked canonical id such as `instruction-contracts/core.orchestration-protocol` means the bounded framework inspection target for `vida protocol view <canonical_id>`,
+2. full command-form `vida protocol view <canonical_id>` should remain only in runnable shell examples, operator help, or explicit command snippets,
+3. `.md` suffixes must not appear in ordinary framework routing prose.
 
 ## 4. Orchestrator Initialization Contract
 
@@ -74,9 +88,11 @@ Minimum output classes:
 2. environment/runtime posture,
 3. minimum VIDA command set for safe start,
 4. mandatory framework maps and protocols,
-5. current initialization/readiness state,
-6. whether project activation is pending,
-7. bounded remediation if readiness is not green.
+5. active orchestrator thinking bootstrap surface and per-step mode-selection rule,
+6. runtime-visible reporting contract for `Thinking mode` and counter prefixes,
+7. current initialization/readiness state,
+8. whether project activation is pending,
+9. bounded remediation if readiness is not green.
 
 Minimum command-oriented content:
 
@@ -99,10 +115,11 @@ It must include:
 
 1. confirmation that the lane is an agent/worker lane,
 2. the bounded task goal or prompt from the orchestrator,
-3. only the protocol subset needed for that lane,
-4. the minimum command set needed for `TaskFlow`, `DocFlow`, or adjacent bounded execution,
-5. the runtime/environment posture relevant to the assigned lane,
-6. explicit refusal to inherit the whole orchestrator bootstrap law.
+3. the worker thinking subset and worker-safe allowed thinking modes,
+4. the runtime-visible reporting contract for worker-safe `Thinking mode` and counter prefixes,
+5. the minimum command set needed for `TaskFlow`, `DocFlow`, or adjacent bounded execution,
+6. the runtime/environment posture relevant to the assigned lane,
+7. explicit refusal to inherit the whole orchestrator bootstrap law.
 
 Agent-load rule:
 
@@ -167,23 +184,86 @@ Bootstrap-carrier rule:
 1. during this pending state, `AGENTS.md` may carry an explicit instruction to run `vida project-activator`,
 2. once activation is complete, that temporary instruction should be removed from the generated project bootstrap carrier so it does not remain as stale onboarding noise.
 
+Current packaging rule:
+
+1. until a separate generated root bootstrap carrier exists, the packaged project bootstrap carrier may be produced from the current root `AGENTS.md`,
+2. that packaging shortcut does not make the packaged copy a second owner layer,
+3. any shared bootstrap-law edit must keep root `AGENTS.md`, `system-maps/bootstrap.router-guide`, and packaged delivery output synchronized.
+
+## 8.1 Minimum Runtime Surface
+
+`vida project-activator` must be a bounded operator-facing command rather than an implied chat ritual.
+
+Minimum rule:
+
+1. the command must exist on the root `vida` surface,
+2. it must appear in root help beside `init`, `orchestrator-init`, and `agent-init`,
+3. it must expose one bounded current-project activation view rather than silently mutating project state,
+4. it may report `pending` or `ready_enough_for_normal_work`, but it must not claim full activation closure without explicit supporting evidence.
+5. while it reports `pending`, it must also make the bounded activation algorithm explicit:
+   - collect required interview inputs,
+   - apply safe defaults,
+   - materialize the minimum docs/config/host-template slice,
+   - log the activation receipt,
+   - tell the operator whether restart is required.
+
+Minimum output classes:
+
+1. current project root/path under evaluation,
+2. project shape classification:
+   - `empty`
+   - `partial`
+   - `structured`
+3. bootstrap carrier state:
+   - `AGENTS.md`
+   - `AGENTS.sidecar.md`
+   - project docs/runtime roots when relevant
+4. activation posture:
+   - `pending`
+   - `partial`
+   - `ready_enough_for_normal_work`
+5. missing activation prerequisites or blockers,
+6. bounded next steps,
+7. whether restart or later host-template initialization is still required.
+8. required interview inputs still missing for lawful activation.
+9. whether TaskFlow is forbidden while activation remains pending.
+10. which documentation/runtime surface is preferred during activation.
+
+JSON rule:
+
+1. the command should expose a machine-readable `--json` view with the same bounded activation summary,
+2. plain-text and JSON views must agree on status, blockers, and next steps.
+3. the machine-readable view should expose a one-shot example command whenever the remaining activation inputs are small enough to complete in one bounded call.
+
 ## 9. Project Activator Pipeline
 
 The canonical activator pipeline is:
 
 1. inspect the current project and determine whether it is empty, partial, or already structured,
-2. record the current project structure into the sidecar/project-doc layer,
-3. build or refresh the project documentation map when enough structure exists,
-4. inspect the current environment and runtime posture,
-5. determine which runtime/development environment is already configured,
-6. create the high-value bootstrap/project documents required by protocol,
-7. ask the user for current and upcoming task context,
-8. build the import-ready project/task initialization payload and import it into VIDA,
-9. walk through core project configuration settings,
-10. walk through automation and external-agent settings,
-11. choose and initialize the current host LLM-tool environment template,
-12. tell the user to restart the tool after agent-environment initialization when required,
-13. continue later into roles/skills/profiles/flows and methodology shaping as those slices become available.
+2. if activation is pending, collect the minimum bounded interview inputs first:
+   - project identity,
+   - language policy,
+   - supported host CLI system,
+3. record the current project structure into the sidecar/project-doc layer,
+4. build or refresh the minimum project documentation map and docs roots using safe defaults where the framework owns the default,
+5. inspect the current environment and runtime posture,
+6. choose and initialize the current host LLM-tool environment template,
+7. log the activation mutation under `.vida/receipts/`,
+8. tell the user to restart the tool after agent-environment initialization when required,
+9. continue later into richer project/task/roles/skills/profiles/flows slices as those capabilities become available.
+
+Pipeline staging rule:
+
+1. the first runtime-native `vida project-activator` surface may summarize and route the canonical pipeline in bounded steps without implementing every later interview/config slice in one command,
+2. early runtime-native output must still make the pending-vs-ready activation posture explicit and must not pretend the full pipeline is already automated when it is not,
+3. however, when the missing slice is only the minimum onboarding set (`project id`, language policy, supported host CLI selection), the activator should support one bounded one-shot command rather than forcing the agent into broad manual file edits.
+
+Activation boundary rule:
+
+1. pending activation is not TaskFlow execution,
+2. `vida taskflow` and any non-canonical external TaskFlow runtime are out of scope while activation remains pending,
+3. `vida docflow` is the lawful companion runtime family for documentation/readiness inspection during activation,
+4. the activator itself is the bounded mutation surface for activation-owned docs/config changes.
 
 ## 10. Sidecar And Project-Map Work
 
@@ -261,9 +341,15 @@ Current known template:
 
 1. `Codex`
 
+Framework ownership rule:
+
+1. host CLI selection/materialization is framework-owned and must route through `runtime-instructions/work.host-cli-agent-setup-protocol`,
+2. project-local guides such as `docs/process/codex-agent-configuration-guide.md` may tune the selected tool, but they are not the framework owner for choosing or materializing the template.
+
 Post-init rule:
 
 1. when full host-agent initialization requires a fresh session, the activator must tell the user to exit and re-run the tool.
+2. for `Codex`, the activator must explicitly say to close and restart Codex after `.codex/**` is materialized so agents become visible in the runtime execution environment.
 
 ## 15. Future Activation Interview
 
@@ -314,10 +400,10 @@ This model is closed enough when:
 artifact_path: product/spec/bootstrap-carriers-and-project-activator-model
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-12'
+artifact_revision: '2026-03-14'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/bootstrap-carriers-and-project-activator-model.md
 created_at: '2026-03-12T22:20:00+02:00'
-updated_at: '2026-03-12T22:20:00+02:00'
+updated_at: 2026-03-14T12:05:10.552348476Z
 changelog_ref: bootstrap-carriers-and-project-activator-model.changelog.jsonl

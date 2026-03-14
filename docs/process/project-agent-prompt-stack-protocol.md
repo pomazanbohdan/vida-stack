@@ -77,10 +77,11 @@ Role:
 
 Mandatory sources when a delegated lane is active:
 
-1. `.codex/agents/development-implementer.toml`
-2. `.codex/agents/development-coach.toml`
-3. `.codex/agents/development-verifier.toml`
-4. `.codex/agents/development-escalation.toml`
+1. `.codex/agents/junior.toml`
+2. `.codex/agents/middle.toml`
+3. `.codex/agents/senior.toml`
+4. `.codex/agents/architect.toml`
+5. activation-time `runtime_role` / `task_class` packet fields
 
 Role:
 
@@ -120,9 +121,9 @@ Role:
 
 Mandatory sources when execution state matters:
 
-1. `taskflow-v0 status`
-2. `taskflow-v0 boot snapshot --json --top-limit 5 --ready-limit 5`
-3. bounded `taskflow-v0 task` views when a specific active unit exists
+1. `vida status --json`
+2. `vida orchestrator-init --json`
+3. bounded `vida taskflow task` views when a specific active unit exists
 
 Role:
 

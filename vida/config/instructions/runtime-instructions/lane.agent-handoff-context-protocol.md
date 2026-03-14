@@ -28,8 +28,8 @@ A lawful handoff must define at minimum:
 
 When rendered as a worker packet, the packet must also obey:
 
-1. `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`
-2. `vida/config/instructions/agent-definitions/entry.worker-entry.md`
+1. `instruction-contracts/lane.worker-dispatch-protocol`
+2. `agent-definitions/entry.worker-entry`
 
 Fresh-start continuation prompts for the next agent must additionally carry:
 
@@ -70,7 +70,7 @@ Before handoff construction or prompt rendering, the sender must normalize sessi
 
 Allowed session-experience sources:
 
-1. `vida/config/instructions/instruction-contracts/overlay.session-context-continuity-protocol.md` session packet fields,
+1. `instruction-contracts/overlay.session-context-continuity-protocol` session packet fields,
 2. validated task/runtime artifacts,
 3. explicit current-user instructions and current stop conditions,
 4. exact changed-file or artifact references,
@@ -144,7 +144,7 @@ Supported variants:
    - explicit worker-lane confirmation,
    - one blocking question,
    - bounded ownership and verification command,
-   - must obey `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`.
+   - must obey `instruction-contracts/lane.worker-dispatch-protocol`.
 2. `fresh-start continuation prompt`
    - used when the next agent may start without transcript inheritance,
    - must restate the lawful bootstrap/read path and authoritative state source,
@@ -223,10 +223,10 @@ This protocol's historical external-alignment lineage is preserved in:
 
 ## References
 
-1. `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`
-2. `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
-3. `vida/config/instructions/instruction-contracts/overlay.session-context-continuity-protocol.md`
-4. `vida/config/instructions/prompt-templates/worker.packet-templates.md`
+1. `instruction-contracts/lane.worker-dispatch-protocol`
+2. `runtime-instructions/core.context-governance-protocol`
+3. `instruction-contracts/overlay.session-context-continuity-protocol`
+4. `prompt-templates/worker.packet-templates`
 5. `docs/process/framework-source-lineage-index.md`
 
 -----

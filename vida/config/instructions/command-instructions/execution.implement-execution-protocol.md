@@ -7,8 +7,8 @@ Scope:
 1. Command mode: `/vida-implement`.
 2. Applies to autonomous development execution for a ready task pool in the DB-backed task runtime.
 3. Uses one canonical command (`/vida-implement`) and forbids historical split aliases as runtime path.
-4. When the user explicitly wants the agent to keep following a settled plan/spec/task pool to completion, activate `vida/config/instructions/instruction-contracts/overlay.autonomous-execution-protocol.md` as the trigger/stop doctrine layered on top of this protocol.
-5. When queue selection or reprioritization is ambiguous, activate `vida/config/instructions/runtime-instructions/work.execution-priority-protocol.md` before selecting the next writer task.
+4. When the user explicitly wants the agent to keep following a settled plan/spec/task pool to completion, activate `instruction-contracts/overlay.autonomous-execution-protocol` as the trigger/stop doctrine layered on top of this protocol.
+5. When queue selection or reprioritization is ambiguous, activate `runtime-instructions/work.execution-priority-protocol` before selecting the next writer task.
 
 ## Core Contract
 
@@ -16,7 +16,7 @@ Scope:
 
 1. accept only tasks that passed form-task launch gate,
 2. build or refresh the active pool dependency graph before selecting the next writer task when the scope includes multiple tasks/subtasks,
-3. pick next `ready` task(s) from `taskflow-v0 task`,
+3. pick next `ready` task(s) from `vida taskflow task`,
 4. execute implementation loop to completion or explicit blocker,
 5. run mandatory verification and review gates,
 6. continue automatically with next ready task until pool completion.
@@ -27,7 +27,7 @@ Scope:
 2. Approved spec and acceptance criteria, or approved `issue_contract` for equivalent bug paths.
 2.1. When the work originated from mixed research/release/user-negotiation inputs, a normalized `spec_intake` artifact must already have routed that work into SCP or ICP before launch.
 2.2. `draft_execution_spec` is a pre-launch review artifact only; it does not authorize `/vida-implement` by itself and must be absorbed by the canonical form-task launch path before writer execution.
-2.3. A launch-approved bounded `delivery_task_card` from `vida/config/instructions/command-instructions/planning.form-task-protocol.md` is mandatory launch context, not optional planning residue.
+2.3. A launch-approved bounded `delivery_task_card` from `command-instructions/planning.form-task-protocol` is mandatory launch context, not optional planning residue.
 2.4. The active `delivery_task_card` must expose at minimum:
    - `goal`
    - `non_goals`
@@ -43,7 +43,7 @@ Scope:
 3. Research evidence relevant to scope.
 4. External API reality evidence (when integration exists).
 5. Decision log (`docs/decisions.md`) and feature checklist entries.
-6. `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md` for external assumptions during execution.
+6. `runtime-instructions/work.web-validation-protocol` for external assumptions during execution.
 7. Hydrated context capsule for active task (`.vida/logs/context-capsules/<task_id>.json`).
 8. Route-level control limits when declared by the active route or overlay:
    - `budget_policy`
@@ -63,7 +63,7 @@ For `/vida-implement`, IEP layers map to CLP as follows:
 4. `CL4 Materialization` -> `IEP-5 Implement Loop`
 5. `CL5 Gates And Handoff` -> `IEP-6 Verify And Review` + `IEP-7 Close And Continue` + `IEP-8 Pool Completion`
 
-Canonical layer source: `vida/config/instructions/command-instructions/routing.command-layer-protocol.md`
+Canonical layer source: `command-instructions/routing.command-layer-protocol`
 
 ## Gate Sequence (Canonical)
 
@@ -82,9 +82,9 @@ Canonical layer source: `vida/config/instructions/command-instructions/routing.c
    - classify `ready`, `blocked`, `soft-blocked`, `parallel_read_only`, and `single_writer`.
    - if the graph is missing, stale, or contradictory: `BLOCKED (BLK_POOL_GRAPH_MISSING)`.
 4. `IEP-2 Queue Intake`
-   - select next `ready` task from `taskflow-v0 task`.
+   - select next `ready` task from `vida taskflow task`.
    - if none: move to `IEP-8 Pool Completion`.
-   - if multiple candidates remain after queue intake, apply `vida/config/instructions/runtime-instructions/work.execution-priority-protocol.md` and keep `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md` route law active while selecting the next writer task.
+   - if multiple candidates remain after queue intake, apply `runtime-instructions/work.execution-priority-protocol` and keep `instruction-contracts/core.agent-system-protocol` route law active while selecting the next writer task.
 5. `IEP-3 Skills Routing`
    - run dynamic skill selection for current task scope.
 6. `IEP-4 Preflight`
@@ -116,7 +116,7 @@ Canonical layer source: `vida/config/instructions/command-instructions/routing.c
    - if the gate is not satisfied: `BLOCKED (BLK_RUNTIME_CONTROL_EXHAUSTED)`.
 8. `IEP-4.5 Change-Impact Gate`
    - detect scope/AC/dependency/decision drift before continuing.
-   - if drift detected: stop and route per `vida/config/instructions/runtime-instructions/work.change-impact-reconciliation-protocol.md`.
+   - if drift detected: stop and route per `runtime-instructions/work.change-impact-reconciliation-protocol`.
 9. `IEP-5 Implement Loop`
    - consume one bounded `execution_block` at a time from the active `delivery_task_card`.
    - code changes + targeted checks + state delta capture only inside owned scope.
@@ -152,7 +152,7 @@ Canonical layer source: `vida/config/instructions/command-instructions/routing.c
      - the current result bundle includes `done_verdict`, `stop_reason`, and `residual_risks`.
    - if review-pool admissibility fails: `BLOCKED (BLK_REVIEW_POOL_PENDING)`.
 11.2. `IEP-6.2 Human Approval Gate` (when the selected route or verifier manifest lands in `policy_gate_required`, `senior_review_required`, or `human_gate_required`)
-   - record a matching approval or rejection receipt through `vida/config/instructions/runtime-instructions/work.human-approval-protocol.md`,
+   - record a matching approval or rejection receipt through `runtime-instructions/work.human-approval-protocol`,
    - missing approval receipt keeps the task in `approval_pending`,
    - rejection receipt blocks closure-ready state and feeds the next rework/escalation decision.
 12. `IEP-7 Close And Continue`
@@ -162,7 +162,7 @@ Canonical layer source: `vida/config/instructions/command-instructions/routing.c
      - do not run next-task boundary analysis yet,
      - shape the next lawful in-task leaf or fail closed with an explicit blocker/escalation receipt,
    - only after the parent task is actually closed: close task in the DB-backed runtime, sync logs, auto-pick next `ready` task,
-   - before starting that next task, run the `vida/config/instructions/instruction-contracts/overlay.autonomous-execution-protocol.md` boundary step when continuous autonomy is active:
+   - before starting that next task, run the `instruction-contracts/overlay.autonomous-execution-protocol` boundary step when continuous autonomy is active:
      - inspect nearby specs/protocols and controlling code for the next slice,
      - produce a brief implementation-plan report outside the next task's TaskFlow gating,
      - refresh dependent spec/task coverage if the boundary analysis discovers stale or missing ownership.
@@ -208,7 +208,7 @@ On trigger:
 
 1. set blocker `BLK_CHANGE_IMPACT_PENDING`,
 2. stop implementation for current queue,
-3. execute the canonical reconciliation route from `vida/config/instructions/runtime-instructions/work.change-impact-reconciliation-protocol.md`,
+3. execute the canonical reconciliation route from `runtime-instructions/work.change-impact-reconciliation-protocol`,
 4. resume only after explicit launch confirmation is renewed.
 5. record drift alert from `context-drift-sentinel.sh` evidence in logs/report.
 
@@ -242,7 +242,7 @@ On trigger:
 3. For package/platform/security/migration decisions during implementation, execute WVP and log evidence.
 4. No silent error handling in new/changed code paths.
 5. Single-verifier closure is lawful only when verifier independence is explicit through a verifier-independence receipt or an explicit override receipt.
-6. Review-pool closure is lawful only through `vida/config/instructions/runtime-instructions/work.verification-merge-protocol.md`.
+6. Review-pool closure is lawful only through `runtime-instructions/work.verification-merge-protocol`.
 
 ## Blocker Codes
 
@@ -272,7 +272,7 @@ On trigger:
 1. Execute only via TaskFlow blocks (`block-start -> block-end -> reflect -> verify`).
 2. Record evidence for each gate.
 3. Before reporting completion to user, ensure TaskFlow sync is visible.
-4. Keep `taskflow-v0 task` as the only task-state source of truth.
+4. Keep `vida taskflow task` as the only task-state source of truth.
 5. Emit Telemetry V1 events with minimum fields: `trace_id`, `task_id`, `block_id`, `action`, `duration_ms`, `result`, `success`.
 6. At each resumable boundary, checkpoint at minimum:
    - `delivery_task_id`

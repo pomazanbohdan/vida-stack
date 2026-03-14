@@ -13,8 +13,8 @@ Purpose: define the canonical runtime law for resumability, checkpoint ownership
 
 Primary runtime artifacts:
 
-1. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
-2. `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
+1. `runtime-instructions/core.run-graph-protocol`
+2. `runtime-instructions/core.context-governance-protocol`
 3. `docs/product/spec/checkpoint-commit-and-replay-model.md`
 
 Current durable surfaces:
@@ -107,8 +107,8 @@ Historical runtime-lineage provenance is preserved in:
 
 ## References
 
-1. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
-2. `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
+1. `runtime-instructions/core.run-graph-protocol`
+2. `runtime-instructions/core.context-governance-protocol`
 3. `docs/product/spec/checkpoint-commit-and-replay-model.md`
 4. `docs/process/framework-source-lineage-index.md`
 

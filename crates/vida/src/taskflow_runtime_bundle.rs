@@ -465,7 +465,7 @@ pub(crate) fn blocking_runtime_bundle(error: &str) -> TaskflowConsumeBundlePaylo
         launcher_runtime_paths: DoctorLauncherSummary {
             vida: current_exe,
             project_root: vida_root,
-            taskflow_runtime: "unresolved".to_string(),
+            taskflow_surface: "vida taskflow".to_string(),
         },
         metadata: serde_json::json!({
             "bundle_id": "",
@@ -652,7 +652,7 @@ fn parse_markdown_artifact_metadata(raw: &str) -> std::collections::HashMap<Stri
     map
 }
 
-fn build_orchestrator_init_view(
+pub(crate) fn build_orchestrator_init_view(
     vida_root: &Path,
     control_core: &serde_json::Value,
     project_protocol_projections: &serde_json::Value,
@@ -669,8 +669,35 @@ fn build_orchestrator_init_view(
         "framework_bootstrap": [
             "AGENTS.md",
             "AGENTS.sidecar.md",
-            "vida/root-map.md",
             "vida/config/instructions/agent-definitions/entry.orchestrator-entry.md"
+        ],
+        "thinking_runtime_surface": "vida/config/instructions/instruction-contracts/overlay.step-thinking-runtime-capsule.md",
+        "thinking_protocol_targets": [
+            "instruction-contracts/overlay.step-thinking-runtime-capsule",
+            "instruction-contracts/overlay.step-thinking-protocol#section-algorithm-selector"
+        ],
+        "allowed_thinking_modes": [
+            "STC",
+            "PR-CoT",
+            "MAR",
+            "5-SOL",
+            "META"
+        ],
+        "mode_selection_rule": "select one thinking mode per step after request-intent classification; do not freeze one mode at bootstrap",
+        "reporting_contract": {
+            "required": true,
+            "scope": "user-facing orchestrator progress and closure reports",
+            "thinking_mode_prefix": "Thinking mode: <STC|PR-CoT|MAR|5-SOL|META>.",
+            "request_counters_prefix": "Requests: active=<n> | in_work=<n> | blocked=<n>",
+            "task_counters_prefix": "Tasks: active=<n> | in_work=<n> | blocked=<n>",
+            "agent_counters_prefix": "Agents: active=<n> | working=<n> | waiting=<n>",
+            "mode_selection_note": "the reporting label must reflect the selected per-step thinking mode but must not expose hidden reasoning"
+        },
+        "protocol_view_targets": [
+            "bootstrap/router",
+            "agent-definitions/entry.orchestrator-entry",
+            "instruction-contracts/overlay.step-thinking-runtime-capsule",
+            "system-maps/bootstrap.orchestrator-boot-flow"
         ],
         "project_startup_bundle": project_protocol_projections["startup_bundle"],
         "project_startup_capsules": project_protocol_projections["startup_capsules"],
@@ -683,16 +710,41 @@ fn build_orchestrator_init_view(
         "minimum_commands": [
             "vida boot",
             "vida orchestrator-init --json",
+            "vida protocol view bootstrap/router",
+            "vida protocol view agent-definitions/entry.orchestrator-entry",
+            "vida protocol view instruction-contracts/overlay.step-thinking-runtime-capsule",
             "vida taskflow task ready --json",
             "vida taskflow consume bundle check --json",
-            "python3 codex-v0/codex.py protocol-coverage-check --profile active-canon"
+            "vida docflow protocol-coverage-check --profile active-canon"
         ],
+        "feature_delivery_default_flow": {
+            "documentation_first": true,
+            "intake_runtime": "vida taskflow consume final <request> --json",
+            "design_template_path": "docs/product/spec/templates/feature-design-document.template.md",
+            "tracked_flow_order": [
+                "open epic in vida taskflow",
+                "open spec-pack task in vida taskflow",
+                "initialize/finalize/check bounded design doc through vida docflow",
+                "close spec-pack and shape work-pool/dev packet in vida taskflow",
+                "delegate implementation through the configured development team"
+            ],
+            "design_flow_commands": [
+                "vida docflow init docs/product/spec/<feature>-design.md product/spec/<feature>-design product_spec \"initialize feature design\"",
+                "vida docflow finalize-edit docs/product/spec/<feature>-design.md \"record bounded feature design\"",
+                "vida docflow check --root . docs/product/spec/<feature>-design.md"
+            ],
+            "post_design_execution_posture": [
+                "shape one bounded execution packet from the design document",
+                "delegate normal write-producing work through the configured development team",
+                "keep the root session in orchestrator posture unless an explicit exception path is recorded"
+            ]
+        },
         "project_root": vida_root.display().to_string(),
         "root_artifact_id": control_core["root_artifact_id"],
     })
 }
 
-fn build_agent_init_view(
+pub(crate) fn build_agent_init_view(
     vida_root: &Path,
     activation_bundle: &serde_json::Value,
     project_protocol_projections: &serde_json::Value,
@@ -704,14 +756,36 @@ fn build_agent_init_view(
         "surface": "vida agent-init",
         "status": init_status(boot_classification, migration_state, protocol_binding_registry),
         "local_runtime_surface": "vida agent-init",
-        "source_mode_fallback_surface": "taskflow-v0 boot run lean <run-id> --non-dev",
         "worker_entry_contract": "vida/config/instructions/agent-definitions/entry.worker-entry.md",
         "worker_thinking_subset": "vida/config/instructions/instruction-contracts/role.worker-thinking.md",
+        "thinking_protocol_targets": [
+            "instruction-contracts/role.worker-thinking"
+        ],
+        "allowed_thinking_modes": [
+            "STC",
+            "PR-CoT",
+            "MAR"
+        ],
+        "mode_selection_rule": "select one worker-safe thinking mode per step inside the assigned bounded scope; do not widen into orchestrator/meta reasoning without an explicit packet trigger",
+        "reporting_contract": {
+            "required": true,
+            "scope": "worker-facing bounded status and completion reports",
+            "thinking_mode_prefix": "Thinking mode: <STC|PR-CoT|MAR>.",
+            "task_counters_prefix": "Tasks: active=<n> | in_work=<n> | blocked=<n>",
+            "agent_counters_prefix": "Agents: active=<n> | working=<n> | waiting=<n>",
+            "mode_selection_note": "the reporting label must reflect the selected worker-safe per-step thinking mode without exposing hidden reasoning"
+        },
+        "protocol_view_targets": [
+            "agent-definitions/entry.worker-entry",
+            "instruction-contracts/role.worker-thinking",
+            "system-maps/bootstrap.worker-boot-flow"
+        ],
         "minimum_commands": [
             "vida agent-init --role worker --json",
+            "vida protocol view agent-definitions/entry.worker-entry",
+            "vida protocol view instruction-contracts/role.worker-thinking",
             "vida taskflow task show <task-id> --json",
-            "vida taskflow consume bundle check --json",
-            "taskflow-v0 boot run lean <run-id> --non-dev"
+            "vida taskflow consume bundle check --json"
         ],
         "allowed_non_orchestrator_roles": non_orchestrator_roles(activation_bundle),
         "worker_lane_markers": [

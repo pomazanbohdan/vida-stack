@@ -47,8 +47,8 @@ Owns:
 
 Canonical homes:
 
-1. `vida/config/instructions/agent-definitions/**`
-2. `vida/config/instructions/instruction-contracts/role.*`
+1. `agent-definitions/**`
+2. `instruction-contracts/role.*`
 
 Owns:
 
@@ -76,7 +76,7 @@ Owns:
 
 Canonical homes:
 
-1. `vida/config/instructions/system-maps/governance.map.md`
+1. `system-maps/governance.map`
 2. governance/approval protocols
 3. root human-governance docs when they are the canonical owner
 
@@ -112,20 +112,20 @@ It does not belong to:
 3. project process docs,
 4. backend-specific lifecycle law.
 
-Use `vida/config/instructions/system-maps/framework.core-protocols-map.md` when the task is specifically about how the `core cluster` fits together.
+Use `system-maps/framework.core-protocols-map` when the task is specifically about how the `core cluster` fits together.
 
 ## Routing
 
 1. if the artifact defines framework truth:
-   - continue to `vida/config/instructions/system-maps/framework.map.md`
+   - continue to `system-maps/framework.map`
 2. if the artifact is specifically about the `core cluster`:
-   - continue to `vida/config/instructions/system-maps/framework.core-protocols-map.md`
+   - continue to `system-maps/framework.core-protocols-map`
 3. if the artifact is role-derived:
    - continue to the relevant `agent-definitions/**` or `role.*` owner
 4. if the artifact is bootstrap/environment:
-   - continue to `AGENTS.md`, `vida/root-map.md`, or the relevant bootstrap/overlay owner
+   - continue to `AGENTS.md`, `AGENTS.sidecar.md`, or the relevant bootstrap/overlay owner
 5. if the artifact is human governance:
-   - continue to `vida/config/instructions/system-maps/governance.map.md`
+   - continue to `system-maps/governance.map`
 6. if the artifact is project-owned:
    - hand off to `AGENTS.sidecar.md` and then the project maps under `docs/**`
 7. if the layering law itself is in question:
@@ -135,10 +135,10 @@ Use `vida/config/instructions/system-maps/framework.core-protocols-map.md` when 
 artifact_path: config/system-maps/framework.protocol-layers-map
 artifact_type: system_map
 artifact_version: '1'
-artifact_revision: '2026-03-11'
+artifact_revision: '2026-03-13'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps/framework.protocol-layers-map.md
 created_at: '2026-03-11T15:48:00+02:00'
-updated_at: '2026-03-12T07:58:34+02:00'
+updated_at: '2026-03-13T23:20:00+02:00'
 changelog_ref: framework.protocol-layers-map.changelog.jsonl

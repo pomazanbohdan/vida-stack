@@ -14,14 +14,14 @@ require_cmd() {
 }
 
 infer_version() {
-  local nimble_version
-  nimble_version="$(awk -F'"' '/^version/ { print $2; exit }' "$ROOT_DIR/taskflow-v0/vida.nimble")"
-  [[ -n "$nimble_version" ]] || fail "Unable to infer version from taskflow-v0/vida.nimble"
-  printf 'v%s\n' "$nimble_version"
+  local cargo_version
+  cargo_version="$(awk -F'"' '/^version/ { print $2; exit }' "$ROOT_DIR/crates/vida/Cargo.toml")"
+  [[ -n "$cargo_version" ]] || fail "Unable to infer version from crates/vida/Cargo.toml"
+  printf 'v%s\n' "$cargo_version"
 }
 
 require_cmd python3
-require_cmd nim
+require_cmd cargo
 require_cmd tar
 require_cmd zip
 require_cmd sha256sum
@@ -34,19 +34,15 @@ ARCHIVE_BASE="vida-stack-${VERSION}"
 DIST_DIR="$ROOT_DIR/dist"
 PACKAGE_ROOT="$DIST_DIR/package"
 STAGE_DIR="$PACKAGE_ROOT/$ARCHIVE_BASE"
-TASKFLOW_BIN="$STAGE_DIR/bin/taskflow-v0"
-TASKFLOW_HELPERS_DIR="$STAGE_DIR/taskflow-v0/helpers"
-TASKFLOW_CONFIG_DIR="$STAGE_DIR/taskflow-v0/config"
-TASKFLOW_GENERATED_DIR="$STAGE_DIR/taskflow-v0/generated"
+VIDA_BIN="$STAGE_DIR/bin/vida"
 INSTALL_ASSETS_DIR="$STAGE_DIR/install/assets"
 INSTALLER_ASSET="$DIST_DIR/vida-install.sh"
 MANIFEST_OUT="$DIST_DIR/${ARCHIVE_BASE}.manifest.json"
 RELEASE_NOTES_SRC="$ROOT_DIR/install/release-notes-${VERSION}.md"
 RELEASE_NOTES_OUT="$DIST_DIR/release-notes.md"
-NIMCACHE_DIR="$DIST_DIR/nimcache/release"
 
 rm -rf "$DIST_DIR"
-mkdir -p "$STAGE_DIR/bin" "$TASKFLOW_HELPERS_DIR" "$TASKFLOW_CONFIG_DIR" "$TASKFLOW_GENERATED_DIR" "$INSTALL_ASSETS_DIR"
+mkdir -p "$STAGE_DIR/bin" "$INSTALL_ASSETS_DIR"
 
 cp "$ROOT_DIR/AGENTS.md" "$STAGE_DIR/AGENTS.md"
 awk '
@@ -55,18 +51,14 @@ awk '
 ' "$ROOT_DIR/install/assets/AGENTS.sidecar.scaffold.md" > "$STAGE_DIR/AGENTS.sidecar.md"
 cp -R "$ROOT_DIR/.codex" "$STAGE_DIR/.codex"
 cp -R "$ROOT_DIR/vida" "$STAGE_DIR/vida"
-cp -R "$ROOT_DIR/codex-v0" "$STAGE_DIR/codex-v0"
 
 find "$STAGE_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$STAGE_DIR" -type f -name '*.pyc' -delete
 
-nim c -d:release --nimcache:"$NIMCACHE_DIR" -o:"$TASKFLOW_BIN" "$ROOT_DIR/taskflow-v0/src/vida.nim"
-chmod +x "$TASKFLOW_BIN"
-cp "$ROOT_DIR/taskflow-v0/helpers/turso_task_store.py" "$TASKFLOW_HELPERS_DIR/turso_task_store.py"
-cp "$ROOT_DIR/taskflow-v0/helpers/toon_render.py" "$TASKFLOW_HELPERS_DIR/toon_render.py"
-cp "$ROOT_DIR/taskflow-v0/config/protocol_binding.seed.json" "$TASKFLOW_CONFIG_DIR/protocol_binding.seed.json"
+cargo build --release -p vida
+cp "$ROOT_DIR/target/release/vida" "$VIDA_BIN"
+chmod +x "$VIDA_BIN"
 cp "$ROOT_DIR/docs/framework/templates/vida.config.yaml.template" "$INSTALL_ASSETS_DIR/vida.config.yaml.template"
-VIDA_ROOT="$STAGE_DIR" "$TASKFLOW_BIN" protocol-binding build --json > /dev/null
 
 python3 - <<PY
 import json
@@ -83,33 +75,28 @@ manifest = {
         "AGENTS.md",
         "AGENTS.sidecar.md",
         ".codex/",
-        "bin/taskflow-v0",
-        "codex-v0/",
+        "bin/vida",
         "install/assets/",
-        "taskflow-v0/helpers/",
-        "taskflow-v0/config/",
-        "taskflow-v0/generated/",
         "vida/",
     ],
     "installed_entrypoints": [
         "vida",
         "vida docflow",
-        "taskflow-v0",
+        "vida taskflow",
     ],
     "bundled_binaries": [
-        "bin/taskflow-v0",
+        "bin/vida",
     ],
     "installer_managed_runtimes": [
-        "taskflow-v0",
-        "codex-v0",
+        "vida",
     ],
     "launcher_contracts": {
         "taskflow": "vida taskflow",
         "docflow": "vida docflow"
     },
     "installed_compatibility_contracts": {
-        "vida docflow": "help|overview only",
-        "codex-v0": "migration-only wrapper -> vida docflow"
+        "vida docflow": "canonical docflow runtime",
+        "vida taskflow": "canonical taskflow runtime"
     },
 }
 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

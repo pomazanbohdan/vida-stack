@@ -5,7 +5,7 @@ Purpose: provide a compact runtime-facing projection of `overlay.step-thinking-p
 Boundary rule:
 
 1. this file is a compact projection, not the owner of step-thinking law,
-2. the canonical owner remains `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md`,
+2. the canonical owner remains `instruction-contracts/overlay.step-thinking-protocol`,
 3. when ambiguity, escalation, or uncommon flow composition appears, consult the owner sections directly.
 
 ## Core Use

@@ -4,7 +4,7 @@ Purpose: provide one canonical reconciliation layer that determines whether a tr
 
 ## Core Contract
 
-1. `taskflow-v0 task` remains SSOT for lifecycle state.
+1. `vida taskflow task` remains SSOT for lifecycle state.
 2. TaskFlow remains SSOT for execution telemetry.
 3. TSRP does not introduce a third task-state engine; it classifies consistency across existing artifacts.
 4. Reconciliation is mandatory before closing stale framework tasks by judgment alone.
@@ -13,8 +13,8 @@ Purpose: provide one canonical reconciliation layer that determines whether a tr
 
 TSRP must read only canonical artifacts:
 
-1. `taskflow-v0 task show <task_id> --json`
-2. `taskflow-v0 todo ui-json <task_id>`
+1. `vida taskflow task show <task_id> --json`
+2. `vida taskflow todo ui-json <task_id>`
 3. `boot-profile.sh verify-receipt <task_id>`
 4. `beads-verify-log.sh --task <task_id>`
 5. `run-graph.py status_payload(<task_id>)`
@@ -78,7 +78,7 @@ Rule:
 ## Canonical Helper
 
 ```bash
-taskflow-v0 reconcile status <task_id>
+vida taskflow reconcile status <task_id>
 ```
 
 -----

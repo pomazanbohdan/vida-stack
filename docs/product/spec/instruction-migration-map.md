@@ -20,34 +20,34 @@ Purpose: preserve the instruction-source trail while moving current canon into `
 4. deleted historical YAML template/schema input formerly at `docs/framework/templates/prompt-template-config.yaml`
    Current role: lineage-only migration source
    Current executable law target: `vida/config/instructions/prompt_templates/**`
-5. `vida/config/instructions/agent-definitions/model.agent-definitions-contract.md`
+5. `agent-definitions/model.agent-definitions-contract.md`
    Current role: historical framework seed artifact
-   Current executable law target: `vida/config/instructions/*.md`
+   Current executable law target: `vida/config/instructions/**/*.md`
 6. `docs/product/spec/instruction-artifact-model.md`
    Current role: historical framework seed artifact
-   Current executable law target: `vida/config/instructions/*.md`
-7. `vida/config/instructions/prompt-templates/worker.packet-templates.md`
+   Current executable law target: `vida/config/instructions/**/*.md`
+7. `prompt-templates/worker.packet-templates.md`
    Current role: historical framework seed artifact
-   Current executable law target: `vida/config/instructions/*.md`
+   Current executable law target: `vida/config/instructions/**/*.md`
 8. `2026-03-08-agentic-cheap-worker-prompt-pack.md`
    Current role: historical script-era prompt pack
-   Current canonical prompt target: `vida/config/instructions/prompt-templates/cheap-worker.prompt-pack-reference.md`
-9. `vida/config/instructions/prompt-templates/worker.packet-templates.md`
+   Current canonical prompt target: `prompt-templates/cheap-worker.prompt-pack-reference.md`
+9. `prompt-templates/worker.packet-templates.md`
    Current role: canonical prompt authoring artifact
-   Current canonical prompt target: `vida/config/instructions/prompt-templates/worker.packet-templates.md`
-10. `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
+   Current canonical prompt target: `prompt-templates/worker.packet-templates.md`
+10. `agent-definitions/entry.orchestrator-entry.md`
    Current role: canonical lane-entry authoring artifact
-   Current canonical instruction target: `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
-11. `vida/config/instructions/agent-definitions/entry.worker-entry.md`
+   Current canonical instruction target: `agent-definitions/entry.orchestrator-entry.md`
+11. `agent-definitions/entry.worker-entry.md`
    Current role: canonical lane-entry authoring artifact
-   Current canonical instruction target: `vida/config/instructions/agent-definitions/entry.worker-entry.md`
+   Current canonical instruction target: `agent-definitions/entry.worker-entry.md`
 
 ## Preservation Rule
 
 1. The old `_vida` artifacts remain source evidence until final cleanup.
-2. New current law must be written to `docs/product/spec/**` and flat canonical Markdown artifacts in `vida/config/instructions/*.md`.
+2. New current law must be written to `docs/product/spec/**` and flat canonical Markdown artifacts under `vida/config/instructions/**/*.md`.
 3. Historical artifacts must not silently remain the only authoritative instruction source.
-4. Instruction-bearing artifacts should be authored in human-readable Markdown in `vida/config/instructions/*.md`; YAML/JSON bridge artifacts may coexist for transitional runtime consumption.
+4. Instruction-bearing artifacts should be authored in human-readable Markdown under `vida/config/instructions/**/*.md`; YAML/JSON bridge artifacts may coexist for transitional runtime consumption.
 5. Only the latest active Markdown revision remains in the canonical tree; earlier states live in adjacent `*.changelog.jsonl` files and Git history.
 
 -----

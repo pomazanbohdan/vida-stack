@@ -27,8 +27,8 @@ Activate this protocol immediately when the task context is any of:
 
 This protocol is a triggered-domain extension of:
 
-1. `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md`
-2. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
+1. `instruction-contracts/work.documentation-operation-protocol`
+2. `instruction-contracts/bridge.instruction-activation-protocol`
 
 ## Target State
 
@@ -136,11 +136,11 @@ When applied to another project:
 
 The bounded proof path for documentation migration to Layer 7 is:
 
-1. `python3 codex-v0/codex.py layer-status --layer <N>` for the current target layer,
-2. `python3 codex-v0/codex.py doctor --layer <N>` for bounded layer validation,
-3. `python3 codex-v0/codex.py proofcheck --layer <N>` for bounded layer closure,
-4. `python3 codex-v0/codex.py proofcheck --profile active-canon-strict` when the slice spans multiple layers,
-5. `python3 codex-v0/codex.py readiness-check --profile active-canon` and `readiness-write --canonical` when Layer 7 is touched.
+1. `vida docflow layer-status --layer <N>` for the current target layer,
+2. `vida docflow doctor --layer <N>` for bounded layer validation,
+3. `vida docflow proofcheck --layer <N>` for bounded layer closure,
+4. `vida docflow proofcheck --profile active-canon-strict` when the slice spans multiple layers,
+5. `vida docflow readiness-check --profile active-canon` and `readiness-write --canonical` when Layer 7 is touched.
 
 ## Closure Rule
 

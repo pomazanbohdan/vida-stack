@@ -57,15 +57,24 @@ Optional extension fields:
 
 ## Project Registry Family
 
-Project-owned registries must remain outside framework-owned `vida/**`.
+Project-owned bridge registries must remain outside framework-owned `vida/**`, while the active runtime-owned projection family lives under `.vida/project/**`.
 
-Current canonical project-owned registry family:
+Current bridge/source project-owned registry family:
 
 1. `docs/process/agent-extensions/roles.yaml`
 2. `docs/process/agent-extensions/skills.yaml`
 3. `docs/process/agent-extensions/profiles.yaml`
 4. `docs/process/agent-extensions/flows.yaml`
 5. `docs/process/agent-extensions/README.md`
+
+Active runtime-owned projection family:
+
+1. `.vida/project/agent-extensions/README.md`
+2. `.vida/project/agent-extensions/roles.yaml`
+3. `.vida/project/agent-extensions/skills.yaml`
+4. `.vida/project/agent-extensions/profiles.yaml`
+5. `.vida/project/agent-extensions/flows.yaml`
+6. matching `.vida/project/agent-extensions/*.sidecar.yaml`
 
 ## Runtime Composition Rule
 
@@ -89,7 +98,7 @@ Project extension activation is valid only when all enabled references resolve.
 
 Minimum validation requirements:
 
-1. referenced registry files exist,
+1. referenced active runtime projection files exist,
 2. ids are unique inside each registry family,
 3. each project role resolves to one known framework base role,
 4. each enabled project role resolves to a registry row,
@@ -139,20 +148,22 @@ Projects may enable any subset of these, but they must not rename or redefine th
 
 Current bounded proof surfaces:
 
-1. `taskflow-v0 config validate`
-2. `taskflow-v0 role-select bundle --json`
-3. `taskflow-v0 role-select request "<request>" --json`
-4. `python3 codex-v0/codex.py activation-check vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`
-5. `python3 codex-v0/codex.py protocol-coverage-check --profile active-canon`
+1. `vida taskflow config validate`
+2. `vida taskflow role-select bundle --json`
+3. `vida taskflow role-select request "<request>" --json`
+4. `vida docflow activation-check vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`
+5. `vida docflow protocol-coverage-check --profile active-canon`
 
 ## References
 
-1. `vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md`
-2. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-3. `vida/config/instructions/agent-definitions/model.agent-definitions-contract.md`
-4. `vida/config/instructions/agent-definitions/role.role-profile-contract.md`
+1. `runtime-instructions/bridge.project-overlay-protocol`
+2. `instruction-contracts/core.agent-system-protocol`
+3. `agent-definitions/model.agent-definitions-contract`
+4. `agent-definitions/role.role-profile-contract`
 5. `docs/product/spec/agent-role-skill-profile-flow-model.md`
 6. `docs/process/agent-extensions/README.md`
+7. `docs/product/spec/runtime-paths-and-derived-cache-model.md`
+8. `docs/product/spec/embedded-runtime-and-editable-projection-model.md`
 
 -----
 artifact_path: config/runtime-instructions/project-agent-extension.protocol
@@ -163,5 +174,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md
 created_at: '2026-03-10T15:45:00+02:00'
-updated_at: '2026-03-12T23:59:59+02:00'
+updated_at: '2026-03-13T11:20:00+02:00'
 changelog_ref: work.project-agent-extension-protocol.changelog.jsonl

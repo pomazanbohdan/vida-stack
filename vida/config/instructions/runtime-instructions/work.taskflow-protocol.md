@@ -1,24 +1,24 @@
 # TaskFlow Protocol (Execution Layer)
 
-Purpose: decompose user requests into executable step-level work while keeping `taskflow-v0 task` as the single source of truth for task state.
+Purpose: decompose user requests into executable step-level work while keeping `vida taskflow task` as the single source of truth for task state.
 
 Output policy:
 
-1. Human-facing `taskflow-v0` runtime commands default to `TOON`.
+1. Human-facing TaskFlow runtime commands default to `TOON`.
 2. Structured JSON output is enabled only through explicit `--json`.
 3. New runtime surfaces must not make raw JSON the default human-facing output.
 
 ## 1) Layer Model
 
 1. `Intent Layer`: user request (goal, constraints, acceptance).
-2. `Work Layer`: DB-backed `taskflow-v0 task` lifecycle (`open/in_progress/closed`).
+2. `Work Layer`: DB-backed `vida taskflow task` lifecycle (`open/in_progress/closed`).
 3. `Execution Layer`: TaskFlow steps/tracks for actual implementation.
 
 Rule: the DB-backed task surface tracks "what"; TaskFlow tracks "how".
 
 Task-state truth rule:
 
-1. When task lifecycle state and execution telemetry appear out of sync, use `vida/config/instructions/runtime-instructions/work.task-state-reconciliation-protocol.md` as the canonical reconciliation layer before closing, reopening, or declaring the task stale.
+1. When task lifecycle state and execution telemetry appear out of sync, use `runtime-instructions/work.task-state-reconciliation-protocol` as the canonical reconciliation layer before closing, reopening, or declaring the task stale.
 
 Hard rule:
 
@@ -29,7 +29,7 @@ Hard rule:
 5. For command-layer documentation audits, pre-register one TaskFlow block per protocol unit (`/vida-*#CLx`) and keep the pending list visible.
 6. Every planned block should include `next_step` (block_id or `-` for terminal step).
 7. Use rolling-window planning: keep 2-3 upcoming planned blocks visible; expand further plan just-in-time.
-8. When the same technical error repeats twice inside an active block, the block must record an escalation event and switch to `vida/config/instructions/diagnostic-instructions/escalation.debug-escalation-protocol.md` before the next substantive fix attempt.
+8. When the same technical error repeats twice inside an active block, the block must record an escalation event and switch to `diagnostic-instructions/escalation.debug-escalation-protocol` before the next substantive fix attempt.
 9. If worker mode is active and an eligible catch/review lane exists, dispatch that external diagnostic lane in parallel with escalation lookup instead of debugging alone.
 10. Escalation evidence must capture which outside inputs were used: `external_agent`, `primary_source`, `web/google`, or explicit `not_available` receipt.
 11. Completed write-producing slices must receive catch/review coverage when an eligible lane exists; if not, record a protocol-drift finding and correct it.
@@ -48,7 +48,7 @@ Hard rule:
    - an explicit blocker/escalation receipt,
    - full chain closure
 23. A closure-style report or finish path is invalid if the task line remains open and no continuation receipt was persisted after the last closed leaf.
-24. If more than one lawful next bounded leaf exists after rebuild, route selection through `vida/config/instructions/runtime-instructions/work.execution-priority-protocol.md` is mandatory before continuation.
+24. If more than one lawful next bounded leaf exists after rebuild, route selection through `runtime-instructions/work.execution-priority-protocol` is mandatory before continuation.
 25. After bounded read-only discovery inside an active write-producing task, if the next lawful step is packet shaping or worker dispatch, TaskFlow must advance execution state to that step or persist an explicit blocker; progress-only commentary is not valid continuation evidence.
 26. A worker wait timeout or empty poll result does not change task state by itself; while the task remains `in_work`, TaskFlow must either continue waiting lawfully, advance to the next lawful step, or persist an explicit blocker/override receipt.
 27. A user-facing summary or progress marker does not count as an execution-state transition; while the task remains `in_work`, summary must be followed by the next lawful execution action or explicit blocker handling in the same active cycle.
@@ -63,7 +63,7 @@ Hard rule:
 ## 1.1) Diagnostic Integration Boundary
 
 1. TaskFlow may carry deferred diagnostic evidence only as tracked execution data.
-2. Silent framework diagnosis policy, capture rules, and reflection criteria are owned by `vida/config/instructions/diagnostic-instructions/analysis.silent-framework-diagnosis-protocol.md`.
+2. Silent framework diagnosis policy, capture rules, and reflection criteria are owned by `diagnostic-instructions/analysis.silent-framework-diagnosis-protocol`.
 3. This protocol owns only the execution-side requirement that deferred diagnostic follow-up, when active, must survive through canonical task/evidence surfaces rather than chat memory.
 
 ## 2) Decomposition + Clustering Algorithm
@@ -75,7 +75,7 @@ This algorithm is mandatory for non-trivial work (3+ steps).
    - Record selected options and constraints as execution evidence.
 2. `Conflict-Gate`: check decision compatibility.
    - If conflicts exist, resolve them before building TaskFlow plan.
-3. Attach to existing `TaskFlow task or create a new one.
+3. Attach to an existing `TaskFlow` task or create a new one.
 4. Build execution clusters:
    - split work into 15-90 minute steps with measurable outputs;
    - each step must have acceptance/evidence intent;
@@ -194,17 +194,16 @@ Optional parallel fields:
 Transition note:
 
 1. the block-lifecycle command examples below are legacy wrapper examples,
-2. transitioned runtime reads now live under `taskflow-v0 task`, `taskflow-v0 todo`, and `taskflow-v0 run-graph`,
-3. wrapper retirement is tracked by `vida/config/instructions/system-maps/migration.runtime-transition-map.md`.
+2. transitioned runtime reads now live under `vida taskflow task`, `vida taskflow todo`, and `vida taskflow run-graph`,
+3. wrapper retirement is tracked by `system-maps/migration.runtime-transition-map`.
 
 Transition verification baseline:
 
 1. use this as the minimum proof before close or handoff on transitioned runtime slices:
-   - `nim c taskflow-v0/src/vida.nim`
-   - `nim c -r taskflow-v0/tests/test_boot_profile.nim`
-   - `nim c -r taskflow-v0/tests/test_worker_packet.nim`
-   - `nim c -r taskflow-v0/tests/test_kernel_runtime.nim`
-2. `vida/config/instructions/system-maps/migration.runtime-transition-map.md` remains the migration registry only and must not keep this verification law as a competing owner.
+   - `vida taskflow help`
+   - the bounded TaskFlow runtime-family implementation test/build suite for the affected source tree
+   - targeted boot/runtime proofs for the affected TaskFlow surface
+2. `system-maps/migration.runtime-transition-map` remains the migration registry only and must not keep this verification law as a competing owner.
 
 Start task:
 
@@ -265,7 +264,7 @@ bash framework-wave-start.sh <task_id> <pack_id> "<goal>" [constraints]
 
 Use only as a migration-only helper for framework-owned legacy wrapper flow. It preserves:
 
-1. `taskflow-v0 task` as SSOT,
+1. `vida taskflow task` as SSOT,
 2. pack logging,
 3. TaskFlow scaffolding/validation,
 4. boot-profile validation.
@@ -282,7 +281,7 @@ Command audit mode:
 8. `block-start` may reopen a previously ended block (clears previous end marker in TaskFlow view and sets status back to `doing`).
 9. When execution focus changes because of a new user instruction, use `beads-workflow.sh redirect` so the current block is closed as `partial` and the replacement block becomes the active `doing` step in one canonical path.
 10. Redirected/superseded blocks must not return to the active TaskFlow backlog; runtime views should surface them as `superseded` instead of `taskflow`.
-11. When more than one next task/block appears lawful, apply `vida/config/instructions/runtime-instructions/work.execution-priority-protocol.md` before choosing or redirecting.
+11. When more than one next task/block appears lawful, apply `runtime-instructions/work.execution-priority-protocol` before choosing or redirecting.
 
 Protocol-unit rule:
 
@@ -303,11 +302,11 @@ UI sync rule:
 5.3. `TASKFLOW_AUTO_SYNC_LEVEL=off`: disable auto sync (manual sync only).
 6. For user-visible progress updates, prefer compact/delta snapshots over full snapshot.
 7. Completion report order is mandatory: `sync -> confirm board/compact -> report done`.
-8. Pack coverage: each non-trivial flow should have balanced `pack-start` and `pack-end` events; lawful pack completion claims are owned by `vida/config/instructions/runtime-instructions/work.pack-completion-gate-protocol.md`.
+8. Pack coverage: each non-trivial flow should have balanced `pack-start` and `pack-end` events; lawful pack completion claims are owned by `runtime-instructions/work.pack-completion-gate-protocol`.
 9. Response visibility rule: when reporting task/todo state to user, include IDs and concise descriptions (not IDs only).
 10. `quality-health-check` cadence: run on checkpoint boundaries, pre-handoff, and finish (not after every micro-step).
 11. Runtime scripts should be quiet-by-default for progress chatter; keep human-facing status output in `taskflow-tool current|list` and `quality-health-check`.
-12. Use `taskflow-v0 reconcile status <task_id>` when a task looks done-but-open, stale-in-progress, or otherwise drifted between the task store and TaskFlow.
+12. Use `vida taskflow reconcile status <task_id>` when a task looks done-but-open, stale-in-progress, or otherwise drifted between the task store and TaskFlow.
 
 Background worker policy (token/cost aware):
 
@@ -327,18 +326,18 @@ Silent diagnosis execution persistence:
 
 1. If silent diagnosis is active and a framework gap was already captured, `reflect`/`finish` should reference the capture artifact or resulting framework task id.
 2. This protocol owns only execution-side persistence of that capture in TaskFlow evidence and context capsules.
-3. Silent diagnosis policy, capture timing, and follow-up routing remain owned by `vida/config/instructions/diagnostic-instructions/analysis.silent-framework-diagnosis-protocol.md`.
+3. Silent diagnosis policy, capture timing, and follow-up routing remain owned by `diagnostic-instructions/analysis.silent-framework-diagnosis-protocol`.
 
 ## 6) Gates
 
 0. Plan gate: non-trivial work must pass `Q-Gate` + `Conflict-Gate` before execution materialization.
 0.1. Tool-capability gate: for non-trivial flows, resolve required tool fallbacks and record evidence when fallback is used.
-0.2. If a task enters bounded conflict-discussion mode via `vida/config/instructions/runtime-instructions/work.problem-party-protocol.md`, record the board artifact path in block evidence before resuming normal execution.
+0.2. If a task enters bounded conflict-discussion mode via `runtime-instructions/work.problem-party-protocol`, record the board artifact path in block evidence before resuming normal execution.
 1. Step gate: `block-end` requires evidence or artifacts.
-1.1. If WVP trigger fired, `block-end`/`reflect` evidence must include WVP markers per `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md`.
+1.1. If WVP trigger fired, `block-end`/`reflect` evidence must include WVP markers per `runtime-instructions/work.web-validation-protocol`.
 2. Track gate: each parallel track must pass verify.
 3. Task gate: strict verify + self-reflection required before close.
-3.1. Pack completion gate: a pack-complete claim is lawful only through `vida/config/instructions/runtime-instructions/work.pack-completion-gate-protocol.md`.
+3.1. Pack completion gate: a pack-complete claim is lawful only through `runtime-instructions/work.pack-completion-gate-protocol`.
 4. Compact gate: always record `compact_pre` and `compact_post`.
 4.1. Drift gate: run `bash context-drift-sentinel.sh check <task_id>` after capsule write checkpoints (`block-finish`, compact restore).
 4.2. If silent framework diagnosis is active and a framework gap was detected, compact-safe evidence must include the capture artifact path or follow-up framework task id.
@@ -359,16 +358,16 @@ Silent diagnosis execution persistence:
 When a task must pause because another task is now the active dependency:
 
 1. Add dependency through the DB-backed task runtime surface.
-2. Set blocked status: `taskflow-v0 task update <blocked_task_id> --status blocked`.
+2. Set blocked status: `vida taskflow task update <blocked_task_id> --status blocked`.
 3. Record reason in execution log (`checkpoint` or `block-end` risk/next_step fields).
 4. Continue work only on the active dependency task.
 
 When dependency is complete and task becomes runnable again:
 
-1. Reopen status: `taskflow-v0 task update <blocked_task_id> --status open`.
-2. Verify dependency state with `taskflow-v0 task show <blocked_task_id> --json`.
-3. Pick next work via `taskflow-v0 task ready` (unblocked-first rule).
-4. Start resumed task explicitly: `taskflow-v0 task update <id> --status in_progress`.
+1. Reopen status: `vida taskflow task update <blocked_task_id> --status open`.
+2. Verify dependency state with `vida taskflow task show <blocked_task_id> --json`.
+3. Pick next work via `vida taskflow task ready` (unblocked-first rule).
+4. Start resumed task explicitly: `vida taskflow task update <id> --status in_progress`.
 
 ## 9) Execution Mode (Decision vs Autonomous)
 
@@ -424,8 +423,8 @@ Before non-trivial execution or post-compact recovery, select boot profile expli
 Validation command:
 
 ```bash
-taskflow-v0 boot run <lean|standard|full> [task_id] [--non-dev]
-taskflow-v0 boot verify-receipt <task_id> [profile]
+vida taskflow boot run <lean|standard|full> [task_id] [--non-dev]
+vida taskflow boot verify-receipt <task_id> [profile]
 ```
 
 Rule:

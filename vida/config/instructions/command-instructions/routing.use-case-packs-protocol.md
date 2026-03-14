@@ -15,7 +15,7 @@ Purpose: define the canonical pack taxonomy and high-level routing intent for bo
 
 ## Runtime Contract
 
-Generic orchestration lifecycle is owned by `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`.
+Generic orchestration lifecycle is owned by `instruction-contracts/core.orchestration-protocol`.
 
 This file owns only:
 
@@ -47,34 +47,34 @@ It must stay thin:
 
 1. `research-pack`
    - primary owners:
-     - `vida/config/instructions/runtime-instructions/work.spec-contract-protocol.md`
-     - `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md` when external-fact triggers fire
+     - `runtime-instructions/work.spec-contract-protocol`
+     - `runtime-instructions/work.web-validation-protocol` when external-fact triggers fire
 2. `spec-pack`
    - primary owner:
-     - `vida/config/instructions/runtime-instructions/work.spec-contract-protocol.md`
+     - `runtime-instructions/work.spec-contract-protocol`
 3. `work-pool-pack`
    - primary owner:
-     - `vida/config/instructions/command-instructions/planning.form-task-protocol.md`
+     - `command-instructions/planning.form-task-protocol`
 4. `dev-pack`
    - primary owner:
-     - `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`
+     - `command-instructions/execution.implement-execution-protocol`
 5. `bug-pool-pack`
    - primary owners:
-     - `vida/config/instructions/command-instructions/execution.bug-fix-protocol.md`
-     - `vida/config/instructions/runtime-instructions/bridge.issue-contract-protocol.md` when bug intake must be normalized before writer start
+     - `command-instructions/execution.bug-fix-protocol`
+     - `runtime-instructions/bridge.issue-contract-protocol` when bug intake must be normalized before writer start
 6. `reflection-pack`
    - primary owners:
-     - `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md`
-     - `vida/config/instructions/runtime-instructions/work.pack-handoff-protocol.md` for pack-boundary reconciliation and admissible handoff state
-     - `vida/config/instructions/diagnostic-instructions/analysis.framework-self-analysis-protocol.md` for tracked framework self-analysis
+     - `instruction-contracts/work.documentation-operation-protocol`
+     - `runtime-instructions/work.pack-handoff-protocol` for pack-boundary reconciliation and admissible handoff state
+     - `diagnostic-instructions/analysis.framework-self-analysis-protocol` for tracked framework self-analysis
 
 ## Pack Boundary Rules
 
-1. `research-pack`, `spec-pack`, `work-pool-pack`, `bug-pool-pack`, and `reflection-pack` remain non-dev packs and must respect `vida/config/instructions/runtime-instructions/work.spec-contract-protocol.md` where applicable.
-2. `dev-pack` remains the implementation route and must use `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`.
-3. When external-fact uncertainty is material, activate `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md` rather than embedding ad hoc lookup law inside pack routing.
-4. When scope, AC, dependency order, or approved decisions drift, route reconciliation per `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`, `vida/config/instructions/command-instructions/planning.form-task-protocol.md`, and `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`.
-5. When explicit tracked framework self-analysis is in scope, `reflection-pack` acts only as the routing bridge; the diagnostic law remains owned by `vida/config/instructions/diagnostic-instructions/analysis.framework-self-analysis-protocol.md`.
+1. `research-pack`, `spec-pack`, `work-pool-pack`, `bug-pool-pack`, and `reflection-pack` remain non-dev packs and must respect `runtime-instructions/work.spec-contract-protocol` where applicable.
+2. `dev-pack` remains the implementation route and must use `command-instructions/execution.implement-execution-protocol`.
+3. When external-fact uncertainty is material, activate `runtime-instructions/work.web-validation-protocol` rather than embedding ad hoc lookup law inside pack routing.
+4. When scope, AC, dependency order, or approved decisions drift, route reconciliation per `instruction-contracts/core.orchestration-protocol`, `command-instructions/planning.form-task-protocol`, and `command-instructions/execution.implement-execution-protocol`.
+5. When explicit tracked framework self-analysis is in scope, `reflection-pack` acts only as the routing bridge; the diagnostic law remains owned by `diagnostic-instructions/analysis.framework-self-analysis-protocol`.
 6. Ordinary documentation drift, spec/task-pool synchronization, or generic change-impact reconciliation inside `reflection-pack` must not be relabeled as FSAP unless tracked framework self-analysis/remediation is the actual target.
 
 ## Pack Sequence
@@ -87,7 +87,7 @@ Default multi-pack order:
 4. `dev-pack` or `bug-pool-pack`
 5. `reflection-pack`
 
-Pack handoff admissibility, required outputs, and boundary law are owned by `vida/config/instructions/runtime-instructions/work.pack-handoff-protocol.md`.
+Pack handoff admissibility, required outputs, and boundary law are owned by `runtime-instructions/work.pack-handoff-protocol`.
 
 ## Migration Boundary
 
@@ -95,13 +95,13 @@ Legacy wrapper surfaces such as `vida-pack-helper.sh` and `nondev-pack-init.sh` 
 
 They are not canonical pack-law owners.
 
-Migration-only wrapper cataloging remains centralized in `vida/config/instructions/command-instructions/migration.pack-wrapper-note.md`.
+Migration-only wrapper cataloging remains centralized in `command-instructions/migration.pack-wrapper-note`.
 
-Wrapper retirement and historical-only mapping remain owned by `vida/config/instructions/system-maps/migration.runtime-transition-map.md`.
+Wrapper retirement and historical-only mapping remain owned by `system-maps/migration.runtime-transition-map`.
 
 ## Notes
 
-1. `taskflow-v0 task` remains the only task-state source of truth.
+1. `vida taskflow task` remains the only task-state source of truth.
 2. TaskFlow board is execution visibility, not task-state authority.
 3. This file should stay thin; deeper flow, gate, and recovery law must remain in their canonical protocol owners.
 

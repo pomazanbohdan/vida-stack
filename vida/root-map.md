@@ -15,21 +15,21 @@ This root map covers:
 
 ## Canonical Entry Points
 
-1. `vida/config/instructions/system-maps/framework.index.md`
+1. `system-maps/framework.index.md`
    - instruction-home entrypoint for framework maps and registries
-2. `vida/config/instructions/system-maps/framework.map.md`
+2. `system-maps/framework.map.md`
    - framework topology, layer, and promotion/projection map
-3. `vida/config/instructions/system-maps/framework.protocol-domains-map.md`
+3. `system-maps/framework.protocol-domains-map.md`
    - protocol-domain routing map across orchestration and adjacent protocol families
-4. `vida/config/instructions/system-maps/protocol.index.md`
+4. `system-maps/protocol.index.md`
    - protocol registry for canonical instruction/runtime domains
-5. `vida/config/instructions/system-maps/runtime-family.index.md`
+5. `system-maps/runtime-family.index.md`
    - runtime-family discovery for `codex`, `taskflow`, and future runtimes
-6. `vida/config/instructions/system-maps/template.map.md`
+6. `system-maps/template.map.md`
    - framework template-family discovery
-7. `vida/config/instructions/system-maps/governance.map.md`
+7. `system-maps/governance.map.md`
    - human governance, approval, contribution, and policy-gate discovery
-8. `vida/config/instructions/system-maps/observability.map.md`
+8. `system-maps/observability.map.md`
    - runtime observability, traces, proving, and health discovery
 
 ## Activation Triggers
@@ -44,19 +44,19 @@ Read this map when:
 ## Routing
 
 1. Framework topology or ownership/layer questions:
-   - continue to `vida/config/instructions/system-maps/framework.map.md`
+   - continue to `system-maps/framework.map.md`
 2. Protocol-domain family lookup:
-   - continue to `vida/config/instructions/system-maps/framework.protocol-domains-map.md`
+   - continue to `system-maps/framework.protocol-domains-map.md`
 3. Canonical protocol lookup:
-   - continue to `vida/config/instructions/system-maps/protocol.index.md`
+   - continue to `system-maps/protocol.index.md`
 4. Runtime-family lookup:
-   - continue to `vida/config/instructions/system-maps/runtime-family.index.md`
+   - continue to `system-maps/runtime-family.index.md`
 5. Template lookup:
-   - continue to `vida/config/instructions/system-maps/template.map.md`
+   - continue to `system-maps/template.map.md`
 6. Human governance, approval, contribution, or policy-gate lookup:
-   - continue to `vida/config/instructions/system-maps/governance.map.md`
+   - continue to `system-maps/governance.map.md`
 7. Runtime observability, traces, proving, or health lookup:
-   - continue to `vida/config/instructions/system-maps/observability.map.md`
+   - continue to `system-maps/observability.map.md`
 
 ## Boundary Rule
 

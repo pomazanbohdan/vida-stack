@@ -42,7 +42,7 @@ python3 doc-lifecycle.py status
 
 ## Scope Rule
 
-1. This protocol governs framework-owned documents first (`AGENTS.md`, `vida/config/instructions/*`, synced framework templates/overlays when applicable).
+1. This protocol governs framework-owned documents first (`AGENTS.md`, `vida/config/instructions/**`, synced framework templates/overlays when applicable).
 2. Project-owned `docs/*` may adopt the same model later, but that does not change framework ownership boundaries.
 
 -----

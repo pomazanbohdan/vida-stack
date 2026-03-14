@@ -22,8 +22,8 @@ Escalation is mandatory when any are true:
 When escalation is triggered, use this order unless a stronger law already narrows the path:
 
 1. capture the repeated error and failed local hypotheses in task evidence,
-2. activate the canonical delegated-diagnosis path through `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md` and `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md` when worker mode supports it,
-3. activate `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md` when external-fact uncertainty is material,
+2. activate the canonical delegated-diagnosis path through `instruction-contracts/core.agent-system-protocol` and `instruction-contracts/lane.worker-dispatch-protocol` when worker mode supports it,
+3. activate `runtime-instructions/work.web-validation-protocol` when external-fact uncertainty is material,
 4. synthesize the next bounded fix attempt only after the required escalation evidence exists.
 
 Hard rule:
@@ -36,13 +36,13 @@ Hard rule:
 
 Web-validation bridge:
 
-1. when external-fact uncertainty is material, this protocol must activate `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md`,
+1. when external-fact uncertainty is material, this protocol must activate `runtime-instructions/work.web-validation-protocol`,
 2. this file does not own source-quality hierarchy, live-check workflow, or web-search completeness law,
 3. store bounded WVP evidence in task artifacts before the next substantive fix attempt when WVP triggers fired.
 
 Delegated-diagnosis bridge:
 
-1. when worker mode is not `disabled`, dispatch behavior must follow `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md` and `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`,
+1. when worker mode is not `disabled`, dispatch behavior must follow `instruction-contracts/core.agent-system-protocol` and `instruction-contracts/lane.worker-dispatch-protocol`,
 2. this file does not own backend choice, packet shape, or verifier-selection law,
 3. if no eligible delegated diagnosis lane exists, record explicit evidence and continue with the remaining lawful escalation path.
 

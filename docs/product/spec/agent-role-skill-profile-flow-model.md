@@ -41,20 +41,47 @@ Current first-class framework roles include:
 
 Role note:
 
-1. `business_analyst` and `pm` are first-class framework roles for scope formation, requirement shaping, task formation, and delivery framing before execution lanes begin.
-2. `solution_architect` is the first-class pre-execution architecture-preparation role:
+1. `orchestrator` is the routing-and-closure role:
+   - owns bootstrap, request classification, packet shaping, lane sequencing, synthesis, and lawful closure,
+   - keeps delegated state explicit,
+   - must not become the default local writer for normal development.
+2. `worker` is the mutation-owning implementation role:
+   - executes one bounded packet inside explicit write scope,
+   - returns diffs, proof notes, blockers, and residual risks,
+   - must not self-approve closure or widen packet scope.
+3. `business_analyst` is the scope-and-spec formation role:
+   - turns feature or ambiguous asks into bounded requirements, constraints, and design-ready scope,
+   - prepares canonical design/spec artifacts before execution lanes begin,
+   - does not replace implementation, coaching, or verification.
+4. `pm` is the delivery-shaping role:
+   - cuts work into lawful tracked units, prioritizes slices, and frames rollout/budget consequences,
+   - owns delivery framing and work-pool quality,
+   - does not replace technical implementation or proof lanes.
+5. `solution_architect` is the first-class pre-execution architecture-preparation role:
    - reads the bounded task or PBI,
    - studies governing specs and active project/runtime constraints,
    - inspects the relevant codebase and dependency surface,
    - produces one architecture-preparation report plus developer handoff packet,
    - defines what can be changed, what must not be changed, reuse points, dependency impact, and expected implementation boundaries before developer execution begins.
-3. `solution_architect` does not replace `business_analyst`, `pm`, `coach`, `verifier`, or the developer/worker lane:
+6. `solution_architect` does not replace `business_analyst`, `pm`, `coach`, `verifier`, or the developer/worker lane:
    - `business_analyst` shapes scope and requirements,
    - `pm` shapes delivery/task cut and launch readiness,
    - `solution_architect` prepares implementation architecture and constraints,
    - `worker` executes implementation,
    - `coach` and `verifier` remain downstream quality gates.
-4. `coach` must remain a separate role and must not collapse into `worker`, `verifier`, or `approver`.
+7. `coach` is the bounded spec-conformance and definition-of-done review role:
+   - compares the implemented result against the approved spec, acceptance criteria, and packet `definition_of_done`,
+   - returns bounded rework guidance or explicit forward approval,
+   - stays formative and packet-local rather than widening into architecture or milestone scope.
+8. `verifier` is the independent proof-and-closure-readiness role:
+   - validates declared proof targets, verification commands, and closure evidence,
+   - fails closed on missing or weak evidence,
+   - must remain independent from the implementer and distinct from coach review.
+9. `prover` is the evidence-deepening verification specialist:
+   - strengthens or reconstructs proof when verification requires deeper evidence than routine review,
+   - stays read-only unless a stronger route explicitly authorizes mutation,
+   - does not replace delivery shaping or implementation.
+10. `coach` must remain a separate role and must not collapse into `worker`, `verifier`, or `approver`.
 
 ## 3. Skill
 
@@ -135,12 +162,20 @@ The project chooses its active role/skill/profile/flow posture through:
 2. `agent_extensions`
 3. project-owned registries referenced by that overlay section
 
-The current canonical project-owned registry family is:
+The current bridge/source project-owned registry family is:
 
 1. `docs/process/agent-extensions/roles.yaml`
 2. `docs/process/agent-extensions/skills.yaml`
 3. `docs/process/agent-extensions/profiles.yaml`
 4. `docs/process/agent-extensions/flows.yaml`
+
+Active runtime-owned projection family:
+
+1. `.vida/project/agent-extensions/roles.yaml`
+2. `.vida/project/agent-extensions/skills.yaml`
+3. `.vida/project/agent-extensions/profiles.yaml`
+4. `.vida/project/agent-extensions/flows.yaml`
+5. matching `.sidecar.yaml` override files under the same runtime home
 
 Shared-skill rule:
 
@@ -178,13 +213,23 @@ Required compiled identity shape:
 
 The orchestrator must consume this compiled identity instead of rediscovering the same logic ad hoc on every request.
 
+`cost_quality_constraints` should expose at least:
+
+1. selected executor tier when the host CLI provides a tier ladder,
+2. local effective score for that tier,
+3. internal rate for that tier,
+4. pricing basis used for the bounded task estimate,
+5. local score-store path when score refresh is runtime-local,
+6. local observability/history store path when host-agent telemetry is runtime-local,
+7. local budget rollup surface when spend tracking is runtime-local.
+
 ## 9. Validation Rule
 
 Project extensions are valid only when all enabled references resolve and remain compatible.
 
 Minimum validation obligations:
 
-1. registry files exist,
+1. active runtime projection files exist,
 2. ids are unique,
 3. project roles resolve to known framework base roles,
 4. project profiles resolve to known roles,
@@ -230,9 +275,10 @@ Each layer must deepen the previous one without depending on a later unfinished 
 Ownership placement must remain clean:
 
 1. framework role and runtime law belong in `vida/config/instructions/**`,
-2. project extension maps and project registries belong in project-owned surfaces under `docs/process/**`,
-3. activation data belongs in root `vida.config.yaml`,
-4. runtime implementation belongs in `taskflow-v0/**`.
+2. bridge/source registries may remain in project-owned surfaces under `docs/process/**`,
+3. active runtime-owned projections belong under `.vida/project/**`,
+4. activation data belongs in root `vida.config.yaml` only as a bridge overlay until `.vida/config/**` fully replaces it,
+5. runtime implementation belongs in the active TaskFlow runtime-family implementation surfaces.
 
 ## 13. Completion Proof
 
@@ -252,5 +298,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/agent-role-skill-profile-flow-model.md
 created_at: '2026-03-10T15:45:00+02:00'
-updated_at: '2026-03-13T08:47:25+02:00'
+updated_at: '2026-03-13T11:20:00+02:00'
 changelog_ref: agent-role-skill-profile-flow-model.changelog.jsonl

@@ -311,7 +311,7 @@ Initialization rule:
 1. init paths must be inspectable,
 2. init output must tell the runtime what law/policy was compiled,
 3. init output must remain usable by an LLM orchestrator without broad manual repo traversal.
-4. local Rust runtime may expose these views directly as `vida orchestrator-init` and `vida agent-init`, while source-mode worker boot may still keep a bounded `taskflow-v0 boot ...` fallback until every lane is fully runtime-native.
+4. local Rust runtime may expose these views directly as `vida orchestrator-init` and `vida agent-init`, while any temporary source-mode worker boot fallback must stay bounded behind `vida taskflow boot ...` until every lane is fully runtime-native.
 
 ## 11. Inspection Surfaces
 

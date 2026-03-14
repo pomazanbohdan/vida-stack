@@ -22,7 +22,7 @@ Purpose: define the bounded worker-lane assembly in human-readable form inside t
 ## Activation Notes
 
 1. This artifact lives in flat canonical form under `vida/config/instructions/` because it is product-owned configuration.
-2. `vida/config/instructions/agent-definitions/entry.worker-entry.md` and `vida/config/instructions/instruction-contracts/role.worker-thinking.md` remain the active worker bootstrap surface until direct runtime consumption is implemented.
+2. `agent-definitions/entry.worker-entry` and `instruction-contracts/role.worker-thinking` remain the active worker bootstrap surface until direct runtime consumption is implemented.
 
 -----
 artifact_path: config/instructions/agent-definitions/model.worker.definition

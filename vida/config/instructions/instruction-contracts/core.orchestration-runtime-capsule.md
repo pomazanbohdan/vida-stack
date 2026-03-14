@@ -5,7 +5,7 @@ Purpose: provide a compact runtime-facing projection of the highest-frequency or
 Boundary rule:
 
 1. this file is a compact projection, not the owner of orchestration law,
-2. the canonical owner remains `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`,
+2. the canonical owner remains `instruction-contracts/core.orchestration-protocol`,
 3. use the owner file when an edge case, conflict, or uncommon routing condition is not resolved by this capsule.
 
 ## Always-Keep-Visible

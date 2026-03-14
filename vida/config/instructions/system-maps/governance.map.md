@@ -7,19 +7,19 @@ Purpose: expose the human-governance surfaces of VIDA so approval, contribution,
 1. Bootstrap governance and hard invariants
    - `AGENTS.md`
 2. Human approval lifecycle
-   - `vida/config/instructions/runtime-instructions/work.human-approval-protocol.md`
+   - `runtime-instructions/work.human-approval-protocol`
 3. User approval loop between tasks
-   - `vida/config/instructions/runtime-instructions/bridge.task-approval-loop-protocol.md`
+   - `runtime-instructions/bridge.task-approval-loop-protocol`
 4. Verification, approval, and closure machine-readable policies
    - `vida/config/policies/verification_policy.yaml`
    - `vida/config/policies/approval_policy.yaml`
    - `vida/config/policies/closure_policy.yaml`
 5. Spec freshness / newer-decision precedence
-   - `vida/config/instructions/runtime-instructions/work.spec-freshness-protocol.md`
+   - `runtime-instructions/work.spec-freshness-protocol`
 6. Document lifecycle / metadata freshness
-   - `vida/config/instructions/runtime-instructions/work.document-lifecycle-protocol.md`
+   - `runtime-instructions/work.document-lifecycle-protocol`
 7. External-evidence / live-validation governance
-   - `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md`
+   - `runtime-instructions/work.web-validation-protocol`
 8. Repository contribution and publication expectations
    - `CONTRIBUTING.md`
 
@@ -36,15 +36,15 @@ Read this map when:
 ## Routing
 
 1. Approval receipts and approval blocking states:
-   - continue to `vida/config/instructions/runtime-instructions/work.human-approval-protocol.md`
+   - continue to `runtime-instructions/work.human-approval-protocol`
 2. User gating between tasks:
-   - continue to `vida/config/instructions/runtime-instructions/bridge.task-approval-loop-protocol.md`
+   - continue to `runtime-instructions/bridge.task-approval-loop-protocol`
 3. Verification / approval / closure policy values:
    - continue to `vida/config/policies/verification_policy.yaml`
    - `vida/config/policies/approval_policy.yaml`
    - `vida/config/policies/closure_policy.yaml`
 4. Versioning / newer-decision precedence:
-   - continue to `vida/config/instructions/runtime-instructions/work.spec-freshness-protocol.md`
+   - continue to `runtime-instructions/work.spec-freshness-protocol`
 5. Contribution / publication rules:
    - continue to `CONTRIBUTING.md`
 

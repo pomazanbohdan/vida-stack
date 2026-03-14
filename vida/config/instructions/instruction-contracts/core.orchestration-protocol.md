@@ -200,16 +200,16 @@ Activate this protocol when at least one is true:
 
 Primary activating companions:
 
-1. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-2. `vida/config/instructions/instruction-contracts/core.skill-activation-protocol.md`
-3. `vida/config/instructions/instruction-contracts/core.packet-decomposition-protocol.md`
-4. `vida/config/instructions/instruction-contracts/core.agent-prompt-stack-protocol.md`
-5. `vida/config/instructions/runtime-instructions/core.capability-registry-protocol.md`
-6. `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
-7. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
+1. `instruction-contracts/core.agent-system-protocol`
+2. `instruction-contracts/core.skill-activation-protocol`
+3. `instruction-contracts/core.packet-decomposition-protocol`
+4. `instruction-contracts/core.agent-prompt-stack-protocol`
+5. `runtime-instructions/core.capability-registry-protocol`
+6. `runtime-instructions/core.context-governance-protocol`
+7. `runtime-instructions/core.run-graph-protocol`
 8. the canonical tracked-execution owner
 9. the canonical execution-telemetry owner
-10. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
+10. `instruction-contracts/bridge.instruction-activation-protocol`
 
 ## Canonical State-Surface Note
 
@@ -220,13 +220,13 @@ Primary activating companions:
 ## Required Core Linkages
 
 1. `core.orchestration` is the integration owner for the `core cluster`, not a standalone island.
-2. When worker routing is active, orchestration must route through `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`.
-3. When delegated candidate lanes are evaluated, admissibility must be proven through `vida/config/instructions/runtime-instructions/core.capability-registry-protocol.md` before scoring or cost ranking can authorize a route.
-4. When routed execution consumes evidence or delegated context, governed usage must respect `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`.
-5. When one routed execution run must be resumed or checkpointed at node level, orchestration must rely on `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`.
-6. Skill discovery and bounded skill activation must rely on `vida/config/instructions/instruction-contracts/core.skill-activation-protocol.md` when a visible skill catalog exists.
-7. Bounded packet shaping and just-in-time deeper refinement must rely on `vida/config/instructions/instruction-contracts/core.packet-decomposition-protocol.md`.
-8. Prompt-layer precedence between bootstrap, role prompt, packet, skill overlay, and runtime state must rely on `vida/config/instructions/instruction-contracts/core.agent-prompt-stack-protocol.md`.
+2. When worker routing is active, orchestration must route through `instruction-contracts/core.agent-system-protocol`.
+3. When delegated candidate lanes are evaluated, admissibility must be proven through `runtime-instructions/core.capability-registry-protocol` before scoring or cost ranking can authorize a route.
+4. When routed execution consumes evidence or delegated context, governed usage must respect `runtime-instructions/core.context-governance-protocol`.
+5. When one routed execution run must be resumed or checkpointed at node level, orchestration must rely on `runtime-instructions/core.run-graph-protocol`.
+6. Skill discovery and bounded skill activation must rely on `instruction-contracts/core.skill-activation-protocol` when a visible skill catalog exists.
+7. Bounded packet shaping and just-in-time deeper refinement must rely on `instruction-contracts/core.packet-decomposition-protocol`.
+8. Prompt-layer precedence between bootstrap, role prompt, packet, skill overlay, and runtime state must rely on `instruction-contracts/core.agent-prompt-stack-protocol`.
 9. Tooling, command syntax, and migration helpers stay outside this protocol and belong to runtime-family or migration surfaces.
 10. Detailed task-state, tracked-execution, and worker-routing rules remain in their canonical protocols.
 
@@ -613,18 +613,18 @@ Escalate when any are true:
 
 ## Related
 
-1. `vida/config/instructions/command-instructions/routing.use-case-packs-protocol.md`
-2. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
-3. `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md`
+1. `command-instructions/routing.use-case-packs-protocol`
+2. `runtime-instructions/work.taskflow-protocol`
+3. `runtime-instructions/runtime.task-state-telemetry-protocol`
 4. migration-only wrapper references remain non-canonical and must not become orchestration law
-5. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-6. `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`
-7. `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md`
-8. `vida/config/instructions/runtime-instructions/lane.agent-handoff-context-protocol.md`
-9. `vida/config/instructions/runtime-instructions/work.problem-party-protocol.md`
-10. `vida/config/instructions/instruction-contracts/core.skill-activation-protocol.md`
-11. `vida/config/instructions/instruction-contracts/core.packet-decomposition-protocol.md`
-12. `vida/config/instructions/instruction-contracts/core.agent-prompt-stack-protocol.md`
+5. `instruction-contracts/core.agent-system-protocol`
+6. `instruction-contracts/lane.worker-dispatch-protocol`
+7. `runtime-instructions/work.verification-lane-protocol`
+8. `runtime-instructions/lane.agent-handoff-context-protocol`
+9. `runtime-instructions/work.problem-party-protocol`
+10. `instruction-contracts/core.skill-activation-protocol`
+11. `instruction-contracts/core.packet-decomposition-protocol`
+12. `instruction-contracts/core.agent-prompt-stack-protocol`
 
 -----
 artifact_path: config/instructions/instruction-contracts/core.orchestration.protocol

@@ -7,11 +7,11 @@ Purpose: define how VIDA reads project-owned root configuration without losing f
 1. VIDA framework remains autonomous when no project overlay exists.
 2. Project overlay is optional and must live in the repository root as `vida.config.yaml`.
 3. Overlay may activate framework protocol bundles, but may not weaken framework invariants.
-4. Overlay is project-owned data; framework-owned behavior stays in `AGENTS.md`, `vida/config/instructions/*`, and `taskflow-v0/*`.
+4. Overlay is project-owned data; framework-owned behavior stays in `AGENTS.md`, `vida/config/instructions/**`, and active TaskFlow runtime-family surfaces.
 
 No-overlay execution rule:
 
-1. If `vida.config.yaml` is absent, VIDA must use only framework-owned canonical commands and wrappers declared in `AGENTS.md`, `vida/config/instructions/system-maps/protocol.index.md`, and `taskflow-v0/*`.
+1. If `vida.config.yaml` is absent, VIDA must use only framework-owned canonical commands and wrappers declared in `AGENTS.md`, `system-maps/protocol.index`, and active TaskFlow runtime-family surfaces.
 2. In no-overlay mode, host-project operations docs are not assumed to exist and must not be treated as the canonical command source.
 3. Project-specific commands become canonical only after an overlay resolves an explicit host-project operations doc.
 4. When neither overlay-resolved project operations nor framework-owned wrappers cover the requested action, the action is not implicitly authorized; the orchestrator must stop, ask the user, or route the gap through tracked framework/project clarification.
@@ -33,14 +33,14 @@ Framework template:
 1. framework-owned starter template lives at `docs/framework/templates/vida.config.yaml.template`,
 2. template is canonical for scaffold/default structure,
 3. instantiated root `vida.config.yaml` remains project-owned data.
-4. project docs referenced from `project_bootstrap` remain project-owned runbooks; framework runtime law must stay in `AGENTS.md`, `vida/config/instructions/*`, and `taskflow-v0/*`, not be synchronized into project docs by drift.
-5. framework-owned document lifecycle/freshness metadata belongs in `vida/config/instructions/runtime-instructions/work.document-lifecycle-protocol.md` and `.vida/state/doc-lifecycle.json`, not inside project-owned docs.
+4. project docs referenced from `project_bootstrap` remain project-owned runbooks; framework runtime law must stay in `AGENTS.md`, `vida/config/instructions/**`, and active TaskFlow runtime-family surfaces, not be synchronized into project docs by drift.
+5. framework-owned document lifecycle/freshness metadata belongs in `runtime-instructions/work.document-lifecycle-protocol` and `.vida/state/doc-lifecycle.json`, not inside project-owned docs.
 
 ## Language Policy
 
 Framework-owned rule:
 
-1. `AGENTS.md`, `vida/config/instructions/*`, and `taskflow-v0/*` use English as the framework language.
+1. `AGENTS.md`, `vida/config/instructions/**`, and active TaskFlow runtime-family surfaces use English as the framework language.
 2. Project-owned language preferences live in root `vida.config.yaml`.
 3. Project language preferences may affect user-facing communication, reasoning language, and project documentation language, but they do not localize framework-owned source files.
 
@@ -50,7 +50,7 @@ Overlay is evaluated after core VIDA boot is available.
 
 Activation order:
 
-1. complete the mandatory bootstrap and lane-entry path (`AGENTS.md`, `AGENTS.sidecar.md`, `vida/root-map.md`, selected lane entry, and activation law),
+1. complete the mandatory bootstrap and lane-entry path (`AGENTS.md`, `AGENTS.sidecar.md`, selected lane entry, and activation law),
 2. detect `vida.config.yaml`,
 3. parse overlay,
 4. read `protocol_activation.*`,
@@ -76,8 +76,8 @@ Initial supported overlay domain:
 
 If `true`, VIDA must activate:
 
-1. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-2. runtime helper: `taskflow-v0 system`
+1. `instruction-contracts/core.agent-system-protocol`
+2. runtime helper: `vida taskflow system`
 
 ## Minimum Schema Surface
 
@@ -177,6 +177,27 @@ Supported `agent_extensions.role_selection.conversation_modes.<mode_id>` keys:
 4. `tracked_flow_entry`
 5. `allow_freeform_chat`
 
+Supported `host_environment` keys:
+
+1. `cli_system`
+2. `codex`
+
+Supported `host_environment.codex` keys:
+
+1. `agents`
+
+Supported `host_environment.codex.agents.<agent_id>` keys:
+
+1. `tier`
+2. `rate`
+3. `reasoning_band`
+4. `model`
+5. `model_reasoning_effort`
+6. `sandbox_mode`
+7. `default_runtime_role`
+8. `runtime_roles`
+9. `task_classes`
+
 Supported `autonomous_execution` keys:
 
 1. `next_task_boundary_analysis`
@@ -193,7 +214,7 @@ Autonomous execution overlay rule:
 1. `autonomous_execution` may tune next-task boundary behavior only within framework law.
 2. It may disable user-facing boundary reporting, but it may not disable required internal next-task boundary analysis.
 3. It may not convert a non-gating boundary report into silent scope widening.
-4. Approval gating still belongs to `vida/config/instructions/runtime-instructions/bridge.task-approval-loop-protocol.md`.
+4. Approval gating still belongs to `runtime-instructions/bridge.task-approval-loop-protocol`.
 5. `continue_after_reports=true` means intermediate lawful reports should auto-advance into the next already-authorized step when no blocker, approval gate, validation gate, explicit user pause, or explicit user request to discuss the report exists.
 6. `continue_after_reports` must not bypass research/spec/approval/verification sequencing; it only removes unnecessary stopping after a lawful intermediate report.
 7. Pre-execution validation reports remain gating even when `continue_after_reports=true`.
@@ -268,7 +289,7 @@ Supported worker-level `dispatch` keys:
 Project agent-extension overlay rule:
 
 1. `agent_extensions` is the project-owned activation and selection surface for project roles, project skills, project profiles, and project flow sets.
-2. Framework-owned role law, role-profile law, and runtime routing law remain in `vida/config/instructions/*`.
+2. Framework-owned role law, role-profile law, and runtime routing law remain in `vida/config/instructions/**`.
 3. Project-owned custom roles, custom skills, custom profiles, and custom flows must live in project-owned registries referenced by `agent_extensions.registries`.
 4. `vida.config.yaml` may enable or disable framework roles and standard flow sets for the active project, but it must not silently redefine framework role authority.
 5. Project extensions are lawful only after validation confirms:
@@ -278,7 +299,7 @@ Project agent-extension overlay rule:
    - project profiles resolve to known roles and skills,
    - project flows resolve to known roles,
    - no project extension weakens framework safety boundaries.
-6. `taskflow-v0 config validate` is the bounded runtime proof surface for the current overlay-level validation of `agent_extensions`.
+6. `vida taskflow config validate` is the bounded runtime proof surface for the current overlay-level validation of `agent_extensions`.
 
 Supported `agent_system.scoring` keys:
 
@@ -430,27 +451,27 @@ These are runtime state files, not canonical project configuration.
 Minimum proof for overlay support:
 
 ```bash
-taskflow-v0 config validate
-taskflow-v0 config dump
-taskflow-v0 config protocol-active agent_system
-taskflow-v0 system snapshot [task_id]
+vida taskflow config validate
+vida taskflow config dump
+vida taskflow config protocol-active agent_system
+vida taskflow system snapshot [task_id]
 ```
 
 Minimum proof for framework template support:
 
 ```bash
-taskflow-v0 boot read-contract lean
-taskflow-v0 boot snapshot --json
+vida taskflow boot read-contract lean
+vida taskflow boot snapshot --json
 ```
 
 -----
 artifact_path: config/runtime-instructions/project-overlay.protocol
 artifact_type: runtime_instruction
 artifact_version: '1'
-artifact_revision: '2026-03-12'
+artifact_revision: '2026-03-13'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-13T07:44:24+02:00'
+updated_at: '2026-03-13T23:20:00+02:00'
 changelog_ref: bridge.project-overlay-protocol.changelog.jsonl

@@ -33,44 +33,44 @@ Each pack handoff must produce:
      - explicit scope candidates or constraints
      - external validation evidence when triggered
    - next owner:
-     - `vida/config/instructions/runtime-instructions/work.spec-contract-protocol.md`
+     - `runtime-instructions/work.spec-contract-protocol`
 2. `spec-pack -> work-pool-pack`
    - required outputs:
      - approved spec scope
      - AC / contract decisions
      - readiness context for task materialization
    - next owner:
-     - `vida/config/instructions/command-instructions/planning.form-task-protocol.md`
+     - `command-instructions/planning.form-task-protocol`
 3. `work-pool-pack -> dev-pack`
    - required outputs:
      - ready queue in the DB-backed task runtime
      - explicit launch decision
      - dependency state
    - next owner:
-     - `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`
+     - `command-instructions/execution.implement-execution-protocol`
 4. `work-pool-pack -> bug-pool-pack`
    - required outputs:
      - narrowed executable bug slice or issue-contract-ready input
      - readiness state for bug execution
    - next owners:
-     - `vida/config/instructions/command-instructions/execution.bug-fix-protocol.md`
-     - `vida/config/instructions/runtime-instructions/bridge.issue-contract-protocol.md` when normalization is still required
+     - `command-instructions/execution.bug-fix-protocol`
+     - `runtime-instructions/bridge.issue-contract-protocol` when normalization is still required
 5. `dev-pack -> reflection-pack`
    - required outputs:
      - completed implementation evidence
      - verification status
      - drift or synchronization trigger when present
    - next owners:
-     - `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md`
-     - `vida/config/instructions/diagnostic-instructions/analysis.framework-self-analysis-protocol.md` only when tracked framework self-analysis/remediation is the actual target rather than ordinary documentation or task-pool reconciliation
+     - `instruction-contracts/work.documentation-operation-protocol`
+     - `diagnostic-instructions/analysis.framework-self-analysis-protocol` only when tracked framework self-analysis/remediation is the actual target rather than ordinary documentation or task-pool reconciliation
 6. `bug-pool-pack -> reflection-pack`
    - required outputs:
      - fix evidence or closure verdict
      - regression results
      - any contract/documentation drift requiring reconciliation
    - next owners:
-     - `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md`
-     - `vida/config/instructions/diagnostic-instructions/analysis.framework-self-analysis-protocol.md` only when the routed outcome is tracked framework self-analysis/remediation instead of ordinary reflection drift handling
+     - `instruction-contracts/work.documentation-operation-protocol`
+     - `diagnostic-instructions/analysis.framework-self-analysis-protocol` only when the routed outcome is tracked framework self-analysis/remediation instead of ordinary reflection drift handling
 
 ## Admissibility Rule
 
@@ -90,9 +90,9 @@ If handoff is invalidated by scope, AC, decision, or dependency drift:
 
 1. do not continue into the next pack by inertia,
 2. route reconciliation through the current canonical owners:
-   - `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-   - `vida/config/instructions/command-instructions/planning.form-task-protocol.md`
-   - `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`
+   - `instruction-contracts/core.orchestration-protocol`
+   - `command-instructions/planning.form-task-protocol`
+   - `command-instructions/execution.implement-execution-protocol`
 3. resume pack progression only after the affected owner restores an admissible handoff state.
 
 ## Output Contract

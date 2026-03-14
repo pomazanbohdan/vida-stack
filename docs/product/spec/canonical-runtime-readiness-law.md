@@ -45,12 +45,12 @@ Current canonical sources:
 
 1. `docs/product/spec/canonical-inventory-law.md`
 2. `docs/product/spec/instruction-artifact-model.md`
-3. `vida/config/instructions/projection_manifest.yaml`
-4. `vida/config/instructions/bundles/default_runtime.yaml`
+3. `projection_manifest.yaml`
+4. `bundles/default_runtime.yaml`
 5. `vida/config/migration/compatibility_classes.yaml`
 6. `vida/config/migration/boot_gates.yaml`
-7. `vida/config/codex-registry.current.jsonl`
-8. `vida/config/codex-readiness.current.jsonl` as the current materialized readiness report path
+7. `vida/config/docflow-registry.current.jsonl`
+8. `vida/config/docflow-readiness.current.jsonl` as the current materialized readiness report path
 
 ## 4. Source-Version Tuple Rule
 
@@ -149,8 +149,8 @@ The minimum blocker families are:
 
 The current transitional bounded proof surface is:
 
-1. `python3 codex-v0/codex.py readiness-check --profile active-canon`
-2. `python3 codex-v0/codex.py readiness-write --profile active-canon --canonical`
+1. `vida docflow readiness-check --profile active-canon`
+2. `vida docflow readiness-write --profile active-canon --canonical`
 
 Current scope of that proof:
 
@@ -162,7 +162,7 @@ Current scope of that proof:
 
 Materialized-readiness rule:
 
-1. the transitional canonical readiness report path is `vida/config/codex-readiness.current.jsonl`,
+1. the transitional canonical readiness report path is `vida/config/docflow-readiness.current.jsonl`,
 2. the readiness artifact must contain only current blocking rows for the selected canonical scope,
 3. an empty materialized readiness artifact means the selected scope is currently `ready` under bounded Layer 7 proof,
 4. the materialized readiness artifact is evidence only and does not by itself authorize runtime consumption.

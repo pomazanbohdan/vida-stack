@@ -41,7 +41,7 @@ This command also absorbs epic-planning responsibilities (scope boundary, depend
 2. `spec-contract-protocol.md`.
 3. `web-validation-protocol.md`.
 4. `runtime.task-state-telemetry-protocol.md`.
-5. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`.
+5. `runtime-instructions/work.taskflow-protocol`.
 6. `implement-execution-protocol.md`.
 7. `docs/decisions.md`.
 8. `docs/feature-checklist.md`.
@@ -176,9 +176,9 @@ VIDA_FORM_TASK:
 
 1. `form-task-protocol.md`
 2. `use-case-packs.md`
-3. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
-4. `vida/config/instructions/command-instructions/operator.vida-spec-guide.md`
-5. `vida/config/instructions/command-instructions/operator.vida-implement-guide.md`
+3. `runtime-instructions/work.taskflow-protocol`
+4. `command-instructions/operator.vida-spec-guide`
+5. `command-instructions/operator.vida-implement-guide`
 
 -----
 artifact_path: config/command-instructions/vida.form-task

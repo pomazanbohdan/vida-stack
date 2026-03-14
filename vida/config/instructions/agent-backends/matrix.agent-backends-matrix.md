@@ -21,8 +21,8 @@ This file is the canonical agent-backend matrix.
 
 Reference:
 
-1. `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`
-2. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
+1. `instruction-contracts/lane.worker-dispatch-protocol`
+2. `instruction-contracts/core.agent-system-protocol`
 
 -----
 artifact_path: config/instructions/agent-backends/matrix.agent-backends.matrix

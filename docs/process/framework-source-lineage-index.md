@@ -19,24 +19,24 @@ Removal rule:
 
 | Archived source path | Primary promoted/canonical homes |
 | --- | --- |
-| `docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md` | `vida/config/instructions/system-maps/framework.map.md`, `docs/product/spec/current-spec-map.md`, `docs/product/spec/canonical-runtime-layer-matrix.md` |
+| `docs/framework/plans/vida-0.1-to-1.0-direct-binary-transition-plan.md` | `system-maps/framework.map.md`, `docs/product/spec/current-spec-map.md`, `docs/product/spec/canonical-runtime-layer-matrix.md` |
 | `docs/framework/plans/vida-0.2-semantic-freeze-spec.md` | `docs/product/spec/partial-development-kernel-model.md`, `vida/config/migration/migration_paths.yaml` |
 | `docs/framework/plans/vida-semantic-extraction-layer-map.md` | `docs/product/spec/partial-development-kernel-model.md`, `vida/config/migration/migration_paths.yaml` |
 | `docs/framework/plans/vida-0.3-parity-and-conformance-spec.md` | `docs/product/spec/partial-development-kernel-model.md`, `vida/config/migration/migration_paths.yaml` |
 | `docs/framework/plans/vida-0.3-state-kernel-schema-spec.md` | `docs/product/spec/partial-development-kernel-model.md`, `docs/product/spec/canonical-machine-map.md`, `vida/config/machines/**`, `vida/config/policies/closure_policy.yaml` |
 | `docs/framework/plans/vida-0.3-route-and-receipt-spec.md` | `docs/product/spec/partial-development-kernel-model.md`, `docs/product/spec/receipt-and-proof-law.md`, `docs/product/spec/canonical-runtime-layer-matrix.md`, `vida/config/routes/route_catalog.yaml`, `vida/config/machines/**` |
-| `docs/framework/plans/vida-0.3-instruction-kernel-spec.md` | `docs/product/spec/instruction-artifact-model.md`, `docs/product/spec/canonical-runtime-readiness-law.md`, `vida/config/instructions/instruction_catalog.yaml` |
-| `docs/framework/plans/vida-0.3-migration-kernel-spec.md` | `docs/product/spec/canonical-runtime-readiness-law.md`, `vida/config/machines/boot_migration_gate.yaml`, `vida/config/instructions/runtime-instructions/runtime.export-protocol.md` |
-| `docs/framework/plans/vida-0.3-command-tree-spec.md` | `vida/config/instructions/system-maps/framework.map.md`, `vida/config/instructions/system-maps/protocol.index.md` |
-| `docs/framework/plans/vida-0.3-db-first-runtime-spec.md` | `docs/product/spec/canonical-runtime-layer-matrix.md`, `vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md`, `vida/config/machines/boot_migration_gate.yaml` |
-| `docs/framework/plans/vida-0.3-storage-kernel-spec.md` | `vida/config/instructions/system-maps/protocol.index.md`, `vida/config/instructions/runtime-instructions/runtime.export-protocol.md` |
-| `docs/framework/plans/vida-0.3-instruction-memory-and-sidecar-spec.md` | `vida/config/instructions/system-maps/protocol.index.md`, `vida/config/instructions/runtime-instructions/runtime.export-protocol.md` |
-| `docs/framework/research/agentic-agent-definition-system.md` | `vida/config/instructions/agent-definitions/model.agent-definitions-contract.md`, `vida/config/instructions/agent-definitions/role.role-profile-contract.md`, `docs/product/spec/agent-role-skill-profile-flow-model.md` |
-| `docs/framework/research/agentic-terminology-glossary.md` | `vida/config/instructions/agent-definitions/model.agent-definitions-contract.md`, `vida/config/instructions/system-maps/framework.map.md` |
-| `docs/framework/research/agentic-cheap-worker-packet-system.md` | `vida/config/instructions/runtime-instructions/lane.agent-handoff-context-protocol.md`, `vida/config/instructions/system-maps/protocol.index.md` |
-| `docs/framework/research/agentic-proof-obligation-registry.md` | `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md`, `vida/config/instructions/system-maps/protocol.index.md` |
+| `docs/framework/plans/vida-0.3-instruction-kernel-spec.md` | `docs/product/spec/instruction-artifact-model.md`, `docs/product/spec/canonical-runtime-readiness-law.md`, `instruction_catalog.yaml` |
+| `docs/framework/plans/vida-0.3-migration-kernel-spec.md` | `docs/product/spec/canonical-runtime-readiness-law.md`, `vida/config/machines/boot_migration_gate.yaml`, `runtime-instructions/runtime.export-protocol.md` |
+| `docs/framework/plans/vida-0.3-command-tree-spec.md` | `system-maps/framework.map.md`, `system-maps/protocol.index.md` |
+| `docs/framework/plans/vida-0.3-db-first-runtime-spec.md` | `docs/product/spec/canonical-runtime-layer-matrix.md`, `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`, `vida/config/machines/boot_migration_gate.yaml` |
+| `docs/framework/plans/vida-0.3-storage-kernel-spec.md` | `system-maps/protocol.index.md`, `runtime-instructions/runtime.export-protocol.md` |
+| `docs/framework/plans/vida-0.3-instruction-memory-and-sidecar-spec.md` | `system-maps/protocol.index.md`, `runtime-instructions/runtime.export-protocol.md` |
+| `docs/framework/research/agentic-agent-definition-system.md` | `agent-definitions/model.agent-definitions-contract.md`, `agent-definitions/role.role-profile-contract.md`, `docs/product/spec/agent-role-skill-profile-flow-model.md` |
+| `docs/framework/research/agentic-terminology-glossary.md` | `agent-definitions/model.agent-definitions-contract.md`, `system-maps/framework.map.md` |
+| `docs/framework/research/agentic-cheap-worker-packet-system.md` | `runtime-instructions/lane.agent-handoff-context-protocol.md`, `system-maps/protocol.index.md` |
+| `docs/framework/research/agentic-proof-obligation-registry.md` | `runtime-instructions/work.verification-lane-protocol.md`, `system-maps/protocol.index.md` |
 | `docs/framework/research/canonical-runtime-readiness-external-patterns.md` | `docs/product/spec/canonical-runtime-readiness-law.md`, `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`, `codex-v0/codex.py` |
-| `docs/framework/research/vida-1.0-agent-runtime-external-alignment.md` | `docs/product/spec/canonical-runtime-layer-matrix.md`, `vida/config/instructions/runtime-instructions/lane.agent-handoff-context-protocol.md`, `vida/config/instructions/runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`, `vida/config/instructions/system-maps/observability.map.md` |
+| `docs/framework/research/vida-1.0-agent-runtime-external-alignment.md` | `docs/product/spec/canonical-runtime-layer-matrix.md`, `runtime-instructions/lane.agent-handoff-context-protocol.md`, `runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`, `system-maps/observability.map.md` |
 
 ## Use Rule
 

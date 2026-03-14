@@ -27,9 +27,9 @@ Canonical split:
 
 Reasoning docs:
 
-1. Canonical deep spec: `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md`
-2. One-screen reference: `vida/config/instructions/references/algorithms.one-screen-reference.md`
-3. Operational quick reference: `vida/config/instructions/references/algorithms.quick-reference.md`
+1. Canonical deep spec: `instruction-contracts/overlay.step-thinking-protocol`
+2. One-screen reference: `references/algorithms.one-screen-reference`
+3. Operational quick reference: `references/algorithms.quick-reference`
 
 Migration policy:
 

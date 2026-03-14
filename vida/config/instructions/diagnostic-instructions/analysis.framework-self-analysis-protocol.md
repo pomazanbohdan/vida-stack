@@ -47,7 +47,7 @@ Do not use FSAP for product/codebase diagnosis unless the user explicitly asks a
 4. Thinking mode:
    - default `META` for explicit self-analysis requests;
    - downgrade to `MAR` only for narrow single-script questions with low blast radius.
-5. Scope: `AGENTS.md`, `vida/config/instructions/*`, `*`, runtime logs, and only the project evidence that proves a framework-level friction point.
+5. Scope: `AGENTS.md`, `vida/config/instructions/**`, `*`, runtime logs, and only the project evidence that proves a framework-level friction point.
 6. Instruction-layer efficiency is in scope: FSAP must inspect `AGENTS.md`, lane entry contracts, and canonical protocols when instruction ambiguity or drift increases rereads, optionality, routing confusion, or token cost.
 
 When the user explicitly requests tracked execution, use `reflection-pack` and the dedicated FSAP chain:
@@ -69,7 +69,7 @@ FSAP must separate findings into two ownership buckets:
 1. `framework-owned`
    - VIDA runtime protocols
    - AGENTS rules
-   - `vida/config/instructions/*`
+   - `vida/config/instructions/**`
    - `*`
 2. `project-owned`
    - app-specific runbooks
@@ -91,8 +91,8 @@ Rule:
    - capture the current orchestrator/runtime state and relevant health/status views.
    - if tracked execution is active, also capture current task id, active TaskFlow block, and pack state.
    - preferred shortcuts:
-     - dev/task-state visibility: `taskflow-v0 boot snapshot --json`
-     - untracked mode: `taskflow-v0 system snapshot` plus bounded queue/status reads as needed,
+     - dev/task-state visibility: `vida taskflow boot snapshot --json`
+     - untracked mode: `vida taskflow system snapshot` plus bounded queue/status reads as needed,
      - tracked mode: `bash framework-self-check.sh <task_id>`.
 3. `FSAP-2 Evidence Collection`
    - inspect only the protocols/scripts actually involved in the observed friction.
@@ -174,7 +174,7 @@ bash framework-wave-start.sh <task_id> <reflection-pack|dev-pack|work-pool-pack>
 Rule:
 
 1. `framework-wave-start.sh` is a migration-only wrapper surface.
-2. It must not be treated as the long-term canonical runtime entrypoint after the `taskflow-v0` cutover.
+2. It must not be treated as the long-term canonical runtime entrypoint after the TaskFlow runtime-family cutover.
 
 Use this only when at least one is true:
 

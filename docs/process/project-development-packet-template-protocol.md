@@ -98,7 +98,9 @@ delivery_task_packet:
   stop_rules:
     - <stop boundary>
   blocking_question: <one blocking question>
-  handoff_target: development_implementer
+  handoff_runtime_role: worker
+  handoff_task_class: implementation
+  handoff_selection: runtime_selected_tier
 ```
 
 Readiness rule:
@@ -133,7 +135,9 @@ execution_block_packet:
   stop_rules:
     - <stop boundary>
   blocking_question: <one blocking question>
-  handoff_target: development_implementer
+  handoff_runtime_role: worker
+  handoff_task_class: implementation
+  handoff_selection: runtime_selected_tier
 ```
 
 JIT rule:
@@ -159,7 +163,9 @@ coach_review_packet:
   review_focus:
     - <quality gate>
   blocking_question: <one review question>
-  handoff_target: development_coach
+  handoff_runtime_role: coach
+  handoff_task_class: coach
+  handoff_selection: runtime_selected_tier
 ```
 
 ## Verifier Proof Packet Template
@@ -177,7 +183,9 @@ verifier_proof_packet:
     - <paths or artifacts to inspect>
   active_skills: <required skills or no_applicable_skill>
   blocking_question: <one proof question>
-  handoff_target: development_verifier
+  handoff_runtime_role: verifier
+  handoff_task_class: verification
+  handoff_selection: runtime_selected_tier
 ```
 
 ## Escalation Packet Template
@@ -196,7 +204,9 @@ escalation_packet:
     - <must preserve rule>
   active_skills: <required skills or no_applicable_skill>
   blocking_question: <one escalation question>
-  handoff_target: development_escalation
+  handoff_runtime_role: solution_architect
+  handoff_task_class: architecture
+  handoff_selection: runtime_selected_tier
 ```
 
 ## Packet Selection Rule
@@ -228,7 +238,7 @@ then it is not lawful and must be reshaped before dispatch.
 2. for session startup, read `docs/process/project-orchestrator-session-start-protocol.md`,
 3. for team/lane semantics, read `docs/process/team-development-and-orchestration-protocol.md`,
 4. for skill activation, read `docs/process/project-skill-initialization-and-activation-protocol.md`,
-5. for framework worker packet home, read `vida/config/instructions/prompt-templates/worker.packet-templates.md`.
+5. for framework worker packet home, read `prompt-templates/worker.packet-templates.md`.
 
 -----
 artifact_path: process/project-development-packet-template-protocol

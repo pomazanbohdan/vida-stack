@@ -123,7 +123,7 @@ Rule:
 2. `receipt-proof-taxonomy` -> checkpoint receipts and replay-linked proof artifacts
 3. `execution_plan` -> pending checkpoint writes and resumability posture
 4. `route_progression` -> replay of route-facing projections only, not route law itself
-5. `run_graph` -> practical runtime resume cursor source in `taskflow-v0`
+5. `run_graph` -> practical runtime resume cursor source in the active TaskFlow runtime family
 6. `task_state_telemetry` -> checkpoint-visible continuation packet and compact hydration contract
 
 ## 6. Invariants

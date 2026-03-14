@@ -40,13 +40,13 @@ Default policy:
 
 Primary executable-law homes:
 
-1. `vida/config/instructions/skills/**`
-2. `vida/config/instructions/activation/**`
-3. `vida/config/instructions/bundles/**`
+1. `skills/**`
+2. `activation/**`
+3. `bundles/**`
 
 ## 5. Transitional Runtime Mapping
 
-`taskflow-v0` is the first transitional runtime expected to consume this split:
+the active TaskFlow runtime family is the first transitional runtime expected to consume this split:
 
 1. inventory,
 2. enablement,

@@ -1,0 +1,57 @@
+schema_version: 1
+footer_optional:
+  - scope: filename
+    glob: "AGENTS.md"
+    reason: AGENTS.md is the canonical bootstrap carrier; metadata lives in AGENTS.sidecar.md and AGENTS.changelog.jsonl
+changelog_only:
+  - scope: filename
+    glob: "AGENTS.md"
+    reason: AGENTS.md is the canonical bootstrap carrier and uses changelog-only mutation
+mutation_disabled:
+  - scope: filename
+    glob: "AGENTS.md"
+    reason: AGENTS.md bootstrap body mutation is disabled through codex; mutate AGENTS.sidecar.md for canonical metadata and project context
+scan_ignored:
+  - scope: relative_path
+    glob: "_temp/**"
+    reason: temporary scratch data, donor snapshots, and local build caches are outside the active documentation canon
+  - scope: relative_path
+    glob: "_vida/**"
+    reason: legacy or bridge-era helper surfaces are outside the active documentation canon
+  - scope: relative_path
+    glob: "dist/**"
+    reason: packaged outputs and release snapshots are outside the active documentation canon
+  - scope: relative_path
+    glob: "install/**"
+    reason: install/release bundle artifacts are outside the active documentation canon
+  - scope: relative_path
+    glob: "projects/**"
+    reason: extracted secondary project bundles are not part of the default active project-doc bootstrap path
+  - scope: relative_path
+    glob: ".agents/**"
+    reason: skill source markdown is outside the active project documentation canon
+  - scope: relative_path
+    glob: "target/**"
+    reason: build output markdown is outside the active documentation canon
+  - scope: relative_path
+    glob: ".venv/**"
+    reason: local project environment packages are runtime dependencies, not documentation canon
+profiles:
+  active-canon:
+    - docs/product
+    - docs/process
+    - docs/project-memory
+    - vida/config/instructions
+  active-canon-strict:
+    - docs/product
+    - docs/process
+    - docs/project-memory
+    - vida/config/instructions
+  framework-active:
+    - vida/config/instructions
+  product-active:
+    - docs/product
+    - docs/process
+    - docs/project-memory
+  repo-root:
+    - .

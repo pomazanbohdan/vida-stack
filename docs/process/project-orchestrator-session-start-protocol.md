@@ -16,8 +16,8 @@ This protocol defines:
 
 Run this checklist in order:
 
-1. confirm project-local runtime path with `taskflow-v0 status`,
-2. confirm current taskflow state with `taskflow-v0 boot snapshot --json --top-limit 5 --ready-limit 5`,
+1. confirm project-local runtime path with `vida status --json`,
+2. confirm current taskflow state with `vida orchestrator-init --json`,
 3. read framework bootstrap carriers:
    - `AGENTS.md`
    - `AGENTS.sidecar.md`
@@ -32,9 +32,9 @@ Run this checklist in order:
 
 Before shaping work, all of the following must be true:
 
-1. `taskflow-v0 status` resolves to this repository root,
+1. `vida status --json` resolves to this repository root,
 2. TaskFlow lifecycle truth is `.vida/state/taskflow-state.db`,
-3. installed shim roots are not the active `taskflow-v0` path,
+3. installed shim roots are not the active TaskFlow runtime path,
 4. the runtime is not relying on `.beads/issues.jsonl` or other legacy task artifacts.
 
 If any of those fail, fix runtime bootstrap first and do not start orchestration work yet.
@@ -99,14 +99,14 @@ Backlog-wide pre-splitting into `execution_block` before first dispatch is forbi
 Use these commands as the canonical session-start smoke path:
 
 ```bash
-taskflow-v0 status
-taskflow-v0 boot snapshot --json --top-limit 5 --ready-limit 5
+vida status --json
+vida orchestrator-init --json
 ```
 
 Optional next-step inspection when active work already exists:
 
 ```bash
-taskflow-v0 task list --all --json
+vida taskflow task list --all --json
 ```
 
 ## Routing

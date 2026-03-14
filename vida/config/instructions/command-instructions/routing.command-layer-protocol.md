@@ -4,7 +4,7 @@ Purpose: define one canonical protocol-layer matrix for VIDA command surfaces.
 
 Scope:
 
-1. Applies to `vida/config/instructions/command-instructions.vida-*.md`.
+1. Applies to `command-instructions.vida-*`.
 2. Decomposes each command into stable protocol-scoped units.
 3. Keeps command docs aligned without duplicating full runtime rules in every file.
 
@@ -170,21 +170,21 @@ Protocol-unit format:
 When command topology changes in the same scope:
 
 1. update this file,
-2. update touched `vida/config/instructions/command-instructions.vida-*.md`,
-3. update `vida/config/instructions/system-maps/protocol.index.md`,
-4. update `vida/config/instructions/system-maps/framework.map.md` if framework topology language changes.
+2. update touched `command-instructions.vida-*`,
+3. update `system-maps/protocol.index`,
+4. update `system-maps/framework.map` if framework topology language changes.
 
 ## Related
 
-1. `vida/config/instructions/command-instructions/operator.command-catalog-index.md`
-2. `vida/config/instructions/system-maps/framework.map.md`
-3. `vida/config/instructions/system-maps/protocol.index.md`
-4. `vida/config/instructions/command-instructions/operator.vida-research-guide.md`
-5. `vida/config/instructions/command-instructions/operator.vida-spec-guide.md`
-6. `vida/config/instructions/command-instructions/operator.vida-form-task-guide.md`
-7. `vida/config/instructions/command-instructions/operator.vida-implement-guide.md`
-8. `vida/config/instructions/command-instructions/operator.vida-bug-fix-guide.md`
-9. `vida/config/instructions/command-instructions/operator.vida-status-guide.md`
+1. `command-instructions/operator.command-catalog-index`
+2. `system-maps/framework.map`
+3. `system-maps/protocol.index`
+4. `command-instructions/operator.vida-research-guide`
+5. `command-instructions/operator.vida-spec-guide`
+6. `command-instructions/operator.vida-form-task-guide`
+7. `command-instructions/operator.vida-implement-guide`
+8. `command-instructions/operator.vida-bug-fix-guide`
+9. `command-instructions/operator.vida-status-guide`
 
 -----
 artifact_path: config/command-instructions/command-layer.protocol

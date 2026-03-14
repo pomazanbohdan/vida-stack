@@ -8,7 +8,7 @@ Use this file only when worker-lane confirmation is absent or the runtime explic
 
 Explicit boot map:
 
-1. `vida/config/instructions/system-maps/bootstrap.orchestrator-boot-flow.md`
+1. `system-maps/bootstrap.orchestrator-boot-flow`
 
 ## Core Contract
 
@@ -49,7 +49,7 @@ Policy precedence:
 Instruction conflict resolution order:
 1. `AGENTS.md`
 2. this file
-3. active canonical protocol named in `vida/config/instructions/system-maps/protocol.index.md`
+3. active canonical protocol named in `system-maps/protocol.index`
 4. validated overlay data from `vida.config.yaml`
 5. command docs and wrappers
 6. helper script behavior
@@ -58,13 +58,14 @@ Drift rule:
 1. lower-precedence text or runtime behavior that conflicts with a higher-precedence source is drift to correct, not an alternate valid path.
 
 Instruction activation rule:
-1. use `vida/config/instructions/instruction-contracts/bridge.instruction-activation-runtime-capsule.md` as the compact runtime-facing source for deciding which instruction surfaces are always-on, lane-entry, trigger-only, or closure-only, and consult `bridge.instruction-activation-protocol.md` as the canonical owner when edge-case activation semantics matter,
+1. use `instruction-contracts/bridge.instruction-activation-runtime-capsule` as the compact runtime-facing source for deciding which instruction surfaces are always-on, lane-entry, trigger-only, or closure-only, and consult `bridge.instruction-activation-protocol.md` as the canonical owner when edge-case activation semantics matter,
 2. do not broaden the boot read-set or domain protocol set unless that protocol's trigger matrix authorizes it.
-3. if the active task context is documentation-shaped, activate `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md` immediately without waiting for a second manual selection step.
-4. detailed orchestration-first coordination law is owned by `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`; this entry contract summarizes trigger gates and boot routing only.
+3. if the active task context is documentation-shaped, activate `instruction-contracts/work.documentation-operation-protocol` immediately without waiting for a second manual selection step.
+4. detailed orchestration-first coordination law is owned by `instruction-contracts/core.orchestration-protocol`; this entry contract summarizes trigger gates and boot routing only.
 5. when the host project exposes a project-owned top-level orchestrator operating protocol through the project docs map or overlay, apply it as a project-layer narrowing of upper-lane routing and decomposition posture without weakening framework invariants.
 6. when the host project exposes project-owned packet-template, prompt-stack, or boot-readiness validation protocols through the project docs map or overlay, treat them as lawful project-layer narrowing of packet rendering, prompt interpretation, and startup validation without weakening framework invariants.
 7. when tracked execution or orchestrator-led continuation is active, the runtime-visible control loop in `core.orchestration` must remain explicit enough to answer lawful-next, replan, and parallel-safety questions without broad rereads.
+8. when the runtime exposes a reporting contract through `vida orchestrator-init`, treat that contract as the mandatory user-facing log/report prefix for `Thinking mode`, `Requests|Tasks`, and `Agents` counters rather than as optional style guidance.
 
 ## Request Intent Gate
 
@@ -84,7 +85,7 @@ Classify user requests before task resolution:
    - enters execution only after explicit mutation decision, existing approved task context, or user-confirmed scope.
 
 Lane-selection note:
-1. when `vida.config.yaml -> agent_extensions.role_selection.mode=auto`, use `vida/config/instructions/runtime-instructions/work.agent-lane-selection-protocol.md` before deeper pack or taskflow routing for scope/PBI conversational work,
+1. when `vida.config.yaml -> agent_extensions.role_selection.mode=auto`, use `runtime-instructions/work.agent-lane-selection-protocol` before deeper pack or taskflow routing for scope/PBI conversational work,
 2. `scope_discussion` and `pbi_discussion` remain bounded conversational stages and must hand off into canonical tracked flow when artifact or execution work begins.
 
 Default rule:
@@ -118,7 +119,7 @@ Tracked execution is mandatory only when at least one is true:
 
 Immediate-entry rule:
 1. when the request already satisfies this gate at session start, attach to or create/select the lawful tracked-execution task before implementation,
-2. start tracked execution through the canonical entrypoints from `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md` and `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md`,
+2. start tracked execution through the canonical entrypoints from `runtime-instructions/work.taskflow-protocol` and `runtime-instructions/runtime.task-state-telemetry-protocol`,
 3. pre-register planned blocks before non-trivial execution and keep subsequent work inside active tracked-execution block lifecycle.
 4. do not reinterpret tracked-execution entry as permission for local orchestrator coding unless an explicit recorded exception path is already active.
 5. when the turn includes both report/diagnosis expectations and continued execution, record whether the active path is `diagnosis_path` or `normal_delivery_path` before implementation, delegation, or local workaround work begins.
@@ -138,15 +139,33 @@ Tracked execution is also forbidden for explicit VIDA/framework self-diagnosis b
 2. the deliverable is a chat report,
 3. no explicit task-tracking request was made.
 
+Activation-pending exception:
+1. if runtime bootstrap reports `pending_activation`, do not treat the session as tracked execution even if later development work is likely,
+2. the lawful next path is a bounded activation interview/configuration slice through `vida project-activator`,
+3. while that state remains pending, do not enter `vida taskflow` or any non-canonical external TaskFlow runtime,
+4. use `vida docflow` only for bounded documentation/readiness inspection around activation if needed.
+
+Feature-delivery entry rule:
+1. if one request asks for research, detailed specifications, an implementation plan, and then code, do not jump directly into implementation,
+2. create or update one bounded design document first through the active project documentation/docflow path,
+3. open one feature epic and one spec-pack task in `vida taskflow` before any implementation packet or delegated coding lane is activated,
+4. keep the specification and plan in that bounded design artifact,
+5. build the bounded todo/design checklist before execution shaping,
+6. after the design artifact is explicit and canonically validated, close the spec-pack task and hand off through the canonical TaskFlow/task-formation path to shape the execution packet,
+7. only after the bounded file set, proof target, rollout, and tracked execution packet are explicit may the orchestrator delegate normal write-producing work.
+8. when the launcher/runtime exposes `vida taskflow consume final <request> --json`, use that surface first to materialize the design-first route, tracked-flow bootstrap, and bounded next-command sequence instead of improvising the sequencing from chat alone.
+9. when the runtime returns a design-first bootstrap command, prefer `vida taskflow bootstrap-spec "<request>" --json` as the first tracked launcher action instead of opening ad hoc epic/spec/doc steps manually.
+10. once `bootstrap-spec` has materialized the feature epic, spec-pack task, and design document, keep the root session in orchestrator mode and hand normal write-producing implementation to the configured development lanes after the design gate is satisfied.
+
 ## Worker-First Orchestration
 
 When the agent system is active, orchestration-first coordination is mandatory for eligible work.
 
 Summary rule:
-1. use `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md` as the canonical owner for orchestration-first law,
-2. use `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md` for lane selection and mode posture,
-3. use `vida/config/instructions/runtime-instructions/core.capability-registry-protocol.md` for admissibility before scoring,
-4. use `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md` and `vida/config/instructions/runtime-instructions/lane.agent-handoff-context-protocol.md` for bounded context shaping,
+1. use `instruction-contracts/core.orchestration-protocol` as the canonical owner for orchestration-first law,
+2. use `instruction-contracts/core.agent-system-protocol` for lane selection and mode posture,
+3. use `runtime-instructions/core.capability-registry-protocol` for admissibility before scoring,
+4. use `runtime-instructions/core.context-governance-protocol` and `runtime-instructions/lane.agent-handoff-context-protocol` for bounded context shaping,
 5. stop before local write-producing work when route posture, verifier posture, or lawful escalation evidence is incomplete.
 6. do not collapse orchestrator identity into local implementer semantics merely because the user asked to continue execution.
 7. if silent framework diagnosis is active and live runtime state reports `delegated_cycle_open=true` with `local_exception_takeover_gate=blocked_open_delegated_cycle`, remain in orchestrator/diagnosis control flow; treat subordinate-lane delay as a routing/process-conflict problem, not as permission for local workaround writing.
@@ -243,30 +262,31 @@ Use for routine execution and token-efficient continuation.
    - if the snapshot answers the request, stop there and avoid wider status discovery
 4. If the request is write-producing continuation work, stop after the compact snapshot long enough to build the route receipt and prepare the external analysis receipt; do not expand into broad protocol reading before that route step.
 5. Hydrate active context capsule when task context exists.
-6. Read `vida/config/instructions/instruction-contracts/overlay.step-thinking-runtime-capsule.md` as the compact step-thinking bootstrap surface; load the owner sections from `overlay.step-thinking-protocol.md` only when the selected algorithm or an edge case requires deeper semantics.
-7. Read `vida/config/instructions/instruction-contracts/overlay.session-context-continuity-protocol.md` and keep it active as the orchestrator continuity layer for the session.
-8. Read `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md`.
-9. Read `vida/config/instructions/runtime-instructions/bridge.project-overlay-runtime-capsule.md`; consult `bridge.project-overlay-protocol.md` when overlay schema or governance details matter.
+6. Read `instruction-contracts/overlay.step-thinking-runtime-capsule` as the compact step-thinking bootstrap surface; load the owner sections from `overlay.step-thinking-protocol.md` only when the selected algorithm or an edge case requires deeper semantics.
+7. Read `instruction-contracts/overlay.session-context-continuity-protocol` and keep it active as the orchestrator continuity layer for the session.
+8. Read `runtime-instructions/work.web-validation-protocol`.
+9. Read `runtime-instructions/bridge.project-overlay-runtime-capsule`; consult `bridge.project-overlay-protocol.md` when overlay schema or governance details matter.
 10. Read `vida.config.yaml` when present.
-11. If `protocol_activation.agent_system=true`, read `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`.
-12. Read `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md` only if the request is not `answer_only` and the compact snapshot is insufficient.
-13. If `framework_self_diagnosis.enabled=true`, read `vida/config/instructions/diagnostic-instructions/analysis.silent-framework-diagnosis-protocol.md` and keep the silent diagnosis contract active for the session.
-14. Apply `vida/config/instructions/instruction-contracts/bridge.instruction-activation-runtime-capsule.md` when deciding whether additional instruction/protocol files should be loaded beyond the lean set; consult the owner activation protocol when the capsule does not settle the question.
-15. When `core.orchestration-protocol.md` is active for execution work, keep `vida/config/instructions/instruction-contracts/core.orchestration-runtime-capsule.md` explicit after boot and after each replan boundary; consult the full owner file for edge cases not resolved by the capsule.
+11. If `protocol_activation.agent_system=true`, read `instruction-contracts/core.agent-system-runtime-capsule`; consult `core.agent-system-protocol.md` when routing, fallback, or verification posture edge cases are not settled by the capsule.
+12. If overlay-driven `autonomous_execution.*` changes reporting or continuation behavior for the current execution path, read `instruction-contracts/overlay.autonomous-execution-runtime-capsule`; consult `overlay.autonomous-execution-protocol.md` when boundary, approval, or stop-condition edge cases are not settled by the capsule.
+13. Read `runtime-instructions/runtime.task-state-telemetry-protocol` only if the request is not `answer_only` and the compact snapshot is insufficient.
+14. If `framework_self_diagnosis.enabled=true`, read `diagnostic-instructions/analysis.silent-framework-diagnosis-protocol` and keep the silent diagnosis contract active for the session.
+15. Apply `instruction-contracts/bridge.instruction-activation-runtime-capsule` when deciding whether additional instruction/protocol files should be loaded beyond the lean set; consult the owner activation protocol when the capsule does not settle the question.
+16. When `core.orchestration-protocol.md` is active for execution work, keep `instruction-contracts/core.orchestration-runtime-capsule` explicit after boot and after each replan boundary; consult the full owner file for edge cases not resolved by the capsule.
 
 ### Standard Boot
 
 Use when the request has moderate cross-protocol impact or uncertainty after Lean.
 
 1. Execute Lean Boot.
-2. Read `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md` only if tracked execution is required.
-3. Read `vida/config/instructions/command-instructions/routing.use-case-packs-protocol.md` only if a pack path is required.
-4. Read `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md` only if implementation flow is in scope.
-5. Read `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md` only if node-level resumability, route control limits, or checkpoint-visible continuation is active.
-6. Read `vida/config/instructions/runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md` only if restart, resumability, checkpoint, replay, or duplicate-delivery safety is active.
-7. Read `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md` only if separated authorship, verifier-independence, or closure-proof semantics are active.
-8. Read `vida/config/instructions/runtime-instructions/work.verification-merge-protocol.md` only if review-pool or merged verification admissibility is active.
-9. Do not expand beyond route-triggered protocol surfaces; use `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md` when in doubt.
+2. Read `runtime-instructions/work.taskflow-protocol` only if tracked execution is required.
+3. Read `command-instructions/routing.use-case-packs-protocol` only if a pack path is required.
+4. Read `command-instructions/execution.implement-execution-protocol` only if implementation flow is in scope.
+5. Read `runtime-instructions/core.run-graph-protocol` only if node-level resumability, route control limits, or checkpoint-visible continuation is active.
+6. Read `runtime-instructions/recovery.checkpoint-replay-recovery-protocol` only if restart, resumability, checkpoint, replay, or duplicate-delivery safety is active.
+7. Read `runtime-instructions/work.verification-lane-runtime-capsule` only if separated authorship, verifier-independence, or closure-proof semantics are active; consult `work.verification-lane-protocol.md` when independence, proving, or merge edge cases are not settled by the capsule.
+8. Read `runtime-instructions/work.verification-merge-protocol` only if review-pool or merged verification admissibility is active.
+9. Do not expand beyond route-triggered protocol surfaces; use `instruction-contracts/bridge.instruction-activation-protocol` when in doubt.
 
 ### Full Boot
 
@@ -279,8 +299,8 @@ Use when at least one is true:
 6. confidence after Standard Boot is below 80%.
 
 1. Execute Standard Boot.
-2. Read `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`.
-3. Read `vida/config/instructions/command-instructions/operator.runtime-pipeline-guide.md`.
+2. Read `instruction-contracts/core.orchestration-protocol`.
+3. Read `command-instructions/operator.runtime-pipeline-guide`.
 
 ## Execution Rules
 
@@ -307,14 +327,15 @@ For non-trivial orchestrator reports, default order:
 
 ## References
 
-1. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-2. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-3. `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`
-4. `vida/config/instructions/command-instructions/operator.runtime-pipeline-guide.md`
-5. `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md`
-6. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
-7. `vida/config/instructions/system-maps/framework.map.md`
-8. `vida/config/instructions/system-maps/bootstrap.orchestrator-boot-flow.md`
+1. `instruction-contracts/core.orchestration-protocol`
+2. `instruction-contracts/core.agent-system-protocol`
+3. `instruction-contracts/core.agent-system-runtime-capsule`
+4. `instruction-contracts/lane.worker-dispatch-protocol`
+5. `command-instructions/operator.runtime-pipeline-guide`
+6. `runtime-instructions/runtime.task-state-telemetry-protocol`
+7. `runtime-instructions/work.taskflow-protocol`
+8. `system-maps/framework.map`
+9. `system-maps/bootstrap.orchestrator-boot-flow`
 
 -----
 artifact_path: config/instructions/agent-definitions/entry.orchestrator.entry
@@ -325,5 +346,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/agent-definitions/entry.orchestrator-entry.md
 created_at: '2026-03-07T09:54:22+02:00'
-updated_at: '2026-03-13T18:43:00+02:00'
+updated_at: 2026-03-14T12:41:58.832504257Z
 changelog_ref: entry.orchestrator-entry.changelog.jsonl

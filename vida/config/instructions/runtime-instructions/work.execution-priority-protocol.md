@@ -6,7 +6,7 @@ Scope:
 
 1. applies when tracked execution is active,
 2. applies to TaskFlow task selection, wave ordering, and in-session reprioritization,
-3. works together with `vida/config/instructions/command-instructions/planning.form-task-protocol.md`, `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`, `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`, and `vida/config/instructions/instruction-contracts/overlay.autonomous-execution-protocol.md`.
+3. works together with `command-instructions/planning.form-task-protocol`, `runtime-instructions/work.taskflow-protocol`, `command-instructions/execution.implement-execution-protocol`, and `instruction-contracts/overlay.autonomous-execution-protocol`.
 
 ## Core Contract
 
@@ -24,7 +24,7 @@ Use these inputs in order:
 1. active blocker/verification/approval receipts,
 2. active TaskFlow block and `next_step`,
 3. DB-backed task lifecycle state and dependency state,
-4. approved scope/order contract from `vida/config/instructions/command-instructions/planning.form-task-protocol.md`,
+4. approved scope/order contract from `command-instructions/planning.form-task-protocol`,
 5. canonical wave/plan ordering,
 6. route-required worker findings or verifier/coach results,
 7. explicit user reprioritization,
@@ -98,7 +98,7 @@ If any of these change materially, autonomous follow-through must stop and re-en
 
 ## Autonomous Execution Binding
 
-When `vida/config/instructions/instruction-contracts/overlay.autonomous-execution-protocol.md` is active:
+When `instruction-contracts/overlay.autonomous-execution-protocol` is active:
 
 1. autonomous mode may keep moving forward only across tasks/blocks that remain lawful under this protocol,
 2. autonomous mode must stop on ambiguous priority or unresolved reprioritization,
@@ -106,7 +106,7 @@ When `vida/config/instructions/instruction-contracts/overlay.autonomous-executio
 
 ## Anti-Patterns
 
-1. treating all `taskflow-v0 task ready` tasks as equally valid next work,
+1. treating all `vida taskflow task ready` tasks as equally valid next work,
 2. ignoring the active TaskFlow block because another task is already open,
 3. silently promoting framework fixes ahead of product work mid-block,
 4. using chat memory as the only reprioritization record,

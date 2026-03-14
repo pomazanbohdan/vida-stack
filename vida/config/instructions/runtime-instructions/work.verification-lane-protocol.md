@@ -90,8 +90,8 @@ No routed work is closure-ready when:
 
 Runtime surfaces that may carry verification state include:
 
-1. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
-2. `vida/config/instructions/diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract.md`
+1. `runtime-instructions/core.run-graph-protocol`
+2. `diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract`
 3. `docs/process/framework-source-lineage-index.md`
 
 ## Route Law Rule
@@ -105,9 +105,9 @@ If route metadata requires `independent_verification_required`:
 
 ## References
 
-1. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-2. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-3. `vida/config/instructions/diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract.md`
+1. `instruction-contracts/core.orchestration-protocol`
+2. `instruction-contracts/core.agent-system-protocol`
+3. `diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract`
 4. `docs/process/framework-source-lineage-index.md`
 
 -----

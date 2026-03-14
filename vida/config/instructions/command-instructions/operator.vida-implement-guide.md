@@ -34,8 +34,8 @@ Execution boundary:
 3. `spec-contract-protocol.md`.
 4. `web-validation-protocol.md`.
 5. `runtime.task-state-telemetry-protocol.md`.
-6. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`.
-7. `vida/config/instructions/agent-definitions/entry.worker-entry.md`.
+6. `runtime-instructions/work.taskflow-protocol`.
+7. `agent-definitions/entry.worker-entry`.
 8. `docs/decisions.md`.
 
 ## Inputs
@@ -105,8 +105,8 @@ Key blocker for absorbed cascade behavior:
 1. `implement-execution-protocol.md`
 2. `form-task-protocol.md`
 3. `use-case-packs.md`
-4. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
-5. `vida/config/instructions/command-instructions/operator.vida-form-task-guide.md`
+4. `runtime-instructions/work.taskflow-protocol`
+5. `command-instructions/operator.vida-form-task-guide`
 
 -----
 artifact_path: config/command-instructions/vida.implement

@@ -6,7 +6,7 @@ Scope:
 
 1. Canonical reconciliation path when `issue_contract.status=spec_delta_required`.
 2. Canonical reconciliation path when `spec_intake.status=needs_spec_delta`.
-3. Bridges `vida/config/instructions/runtime-instructions/work.spec-intake-protocol.md`, `vida/config/instructions/runtime-instructions/work.spec-contract-protocol.md`, `vida/config/instructions/command-instructions/planning.form-task-protocol.md`, and `vida/config/instructions/runtime-instructions/bridge.issue-contract-protocol.md`.
+3. Bridges `runtime-instructions/work.spec-intake-protocol`, `runtime-instructions/work.spec-contract-protocol`, `command-instructions/planning.form-task-protocol`, and `runtime-instructions/bridge.issue-contract-protocol`.
 
 ## Core Principle
 
@@ -59,7 +59,7 @@ Normalize each delta source into one of:
 
 ## Routing Rule
 
-1. `delta_ready` -> `vida/config/instructions/runtime-instructions/work.spec-contract-protocol.md`
+1. `delta_ready` -> `runtime-instructions/work.spec-contract-protocol`
 2. `needs_user_confirmation` -> stay in clarification flow until the delta decision is explicit
 3. `needs_scp_reconciliation` -> block writer launch and return to SCP
 4. `not_required` -> continue with normal equivalent flow

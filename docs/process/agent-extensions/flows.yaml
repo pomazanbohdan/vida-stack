@@ -6,3 +6,6 @@ flow_sets:
   - flow_id: party_chat_council_large
     description: Large Party Chat board for cross-domain systemic decisions.
     role_chain: party_chat_facilitator,party_chat_architect,party_chat_runtime_systems,party_chat_quality_verification,party_chat_delivery_cost,party_chat_product_scope,party_chat_security_safety,party_chat_sre_observability,party_chat_data_contracts,party_chat_dx_tooling,party_chat_pm_process
+  - flow_id: party_chat_council_modern_full
+    description: Expanded modern Party Chat board with analysis, design, QA, accessibility, release, platform, and governance seats.
+    role_chain: party_chat_facilitator,party_chat_system_analyst,party_chat_product_designer,party_chat_architect,party_chat_runtime_systems,party_chat_quality_verification,party_chat_qa_tester,party_chat_delivery_cost,party_chat_product_scope,party_chat_security_safety,party_chat_sre_observability,party_chat_accessibility_ux,party_chat_data_contracts,party_chat_dx_tooling,party_chat_pm_process,party_chat_release_manager

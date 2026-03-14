@@ -11,8 +11,8 @@ Scope:
    - `bug-pool-pack`
    - `reflection-pack`
 2. Excluded from direct development execution flow (`/vida-implement*`, `dev-pack`).
-3. Raw issue text for bugfix execution is normalized by `vida/config/instructions/runtime-instructions/bridge.issue-contract-protocol.md` instead of running full SCP by default.
-4. Raw research findings, release signals, and user clarification should first be normalized by `vida/config/instructions/runtime-instructions/work.spec-intake-protocol.md` when they are still ambiguous, mixed, or scope-bearing.
+3. Raw issue text for bugfix execution is normalized by `runtime-instructions/bridge.issue-contract-protocol` instead of running full SCP by default.
+4. Raw research findings, release signals, and user clarification should first be normalized by `runtime-instructions/work.spec-intake-protocol` when they are still ambiguous, mixed, or scope-bearing.
 
 ## Core Principle
 
@@ -41,12 +41,12 @@ For `/vida-spec`, SCP layers map to CLP as follows:
 4. `CL4 Materialization` -> `SCP-6 Skills Routing` + `SCP-6.5 Draft Execution-Spec` + confidence/artifact assembly
 5. `CL5 Gates And Handoff` -> `SCP-7 Reassessment Gate` + `SCP-8 Ready Verdict` + `/vida-form-task` handoff
 
-Canonical layer source: `vida/config/instructions/command-instructions/routing.command-layer-protocol.md`
+Canonical layer source: `command-instructions/routing.command-layer-protocol`
 
 ## Protocol Flow
 
 0. `SCP-0 Pre-Intake Normalization`
-   - when raw inputs are still ambiguous or mixed, normalize them through `vida/config/instructions/runtime-instructions/work.spec-intake-protocol.md`,
+   - when raw inputs are still ambiguous or mixed, normalize them through `runtime-instructions/work.spec-intake-protocol`,
    - continue only after the intake artifact routes to `ready_for_scp`.
 1. `SCP-0 Intake`
    - Build `Spec Brief`: scope, business goal, constraints, out-of-scope.
@@ -57,7 +57,7 @@ Canonical layer source: `vida/config/instructions/command-instructions/routing.c
 3. `SCP-2 Conflict Check`
    - Detect incompatible user choices; resolve before continuing.
 4. `SCP-3 External Reality Validation`
-   - Execute `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md` (WVP) as canonical validation flow.
+   - Execute `runtime-instructions/work.web-validation-protocol` (WVP) as canonical validation flow.
    - If external API exists: verify with live requests (`curl`), docs, auth, payload, errors.
    - Build `API Reality Matrix` (`expected/actual/conflict/unknown`).
 5. `SCP-4 Design Contract`
@@ -83,7 +83,7 @@ Canonical layer source: `vida/config/instructions/command-instructions/routing.c
 
 ## Mandatory Web Search and External Verification
 
-Canonical rules are defined in `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md`.
+Canonical rules are defined in `runtime-instructions/work.web-validation-protocol`.
 
 SCP-specific enforcement:
 
@@ -198,7 +198,7 @@ python3 skill-discovery.py scaffold <skill-name> "<description>"
 6. `Confidence Scorecard` (five weighted components + final score)
 7. `Draft Execution-Spec`
 
-Artifact templates: `vida/config/instructions/system-maps/template.spec-contract-artifact-templates.md`
+Artifact templates: `system-maps/template.spec-contract-artifact-templates`
 
 ## Minimal Transparency Rules
 

@@ -22,8 +22,8 @@ Rationale:
 These files define process and MUST be committed:
 
 1. `AGENTS.md`
-2. `vida/config/instructions/*.md` instruction documents
-3. `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md`
+2. `vida/config/instructions/**` instruction documents
+3. `runtime-instructions/runtime.task-state-telemetry-protocol`
 4. `scripts/*.sh` protocol tooling
 
 ## 3) Escalation Exception
@@ -31,7 +31,7 @@ These files define process and MUST be committed:
 If a runtime log must be shared for incident analysis:
 
 1. Store a sanitized snapshot under `_temp/`.
-2. Summarize in task notes (`taskflow-v0 task update <id> --notes ...`).
+2. Summarize in task notes (`vida taskflow task update <id> --notes ...`).
 3. Do not promote raw logs into VCS.
 
 ## 4) Console Output Policy

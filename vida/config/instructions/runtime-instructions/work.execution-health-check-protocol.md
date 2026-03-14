@@ -53,7 +53,7 @@ Rule:
 
 ## Mandatory Gate
 
-Before `taskflow-v0 task close` of an active task on transitioned slices:
+Before `vida taskflow task close` of an active task on transitioned slices:
 
 1. run the relevant verification set defined by the transitioned runtime surfaces,
 2. require the bounded health-check to pass,
@@ -77,7 +77,7 @@ If root `vida.config.yaml` exists:
 
 If WVP triggers fired:
 
-1. record evidence per `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md`,
+1. record evidence per `runtime-instructions/work.web-validation-protocol`,
 2. prefer structured WVP evidence markers when available,
 3. do not pass final health-check without required WVP evidence.
 
@@ -97,7 +97,7 @@ At minimum, health-check must confirm:
 
 Operator examples and concrete command snippets may live in:
 
-1. `vida/config/instructions/command-instructions/operator.runtime-pipeline-guide.md`
+1. `command-instructions/operator.runtime-pipeline-guide`
 2. runtime-family maps and runtime homes
 
 ## Fail-Closed Rule

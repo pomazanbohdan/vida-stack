@@ -40,32 +40,32 @@ packaging_policy:
   runtime_inventory_is_distinct_from_binary_contents: true
 roles:
   orchestrator:
-    mission: Own routing, synthesis, final quality gates, and lawful mutation orchestration.
+    mission: Own bootstrap, routing, packet shaping, delegated-lane sequencing, synthesis, and lawful closure without collapsing into default local implementation.
     output_contract: final_verdict
     proof_requirements:
       - policy_evaluation_snapshot
 
   analyst:
-    mission: Answer the blocking question and prepare bounded evidence for writer authorization.
+    mission: Resolve scope ambiguity, shape bounded requirements and design evidence, and prepare lawful writer authorization without substituting for execution lanes.
     output_contract: analysis_event
     proof_requirements:
       - artifact_manifest
 
   writer:
-    mission: Perform the single mutation-owning pass inside explicit write scope.
+    mission: Perform one bounded mutation-owning pass inside explicit write scope and return concrete implementation evidence without self-approving closure.
     output_contract: execution_event
     proof_requirements:
       - diff_summary
       - artifact_manifest
 
   coach:
-    mission: Run formative post-write review and either approve forward or return for rework.
+    mission: Run bounded formative post-write review against approved spec, acceptance criteria, and definition-of-done, then either approve forward or return explicit rework.
     output_contract: coach_event
     proof_requirements:
       - review_findings
 
   verifier:
-    mission: Independently validate authored results and emit a lawful verification verdict.
+    mission: Independently validate authored results, proof targets, and closure readiness, then emit a lawful verification verdict that fails closed on missing evidence.
     output_contract: verification_event
     proof_requirements:
       - verification_evidence

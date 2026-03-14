@@ -43,18 +43,18 @@ Purpose:
 
 Canonical owner map:
 
-1. `vida/config/instructions/system-maps/framework.core-protocols-map.md`
+1. `system-maps/framework.core-protocols-map`
 
 Canonical owner artifacts:
 
-1. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-2. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-3. `vida/config/instructions/instruction-contracts/core.skill-activation-protocol.md`
-4. `vida/config/instructions/instruction-contracts/core.packet-decomposition-protocol.md`
-5. `vida/config/instructions/instruction-contracts/core.agent-prompt-stack-protocol.md`
-6. `vida/config/instructions/runtime-instructions/core.capability-registry-protocol.md`
-7. `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
-8. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
+1. `instruction-contracts/core.orchestration-protocol`
+2. `instruction-contracts/core.agent-system-protocol`
+3. `instruction-contracts/core.skill-activation-protocol`
+4. `instruction-contracts/core.packet-decomposition-protocol`
+5. `instruction-contracts/core.agent-prompt-stack-protocol`
+6. `runtime-instructions/core.capability-registry-protocol`
+7. `runtime-instructions/core.context-governance-protocol`
+8. `runtime-instructions/core.run-graph-protocol`
 
 ### 2. Orchestration Shell And Lane Coordination
 
@@ -69,20 +69,20 @@ Purpose:
 
 Canonical owner artifacts:
 
-1. `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
-2. `vida/config/instructions/agent-definitions/entry.worker-entry.md`
-3. `vida/config/instructions/instruction-contracts/role.orchestrator-contract.md`
-4. `vida/config/instructions/instruction-contracts/role.worker-contract.md`
-5. `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`
-6. `vida/config/instructions/runtime-instructions/lane.agent-handoff-context-protocol.md`
-7. `vida/config/instructions/runtime-instructions/work.agent-lane-selection-protocol.md`
-8. `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md`
-9. `vida/config/instructions/system-maps/bootstrap.orchestrator-boot-flow.md`
-10. `vida/config/instructions/system-maps/bootstrap.worker-boot-flow.md`
+1. `agent-definitions/entry.orchestrator-entry`
+2. `agent-definitions/entry.worker-entry`
+3. `instruction-contracts/role.orchestrator-contract`
+4. `instruction-contracts/role.worker-contract`
+5. `instruction-contracts/lane.worker-dispatch-protocol`
+6. `runtime-instructions/lane.agent-handoff-context-protocol`
+7. `runtime-instructions/work.agent-lane-selection-protocol`
+8. `runtime-instructions/work.verification-lane-protocol`
+9. `system-maps/bootstrap.orchestrator-boot-flow`
+10. `system-maps/bootstrap.worker-boot-flow`
 
 Companion surface with cross-domain thinking ownership:
 
-1. `vida/config/instructions/instruction-contracts/role.worker-thinking.md`
+1. `instruction-contracts/role.worker-thinking`
 
 ### 3. Runtime Execution, State, And Recovery
 
@@ -95,19 +95,19 @@ Purpose:
 
 Canonical owner artifacts:
 
-1. `vida/config/instructions/system-maps/runtime-family.taskflow-map.md`
-2. `vida/config/instructions/system-maps/runtime-family.docflow-map.md`
-3. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
-4. `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md`
-5. `vida/config/instructions/runtime-instructions/work.task-state-reconciliation-protocol.md`
-6. `vida/config/instructions/runtime-instructions/work.execution-priority-protocol.md`
-7. `vida/config/instructions/runtime-instructions/work.pack-handoff-protocol.md`
-8. `vida/config/instructions/runtime-instructions/work.pack-completion-gate-protocol.md`
-9. `vida/config/instructions/runtime-instructions/work.verification-merge-protocol.md`
-10. `vida/config/instructions/runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`
-11. `vida/config/instructions/runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`
-12. `vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
-13. `vida/config/instructions/runtime-instructions/work.execution-health-check-protocol.md`
+1. `system-maps/runtime-family.taskflow-map`
+2. `system-maps/runtime-family.docflow-map`
+3. `runtime-instructions/work.taskflow-protocol`
+4. `runtime-instructions/runtime.task-state-telemetry-protocol`
+5. `runtime-instructions/work.task-state-reconciliation-protocol`
+6. `runtime-instructions/work.execution-priority-protocol`
+7. `runtime-instructions/work.pack-handoff-protocol`
+8. `runtime-instructions/work.pack-completion-gate-protocol`
+9. `runtime-instructions/work.verification-merge-protocol`
+10. `runtime-instructions/recovery.checkpoint-replay-recovery-protocol`
+11. `runtime-instructions/runtime.runtime-kernel-bundle-protocol`
+12. `runtime-instructions/runtime.direct-runtime-consumption-protocol`
+13. `runtime-instructions/work.execution-health-check-protocol`
 
 ### 4. Thinking, Reasoning, And Cognitive Control
 
@@ -120,10 +120,10 @@ Purpose:
 
 Canonical owner artifacts:
 
-1. `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md`
-2. `vida/config/instructions/instruction-contracts/overlay.session-context-continuity-protocol.md`
-3. `vida/config/instructions/instruction-contracts/role.worker-thinking.md`
-4. `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md`
+1. `instruction-contracts/overlay.step-thinking-protocol`
+2. `instruction-contracts/overlay.session-context-continuity-protocol`
+3. `instruction-contracts/role.worker-thinking`
+4. `runtime-instructions/work.web-validation-protocol`
 
 ### 5. Bootstrap, Activation, And Overlay Binding
 
@@ -136,10 +136,10 @@ Purpose:
 
 Canonical owner artifacts:
 
-1. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
-2. `vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md`
-3. `vida/config/instructions/runtime-instructions/model.boot-packet-protocol.md`
-4. `vida/config/instructions/instruction-contracts/overlay.autonomous-execution-protocol.md`
+1. `instruction-contracts/bridge.instruction-activation-protocol`
+2. `runtime-instructions/bridge.project-overlay-protocol`
+3. `runtime-instructions/model.boot-packet-protocol`
+4. `instruction-contracts/overlay.autonomous-execution-protocol`
 
 ### 6. Documentation And Canon Operations
 
@@ -152,9 +152,9 @@ Purpose:
 
 Canonical owner artifacts:
 
-1. `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md`
-2. `vida/config/instructions/instruction-contracts/work.documentation-layer7-migration-protocol.md`
-3. `vida/config/instructions/runtime-instructions/work.development-evidence-sync-protocol.md`
+1. `instruction-contracts/work.documentation-operation-protocol`
+2. `instruction-contracts/work.documentation-layer7-migration-protocol`
+3. `runtime-instructions/work.development-evidence-sync-protocol`
 
 Project-side operator map:
 
@@ -172,14 +172,14 @@ Purpose:
 
 Canonical owner artifacts:
 
-1. `vida/config/instructions/diagnostic-instructions/analysis.framework-self-analysis-protocol.md`
-2. `vida/config/instructions/diagnostic-instructions/analysis.silent-framework-diagnosis-protocol.md`
-3. `vida/config/instructions/diagnostic-instructions/analysis.protocol-self-diagnosis-protocol.md`
-4. `vida/config/instructions/diagnostic-instructions/analysis.protocol-consistency-audit-protocol.md`
-5. `vida/config/instructions/diagnostic-instructions/analysis.self-reflection-protocol.md`
-6. `vida/config/instructions/diagnostic-instructions/escalation.debug-escalation-protocol.md`
-7. `vida/config/instructions/diagnostic-instructions/evaluation.library-evaluation-protocol.md`
-8. `vida/config/instructions/diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract.md`
+1. `diagnostic-instructions/analysis.framework-self-analysis-protocol`
+2. `diagnostic-instructions/analysis.silent-framework-diagnosis-protocol`
+3. `diagnostic-instructions/analysis.protocol-self-diagnosis-protocol`
+4. `diagnostic-instructions/analysis.protocol-consistency-audit-protocol`
+5. `diagnostic-instructions/analysis.self-reflection-protocol`
+6. `diagnostic-instructions/escalation.debug-escalation-protocol`
+7. `diagnostic-instructions/evaluation.library-evaluation-protocol`
+8. `diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract`
 
 ### 8. Artifact Modeling, Naming, And Extension Governance
 
@@ -189,25 +189,27 @@ Purpose:
 2. role/profile identity,
 3. naming grammar,
 4. project extension admission,
-5. new-protocol authoring/update discipline and safe token-optimization rollout.
+5. host CLI agent-template selection/materialization during project activation,
+6. new-protocol authoring/update discipline and safe token-optimization rollout.
 
 Canonical owner artifacts:
 
-1. `vida/config/instructions/agent-definitions/model.agent-definitions-contract.md`
-2. `vida/config/instructions/agent-definitions/role.role-profile-contract.md`
-3. `vida/config/instructions/instruction-contracts/meta.protocol-naming-grammar-protocol.md`
-4. `vida/config/instructions/instruction-contracts/meta.core-protocol-standard-protocol.md`
-5. `vida/config/instructions/instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol.md`
-6. `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`
+1. `agent-definitions/model.agent-definitions-contract`
+2. `agent-definitions/role.role-profile-contract`
+3. `instruction-contracts/meta.protocol-naming-grammar-protocol`
+4. `instruction-contracts/meta.core-protocol-standard-protocol`
+5. `runtime-instructions/work.host-cli-agent-setup-protocol`
+6. `instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol`
+7. `runtime-instructions/work.project-agent-extension-protocol`
 
 ## Reading Rule
 
 Use the three routing axes together:
 
 1. use this file for domain-family routing,
-2. use `vida/config/instructions/system-maps/framework.protocol-layers-map.md` for owner-layer placement,
-3. use `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md` for activation class and trigger,
-4. use `vida/config/instructions/system-maps/protocol.index.md` when the exact canonical artifact must be opened.
+2. use `system-maps/framework.protocol-layers-map` for owner-layer placement,
+3. use `instruction-contracts/bridge.instruction-activation-protocol` for activation class and trigger,
+4. use `system-maps/protocol.index` when the exact canonical artifact must be opened.
 
 ## Boundary Rule
 

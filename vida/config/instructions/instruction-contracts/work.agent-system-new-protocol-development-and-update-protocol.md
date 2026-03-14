@@ -201,6 +201,13 @@ Boundary rule:
 1. a compact capsule, bundle view, or runtime IR must not become a second competing law owner,
 2. if a compact surface cannot safely answer an edge case, it must route back to the owner artifact rather than improvising.
 
+Naming and routing rule for optimized families:
+
+1. canonical human-readable Markdown owners should remain in the kebab-case instruction families,
+2. machine-readable or compiled projections may live in snake_case families,
+3. optimization work must preserve that distinction explicitly in routing maps and runtime bundles,
+4. if paired family names begin to look like duplicate ownership, the fix is stronger map/routing clarification, not silent deletion of the projection layer.
+
 ## Safe Optimization Acceptance Criteria
 
 An optimization pass is admissible only when all are true:
@@ -211,6 +218,8 @@ An optimization pass is admissible only when all are true:
 4. the optimized surface declares when escalation back to the owner artifact is required,
 5. activation/discovery wiring stays explicit,
 6. validation can prove that the optimized surface still routes lawful behavior.
+7. `protocol.index` and other maps remain thin registries or routing surfaces rather than absorbing owner-law detail just because compact surfaces were added.
+8. routine read posture remains `capsule first, owner on demand` wherever an approved compact surface already covers the normal path.
 
 Fail-closed rule:
 
@@ -234,6 +243,32 @@ Example rule:
 1. canonical artifact language may say `agent-system protocol`,
 2. user-facing collaboration may say `new process` or `new type of work`,
 3. the final artifact must normalize that natural wording back into the formal protocol contract.
+
+Framework reference-style rule:
+
+1. framework routing prose should prefer the canonical shorthand id `<family>/<artifact>` rather than a raw file path or a repeated shell prefix,
+2. when a shorthand id appears in framework routing prose, it is interpreted as the target for `<canonical_id>` unless a higher-precedence surface says otherwise,
+3. executable shell examples, operator help, and copy-paste command snippets may still use the full command form `<canonical_id>`,
+4. the canonical shorthand or command-style identifier should omit the source-file suffix `.md`,
+5. file-path references such as `vida/config/instructions/...` are reserved for metadata, implementation, source-path, or lineage contexts rather than normal inter-protocol routing prose,
+6. if a framework instruction reference still carries `.md` in ordinary routing prose, treat it as normalization debt to remove.
+
+Structured design-doc rule:
+
+1. when a framework/runtime/product change is large enough to carry bounded context, design, rollout, and proof planning, author one structured design document before or alongside implementation rather than scattering that planning across chat-only prose,
+2. the canonical owner model for that split is `product/spec/feature-design-and-adr-model`,
+3. the framework-owned reusable starting shape is `docs/framework/templates/feature-design-document.template.md`,
+4. the design document must keep a bounded file set, fail-closed constraints, and explicit proof targets,
+5. if one major decision inside that change needs durable standalone recording, create or update a linked ADR instead of overloading the design document,
+6. design documents are planning/output templates, not a replacement for protocol-bearing owner law or runtime receipts.
+
+AGENTS carrier rule:
+
+1. shared bootstrap law must live in one framework-owned owner surface plus its synchronized bootstrap carriers,
+2. root `AGENTS.md` is the stronger live bootstrap carrier for the current repository,
+3. protocol-view/bootstrap-router copies and packaged/generated bootstrap carriers are delivery surfaces, not parallel owner layers,
+4. packaged/generated bootstrap carriers must be synchronized from the shared framework law and must not diverge by manual parallel authoring,
+5. when root `AGENTS.md`, bootstrap router guidance, and packaged/generated carrier wording disagree, repair the divergence in the same change rather than allowing dual ownership to persist.
 
 ## New-Protocol And Update Rule
 
@@ -1368,29 +1403,29 @@ A new protocol may be promoted into active framework canon only when:
 When this protocol creates or materially changes a canonical protocol-bearing artifact:
 
 1. update the canonical protocol artifact first,
-2. update `vida/config/instructions/system-maps/protocol.index.md`,
+2. update `system-maps/protocol.index`,
 3. run activation/coverage validation appropriate to the changed scope,
 4. when token optimization is in scope, validate the optimized surface against at least one normal startup path and one failure-shaped path before promotion,
 5. do not treat the protocol as framework-green until those updates and checks are complete.
 
 ## Related
 
-1. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-2. `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md`
-3. `vida/config/instructions/system-maps/protocol.index.md`
+1. `instruction-contracts/core.agent-system-protocol`
+2. `instruction-contracts/work.documentation-operation-protocol`
+3. `system-maps/protocol.index`
 4. `docs/product/spec/instruction-artifact-model.md`
-5. `vida/config/instructions/command-instructions/routing.command-layer-protocol.md`
-6. `vida/config/instructions/references/protocol.agent-system-new-protocol-artifact-templates.md`
+5. `command-instructions/routing.command-layer-protocol`
+6. `references/protocol.agent-system-new-protocol-artifact-templates`
    - non-canonical companion reference for packet and receipt shapes only
 
 -----
 artifact_path: config/instructions/instruction-contracts/work.agent-system-new-protocol-development-and-update.protocol
 artifact_type: instruction_contract
 artifact_version: '1'
-artifact_revision: '2026-03-13'
+artifact_revision: '2026-03-14'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol.md
 created_at: '2026-03-11T07:38:29+02:00'
-updated_at: '2026-03-13T19:20:00+02:00'
+updated_at: '2026-03-14T17:15:00+02:00'
 changelog_ref: work.agent-system-new-protocol-development-and-update-protocol.changelog.jsonl

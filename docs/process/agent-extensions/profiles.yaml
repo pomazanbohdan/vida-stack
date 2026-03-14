@@ -36,6 +36,18 @@ profiles:
     stance: product_scope_and_outcomes
     preferred_backend: internal_subagents
     preferred_model: internal_fast
+  - profile_id: party_chat_system_analyst_profile
+    role_ref: party_chat_system_analyst
+    skill_refs: party_chat_council_reasoning,party_chat_system_analysis
+    stance: requirement_decomposition_and_traceability
+    preferred_backend: internal_subagents
+    preferred_model: internal_review
+  - profile_id: party_chat_product_designer_profile
+    role_ref: party_chat_product_designer
+    skill_refs: party_chat_council_reasoning,party_chat_product_design
+    stance: user_flow_and_interaction_shape
+    preferred_backend: internal_subagents
+    preferred_model: internal_fast
   - profile_id: party_chat_security_safety_profile
     role_ref: party_chat_security_safety
     skill_refs: party_chat_council_reasoning,party_chat_security_safety
@@ -46,6 +58,18 @@ profiles:
     role_ref: party_chat_sre_observability
     skill_refs: party_chat_council_reasoning,party_chat_observability
     stance: observability_and_reliability
+    preferred_backend: internal_subagents
+    preferred_model: internal_review
+  - profile_id: party_chat_qa_tester_profile
+    role_ref: party_chat_qa_tester
+    skill_refs: party_chat_council_reasoning,party_chat_quality_testing
+    stance: scenario_coverage_and_regression_risk
+    preferred_backend: internal_subagents
+    preferred_model: internal_review
+  - profile_id: party_chat_accessibility_ux_profile
+    role_ref: party_chat_accessibility_ux
+    skill_refs: party_chat_council_reasoning,party_chat_accessibility_ux
+    stance: inclusive_interaction_and_usability
     preferred_backend: internal_subagents
     preferred_model: internal_review
   - profile_id: party_chat_data_contracts_profile
@@ -64,5 +88,11 @@ profiles:
     role_ref: party_chat_pm_process
     skill_refs: party_chat_council_reasoning,party_chat_pm_process
     stance: process_and_delivery_governance
+    preferred_backend: internal_subagents
+    preferred_model: internal_review
+  - profile_id: party_chat_release_manager_profile
+    role_ref: party_chat_release_manager
+    skill_refs: party_chat_council_reasoning,party_chat_release_management
+    stance: rollout_gating_and_release_timing
     preferred_backend: internal_subagents
     preferred_model: internal_review

@@ -64,6 +64,7 @@ pub enum Command {
     Readiness(ReadinessArgs),
     CheckFile(FileArgs),
     ReadinessFile(FileArgs),
+    ReportCheck(FileArgs),
 }
 
 #[derive(Debug, Args)]
@@ -155,6 +156,8 @@ pub struct CheckArgs {
     pub root: Option<String>,
     #[arg(long, default_value = "")]
     pub profile: String,
+    #[arg()]
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -457,7 +460,7 @@ pub fn run(cli: Cli) -> String {
                 args.layer, error
             ),
         },
-        Command::Check(args) => match check_rows(args.root.as_deref(), &args.profile) {
+        Command::Check(args) => match check_rows(args.root.as_deref(), &args.profile, &args.files) {
             Ok(rows) => rows
                 .iter()
                 .map(|row| encode_line(row))
@@ -616,7 +619,7 @@ pub fn run(cli: Cli) -> String {
             Err(error) => format!("{{\"task_id\":\"{}\",\"error\":\"{}\"}}", args.task_id, error),
         },
         Command::Fastcheck(args) => {
-            match fastcheck_rows(args.root.as_deref(), &args.profile) {
+            match fastcheck_rows(args.root.as_deref(), &args.profile, &args.files) {
                 Ok(rows) => rows
                     .iter()
                     .map(|issue| encode_line(issue))
@@ -635,7 +638,7 @@ pub fn run(cli: Cli) -> String {
             }
         }
         Command::ActivationCheck(args) => {
-            match activation_rows(args.root.as_deref(), &args.profile) {
+            match activation_rows(args.root.as_deref(), &args.profile, &args.files) {
                 Ok(rows) => rows
                     .iter()
                     .map(|issue| encode_line(issue))
@@ -654,7 +657,7 @@ pub fn run(cli: Cli) -> String {
             }
         }
         Command::ProtocolCoverageCheck(args) => {
-            match protocol_coverage_rows(args.root.as_deref(), &args.profile) {
+            match protocol_coverage_rows(args.root.as_deref(), &args.profile, &args.files) {
                 Ok(rows) => rows
                     .iter()
                     .map(|issue| encode_line(issue))
@@ -713,8 +716,7 @@ pub fn run(cli: Cli) -> String {
             },
         },
         Command::Doctor(args) => {
-            let mut scope = InventoryScope::new(&args.root);
-            scope.exclude_globs = args.exclude_globs;
+            let scope = inventory_scope_for_root(&args.root, &args.exclude_globs);
             match build_registry(&scope) {
                 Ok(rows) => doctor_rows_for(&args.root, &rows, args.show_warnings)
                     .iter()
@@ -734,8 +736,7 @@ pub fn run(cli: Cli) -> String {
             }
         }
         Command::Summary(args) => {
-            let mut scope = InventoryScope::new(&args.root);
-            scope.exclude_globs = args.exclude_globs;
+            let scope = inventory_scope_for_root(&args.root, &args.exclude_globs);
             match build_registry(&scope) {
                 Ok(rows) => {
                     let issues = collect_tree_issues(&args.root, &rows);
@@ -757,8 +758,7 @@ pub fn run(cli: Cli) -> String {
             }
         }
         Command::OverviewScan(args) => {
-            let mut scope = InventoryScope::new(&args.root);
-            scope.exclude_globs = args.exclude_globs;
+            let scope = inventory_scope_for_root(&args.root, &args.exclude_globs);
             match build_registry(&scope) {
                 Ok(rows) => {
                     let edges = artifact_identity_edges(&rows);
@@ -788,8 +788,7 @@ pub fn run(cli: Cli) -> String {
             render_relation_summary(&edges)
         }
         Command::RelationsScan(args) => {
-            let mut scope = InventoryScope::new(&args.root);
-            scope.exclude_globs = args.exclude_globs;
+            let scope = inventory_scope_for_root(&args.root, &args.exclude_globs);
             match build_registry(&scope) {
                 Ok(rows) => {
                     let edges = rows
@@ -806,8 +805,7 @@ pub fn run(cli: Cli) -> String {
             }
         }
         Command::Scan(args) => {
-            let mut scope = InventoryScope::new(&args.root);
-            scope.exclude_globs = args.exclude_globs;
+            let scope = inventory_scope_for_root(&args.root, &args.exclude_globs);
             match build_registry(&scope) {
                 Ok(rows) => rows
                     .iter()
@@ -829,8 +827,7 @@ pub fn run(cli: Cli) -> String {
             }
         }
         Command::RegistryScan(args) => {
-            let mut scope = InventoryScope::new(&args.root);
-            scope.exclude_globs = args.exclude_globs;
+            let scope = inventory_scope_for_root(&args.root, &args.exclude_globs);
             match build_registry(&scope) {
                 Ok(rows) => {
                     let detail = rows
@@ -848,8 +845,7 @@ pub fn run(cli: Cli) -> String {
             }
         }
         Command::Registry(args) => {
-            let mut scope = InventoryScope::new(&args.root);
-            scope.exclude_globs = args.exclude_globs;
+            let scope = inventory_scope_for_root(&args.root, &args.exclude_globs);
             match build_registry(&scope) {
                 Ok(rows) => rows
                     .iter()
@@ -871,8 +867,7 @@ pub fn run(cli: Cli) -> String {
         }
         Command::RegistryWrite(args) => {
             let output = resolve_registry_output(&args);
-            let mut scope = InventoryScope::new(&args.root);
-            scope.exclude_globs = args.exclude_globs;
+            let scope = inventory_scope_for_root(&args.root, &args.exclude_globs);
             match build_registry(&scope) {
                 Ok(rows) => match write_registry_jsonl(&output, &rows) {
                     Ok(()) => format!(
@@ -894,8 +889,7 @@ pub fn run(cli: Cli) -> String {
             }
         }
         Command::ValidateTree(args) => {
-            let mut scope = InventoryScope::new(&args.root);
-            scope.exclude_globs = args.exclude_globs;
+            let scope = inventory_scope_for_root(&args.root, &args.exclude_globs);
             match build_registry(&scope) {
                 Ok(rows) => {
                     let issues = collect_tree_issues(&args.root, &rows);
@@ -934,8 +928,7 @@ pub fn run(cli: Cli) -> String {
             }
         }
         Command::ReadinessTree(args) => {
-            let mut scope = InventoryScope::new(&args.root);
-            scope.exclude_globs = args.exclude_globs;
+            let scope = inventory_scope_for_root(&args.root, &args.exclude_globs);
             match build_registry(&scope) {
                 Ok(rows) => {
                     let issues = collect_tree_issues(&args.root, &rows);
@@ -974,7 +967,7 @@ pub fn run(cli: Cli) -> String {
                 ),
             }
         }
-        Command::ReadinessCheck(args) => match readiness_rows(args.root.as_deref(), &args.profile) {
+        Command::ReadinessCheck(args) => match readiness_rows(args.root.as_deref(), &args.profile, &args.files) {
             Ok(rows) => rows
                 .iter()
                 .map(|row| encode_line(row))
@@ -993,8 +986,7 @@ pub fn run(cli: Cli) -> String {
         },
         Command::ReadinessWrite(args) => {
             let output = resolve_readiness_output(&args);
-            let mut scope = InventoryScope::new(&args.root);
-            scope.exclude_globs = args.exclude_globs;
+            let scope = inventory_scope_for_root(&args.root, &args.exclude_globs);
             match build_registry(&scope) {
                 Ok(rows) => {
                     let issues = collect_tree_issues(&args.root, &rows);
@@ -1032,6 +1024,13 @@ pub fn run(cli: Cli) -> String {
             Ok(content) => render_readiness_result(&args.path, &content),
             Err(error) => format!(
                 "readiness\n  rows: 1\n  verdict: blocking\n  - {} [read_error: {}]",
+                args.path, error
+            ),
+        },
+        Command::ReportCheck(args) => match fs::read_to_string(&args.path) {
+            Ok(content) => render_report_check_result(&args.path, &content),
+            Err(error) => format!(
+                "reporting\n  issues: 1\n  verdict: blocking\n  - {} [read_error]: {}",
                 args.path, error
             ),
         },
@@ -1150,7 +1149,46 @@ fn repo_root() -> std::path::PathBuf {
 fn runtime_root() -> std::path::PathBuf {
     std::env::var_os("VIDA_ROOT")
         .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::current_dir().ok().and_then(|cwd| {
+                cwd.ancestors()
+                    .find(|ancestor| {
+                        ancestor.join("AGENTS.sidecar.md").is_file()
+                            || ancestor.join("vida.config.yaml").is_file()
+                    })
+                    .map(std::path::Path::to_path_buf)
+            })
+        })
         .unwrap_or_else(repo_root)
+}
+
+fn docflow_policy_path() -> std::path::PathBuf {
+    let runtime_path = runtime_root().join("vida/config/docflow/docsys_policy.yaml");
+    if runtime_path.is_file() {
+        return runtime_path;
+    }
+    repo_root().join("vida/config/docflow/docsys_policy.yaml")
+}
+
+fn default_inventory_excludes() -> Vec<String> {
+    let policy = docflow_policy_path();
+    resolve_scan_ignored_globs(&policy).unwrap_or_default()
+}
+
+fn merge_inventory_excludes(explicit: &[String]) -> Vec<String> {
+    let mut merged = default_inventory_excludes();
+    for pattern in explicit {
+        if !merged.iter().any(|existing| existing == pattern) {
+            merged.push(pattern.clone());
+        }
+    }
+    merged
+}
+
+fn inventory_scope_for_root(root: &str, explicit_excludes: &[String]) -> InventoryScope {
+    let mut scope = InventoryScope::new(root);
+    scope.exclude_globs = merge_inventory_excludes(explicit_excludes);
+    scope
 }
 
 fn activation_issue_for(path: &str, activation_body: &str) -> Option<DoctorRow> {
@@ -1162,10 +1200,9 @@ fn activation_issue_for(path: &str, activation_body: &str) -> Option<DoctorRow> 
     {
         return None;
     }
-    if activation_body.contains(path)
-        || std::path::Path::new(path)
-            .file_name()
-            .is_some_and(|name| activation_body.contains(name.to_string_lossy().as_ref()))
+    if protocol_reference_variants(path)
+        .iter()
+        .any(|variant| activation_body.contains(variant))
     {
         return None;
     }
@@ -1188,11 +1225,10 @@ fn protocol_coverage_issue_for(
     if activation_issue_for(path, activation_body).is_some() {
         issues.push(format!("missing_activation_binding:{path}"));
     }
-    let file_name = std::path::Path::new(path)
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_default();
-    if !protocol_index_body.contains(path) && !protocol_index_body.contains(&file_name) {
+    if !protocol_reference_variants(path)
+        .iter()
+        .any(|variant| protocol_index_body.contains(variant))
+    {
         issues.push(format!("missing_protocol_index_binding:{path}"));
     }
     if issues.is_empty() {
@@ -1204,6 +1240,39 @@ fn protocol_coverage_issue_for(
             issues: issues.join(","),
         })
     }
+}
+
+fn protocol_reference_variants(path: &str) -> Vec<String> {
+    let path_obj = std::path::Path::new(path);
+    let mut variants = vec![path.to_string()];
+    if let Some(file_name) = path_obj
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+    {
+        variants.push(file_name.clone());
+        if let Some(stem) = std::path::Path::new(&file_name)
+            .file_stem()
+            .map(|value| value.to_string_lossy().to_string())
+        {
+            variants.push(stem);
+        }
+    }
+
+    let normalized = path.replace('\\', "/");
+    if let Some(stripped) = normalized.strip_prefix("vida/config/instructions/") {
+        let shorthand = stripped.trim_end_matches(".md").to_string();
+        variants.push(shorthand.clone());
+        if let Some(file_name) = std::path::Path::new(&shorthand)
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+        {
+            variants.push(file_name);
+        }
+    }
+
+    variants.sort();
+    variants.dedup();
+    variants
 }
 
 fn layer_scope_paths(layer: usize) -> Result<Vec<String>, String> {
@@ -1275,10 +1344,7 @@ fn fastcheck_rows_for_paths(paths: &[String]) -> Vec<ValidationIssue> {
         let path = root.join(rel);
         match fs::read_to_string(&path) {
             Ok(content) => {
-                issues.extend(validate_markdown_footer(
-                    ArtifactPath(rel.clone()),
-                    &content,
-                ));
+                issues.extend(collect_file_validation_issues(&root, rel, &content));
             }
             Err(error) => issues.push(ValidationIssue {
                 artifact_path: ArtifactPath(rel.clone()),
@@ -1370,10 +1436,10 @@ fn render_proofcheck_layer(layer: usize, paths: &[String]) -> String {
 }
 
 fn render_proofcheck_profile(profile: &str) -> Result<String, String> {
-    let targets = resolve_profile_targets(None, profile)?;
-    let fast_rows = fastcheck_rows(None, profile)?;
-    let protocol_rows = protocol_coverage_rows(None, profile)?;
-    let readiness_rows = readiness_rows(None, profile)?;
+    let targets = resolve_profile_targets(None, profile, &[])?;
+    let fast_rows = fastcheck_rows(None, profile, &[])?;
+    let protocol_rows = protocol_coverage_rows(None, profile, &[])?;
+    let readiness_rows = readiness_rows(None, profile, &[])?;
     let doctor_rows = doctor_rows_for_targets(&targets, false);
     let doctor_error_rows = doctor_rows
         .iter()
@@ -1831,7 +1897,7 @@ fn changelog_task_rows(
     profile: &str,
     task_id: &str,
 ) -> Result<Vec<Value>, String> {
-    let targets = resolve_profile_targets(root, profile)?;
+    let targets = resolve_profile_targets(root, profile, &[])?;
     let mut matched = Vec::new();
     for (scope_root, markdown_file) in targets {
         let content = match fs::read_to_string(&markdown_file) {
@@ -1884,7 +1950,7 @@ fn task_summary_payload(
     profile: &str,
     task_id: &str,
 ) -> Result<TaskSummaryPayload, String> {
-    let targets = resolve_profile_targets(root, profile)?;
+    let targets = resolve_profile_targets(root, profile, &[])?;
     let mut actor_counts = BTreeMap::<String, usize>::new();
     let mut scope_counts = BTreeMap::<String, usize>::new();
     let mut tag_counts = BTreeMap::<String, usize>::new();
@@ -2099,34 +2165,275 @@ struct CheckRow {
     issues: Vec<String>,
 }
 
-fn check_rows(root: Option<&str>, profile: &str) -> Result<Vec<CheckRow>, String> {
-    let runtime = runtime_root();
+#[derive(Debug, Clone)]
+struct ReportShapeIssue {
+    code: String,
+    message: String,
+}
+
+fn custom_validation_issue(path: &str, code: &str, message: impl Into<String>) -> ValidationIssue {
+    ValidationIssue {
+        artifact_path: ArtifactPath(path.to_string()),
+        verdict: ReadinessVerdict::Blocking,
+        code: code.to_string(),
+        message: message.into(),
+        checked_at: CheckedAt::now_utc(),
+    }
+}
+
+fn detect_project_root_for(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    path.ancestors()
+        .find(|ancestor| {
+            ancestor.join("AGENTS.sidecar.md").is_file()
+                || ancestor.join("vida.config.yaml").is_file()
+        })
+        .map(std::path::Path::to_path_buf)
+}
+
+fn resolve_validation_scope(path: &str) -> (std::path::PathBuf, String) {
+    let target = std::path::Path::new(path);
+    if target.is_absolute() {
+        if let Some(scope_root) = detect_project_root_for(target) {
+            let rel = normalize_path_for_root(target, &scope_root);
+            return (scope_root, rel);
+        }
+        let scope_root = target
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(runtime_root);
+        let rel = target
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string());
+        return (scope_root, rel);
+    }
+    (runtime_root(), path.to_string())
+}
+
+fn is_project_visible_doc(rel: &str) -> bool {
+    rel == "AGENTS.sidecar.md" || (rel.starts_with("docs/") && rel.ends_with(".md"))
+}
+
+fn project_doc_owning_maps(rel: &str) -> Vec<&'static str> {
+    match rel {
+        "docs/project-root-map.md" => vec![],
+        "docs/product/index.md" => vec!["docs/project-root-map.md"],
+        "docs/product/spec/README.md" => vec!["docs/product/index.md"],
+        "docs/process/README.md" => vec!["docs/project-root-map.md"],
+        "docs/process/documentation-tooling-map.md" => {
+            vec!["docs/process/README.md", "AGENTS.sidecar.md"]
+        }
+        "docs/research/README.md" => vec!["docs/project-root-map.md"],
+        _ if rel.starts_with("docs/product/spec/templates/") => vec![],
+        _ if rel.starts_with("docs/product/spec/") => {
+            vec![
+                "docs/product/spec/README.md",
+                "docs/product/spec/current-spec-map.md",
+            ]
+        }
+        _ if rel.starts_with("docs/product/") => vec!["docs/product/index.md"],
+        _ if rel.starts_with("docs/process/") => {
+            vec![
+                "docs/process/README.md",
+                "docs/process/documentation-tooling-map.md",
+            ]
+        }
+        _ if rel.starts_with("docs/research/") => vec!["docs/research/README.md"],
+        _ => vec![],
+    }
+}
+
+fn project_doc_registration_validation_issues(
+    scope_root: &std::path::Path,
+    rel: &str,
+    content: &str,
+) -> Vec<ValidationIssue> {
+    if !is_project_visible_doc(rel) {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    let sidecar_rel = "AGENTS.sidecar.md";
+    let sidecar_path = scope_root.join(sidecar_rel);
+    let sidecar_content = if rel == sidecar_rel {
+        Some(content.to_string())
+    } else {
+        fs::read_to_string(&sidecar_path).ok()
+    };
+
+    if rel.starts_with("docs/") || rel == sidecar_rel {
+        match sidecar_content.as_deref() {
+            Some(body) => {
+                if !body.contains("docs/project-root-map.md") {
+                    issues.push(custom_validation_issue(
+                        rel,
+                        "missing_sidecar_project_root_map_pointer",
+                        "AGENTS.sidecar.md must point to `docs/project-root-map.md` for project documentation routing.",
+                    ));
+                }
+                if !body.contains("docs/process/documentation-tooling-map.md") {
+                    issues.push(custom_validation_issue(
+                        rel,
+                        "missing_sidecar_documentation_tooling_map_pointer",
+                        "AGENTS.sidecar.md must point to `docs/process/documentation-tooling-map.md` as the project documentation tooling map.",
+                    ));
+                }
+            }
+            None => issues.push(custom_validation_issue(
+                rel,
+                "missing_agents_sidecar",
+                "Project documentation validation requires `AGENTS.sidecar.md` to exist as the project docs map.",
+            )),
+        }
+    }
+
+    let owning_maps = project_doc_owning_maps(rel);
+    if owning_maps.is_empty() {
+        return issues;
+    }
+
+    let mut existing_maps = Vec::new();
+    let mut registered = false;
+    for map_rel in &owning_maps {
+        let map_path = scope_root.join(map_rel);
+        let map_content = if rel == *map_rel {
+            Some(content.to_string())
+        } else {
+            fs::read_to_string(&map_path).ok()
+        };
+        if let Some(body) = map_content {
+            existing_maps.push(map_rel.to_string());
+            if body.contains(rel) {
+                registered = true;
+            }
+        }
+    }
+
+    if existing_maps.is_empty() {
+        issues.push(custom_validation_issue(
+            rel,
+            "missing_project_doc_map_surface",
+            format!(
+                "Project doc `{rel}` requires an owning map/index surface such as {}.",
+                owning_maps
+                    .iter()
+                    .map(|value| format!("`{value}`"))
+                    .collect::<Vec<_>>()
+                    .join(" or ")
+            ),
+        ));
+    } else if !registered {
+        issues.push(custom_validation_issue(
+            rel,
+            "missing_project_doc_map_registration",
+            format!(
+                "Project doc `{rel}` must be registered in one of the owning map/index surfaces: {}.",
+                existing_maps
+                    .iter()
+                    .map(|value| format!("`{value}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        ));
+    }
+
+    if matches!(
+        rel,
+        "docs/project-root-map.md" | "docs/process/documentation-tooling-map.md"
+    ) {
+        if let Some(body) = sidecar_content.as_deref() {
+            if !body.contains(rel) {
+                issues.push(custom_validation_issue(
+                    rel,
+                    "missing_sidecar_bootstrap_pointer",
+                    format!(
+                        "`AGENTS.sidecar.md` must reference `{rel}` when it is a bootstrap-visible project documentation surface."
+                    ),
+                ));
+            }
+        }
+    }
+
+    issues
+}
+
+fn collect_file_validation_issues(
+    scope_root: &std::path::Path,
+    rel: &str,
+    content: &str,
+) -> Vec<ValidationIssue> {
+    let mut issues = validate_markdown_footer(ArtifactPath(rel.to_string()), content);
+    issues.extend(project_doc_registration_validation_issues(
+        scope_root, rel, content,
+    ));
+    issues
+}
+
+fn normalized_report_lines(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .map(|line| {
+            line.trim_start()
+                .trim_start_matches(['•', '-', '*'])
+                .trim_start()
+                .to_string()
+        })
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+fn report_shape_issues(content: &str) -> Vec<ReportShapeIssue> {
+    let lines = normalized_report_lines(content);
+    let mut issues = Vec::new();
+
+    match lines.first() {
+        Some(line)
+            if line.starts_with("Thinking mode: ")
+                && ["STC.", "PR-CoT.", "MAR.", "5-SOL.", "META."]
+                    .iter()
+                    .any(|suffix| line.ends_with(suffix)) => {}
+        _ => issues.push(ReportShapeIssue {
+            code: "missing_thinking_mode_prefix".to_string(),
+            message:
+                "The first non-empty line must start with `Thinking mode: <STC|PR-CoT|MAR|5-SOL|META>.`."
+                    .to_string(),
+        }),
+    }
+
+    match lines.get(1) {
+        Some(line) if line.starts_with("Requests: ") || line.starts_with("Tasks: ") => {}
+        _ => issues.push(ReportShapeIssue {
+            code: "missing_request_or_task_counters_prefix".to_string(),
+            message: "The second non-empty line must start with either `Requests:` or `Tasks:`."
+                .to_string(),
+        }),
+    }
+
+    match lines.get(2) {
+        Some(line) if line.starts_with("Agents: ") => {}
+        _ => issues.push(ReportShapeIssue {
+            code: "missing_agent_counters_prefix".to_string(),
+            message: "The third non-empty line must start with `Agents:`.".to_string(),
+        }),
+    }
+
+    issues
+}
+
+fn check_rows(
+    root: Option<&str>,
+    profile: &str,
+    files: &[String],
+) -> Result<Vec<CheckRow>, String> {
     let mut issues = Vec::new();
     let activation_body = read_activation_protocol().map_err(|err| err.to_string())?;
-    let targets = if profile.is_empty() {
-        let root = root
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| runtime.clone());
-        collect_check_targets(&root, Vec::<String>::new()).map_err(|err| err.to_string())?
-    } else {
-        let policy = runtime.join("codex-v0/docsys_policy.yaml");
-        let roots = resolve_profile_roots(Some(&runtime), &policy, profile)
-            .map_err(|err| err.to_string())?;
-        let excludes = resolve_scan_ignored_globs(&policy).map_err(|err| err.to_string())?;
-        let mut rows = Vec::new();
-        for root in roots {
-            rows.extend(
-                collect_check_targets(&root, excludes.clone()).map_err(|err| err.to_string())?,
-            );
-        }
-        rows
-    };
+    let targets = resolve_profile_targets(root, profile, files)?;
 
     for (scope_root, file_path) in targets {
         let content = fs::read_to_string(&file_path).map_err(|err| err.to_string())?;
         let rel = normalize_path_for_root(&file_path, &scope_root);
         let footer = footer_map(&content);
-        let mut row_issues = validate_markdown_footer(ArtifactPath(rel.clone()), &content)
+        let mut row_issues = collect_file_validation_issues(&scope_root, &rel, &content)
             .into_iter()
             .map(|issue| issue.code)
             .collect::<Vec<_>>();
@@ -2150,20 +2457,28 @@ fn check_rows(root: Option<&str>, profile: &str) -> Result<Vec<CheckRow>, String
     Ok(issues)
 }
 
-fn fastcheck_rows(root: Option<&str>, profile: &str) -> Result<Vec<ValidationIssue>, String> {
-    let targets = resolve_profile_targets(root, profile)?;
+fn fastcheck_rows(
+    root: Option<&str>,
+    profile: &str,
+    files: &[String],
+) -> Result<Vec<ValidationIssue>, String> {
+    let targets = resolve_profile_targets(root, profile, files)?;
     let mut issues = Vec::new();
     for (scope_root, file_path) in targets {
         let content = fs::read_to_string(&file_path).map_err(|err| err.to_string())?;
         let rel = normalize_path_for_root(&file_path, &scope_root);
-        issues.extend(validate_markdown_footer(ArtifactPath(rel), &content));
+        issues.extend(collect_file_validation_issues(&scope_root, &rel, &content));
     }
     Ok(issues)
 }
 
-fn activation_rows(root: Option<&str>, profile: &str) -> Result<Vec<DoctorRow>, String> {
+fn activation_rows(
+    root: Option<&str>,
+    profile: &str,
+    files: &[String],
+) -> Result<Vec<DoctorRow>, String> {
     let activation_body = read_activation_protocol().map_err(|err| err.to_string())?;
-    let targets = resolve_profile_targets(root, profile)?;
+    let targets = resolve_profile_targets(root, profile, files)?;
     let mut rows = Vec::new();
     for (scope_root, file_path) in targets {
         let rel = normalize_path_for_root(&file_path, &scope_root);
@@ -2174,10 +2489,14 @@ fn activation_rows(root: Option<&str>, profile: &str) -> Result<Vec<DoctorRow>, 
     Ok(rows)
 }
 
-fn protocol_coverage_rows(root: Option<&str>, profile: &str) -> Result<Vec<DoctorRow>, String> {
+fn protocol_coverage_rows(
+    root: Option<&str>,
+    profile: &str,
+    files: &[String],
+) -> Result<Vec<DoctorRow>, String> {
     let activation_body = read_activation_protocol().map_err(|err| err.to_string())?;
     let protocol_index_body = read_protocol_index().map_err(|err| err.to_string())?;
-    let targets = resolve_profile_targets(root, profile)?;
+    let targets = resolve_profile_targets(root, profile, files)?;
     let mut rows = Vec::new();
     for (scope_root, file_path) in targets {
         let rel = normalize_path_for_root(&file_path, &scope_root);
@@ -2190,13 +2509,17 @@ fn protocol_coverage_rows(root: Option<&str>, profile: &str) -> Result<Vec<Docto
     Ok(rows)
 }
 
-fn readiness_rows(root: Option<&str>, profile: &str) -> Result<Vec<ReadinessRow>, String> {
-    let targets = resolve_profile_targets(root, profile)?;
+fn readiness_rows(
+    root: Option<&str>,
+    profile: &str,
+    files: &[String],
+) -> Result<Vec<ReadinessRow>, String> {
+    let targets = resolve_profile_targets(root, profile, files)?;
     let mut issues = Vec::new();
     for (scope_root, file_path) in targets {
         let content = fs::read_to_string(&file_path).map_err(|err| err.to_string())?;
         let rel = normalize_path_for_root(&file_path, &scope_root);
-        issues.extend(validate_markdown_footer(ArtifactPath(rel), &content));
+        issues.extend(collect_file_validation_issues(&scope_root, &rel, &content));
     }
     Ok(issues_to_readiness_rows(&issues))
 }
@@ -2204,16 +2527,31 @@ fn readiness_rows(root: Option<&str>, profile: &str) -> Result<Vec<ReadinessRow>
 fn resolve_profile_targets(
     root: Option<&str>,
     profile: &str,
+    files: &[String],
 ) -> Result<Vec<(std::path::PathBuf, std::path::PathBuf)>, String> {
     let runtime = runtime_root();
+    let root = root
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| runtime.clone());
+    if !files.is_empty() {
+        return files
+            .iter()
+            .map(|file| {
+                let candidate = std::path::PathBuf::from(file);
+                let resolved = if candidate.is_absolute() {
+                    candidate
+                } else {
+                    root.join(candidate)
+                };
+                Ok((root.clone(), resolved))
+            })
+            .collect();
+    }
     if profile.is_empty() {
-        let root = root
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| runtime.clone());
         return collect_check_targets(&root, Vec::<String>::new()).map_err(|err| err.to_string());
     }
 
-    let policy = runtime.join("codex-v0/docsys_policy.yaml");
+    let policy = docflow_policy_path();
     let roots =
         resolve_profile_roots(Some(&runtime), &policy, profile).map_err(|err| err.to_string())?;
     let excludes = resolve_scan_ignored_globs(&policy).map_err(|err| err.to_string())?;
@@ -2242,20 +2580,20 @@ fn collect_check_targets(
 
 fn resolve_registry_output(args: &RegistryWriteArgs) -> String {
     if args.canonical {
-        return resolve_rooted_output(&args.root, "vida/config/codex-registry.current.jsonl");
+        return resolve_rooted_output(&args.root, "vida/config/docflow-registry.current.jsonl");
     }
     args.output
         .clone()
-        .unwrap_or_else(|| resolve_rooted_output(&args.root, "_temp/codex-registry.jsonl"))
+        .unwrap_or_else(|| resolve_rooted_output(&args.root, "_temp/docflow-registry.jsonl"))
 }
 
 fn resolve_readiness_output(args: &RegistryWriteArgs) -> String {
     if args.canonical {
-        return resolve_rooted_output(&args.root, "vida/config/codex-readiness.current.jsonl");
+        return resolve_rooted_output(&args.root, "vida/config/docflow-readiness.current.jsonl");
     }
     args.output
         .clone()
-        .unwrap_or_else(|| resolve_rooted_output(&args.root, "_temp/codex-readiness.jsonl"))
+        .unwrap_or_else(|| resolve_rooted_output(&args.root, "_temp/docflow-readiness.jsonl"))
 }
 
 fn finalize_edit(args: FinalizeEditArgs) -> Result<String, String> {
@@ -2547,7 +2885,8 @@ fn load_markdown_with_footer(path: &std::path::Path) -> Result<LoadedMarkdownWit
     }
     let content = fs::read_to_string(path).map_err(|err| err.to_string())?;
     let artifact = docflow_markdown::split_footer(&content).map_err(|err| err.to_string())?;
-    let footer = footer_entries(&content).ok_or_else(|| format!("missing footer: {}", path.display()))?;
+    let footer =
+        footer_entries(&content).ok_or_else(|| format!("missing footer: {}", path.display()))?;
     Ok(LoadedMarkdownWithFooter { artifact, footer })
 }
 
@@ -2766,12 +3105,13 @@ fn quiet_check_paths(paths: &[std::path::PathBuf]) -> Vec<(String, Vec<String>)>
                 continue;
             }
         };
-        let rel = normalize_path_for_repo(path);
+        let scope_root = detect_project_root_for(path).unwrap_or_else(runtime_root);
+        let rel = normalize_path_for_root(path, &scope_root);
         let body = docflow_markdown::split_footer(&content)
             .map(|artifact| artifact.body)
             .unwrap_or(content.clone());
         let footer = footer_map(&content);
-        let mut issues = validate_markdown_footer(ArtifactPath(rel.clone()), &content)
+        let mut issues = collect_file_validation_issues(&scope_root, &rel, &content)
             .into_iter()
             .map(|issue| issue.code)
             .collect::<Vec<_>>();
@@ -3145,7 +3485,8 @@ fn verdict_label(verdict: ReadinessVerdict) -> &'static str {
 }
 
 fn render_validation_result(path: &str, content: &str) -> String {
-    let issues = validate_markdown_footer(ArtifactPath(path.to_string()), content);
+    let (scope_root, rel) = resolve_validation_scope(path);
+    let issues = collect_file_validation_issues(&scope_root, &rel, content);
     if issues.is_empty() {
         "validation\n  issues: 0\n  verdict: ok".to_string()
     } else {
@@ -3170,7 +3511,8 @@ fn render_validation_result(path: &str, content: &str) -> String {
 }
 
 fn render_readiness_result(path: &str, content: &str) -> String {
-    let issues = validate_markdown_footer(ArtifactPath(path.to_string()), content);
+    let (scope_root, rel) = resolve_validation_scope(path);
+    let issues = collect_file_validation_issues(&scope_root, &rel, content);
     let rows = issues_to_readiness_rows(&issues);
     let verdict = summarize_verdict(&rows);
     if rows.is_empty() {
@@ -3199,6 +3541,24 @@ fn render_readiness_result(path: &str, content: &str) -> String {
     }
 }
 
+fn render_report_check_result(path: &str, content: &str) -> String {
+    let issues = report_shape_issues(content);
+    if issues.is_empty() {
+        "reporting\n  issues: 0\n  verdict: ok".to_string()
+    } else {
+        let issue_lines = issues
+            .iter()
+            .map(|issue| format!("  - {} [{}]: {}", path, issue.code, issue.message))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "reporting\n  issues: {}\n  verdict: blocking\n{}",
+            issues.len(),
+            issue_lines
+        )
+    }
+}
+
 fn collect_tree_issues(
     root: &str,
     rows: &[docflow_contracts::RegistryRow],
@@ -3207,8 +3567,9 @@ fn collect_tree_issues(
     for row in rows {
         let full_path = format!("{root}/{}", row.artifact_path.0);
         match fs::read_to_string(&full_path) {
-            Ok(content) => issues.extend(validate_markdown_footer(
-                row.artifact_path.clone(),
+            Ok(content) => issues.extend(collect_file_validation_issues(
+                std::path::Path::new(root),
+                &row.artifact_path.0,
                 &content,
             )),
             Err(error) => issues.push(ValidationIssue {
@@ -3225,7 +3586,7 @@ fn collect_tree_issues(
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, run};
+    use super::{Cli, activation_issue_for, protocol_coverage_issue_for, run};
     use clap::Parser;
     use std::fs;
     use std::path::PathBuf;
@@ -3482,6 +3843,25 @@ mod tests {
         assert!(rendered.contains("missing_protocol_index_binding"));
 
         fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn activation_issue_accepts_canonical_shorthand_binding_without_md_suffix() {
+        let issue = activation_issue_for(
+            "vida/config/instructions/runtime-instructions/synthetic-protocol.md",
+            "runtime-instructions/synthetic-protocol\n",
+        );
+        assert!(issue.is_none());
+    }
+
+    #[test]
+    fn protocol_coverage_issue_accepts_canonical_shorthand_binding_without_md_suffix() {
+        let issue = protocol_coverage_issue_for(
+            "vida/config/instructions/runtime-instructions/synthetic-protocol.md",
+            "runtime-instructions/synthetic-protocol\n",
+            "runtime-instructions/synthetic-protocol\n",
+        );
+        assert!(issue.is_none());
     }
 
     #[test]
@@ -3775,7 +4155,7 @@ mod tests {
             "--canonical",
         ]);
         let rendered = run(cli);
-        let expected = root.join("vida/config/codex-registry.current.jsonl");
+        let expected = root.join("vida/config/docflow-registry.current.jsonl");
         assert!(rendered.contains(expected.to_string_lossy().as_ref()));
         let written = fs::read_to_string(&expected).expect("canonical registry jsonl should exist");
         assert!(written.contains("\"artifact_path\":\"docs/process/a.md\""));
@@ -3843,7 +4223,7 @@ mod tests {
             "--canonical",
         ]);
         let rendered = run(cli);
-        let expected = root.join("vida/config/codex-readiness.current.jsonl");
+        let expected = root.join("vida/config/docflow-readiness.current.jsonl");
         assert!(rendered.contains(expected.to_string_lossy().as_ref()));
         let written =
             fs::read_to_string(&expected).expect("canonical readiness jsonl should exist");
@@ -3877,6 +4257,116 @@ mod tests {
         let rendered = run(cli);
         assert!(!rendered.contains("inventory_error"));
         assert!(!rendered.contains("error"));
+    }
+
+    #[test]
+    fn check_file_blocks_when_project_doc_is_missing_from_owning_map() {
+        let root = temp_dir("project-doc-map-check");
+        fs::create_dir_all(root.join("docs/product/spec")).expect("spec dir should exist");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(
+            root.join("AGENTS.sidecar.md"),
+            "# Project Docs Map\n\n- `docs/project-root-map.md`\n- `docs/process/documentation-tooling-map.md`\n",
+        )
+        .expect("sidecar should exist");
+        fs::write(
+            root.join("docs/project-root-map.md"),
+            "# Root Map\n\n- `docs/product/index.md`\n- `docs/process/README.md`\n",
+        )
+        .expect("root map should exist");
+        fs::write(
+            root.join("docs/process/documentation-tooling-map.md"),
+            "# Documentation Tooling\n",
+        )
+        .expect("documentation tooling map should exist");
+        fs::write(
+            root.join("docs/product/spec/README.md"),
+            "# Product Spec Guide\n\nActive design docs:\n\n",
+        )
+        .expect("spec readme should exist");
+        fs::write(
+            root.join("docs/product/spec/flappy-bird-design.md"),
+            "# Flappy Bird Design\n\n-----\nartifact_path: product/spec/flappy-bird-design\nartifact_type: product_spec\nartifact_version: 1\nartifact_revision: init\nsource_path: docs/product/spec/flappy-bird-design.md\nstatus: proposed\nchangelog_ref: flappy-bird-design.changelog.jsonl\ncreated_at: 2026-03-14T00:00:00Z\nupdated_at: 2026-03-14T00:00:00Z\n",
+        )
+        .expect("design doc should exist");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "check-file",
+            "--path",
+            root.join("docs/product/spec/flappy-bird-design.md")
+                .to_string_lossy()
+                .as_ref(),
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("missing_project_doc_map_registration"));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn check_file_blocks_when_sidecar_omits_documentation_tooling_map_pointer() {
+        let root = temp_dir("sidecar-pointer-check");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(
+            root.join("AGENTS.sidecar.md"),
+            "# Project Docs Map\n\n- `docs/project-root-map.md`\n",
+        )
+        .expect("sidecar should exist");
+        fs::write(
+            root.join("docs/process/README.md"),
+            "# Process Docs\n\n- `documentation-tooling-map.md`\n",
+        )
+        .expect("process readme should exist");
+        fs::write(
+            root.join("docs/process/documentation-tooling-map.md"),
+            "# Documentation Tooling\n",
+        )
+        .expect("documentation tooling map should exist");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "check-file",
+            "--path",
+            root.join("AGENTS.sidecar.md").to_string_lossy().as_ref(),
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("missing_sidecar_documentation_tooling_map_pointer"));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn report_check_accepts_required_runtime_reporting_shape() {
+        let path = temp_path("reporting-ok");
+        fs::write(
+            &path,
+            "Thinking mode: MAR.\nTasks: active=1 | in_work=1 | blocked=0\nAgents: active=0 | working=0 | waiting=0\n",
+        )
+        .expect("report should be written");
+
+        let cli = Cli::parse_from(["docflow", "report-check", "--path", &path]);
+        let rendered = run(cli);
+        assert!(rendered.contains("verdict: ok"));
+
+        fs::remove_file(path).expect("temp report should be removed");
+    }
+
+    #[test]
+    fn report_check_blocks_when_thinking_prefix_is_missing() {
+        let path = temp_path("reporting-block");
+        fs::write(
+            &path,
+            "Tasks: active=1 | in_work=1 | blocked=0\nAgents: active=0 | working=0 | waiting=0\n",
+        )
+        .expect("report should be written");
+
+        let cli = Cli::parse_from(["docflow", "report-check", "--path", &path]);
+        let rendered = run(cli);
+        assert!(rendered.contains("verdict: blocking"));
+        assert!(rendered.contains("missing_thinking_mode_prefix"));
+
+        fs::remove_file(path).expect("temp report should be removed");
     }
 
     #[test]
@@ -4134,6 +4624,26 @@ mod tests {
     }
 
     #[test]
+    fn check_command_accepts_positional_file_paths_under_root() {
+        let root = temp_dir("check-positional");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::write(root.join("docs/process/a.md"), "# a\n").expect("markdown should exist");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "check",
+            "--root",
+            root.to_string_lossy().as_ref(),
+            "docs/process/a.md",
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("\"path\":\"docs/process/a.md\""));
+        assert!(rendered.contains("missing_footer"));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
     fn readiness_file_command_reads_markdown_artifact_from_disk() {
         let path = temp_path("readiness-file");
         fs::write(&path, "# title\n").expect("temp markdown should be written");
@@ -4164,6 +4674,31 @@ mod tests {
         assert!(rendered.contains("total_rows: 2"));
         assert!(rendered.contains("docs/process/a.md [process_doc]"));
         assert!(rendered.contains("docs/product/spec/b.md [product_spec]"));
+
+        fs::remove_dir_all(root).expect("temp root should be removed");
+    }
+
+    #[test]
+    fn registry_scan_command_applies_default_policy_ignores() {
+        let root = temp_dir("registry-ignored");
+        fs::create_dir_all(root.join("docs/process")).expect("process dir should exist");
+        fs::create_dir_all(root.join("_temp/cache")).expect("temp dir should exist");
+        fs::create_dir_all(root.join("dist/package")).expect("dist dir should exist");
+        fs::write(root.join("docs/process/a.md"), "# a\n").expect("process markdown");
+        fs::write(root.join("_temp/cache/ignored.md"), "# ignore\n").expect("temp markdown");
+        fs::write(root.join("dist/package/ignored.md"), "# ignore\n").expect("dist markdown");
+
+        let cli = Cli::parse_from([
+            "docflow",
+            "registry-scan",
+            "--root",
+            root.to_string_lossy().as_ref(),
+        ]);
+        let rendered = run(cli);
+        assert!(rendered.contains("registry"));
+        assert!(rendered.contains("docs/process/a.md [process_doc]"));
+        assert!(!rendered.contains("_temp/cache/ignored.md"));
+        assert!(!rendered.contains("dist/package/ignored.md"));
 
         fs::remove_dir_all(root).expect("temp root should be removed");
     }

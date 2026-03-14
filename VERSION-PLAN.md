@@ -8,14 +8,14 @@ Rule:
 
 1. `README.md` explains the product narrative and current direction.
 2. This file defines the versioned scope and transition path.
-3. Runtime bootstrap truth remains in `AGENTS.md`, active instruction canon lives in `vida/config/instructions/*`, and active product-law direction lives in `docs/product/spec/**`.
+3. Runtime bootstrap truth remains in `AGENTS.md`, active instruction canon lives in `vida/config/instructions/**`, and active product-law direction lives in `docs/product/spec/**`.
 4. The bounded Release-1 working entrypoint is `docs/product/spec/release-1-program-map.md`, not this version ladder.
 
 Design assumptions:
 
 1. `0.2.x` remains the active semantic-freeze and proving line built on bounded proof runtimes, with `v0.2.1` as the latest published hotfix and `v0.2.2` as the current protocol-binding bridge slice now built and installer-proven locally before publication.
 2. `Release 1` and `1.0` point at the first CLI-first compiled autonomous delivery runtime, not at a daemon release.
-3. the public `0.2.x` runtime remains `taskflow-v0` plus `codex-v0`; Rust `taskflow` / `docflow` continue as parallel implementation tracks until the next release line.
+3. the public runtime surface is `vida taskflow` plus `vida docflow`; implementation ownership lives in the Rust runtime line.
 4. `2.0` owns daemon mode, richer observability, dashboards, and vector-search daemon integration.
 5. `3.0` owns plugins, marketplace, and extension ecosystem concerns.
 
@@ -46,8 +46,8 @@ It is the semantic-freeze and proving release that bridges the current bounded p
 
 Core characteristics:
 
-1. bounded proof runtimes through `taskflow-v0` and `codex-v0`,
-2. protocol-driven execution through `AGENTS.md`, `vida/config/instructions/*`, and active product/spec canon,
+1. bounded proof runtimes through `vida taskflow` and `vida docflow`,
+2. protocol-driven execution through `AGENTS.md`, `vida/config/instructions/**`, and active product/spec canon,
 3. source-of-truth authority in `docs/product/spec/**`, `vida/config/**`, and `vida/config/instructions/**`,
 4. bounded subagent orchestration,
 5. review, approval, and route-law enforcement,
@@ -260,7 +260,7 @@ The project is currently:
 
 1. operating on the `0.2.x` proving line,
 2. reducing ambiguity for semantic freeze and Release-1 closure,
-3. using `taskflow-v0` and `codex-v0` as the current public proof runtimes,
+3. using `vida taskflow` and `vida docflow` as the current public proof runtimes,
 4. treating canonical specs, config, and instruction canon as the source of truth,
 5. preparing the architectural move into the `1.0` / `Release 1` compiled runtime line through active parallel Rust implementation tracks.
 

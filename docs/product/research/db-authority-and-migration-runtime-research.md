@@ -27,9 +27,9 @@ Research inputs:
 
 Framework/runtime inputs:
 
-1. `vida/config/instructions/runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`
-2. `vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
-3. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
+1. `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`
+2. `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
+3. `instruction-contracts/bridge.instruction-activation-protocol.md`
 
 ## 3. Core Result
 

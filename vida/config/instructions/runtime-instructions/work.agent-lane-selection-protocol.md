@@ -66,6 +66,20 @@ When conversational work becomes artifact-bearing or execution-bearing:
 3. if implementation starts, the route must continue through the canonical tracked-execution owner and the implementation protocol,
 4. one-task boundedness must remain visible in the resulting tracked artifact or task pool.
 
+Mixed feature-delivery rule:
+
+1. if one request asks for research, specifications, planning, and implementation/code together, route it through `scope_discussion` first even when it is phrased as a direct build request,
+2. that route must hand off to `spec-pack` before any development-team execution posture is activated,
+3. the lawful order is:
+   - bounded todo/design checklist,
+   - one feature epic and one spec-pack task in `vida taskflow`,
+   - bounded design/spec document through `vida docflow`,
+   - close the spec-pack task only after the bounded design/spec document is finalized and validated,
+   - tracked task/task-pool shaping through the canonical TaskFlow/form-task path,
+   - only then delegated implementation/review/proof lanes.
+4. when the runtime exposes `vida taskflow consume final <request> --json`, use that direct-consumption surface to materialize the spec-first tracked-flow bootstrap and required next commands before broader orchestration.
+5. do not treat the presence of implementation language inside the request as permission to skip the conversational/spec stage.
+
 ## Overlay Activation Surface
 
 The active overlay section is:
@@ -107,13 +121,13 @@ Current bounded proof surfaces:
 
 ## References
 
-1. `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
-2. `vida/config/instructions/command-instructions/routing.use-case-packs-protocol.md`
-3. `vida/config/instructions/command-instructions/planning.form-task-protocol.md`
-4. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
-5. `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`
+1. `agent-definitions/entry.orchestrator-entry`
+2. `command-instructions/routing.use-case-packs-protocol`
+3. `command-instructions/planning.form-task-protocol`
+4. `runtime-instructions/work.taskflow-protocol`
+5. `runtime-instructions/work.project-agent-extension-protocol`
 6. `docs/product/spec/agent-lane-selection-and-conversation-mode-model.md`
-7. `vida/config/instructions/system-maps/runtime-family.taskflow-map.md`
+7. `system-maps/runtime-family.taskflow-map`
 
 -----
 artifact_path: config/runtime-instructions/agent-lane-selection.protocol
@@ -124,5 +138,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/work.agent-lane-selection-protocol.md
 created_at: '2026-03-10T16:40:00+02:00'
-updated_at: '2026-03-13T07:44:24+02:00'
+updated_at: 2026-03-14T12:05:10.555382992Z
 changelog_ref: work.agent-lane-selection-protocol.changelog.jsonl

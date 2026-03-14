@@ -18,12 +18,24 @@ skills:
   - skill_id: party_chat_product_scope
     description: Product-scope and outcome framing for Party Chat product seats.
     compatible_base_roles: pm,business_analyst
+  - skill_id: party_chat_system_analysis
+    description: System-analysis payload for requirements decomposition, interface tracing, edge-case discovery, and rule normalization.
+    compatible_base_roles: business_analyst,pm
+  - skill_id: party_chat_product_design
+    description: Product-design payload for user flows, information architecture, and interaction-shape trade-offs.
+    compatible_base_roles: business_analyst,pm,coach
   - skill_id: party_chat_security_safety
     description: Security and safety review payload for Party Chat specialty seats.
     compatible_base_roles: verifier,worker,coach
   - skill_id: party_chat_observability
     description: Reliability and observability payload for Party Chat specialty seats.
     compatible_base_roles: coach,worker
+  - skill_id: party_chat_quality_testing
+    description: QA and testing payload for scenario coverage, regression risk, and executable proof expectations.
+    compatible_base_roles: verifier,coach,worker
+  - skill_id: party_chat_accessibility_ux
+    description: Accessibility and UX review payload for usability, inclusive interaction, and interface conformance.
+    compatible_base_roles: coach,business_analyst,verifier
   - skill_id: party_chat_data_contracts
     description: Data and contract reasoning payload for Party Chat specialty seats.
     compatible_base_roles: worker,verifier
@@ -32,4 +44,7 @@ skills:
     compatible_base_roles: worker,coach
   - skill_id: party_chat_pm_process
     description: Process, sequencing, and delivery-governance payload for Party Chat process seats.
+    compatible_base_roles: pm,coach
+  - skill_id: party_chat_release_management
+    description: Release-management payload for rollout sequencing, dependency timing, and go/no-go readiness.
     compatible_base_roles: pm,coach

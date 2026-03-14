@@ -74,6 +74,13 @@ Pattern rule:
 3. a common implementation-preparation pattern is:
    - `business_analyst -> pm -> solution_architect -> worker -> coach -> verifier`
 4. this pattern exists to keep execution-preparation and architecture-constraint shaping separate from raw coding and separate from downstream review/verification.
+5. a broader modern cross-functional pattern may legally add project-specialist seats such as:
+   - `system_analyst`
+   - `product_designer`
+   - `qa_tester`
+   - `accessibility_ux`
+   - `release_manager`
+6. those specialists must still resolve through project roles/profiles/flows and must not bypass framework closure, review, or escalation law.
 
 ## 6. Participants
 

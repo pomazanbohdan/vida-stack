@@ -64,17 +64,17 @@ This layer must not own:
 
 Primary audited artifacts:
 
-1. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-2. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-3. `vida/config/instructions/runtime-instructions/core.capability-registry-protocol.md`
-4. `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
-5. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
+1. `core.orchestration-protocol.md`
+2. `core.agent-system-protocol.md`
+3. `runtime-instructions/core.capability-registry-protocol.md`
+4. `runtime-instructions/core.context-governance-protocol.md`
+5. `runtime-instructions/core.run-graph-protocol.md`
 
 Immediate stitching/projection surfaces used by the wave program:
 
-1. `vida/config/instructions/system-maps/framework.core-protocols-map.md`
-2. `vida/config/instructions/system-maps/framework.protocol-layers-map.md`
-3. `vida/config/instructions/system-maps/protocol.index.md`
+1. `system-maps/framework.core-protocols-map.md`
+2. `system-maps/framework.protocol-layers-map.md`
+3. `system-maps/protocol.index.md`
 4. `docs/product/spec/canonical-runtime-layer-matrix.md`
 
 ### Findings Before Refactor
@@ -161,16 +161,16 @@ This layer must not own:
 
 Primary audited artifacts:
 
-1. `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
-2. `vida/config/instructions/system-maps/bootstrap.orchestrator-boot-flow.md`
-3. `vida/config/instructions/instruction-contracts/role.orchestrator-contract.md`
-4. `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`
-5. `vida/config/instructions/runtime-instructions/lane.agent-handoff-context-protocol.md`
-6. `vida/config/instructions/runtime-instructions/work.agent-lane-selection-protocol.md`
-7. `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md`
-8. `vida/config/instructions/agent-definitions/entry.worker-entry.md`
-9. `vida/config/instructions/instruction-contracts/role.worker-contract.md`
-10. `vida/config/instructions/instruction-contracts/role.worker-thinking.md`
+1. `agent-definitions/entry.orchestrator-entry.md`
+2. `system-maps/bootstrap.orchestrator-boot-flow.md`
+3. `role.orchestrator-contract.md`
+4. `lane.worker-dispatch-protocol.md`
+5. `runtime-instructions/lane.agent-handoff-context-protocol.md`
+6. `runtime-instructions/work.agent-lane-selection-protocol.md`
+7. `runtime-instructions/work.verification-lane-protocol.md`
+8. `agent-definitions/entry.worker-entry.md`
+9. `instruction-contracts/role.worker-contract.md`
+10. `instruction-contracts/role.worker-thinking.md`
 
 Projection touched:
 
@@ -265,14 +265,14 @@ This layer must not own:
 
 Primary audited artifacts:
 
-1. `vida/config/instructions/system-maps/runtime-family.taskflow-map.md`
-2. `vida/config/instructions/system-maps/runtime-family.docflow-map.md`
-3. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
-4. `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md`
-5. `vida/config/instructions/runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`
-6. `vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
-7. `vida/config/instructions/runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`
-8. `vida/config/instructions/runtime-instructions/work.verification-merge-protocol.md`
+1. `system-maps/runtime-family.taskflow-map.md`
+2. `system-maps/runtime-family.docflow-map.md`
+3. `runtime-instructions/work.taskflow-protocol.md`
+4. `runtime-instructions/runtime.task-state-telemetry-protocol.md`
+5. `runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`
+6. `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
+7. `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`
+8. `runtime-instructions/work.verification-merge-protocol.md`
 
 ### Findings Before Refactor
 

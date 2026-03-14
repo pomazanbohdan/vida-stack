@@ -41,14 +41,14 @@ The active project development team is:
 
 1. root orchestrator session
    - owns framing, decomposition, packet routing, synthesis, and closure decisions
-2. `development_implementer`
-   - owns one bounded write-producing packet
-3. `development_coach`
-   - owns formative review for one bounded packet before independent verification
-4. `development_verifier`
-   - owns independent proof and closure-readiness checks for one bounded packet
-5. `development_escalation`
-   - owns high-cost conflict resolution when the normal packet path cannot close lawfully
+2. `junior`
+   - default low-cost carrier tier for one bounded write-producing packet with `runtime_role=worker`
+3. `middle`
+   - carrier tier for specification/planning packets and formative review with `runtime_role=coach`
+4. `senior`
+   - carrier tier for independent proof and closure-readiness checks with `runtime_role=verifier`
+5. `architect`
+   - carrier tier for high-cost conflict resolution with `runtime_role=solution_architect`
 
 ## Canonical Work Unit
 
@@ -189,6 +189,7 @@ The orchestrator must not:
 9. treat delayed or hanging delegated lanes as permission to absorb the packet locally while the delegated cycle still remains open.
 10. silently replace the active packet with the first locally failing test or compile error and then treat that narrower symptom fix as packet closure.
 11. treat a dirty worktree, same-scope partial diff, or partially applied delegated patch as implicit transfer of writer ownership back to the root session.
+12. treat a worker wait timeout, empty poll result, or late implementer response as permission to collapse the packet into one generic development lane or root-session self-development.
 
 ### Implementer
 
@@ -210,16 +211,17 @@ The implementer must not:
 
 The coach must:
 
-1. review the packet result against `definition_of_done`,
+1. review the packet result against the approved spec, acceptance criteria, and `definition_of_done`,
 2. activate the relevant skills before packet review begins,
 3. identify rework signals,
-4. return bounded corrective guidance.
+4. return bounded corrective guidance or explicit forward approval.
 
 The coach must not:
 
 1. replace the verifier,
 2. convert review into milestone-wide architecture scope,
 3. silently accept missing proof.
+4. silently widen a stalled implementer packet into generic development or root-session coding.
 
 ### Verifier
 
@@ -306,10 +308,10 @@ Use delegated agents by default for write-producing work.
 Default engagement policy:
 
 1. orchestrator owns shaping, routing, synthesis, and closure decisions,
-2. `development_implementer` owns one bounded write-producing packet,
-3. `development_coach` owns bounded formative review,
-4. `development_verifier` owns independent proof and closure readiness,
-5. `development_escalation` is exceptional and activates only when normal packet closure cannot be made coherent.
+2. the runtime-selected `worker` carrier owns one bounded write-producing packet,
+3. the runtime-selected `coach` carrier owns bounded formative review,
+4. the runtime-selected `verifier` carrier owns independent proof and closure readiness,
+5. the runtime-selected `solution_architect` carrier is exceptional and activates only when normal packet closure cannot be made coherent.
 
 Local orchestrator-only work is lawful only for:
 
@@ -358,12 +360,12 @@ For the active Release-1 restart line:
 
 After bootstrap, development agents must know immediately:
 
-1. project-local TaskFlow env lives in `taskflow-v0/.env`,
+1. project-local TaskFlow runtime is entered through `vida taskflow`,
 2. task lifecycle truth lives in `.vida/state/taskflow-state.db`,
-3. lifecycle/task mutation goes through `taskflow-v0 task`,
+3. lifecycle/task mutation goes through `vida taskflow task`,
 4. JSONL is bounded import/export only,
 5. delivery-task packets are the only lawful delegated write unit,
-6. the default `taskflow-v0` shell command is expected to resolve to the project-local wrapper/runtime path for this repository rather than an installed shim rooted elsewhere.
+6. the default `vida taskflow` surface is expected to resolve to the project-local runtime path for this repository rather than an installed shim rooted elsewhere.
 7. the default decomposition leaf is `delivery_task`, with `execution_block` reserved for packets that still violate one-owner bounded closure.
 8. delegated agents are the normal path for write-producing work once a lawful packet exists.
 9. packet interpretation follows the project prompt-stack protocol rather than ad hoc precedence guesses.
@@ -381,8 +383,8 @@ After bootstrap, development agents must know immediately:
 8. for project Codex configuration, read `docs/process/codex-agent-configuration-guide.md`,
 9. for project agent-system posture, read `docs/process/agent-system-guide.md`,
 10. for project role/skill/profile/flow registries, read `docs/process/agent-extensions/README.md`,
-11. for canonical spec-to-task decomposition law, read `vida/config/instructions/command-instructions/planning.form-task-protocol.md`,
-12. for delegated packet invariants, read `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`,
+11. for canonical spec-to-task decomposition law, read `command-instructions/planning.form-task-protocol.md`,
+12. for delegated packet invariants, read `instruction-contracts/lane.worker-dispatch-protocol.md`,
 13. for Release-1 restart backlog ownership, read `docs/product/spec/release-1-restart-backlog.md`.
 
 -----

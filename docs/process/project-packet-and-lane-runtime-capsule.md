@@ -44,9 +44,9 @@ If any of those are missing, reshape before delegation.
 For normal write-producing work:
 
 1. orchestrator shapes
-2. implementer writes
-3. coach reviews
-4. verifier proves
+2. runtime activates the cheapest capable carrier tier for `runtime_role=worker`
+3. runtime activates the cheapest capable carrier tier for `runtime_role=coach`
+4. runtime activates the cheapest capable carrier tier for `runtime_role=verifier`
 5. orchestrator synthesizes
 
 Read-only findings feed the next packet; they do not transfer root-session write ownership.
@@ -67,7 +67,8 @@ Local write work still requires an explicit exception-path receipt and remains b
 1. partial implementer return means reroute, not implicit root-session completion,
 2. review-found compile blocker in a mutated packet still stays under reroute/exception law,
 3. if delegated state is still open, packet closure and root takeover are both blocked,
-4. when one packet closes, immediately rebuild the parent bounded unit and continue to the next lawful packet unless a real blocker or escalation receipt exists.
+4. worker timeout or empty poll window does not authorize generic single-agent fallback or root-session self-development,
+5. when one packet closes, immediately rebuild the parent bounded unit and continue to the next lawful packet unless a real blocker or escalation receipt exists.
 
 ## Routing
 

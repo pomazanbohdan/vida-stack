@@ -1,7 +1,0 @@
-src/vida
-nimcache/
-tests/test_utils
-tests/test_config
-tests/test_execution_auth
-tests/test_route
-tests/test_todo

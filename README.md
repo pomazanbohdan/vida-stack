@@ -5,7 +5,7 @@
   <p>
     <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen" alt="Status"></a>
     <a href="#"><img src="https://img.shields.io/badge/Release-0.2.1-blue" alt="Release"></a>
-    <a href="#"><img src="https://img.shields.io/badge/Runtime-taskflow--v0-orange" alt="Runtime"></a>
+    <a href="#"><img src="https://img.shields.io/badge/Runtime-TaskFlow-orange" alt="Runtime"></a>
     <a href="#"><img src="https://img.shields.io/badge/Docsys-DocFlow-teal" alt="Docsys"></a>
     <a href="#"><img src="https://img.shields.io/badge/Target-VIDA_1.0-purple" alt="Target"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MPL--2.0-brightgreen" alt="License"></a>
@@ -29,8 +29,8 @@
 
 Instead of treating prompts, scripts, task lists, and docs as disconnected artifacts, VIDA keeps one lawful operating model with clear proof/runtime boundaries:
 
-- ⚙️ **Task execution proof runtime** through `taskflow-v0`
-- 📚 **Documentation/inventory proof runtime** through **DocFlow** (current donor surface: `codex-v0`)
+- ⚙️ **Task execution runtime family** through `vida taskflow`
+- 📚 **Documentation/inventory runtime family** through `vida docflow`
 - 🧭 **Boot, routing, and map-driven discovery** through `AGENTS.md`, `AGENTS.sidecar.md`, and framework maps
 - ✅ **Verification, approval, and proof gates**
 - 🧠 **Durable runtime state, receipts, and checkpoints**
@@ -84,7 +84,7 @@ The current VIDA direction is grounded in orchestrator-led multi-agent product e
 | `Runtime / State Machines` | materialize execution state, route progression, approval, coach, and verification lifecycles |
 
 > [!IMPORTANT]
-> **Transitional Architecture Notice:** `taskflow-v0` and **DocFlow** (current donor surface: `codex-v0`) are the separate proof runtimes shipped on the `0.2.x` line, with `v0.2.1` as the current hotfix. The source of truth remains the canonical product/spec and instruction surfaces under `docs/product/spec/`, `vida/config/`, and `vida/config/instructions/`. Rust `taskflow` / `docflow` remain active parallel implementation tracks for the next release, not the current public runtime.
+> **Current Runtime Notice:** `vida taskflow` and `vida docflow` are the active runtime-family surfaces on the current line. The source of truth remains the canonical product/spec and instruction surfaces under `docs/product/spec/`, `vida/config/`, and `vida/config/instructions/`.
 
 ---
 
@@ -105,15 +105,11 @@ vida init
 - 🔐 verifies release checksums
 - 🗂️ installs versioned sources under `~/.local/share/vida-stack/releases/<tag>`
 - 🔁 updates `~/.local/share/vida-stack/current`
-- 🧪 creates an installer-managed Python `venv` for **DocFlow** (current donor surface: `codex-v0`) and `pyturso`
 - 🧩 ships the project-local `.codex/` runtime configuration surface
 - 📍 deploys a clean `AGENTS.sidecar.md` scaffold for the external project owner
 - 🧱 scaffolds `vida.config.yaml` from the packaged template when the installed release root does not already have one
-- 🗃️ builds `taskflow-v0/generated/protocol_binding.compiled.json` and imports protocol-binding state into `.vida/state/taskflow-state.db`
 - 🧰 writes launchers into `~/.local/bin`:
   - `vida`
-  - `taskflow-v0`
-  - `codex-v0`
 - 🐚 wires `VIDA_HOME`, `VIDA_ROOT`, and `PATH` into `bash` / `zsh`
 
 ### Bootstrap the current project folder
@@ -126,14 +122,48 @@ This copies the current project bootstrap surfaces into the working directory:
 
 - `AGENTS.md`
 - `AGENTS.sidecar.md`
-- `vida/`
-- `.codex/`
 - `vida.config.yaml`
+- `.vida/config/`
+- `.vida/db/`
+- `.vida/cache/`
+- `.vida/framework/`
+- `.vida/project/`
+- `.vida/receipts/`
+- `.vida/runtime/`
+- `.vida/scratchpad/`
+
+### Local developer binary contract
+
+For local framework development, keep the system launcher on a release build and keep proofs/tests on the debug profile:
+
+```bash
+cargo build -p vida --release
+install -m 755 target/release/vida ~/.local/bin/vida
+cargo test -p vida -- --nocapture
+```
+
+This keeps the operator-facing `vida` in `~/.local/bin` aligned with the release binary while preserving faster and more inspectable local proof runs on the debug build.
+
+### Project activation survey
+
+```bash
+vida project-activator
+vida project-activator --json
+```
+
+This surfaces the bounded project-activation view for the current directory:
+
+- project shape (`empty|partial|structured`)
+- bootstrap-carrier state
+- activation posture (`pending|partial|ready_enough_for_normal_work`)
+- explicit blockers and next steps
+- whether later restart or host-template initialization is still required
 
 ### Upgrade / doctor
 
 ```bash
 vida init
+vida project-activator
 vida upgrade --version v0.2.2
 vida doctor
 vida use --version v0.2.2
@@ -143,9 +173,9 @@ vida use --version v0.2.2
 
 ## 🧩 Main Tools
 
-### ⚙️ `taskflow-v0`
+### ⚙️ `vida taskflow`
 
-The current tracked-execution proof runtime for the `0.2.x` proving line.
+The current tracked-execution runtime family surface for the `0.2.x` line.
 
 It already covers:
 
@@ -172,7 +202,7 @@ It already covers:
 
 The top-level product surface and release direction.
 
-In the current `0.2.x` proving line, the installer already gives you a `vida` launcher, but the public runtime still operates through the bounded `taskflow-v0` and **DocFlow** proof surfaces. The current DocFlow donor path remains `codex-v0/codex.py`.
+In the current `0.2.x` line, the installer gives you one `vida` launcher and the active operator/runtime surfaces are `vida taskflow` and `vida docflow`.
 
 The next product target behind that launcher is:
 
@@ -235,13 +265,13 @@ These standards are designed so each layer is independently coherent and future 
 Typical documentation/runtime proving flow:
 
 ```bash
-python3 codex-v0/codex.py overview
+vida docflow overview
 
-python3 codex-v0/codex.py readiness-check --profile active-canon
+vida docflow readiness-check --profile active-canon
 
-taskflow-v0 task import-jsonl .vida/imports/tasks.seed.jsonl --json
+vida taskflow task import-jsonl .vida/imports/tasks.seed.jsonl --json
 
-taskflow-v0 consume final "Runtime closure proof path"
+vida taskflow consume final "Runtime closure proof path"
 ```
 
 ---
@@ -254,7 +284,7 @@ Its job is to make the transitional product trustworthy enough that `Release 1` 
 
 That means:
 
-- `taskflow-v0` and **DocFlow** remain the current public proof runtimes
+- `vida taskflow` and `vida docflow` remain the current public runtime-family surfaces
 - source-of-truth law stays in `docs/product/spec/`, `vida/config/`, and `vida/config/instructions/`
 - current release work hardens semantics before compiled runtime substitution
 - Rust `taskflow` and `docflow` remain active parallel implementation tracks for `Release 1`

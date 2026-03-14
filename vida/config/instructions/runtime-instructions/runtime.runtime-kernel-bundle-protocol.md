@@ -10,12 +10,12 @@ Purpose: define the canonical runtime-owned bundle that composes kernel law, rou
 
 ## Canonical Runtime Surfaces
 
-1. `taskflow-v0/src/core/runtime_bundle.nim`
+1. `system-maps/runtime-family.taskflow-map`
 2. `vida orchestrator-init`
 3. `vida agent-init`
-4. `taskflow-v0 bundle check --json`
-5. `taskflow-v0 kernel summary --json`
-6. `vida/config/instructions/bundles/default_runtime.yaml`
+4. `vida taskflow bundle check --json`
+5. `vida taskflow kernel summary --json`
+6. `bundles/default_runtime.yaml`
 7. `docs/product/spec/partial-development-kernel-model.md`
 8. `docs/product/spec/canonical-machine-map.md`
 9. `docs/product/spec/receipt-and-proof-law.md`
@@ -41,7 +41,7 @@ The runtime kernel bundle is closed enough for current `taskflow` consumption on
 2. route and receipt artifacts are present,
 3. runtime inventory is present,
 4. compiled agent extensions are present,
-5. the bundle passes `taskflow-v0 bundle check --json`.
+5. the bundle passes `vida taskflow bundle check --json`.
 
 ## Boundary Rule
 
@@ -51,9 +51,9 @@ The runtime kernel bundle is closed enough for current `taskflow` consumption on
 
 ## References
 
-1. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
-2. `vida/config/instructions/runtime-instructions/work.agent-lane-selection-protocol.md`
-3. `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`
+1. `runtime-instructions/work.taskflow-protocol`
+2. `runtime-instructions/work.agent-lane-selection-protocol`
+3. `runtime-instructions/work.project-agent-extension-protocol`
 4. `docs/product/spec/canonical-runtime-layer-matrix.md`
 
 -----

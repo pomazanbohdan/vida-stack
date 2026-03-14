@@ -22,7 +22,7 @@ This law does not govern:
 
 Framework instruction naming remains owned by:
 
-1. `vida/config/instructions/instruction-contracts/meta.protocol-naming-grammar-protocol.md`
+1. `instruction-contracts/meta.protocol-naming-grammar-protocol.md`
 
 GitHub-native repository/community filenames remain owned by:
 

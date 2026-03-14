@@ -138,18 +138,18 @@ The current canonical root-map stack is implemented as:
 2. project root map:
    - `docs/project-root-map.md`
 3. governance map:
-   - `vida/config/instructions/system-maps/governance.map.md`
+   - `system-maps/governance.map.md`
 4. runtime-family index:
-   - `vida/config/instructions/system-maps/runtime-family.index.md`
+   - `system-maps/runtime-family.index.md`
 5. runtime-family maps:
-   - `vida/config/instructions/system-maps/runtime-family.docflow-map.md`
-   - `vida/config/instructions/system-maps/runtime-family.taskflow-map.md`
+   - `system-maps/runtime-family.docflow-map.md`
+   - `system-maps/runtime-family.taskflow-map.md`
 6. template map:
-   - `vida/config/instructions/system-maps/template.map.md`
+   - `system-maps/template.map.md`
 7. project-owned documentation tooling map:
    - `docs/process/documentation-tooling-map.md`
 8. observability map:
-   - `vida/config/instructions/system-maps/observability.map.md`
+   - `system-maps/observability.map.md`
 
 Rule:
 

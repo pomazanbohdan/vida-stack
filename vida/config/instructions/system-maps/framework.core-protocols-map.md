@@ -6,14 +6,14 @@ Purpose: provide one bounded framework-owned map for the `core cluster` of proto
 
 This map covers only the framework `core cluster`:
 
-1. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-2. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-3. `vida/config/instructions/instruction-contracts/core.skill-activation-protocol.md`
-4. `vida/config/instructions/instruction-contracts/core.packet-decomposition-protocol.md`
-5. `vida/config/instructions/instruction-contracts/core.agent-prompt-stack-protocol.md`
-6. `vida/config/instructions/runtime-instructions/core.capability-registry-protocol.md`
-7. `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
-8. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
+1. `instruction-contracts/core.orchestration-protocol`
+2. `instruction-contracts/core.agent-system-protocol`
+3. `instruction-contracts/core.skill-activation-protocol`
+4. `instruction-contracts/core.packet-decomposition-protocol`
+5. `instruction-contracts/core.agent-prompt-stack-protocol`
+6. `runtime-instructions/core.capability-registry-protocol`
+7. `runtime-instructions/core.context-governance-protocol`
+8. `runtime-instructions/core.run-graph-protocol`
 
 This map does not own:
 
@@ -50,7 +50,7 @@ Cluster reading rule:
 1. `core` is the structural cluster label,
 2. each file under the cluster remains the canonical owner of its own bounded family/function,
 3. this map is a stitching and routing surface only, not a second law-bearing owner.
-4. artifact-standard requirements for what a `core` protocol must contain live in `vida/config/instructions/instruction-contracts/meta.core-protocol-standard-protocol.md`.
+4. artifact-standard requirements for what a `core` protocol must contain live in `instruction-contracts/meta.core-protocol-standard-protocol`.
 
 ## Canonical Owner Split
 
@@ -118,28 +118,28 @@ The `core cluster` is intended to remain:
 ## Routing
 
 1. top-level routed execution, writer ownership, and execution authorization questions:
-   - continue to `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
+   - continue to `instruction-contracts/core.orchestration-protocol`
 2. worker mode, backend-class routing, fallback, and verification-lane posture:
-   - continue to `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
+   - continue to `instruction-contracts/core.agent-system-protocol`
 3. visible skill discovery, activation, and missing-skill fail-closed questions:
-   - continue to `vida/config/instructions/instruction-contracts/core.skill-activation-protocol.md`
+   - continue to `instruction-contracts/core.skill-activation-protocol`
 4. bounded packet shaping, default leaf depth, and JIT deeper refinement:
-   - continue to `vida/config/instructions/instruction-contracts/core.packet-decomposition-protocol.md`
+   - continue to `instruction-contracts/core.packet-decomposition-protocol`
 5. prompt-stack precedence between bootstrap, role prompt, packet, skill overlay, and runtime state:
-   - continue to `vida/config/instructions/instruction-contracts/core.agent-prompt-stack-protocol.md`
+   - continue to `instruction-contracts/core.agent-prompt-stack-protocol`
 6. typed admissibility and fail-closed compatibility before scoring:
-   - continue to `vida/config/instructions/runtime-instructions/core.capability-registry-protocol.md`
+   - continue to `runtime-instructions/core.capability-registry-protocol`
 7. context-source provenance, freshness, and lane-scoped evidence governance:
-   - continue to `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
+   - continue to `runtime-instructions/core.context-governance-protocol`
 8. routed-run resumability and node-level stage state:
-   - continue to `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
+   - continue to `runtime-instructions/core.run-graph-protocol`
 9. activation and canonical coverage questions for this cluster:
-   - continue to `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
-   - then to `vida/config/instructions/system-maps/protocol.index.md`
+   - continue to `instruction-contracts/bridge.instruction-activation-protocol`
+   - then to `system-maps/protocol.index`
 10. runtime-layer placement questions for the runtime-side `core` protocols:
    - continue to `docs/product/spec/canonical-runtime-layer-matrix.md`
 11. artifact-standard and boundary questions for what a `core` protocol must contain:
-   - continue to `vida/config/instructions/instruction-contracts/meta.core-protocol-standard-protocol.md`
+   - continue to `instruction-contracts/meta.core-protocol-standard-protocol`
 
 -----
 artifact_path: config/system-maps/framework.core-protocols-map

@@ -150,7 +150,7 @@ Current focused Rust test harness condition:
 66. `vida task ready --scope <task-id>` now computes the ready set inside one authoritative parent-child subtree from the TaskFlow runtime store, so operators can query ready work under a chosen epic/task scope while preserving the same blocked-edge gating as the global ready surface
 67. `vida task validate-graph` now validates authoritative TaskFlow dependency edges in-process, returning a structured issue set and non-zero exit for broken graphs such as missing dependency targets, self-dependencies, multiple parent-child parents, or parent-child cycles, while succeeding cleanly for valid runtime graphs
 68. `vida task dep add <task-id> <depends-on-id> <edge-type>` and `vida task dep remove <task-id> <depends-on-id> <edge-type>` now mutate authoritative TaskFlow dependency edges in-process with preflight graph validation, normalized `task_dependency` table sync, and natural `--json` CLI rendering on the concrete add/remove subcommands
-69. the flat canonical prompt-template source paths `vida/config/instructions/prompt-templates.cheap-worker-prompt-pack.md` and `vida/config/instructions/prompt-templates.worker-packet-templates.md` are restored as proof/runtime-discoverable artifacts again, while the clustered prompt-template documents remain as maintained companion guides under distinct artifact ids so `active-canon` validation and strict proofcheck no longer fail on missing or duplicate prompt-home artifacts
+69. the flat canonical prompt-template source paths `prompt-templates.cheap-worker-prompt-pack.md` and `prompt-templates.worker-packet-templates.md` are restored as proof/runtime-discoverable artifacts again, while the clustered prompt-template documents remain as maintained companion guides under distinct artifact ids so `active-canon` validation and strict proofcheck no longer fail on missing or duplicate prompt-home artifacts
 70. `vida task critical-path` now computes a deterministic longest unresolved `blocks` chain directly from the authoritative TaskFlow runtime store, returning a bounded planning path from root blocker to terminal downstream task and failing closed if the dependency graph must be repaired first
 71. `vida doctor` now also verifies launcher/runtime path resolution and native dependency graph health in addition to storage, spine, task-store, run-graph, compatibility, migration, and effective-bundle checks, so operators can see the active `vida` executable path, resolved project root, resolved TaskFlow runtime path, and zero-issue graph health in one fail-closed diagnosis surface
 72. the unified user-facing `vida` CLI now exposes explicit sibling runtime-family command homes at the root surface (`vida taskflow`, `vida docflow`) with bounded runtime-family help, root command-family discovery, and fail-closed routing semantics instead of hidden launcher ambiguity
@@ -332,6 +332,9 @@ The release build path is proven for the current tree.
 Proven command:
 
 1. `bash scripts/build-release.sh`
+2. `cargo build -p vida --release`
+3. `install -m 755 target/release/vida ~/.local/bin/vida`
+4. `cargo test -p vida -- --nocapture`
 
 Proven release outputs:
 
@@ -339,10 +342,12 @@ Proven release outputs:
 2. `dist/vida-stack-v0.2.1.zip`
 3. `dist/vida-install.sh`
 4. `dist/vida-stack-v0.2.1.manifest.json`
+5. `~/.local/bin/vida` may be refreshed from `target/release/vida` for the active local system launcher
 
 Current release-manifest contract:
 
 1. installed entrypoints are `vida`, `taskflow-v0`, `codex-v0`
+2. the local proof loop remains on the debug profile even when the system launcher is refreshed from the release build
 2. bundled binary is `bin/taskflow-v0`
 
 ### Installer
@@ -503,10 +508,10 @@ Only record proven working conditions.
 artifact_path: process/vida1-development-conditions
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-12'
+artifact_revision: '2026-03-14'
 schema_version: '1'
 status: canonical
 source_path: docs/process/vida1-development-conditions.md
 created_at: '2026-03-11T09:00:00+02:00'
-updated_at: '2026-03-12T23:05:00+02:00'
+updated_at: '2026-03-14T18:10:00+02:00'
 changelog_ref: vida1-development-conditions.changelog.jsonl

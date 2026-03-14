@@ -36,21 +36,21 @@ Matrix reading rule:
 
 | Layer | Alignment | Strongest evidence | Main current gap |
 |---|---|---|---|
-| Layer 1 | ✅ | `partial-development-kernel-model.md`, `canonical-machine-map.md`, `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`, `taskflow-v0/src/core/runtime_bundle.nim` | no blocking gap for the current runtime kernel boundary; taskflow now composes and validates one executable kernel bundle over canonical law |
+| Layer 1 | ✅ | `partial-development-kernel-model.md`, `canonical-machine-map.md`, `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`, `system-maps/runtime-family.taskflow-map.md` | no blocking gap for the current runtime kernel boundary; taskflow now composes and validates one executable kernel bundle over canonical law |
 | Layer 2 | ✅ | `vida-0.3-route-and-receipt-spec.md`, `canonical-machine-map.md`, `receipt-and-proof-law.md`, `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md` | no blocking gap for the current state/route/receipt kernel; machine, route, and receipt law now close through canonical specs plus executable bundle composition |
-| Layer 3 | ✅ | `runtime-instructions/work.taskflow-protocol.md`, `runtime-instructions/model.boot-packet-protocol.md`, `taskflow-v0/**` | no blocking gap for the current transitional execution substrate |
-| Layer 4 | ✅ | `core.agent-system-protocol.md`, `runtime-instructions/core.capability-registry-protocol.md`, `runtime-instructions/work.project-agent-extension-protocol.md`, `runtime-instructions/work.agent-lane-selection-protocol.md`, `taskflow-v0/src/agents/route.nim`, `taskflow-v0/src/core/assignment_engine.nim`, `taskflow-v0/src/core/role_selection.nim` | no blocking gap for the current transitional routing/assignment layer; dynamic role extensions and auto-lane selection now have runtime-owned executable surfaces |
+| Layer 3 | ✅ | `runtime-instructions/work.taskflow-protocol.md`, `runtime-instructions/model.boot-packet-protocol.md`, `system-maps/runtime-family.taskflow-map.md` | no blocking gap for the current transitional execution substrate |
+| Layer 4 | ✅ | `core.agent-system-protocol.md`, `runtime-instructions/core.capability-registry-protocol.md`, `runtime-instructions/work.project-agent-extension-protocol.md`, `runtime-instructions/work.agent-lane-selection-protocol.md`, `system-maps/runtime-family.taskflow-map.md`, `crates/vida/src/main.rs` | no blocking gap for the current transitional routing/assignment layer; dynamic role extensions and auto-lane selection now have runtime-owned executable surfaces |
 | Layer 5 | ✅ | `lane.worker-dispatch-protocol.md`, `runtime-instructions/lane.agent-handoff-context-protocol.md`, `runtime-instructions/core.context-governance-protocol.md` | no blocking gap for bounded handoff/context law in the current transitional runtime |
-| Layer 6 | ✅ | `runtime-instructions/work.verification-lane-protocol.md`, `runtime-instructions/work.verification-merge-protocol.md`, `verification-merge-law.md`, `taskflow-v0/src/gates/verification_merge.nim` | no blocking gap for verification merge/admissibility; taskflow now exposes executable verifier admissibility and merge policies |
-| Layer 7 | ✅ | `runtime-instructions/core.run-graph-protocol.md`, `runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`, `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`, `taskflow-v0/src/state/recovery.nim` | no blocking gap for checkpoint lineage and gateway recovery in the current transitional runtime; recovery, gateway resolution, and resumable resume are executable surfaces |
-| Layer 8 | ✅ | `system-maps/observability.map.md`, `runtime-instructions.observability.trace-grading-protocol.md`, `runtime-instructions/work.task-state-reconciliation-protocol.md`, `canonical-runtime-readiness-law.md`, `codex-v0` readiness/proof checks | no blocking gap for readiness as a pre-consumption gate in the current canon |
-| Layer 9 | ✅ | `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`, `taskflow-v0/src/core/direct_consumption.nim`, `taskflow-v0 consume final`, `vida-0.3-db-first-runtime-spec.md` | no blocking gap for the current transitional direct runtime-consumption layer; taskflow now consumes the compiled bundle directly and activates codex explicitly for final evidence before closure trust |
+| Layer 6 | ✅ | `runtime-instructions/work.verification-lane-protocol.md`, `runtime-instructions/work.verification-merge-protocol.md`, `verification-merge-law.md`, `system-maps/runtime-family.taskflow-map.md` | no blocking gap for verification merge/admissibility; taskflow now exposes executable verifier admissibility and merge policies |
+| Layer 7 | ✅ | `runtime-instructions/core.run-graph-protocol.md`, `runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`, `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`, `system-maps/runtime-family.taskflow-map.md` | no blocking gap for checkpoint lineage and gateway recovery in the current transitional runtime; recovery, gateway resolution, and resumable resume are executable surfaces |
+| Layer 8 | ✅ | `system-maps/observability.map.md`, `runtime-instructions.observability.trace-grading-protocol.md`, `runtime-instructions/work.task-state-reconciliation-protocol.md`, `canonical-runtime-readiness-law.md`, `vida docflow` readiness/proof checks | no blocking gap for readiness as a pre-consumption gate in the current canon |
+| Layer 9 | ✅ | `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`, `system-maps/runtime-family.taskflow-map.md`, `vida taskflow consume final`, `vida-0.3-db-first-runtime-spec.md` | no blocking gap for the current transitional direct runtime-consumption layer; taskflow now consumes the compiled bundle directly and activates DocFlow explicitly for final evidence before closure trust |
 
 Current codex-backed evidence:
 
-1. `python3 codex-v0/codex.py overview --profile active-canon` -> `177` active files, `0` missing footers, `0` missing changelogs
-2. `python3 codex-v0/codex.py readiness-check --profile active-canon` -> `OK`
-3. `python3 codex-v0/codex.py proofcheck --profile active-canon` -> `OK`
+1. `vida docflow overview --profile active-canon` -> `177` active files, `0` missing footers, `0` missing changelogs
+2. `vida docflow readiness-check --profile active-canon` -> `OK`
+3. `vida docflow proofcheck --profile active-canon` -> `OK`
 
 Interpretation rule:
 
@@ -78,11 +78,11 @@ Runtime matrix rule:
 Primary owner references for the three-level spine:
 
 1. `docs/process/framework-three-layer-refactoring-audit.md`
-2. `vida/config/instructions/instruction-contracts/meta.core-protocol-standard-protocol.md`
+2. `instruction-contracts/meta.core-protocol-standard-protocol.md`
 3. `docs/product/spec/framework-project-documentation-layer-model.md`
 4. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
 5. `docs/process/framework-source-lineage-index.md`
-6. `vida/config/instructions/system-maps/framework.protocol-layers-map.md`
+6. `system-maps/framework.protocol-layers-map.md`
 7. `docs/product/spec/taskflow-protocol-runtime-binding-model.md`
 8. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
 
@@ -99,15 +99,15 @@ This control matrix strengthens the layer status view with owner, proof, and mig
 
 | Layer | Three-level owner | Owner docs | Owner code surface | Operator and proof surface | Migration posture | Fail-closed failure mode | Main current gap |
 |---|---|---|---|---|---|---|---|
-| Layer 1 | `core` | `partial-development-kernel-model.md`; `canonical-machine-map.md`; `taskflow-protocol-runtime-binding-model.md` | `taskflow-v0/src/core/runtime_bundle.nim`; runtime bundle composition surfaces | runtime bundle validation; `codex.py proofcheck --profile active-canon` | `bridge_backed` | runtime bundle boundary becomes ambiguous and later layers lose lawful owner splits | Rust-native kernel bundle ownership is not yet the sole execution path |
-| Layer 2 | `core` | `vida-0.3-route-and-receipt-spec.md`; `receipt-and-proof-law.md`; `canonical-machine-map.md` | `taskflow-v0` route/state/receipt surfaces; DB-backed taskflow state authority | route/receipt proofs; runtime bundle composition checks | `bridge_backed` | route stages, receipt classes, or proof boundaries become non-queryable and runtime must stop before trustworthy progression | DB-first compiled Rust authority is still converging with script-era route/state law |
-| Layer 3 | `runtime-family execution` | `work.taskflow-protocol.md`; `model.boot-packet-protocol.md`; `taskflow-v1-runtime-modernization-plan.md` | `taskflow-v0/**`; active Rust `taskflow-*` crates for native closure | tracked execution receipts; run-graph proofs; bounded task execution inspection | `bridge_backed` | tracked execution cannot prove block lifecycle or resumable progression and execution must not claim lawful continuity | Rust-native TaskFlow execution substrate is under active implementation beside bridge runtime |
-| Layer 4 | `orchestration shell` | `core.agent-system-protocol.md`; `core.capability-registry-protocol.md`; `work.agent-lane-selection-protocol.md` | `taskflow-v0/src/agents/route.nim`; `taskflow-v0/src/core/assignment_engine.nim`; `crates/vida/src/main.rs` routing shell | route receipts; capability registry checks; lane-selection proofs | `bridge_backed` | lane assignment becomes implicit or role drift bypasses lawful route selection | `vida` shell still concentrates routing integration while Rust TaskFlow boundaries are being carved out |
-| Layer 5 | `orchestration shell` | `lane.worker-dispatch-protocol.md`; `lane.agent-handoff-context-protocol.md`; `core.context-governance-protocol.md` | packet/handoff surfaces in `taskflow-v0`; launcher-owned delegation bridges in `crates/vida` | handoff packets; bounded context receipts; verifier packet proofs | `bridge_backed` | delegation inherits broad context or loses provenance and replay-safe execution must stop | Native handoff/context governance still depends on bridge-era packet surfaces |
-| Layer 6 | `orchestration shell` + `runtime-family execution` gate seam | `work.verification-lane-protocol.md`; `work.verification-merge-protocol.md`; `verification-merge-law.md` | `taskflow-v0/src/gates/verification_merge.nim`; Rust review/verification closure remains in active modernization track | admissibility checks; merge proofs; approval/verification receipts | `bridge_backed` | verification, approval, and proof collapse into one informal close path and runtime must fail closed | Native closure gates are not yet the sole owner for end-to-end TaskFlow verification |
-| Layer 7 | `runtime-family execution` | `core.run-graph-protocol.md`; `recovery.checkpoint-replay-recovery-protocol.md`; `taskflow-v1-runtime-modernization-plan.md` | `taskflow-v0/src/state/recovery.nim`; active Rust recovery/state crates | checkpoint lineage; replay-safe recovery checks; resumability proofs | `bridge_backed` | interruption-safe recovery is no longer provable and runtime may not advertise resumability | Rust-native checkpoint and replay ownership is still being completed |
-| Layer 8 | `runtime-family execution` | `observability.map.md`; `canonical-runtime-readiness-law.md`; `operational-state-and-synchronization-model.md` | `codex-v0`; `taskflow-v0` observability/readiness surfaces; future Rust readiness shell in `vida`/`taskflow-*` | `codex.py readiness-check`; `proofcheck`; readiness reports and reconciliation views | `bridge_backed` | readiness cannot prove trust and direct runtime use must remain blocked | readiness is green canonically, but native TaskFlow observability/readiness closure is still converging |
-| Layer 9 | `runtime-family execution` + `DocFlow` activation seam | `runtime.direct-runtime-consumption-protocol.md`; `compiled-autonomous-delivery-runtime-architecture.md`; `taskflow-v1-runtime-modernization-plan.md`; `docflow-v1-runtime-modernization-plan.md` | `taskflow-v0/src/core/direct_consumption.nim`; `crates/vida/src/main.rs`; active Rust `taskflow-*` and `docflow-*` integration surfaces | `taskflow-v0 consume final`; `codex.py proofcheck`; explicit `DocFlow` activation for final evidence | `bridge_backed` | runtime consumes incomplete canon or bypasses `DocFlow` evidence and closure trust must fail closed | `TaskFlow -> DocFlow` direct native seam is still converging while both Rust families are under active development |
+| Layer 1 | `core` | `partial-development-kernel-model.md`; `canonical-machine-map.md`; `taskflow-protocol-runtime-binding-model.md` | TaskFlow runtime-family kernel bundle composition surfaces | runtime bundle validation; `vida docflow proofcheck --profile active-canon` | `bridge_backed` | runtime bundle boundary becomes ambiguous and later layers lose lawful owner splits | Rust-native kernel bundle ownership is not yet the sole execution path |
+| Layer 2 | `core` | `vida-0.3-route-and-receipt-spec.md`; `receipt-and-proof-law.md`; `canonical-machine-map.md` | TaskFlow route/state/receipt surfaces; DB-backed taskflow state authority | route/receipt proofs; runtime bundle composition checks | `bridge_backed` | route stages, receipt classes, or proof boundaries become non-queryable and runtime must stop before trustworthy progression | DB-first compiled Rust authority is still converging with legacy route/state law |
+| Layer 3 | `runtime-family execution` | `work.taskflow-protocol.md`; `model.boot-packet-protocol.md`; `taskflow-v1-runtime-modernization-plan.md` | TaskFlow runtime-family implementation surfaces; active Rust `taskflow-*` crates for native closure | tracked execution receipts; run-graph proofs; bounded task execution inspection | `bridge_backed` | tracked execution cannot prove block lifecycle or resumable progression and execution must not claim lawful continuity | Rust-native TaskFlow execution substrate is under active implementation beside bridge runtime |
+| Layer 4 | `orchestration shell` | `core.agent-system-protocol.md`; `core.capability-registry-protocol.md`; `work.agent-lane-selection-protocol.md` | TaskFlow runtime-family routing/assignment surfaces; `crates/vida/src/main.rs` routing shell | route receipts; capability registry checks; lane-selection proofs | `bridge_backed` | lane assignment becomes implicit or role drift bypasses lawful route selection | `vida` shell still concentrates routing integration while Rust TaskFlow boundaries are being carved out |
+| Layer 5 | `orchestration shell` | `lane.worker-dispatch-protocol.md`; `lane.agent-handoff-context-protocol.md`; `core.context-governance-protocol.md` | packet/handoff surfaces in the TaskFlow runtime family; launcher-owned delegation bridges in `crates/vida` | handoff packets; bounded context receipts; verifier packet proofs | `bridge_backed` | delegation inherits broad context or loses provenance and replay-safe execution must stop | Native handoff/context governance still depends on bridge-era packet surfaces |
+| Layer 6 | `orchestration shell` + `runtime-family execution` gate seam | `work.verification-lane-protocol.md`; `work.verification-merge-protocol.md`; `verification-merge-law.md` | TaskFlow verification-merge surfaces; Rust review/verification closure remains in active modernization track | admissibility checks; merge proofs; approval/verification receipts | `bridge_backed` | verification, approval, and proof collapse into one informal close path and runtime must fail closed | Native closure gates are not yet the sole owner for end-to-end TaskFlow verification |
+| Layer 7 | `runtime-family execution` | `core.run-graph-protocol.md`; `recovery.checkpoint-replay-recovery-protocol.md`; `taskflow-v1-runtime-modernization-plan.md` | TaskFlow recovery/state surfaces; active Rust recovery/state crates | checkpoint lineage; replay-safe recovery checks; resumability proofs | `bridge_backed` | interruption-safe recovery is no longer provable and runtime may not advertise resumability | Rust-native checkpoint and replay ownership is still being completed |
+| Layer 8 | `runtime-family execution` | `observability.map.md`; `canonical-runtime-readiness-law.md`; `operational-state-and-synchronization-model.md` | `vida docflow`; TaskFlow observability/readiness surfaces; future Rust readiness shell in `vida`/`taskflow-*` | `vida docflow readiness-check`; `proofcheck`; readiness reports and reconciliation views | `bridge_backed` | readiness cannot prove trust and direct runtime use must remain blocked | readiness is green canonically, but native TaskFlow observability/readiness closure is still converging |
+| Layer 9 | `runtime-family execution` + `DocFlow` activation seam | `runtime.direct-runtime-consumption-protocol.md`; `compiled-autonomous-delivery-runtime-architecture.md`; `taskflow-v1-runtime-modernization-plan.md`; `docflow-v1-runtime-modernization-plan.md` | TaskFlow direct-consumption surfaces; `crates/vida/src/main.rs`; active Rust `taskflow-*` and `docflow-*` integration surfaces | `vida taskflow consume final`; `vida docflow proofcheck`; explicit `DocFlow` activation for final evidence | `bridge_backed` | runtime consumes incomplete canon or bypasses `DocFlow` evidence and closure trust must fail closed | `TaskFlow -> DocFlow` direct native seam is still converging while both Rust families are under active development |
 
 ## 1. Scope
 
@@ -249,9 +249,9 @@ Provide the bounded runtime that records how one task is executed, resumed, and 
 
 ### 6.3 Strongest Current Evidence
 
-1. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
-2. `vida/config/instructions/runtime-instructions/model.boot-packet-protocol.md`
-3. `taskflow-v0/**`
+1. `runtime-instructions/work.taskflow-protocol.md`
+2. `runtime-instructions/model.boot-packet-protocol.md`
+3. `system-maps/runtime-family.taskflow-map.md`
 
 ### 6.4 Standalone Value
 
@@ -272,13 +272,13 @@ Select the lawful lane, agent backend, and route receipt for each task class or 
 
 ### 7.3 Strongest Current Evidence
 
-1. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-2. `vida/config/instructions/runtime-instructions/core.capability-registry-protocol.md`
-3. `taskflow-v0/src/agents/route.nim`
-4. `taskflow-v0/src/core/assignment_engine.nim`
-5. `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`
-6. `vida/config/instructions/runtime-instructions/work.agent-lane-selection-protocol.md`
-7. `taskflow-v0/src/core/role_selection.nim`
+1. `instruction-contracts/core.agent-system-protocol.md`
+2. `runtime-instructions/core.capability-registry-protocol.md`
+3. `system-maps/runtime-family.taskflow-map.md`
+4. `crates/vida/src/main.rs`
+5. `runtime-instructions/work.project-agent-extension-protocol.md`
+6. `runtime-instructions/work.agent-lane-selection-protocol.md`
+7. `runtime-instructions/work.agent-lane-selection-protocol.md`
 
 ### 7.4 Standalone Value
 
@@ -299,9 +299,9 @@ Make delegation lawful, bounded, and replay-safe by using explicit packets and g
 
 ### 8.3 Strongest Current Evidence
 
-1. `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`
-2. `vida/config/instructions/runtime-instructions/lane.agent-handoff-context-protocol.md`
-3. `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
+1. `instruction-contracts/lane.worker-dispatch-protocol.md`
+2. `runtime-instructions/lane.agent-handoff-context-protocol.md`
+3. `runtime-instructions/core.context-governance-protocol.md`
 
 ### 8.4 Standalone Value
 
@@ -323,11 +323,11 @@ Keep formative critique, independent verification, proof obligations, and approv
 
 ### 9.3 Strongest Current Evidence
 
-1. `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md`
-2. `vida/config/instructions/runtime-instructions/work.verification-merge-protocol.md`
-3. `vida/config/instructions/runtime-instructions/work.human-approval-protocol.md`
+1. `runtime-instructions/work.verification-lane-protocol.md`
+2. `runtime-instructions/work.verification-merge-protocol.md`
+3. `runtime-instructions/work.human-approval-protocol.md`
 4. `docs/product/spec/verification-merge-law.md`
-5. `taskflow-v0/src/gates/verification_merge.nim`
+5. `system-maps/runtime-family.taskflow-map.md`
 
 ### 9.4 Standalone Value
 
@@ -348,11 +348,11 @@ Let routed execution survive interruption, restart, and long-running waits throu
 
 ### 10.3 Strongest Current Evidence
 
-1. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
-2. `vida/config/instructions/runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`
+1. `runtime-instructions/core.run-graph-protocol.md`
+2. `runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`
 3. `docs/product/spec/projection-listener-checkpoint-model.md`
 4. `docs/product/spec/gateway-resume-handle-and-trigger-index.md`
-5. `taskflow-v0/src/state/recovery.nim`
+5. `system-maps/runtime-family.taskflow-map.md`
 
 ### 10.4 Standalone Value
 
@@ -373,11 +373,11 @@ Expose the runtime health, proving, trace, reconciliation, and readiness gate ne
 
 ### 11.3 Strongest Current Evidence
 
-1. `vida/config/instructions/system-maps/observability.map.md`
-2. `vida/config/instructions/runtime-instructions/observability.trace-grading-protocol.md`
-3. `vida/config/instructions/runtime-instructions/work.task-state-reconciliation-protocol.md`
+1. `system-maps/observability.map.md`
+2. `runtime-instructions/observability.trace-grading-protocol.md`
+3. `runtime-instructions/work.task-state-reconciliation-protocol.md`
 4. `docs/product/spec/canonical-runtime-readiness-law.md`
-5. `python3 codex-v0/codex.py readiness-check --profile active-canon`
+5. `vida docflow readiness-check --profile active-canon`
 
 ### 11.4 Standalone Value
 
@@ -401,10 +401,10 @@ Allow the runtime to consume canonical law, canonical bundles, and canonical sta
 
 1. `docs/process/framework-source-lineage-index.md`
 2. `docs/product/spec/root-map-and-runtime-surface-model.md`
-3. `vida/config/instructions/bundles/default_runtime.yaml`
-4. `vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
-5. `taskflow-v0/src/core/direct_consumption.nim`
-6. `taskflow-v0 consume final`
+3. `bundles/default_runtime.yaml`
+4. `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
+5. `system-maps/runtime-family.taskflow-map.md`
+6. `vida taskflow consume final`
 
 ### 12.4 Standalone Value
 
@@ -439,11 +439,11 @@ This spec absorbs and concentrates runtime-layer law previously scattered across
 6. `docs/product/spec/gateway-resume-handle-and-trigger-index.md`
 7. `docs/product/spec/verification-merge-law.md`
 8. `docs/product/spec/canonical-runtime-readiness-law.md`
-9. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
-10. `vida/config/instructions/runtime-instructions/lane.agent-handoff-context-protocol.md`
-11. `vida/config/instructions/runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`
-12. `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md`
-13. `vida/config/instructions/system-maps/observability.map.md`
+9. `runtime-instructions/work.taskflow-protocol.md`
+10. `runtime-instructions/lane.agent-handoff-context-protocol.md`
+11. `runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`
+12. `runtime-instructions/work.verification-lane-protocol.md`
+13. `system-maps/observability.map.md`
 14. `docs/process/framework-source-lineage-index.md`
 
 -----

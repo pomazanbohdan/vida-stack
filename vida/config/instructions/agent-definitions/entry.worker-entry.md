@@ -6,7 +6,7 @@ This file is the canonical worker-lane entry contract.
 
 Explicit boot map:
 
-1. `vida/config/instructions/system-maps/bootstrap.worker-boot-flow.md`
+1. `system-maps/bootstrap.worker-boot-flow`
 
 `AGENTS.md` remains the L0 orchestrator contract. Workers must not inherit the full orchestrator role.
 
@@ -18,7 +18,7 @@ Your job is to execute the scoped worker packet you were given and return eviden
 
 Worker-lane confirmation rule:
 1. If the active packet/runtime explicitly confirms worker-lane semantics, follow this file.
-2. If worker-lane confirmation is absent or ambiguous, fall back to `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`.
+2. If worker-lane confirmation is absent or ambiguous, fall back to `agent-definitions/entry.orchestrator-entry`.
 3. Required packet markers in canonical worker/runtime packets:
    - `worker_lane_confirmed: true`
    - `lane_identity: worker`
@@ -38,7 +38,7 @@ Worker-lane confirmation rule:
 4. Distinguish confirmed facts from assumptions.
 5. Return the exact deliverable format requested by the packet.
 6. Stop once the bounded result is produced.
-7. Use the worker-safe thinking subset from `vida/config/instructions/instruction-contracts/role.worker-thinking.md`.
+7. Use the worker-safe thinking subset from `instruction-contracts/role.worker-thinking`.
 8. Answer the packet's blocking question directly before adding optional context.
 9. When the packet marks `impact_tail_policy: required_for_non_stc` and your selected worker mode is `PR-CoT` or `MAR`, return a bounded impact analysis tail before finishing.
 
@@ -61,7 +61,7 @@ Workers may read only the local context needed for the assigned slice:
 2. explicit verification commands,
 3. project preflight doc when the packet requires command execution,
 4. packet-linked local references that are necessary to finish the task,
-5. `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md` only when the worker packet is implementation-shaped and explicitly links execution-law requirements.
+5. `command-instructions/execution.implement-execution-protocol` only when the worker packet is implementation-shaped and explicitly links execution-law requirements.
 
 Log-read budget:
 1. prefer exact-key lookup against a specific file,
@@ -89,6 +89,9 @@ Return:
 7. merge-ready verdict when requested,
 8. recommended next action when work remains.
 
+Reporting rule:
+1. If the worker packet/runtime requires user-facing or lane-facing status output, emit the runtime-visible `Thinking mode` label and mandatory counters from the active `vida agent-init` reporting contract instead of improvising a local log prefix.
+
 When `impact_tail_policy: required_for_non_stc` applies, also return:
 
 1. affected scope inside your assigned slice,
@@ -112,9 +115,9 @@ When escalating, say what is blocked and why in one short section.
 
 ## References
 
-1. `vida/config/instructions/system-maps/bootstrap.worker-boot-flow.md`
-2. `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`
-3. `vida/config/instructions/instruction-contracts/role.worker-thinking.md`
+1. `system-maps/bootstrap.worker-boot-flow`
+2. `instruction-contracts/lane.worker-dispatch-protocol`
+3. `instruction-contracts/role.worker-thinking`
 
 -----
 artifact_path: config/instructions/agent-definitions/entry.worker.entry
@@ -125,5 +128,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/agent-definitions/entry.worker-entry.md
 created_at: '2026-03-07T00:25:15+02:00'
-updated_at: '2026-03-13T07:44:24+02:00'
+updated_at: 2026-03-14T12:05:10.554594266Z
 changelog_ref: entry.worker-entry.changelog.jsonl

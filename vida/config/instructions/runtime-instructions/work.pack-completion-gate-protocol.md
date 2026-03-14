@@ -41,7 +41,7 @@ Before claiming pack completion:
 1. the pack must have one explicit `pack_id`,
 2. all mandatory outputs expected for the current pack route must be present or explicitly blocked,
 3. completion evidence must be visible in TaskFlow/block evidence or bounded pack-close summary,
-4. required runtime proof must satisfy `vida/config/instructions/runtime-instructions/work.execution-health-check-protocol.md` in `full` mode.
+4. required runtime proof must satisfy `runtime-instructions/work.execution-health-check-protocol` in `full` mode.
 
 Pack-specific output expectations remain owned by the deeper canonical runtime/command owners for that pack.
 
@@ -81,15 +81,15 @@ Rule:
 
 Ownership boundaries:
 
-1. `vida/config/instructions/command-instructions/routing.use-case-packs-protocol.md`
+1. `command-instructions/routing.use-case-packs-protocol`
    - owns pack taxonomy and routing intent only.
-2. `vida/config/instructions/runtime-instructions/work.pack-handoff-protocol.md`
+2. `runtime-instructions/work.pack-handoff-protocol`
    - owns cross-pack admissibility after a pack has a lawful completion verdict.
-3. `vida/config/instructions/runtime-instructions/work.execution-health-check-protocol.md`
+3. `runtime-instructions/work.execution-health-check-protocol`
    - owns health-check modes and verification proof expectations used by this gate.
-4. `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md`
+4. `runtime-instructions/runtime.task-state-telemetry-protocol`
    - owns pack event logging/wrapper usage, not pack completion law.
-5. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
+5. `runtime-instructions/work.taskflow-protocol`
    - owns generic planning/execution/task gates, not pack-complete admissibility.
 
 ## Fail-Closed Rule

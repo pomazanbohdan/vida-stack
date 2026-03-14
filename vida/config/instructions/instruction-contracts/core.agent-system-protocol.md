@@ -20,9 +20,9 @@ Canonical model:
 5. success/failure scoring,
 6. escalation, promotion, and demotion.
 
-Single-dispatch packet contract stays in `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`.
+Single-dispatch packet contract stays in `instruction-contracts/lane.worker-dispatch-protocol`.
 
-Worker-lane entry contract stays in `vida/config/instructions/agent-definitions/entry.worker-entry.md`.
+Worker-lane entry contract stays in `agent-definitions/entry.worker-entry`.
 
 ## Activation Surface
 
@@ -36,12 +36,12 @@ Activate this protocol when at least one is true:
 
 Primary activating companions:
 
-1. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-2. `vida/config/instructions/runtime-instructions/core.capability-registry-protocol.md`
-3. `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
-4. `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`
-5. `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md`
-6. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
+1. `instruction-contracts/core.orchestration-protocol`
+2. `runtime-instructions/core.capability-registry-protocol`
+3. `runtime-instructions/core.context-governance-protocol`
+4. `runtime-instructions/work.project-agent-extension-protocol`
+5. `runtime-instructions/work.verification-lane-protocol`
+6. `instruction-contracts/bridge.instruction-activation-protocol`
 
 ## Canonical State-Surface Note
 
@@ -51,10 +51,10 @@ Primary activating companions:
 
 ## Boundary Rule
 
-1. backend-specific onboarding, probing, probation, promotion, degradation, cooldown, recovery, and retirement for external CLI backends are owned by `vida/config/instructions/agent-backends/role.backend-lifecycle-protocol.md`,
+1. backend-specific onboarding, probing, probation, promotion, degradation, cooldown, recovery, and retirement for external CLI backends are owned by `agent-backends/role.backend-lifecycle-protocol`,
 2. this file keeps the generic agent-system routing and mode law above those backend-specific lifecycle mechanics.
-3. typed admissibility remains owned by `vida/config/instructions/runtime-instructions/core.capability-registry-protocol.md`,
-4. context provenance, freshness, and lane-scoped governed usage remain owned by `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`,
+3. typed admissibility remains owned by `runtime-instructions/core.capability-registry-protocol`,
+4. context provenance, freshness, and lane-scoped governed usage remain owned by `runtime-instructions/core.context-governance-protocol`,
 5. this file must not absorb command-level runtime help or backend-specific tool invocation syntax.
 
 ## Modes
@@ -105,7 +105,7 @@ Hard rule:
 Hard rule:
 
 1. `AGENTS.md` is the orchestrator-only entry contract,
-2. external and delegated workers must use `vida/config/instructions/agent-definitions/entry.worker-entry.md`,
+2. external and delegated workers must use `agent-definitions/entry.worker-entry`,
 3. worker packets should optimize for bounded evidence delivery, not meta-orchestration narration.
 
 ## Routing Contract
@@ -214,16 +214,16 @@ Project extension rule:
 1. framework lane classes and standard flow sets remain the stable runtime base.
 2. project-owned lane classes, skills, profiles, and flow sets may extend that base only through the validated project overlay path.
 3. invalid or unresolved project extensions must fail closed rather than silently degrade into ad hoc runtime behavior.
-4. project extension activation and validation semantics are governed by `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`.
+4. project extension activation and validation semantics are governed by `runtime-instructions/work.project-agent-extension-protocol`.
 
 ## Required Core Linkages
 
 1. `core.agent-system` owns generic worker-system routing and mode law only.
-2. Before a candidate lane may remain eligible for scoring, this protocol must defer typed admissibility to `vida/config/instructions/runtime-instructions/core.capability-registry-protocol.md`.
-3. When delegated context or evidence is shaped for a lane, this protocol must respect `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`.
-4. This protocol does not own node-level resumability; that remains in `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`.
+2. Before a candidate lane may remain eligible for scoring, this protocol must defer typed admissibility to `runtime-instructions/core.capability-registry-protocol`.
+3. When delegated context or evidence is shaped for a lane, this protocol must respect `runtime-instructions/core.context-governance-protocol`.
+4. This protocol does not own node-level resumability; that remains in `runtime-instructions/core.run-graph-protocol`.
 5. This protocol is a peer of `core.orchestration`, not a replacement for top-level orchestration law.
-6. conversational pre-routing and conversational lane-class selection remain owned by `vida/config/instructions/runtime-instructions/work.agent-lane-selection-protocol.md`.
+6. conversational pre-routing and conversational lane-class selection remain owned by `runtime-instructions/work.agent-lane-selection-protocol`.
 
 ## Operational Proof And Closure
 
@@ -276,14 +276,14 @@ Minimum contract:
 1. eligible non-trivial work should separate authorship and verification when route policy requires it,
 2. verification should be selected from a dedicated verification route class when possible,
 3. the verifier should differ from the author lane when another eligible verifier exists.
-4. verification-lane semantics are governed by `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md`.
+4. verification-lane semantics are governed by `runtime-instructions/work.verification-lane-protocol`.
 
 ## References
 
-1. `vida/config/instructions/runtime-instructions/work.agent-lane-selection-protocol.md`
-2. `vida/config/instructions/runtime-instructions/core.capability-registry-protocol.md`
-3. `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
-4. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
+1. `runtime-instructions/work.agent-lane-selection-protocol`
+2. `runtime-instructions/core.capability-registry-protocol`
+3. `runtime-instructions/core.context-governance-protocol`
+4. `runtime-instructions/core.run-graph-protocol`
 
 -----
 artifact_path: config/instructions/instruction-contracts/core.agent-system.protocol

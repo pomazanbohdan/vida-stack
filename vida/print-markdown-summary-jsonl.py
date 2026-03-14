@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
-"""Thin wrapper for codex summary over vida/."""
+"""Thin wrapper for `vida docflow summary` over `vida/`."""
 
 from __future__ import annotations
 
 from pathlib import Path
-import runpy
+import subprocess
 import sys
 
 
 def main() -> int:
-    script = Path(__file__).resolve().parents[1] / "codex-v0" / "codex.py"
-    sys.argv = [str(script), "summary", "--root", str(Path(__file__).resolve().parent), *sys.argv[1:]]
-    runpy.run_path(str(script), run_name="__main__")
-    return 0
+    repo_root = Path(__file__).resolve().parents[1]
+    command = [
+        "vida",
+        "docflow",
+        "summary",
+        "--root",
+        str(Path(__file__).resolve().parent),
+        *sys.argv[1:],
+    ]
+    completed = subprocess.run(command, cwd=repo_root)
+    return completed.returncode
 
 
 if __name__ == "__main__":

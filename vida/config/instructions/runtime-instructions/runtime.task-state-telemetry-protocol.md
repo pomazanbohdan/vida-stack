@@ -4,12 +4,12 @@ Purpose: one operational contract for task-state SSOT, workflow telemetry, and e
 
 Transition note:
 
-1. `taskflow-v0 task`, `taskflow-v0 todo`, and `taskflow-v0 run-graph` are the active transitioned read surfaces.
+1. `vida taskflow task`, `vida taskflow todo`, and `vida taskflow run-graph` are the active transitioned read surfaces.
 2. Legacy `beads-workflow.sh` and companion wrappers remain migration-source operator helpers only until their sequencing behavior is reimplemented or retired.
 
 ## 1) SSOT Rule
 
-`taskflow-v0 task` is the only source of truth for task lifecycle state.
+`vida taskflow task` is the only source of truth for task lifecycle state.
 
 Forbidden:
 
@@ -19,9 +19,9 @@ Forbidden:
 
 Required:
 
-1. Find work via `taskflow-v0 task ready`.
-2. Start with `taskflow-v0 task update <id> --status in_progress`.
-3. Close with `taskflow-v0 task close <id> --reason "..."`.
+1. Find work via `vida taskflow task ready`.
+2. Start with `vida taskflow task update <id> --status in_progress`.
+3. Close with `vida taskflow task close <id> --reason "..."`.
 4. Emit JSONL only as bounded export under `.vida/exports/` when an external snapshot is explicitly required.
 5. Optional background backup worker must use sparse cadence (`>=120s`, default 600s):
 
@@ -40,14 +40,14 @@ Autostart note:
 
 ## 2) Two-Layer Model
 
-1. Task lifecycle/state: `taskflow-v0 task` over `.vida/state/taskflow-state.db` (`open`, `in_progress`, `closed`, `deferred`, deps).
+1. Task lifecycle/state: `vida taskflow task` over `.vida/state/taskflow-state.db` (`open`, `in_progress`, `closed`, `deferred`, deps).
 2. Execution trace/visibility: TaskFlow blocks in beads logs (`block-plan/start/end/reflect/verify`).
 
 Rule: TaskFlow is not a second task-state engine. It is execution telemetry only.
 
 Reconciliation rule:
 
-1. When DB-backed lifecycle state and TaskFlow execution state diverge, use `vida/config/instructions/runtime-instructions/work.task-state-reconciliation-protocol.md` to classify the task before mutating lifecycle state.
+1. When DB-backed lifecycle state and TaskFlow execution state diverge, use `runtime-instructions/work.task-state-reconciliation-protocol` to classify the task before mutating lifecycle state.
 
 Wrapper rule:
 
@@ -58,10 +58,10 @@ Wrapper rule:
 ## 3) Daily Core Commands
 
 ```bash
-taskflow-v0 task ready
-taskflow-v0 task update <id> --status in_progress
-taskflow-v0 task close <id> --reason "All ACs met"
-taskflow-v0 task export-jsonl .vida/exports/tasks.snapshot.jsonl --json
+vida taskflow task ready
+vida taskflow task update <id> --status in_progress
+vida taskflow task close <id> --reason "All ACs met"
+vida taskflow task export-jsonl .vida/exports/tasks.snapshot.jsonl --json
 ```
 
 Mutation serialization rule:
@@ -139,8 +139,8 @@ Auto-sync level:
 Boot profile validation:
 
 ```bash
-taskflow-v0 boot run lean <task_id>
-taskflow-v0 boot verify-receipt <task_id> [profile]
+vida taskflow boot run lean <task_id>
+vida taskflow boot verify-receipt <task_id> [profile]
 ```
 
 Escalate to `standard|full` only when complexity/risk requires broader read-set.
@@ -152,7 +152,7 @@ For non-trivial requests routed via use-case packs:
 1. run `pack-start` before block execution,
 2. run `pack-end` on completion,
 3. keep pack events balanced (`start == end`),
-4. treat balanced pack events as coverage telemetry only; lawful pack completion is owned by `vida/config/instructions/runtime-instructions/work.pack-completion-gate-protocol.md`.
+4. treat balanced pack events as coverage telemetry only; lawful pack completion is owned by `runtime-instructions/work.pack-completion-gate-protocol`.
 
 ## 6) Compact Contract
 
@@ -210,8 +210,8 @@ Before close/handoff:
 
 Boundary note:
 
-1. close/handoff admissibility semantics remain owned by `vida/config/instructions/runtime-instructions/work.execution-health-check-protocol.md`,
-2. stale/drift closure classification remains owned by `vida/config/instructions/runtime-instructions/work.task-state-reconciliation-protocol.md`,
+1. close/handoff admissibility semantics remain owned by `runtime-instructions/work.execution-health-check-protocol`,
+2. stale/drift closure classification remains owned by `runtime-instructions/work.task-state-reconciliation-protocol`,
 3. this file keeps the workflow wrapper path and SSOT/telemetry integration only.
 
 Finish gate:
@@ -234,7 +234,7 @@ If phase gating is used, handle future work with `deferred` status and open by p
 
 Rule:
 
-1. This does not replace `taskflow-v0 task ready`.
+1. This does not replace `vida taskflow task ready`.
 2. This does not introduce any second state model.
 
 -----

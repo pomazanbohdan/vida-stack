@@ -26,10 +26,10 @@ When active, the orchestrator must treat silent diagnosis as a background framew
 5. After the current task boundary, take the captured framework bug into the framework queue and fix it systematically.
 6. Framework bug work must use WVP/web research when the fix depends on external best practice, tool behavior, or architecture claims.
 7. Closure-ready state for framework bug work still requires normal delegated verification/proving rules.
-8. When TaskFlow is active, `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md` is the canonical execution-layer contract for deferred capture, compact-safe persistence, and post-boundary follow-up routing.
-9. Durable lessons, corrections, and anomalies belong in `vida/config/instructions/runtime-instructions/runtime.framework-memory-protocol.md`, not only in chat or transient reflection output.
+8. When TaskFlow is active, `runtime-instructions/work.taskflow-protocol` is the canonical execution-layer contract for deferred capture, compact-safe persistence, and post-boundary follow-up routing.
+9. Durable lessons, corrections, and anomalies belong in `runtime-instructions/runtime.framework-memory-protocol`, not only in chat or transient reflection output.
 10. Silent diagnosis must audit the instruction layer as well as runtime/TaskFlow: `AGENTS.md`, lane entry contracts, and canonical framework protocols are valid diagnosis targets when they reduce quality, clarity, token efficiency, or determinism.
-11. Silent diagnosis must also audit protocol execution drift using `vida/config/instructions/diagnostic-instructions/analysis.protocol-self-diagnosis-protocol.md` when reporting barriers, missing task coverage, skipped catch-review, or route drift are observed.
+11. Silent diagnosis must also audit protocol execution drift using `diagnostic-instructions/analysis.protocol-self-diagnosis-protocol` when reporting barriers, missing task coverage, skipped catch-review, or route drift are observed.
 12. Timeout-driven pauses, report-after-timeout stopping, or other generic-assistant waiting behavior during `in_work=1` must be captured as framework drift rather than accepted as normal session pacing.
 13. Silent diagnosis does not choose between `diagnosis_path` and `normal_delivery_path` implicitly; when a turn mixes report/diagnosis intent with continued development, path selection must be made explicitly before any write-producing action.
 14. Silent diagnosis pressure, discovered defect visibility, or “scope is already clear” do not authorize local product patching until that path selection and downstream route law are explicit.

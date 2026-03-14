@@ -16,9 +16,9 @@ This protocol audits framework protocol artifacts themselves.
 
 It does not replace:
 
-1. `vida/config/instructions/diagnostic-instructions/analysis.protocol-self-diagnosis-protocol.md` for runtime execution drift,
-2. `vida/config/instructions/diagnostic-instructions/analysis.framework-self-analysis-protocol.md` for broader framework-wide friction diagnosis,
-3. `vida/config/instructions/instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol.md` for authoring new protocols or major protocol restructuring.
+1. `diagnostic-instructions/analysis.protocol-self-diagnosis-protocol` for runtime execution drift,
+2. `diagnostic-instructions/analysis.framework-self-analysis-protocol` for broader framework-wide friction diagnosis,
+3. `instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol` for authoring new protocols or major protocol restructuring.
 
 ## Trigger
 
@@ -76,10 +76,10 @@ Run the audit in this order:
 
 Minimum comparison set:
 
-1. `vida/config/instructions/system-maps/framework.protocol-layers-map.md`
-2. `vida/config/instructions/system-maps/framework.protocol-domains-map.md`
-3. `vida/config/instructions/system-maps/protocol.index.md`
-4. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
+1. `system-maps/framework.protocol-layers-map`
+2. `system-maps/framework.protocol-domains-map`
+3. `system-maps/protocol.index`
+4. `instruction-contracts/bridge.instruction-activation-protocol`
 5. the active protocol-bearing artifacts under audit
 
 Use adjacent owner artifacts when the audit depends on a live boundary with:
@@ -127,9 +127,9 @@ The audit result must make visible:
 
 ## References
 
-1. `vida/config/instructions/diagnostic-instructions/analysis.framework-self-analysis-protocol.md`
-2. `vida/config/instructions/diagnostic-instructions/analysis.protocol-self-diagnosis-protocol.md`
-3. `vida/config/instructions/instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol.md`
+1. `diagnostic-instructions/analysis.framework-self-analysis-protocol`
+2. `diagnostic-instructions/analysis.protocol-self-diagnosis-protocol`
+3. `instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol`
 4. `docs/process/framework-three-layer-refactoring-audit.md`
 
 -----

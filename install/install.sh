@@ -10,6 +10,19 @@ BIN_DIR="${VIDA_BIN_DIR:-$HOME/.local/bin}"
 FORCE="no"
 DRY_RUN="no"
 KEEP_RELEASES="${VIDA_KEEP_RELEASES:-3}"
+SHELL_REFRESH_COMMAND=""
+
+Color_Off=''
+Red=''
+Dim=''
+Bold_White=''
+
+if [[ -t 1 ]]; then
+  Color_Off='\033[0m'
+  Red='\033[0;31m'
+  Dim='\033[0;2m'
+  Bold_White='\033[1m'
+fi
 
 usage() {
   cat <<'EOF'
@@ -36,7 +49,7 @@ EOF
 }
 
 log() {
-  printf '[vida-installer] %s\n' "$*"
+  printf "${Dim}[vida-installer]${Color_Off} %s\n" "$*"
 }
 
 print_install_summary() {
@@ -63,15 +76,13 @@ print_install_summary() {
 ${action_emoji} VIDA ${version} ${action_label} successfully
 ✅ Active release: ${current_link}
 📦 Release root: ${release_root}
-🧭 Launchers: ${BIN_DIR}/vida ${BIN_DIR}/taskflow-v0
-🪄 Compatibility wrapper: ${BIN_DIR}/codex-v0 -> vida docflow
+🧭 Launchers: ${BIN_DIR}/vida
 🔧 Shell env: ${env_file}
 🩹 Active patch line: ${version}
 
 Try it now:
   source "${env_file}"
   vida doctor
-  vida taskflow protocol-binding check --json
   vida taskflow status --json
   vida docflow help
 
@@ -81,6 +92,14 @@ Examples:
   vida taskflow task list --json
   vida docflow overview --format toon
 EOF
+
+  if [[ -n "$SHELL_REFRESH_COMMAND" ]]; then
+    cat <<EOF
+
+Reload shell:
+  ${SHELL_REFRESH_COMMAND}
+EOF
+  fi
 }
 
 print_project_init_summary() {
@@ -104,7 +123,6 @@ Next steps:
   rg --files vida/config/instructions | head
 
 Project usage examples:
-  vida taskflow protocol-binding check --json
   vida taskflow task list --json
   vida docflow help
 EOF
@@ -125,12 +143,11 @@ print_already_installed_summary() {
 Try:
   vida doctor
   vida init
-  vida taskflow protocol-binding check --json
 EOF
 }
 
 fail() {
-  printf '[vida-installer] ERROR: %s\n' "$*" >&2
+  printf "${Red}[vida-installer] ERROR:${Color_Off} %s\n" "$*" >&2
   exit 1
 }
 
@@ -161,6 +178,47 @@ if not tag:
     raise SystemExit("Missing tag_name in latest-release payload")
 print(tag)
 '
+}
+
+tildify() {
+  if [[ "$1" == "$HOME/"* ]]; then
+    printf '~/%s\n' "${1#$HOME/}"
+    return 0
+  fi
+  printf '%s\n' "$1"
+}
+
+download_url_to_file() {
+  local url="$1"
+  local destination="$2"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl --fail --location --progress-bar "$url" --output "$destination"
+    return 0
+  fi
+
+  if command -v wget >/dev/null 2>&1; then
+    wget -q --show-progress -O "$destination" "$url"
+    return 0
+  fi
+
+  fail "Missing required downloader: curl or wget"
+}
+
+download_url_to_stdout() {
+  local url="$1"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url"
+    return 0
+  fi
+
+  if command -v wget >/dev/null 2>&1; then
+    wget -qO- "$url"
+    return 0
+  fi
+
+  fail "Missing required downloader: curl or wget"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -219,7 +277,7 @@ resolve_version() {
     fail "Unable to infer version from local archive name: ${archive_name}"
   fi
 
-  curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases/latest" \
+  download_url_to_stdout "https://api.github.com/repos/${REPO_SLUG}/releases/latest" \
     | parse_latest_release_tag
 }
 
@@ -241,7 +299,7 @@ download_release_archive() {
   if [[ "$DRY_RUN" == "yes" ]]; then
     return 0
   fi
-  curl -fsSL "$url" -o "$destination"
+  download_url_to_file "$url" "$destination"
 }
 
 download_release_checksum() {
@@ -257,7 +315,7 @@ download_release_checksum() {
   if [[ "$DRY_RUN" == "yes" ]]; then
     return 0
   fi
-  curl -fsSL "$url" -o "$destination"
+  download_url_to_file "$url" "$destination"
 }
 
 verify_archive_checksum() {
@@ -312,14 +370,57 @@ EOF
 install_profile_hooks() {
   local env_file="$1"
   local source_line="[[ -f \"$env_file\" ]] && source \"$env_file\""
-  append_source_line "$HOME/.bashrc" "$source_line"
-  append_source_line "$HOME/.zshrc" "$source_line"
-  if [[ -f "$HOME/.bash_profile" ]]; then
-    append_source_line "$HOME/.bash_profile" "$source_line"
+  local shell_name="${SHELL##*/}"
+  local candidates=()
+  local target=""
+
+  case "$shell_name" in
+    zsh)
+      candidates=("$HOME/.zshrc" "$HOME/.zprofile")
+      ;;
+    bash)
+      candidates=("$HOME/.bash_profile" "$HOME/.bashrc")
+      ;;
+    *)
+      candidates=("$HOME/.profile")
+      ;;
+  esac
+
+  for candidate in "${candidates[@]}"; do
+    mkdir -p "$(dirname "$candidate")" 2>/dev/null || true
+    if [[ -f "$candidate" ]]; then
+      if [[ -w "$candidate" ]]; then
+        target="$candidate"
+        break
+      fi
+      continue
+    fi
+    if touch "$candidate" 2>/dev/null; then
+      target="$candidate"
+      break
+    fi
+  done
+
+  if [[ -n "$target" ]]; then
+    append_source_line "$target" "$source_line"
+    log "Added shell hook to $(tildify "$target")"
+    case "$shell_name" in
+      zsh)
+        SHELL_REFRESH_COMMAND="exec \$SHELL"
+        ;;
+      bash)
+        SHELL_REFRESH_COMMAND="source $(tildify "$target")"
+        ;;
+      *)
+        SHELL_REFRESH_COMMAND="source $(tildify "$target")"
+        ;;
+    esac
+    return 0
   fi
-  if [[ -f "$HOME/.zprofile" ]]; then
-    append_source_line "$HOME/.zprofile" "$source_line"
-  fi
+
+  log "Could not auto-update shell profile for PATH/env hook"
+  printf '%s\n' "${Bold_White}Add this line manually:${Color_Off}"
+  printf '  %s\n' "$source_line"
 }
 
 write_wrapper() {
@@ -335,31 +436,6 @@ EOF
 }
 
 install_wrappers() {
-  write_wrapper "$BIN_DIR/taskflow-v0" '
-VIDA_HOME="${VIDA_HOME:-'"$INSTALL_ROOT"'}"
-VIDA_ROOT="${VIDA_ROOT:-$VIDA_HOME/current}"
-exec "$VIDA_ROOT/bin/taskflow-v0" "$@"
-'
-  write_wrapper "$BIN_DIR/codex-v0" '
-VIDA_HOME="${VIDA_HOME:-'"$INSTALL_ROOT"'}"
-VIDA_ROOT="${VIDA_ROOT:-$VIDA_HOME/current}"
-if [[ "${1:-}" == "help" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-  cat <<'\''USAGE'\''
-Codex v0 compatibility wrapper
-
-Usage:
-  codex-v0 help
-  codex-v0 overview [args...]
-
-Notes:
-  - `vida docflow` is the canonical installed launcher contract
-  - installed `codex-v0` is migration-only compatibility
-  - installed-mode compatibility remains `help|overview only`
-USAGE
-  exit 0
-fi
-exec "'"$BIN_DIR"'/vida" docflow "$@"
-'
   write_wrapper "$BIN_DIR/vida" '
 VIDA_HOME="${VIDA_HOME:-'"$INSTALL_ROOT"'}"
 VIDA_ROOT="${VIDA_ROOT:-$VIDA_HOME/current}"
@@ -380,16 +456,10 @@ USAGE
 
 docflow_usage() {
   cat <<'\''USAGE'\''
-VIDA DocFlow compatibility bridge
+VIDA DocFlow
 
 Usage:
-  vida docflow help
-  vida docflow overview [args...]
-
-Notes:
-  - installed-mode `vida docflow` compatibility contract is `help|overview only`
-  - the bundled donor runtime remains `codex-v0/codex.py`
-  - unsupported commands fail closed instead of passing through raw donor args
+  vida docflow <args...>
 USAGE
 }
 
@@ -397,24 +467,15 @@ sub="${1:-help}"
 case "$sub" in
   taskflow)
     shift
-    exec "'"$BIN_DIR"'/taskflow-v0" "$@"
+    exec "$VIDA_ROOT/bin/vida" taskflow "$@"
     ;;
   docflow)
     shift
-    docflow_sub="${1:-help}"
-    case "$docflow_sub" in
-      help|--help|-h)
-        docflow_usage
-        ;;
-      overview)
-        exec "$VIDA_ROOT/.venv/bin/python3" "$VIDA_ROOT/codex-v0/codex.py" "$@"
-        ;;
-      *)
-        printf "vida docflow: unsupported installed-mode command: %s\n\n" "$docflow_sub" >&2
-        docflow_usage >&2
-        exit 1
-        ;;
-    esac
+    if [[ "${1:-help}" == "help" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+      docflow_usage
+      exit 0
+    fi
+    exec "$VIDA_ROOT/bin/vida" docflow "$@"
     ;;
   doctor|upgrade|install|init|use)
     exec "$VIDA_HOME/installer/install.sh" "$sub" --root "$VIDA_HOME" --bin-dir "'"$BIN_DIR"'" "${@:2}"
@@ -434,24 +495,7 @@ esac
 }
 
 prepare_python_env() {
-  local release_root="$1"
-  local venv_dir="$release_root/.venv"
-  local requirements="$release_root/codex-v0/requirements-python.txt"
-  if [[ ! -f "$requirements" ]]; then
-    requirements="$release_root/install/requirements-python.txt"
-  fi
-  [[ -f "$requirements" ]] || fail "Missing runtime requirements: $requirements"
-
-  if [[ "$DRY_RUN" == "yes" ]]; then
-    log "Would create Python venv in ${venv_dir}"
-    log "Would install Python requirements from ${requirements}"
-    return 0
-  fi
-
-  python3 -m venv "$venv_dir"
-  "$venv_dir/bin/python3" -m ensurepip --upgrade >/dev/null 2>&1 || true
-  "$venv_dir/bin/python3" -m pip install --upgrade pip
-  "$venv_dir/bin/python3" -m pip install -r "$requirements"
+  return 0
 }
 
 ensure_runtime_config_scaffold() {
@@ -543,22 +587,7 @@ bootstrap_current_project() {
 }
 
 bootstrap_protocol_binding() {
-  local release_root="$1"
-  local runtime_bin="$release_root/bin/taskflow-v0"
-  [[ -x "$runtime_bin" ]] || fail "Missing bundled taskflow binary for protocol binding bootstrap: $runtime_bin"
-
-  if [[ "$DRY_RUN" == "yes" ]]; then
-    log "Would build protocol-binding compiled payload under ${release_root}/taskflow-v0/generated"
-    log "Would sync protocol-binding state into ${release_root}/.vida/state/taskflow-state.db"
-    return 0
-  fi
-
-  log "Building protocol-binding compiled payload"
-  VIDA_ROOT="$release_root" "$runtime_bin" protocol-binding build --json >/dev/null
-  log "Syncing protocol-binding state into the TaskFlow DB"
-  VIDA_ROOT="$release_root" "$runtime_bin" protocol-binding sync --json >/dev/null
-  log "Validating protocol-binding state"
-  VIDA_ROOT="$release_root" "$runtime_bin" protocol-binding check --json >/dev/null
+  return 0
 }
 
 install_management_script() {
@@ -576,7 +605,7 @@ install_management_script() {
   if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
     cp "${BASH_SOURCE[0]}" "$target"
   elif [[ -z "$ARCHIVE_FILE" ]]; then
-    curl -fsSL "https://github.com/${REPO_SLUG}/releases/download/${version}/vida-install.sh" -o "$target"
+    download_url_to_file "https://github.com/${REPO_SLUG}/releases/download/${version}/vida-install.sh" "$target"
   else
     fail "Unable to install management script from the current invocation while using a local archive."
   fi
@@ -688,9 +717,7 @@ install_release() {
 
   log "Installed VIDA ${version} into ${release_root}"
   log "Active release: ${current_link}"
-  log "Launchers: ${BIN_DIR}/vida ${BIN_DIR}/taskflow-v0"
-  log "Installed compatibility wrapper: ${BIN_DIR}/codex-v0 -> vida docflow"
-  log "Canonical DocFlow bridge: vida docflow -> codex-v0/codex.py"
+  log "Launchers: ${BIN_DIR}/vida"
   print_install_summary "$version" "$release_root" "$current_link" "$env_file"
 }
 
@@ -699,35 +726,21 @@ doctor() {
   local missing=0
   [[ -L "$current_link" || -d "$current_link" ]] || { log "Missing active release link: $current_link"; missing=1; }
   [[ -x "${BIN_DIR}/vida" ]] || { log "Missing launcher: ${BIN_DIR}/vida"; missing=1; }
-  [[ -x "${BIN_DIR}/taskflow-v0" ]] || { log "Missing launcher: ${BIN_DIR}/taskflow-v0"; missing=1; }
   [[ -f "${INSTALL_ROOT}/env.sh" ]] || { log "Missing env file: ${INSTALL_ROOT}/env.sh"; missing=1; }
   [[ -x "${INSTALL_ROOT}/installer/install.sh" ]] || { log "Missing installer management script: ${INSTALL_ROOT}/installer/install.sh"; missing=1; }
 
   if [[ -e "$current_link" ]]; then
-    [[ -x "${current_link}/bin/taskflow-v0" ]] || { log "Missing bundled taskflow binary"; missing=1; }
-    [[ -x "${current_link}/.venv/bin/python3" ]] || { log "Missing installer-managed Python runtime"; missing=1; }
-    [[ -f "${current_link}/codex-v0/codex.py" ]] || { log "Missing bundled codex runtime surface"; missing=1; }
+    [[ -x "${current_link}/bin/vida" ]] || { log "Missing bundled vida binary"; missing=1; }
     [[ -f "${current_link}/.codex/config.toml" ]] || { log "Missing bundled .codex config: ${current_link}/.codex/config.toml"; missing=1; }
     [[ -d "${current_link}/.codex/agents" ]] || { log "Missing bundled .codex agents directory: ${current_link}/.codex/agents"; missing=1; }
     [[ -f "${current_link}/AGENTS.sidecar.md" ]] || { log "Missing packaged project sidecar scaffold"; missing=1; }
     [[ -f "${current_link}/vida.config.yaml" ]] || { log "Missing scaffolded runtime config: ${current_link}/vida.config.yaml"; missing=1; }
     [[ -f "${current_link}/install/assets/vida.config.yaml.template" ]] || { log "Missing packaged runtime config template: ${current_link}/install/assets/vida.config.yaml.template"; missing=1; }
-    [[ -f "${current_link}/taskflow-v0/helpers/turso_task_store.py" ]] || { log "Missing installed helper: ${current_link}/taskflow-v0/helpers/turso_task_store.py"; missing=1; }
-    [[ -f "${current_link}/taskflow-v0/helpers/toon_render.py" ]] || { log "Missing installed helper: ${current_link}/taskflow-v0/helpers/toon_render.py"; missing=1; }
-    [[ -f "${current_link}/taskflow-v0/config/protocol_binding.seed.json" ]] || { log "Missing installed protocol-binding seed: ${current_link}/taskflow-v0/config/protocol_binding.seed.json"; missing=1; }
-    [[ -f "${current_link}/taskflow-v0/generated/protocol_binding.compiled.json" ]] || { log "Missing installed protocol-binding compiled payload: ${current_link}/taskflow-v0/generated/protocol_binding.compiled.json"; missing=1; }
-    [[ -f "${current_link}/.vida/state/taskflow-state.db" ]] || { log "Missing protocol-binding DB state: ${current_link}/.vida/state/taskflow-state.db"; missing=1; }
   fi
 
   if [[ "$missing" -eq 1 ]]; then
     fail "Doctor found missing installation surfaces."
   fi
-
-  if [[ -e "$current_link" ]]; then
-    VIDA_ROOT="$current_link" "${current_link}/bin/taskflow-v0" protocol-binding check --json >/dev/null || \
-      fail "Doctor found protocol-binding state drift or missing import."
-  fi
-
   log "Doctor check passed for ${INSTALL_ROOT}"
 }
 
@@ -740,7 +753,7 @@ use_release() {
 }
 
 main() {
-  require_cmd curl
+  command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || fail "Missing required downloader: curl or wget"
   require_cmd tar
   require_cmd mktemp
   require_cmd awk

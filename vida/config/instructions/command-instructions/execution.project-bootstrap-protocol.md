@@ -4,10 +4,12 @@ Purpose: define how VIDA can audit and scaffold the minimal project-owned artifa
 
 ## Core Contract
 
-1. Framework policy stays in `AGENTS.md` and `vida/config/instructions/*`.
+1. Framework policy stays in `AGENTS.md` and `vida/config/instructions/**`.
 2. Project bootstrap creates or audits only project-owned artifacts in `docs/*`, `docs/process/*`, and root `vida.config.yaml`.
 3. Bootstrap must never overwrite existing project files unless explicitly forced.
 4. Bootstrap is the first self-reproduction layer, not a replacement for project-specific implementation work.
+5. Host CLI agent-template selection/materialization is not part of bare `vida init`; it belongs to `runtime-instructions/work.host-cli-agent-setup-protocol` through `vida project-activator`.
+6. While project activation is pending, onboarding/configuration remains a bounded activation path, not TaskFlow execution.
 
 Framework template rule:
 
@@ -20,7 +22,7 @@ Framework template rule:
 Bootstrap reads:
 
 1. root `vida.config.yaml`
-2. `vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md`
+2. `runtime-instructions/bridge.project-overlay-protocol`
 3. optional `project_bootstrap.*` settings from the root overlay
 
 Fail-fast rule:
@@ -39,14 +41,16 @@ Minimum scaffoldable project artifacts:
 5. project environment/operations notes when the project needs them
 6. host-project operations doc resolved by the emitted overlay/bootstrap contract
 7. project process/agent-system doc when the project bootstrap contract declares it
+8. bootstrap carriers required to route later host CLI activation, without silently materializing the host CLI runtime tree itself
+9. activation-ready project docs/config placeholders that can be completed by `vida project-activator` from a bounded interview packet
 
 ## Commands
 
 ```bash
-taskflow-v0 config validate
-taskflow-v0 boot read-contract lean
-taskflow-v0 boot snapshot --json
-taskflow-v0 system snapshot
+vida taskflow config validate
+vida taskflow boot read-contract lean
+vida taskflow boot snapshot --json
+vida taskflow system snapshot
 ```
 
 ## Machine-Readable Contract
@@ -69,6 +73,8 @@ Bootstrap can:
 1. scaffold missing project docs/runbooks,
 2. emit a machine-readable project contract,
 3. verify that the project-owned artifact layer is present.
+4. leave host CLI activation explicitly pending until `vida project-activator` records the selected CLI system and materializes its template.
+5. hand off a bounded activation interview packet instead of silently inferring project identity or language policy.
 
 Bootstrap cannot:
 
@@ -76,6 +82,19 @@ Bootstrap cannot:
 2. replace live API validation,
 3. bypass user launch confirmation for implementation,
 4. invent project-specific executable commands beyond the bootstrap templates.
+5. silently copy one host CLI agent runtime tree (for example `.codex/**`) into every project during bare initialization.
+6. enter `vida taskflow` or any non-canonical external TaskFlow runtime merely to complete activation placeholders.
+
+Activation follow-through rule:
+
+1. `vida project-activator` is the canonical bounded mutation surface for:
+   - project id / project title onboarding,
+   - language-policy onboarding,
+   - safe default docs-root/path materialization,
+   - host CLI selection/materialization,
+   - activation logging receipts.
+2. The activator should expose a one-shot interview/apply path so the operator or agent can complete the minimum activation state in one bounded command.
+3. During this pending state, `vida docflow` is the lawful documentation/readiness companion surface and `vida taskflow` remains out of scope.
 
 ## Verification
 

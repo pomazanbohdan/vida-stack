@@ -2,34 +2,49 @@ version: 1
 roles:
   - role_id: party_chat_facilitator
     base_role: business_analyst
-    description: Facilitates Party Chat framing, board assembly, DEI checks, and synthesis boundaries.
+    description: Facilitates Party Chat scope framing, board assembly, DEI checks, and synthesis boundaries so the council stays inside one explicit decision surface.
   - role_id: party_chat_architect
     base_role: worker
-    description: Architecture-first council seat for system shape, structure, and boundary design.
+    description: Architecture-first council seat for system shape, structure, boundary design, and implementation-constraint framing before execution changes are proposed.
   - role_id: party_chat_runtime_systems
     base_role: worker
-    description: Runtime and orchestration seat for execution substrate, operations, and state transitions.
+    description: Runtime and orchestration seat for execution substrate, operator-facing runtime behavior, and state-transition consequences.
   - role_id: party_chat_quality_verification
     base_role: verifier
-    description: Verification seat for critique, acceptance criteria, failure signals, and confidence.
+    description: Verification seat for critique, acceptance-criteria conformance, failure signals, and confidence in closure readiness.
   - role_id: party_chat_delivery_cost
     base_role: pm
-    description: Delivery and cost trade-off seat for feasibility, rollout shape, and sequencing.
+    description: Delivery and cost trade-off seat for feasibility, rollout shape, sequencing, and bounded budget consequences.
   - role_id: party_chat_product_scope
     base_role: pm
-    description: Product scope seat for outcome framing, prioritization, and user-facing consequences.
+    description: Product scope seat for outcome framing, prioritization, and user-facing consequences of the proposed change.
+  - role_id: party_chat_system_analyst
+    base_role: business_analyst
+    description: System-analysis seat for requirements decomposition, business-rule tracing, interface expectations, and ambiguity removal before execution.
+  - role_id: party_chat_product_designer
+    base_role: business_analyst
+    description: Product-design seat for user flows, interaction shape, information hierarchy, and experience constraints that should guide implementation.
   - role_id: party_chat_security_safety
     base_role: verifier
-    description: Specialty seat for security and safety concerns in Party Chat escalation boards.
+    description: Specialty seat for security and safety concerns, abuse cases, and fail-closed risk posture in Party Chat escalation boards.
   - role_id: party_chat_sre_observability
     base_role: coach
-    description: Specialty seat for reliability, observability, and operational readiness concerns.
+    description: Specialty seat for reliability, observability, and operational-readiness conformance before work is considered ready to proceed.
+  - role_id: party_chat_qa_tester
+    base_role: verifier
+    description: QA and testing seat for scenario coverage, failure modes, regression risk, and executable test expectations.
+  - role_id: party_chat_accessibility_ux
+    base_role: coach
+    description: Accessibility and UX conformance seat for usability risks, inclusive interaction review, and interface-quality rework guidance.
   - role_id: party_chat_data_contracts
     base_role: worker
-    description: Specialty seat for schemas, contracts, and data boundary reasoning.
+    description: Specialty seat for schemas, contracts, compatibility surfaces, and data-boundary reasoning.
   - role_id: party_chat_dx_tooling
     base_role: worker
-    description: Specialty seat for tooling, developer experience, and operator ergonomics.
+    description: Specialty seat for tooling, developer experience, operator ergonomics, and workflow friction reduction.
   - role_id: party_chat_pm_process
     base_role: pm
-    description: Specialty seat for delivery process, sequencing, and escalation workflow.
+    description: Specialty seat for delivery process, sequencing, escalation workflow, and route-level governance hygiene.
+  - role_id: party_chat_release_manager
+    base_role: pm
+    description: Release-management seat for rollout gating, release slicing, dependency timing, and go/no-go coordination signals.

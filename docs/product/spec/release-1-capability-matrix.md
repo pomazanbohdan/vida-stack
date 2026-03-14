@@ -138,13 +138,13 @@ Provide the first usable Release-1 shell that can initialize, inspect, and gover
 
 1. `crates/vida/**`
 2. `crates/taskflow-*/**`
-3. bounded bridge donors under `taskflow-v0/**`
+3. bounded compatibility/runtime-support donors under the active TaskFlow runtime-family bridge surfaces
 
 ### 4.8 Operator And Proof Surface
 
 1. `vida` boot/init/status/doctor families
 2. protocol-binding status and check surfaces
-3. `codex.py readiness-check`
+3. `vida docflow readiness-check`
 4. bounded runtime boot and restore proofs
 
 ### 4.9 Failure Mode

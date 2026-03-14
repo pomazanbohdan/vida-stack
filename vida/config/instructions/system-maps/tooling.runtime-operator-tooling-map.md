@@ -14,18 +14,18 @@ Read this map when:
 ## Routing
 
 1. health-check semantics:
-   - continue to `vida/config/instructions/runtime-instructions/work.execution-health-check-protocol.md`
+   - continue to `runtime-instructions/work.execution-health-check-protocol`
 2. command discipline / temp artifacts / command boundary:
-   - continue to `vida/config/instructions/runtime-instructions/work.command-execution-discipline-protocol.md`
+   - continue to `runtime-instructions/work.command-execution-discipline-protocol`
 3. tracked execution lifecycle and TaskFlow law:
-   - continue to `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
+   - continue to `runtime-instructions/work.taskflow-protocol`
 4. task-state workflow wrapper law:
-   - continue to `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md`
+   - continue to `runtime-instructions/runtime.task-state-telemetry-protocol`
 5. script/runtime implementation boundary:
-   - continue to `vida/config/instructions/system-maps/migration.script-runtime-architecture-map.md`
+   - continue to `system-maps/migration.script-runtime-architecture-map`
 6. migration-only wrapper catalog:
-   - continue to `vida/config/instructions/command-instructions/migration.pack-wrapper-note.md`
-   - continue to `vida/config/instructions/system-maps/migration.runtime-transition-map.md`
+   - continue to `command-instructions/migration.pack-wrapper-note`
+   - continue to `system-maps/migration.runtime-transition-map`
 
 ## Operator Entry Surfaces
 
@@ -34,10 +34,8 @@ Read this map when:
 Fast operator sanity check:
 
 ```bash
-nim c taskflow-v0/src/vida.nim
-nim c -r taskflow-v0/tests/test_boot_profile.nim
-nim c -r taskflow-v0/tests/test_worker_packet.nim
-nim c -r taskflow-v0/tests/test_kernel_runtime.nim
+vida taskflow help
+cargo test -p vida --test boot_smoke -- --nocapture
 ```
 
 ### Workflow Wrappers
@@ -56,8 +54,8 @@ bash beads-workflow.sh finish <id> "All ACs met"
 ### Boot Preflight
 
 ```bash
-taskflow-v0 boot run lean <task_id>
-taskflow-v0 boot verify-receipt <task_id> [profile]
+vida taskflow boot run lean <task_id>
+vida taskflow boot verify-receipt <task_id> [profile]
 ```
 
 ### Context Compression

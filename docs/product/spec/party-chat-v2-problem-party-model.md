@@ -45,11 +45,16 @@ The Party Chat v2 integration recognizes these project roles:
 4. `party_chat_quality_verification`
 5. `party_chat_delivery_cost`
 6. `party_chat_product_scope`
-7. `party_chat_security_safety`
-8. `party_chat_sre_observability`
-9. `party_chat_data_contracts`
-10. `party_chat_dx_tooling`
-11. `party_chat_pm_process`
+7. `party_chat_system_analyst`
+8. `party_chat_product_designer`
+9. `party_chat_security_safety`
+10. `party_chat_sre_observability`
+11. `party_chat_qa_tester`
+12. `party_chat_accessibility_ux`
+13. `party_chat_data_contracts`
+14. `party_chat_dx_tooling`
+15. `party_chat_pm_process`
+16. `party_chat_release_manager`
 
 ### 3.2 Board Sizes
 
@@ -71,6 +76,22 @@ Default board presets:
    - `party_chat_data_contracts`
    - `party_chat_dx_tooling`
    - `party_chat_pm_process`
+3. `modern_full`
+   - `party_chat_system_analyst`
+   - `party_chat_product_designer`
+   - `party_chat_architect`
+   - `party_chat_runtime_systems`
+   - `party_chat_quality_verification`
+   - `party_chat_qa_tester`
+   - `party_chat_delivery_cost`
+   - `party_chat_product_scope`
+   - `party_chat_security_safety`
+   - `party_chat_sre_observability`
+   - `party_chat_accessibility_ux`
+   - `party_chat_data_contracts`
+   - `party_chat_dx_tooling`
+   - `party_chat_pm_process`
+   - `party_chat_release_manager`
 
 The facilitator remains a separate orchestration posture and is attached to the manifest independently of the board role list.
 
@@ -82,7 +103,7 @@ Each Party Chat project role must derive from a lawful framework base role:
 2. delivery/scope/process roles derive from `pm`,
 3. verification-heavy roles derive from `verifier`,
 4. architecture/runtime/data/dx specialist roles derive from `worker`,
-5. review-heavy observability and trade-off roles may derive from `coach`.
+5. review-heavy observability, accessibility, and conformance roles may derive from `coach`.
 
 Project roles may narrow posture, but they must not grant stronger authority than their base role.
 
@@ -173,16 +194,16 @@ Party Chat is a project-level integration, but it is lawful only because the cur
 Framework alignment points:
 
 1. bounded escalation instead of default free-form discussion:
-   - `vida/config/instructions/runtime-instructions/work.problem-party-protocol.md` already defines `problem_party` as optional, escalation-only, structured, and bounded by board size, round count, and token budget,
+   - `runtime-instructions/work.problem-party-protocol.md` already defines `problem_party` as optional, escalation-only, structured, and bounded by board size, round count, and token budget,
    - Party Chat uses this exact slot instead of inventing a second ungoverned discussion lane.
 2. orchestration law already prefers structured conflict handling:
-   - `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md` already says materially conflict-heavy but bounded problems should prefer `problem-party-protocol.md` over ad hoc debate and require a structured decision artifact before resuming the main flow,
+   - `instruction-contracts/core.orchestration-protocol.md` already says materially conflict-heavy but bounded problems should prefer `problem-party-protocol.md` over ad hoc debate and require a structured decision artifact before resuming the main flow,
    - Party Chat strengthens that artifact rather than bypassing it.
 3. project-owned roles are already lawful under framework validation:
-   - `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md` already allows project roles, skills, profiles, and flow sets when they resolve through `vida.config.yaml` and pass fail-closed validation,
+   - `runtime-instructions/work.project-agent-extension-protocol.md` already allows project roles, skills, profiles, and flow sets when they resolve through `vida.config.yaml` and pass fail-closed validation,
    - Party Chat therefore uses project council roles as validated extensions, not as hidden prompt-only authority.
 4. lane-class selection already supports bounded role routing before deeper flow handoff:
-   - `vida/config/instructions/runtime-instructions/work.agent-lane-selection-protocol.md` already supports fixed or auto lane-class selection and bounded conversational role modes with lawful handoff,
+   - `runtime-instructions/work.agent-lane-selection-protocol.md` already supports fixed or auto lane-class selection and bounded conversational role modes with lawful handoff,
    - Party Chat remains downstream of that law and does not replace ordinary scope or PBI discussion.
 5. framework-owned safety boundaries remain intact:
    - Party Chat may enrich role composition and model routing,
@@ -201,7 +222,7 @@ This integration is considered wired when:
 1. the spec is saved in `docs/product/spec/**`,
 2. Party Chat project roles, skills, profiles, and flow sets exist under `docs/process/agent-extensions/**`,
 3. `vida.config.yaml` enables those project registries,
-4. `taskflow-v0` exposes a `problem-party` command,
+4. the active TaskFlow runtime family exposes a `problem-party` command,
 5. the helper consumes the project registries when rendering board manifests,
 6. runtime tests prove manifest rendering and receipt writing.
 

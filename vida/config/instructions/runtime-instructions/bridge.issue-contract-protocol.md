@@ -6,8 +6,8 @@ Scope:
 
 1. Canonical bridge for `bug-as-spec` style requests.
 2. Applies when the incoming issue text is the main spec input or when analysis must decide whether a reported bug is an equivalent fix versus a spec/product-contract delta.
-3. Works with `vida/config/instructions/command-instructions/execution.bug-fix-protocol.md`, `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`, and `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`.
-4. Consumes `vida/config/instructions/runtime-instructions/work.spec-intake-protocol.md` when an incoming issue/release signal is still too mixed or scope-bearing for direct issue-contract narrowing.
+3. Works with `command-instructions/execution.bug-fix-protocol`, `command-instructions/execution.implement-execution-protocol`, and `instruction-contracts/core.agent-system-protocol`.
+4. Consumes `runtime-instructions/work.spec-intake-protocol` when an incoming issue/release signal is still too mixed or scope-bearing for direct issue-contract narrowing.
 
 ## Core Principle
 
@@ -120,7 +120,7 @@ the runtime should emit an `issue-split` artifact that preserves:
 
 If the issue classification or expected behavior depends on external facts:
 
-1. run `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md`,
+1. run `runtime-instructions/work.web-validation-protocol`,
 2. mark `wvp_required=yes`,
 3. record `wvp_status`,
 4. do not mark `writer_ready` while WVP is still `conflicting` or `unknown`.
@@ -148,7 +148,7 @@ Spec synchronization happens in two distinct moments:
 2. post-fix:
    - when a completed equivalent fix changes or clarifies the documented contract
 
-When `status=spec_delta_required`, materialize the delta via `vida/config/instructions/runtime-instructions/work.spec-delta-protocol.md` instead of leaving the reconciliation request implicit.
+When `status=spec_delta_required`, materialize the delta via `runtime-instructions/work.spec-delta-protocol` instead of leaving the reconciliation request implicit.
 
 ## Fail Conditions
 

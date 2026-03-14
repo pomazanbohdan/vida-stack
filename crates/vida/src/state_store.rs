@@ -298,6 +298,27 @@ impl StateStore {
         })
     }
 
+    pub async fn export_tasks_to_jsonl(
+        &self,
+        target_path: &Path,
+    ) -> Result<usize, StateStoreError> {
+        let tasks = self.all_tasks().await?;
+        let mut body = String::new();
+        for task in tasks {
+            body.push_str(&serde_json::to_string(&task).map_err(|error| {
+                StateStoreError::InvalidTaskRecord {
+                    reason: format!("failed to serialize task export row: {error}"),
+                }
+            })?);
+            body.push('\n');
+        }
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(target_path, body)?;
+        Ok(self.all_tasks().await?.len())
+    }
+
     pub async fn list_tasks(
         &self,
         status: Option<&str>,
@@ -705,6 +726,173 @@ impl StateStore {
 
         self.persist_task_record(updated).await?;
         Ok(removed)
+    }
+
+    pub async fn create_task(
+        &self,
+        task_id: &str,
+        title: &str,
+        description: &str,
+        issue_type: &str,
+        status: &str,
+        priority: u32,
+        parent_id: Option<&str>,
+        labels: &[String],
+        created_by: &str,
+        source_repo: &str,
+    ) -> Result<TaskRecord, StateStoreError> {
+        let task_id = task_id.trim();
+        let title = title.trim();
+        if task_id.is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: "task id is empty".to_string(),
+            });
+        }
+        if title.is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!("task `{task_id}` title is empty"),
+            });
+        }
+        if self.show_task(task_id).await.is_ok() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!("task already exists: {task_id}"),
+            });
+        }
+        if let Some(parent_id) = parent_id.filter(|value| !value.trim().is_empty()) {
+            if self.show_task(parent_id).await.is_err() {
+                return Err(StateStoreError::MissingTask {
+                    task_id: parent_id.to_string(),
+                });
+            }
+        }
+
+        let now = unix_timestamp_nanos().to_string();
+        let mut normalized_labels = labels
+            .iter()
+            .map(|label| label.trim().to_string())
+            .filter(|label| !label.is_empty())
+            .collect::<Vec<_>>();
+        normalized_labels.sort();
+        normalized_labels.dedup();
+
+        let mut dependencies = Vec::new();
+        if let Some(parent_id) = parent_id.filter(|value| !value.trim().is_empty()) {
+            dependencies.push(TaskDependencyRecord {
+                issue_id: task_id.to_string(),
+                depends_on_id: parent_id.to_string(),
+                edge_type: "parent-child".to_string(),
+                created_at: now.clone(),
+                created_by: created_by.to_string(),
+                metadata: "{}".to_string(),
+                thread_id: String::new(),
+            });
+        }
+
+        let mut task = TaskRecord {
+            id: task_id.to_string(),
+            title: title.to_string(),
+            description: description.to_string(),
+            status: status.to_string(),
+            priority,
+            issue_type: issue_type.to_string(),
+            created_at: now.clone(),
+            created_by: created_by.to_string(),
+            updated_at: now.clone(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: source_repo.to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: normalized_labels,
+            dependencies,
+        };
+        if status == "closed" {
+            task.closed_at = Some(now);
+        }
+
+        let mut tasks = self.all_tasks().await?;
+        tasks.push(task.clone());
+        let issues = Self::validate_task_graph_rows(&tasks);
+        if let Some(first) = issues.first() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "task creation would create invalid graph: {} on {}",
+                    first.issue_type, first.issue_id
+                ),
+            });
+        }
+
+        self.persist_task_record(task.clone()).await?;
+        Ok(task)
+    }
+
+    pub async fn update_task(
+        &self,
+        task_id: &str,
+        status: Option<&str>,
+        notes: Option<&str>,
+        description: Option<&str>,
+        add_labels: &[String],
+        remove_labels: &[String],
+        set_labels: Option<&[String]>,
+    ) -> Result<TaskRecord, StateStoreError> {
+        let mut task = self.show_task(task_id).await?;
+        if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
+            task.status = status.to_string();
+            if status == "closed" {
+                if task.closed_at.is_none() {
+                    task.closed_at = Some(unix_timestamp_nanos().to_string());
+                }
+            } else {
+                task.closed_at = None;
+                task.close_reason = None;
+            }
+        }
+        if let Some(notes) = notes {
+            task.notes = Some(notes.to_string());
+        }
+        if let Some(description) = description {
+            task.description = description.to_string();
+        }
+        if let Some(set_labels) = set_labels {
+            task.labels = set_labels
+                .iter()
+                .map(|label| label.trim().to_string())
+                .filter(|label| !label.is_empty())
+                .collect::<Vec<_>>();
+        }
+        for label in add_labels {
+            let label = label.trim();
+            if label.is_empty() || task.labels.iter().any(|existing| existing == label) {
+                continue;
+            }
+            task.labels.push(label.to_string());
+        }
+        if !remove_labels.is_empty() {
+            task.labels
+                .retain(|label| !remove_labels.iter().any(|remove| remove == label));
+        }
+        task.labels.sort();
+        task.labels.dedup();
+        task.updated_at = unix_timestamp_nanos().to_string();
+        self.persist_task_record(task.clone()).await?;
+        Ok(task)
+    }
+
+    pub async fn close_task(
+        &self,
+        task_id: &str,
+        reason: &str,
+    ) -> Result<TaskRecord, StateStoreError> {
+        let mut task = self.show_task(task_id).await?;
+        let now = unix_timestamp_nanos().to_string();
+        task.status = "closed".to_string();
+        task.updated_at = now.clone();
+        task.closed_at = Some(now);
+        task.close_reason = Some(reason.to_string());
+        self.persist_task_record(task.clone()).await?;
+        Ok(task)
     }
 
     pub async fn critical_path(&self) -> Result<TaskCriticalPath, StateStoreError> {
@@ -1515,6 +1703,19 @@ impl StateStore {
     }
 
     #[allow(dead_code)]
+    pub async fn record_run_graph_dispatch_receipt(
+        &self,
+        receipt: &RunGraphDispatchReceipt,
+    ) -> Result<(), StateStoreError> {
+        let _: Option<RunGraphDispatchReceipt> = self
+            .db
+            .upsert(("run_graph_dispatch_receipt", receipt.run_id.as_str()))
+            .content(receipt.clone())
+            .await?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
     pub async fn run_graph_status(&self, run_id: &str) -> Result<RunGraphStatus, StateStoreError> {
         let execution: Option<ExecutionPlanStateRow> =
             self.db.select(("execution_plan_state", run_id)).await?;
@@ -1569,6 +1770,41 @@ impl StateStore {
             return Ok(None);
         };
         Ok(Some(self.run_graph_status(&latest.run_id).await?))
+    }
+
+    pub async fn latest_run_graph_dispatch_receipt_summary(
+        &self,
+    ) -> Result<Option<RunGraphDispatchReceiptSummary>, StateStoreError> {
+        let mut query = self
+            .db
+            .query("SELECT * FROM run_graph_dispatch_receipt ORDER BY recorded_at DESC LIMIT 1;")
+            .await?;
+        let rows: Vec<RunGraphDispatchReceipt> = query.take(0)?;
+        let Some(latest) = rows.into_iter().next() else {
+            return Ok(None);
+        };
+        Ok(Some(RunGraphDispatchReceiptSummary::from_receipt(latest)))
+    }
+
+    pub async fn latest_run_graph_dispatch_receipt(
+        &self,
+    ) -> Result<Option<RunGraphDispatchReceipt>, StateStoreError> {
+        let mut query = self
+            .db
+            .query("SELECT * FROM run_graph_dispatch_receipt ORDER BY recorded_at DESC LIMIT 1;")
+            .await?;
+        let rows: Vec<RunGraphDispatchReceipt> = query.take(0)?;
+        Ok(rows.into_iter().next())
+    }
+
+    pub async fn run_graph_dispatch_receipt(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<RunGraphDispatchReceipt>, StateStoreError> {
+        self.db
+            .select(("run_graph_dispatch_receipt", run_id))
+            .await
+            .map_err(Into::into)
     }
 
     pub async fn latest_run_graph_recovery_summary(
@@ -3386,6 +3622,34 @@ struct ResumabilityCapsuleRow {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub struct RunGraphDispatchReceipt {
+    pub run_id: String,
+    pub dispatch_target: String,
+    pub dispatch_status: String,
+    pub dispatch_kind: String,
+    pub dispatch_surface: Option<String>,
+    pub dispatch_command: Option<String>,
+    pub dispatch_packet_path: Option<String>,
+    pub dispatch_result_path: Option<String>,
+    pub downstream_dispatch_target: Option<String>,
+    pub downstream_dispatch_command: Option<String>,
+    pub downstream_dispatch_note: Option<String>,
+    pub downstream_dispatch_ready: bool,
+    pub downstream_dispatch_blockers: Vec<String>,
+    pub downstream_dispatch_packet_path: Option<String>,
+    pub downstream_dispatch_status: Option<String>,
+    pub downstream_dispatch_result_path: Option<String>,
+    pub downstream_dispatch_trace_path: Option<String>,
+    pub downstream_dispatch_executed_count: u32,
+    pub downstream_dispatch_last_target: Option<String>,
+    pub activation_agent_type: Option<String>,
+    pub activation_runtime_role: Option<String>,
+    pub selected_backend: Option<String>,
+    pub recorded_at: String,
+}
+
+#[allow(dead_code)]
 #[derive(Debug, serde::Serialize)]
 pub struct RunGraphStatus {
     pub run_id: String,
@@ -3580,6 +3844,97 @@ impl RunGraphCheckpointSummary {
             self.checkpoint_kind,
             self.resume_target,
             self.recovery_ready
+        )
+    }
+}
+
+#[derive(Debug, serde::Serialize, PartialEq, Eq)]
+pub struct RunGraphDispatchReceiptSummary {
+    pub run_id: String,
+    pub dispatch_target: String,
+    pub dispatch_status: String,
+    pub dispatch_kind: String,
+    pub dispatch_surface: Option<String>,
+    pub dispatch_command: Option<String>,
+    pub dispatch_packet_path: Option<String>,
+    pub dispatch_result_path: Option<String>,
+    pub downstream_dispatch_target: Option<String>,
+    pub downstream_dispatch_command: Option<String>,
+    pub downstream_dispatch_note: Option<String>,
+    pub downstream_dispatch_ready: bool,
+    pub downstream_dispatch_blockers: Vec<String>,
+    pub downstream_dispatch_packet_path: Option<String>,
+    pub downstream_dispatch_status: Option<String>,
+    pub downstream_dispatch_result_path: Option<String>,
+    pub downstream_dispatch_trace_path: Option<String>,
+    pub downstream_dispatch_executed_count: u32,
+    pub downstream_dispatch_last_target: Option<String>,
+    pub activation_agent_type: Option<String>,
+    pub activation_runtime_role: Option<String>,
+    pub selected_backend: Option<String>,
+    pub recorded_at: String,
+}
+
+#[allow(dead_code)]
+impl RunGraphDispatchReceiptSummary {
+    fn from_receipt(receipt: RunGraphDispatchReceipt) -> Self {
+        Self {
+            run_id: receipt.run_id,
+            dispatch_target: receipt.dispatch_target,
+            dispatch_status: receipt.dispatch_status,
+            dispatch_kind: receipt.dispatch_kind,
+            dispatch_surface: receipt.dispatch_surface,
+            dispatch_command: receipt.dispatch_command,
+            dispatch_packet_path: receipt.dispatch_packet_path,
+            dispatch_result_path: receipt.dispatch_result_path,
+            downstream_dispatch_target: receipt.downstream_dispatch_target,
+            downstream_dispatch_command: receipt.downstream_dispatch_command,
+            downstream_dispatch_note: receipt.downstream_dispatch_note,
+            downstream_dispatch_ready: receipt.downstream_dispatch_ready,
+            downstream_dispatch_blockers: receipt.downstream_dispatch_blockers,
+            downstream_dispatch_packet_path: receipt.downstream_dispatch_packet_path,
+            downstream_dispatch_status: receipt.downstream_dispatch_status,
+            downstream_dispatch_result_path: receipt.downstream_dispatch_result_path,
+            downstream_dispatch_trace_path: receipt.downstream_dispatch_trace_path,
+            downstream_dispatch_executed_count: receipt.downstream_dispatch_executed_count,
+            downstream_dispatch_last_target: receipt.downstream_dispatch_last_target,
+            activation_agent_type: receipt.activation_agent_type,
+            activation_runtime_role: receipt.activation_runtime_role,
+            selected_backend: receipt.selected_backend,
+            recorded_at: receipt.recorded_at,
+        }
+    }
+
+    pub fn as_display(&self) -> String {
+        format!(
+            "run={} target={} status={} kind={} surface={} command={} packet={} result={} next_target={} next_command={} next_note={} next_ready={} next_blockers={} next_packet={} next_status={} next_result={} next_trace={} next_count={} next_last_target={} agent={} runtime_role={} backend={} recorded_at={}",
+            self.run_id,
+            self.dispatch_target,
+            self.dispatch_status,
+            self.dispatch_kind,
+            self.dispatch_surface.as_deref().unwrap_or("none"),
+            self.dispatch_command.as_deref().unwrap_or("none"),
+            self.dispatch_packet_path.as_deref().unwrap_or("none"),
+            self.dispatch_result_path.as_deref().unwrap_or("none"),
+            self.downstream_dispatch_target.as_deref().unwrap_or("none"),
+            self.downstream_dispatch_command.as_deref().unwrap_or("none"),
+            self.downstream_dispatch_note.as_deref().unwrap_or("none"),
+            self.downstream_dispatch_ready,
+            if self.downstream_dispatch_blockers.is_empty() {
+                "none".to_string()
+            } else {
+                self.downstream_dispatch_blockers.join("|")
+            },
+            self.downstream_dispatch_packet_path.as_deref().unwrap_or("none"),
+            self.downstream_dispatch_status.as_deref().unwrap_or("none"),
+            self.downstream_dispatch_result_path.as_deref().unwrap_or("none"),
+            self.downstream_dispatch_trace_path.as_deref().unwrap_or("none"),
+            self.downstream_dispatch_executed_count,
+            self.downstream_dispatch_last_target.as_deref().unwrap_or("none"),
+            self.activation_agent_type.as_deref().unwrap_or("none"),
+            self.activation_runtime_role.as_deref().unwrap_or("none"),
+            self.selected_backend.as_deref().unwrap_or("none"),
+            self.recorded_at
         )
     }
 }

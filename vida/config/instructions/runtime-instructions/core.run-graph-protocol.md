@@ -24,10 +24,10 @@ Activate this protocol when at least one is true:
 
 Primary activating companions:
 
-1. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-2. `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
-3. `vida/config/instructions/runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`
-4. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
+1. `instruction-contracts/core.orchestration-protocol`
+2. `runtime-instructions/core.context-governance-protocol`
+3. `runtime-instructions/recovery.checkpoint-replay-recovery-protocol`
+4. `instruction-contracts/bridge.instruction-activation-protocol`
 
 Minimum fields:
 

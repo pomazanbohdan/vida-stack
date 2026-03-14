@@ -128,14 +128,14 @@ The executable law home for this model is `vida/config/instructions/**`.
 
 Target families:
 
-1. flat canonical Markdown authoring artifacts in `vida/config/instructions/*.md`
-2. projected machine-readable artifacts in `vida/config/instructions/{agent_definitions,instruction_contracts,prompt_templates,skills,bundles,activation}/**`
+1. flat canonical Markdown authoring artifacts under `vida/config/instructions/**/*.md`
+2. projected machine-readable artifacts under `vida/config/instructions/{agent_definitions,instruction_contracts,prompt_templates,skills,bundles,activation}/**`
 
 Canonical flat naming rule:
 
 1. active Markdown instruction artifacts stay in the root of `vida/config/instructions/`,
 2. logical family placement is expressed by pseudo-directory prefixes in the filename and in `artifact_path`,
-3. example: `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
+3. example: `agent-definitions/entry.orchestrator-entry.md`
 
 ## 5.1 Authoring Format
 
@@ -168,9 +168,9 @@ Canonical rule:
 This spec absorbs and supersedes product-instruction semantics previously scattered across:
 
 1. `docs/process/framework-source-lineage-index.md`
-2. `vida/config/instructions/agent-definitions/model.agent-definitions-contract.md`
+2. `agent-definitions/model.agent-definitions-contract.md`
 3. `docs/product/spec/instruction-artifact-model.md`
-4. `vida/config/instructions/prompt-templates/worker.packet-templates.md`
+4. `prompt-templates/worker.packet-templates.md`
 5. deleted historical YAML template/schema input formerly at `docs/framework/templates/instruction-contract.yaml`
 6. deleted historical YAML template/schema input formerly at `docs/framework/templates/prompt-template-config.yaml`
 

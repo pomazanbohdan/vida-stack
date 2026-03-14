@@ -40,23 +40,23 @@ Run these checks in order:
 Use these commands as the minimum validation set:
 
 ```bash
-taskflow-v0 status
-taskflow-v0 boot snapshot --json --top-limit 5 --ready-limit 5
-python3 codex-v0/codex.py protocol-coverage-check --profile active-canon
+vida status --json
+vida orchestrator-init --json
+vida docflow protocol-coverage-check --profile active-canon
 ```
 
 Optional bounded follow-up when an active unit already exists:
 
 ```bash
-taskflow-v0 task ready --json
-taskflow-v0 task show <task-id> --json
+vida taskflow task ready --json
+vida taskflow task show <task-id> --json
 ```
 
 ## Passing Conditions
 
 A session is boot-ready only when all are true:
 
-1. `taskflow-v0 status` resolves to this repository root,
+1. `vida status --json` resolves to this repository root,
 2. lifecycle truth is `.vida/state/taskflow-state.db`,
 3. no active path depends on installed shim roots outside this repository,
 4. no active path depends on `.beads/issues.jsonl` or other legacy task artifacts,
@@ -70,7 +70,7 @@ A session is boot-ready only when all are true:
 
 Do not begin write-producing work when any of these is true:
 
-1. `taskflow-v0 status` points outside the repository root,
+1. `vida status --json` points outside the repository root,
 2. boot snapshot is unreadable or inconsistent with the expected queue,
 3. the session cannot name the active process protocols,
 4. the session cannot name the active skill set or `no_applicable_skill`,

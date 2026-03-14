@@ -51,8 +51,8 @@ The minimum scope is:
 4. `docs/product/research/**` when active,
 5. `docs/process/**`,
 6. `docs/project-memory/**`,
-7. `vida/config/instructions/*.md`,
-8. `vida/config/instructions/*.yaml`,
+7. flat framework Markdown authoring artifacts under `vida/config/instructions/**/*.md`,
+8. framework machine-readable artifacts under `vida/config/instructions/**/*.yaml`,
 9. active machine-readable product-law families under `vida/config/**`.
 
 Framework plans and research remain active framework inputs and must be inventory-visible when they are active canonical inputs, but they do not become product canon merely by being inventoried.
@@ -80,7 +80,7 @@ Additional fields may be present, but they must not weaken or contradict the can
 
 The canonical registry write path for the current architecture is:
 
-1. `vida/config/codex-registry.current.jsonl`
+1. `vida/config/docflow-registry.current.jsonl`
 
 Rules:
 

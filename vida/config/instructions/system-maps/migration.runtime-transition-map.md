@@ -4,22 +4,22 @@ Purpose: provide one canonical transition registry from legacy helper surfaces t
 
 ## Active Transitional Runtime
 
-Use `taskflow-v0` as the canonical runtime surface for these domains:
+Use `vida taskflow` as the canonical runtime surface for these domains:
 
-1. `boot-packet.py` / `boot-profile.sh` / `vida-boot-snapshot.py` -> `taskflow-v0 boot ...`
-2. `worker-packet-gate.py` -> `taskflow-v0 worker ...`
-3. route snapshot/receipt helpers -> `taskflow-v0 route ...`
-4. kernel config introspection -> `taskflow-v0 kernel ...`
-5. task store and import/export -> `taskflow-v0 task ...`
-6. TaskFlow/readiness views -> `taskflow-v0 todo ...`
-7. run-graph -> `taskflow-v0 run-graph ...`
-8. execution auth / coach / verification prompt -> `taskflow-v0 auth ...`, `taskflow-v0 coach ...`, `taskflow-v0 coach-decision ...`, `taskflow-v0 verification-prompt ...`
-9. worker runtime inventory and leases -> `taskflow-v0 system ...`, `taskflow-v0 registry ...`, `taskflow-v0 lease ...`, `taskflow-v0 pool ...`
-10. context/memory/spec surfaces -> `taskflow-v0 context ...`, `taskflow-v0 context-capsule ...`, `taskflow-v0 memory ...`, `taskflow-v0 spec-intake ...`, `taskflow-v0 spec-delta ...`, `taskflow-v0 draft-execution-spec ...`
+1. `boot-packet.py` / `boot-profile.sh` / `vida-boot-snapshot.py` -> `vida taskflow boot ...`
+2. `worker-packet-gate.py` -> `vida taskflow worker ...`
+3. route snapshot/receipt helpers -> `vida taskflow route ...`
+4. kernel config introspection -> `vida taskflow kernel ...`
+5. task store and import/export -> `vida taskflow task ...`
+6. TaskFlow/readiness views -> `vida taskflow todo ...`
+7. run-graph -> `vida taskflow run-graph ...`
+8. execution auth / coach / verification prompt -> `vida taskflow auth ...`, `vida taskflow coach ...`, `vida taskflow coach-decision ...`, `vida taskflow verification-prompt ...`
+9. worker runtime inventory and leases -> `vida taskflow system ...`, `vida taskflow registry ...`, `vida taskflow lease ...`, `vida taskflow pool ...`
+10. context/memory/spec surfaces -> `vida taskflow context ...`, `vida taskflow context-capsule ...`, `vida taskflow memory ...`, `vida taskflow spec-intake ...`, `vida taskflow spec-delta ...`, `vida taskflow draft-execution-spec ...`
 
 Interpretation rule:
 
-1. concrete operator commands for `run-graph`, capability-registry, and context-governance belong to the active `taskflow-v0` runtime surface or its README help, not to the peer `core` owner protocols,
+1. concrete operator commands for `run-graph`, capability-registry, and context-governance belong to the active `vida taskflow` runtime surface or its help surface, not to the peer `core` owner protocols,
 2. the peer `core` protocols keep semantic ownership of law, boundaries, and proof conditions above those concrete runtime commands.
 
 ## Historical-Only Until Retired Or Reimplemented
@@ -45,7 +45,7 @@ Rule:
 
 1. historical-only commands may be referenced only as migration sources or temporary gaps,
 2. they must not be treated as the long-term active runtime home,
-3. removal is blocked only until replacement behavior is either implemented in `taskflow-v0` or intentionally retired.
+3. removal is blocked only until replacement behavior is either implemented in the active TaskFlow runtime family or intentionally retired.
 
 Pack/wave rule:
 
@@ -70,9 +70,9 @@ This map does not own:
 
 Current owner notes:
 
-1. transitioned-slice verification baseline lives in `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`,
+1. transitioned-slice verification baseline lives in `runtime-instructions/work.taskflow-protocol`,
 2. `framework-wave-start.sh` remains a migration-only helper shortcut to existing owners in `core.orchestration-protocol.md`, `command-instructions/routing.use-case-packs-protocol.md`, and `diagnostic-instructions/analysis.framework-self-analysis-protocol.md`; no separate framework-wave-start law is promoted yet,
-3. `framework-task-sync.py` remains a migration-only helper shortcut to `vida/config/instructions/runtime-instructions/work.task-state-reconciliation-protocol.md`; no separate framework-wave task-sync law is promoted yet,
+3. `framework-task-sync.py` remains a migration-only helper shortcut to `runtime-instructions/work.task-state-reconciliation-protocol`; no separate framework-wave task-sync law is promoted yet,
 4. framework-wave wrappers remain migration-only references until a stronger canonical owner is promoted.
 
 -----

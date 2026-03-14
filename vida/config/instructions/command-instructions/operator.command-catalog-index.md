@@ -19,9 +19,9 @@ Purpose: compact command map aligned with DB-backed task runtime + packs + proto
 
 Thinking is protocol-driven (no separate slash command):
 
-7. `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md`
+7. `instruction-contracts/overlay.step-thinking-protocol`
    - mandatory step-thinking router (STC/PR-CoT/MAR/5-SOL/META).
-8. `vida/config/instructions/instruction-contracts/overlay.session-context-continuity-protocol.md`
+8. `instruction-contracts/overlay.session-context-continuity-protocol`
    - cross-step continuity layer for invariants, scope, and session carry-forward.
 
 ## Core Flow
@@ -33,7 +33,7 @@ Thinking is protocol-driven (no separate slash command):
 Rules:
 
 1. `/vida-implement` starts only after explicit launch confirmation in `/vida-form-task`.
-2. `taskflow-v0 task` is the only task-state source of truth.
+2. `vida taskflow task` is the only task-state source of truth.
 3. TaskFlow board is execution visibility only.
 4. Project analyze/scan/test/triage behaviors are absorbed into `/vida-status`, `/vida-implement`, and `/vida-bug-fix` protocols.
 
@@ -49,21 +49,21 @@ Use one shared command-layer taxonomy for all canonical command surfaces:
 
 Canonical source:
 
-1. `vida/config/instructions/command-instructions/routing.command-layer-protocol.md`
+1. `command-instructions/routing.command-layer-protocol`
 
 ## Protocol Links
 
-1. Step thinking: `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md`
-2. Session continuity: `vida/config/instructions/instruction-contracts/overlay.session-context-continuity-protocol.md`
-3. Command layers: `vida/config/instructions/command-instructions/routing.command-layer-protocol.md`
-4. Bug-fix: `vida/config/instructions/command-instructions/execution.bug-fix-protocol.md`
-5. Web/internet validation: `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md`
-6. Spec contract: `vida/config/instructions/runtime-instructions/work.spec-contract-protocol.md`
-7. Form-task bridge: `vida/config/instructions/command-instructions/planning.form-task-protocol.md`
-8. Implement execution: `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`
-9. Pack routing: `vida/config/instructions/command-instructions/routing.use-case-packs-protocol.md`
-10. Task-state protocol: `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md`
-11. Framework topology map: `vida/config/instructions/system-maps/framework.map.md`
+1. Step thinking: `instruction-contracts/overlay.step-thinking-protocol`
+2. Session continuity: `instruction-contracts/overlay.session-context-continuity-protocol`
+3. Command layers: `command-instructions/routing.command-layer-protocol`
+4. Bug-fix: `command-instructions/execution.bug-fix-protocol`
+5. Web/internet validation: `runtime-instructions/work.web-validation-protocol`
+6. Spec contract: `runtime-instructions/work.spec-contract-protocol`
+7. Form-task bridge: `command-instructions/planning.form-task-protocol`
+8. Implement execution: `command-instructions/execution.implement-execution-protocol`
+9. Pack routing: `command-instructions/routing.use-case-packs-protocol`
+10. Task-state protocol: `runtime-instructions/runtime.task-state-telemetry-protocol`
+11. Framework topology map: `system-maps/framework.map`
 
 -----
 artifact_path: config/command-instructions/commands.index

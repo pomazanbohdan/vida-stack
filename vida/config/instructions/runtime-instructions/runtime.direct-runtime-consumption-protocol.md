@@ -12,14 +12,14 @@ Purpose: define the canonical final-layer runtime consumption loop where `taskfl
 
 ## Canonical Runtime Surfaces
 
-1. `taskflow-v0/src/core/direct_consumption.nim`
-2. `taskflow-v0 consume final <request_text> [--json]`
-3. `taskflow-v0 bundle check --json`
-4. `vida/config/instructions/system-maps/runtime-family.taskflow-map.md`
-5. `vida/config/instructions/system-maps/runtime-family.docflow-map.md`
-6. `python3 codex-v0/codex.py overview --profile active-canon`
-7. `python3 codex-v0/codex.py readiness-check --profile active-canon`
-8. `python3 codex-v0/codex.py proofcheck --profile active-canon`
+1. `system-maps/runtime-family.taskflow-map`
+2. `vida taskflow consume final <request_text> [--json]`
+3. `vida taskflow bundle check --json`
+4. `system-maps/runtime-family.taskflow-map`
+5. `system-maps/runtime-family.docflow-map`
+6. `vida docflow overview --profile active-canon`
+7. `vida docflow readiness-check --profile active-canon`
+8. `vida docflow proofcheck --profile active-canon`
 
 ## Final Consumption Loop
 
@@ -72,11 +72,11 @@ This file does not own:
 
 Adjacent canonical owners:
 
-1. `vida/config/instructions/runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`
+1. `runtime-instructions/runtime.runtime-kernel-bundle-protocol`
    - owns bundle composition and bundle-readiness closure before final consumption begins.
-2. `vida/config/instructions/system-maps/runtime-family.docflow-map.md`
+2. `system-maps/runtime-family.docflow-map`
    - owns the bounded `DocFlow` runtime-family branch that must be activated here.
-3. `vida/config/instructions/runtime-instructions/work.agent-lane-selection-protocol.md`
+3. `runtime-instructions/work.agent-lane-selection-protocol`
    - owns generic lane-selection law outside this final-loop context.
 
 ## References

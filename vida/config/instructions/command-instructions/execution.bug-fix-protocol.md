@@ -18,7 +18,7 @@ For `/vida-bug-fix`, BFP layers map to CLP as follows:
 4. `CL4 Materialization` -> `BFP-7 Implement`
 5. `CL5 Gates And Handoff` -> `BFP-8 Verify & Regression` + `BFP-9 Documentation/Spec Sync` + `BFP-10 Closure`
 
-Canonical layer source: `vida/config/instructions/command-instructions/routing.command-layer-protocol.md`
+Canonical layer source: `command-instructions/routing.command-layer-protocol`
 
 ## Input Contract
 
@@ -41,7 +41,7 @@ Canonical layer source: `vida/config/instructions/command-instructions/routing.c
 3. `BFP-2 Issue Classification`:
    - classify each issue as `defect_equivalent|defect_needs_contract_update|feature_delta|as_designed|not_a_bug|insufficient_evidence`.
 4. `BFP-3 Issue Contract`:
-   - build the canonical `issue_contract` artifact by `vida/config/instructions/runtime-instructions/bridge.issue-contract-protocol.md`,
+   - build the canonical `issue_contract` artifact by `runtime-instructions/bridge.issue-contract-protocol`,
    - separate `reported_scope` from `proven_scope` before any writer-ready decision,
    - if one issue contains both a primary executable slice and secondary unresolved symptoms, emit the `issue-split` artifact instead of silently widening the current bug fix,
    - do not send a writer lane raw bug text when the issue contract is still missing.

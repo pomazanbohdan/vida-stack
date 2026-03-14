@@ -53,13 +53,13 @@ Reconciliation is mandatory when at least one of the following becomes true:
 
 The active owner may discover the trigger in different places:
 
-1. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
+1. `instruction-contracts/core.orchestration-protocol`
    - routes change-impact triggers into reconciliation
-2. `vida/config/instructions/command-instructions/planning.form-task-protocol.md`
+2. `command-instructions/planning.form-task-protocol`
    - blocks stale task-pool materialization or stale launch posture
-3. `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`
+3. `command-instructions/execution.implement-execution-protocol`
    - blocks continued implementation against drifted contract or queue state
-4. `vida/config/instructions/command-instructions/operator.vida-spec-guide.md`
+4. `command-instructions/operator.vida-spec-guide`
    - re-baselines the contract after drift is confirmed
 
 ## Reconciliation Sequence

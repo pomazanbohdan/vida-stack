@@ -4,8 +4,8 @@ Purpose: normalize raw research findings, issue or release signals, and user sco
 
 Scope:
 
-1. Canonical intake layer before `vida/config/instructions/runtime-instructions/work.spec-contract-protocol.md`.
-2. Canonical intake layer before `vida/config/instructions/runtime-instructions/bridge.issue-contract-protocol.md` when the incoming issue/release signal is still ambiguous or scope-bearing.
+1. Canonical intake layer before `runtime-instructions/work.spec-contract-protocol`.
+2. Canonical intake layer before `runtime-instructions/bridge.issue-contract-protocol` when the incoming issue/release signal is still ambiguous or scope-bearing.
 3. Canonical intake layer for mixed research + user clarification flows that need a compact negotiation artifact before task formation.
 
 ## Core Principle
@@ -75,10 +75,10 @@ Normalize each intake into one of:
 
 ## Routing Rule
 
-1. `ready_for_scp` -> `vida/config/instructions/runtime-instructions/work.spec-contract-protocol.md`
-2. `ready_for_issue_contract` -> `vida/config/instructions/runtime-instructions/bridge.issue-contract-protocol.md`
+1. `ready_for_scp` -> `runtime-instructions/work.spec-contract-protocol`
+2. `ready_for_issue_contract` -> `runtime-instructions/bridge.issue-contract-protocol`
 3. `needs_user_negotiation` -> stay in spec-intake / SCP discovery until open decisions are resolved
-4. `needs_spec_delta` -> `vida/config/instructions/runtime-instructions/work.spec-delta-protocol.md`
+4. `needs_spec_delta` -> `runtime-instructions/work.spec-delta-protocol`
 5. `insufficient_intake` -> gather more research/evidence before forming tasks or writer-ready contracts
 
 ## Normalization Rules

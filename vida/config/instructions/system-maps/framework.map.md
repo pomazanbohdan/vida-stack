@@ -1,10 +1,6 @@
 # Framework Map Protocol (FMP)
 
-Purpose: define the canonical framework topology, layer model, artifact taxonomy, and promotion/projection rules beneath the top-level `vida/` root map.
-
-Primary framework root:
-
-1. `vida/root-map.md`
+Purpose: define the canonical framework topology, layer model, artifact taxonomy, and promotion/projection rules for the active framework instruction-home.
 
 This file answers five topology questions:
 
@@ -22,6 +18,7 @@ Top-level repository layout:
    - bootstrap router and cross-lane invariants,
    - framework-owned,
    - active canon.
+   - protocol-view-friendly framework copy lives at `system-maps/bootstrap.router-guide` without replacing the stronger root carrier.
 2. `vida/config/instructions/`
    - active framework instruction canon in flat latest-revision Markdown form plus executable projections,
    - canonical home for agent instructions, command instructions, runtime instructions, diagnostic instructions, and system maps.
@@ -32,19 +29,19 @@ Top-level repository layout:
 5. `docs/process/framework-source-lineage-index.md`
    - project-owned provenance index for deleted framework-formation plan/research inputs,
    - not active framework law.
-6. `taskflow-v0/`
-   - transitional implementation runtime,
-   - current execution substrate for the `0.2.0` line.
-7. `codex-v0/`
-   - bounded transitional `DocFlow` donor/documentation/operator runtime surface,
-   - independently usable, but still part of the unified VIDA framework runtime family.
+6. TaskFlow runtime-family implementation surfaces
+   - transitional implementation/runtime substrate,
+   - current execution substrate for the active pre-Release-1 line.
+7. DocFlow runtime-family implementation surfaces
+   - bounded documentation/operator/readiness implementation surfaces,
+   - still part of the unified VIDA framework runtime family.
 8. additional runtime families may exist or be added later,
    - each must remain both independently understandable and discoverable through the unified VIDA framework map layer.
 9. `docs/project-memory/`
    - Git-resident source tree for project-memory artifacts.
 10. `docs/process/`
    - project operational runbooks when present,
-   - including project-owned development/build/install/run-condition records such as `docs/process/vida1-development-conditions.md`, kept current through `vida/config/instructions/runtime-instructions/work.development-evidence-sync-protocol.md`.
+   - including project-owned development/build/install/run-condition records such as `docs/process/vida1-development-conditions.md`, kept current through `runtime-instructions/work.development-evidence-sync-protocol`.
 11. `projects/`
    - extracted or quarantined secondary project bundles preserved locally during repository cleanup or staged separation,
    - not part of the default active project-doc bootstrap path.
@@ -54,6 +51,13 @@ Rule:
 1. directory placement is semantic, not cosmetic,
 2. no artifact should exist in two active homes with equal authority,
 3. if the same concept appears in multiple places, exactly one location must be canonical and the others must be projections, pointers, or evidence.
+
+Authoring/projection split rule:
+
+1. kebab-case instruction families under `vida/config/instructions/` are the canonical Markdown authoring homes,
+2. snake_case instruction families under the same root are machine-readable projection homes used for compiled/runtime consumption,
+3. paired names such as `agent-definitions` / `agent_definitions`, `instruction-contracts` / `instruction_contracts`, and `prompt-templates` / `prompt_templates` are therefore not dual owners,
+4. any routing surface that points to a snake_case family must make clear that it is routing to a projection or executable form rather than to the primary law owner.
 
 Bootstrap routing rule:
 
@@ -67,36 +71,42 @@ Runtime-family map rule:
 2. each runtime family such as `docflow`, `taskflow`, or a future runtime must have a bounded map/discovery surface of its own,
 3. runtime-family discoverability must not depend on ad hoc filesystem guessing,
 4. one runtime family must not silently absorb the identity of the others.
-5. current runtime-family discovery entrypoint: `vida/config/instructions/system-maps/runtime-family.index.md`
+5. current runtime-family discovery entrypoint: `system-maps/runtime-family.index`
 
 Tooling routing rule:
 
 1. concrete documentation/runtime tooling discovery does not belong in this topology map,
-2. use `vida/config/instructions/system-maps/runtime-family.index.md` for runtime-family routing,
-3. use `vida/config/instructions/system-maps/template.map.md` for template routing,
-4. use `vida/config/instructions/system-maps/governance.map.md` for policy/gate discovery.
+2. use `system-maps/runtime-family.index` for runtime-family routing,
+3. use `system-maps/template.map` for template routing,
+4. use `system-maps/governance.map` for policy/gate discovery.
+
+Compact-routing rule:
+
+1. routine startup and runtime reads should prefer approved compact capsules, startup bundles, and compiled runtime views when those surfaces already cover the active question,
+2. owner-layer Markdown must still be opened on demand for edge cases, ambiguity, or law mutation,
+3. framework maps must reinforce `capsule first, owner on demand` rather than encouraging broad rereads of full owner stacks by default.
 
 Core-cluster routing rule:
 
 1. bounded discovery and stitching for the framework `core cluster` does not belong inside the core protocols themselves,
-2. use `vida/config/instructions/system-maps/framework.core-protocols-map.md` when the task is about how the core protocols fit together as one package,
+2. use `system-maps/framework.core-protocols-map` when the task is about how the core protocols fit together as one package,
 3. keep tooling, project-environment notes, and backend-specific lifecycle law outside the core cluster map and outside the core protocols.
 
 Protocol-domain routing rule:
 
 1. domain-level classification of protocol-bearing artifacts does not belong inside `protocol.index` rows or owner-layer maps,
-2. use `vida/config/instructions/system-maps/framework.protocol-domains-map.md` when the task is about which protocol family a topic belongs to, especially when distinguishing orchestration architecture from adjacent protocol families such as thinking, documentation, diagnostics, naming, or artifact governance,
+2. use `system-maps/framework.protocol-domains-map` when the task is about which protocol family a topic belongs to, especially when distinguishing orchestration architecture from adjacent protocol families such as thinking, documentation, diagnostics, naming, or artifact governance,
 3. keep this topology map as the higher framework architecture owner and the protocol-domains map as the thinner domain-classification surface.
 
 Protocol-layer routing rule:
 
 1. one-pass placement of a protocol-bearing artifact into the correct owner layer does not belong inside individual protocols,
-2. use `vida/config/instructions/system-maps/framework.protocol-layers-map.md` when the task is about whether an artifact belongs to framework canon, agent-role, bootstrap/environment, human-governance, or project documentation,
+2. use `system-maps/framework.protocol-layers-map` when the task is about whether an artifact belongs to framework canon, agent-role, bootstrap/environment, human-governance, or project documentation,
 3. keep this topology map as the higher framework architecture owner and the protocol-layers map as the thinner layer-placement surface.
 
 Development-evidence routing rule:
 
-1. when implementation/build/install work just succeeded and that success changes what can now be run, built, installed, or verified, activate `vida/config/instructions/runtime-instructions/work.development-evidence-sync-protocol.md`,
+1. when implementation/build/install work just succeeded and that success changes what can now be run, built, installed, or verified, activate `runtime-instructions/work.development-evidence-sync-protocol`,
 2. route the resulting project-owned mutation to `docs/process/vida1-development-conditions.md` unless the active project overlay names a more specific target,
 3. do not postpone this routing until the end of a larger wave once the condition is already proven.
 
@@ -116,7 +126,7 @@ Template-map rule:
 1. template discovery must be available through an explicit template-map surface,
 2. top-level framework discovery must point to that template-map surface,
 3. template families must remain distinguishable by owner and by activation trigger.
-4. current template discovery entrypoint: `vida/config/instructions/system-maps/template.map.md`
+4. current template discovery entrypoint: `system-maps/template.map`
 
 Map trigger rule:
 
@@ -132,18 +142,19 @@ VIDA uses one normalized documentation/runtime stack:
 
 1. `Bootstrap Layer`
    - `AGENTS.md`
-   - `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
-   - `vida/config/instructions/agent-definitions/entry.worker-entry.md`
-   - `vida/config/instructions/instruction-contracts/role.worker-thinking.md`
+   - `system-maps/bootstrap.router-guide`
+   - `agent-definitions/entry.orchestrator-entry`
+   - `agent-definitions/entry.worker-entry`
+   - `instruction-contracts/role.worker-thinking`
 2. `Instruction Artifact Layer`
    - `vida/config/instructions/**`
    - active latest-revision Markdown canon plus adjacent changelogs and projections
 3. `Framework Map / Index Layer`
-   - `vida/root-map.md`
+   - `system-maps/framework.index`
    - this file
-   - `vida/config/instructions/system-maps/framework.protocol-domains-map.md`
-   - `vida/config/instructions/system-maps/protocol.index.md`
-   - `vida/config/instructions/system-maps/governance.map.md`
+   - `system-maps/framework.protocol-domains-map`
+   - `system-maps/protocol.index`
+   - `system-maps/governance.map`
    - thin indexes/pointers only
 4. `Product Spec Layer`
    - `docs/product/spec/**`
@@ -152,7 +163,7 @@ VIDA uses one normalized documentation/runtime stack:
    - `vida/config/**`
    - machine-readable law consumed by runtime
 6. `Implementation Layer`
-   - `taskflow-v0/**`
+   - TaskFlow runtime-family implementation surfaces
    - current transitional implementation
    - future `vida 1.0` implementation must be a Rust workspace with reusable crates, not only one CLI-bound binary crate
 ## 3. Canonical Artifact Taxonomy
@@ -177,7 +188,7 @@ Canonical artifact classes:
    - active home: `vida/config/**`
 7. `implementation`
    - concrete runtime code,
-   - active home: `taskflow-v0/**` today
+   - active home: TaskFlow and DocFlow runtime-family implementation surfaces today
 8. `history_evidence`
    - non-canonical source trail carried by Git history and sidecar changelogs,
    - no separate active directory is required for this class in the clean architecture.
@@ -283,7 +294,7 @@ Implementation posture:
 
 1. `vida 0.2.0`
    - prototype / proving / continuation runtime,
-   - current implementation substrate: `taskflow-v0/**`,
+   - current implementation substrate: TaskFlow runtime-family implementation surfaces,
    - expected to continue development and refine instruction/runtime behavior in practice
 2. `vida 1.0`
    - target durable runtime implementation,
@@ -298,7 +309,7 @@ Promotion rule:
 
 1. when a runtime-spec boundary is stable, keep its settled product-law portion in `docs/product/spec/**`,
 2. executable projections then belong in `vida/config/**`,
-3. implementation-specific details remain in `taskflow-v0/**` or later target runtimes,
+3. implementation-specific details remain in TaskFlow/DocFlow runtime-family implementation surfaces or later target runtimes,
 4. historical formation inputs are preserved only through `docs/process/framework-source-lineage-index.md`, active artifact sidecars, and Git history.
 
 ## 7. Promotion And Projection Rules
@@ -343,7 +354,7 @@ Reduce a document to `pointer_only` when:
 Use this anti-duplication rule:
 
 1. one master map: this file
-2. one protocol registry: `vida/config/instructions/system-maps/protocol.index.md`
+2. one protocol registry: `system-maps/protocol.index`
 3. one current project/product docs map resolved through the project docs bootstrap surface
 4. one canonical source per semantic decision
 
@@ -355,8 +366,8 @@ Avoid:
 
 Index reduction rule:
 
-1. `vida/config/instructions/system-maps/framework.index.md` should remain a thin pointer into this map and the protocol index,
-2. `vida/config/instructions/system-maps/protocol.index.md` should remain a registry, not a second architecture map.
+1. `system-maps/framework.index` should remain a thin pointer into this map and the protocol index,
+2. `system-maps/protocol.index` should remain a registry, not a second architecture map.
 
 ## 9. Normalized Worker Model
 
@@ -373,7 +384,7 @@ Canonical state:
 When changing framework structure, in the same change set:
 
 1. update this file,
-2. update `vida/config/instructions/system-maps/protocol.index.md` if protocol ownership or canonical source changed,
+2. update `system-maps/protocol.index` if protocol ownership or canonical source changed,
 3. update the project docs map if a runtime-spec promotion changed current project/product canon,
 4. update instruction projection docs when an instruction-bearing artifact moves,
 5. remove outdated active-body duplicates immediately or mark them pointer-only.
@@ -391,17 +402,17 @@ Conflict rule:
 
 1. `AGENTS.md` remains stronger for bootstrap behavior,
 2. this file is the canonical repository/documentation architecture map,
-3. `vida/config/instructions/system-maps/protocol.index.md` is the canonical domain-protocol registry,
+3. `system-maps/protocol.index` is the canonical domain-protocol registry,
 4. the active project docs map is the canonical promoted project/product-spec map for the current repository.
 
 -----
 artifact_path: config/system-maps/framework.map
 artifact_type: system_map
 artifact_version: '1'
-artifact_revision: '2026-03-12'
+artifact_revision: '2026-03-14'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps/framework.map.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-12T11:05:54+02:00'
+updated_at: '2026-03-13T23:20:00+02:00'
 changelog_ref: framework.map.changelog.jsonl

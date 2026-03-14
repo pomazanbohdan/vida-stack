@@ -117,7 +117,7 @@ Accepted for future work, not required in this pass:
 ## 6. Invariants
 
 1. root `vida/config` remains product law
-2. framework/runtime helpers such as `docs/framework/**` and `taskflow-v0/**` may implement adapters only
+2. framework/runtime helpers such as `docs/framework/**` and the active TaskFlow runtime-family implementation surfaces may implement adapters only
 3. projection output must be derivable from canonical sources plus durable runtime ledgers
 4. listener metadata must never replace receipts
 5. checkpoint hints must never rewrite route or policy law

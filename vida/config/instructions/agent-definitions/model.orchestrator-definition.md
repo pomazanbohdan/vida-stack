@@ -23,7 +23,7 @@ Purpose: define the orchestrator assembly in human-readable form inside the prod
 
 1. This artifact lives in flat canonical form under `vida/config/instructions/` because it is product-owned configuration.
 2. `AGENTS.md` remains the L0 bootstrap router.
-3. `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md` remains the current lane-entry boot surface until the runtime consumes this family directly.
+3. `agent-definitions/entry.orchestrator-entry` remains the current lane-entry boot surface until the runtime consumes this family directly.
 
 -----
 artifact_path: config/instructions/agent-definitions/model.orchestrator.definition

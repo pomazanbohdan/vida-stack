@@ -14,7 +14,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Source of truth:");
-            println!("  Runtime store: taskflow-v0 task over the authoritative state store.");
+            println!("  Runtime store: vida taskflow task over the authoritative state store.");
             println!("  Snapshot export only: .vida/exports/tasks.snapshot.jsonl");
             println!();
             println!("Dependency semantics:");
@@ -65,6 +65,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida taskflow consume bundle [--json]");
             println!("  vida taskflow consume bundle check [--json]");
             println!("  vida taskflow consume final \"<request>\" --json");
+            println!("  vida taskflow bootstrap-spec \"<request>\" --json");
             println!();
             println!("Failure modes:");
             println!("  `bundle` requires a booted authoritative state root and fails closed if runtime bundle surfaces are missing.");
@@ -185,12 +186,12 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!();
     println!("Source of truth notes:");
     println!("  TaskFlow is the execution/runtime authority.");
-    println!("  `taskflow-v0 task` is the primary backlog store during the bridge.");
+    println!("  `vida taskflow task` is the primary backlog store during the active runtime path.");
     println!("  `.vida/exports/tasks.snapshot.jsonl` is export-only, not the live runtime store.");
     println!();
     println!("Runtime routing:");
     println!("  In a project tree, vida resolves the root from the current working directory without manual VIDA_ROOT export.");
-    println!("  In repo mode the delegated runtime resolves to taskflow-v0/src/vida.");
+    println!("  In repo mode the delegated runtime resolves to the local TaskFlow runtime implementation.");
     println!("  In installed mode it resolves the sibling taskflow binary from the active vida bin root.");
     println!("  Unknown roots or missing binaries fail closed.");
     println!();
@@ -198,6 +199,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  task        backlog inspection and mutation");
     println!("  run-graph   resumability and node-state inspection");
     println!("  consume     explicit TaskFlow -> final closure handoff");
+    println!(
+        "  bootstrap-spec  one-shot epic/spec/doc bootstrap for design-first feature requests"
+    );
     println!("  protocol-binding  bounded protocol/runtime bridge receipts");
     println!();
     println!("Canonical examples:");
@@ -205,6 +209,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida taskflow task show <task-id> --json");
     println!("  vida taskflow run-graph status <task-id>");
     println!("  vida taskflow consume final \"proof path\" --json");
+    println!("  vida taskflow bootstrap-spec \"feature request\" --json");
     println!();
     println!("Operator recipes:");
     println!("  Find the next lawful slice: vida taskflow task ready --json");

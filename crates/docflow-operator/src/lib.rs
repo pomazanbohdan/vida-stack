@@ -19,11 +19,7 @@ pub fn render_relation_summary(edges: &[RelationEdge]) -> String {
     format!("relations\n  total_edges: {}", edges.len())
 }
 
-pub fn render_artifact_impact(
-    artifact: &str,
-    source: &str,
-    impacts: &[(&str, &str)],
-) -> String {
+pub fn render_artifact_impact(artifact: &str, source: &str, impacts: &[(&str, &str)]) -> String {
     let mut lines = vec![
         "artifact-impact".to_string(),
         format!("  artifact: {artifact}"),
@@ -176,9 +172,7 @@ mod tests {
         assert!(rendered.contains("touched: 1"));
         assert!(rendered.contains("indirect_impacts: 1"));
         assert!(rendered.contains("touched_path: docs/process/a.md"));
-        assert!(rendered.contains(
-            "indirect_impact: docs/process/b.md <= process/a [footer_ref]"
-        ));
+        assert!(rendered.contains("indirect_impact: docs/process/b.md <= process/a [footer_ref]"));
     }
 
     #[test]

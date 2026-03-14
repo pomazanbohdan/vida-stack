@@ -25,7 +25,7 @@ It must not assume that later layers are closed.
 
 If the task is not one bounded documentation operation but a project-wide migration of another project's documentation system toward Layer 7 closure, escalate to:
 
-1. `vida/config/instructions/instruction-contracts/work.documentation-layer7-migration-protocol.md`
+1. `instruction-contracts/work.documentation-layer7-migration-protocol`
 
 ## Documentation-First Rule
 
@@ -42,7 +42,7 @@ Precedence order:
 1. an active skill-specific artifact standard when the current task explicitly uses a skill and that skill defines the format of the artifact being written,
 2. an explicit project-owned documentation standard for that artifact family when such a standard is already documented,
 3. promoted product-law requirements for canonical documentation and instruction artifacts,
-4. the bounded default formatting and mutation behavior provided by `codex-v0/codex.py`.
+4. the bounded default formatting and mutation behavior provided by `vida docflow`.
 
 Rules:
 
@@ -59,7 +59,7 @@ Example rule:
 
 1. Documentation context activates this protocol immediately in one touch.
 2. The orchestrator or worker must not wait for a second manual selection step once the active task is clearly about documentation, instruction canon, sidecar lineage, canonical maps, or documentation-layer tooling.
-3. As soon as the task context is documentation-shaped, this protocol becomes active authority together with `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`.
+3. As soon as the task context is documentation-shaped, this protocol becomes active authority together with `instruction-contracts/bridge.instruction-activation-protocol`.
 4. Presence in the protocol index is discovery evidence only; activation still comes from the context trigger defined in the activation protocol.
 
 ## Allowed Foundations
@@ -68,10 +68,10 @@ Use only the following canonical foundations:
 
 1. `docs/product/spec/project-documentation-law.md`
 2. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
-3. `vida/config/instructions/system-maps/framework.map.md`
+3. `system-maps/framework.map`
 4. `AGENTS.md`
 5. `AGENTS.sidecar.md`
-6. `codex-v0/codex.py`
+6. `vida docflow`
 
 Evidence rule:
 
@@ -93,11 +93,11 @@ When working on documentation, the agent must operate in this order:
 
 Default documentation orientation path:
 
-1. `python3 codex-v0/codex.py overview --profile active-canon`
-2. `python3 codex-v0/codex.py layer-status --layer <N>` when the work is bounded to one canonical layer
-3. `python3 codex-v0/codex.py doctor --layer <N>` when a bounded layer audit is needed
+1. `vida docflow overview --profile active-canon`
+2. `vida docflow layer-status --layer <N>` when the work is bounded to one canonical layer
+3. `vida docflow doctor --layer <N>` when a bounded layer audit is needed
 4. targeted reads of the canonical documents being changed
-5. `python3 codex-v0/codex.py proofcheck --layer <N>` for bounded one-layer closure or `python3 codex-v0/codex.py proofcheck --profile active-canon-strict` for cross-layer closure
+5. `vida docflow proofcheck --layer <N>` for bounded one-layer closure or `vida docflow proofcheck --profile active-canon-strict` for cross-layer closure
 6. targeted deep reads only when the proof surface reports a blocker
 
 Use richer history or status views only when needed:
@@ -113,6 +113,7 @@ Use richer history or status views only when needed:
 9. `protocol-coverage-check`
 10. `readiness-check`
 11. `readiness-write`
+12. `report-check`
 
 ## Lawful Mutation Path
 
@@ -135,7 +136,7 @@ For canonical markdown artifacts:
 1. keep the canonical markdown body as the latest active revision only,
 2. keep lineage in sibling `*.changelog.jsonl`,
 3. keep footer metadata machine-readable,
-4. prefer lawful codex mutation paths over manual footer/changelog manipulation,
+4. prefer lawful DocFlow mutation paths over manual footer/changelog manipulation,
 5. do not create parallel active documents that restate the same canonical rule, matrix, or artifact law when one canonical home already exists.
 
 ## Deduplication Rule
@@ -156,8 +157,8 @@ Protocol reuse and promotion rule:
 
 1. Before creating a new canonical protocol, instruction contract, runtime instruction, or framework map, first search the existing canonical protocol/index/map surfaces for an already-owned home of the topic.
 2. The minimum lookup path is:
-   - `vida/config/instructions/system-maps/protocol.index.md`
-   - `vida/config/instructions/system-maps/framework.map.md`
+   - `system-maps/protocol.index`
+   - `system-maps/framework.map`
    - targeted search across `vida/config/instructions/**` for the active topic
 3. Create a new protocol-bearing artifact only when the topic is clearly a separate domain with its own bounded trigger, owner, and responsibility set.
 4. "I want to say this more strongly" is not enough reason to create a new protocol if an existing canonical owner already covers the same topic.
@@ -180,17 +181,37 @@ Before closure of documentation work:
 8. treat validation failure as blocking,
 9. keep success output quiet and failure output explicit.
 
+## Map Registration Rule
+
+When documentation work creates, promotes, renames, or materially reroutes a canonical project-visible document surface:
+
+1. update the owning project map or index in the same bounded change,
+2. if the change affects bootstrap-visible project documentation topology, update `AGENTS.sidecar.md` in the same bounded change,
+3. if the change affects project-level canonical document entrypoints, update `docs/project-root-map.md` in the same bounded change,
+4. treat missing map registration as blocking drift rather than optional follow-up cleanup.
+5. use `vida docflow check-file`, `check`, `fastcheck`, or `readiness-check` as the operational proof surface for this rule; they must fail closed when required registration or bootstrap-visible sidecar pointers are missing.
+
+## Reporting Prefix Verification Rule
+
+When the proof target is the runtime reporting/log prefix rather than markdown footer law:
+
+1. use `vida docflow report-check --path <file>`,
+2. require the first non-empty line to start with `Thinking mode: <STC|PR-CoT|MAR|5-SOL|META>.`,
+3. require the second non-empty line to start with `Requests:` or `Tasks:`,
+4. require the third non-empty line to start with `Agents:`,
+5. treat missing or malformed reporting-prefix shape as a blocking proof failure.
+
 ## Protocol Activation Verification Rule
 
 1. A protocol does not become active merely because the file exists, because it appears in the protocol index, or because another document references it.
 2. Treat protocol activation as a rule-evaluation problem:
-   - determine the activation class and trigger from `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`,
+   - determine the activation class and trigger from `instruction-contracts/bridge.instruction-activation-protocol`,
    - verify that the current lane, phase, route, or artifact flow satisfies that trigger,
    - only then treat the protocol as active authority for the current task.
 3. When documentation work changes a canonical protocol or its routing/index wiring, verify the activation rule in the same work cycle.
 4. If a documentation-context protocol lacks a valid activation binding, treat that as a bounded green-layer gap and correct it immediately when safe.
-5. Use `python3 codex-v0/codex.py activation-check --root <dir> [files...]` as the bounded operational proof for activation coverage during documentation work.
-6. Use `python3 codex-v0/codex.py protocol-coverage-check --root <dir> [files...]` as the bounded operational proof that canonical protocol-bearing artifacts are present in the protocol index and still have valid activation coverage.
+5. Use `vida docflow activation-check --root <dir> [files...]` as the bounded operational proof for activation coverage during documentation work.
+6. Use `vida docflow protocol-coverage-check --root <dir> [files...]` as the bounded operational proof that canonical protocol-bearing artifacts are present in the protocol index and still have valid activation coverage.
 
 ## Immediate Gap Correction Rule
 
@@ -205,12 +226,12 @@ When documentation work or documentation-layer validation reveals a bounded defe
 This protocol must not depend on:
 
 1. runtime-owned latest resolution,
-2. ad hoc filesystem assumptions outside current canonical docs and codex policy.
+2. ad hoc filesystem assumptions outside current canonical docs and DocFlow policy.
 
 ## Forbidden Behaviors
 
 1. Do not invent undocumented documentation workflows.
-2. Do not mutate footer metadata or sidecar history by hand when a lawful codex path exists.
+2. Do not mutate footer metadata or sidecar history by hand when a lawful DocFlow path exists.
 3. Do not justify documentation changes by future-layer intent alone.
 4. Do not treat partial inventory or relation features as if they were already canonical authority.
 5. Do not close documentation work without validation.
@@ -230,7 +251,8 @@ Documentation work is closed only when:
 6. `readiness-check` passes when readiness surfaces changed,
 7. `doctor --profile active-canon-strict` passes when the change touches canonical maps, specs, or active instruction canon,
 8. `proofcheck --layer <N>` may be used as the one-command bounded closure proof for one canonical layer,
-9. `proofcheck --profile active-canon-strict` may be used as the one-command bounded closure proof for cross-layer active-canon work.
+9. `proofcheck --profile active-canon-strict` may be used as the one-command bounded closure proof for cross-layer active-canon work,
+10. bootstrap-visible map registration is synchronized when the change created or rerouted a canonical project-visible document surface.
 
 ## Current Boundary Note
 
@@ -251,5 +273,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md
 created_at: '2026-03-10T04:10:00+02:00'
-updated_at: '2026-03-12T07:58:34+02:00'
+updated_at: 2026-03-14T12:41:58.833200134Z
 changelog_ref: work.documentation-operation-protocol.changelog.jsonl

@@ -62,10 +62,10 @@ Activate this protocol when at least one is true:
 
 Primary activating companions:
 
-1. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-2. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-3. `vida/config/instructions/runtime-instructions/work.agent-lane-selection-protocol.md`
-4. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
+1. `instruction-contracts/core.orchestration-protocol`
+2. `instruction-contracts/core.agent-system-protocol`
+3. `runtime-instructions/work.agent-lane-selection-protocol`
+4. `instruction-contracts/bridge.instruction-activation-protocol`
 
 Boundary rule:
 
@@ -98,15 +98,15 @@ Closure rule:
 
 Discoverability note:
 
-1. canonical discovery lives in `vida/config/instructions/system-maps/protocol.index.md`,
-2. activation binding lives in `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`,
+1. canonical discovery lives in `system-maps/protocol.index`,
+2. activation binding lives in `instruction-contracts/bridge.instruction-activation-protocol`,
 3. absence from either surface is activation/discoverability drift and should be treated as blocking for canonical coverage claims.
 
 ## Runtime Surface Note
 
 1. concrete operator commands and migrated runtime entrypoints for registry build/check stay in the execution runtime-family surfaces, not in this owner protocol,
 2. this protocol owns the compatibility law and proof conditions; runtime-family maps and runtime help surfaces own the concrete command syntax,
-3. migration-only command history belongs in `vida/config/instructions/system-maps/migration.runtime-transition-map.md`.
+3. migration-only command history belongs in `system-maps/migration.runtime-transition-map`.
 
 -----
 artifact_path: config/runtime-instructions/capability-registry.protocol

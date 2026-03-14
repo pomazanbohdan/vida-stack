@@ -1,24 +1,24 @@
 # Script Runtime Architecture
 
-Purpose: define the canonical transition from legacy `*` wrappers to the `taskflow-v0` transitional runtime package.
+Purpose: define the canonical transition from legacy `*` wrappers to the active TaskFlow runtime family package.
 
 ## Core Rule
 
 Current transitional runtime model:
 
-1. `taskflow-v0/*` is the active transitional runtime surface,
+1. the TaskFlow runtime family is the active transitional runtime surface,
 2. legacy `*.sh` and `*.py` are migration-source wrappers only,
 3. project delivery scripts stay in `scripts/` and are not part of this framework contract.
 
 Rule:
 
 1. do not keep two active canonical runtime surfaces,
-2. when a legacy wrapper has a `taskflow-v0` equivalent, `taskflow-v0` becomes canonical immediately,
+2. when a legacy wrapper has a `vida taskflow` equivalent, `vida taskflow` becomes canonical immediately,
 3. legacy wrappers remain only until the equivalent behavior is either migrated or explicitly retired.
 
 ## Ownership Split
 
-`taskflow-v0` is responsible for:
+The TaskFlow runtime family is responsible for:
 
 1. canonical CLI ergonomics for transitioned surfaces,
 2. parsing, validation, routing, scoring, and state derivation,
@@ -33,7 +33,7 @@ Historical wrappers are responsible only for:
 
 ## Current Framework Examples
 
-Already transitioned or transition-ready in `taskflow-v0`:
+Already transitioned or transition-ready in the TaskFlow runtime family:
 
 1. boot packet/profile/snapshot,
 2. task store and legacy compatibility retirement,
@@ -46,15 +46,15 @@ Already transitioned or transition-ready in `taskflow-v0`:
 9. spec-intake/spec-delta/draft-execution-spec surfaces,
 10. worker registry/system/leases/pool.
 
-Canonical reference map lives in `vida/config/instructions/system-maps/migration.runtime-transition-map.md`.
+Canonical reference map lives in `system-maps/migration.runtime-transition-map`.
 
 ## Migration Rules
 
-When migrating a framework script to `taskflow-v0`:
+When migrating a framework script to the TaskFlow runtime family:
 
 1. identify the canonical caller surface first,
 2. preserve CLI arguments and exit-code semantics,
-3. move parsing/derivation/validation logic into `taskflow-v0`,
+3. move parsing/derivation/validation logic into the TaskFlow runtime family,
 4. demote the old wrapper to historical-only status or delete it,
 5. re-run consumer tests that depend on the command,
 6. update this document and all linked framework references in the same change.
@@ -63,8 +63,8 @@ When migrating a framework script to `taskflow-v0`:
 
 Minimum proof for script-runtime migrations:
 
-1. `nim c taskflow-v0/src/vida.nim` passes,
-2. direct `taskflow-v0` command smoke or targeted test passes,
+1. the bounded TaskFlow runtime-family implementation build passes,
+2. direct `vida taskflow` command smoke or targeted test passes,
 3. at least one real framework consumer path is verified after migration,
 4. old wrapper references are either removed or marked historical-only.
 

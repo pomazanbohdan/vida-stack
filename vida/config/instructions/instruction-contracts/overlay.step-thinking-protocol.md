@@ -5,10 +5,10 @@ Purpose: keep the canonical full algorithm specifications for one active step of
 Shared rules:
 
 1. The canonical algorithm owners in this file are the embedded section anchors below.
-2. Boot/read activation is owned by `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md` and `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`.
-3. Web/internet validation is owned by `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md`.
+2. Boot/read activation is owned by `instruction-contracts/bridge.instruction-activation-protocol` and `agent-definitions/entry.orchestrator-entry`.
+3. Web/internet validation is owned by `runtime-instructions/work.web-validation-protocol`.
 4. User-facing reporting must not expose intermediate chain-of-thought; `Thinking mode` remains a reporting label only.
-5. This protocol governs reasoning inside one active step only; cross-step continuity, invariant carry-forward, and session context preservation belong to `vida/config/instructions/instruction-contracts/overlay.session-context-continuity-protocol.md`.
+5. This protocol governs reasoning inside one active step only; cross-step continuity, invariant carry-forward, and session context preservation belong to `instruction-contracts/overlay.session-context-continuity-protocol`.
 6. PR-CoT, MAR, 5-SOL, and META must preserve impact analysis covering:
    - affected scope,
    - contract impact,
@@ -145,7 +145,7 @@ STEPS:
   5. Execute internally:
      - If META: assemble the smallest lawful block flow from the registry below
      - Named algorithms may be used inside META only as exact template shortcuts
-  6. If external facts affect the decision, delegate web validation to `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md`
+  6. If external facts affect the decision, delegate web validation to `runtime-instructions/work.web-validation-protocol`
   7. Preserve concise execution receipts: selected blocks, gates, impact analysis, and any escalation reason
 ```
 
@@ -967,7 +967,7 @@ CATEGORY_WEIGHTING:
 
 ```yaml
 TRIGGER: multi-domain problem OR explicit need for higher option diversity
-ACTION: Select 2-3 modules from `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md#section-reasoning-modules` → inform categories
+ACTION: Select 2-3 modules from `instruction-contracts/overlay.step-thinking-protocol#section-reasoning-modules` → inform categories
 MAPPING:
   A2 (systems) → "Integration" category
   A3 (risk) → "Failure Modes" category
@@ -1878,7 +1878,7 @@ forbidden[8]{action,correct}:
 
 # Web Validation Integration
 
-> **⛔ MANDATORY.** Canonical web/internet validation rules live in `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md`.
+> **⛔ MANDATORY.** Canonical web/internet validation rules live in `runtime-instructions/work.web-validation-protocol`.
 
 Use this section only as router-level integration map.
 
@@ -2011,7 +2011,7 @@ ANALYSIS:
       - Debugging complex issues
       - Refactoring decisions
       - Technical debt analysis
-    vida_mapping: `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md#section-bug-reasoning`, MAR Round 1
+    vida_mapping: `instruction-contracts/overlay.step-thinking-protocol#section-bug-reasoning`, MAR Round 1
 ```
 
 ---

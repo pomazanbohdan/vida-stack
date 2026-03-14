@@ -20,12 +20,12 @@ Consult those owner documents when a startup edge case, validation conflict, or 
 
 Before the first write-producing dispatch:
 
-1. run `taskflow-v0 status`,
-2. run `taskflow-v0 boot snapshot --json --top-limit 5 --ready-limit 5`,
+1. run `vida status --json`,
+2. run `vida status --json`,
 3. confirm the active read set is visible,
 4. inspect the visible skill catalog,
 5. activate the minimal relevant skill set or state `no_applicable_skill`,
-6. run `python3 codex-v0/codex.py protocol-coverage-check --profile active-canon`.
+6. run `vida docflow protocol-coverage-check --profile active-canon`.
 
 ## Boot-Ready Conditions
 

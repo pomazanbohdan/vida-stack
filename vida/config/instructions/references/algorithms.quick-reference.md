@@ -100,7 +100,7 @@ Question: "How can the algorithm descriptions be optimized without losing their 
 
 Synthesis (recommended):
 1. Keep `Quick Reference` (this file) as the operational layer.
-2. Keep `Deep Spec` in `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md` as canonical.
+2. Keep `Deep Spec` in `instruction-contracts/overlay.step-thinking-protocol` as canonical.
 3. Preserve: triggers, quality gates, escalation rules.
 4. Add a smoke gate: if the quality gate fails -> automatically escalate to the next algorithm.
 

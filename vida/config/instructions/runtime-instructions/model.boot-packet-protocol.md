@@ -11,9 +11,9 @@ It is not a full protocol compiler.
 ## Command
 
 ```bash
-taskflow-v0 boot run <lean|standard|full> [task_id] [--non-dev]
-taskflow-v0 boot read-contract <lean|standard|full> [--non-dev]
-taskflow-v0 boot summary <task_id|session>
+vida taskflow boot run <lean|standard|full> [task_id] [--non-dev]
+vida taskflow boot read-contract <lean|standard|full> [--non-dev]
+vida taskflow boot summary <task_id|session>
 ```
 
 ## Output Contract
@@ -30,7 +30,7 @@ Boot packet should expose:
 
 ## Integration With Boot Receipts
 
-When boot is executed through `taskflow-v0 boot ...`:
+When boot is executed through `vida taskflow boot ...`:
 
 1. a boot packet should be written next to the receipt,
 2. receipt should record `boot_packet_file`,
@@ -47,11 +47,11 @@ Boot packet is a runtime convenience artifact.
 Canonical policy still lives in:
 
 1. `AGENTS.md`
-2. `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
-3. `vida/config/instructions/system-maps/bootstrap.orchestrator-boot-flow.md`
-4. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
-5. `vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md`
-6. `taskflow-v0`
+2. `agent-definitions/entry.orchestrator-entry`
+3. `system-maps/bootstrap.orchestrator-boot-flow`
+4. `instruction-contracts/bridge.instruction-activation-protocol`
+5. `runtime-instructions/bridge.project-overlay-protocol`
+6. `vida taskflow`
 
 ## Current Version
 
@@ -62,7 +62,7 @@ Characteristics:
 1. generated on demand,
 2. no signature/hash enforcement yet,
 3. integrated with boot receipts and receipt verification,
-4. `taskflow-v0 boot run` should consume boot-packet read-contract output instead of duplicating profile file lists,
+4. `vida taskflow boot run` should consume boot-packet read-contract output instead of duplicating profile file lists,
 5. health/verification flows may consume packet summaries as a compact proof surface,
 6. dev-oriented boot receipts may include a compact task-state snapshot artifact,
 7. intended as the first step toward lighter compiled boot contracts.

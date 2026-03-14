@@ -12,15 +12,15 @@ Concrete backend/model choices are not hardcoded here.
 
 Use:
 
-1. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md` for system-level activation, routing, fallback, and scoring.
-2. `vida/config/instructions/agent-backends/matrix.agent-backends-matrix.md` for generic backend classes and routing categories.
+1. `instruction-contracts/core.agent-system-protocol` for system-level activation, routing, fallback, and scoring.
+2. `agent-backends/matrix.agent-backends-matrix` for generic backend classes and routing categories.
 3. project overlay (`vida.config.yaml` + project docs) for concrete backends/models enabled in the current repository.
-4. `vida/config/instructions/runtime-instructions/lane.agent-handoff-context-protocol.md` for handoff/context shaping law.
+4. `runtime-instructions/lane.agent-handoff-context-protocol` for handoff/context shaping law.
 
 ## Mandatory Packet Fields
 
-0. Worker entry contract: external/delegated workers must receive `vida/config/instructions/agent-definitions/entry.worker-entry.md` semantics instead of inheriting `AGENTS.md` orchestrator identity.
-0.1. Worker thinking contract: external/delegated workers must receive `vida/config/instructions/instruction-contracts/role.worker-thinking.md` semantics and stay inside `STC|PR-CoT|MAR` unless explicitly escalated by the packet.
+0. Worker entry contract: external/delegated workers must receive `agent-definitions/entry.worker-entry` semantics instead of inheriting `AGENTS.md` orchestrator identity.
+0.1. Worker thinking contract: external/delegated workers must receive `instruction-contracts/role.worker-thinking` semantics and stay inside `STC|PR-CoT|MAR` unless explicitly escalated by the packet.
 0.2. Worker-lane confirmation must be explicit in the rendered packet so the worker does not have to infer lane function from repository context.
 1. Environment prerequisite: `Follow the active project preflight and command order declared by the host-project overlay.`
 2. Working directory: current repository root (`<repo_root>` resolved at runtime).
@@ -64,7 +64,7 @@ Before dispatch:
 4. Define explicit verification command.
 5. Define expected deliverable format.
 6. Confirm dependency prerequisites are in the packet.
-7. Prefer the canonical packet shape from `vida/config/instructions/prompt-templates/worker.packet-templates.md`.
+7. Prefer the canonical packet shape from `prompt-templates/worker.packet-templates`.
 8. If project overlay activates the agent system, consult the active routing snapshot before choosing backend class.
 9. If routing metadata includes `fanout_workers`, dispatch only those backends for read-only work, require at least `fanout_min_results`, and merge results via the declared `merge_policy`.
 10. If routing metadata marks `independent_verification_required=yes`, use `verification_plan` to select an independent verifier before orchestrator synthesis.
@@ -108,8 +108,8 @@ Partial-return rule:
 ## Lane Boundary
 
 1. `AGENTS.md` is for the orchestrator only.
-2. Delegated workers should follow `vida/config/instructions/agent-definitions/entry.worker-entry.md` as their entry contract.
-3. Delegated workers should use `vida/config/instructions/instruction-contracts/role.worker-thinking.md` as their default reasoning subset.
+2. Delegated workers should follow `agent-definitions/entry.worker-entry` as their entry contract.
+3. Delegated workers should use `instruction-contracts/role.worker-thinking` as their default reasoning subset.
 4. Do not proxy the full orchestrator boot/governance layer into worker packets unless the task explicitly audits that framework layer.
 5. Worker packets must identify worker-lane semantics explicitly instead of relying on repository-global instruction inheritance.
 

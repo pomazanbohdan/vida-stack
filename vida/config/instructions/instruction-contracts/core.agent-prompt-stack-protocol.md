@@ -75,10 +75,10 @@ Do not begin bounded work when:
 
 ## Related
 
-1. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-2. `vida/config/instructions/instruction-contracts/core.skill-activation-protocol.md`
-3. `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`
-4. `vida/config/instructions/system-maps/protocol.index.md`
+1. `instruction-contracts/core.orchestration-protocol`
+2. `instruction-contracts/core.skill-activation-protocol`
+3. `instruction-contracts/lane.worker-dispatch-protocol`
+4. `system-maps/protocol.index`
 
 -----
 artifact_path: config/instructions/instruction-contracts/core.agent-prompt-stack-protocol

@@ -5,7 +5,7 @@ Purpose: provide a compact runtime-facing projection of project overlay behavior
 Boundary rule:
 
 1. this file is a compact projection, not the owner of project-overlay law,
-2. the canonical owner remains `vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md`,
+2. the canonical owner remains `runtime-instructions/bridge.project-overlay-protocol`,
 3. consult the owner file for schema details, unsupported-key checks, validation edge cases, or overlay-governance changes.
 
 ## Runtime Role
@@ -13,7 +13,7 @@ Boundary rule:
 1. `vida.config.yaml` is optional project-owned root data,
 2. overlay may activate framework bundles and project routing posture,
 3. overlay must not weaken framework invariants,
-4. framework-owned behavior remains in `AGENTS.md`, `vida/config/instructions/*`, and `taskflow-v0/*`.
+4. framework-owned behavior remains in `AGENTS.md`, `vida/config/instructions/**`, and active TaskFlow runtime-family surfaces.
 
 ## Routine Boot Rules
 
@@ -32,6 +32,11 @@ For routine orchestration, the main overlay questions are:
 3. whether `framework_self_diagnosis` is enabled,
 4. whether `autonomous_execution` changes reporting/continuation behavior,
 5. whether `agent_extensions` are enabled and require registry-aware routing.
+
+Autonomous-execution routing note:
+
+1. when overlay changes reporting or continuation behavior through `autonomous_execution.*`, prefer `instruction-contracts/overlay.autonomous-execution-runtime-capsule` as the routine runtime-facing interpretation surface,
+2. consult `instruction-contracts/overlay.autonomous-execution-protocol` only when boundary, approval, or stop-condition edge cases are not settled by the capsule.
 
 ## Runtime Consequences
 
@@ -59,5 +64,5 @@ schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/runtime-instructions/bridge.project-overlay-runtime-capsule.md
 created_at: '2026-03-13T22:40:00+02:00'
-updated_at: '2026-03-13T22:40:00+02:00'
+updated_at: '2026-03-14T00:15:00+02:00'
 changelog_ref: bridge.project-overlay-runtime-capsule.changelog.jsonl

@@ -5,18 +5,18 @@ Purpose: expose the canonical observability, trace, proving, and runtime-health 
 ## Canonical Surfaces
 
 1. run-graph resumability ledger
-   - `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
+   - `runtime-instructions/core.run-graph-protocol`
 2. context-governance ledger
-   - `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
+   - `runtime-instructions/core.context-governance-protocol`
 3. local trace grading and trace datasets
-   - `vida/config/instructions/runtime-instructions/observability.trace-grading-protocol.md`
+   - `runtime-instructions/observability.trace-grading-protocol`
 4. proving-pack scaffolds
-   - `vida/config/instructions/diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract.md`
+   - `diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract`
 5. task-state reconciliation
-   - `vida/config/instructions/runtime-instructions/work.task-state-reconciliation-protocol.md`
+   - `runtime-instructions/work.task-state-reconciliation-protocol`
 6. protocol/runtime drift diagnostics
-   - `vida/config/instructions/diagnostic-instructions/analysis.protocol-self-diagnosis-protocol.md`
-   - `vida/config/instructions/diagnostic-instructions/analysis.silent-framework-diagnosis-protocol.md`
+   - `diagnostic-instructions/analysis.protocol-self-diagnosis-protocol`
+   - `diagnostic-instructions/analysis.silent-framework-diagnosis-protocol`
 
 ## Activation Triggers
 
@@ -30,15 +30,15 @@ Read this map when:
 ## Routing
 
 1. resumability and node-level runtime state:
-   - continue to `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
+   - continue to `runtime-instructions/core.run-graph-protocol`
 2. governed context and provenance:
-   - continue to `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
+   - continue to `runtime-instructions/core.context-governance-protocol`
 3. trace grading and regression datasets:
-   - continue to `vida/config/instructions/runtime-instructions/observability.trace-grading-protocol.md`
+   - continue to `runtime-instructions/observability.trace-grading-protocol`
 4. proving packs and bounded proving scaffolds:
-   - continue to `vida/config/instructions/diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract.md`
+   - continue to `diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract`
 5. runtime/task drift diagnosis:
-   - continue to `vida/config/instructions/runtime-instructions/work.task-state-reconciliation-protocol.md`
+   - continue to `runtime-instructions/work.task-state-reconciliation-protocol`
    - or the relevant diagnostic protocol
 
 ## Boundary Rule

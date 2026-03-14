@@ -67,8 +67,8 @@ vida/
 Rule:
 
 1. root config artifacts are product law,
-2. `docs/framework/*` and `taskflow-v0/*` are framework/runtime support surfaces outside product law,
-3. `taskflow-v0` and `vida-v1` must read the same root config law.
+2. `docs/framework/*` and active TaskFlow runtime-family implementation surfaces are framework/runtime support surfaces outside product law,
+3. the active TaskFlow runtime family and future direct `vida` runtime closure must read the same root config law.
 4. concrete installed agent IDs, model IDs, and live backend inventory are runtime-owned bridge data, not canonical route or policy law.
 
 ## 4. Canonical Entities

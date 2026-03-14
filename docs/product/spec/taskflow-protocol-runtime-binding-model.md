@@ -8,7 +8,7 @@ Purpose: define how `taskflow` becomes a runtime that actually executes against 
 
 ## 1. Problem
 
-The current system already has substantial protocol canon under `vida/config/instructions/**`, but `taskflow-v0` is still written largely as a runtime substrate beside that canon rather than as a runtime that deterministically consumes protocol contracts.
+The current system already has substantial protocol canon under `vida/config/instructions/**`, but the legacy script-era TaskFlow binding substrate is still documented beside that canon rather than as a runtime that deterministically consumes protocol contracts.
 
 That means:
 
@@ -75,16 +75,16 @@ Canonical shape:
 
 Current implemented bridge surface:
 
-1. `taskflow-v0 protocol-binding build [--json]`
-2. `taskflow-v0 protocol-binding sync [--json]`
-3. `taskflow-v0 protocol-binding status [--json]`
-4. `taskflow-v0 protocol-binding check [--json]`
-5. installed and launcher-owned delegation may still expose the same bounded surface through `vida taskflow ...` or installer bootstrap, but `taskflow-v0` is the script-era primary owner for `v0.2.2`
+1. `vida taskflow protocol-binding build [--json]`
+2. `vida taskflow protocol-binding sync [--json]`
+3. `vida taskflow protocol-binding status [--json]`
+4. `vida taskflow protocol-binding check [--json]`
+5. installed and launcher-owned delegation may still expose the same bounded surface through `vida taskflow ...` or installer bootstrap, but the current bridge still depends on one legacy script-era binding substrate during the `v0.2.2` slice
 
 Current state rule:
 
 1. the implemented bridge stores binding rows and receipts in the authoritative TaskFlow state store,
-2. the bridge first materializes a deterministic compiled JSON payload under `taskflow-v0/generated/protocol_binding.compiled.json`,
+2. the bridge first materializes one deterministic compiled protocol-binding payload,
 3. installer bootstrap and repo-local sync import that compiled payload into `taskflow-state.db`,
 4. runtime execution fails closed when the DB-backed protocol-binding state is missing or invalid,
 5. the installed runtime keeps the same authoritative state path and does not fall back to detached file-log truth,
@@ -111,16 +111,16 @@ Minimum responsibilities:
 
 Current implementation location:
 
-1. bounded `taskflow-v0` tooling surface
-2. `taskflow-v0/config/protocol_binding.seed.json` as the script-era metadata owner
-3. `taskflow-v0/generated/protocol_binding.compiled.json` as the deterministic compiled bridge artifact
-4. `taskflow-v0/helpers/turso_task_store.py` as the DB materialization layer
+1. bounded `vida taskflow protocol-binding` tooling surface
+2. the TaskFlow runtime-family protocol-binding seed payload as the script-era metadata owner
+3. the deterministic compiled protocol-binding payload as the bridge artifact
+4. the TaskFlow runtime-family helper layer as the DB materialization boundary
 5. `scripts/precommit-build-json.sh` as the thin JSON-artifact build hook
 
 Recommended output artifacts:
 
 1. DB-backed TaskFlow binding rows or equivalent state-store records under the authoritative runtime state root
-2. one deterministic compiled bridge payload under `taskflow-v0/generated/protocol_binding.compiled.json`
+2. one deterministic compiled bridge payload
 3. bounded JSON export snapshots derived from that runtime truth for proof, parity, or operator inspection
 
 Invalid pattern:
@@ -145,7 +145,7 @@ Purpose:
 Canonical shape:
 
 1. one dedicated Rust crate for protocol-runtime binding,
-2. optional helper modules inside `crates/vida` and `taskflow-v0` that consume that crate,
+2. optional helper modules inside `crates/vida` and the active TaskFlow runtime-family implementation that consume that crate,
 3. shared typed contracts for activation, gates, blockers, receipts, and proof requirements.
 
 Recommended crate:
@@ -210,11 +210,11 @@ Primary state rule:
 
 The binding layer must consume and stay aligned with at least:
 
-1. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
-2. `vida/config/instructions/system-maps/framework.protocol-domains-map.md`
-3. `vida/config/instructions/system-maps/framework.protocol-layers-map.md`
-4. `vida/config/instructions/system-maps/protocol.index.md`
-5. runtime-bearing protocol owners under `vida/config/instructions/runtime-instructions/**`
+1. `instruction-contracts/bridge.instruction-activation-protocol.md`
+2. `system-maps/framework.protocol-domains-map.md`
+3. `system-maps/framework.protocol-layers-map.md`
+4. `system-maps/protocol.index.md`
+5. runtime-bearing protocol owners under `runtime-instructions/**`
 6. closure and diagnostic protocol owners when they materially affect runtime behavior
 
 The binding layer must not treat changelog entries, transition notes, or generated status artifacts as primary protocol law.
@@ -310,10 +310,10 @@ Database-first acceptance rule:
 1. `docs/product/spec/canonical-runtime-layer-matrix.md`
 2. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
 3. `docs/product/spec/compiled-runtime-bundle-contract.md`
-4. `vida/config/instructions/runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`
-5. `vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
-6. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
-7. `vida/config/instructions/diagnostic-instructions/analysis.protocol-consistency-audit-protocol.md`
+4. `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`
+5. `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
+6. `instruction-contracts/bridge.instruction-activation-protocol.md`
+7. `diagnostic-instructions/analysis.protocol-consistency-audit-protocol.md`
 
 -----
 artifact_path: product/spec/taskflow-protocol-runtime-binding-model

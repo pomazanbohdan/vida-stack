@@ -16,8 +16,8 @@ Runtime start:
 
 1. Confirm project-local TaskFlow runtime.
    Run:
-   - taskflow-v0 status
-   - taskflow-v0 boot snapshot --json --top-limit 5 --ready-limit 5
+   - vida status --json
+   - vida orchestrator-init --json
 
 2. Rebuild bootstrap and project routing context.
    Read:
@@ -83,7 +83,7 @@ For detailed rules, defer to:
 1. `docs/process/project-orchestrator-operating-protocol.md`
 2. `docs/process/project-orchestrator-session-start-protocol.md`
 3. `docs/process/team-development-and-orchestration-protocol.md`
-4. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
+4. `instruction-contracts/core.orchestration-protocol`
 
 ## Routing
 

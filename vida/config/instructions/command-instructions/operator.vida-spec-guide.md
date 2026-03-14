@@ -31,7 +31,7 @@ Handoff boundary:
 
 ## Runtime Invariants
 
-1. Task state SSOT: `taskflow-v0 task` + TaskFlow execution logs only.
+1. Task state SSOT: `vida taskflow task` + TaskFlow execution logs only.
 2. No legacy `state/**` and no separate sync-command behavior.
 3. No hidden side-effects outside TaskFlow workflow.
 4. Do not finalize spec without explicit reassessment confirmation.
@@ -44,7 +44,7 @@ Handoff boundary:
 4. `docs/decisions.md`
 5. `spec-contract-protocol.md`
 6. `web-validation-protocol.md`
-7. `runtime.task-state-telemetry-protocol.md` + `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
+7. `runtime.task-state-telemetry-protocol.md` + `runtime-instructions/work.taskflow-protocol`
 
 ## Commands
 

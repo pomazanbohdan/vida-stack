@@ -13,12 +13,12 @@ Purpose: define a canonical self-diagnosis layer for VIDA runtime protocols so t
 
 This protocol applies to runtime behavior governed by at least:
 
-1. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
-2. `vida/config/instructions/instruction-contracts/overlay.autonomous-execution-protocol.md`
-3. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-4. `vida/config/instructions/runtime-instructions/bridge.spec-sync-protocol.md`
-5. `vida/config/instructions/runtime-instructions/bridge.task-approval-loop-protocol.md`
-6. `vida/config/instructions/diagnostic-instructions/escalation.debug-escalation-protocol.md`
+1. `runtime-instructions/work.taskflow-protocol`
+2. `instruction-contracts/overlay.autonomous-execution-protocol`
+3. `instruction-contracts/core.agent-system-protocol`
+4. `runtime-instructions/bridge.spec-sync-protocol`
+5. `runtime-instructions/bridge.task-approval-loop-protocol`
+6. `diagnostic-instructions/escalation.debug-escalation-protocol`
 
 ## Trigger Conditions
 

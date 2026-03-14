@@ -86,9 +86,9 @@ If any of these are missing, the packet is not ready and must be reshaped.
 
 ## Related
 
-1. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-2. `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`
-3. `vida/config/instructions/system-maps/protocol.index.md`
+1. `instruction-contracts/core.orchestration-protocol`
+2. `instruction-contracts/lane.worker-dispatch-protocol`
+3. `system-maps/protocol.index`
 
 -----
 artifact_path: config/instructions/instruction-contracts/core.packet-decomposition-protocol

@@ -16,7 +16,6 @@ The worker boot inherits only the mandatory shared bootstrap:
 
 1. `AGENTS.md`
 2. `AGENTS.sidecar.md`
-3. `vida/root-map.md`
 
 Rules:
 
@@ -33,18 +32,18 @@ Required packet/runtime markers:
 If those markers are absent or ambiguous:
 
 1. stop using this map,
-2. fall back to `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`.
+2. fall back to `agent-definitions/entry.orchestrator-entry`.
 
 ## Step 2. Read Worker Entry Surfaces
 
 The canonical worker boot read set is:
 
-1. `vida/config/instructions/agent-definitions/entry.worker-entry.md`
-2. `vida/config/instructions/instruction-contracts/role.worker-thinking.md`
+1. `agent-definitions/entry.worker-entry`
+2. `instruction-contracts/role.worker-thinking`
 
 When packet construction or packet validation is active, also read:
 
-1. `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`
+1. `instruction-contracts/lane.worker-dispatch-protocol`
 
 ## Step 3. Apply Bounded Packet Context
 
@@ -58,12 +57,12 @@ The worker may then read only:
 
 Packet-linked canonical references may include, only when the worker packet/task class explicitly requires them:
 
-1. `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`
-2. `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md`
-3. `vida/config/instructions/runtime-instructions/work.verification-merge-protocol.md`
-4. `vida/config/instructions/runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`
-5. `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md`
-6. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
+1. `command-instructions/execution.implement-execution-protocol`
+2. `runtime-instructions/work.verification-lane-protocol`
+3. `runtime-instructions/work.verification-merge-protocol`
+4. `runtime-instructions/recovery.checkpoint-replay-recovery-protocol`
+5. `runtime-instructions/runtime.task-state-telemetry-protocol`
+6. `runtime-instructions/core.run-graph-protocol`
 
 Forbidden by default:
 
@@ -102,10 +101,10 @@ Otherwise return the required bounded result with evidence and verification.
 artifact_path: config/system-maps/worker-boot-flow
 artifact_type: system_map
 artifact_version: '1'
-artifact_revision: '2026-03-10'
+artifact_revision: '2026-03-13'
 schema_version: '1'
 status: canonical
 source_path: vida/config/instructions/system-maps/bootstrap.worker-boot-flow.md
 created_at: '2026-03-10T15:05:00+02:00'
-updated_at: '2026-03-13T07:44:24+02:00'
+updated_at: '2026-03-13T23:20:00+02:00'
 changelog_ref: bootstrap.worker-boot-flow.changelog.jsonl

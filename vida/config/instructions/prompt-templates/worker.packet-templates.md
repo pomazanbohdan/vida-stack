@@ -4,21 +4,21 @@ Purpose: framework-facing maintained reference for the worker-packet template ho
 
 Canonical prompt home for `vida 0.2.0` and `vida 1.0`:
 
-1. `vida/config/instructions/prompt-templates/worker.packet-templates.md`
-2. `vida/config/instructions/prompt-templates/cheap-worker.prompt-pack-reference.md`
+1. `prompt-templates/worker.packet-templates`
+2. `prompt-templates/cheap-worker.prompt-pack-reference`
 
 Rule:
 
 1. The flat prompt-template paths remain the canonical discovery paths.
 2. This clustered document remains the maintained consumer guide and protocol pointer, not the canonical flat source-path owner.
-3. Worker packets bind to `vida/config/instructions/agent-definitions/entry.worker-entry.md` and `vida/config/instructions/instruction-contracts/role.worker-thinking.md`.
+3. Worker packets bind to `agent-definitions/entry.worker-entry` and `instruction-contracts/role.worker-thinking`.
 
 Consumer note:
 
 1. Keep worker-lane confirmation explicit.
 2. Keep one blocking question per packet.
 3. Keep packet law stronger than reusable prompt scaffolding.
-4. For session-derived next-agent prompts or fresh-start continuation packets, follow `vida/config/instructions/runtime-instructions/lane.agent-handoff-context-protocol.md` first and treat this file as rendering guidance only.
+4. For session-derived next-agent prompts or fresh-start continuation packets, follow `runtime-instructions/lane.agent-handoff-context-protocol` first and treat this file as rendering guidance only.
 
 -----
 artifact_path: config/instructions/prompt-templates/reference/worker.packet-templates-guide

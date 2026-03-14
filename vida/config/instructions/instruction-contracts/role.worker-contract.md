@@ -26,9 +26,9 @@ Purpose: express the bounded worker-lane behavior law in human-readable form whi
 
 ## Mandatory Reads
 
-1. `vida/config/instructions/agent-definitions/entry.worker-entry.md`
-2. `vida/config/instructions/instruction-contracts/role.worker-thinking.md`
-3. `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`
+1. `agent-definitions/entry.worker-entry`
+2. `instruction-contracts/role.worker-thinking`
+3. `instruction-contracts/lane.worker-dispatch-protocol`
 
 ## Decision Rules
 
@@ -61,7 +61,7 @@ Purpose: express the bounded worker-lane behavior law in human-readable form whi
 1. Return result status and whether the blocking question was answered.
 2. Include evidence references and blockers.
 3. Include verification evidence when the packet requires it.
-4. When the packet or runtime requires a machine-readable delivery summary, defer to `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md` as the canonical field contract rather than inventing a looser local schema.
+4. When the packet or runtime requires a machine-readable delivery summary, defer to `instruction-contracts/lane.worker-dispatch-protocol` as the canonical field contract rather than inventing a looser local schema.
 
 -----
 artifact_path: config/instructions/instruction-contracts/role.worker.contract

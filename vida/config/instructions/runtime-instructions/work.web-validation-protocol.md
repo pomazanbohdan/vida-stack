@@ -7,7 +7,7 @@ Scope:
 1. Mandatory for all VIDA flows when external assumptions may affect decisions.
 2. Part of the orchestrator lean-execution boot read set through `entry.orchestrator-entry.md`, `bootstrap.orchestrator-boot-flow.md`, and `bridge.instruction-activation-protocol.md`.
 3. Worker lanes use this protocol only when the active packet or activating companion protocol requires external validation for the bounded decision.
-4. Used by `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md` and `vida/config/instructions/runtime-instructions/work.spec-contract-protocol.md` as single source for step-level and spec-level external validation.
+4. Used by `instruction-contracts/overlay.step-thinking-protocol` and `runtime-instructions/work.spec-contract-protocol` as single source for step-level and spec-level external validation.
 
 ## Core Contract
 
@@ -173,9 +173,9 @@ Recommended bands:
 
 ## Integration Map
 
-1. `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md#section-web-search`: router-level trigger map and algorithm integration.
-2. `vida/config/instructions/runtime-instructions/work.spec-contract-protocol.md`: SCP gates and weighted readiness model.
-3. `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`: execution-time validation before code decisions.
+1. `instruction-contracts/overlay.step-thinking-protocol#section-web-search`: router-level trigger map and algorithm integration.
+2. `runtime-instructions/work.spec-contract-protocol`: SCP gates and weighted readiness model.
+3. `command-instructions/execution.implement-execution-protocol`: execution-time validation before code decisions.
 
 ## Fail Conditions
 

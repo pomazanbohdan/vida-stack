@@ -6,7 +6,7 @@ Status note:
 
 1. this file is `non-canonical reference material`,
 2. it does not own pack law, handoff law, completion law, or orchestration law,
-3. it exists only to centralize migration-only wrapper entrypoints while `taskflow-v0` remains the target runtime home.
+3. it exists only to centralize migration-only wrapper entrypoints while the TaskFlow runtime family remains the target runtime home.
 
 ## Legacy Pack Wrapper Catalog
 
@@ -16,7 +16,7 @@ Legacy wrappers still seen in active canon:
 2. `vida-pack-router.sh`
 3. `nondev-pack-init.sh`
 
-These wrappers remain migration-only helpers per `vida/config/instructions/system-maps/migration.runtime-transition-map.md`.
+These wrappers remain migration-only helpers per `system-maps/migration.runtime-transition-map`.
 
 ## Wrapper-To-Owner Map
 
@@ -27,26 +27,26 @@ Use this note only to find the current canonical owner behind a legacy wrapper b
      - `vida-pack-helper.sh detect`
      - `vida-pack-router.sh`
    - canonical owners:
-     - `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-     - `vida/config/instructions/command-instructions/routing.use-case-packs-protocol.md`
+     - `instruction-contracts/core.orchestration-protocol`
+     - `command-instructions/routing.use-case-packs-protocol`
 2. non-dev pack bootstrap
    - legacy helper:
      - `nondev-pack-init.sh`
      - `vida-pack-helper.sh start`
    - canonical owners:
-     - `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
-     - `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md`
+     - `runtime-instructions/work.taskflow-protocol`
+     - `runtime-instructions/runtime.task-state-telemetry-protocol`
 3. pack session scaffolding
    - legacy helper:
      - `vida-pack-helper.sh scaffold`
    - canonical owner:
-     - `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
+     - `runtime-instructions/work.taskflow-protocol`
 4. pack completion / close
    - legacy helper:
      - `vida-pack-helper.sh end`
    - canonical owners:
-     - `vida/config/instructions/runtime-instructions/work.pack-completion-gate-protocol.md`
-     - `vida/config/instructions/runtime-instructions/work.pack-handoff-protocol.md`
+     - `runtime-instructions/work.pack-completion-gate-protocol`
+     - `runtime-instructions/work.pack-handoff-protocol`
 
 ## Hard Boundary
 
@@ -56,11 +56,11 @@ Use this note only to find the current canonical owner behind a legacy wrapper b
 
 ## Current Migration Direction
 
-1. active pack routing law stays in `vida/config/instructions/command-instructions/routing.use-case-packs-protocol.md`
-2. active orchestration entry/routing law stays in `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-3. active pack handoff law stays in `vida/config/instructions/runtime-instructions/work.pack-handoff-protocol.md`
-4. active pack completion law stays in `vida/config/instructions/runtime-instructions/work.pack-completion-gate-protocol.md`
-5. active migration-status registry stays in `vida/config/instructions/system-maps/migration.runtime-transition-map.md`
+1. active pack routing law stays in `command-instructions/routing.use-case-packs-protocol`
+2. active orchestration entry/routing law stays in `instruction-contracts/core.orchestration-protocol`
+3. active pack handoff law stays in `runtime-instructions/work.pack-handoff-protocol`
+4. active pack completion law stays in `runtime-instructions/work.pack-completion-gate-protocol`
+5. active migration-status registry stays in `system-maps/migration.runtime-transition-map`
 
 -----
 artifact_path: config/command-instructions/pack-wrapper-migration.note

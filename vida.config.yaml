@@ -1,26 +1,194 @@
 project:
-  id: vida-stack
+  id: vida-test
   overlay_version: 1
 
 project_bootstrap:
   enabled: true
   docs_root: docs
   process_root: docs/process
-  research_root: docs/product/research
+  research_root: docs/research
   readme_doc: README.md
-  architecture_doc: docs/project-root-map.md
-  decisions_doc: docs/product/spec/current-spec-map.md
-  environments_doc: docs/product/spec/repository-two-project-surface-model.md
-  project_operations_doc: docs/process/README.md
-  agent_system_doc: docs/process/agent-system-guide.md
-  allow_scaffold_missing: true
+  architecture_doc: docs/product/architecture.md
+  decisions_doc: docs/process/decisions.md
+  environments_doc: docs/process/environments.md
+  project_operations_doc: docs/process/project-operations.md
+  agent_system_doc: docs/process/agent-system.md
+  allow_scaffold_missing: false
   require_launch_confirmation: false
 
 language_policy:
-  user_communication: uk
-  reasoning: en
-  documentation: en
-  todo_protocol: en
+  user_communication: english
+  reasoning: english
+  documentation: english
+  todo_protocol: english
+
+host_environment:
+  cli_system: codex
+  codex:
+    agents:
+      junior:
+        tier: junior
+        description: Level 1 Codex lane for cheap bounded implementation packets that own one explicit write scope and return concrete delivery evidence without self-approving closure.
+        rate: 1
+        reasoning_band: low
+        model: gpt-5.4
+        model_reasoning_effort: low
+        sandbox_mode: workspace-write
+        default_runtime_role: worker
+        runtime_roles:
+          - worker
+        task_classes:
+          - implementation
+          - delivery_task
+          - execution_block
+      middle:
+        tier: middle
+        description: Level 2 Codex lane for bounded specification, planning, spec-conformance coach review, and medium implementation packets when the work still fits one packet and does not require senior proof or architecture escalation.
+        rate: 4
+        reasoning_band: medium
+        model: gpt-5.4
+        model_reasoning_effort: medium
+        sandbox_mode: workspace-write
+        default_runtime_role: coach
+        runtime_roles:
+          - business_analyst
+          - pm
+          - coach
+          - worker
+        task_classes:
+          - specification
+          - planning
+          - coach
+          - implementation_medium
+      senior:
+        tier: senior
+        description: Level 3 Codex lane for independent verification, proof-strength review, and high-confidence closure gates that fail closed on missing evidence.
+        rate: 16
+        reasoning_band: high
+        model: gpt-5.4
+        model_reasoning_effort: high
+        sandbox_mode: read-only
+        default_runtime_role: verifier
+        runtime_roles:
+          - verifier
+          - prover
+        task_classes:
+          - verification
+          - review
+          - quality_gate
+          - release_readiness
+      architect:
+        tier: architect
+        description: Level 4 Codex lane for architecture preparation, hard escalation, and cross-scope conflict resolution when the normal implementer-coach-verifier path cannot close lawfully.
+        rate: 32
+        reasoning_band: xhigh
+        model: gpt-5.4
+        model_reasoning_effort: high
+        sandbox_mode: read-only
+        default_runtime_role: solution_architect
+        runtime_roles:
+          - solution_architect
+        task_classes:
+          - architecture
+          - execution_preparation
+          - hard_escalation
+          - meta_analysis
+    dispatch_aliases:
+      development_implementer:
+        carrier_tier: junior
+        description: Internal VIDA Codex implementer dispatch alias for one bounded write-producing packet. Runtime should still activate the selected carrier tier directly and pass `runtime_role=worker`.
+        runtime_role: worker
+        runtime_roles:
+          - worker
+        task_classes:
+          - implementation
+          - delivery_task
+          - execution_block
+        developer_instructions: |
+          You are the internal VIDA Codex development_implementer dispatch alias.
+
+          Carrier:
+          1. Default carrier tier: junior.
+          2. Runtime role: worker.
+          3. Mission: execute one bounded write-producing packet and return concrete delivery evidence.
+
+          Boundaries:
+          1. Do not self-approve closure.
+          2. Do not replace coach, verifier, or escalation lanes.
+          3. Do not widen from one bounded packet into epic or milestone scope.
+          4. If the packet is missing owned paths, definition of done, verification target, or stop rules, fail closed and return the packet for reshaping.
+      development_coach:
+        carrier_tier: middle
+        description: Internal VIDA Codex coach dispatch alias for packet-local implemented-result versus approved-spec conformance. Runtime should still activate the selected carrier tier directly and pass `runtime_role=coach`.
+        runtime_role: coach
+        runtime_roles:
+          - coach
+        task_classes:
+          - coach
+          - specification
+          - planning
+        developer_instructions: |
+          You are the internal VIDA Codex development_coach dispatch alias.
+
+          Carrier:
+          1. Default carrier tier: middle.
+          2. Runtime role: coach.
+          3. Mission: judge whether the implemented result matches the approved spec, acceptance criteria, and definition of done.
+
+          Boundaries:
+          1. Coach is formative review only.
+          2. Do not replace independent verification.
+          3. Do not rewrite the implementation unless the bounded packet explicitly grants that authority.
+          4. Return either bounded approval-forward or bounded rework with concrete drift evidence.
+      development_verifier:
+        carrier_tier: senior
+        description: Internal VIDA Codex verifier dispatch alias for independent proof, risk review, and closure readiness. Runtime should still activate the selected carrier tier directly and pass `runtime_role=verifier`.
+        runtime_role: verifier
+        runtime_roles:
+          - verifier
+          - prover
+        task_classes:
+          - verification
+          - review
+          - quality_gate
+          - release_readiness
+        developer_instructions: |
+          You are the internal VIDA Codex development_verifier dispatch alias.
+
+          Carrier:
+          1. Default carrier tier: senior.
+          2. Runtime role: verifier.
+          3. Mission: perform independent proof, bounded verification, and closure-readiness review.
+
+          Boundaries:
+          1. Stay independent from implementer and coach conclusions.
+          2. Do not collapse into formative coaching.
+          3. Do not widen from one bounded proof packet into milestone-wide approval.
+          4. Fail closed when proof, evidence, or acceptance coverage is missing.
+      development_escalation:
+        carrier_tier: architect
+        description: Internal VIDA Codex escalation dispatch alias for architecture preparation, hard conflicts, and cross-scope arbitration. Runtime should still activate the selected carrier tier directly and pass `runtime_role=solution_architect`.
+        runtime_role: solution_architect
+        runtime_roles:
+          - solution_architect
+        task_classes:
+          - architecture
+          - execution_preparation
+          - hard_escalation
+          - meta_analysis
+        developer_instructions: |
+          You are the internal VIDA Codex development_escalation dispatch alias.
+
+          Carrier:
+          1. Default carrier tier: architect.
+          2. Runtime role: solution_architect.
+          3. Mission: resolve architecture preparation, hard escalation, or cross-scope conflict packets that block normal closure.
+
+          Boundaries:
+          1. Do not become the normal default lane.
+          2. Do not replace the steady-state implementer, coach, or verifier path.
+          3. Prefer decisions that restore one-owner bounded packet closure.
+          4. Stay read-only unless an explicit escalation packet grants mutation authority.
 
 protocol_activation:
   agent_system: true
@@ -32,8 +200,8 @@ party_chat:
   model_routing_strategy: by_role
   default_board_size: small
   min_experts: 2
-  max_experts: 6
-  hard_cap_agents: 8
+  max_experts: 16
+  hard_cap_agents: 20
   dei_enabled: true
   single_agent:
     backend: internal_subagents
@@ -57,10 +225,22 @@ party_chat:
     party_chat_product_scope:
       backend: internal_subagents
       model: internal_fast
+    party_chat_system_analyst:
+      backend: internal_subagents
+      model: internal_review
+    party_chat_product_designer:
+      backend: internal_subagents
+      model: internal_fast
     party_chat_security_safety:
       backend: internal_subagents
       model: internal_review
     party_chat_sre_observability:
+      backend: internal_subagents
+      model: internal_review
+    party_chat_qa_tester:
+      backend: internal_subagents
+      model: internal_review
+    party_chat_accessibility_ux:
       backend: internal_subagents
       model: internal_review
     party_chat_data_contracts:
@@ -72,20 +252,24 @@ party_chat:
     party_chat_pm_process:
       backend: internal_subagents
       model: internal_review
+    party_chat_release_manager:
+      backend: internal_subagents
+      model: internal_review
 
 agent_extensions:
   enabled: true
-  map_doc: docs/process/agent-extensions/README.md
+  map_doc: .vida/project/agent-extensions/README.md
   registries:
-    roles: docs/process/agent-extensions/roles.yaml
-    skills: docs/process/agent-extensions/skills.yaml
-    profiles: docs/process/agent-extensions/profiles.yaml
-    flows: docs/process/agent-extensions/flows.yaml
+    roles: .vida/project/agent-extensions/roles.yaml
+    skills: .vida/project/agent-extensions/skills.yaml
+    profiles: .vida/project/agent-extensions/profiles.yaml
+    flows: .vida/project/agent-extensions/flows.yaml
   enabled_framework_roles:
     - orchestrator
     - worker
     - business_analyst
     - pm
+    - solution_architect
     - coach
     - verifier
     - prover
@@ -100,11 +284,16 @@ agent_extensions:
     - party_chat_quality_verification
     - party_chat_delivery_cost
     - party_chat_product_scope
+    - party_chat_system_analyst
+    - party_chat_product_designer
     - party_chat_security_safety
     - party_chat_sre_observability
+    - party_chat_qa_tester
+    - party_chat_accessibility_ux
     - party_chat_data_contracts
     - party_chat_dx_tooling
     - party_chat_pm_process
+    - party_chat_release_manager
   enabled_project_skills:
     - party_chat_council_reasoning
     - party_chat_architecture_reasoning
@@ -112,11 +301,16 @@ agent_extensions:
     - party_chat_verification_reasoning
     - party_chat_delivery_tradeoffs
     - party_chat_product_scope
+    - party_chat_system_analysis
+    - party_chat_product_design
     - party_chat_security_safety
     - party_chat_observability
+    - party_chat_quality_testing
+    - party_chat_accessibility_ux
     - party_chat_data_contracts
     - party_chat_dx_tooling
     - party_chat_pm_process
+    - party_chat_release_management
   enabled_shared_skills: []
   enabled_project_profiles:
     - party_chat_facilitator_profile
@@ -125,14 +319,20 @@ agent_extensions:
     - party_chat_quality_verification_profile
     - party_chat_delivery_cost_profile
     - party_chat_product_scope_profile
+    - party_chat_system_analyst_profile
+    - party_chat_product_designer_profile
     - party_chat_security_safety_profile
     - party_chat_sre_observability_profile
+    - party_chat_qa_tester_profile
+    - party_chat_accessibility_ux_profile
     - party_chat_data_contracts_profile
     - party_chat_dx_tooling_profile
     - party_chat_pm_process_profile
+    - party_chat_release_manager_profile
   enabled_project_flows:
     - party_chat_council_small
     - party_chat_council_large
+    - party_chat_council_modern_full
   default_flow_set: verified
   role_selection:
     mode: auto

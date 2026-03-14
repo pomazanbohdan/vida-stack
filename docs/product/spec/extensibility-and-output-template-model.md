@@ -51,6 +51,7 @@ Template rule:
 6. Release-1 augmentable-but-not-replaceable upper system surfaces are limited to:
    - output/render templates,
    - onboarding/interview templates,
+   - feature/change design-document templates,
    - project-facing packet or artifact formats that deepen a sealed governing protocol without replacing it.
 7. routing, activation, approval, readiness, execution, and safety protocols remain sealed even when project sidecars or templates deepen the user-facing rendering around them.
 
@@ -110,10 +111,10 @@ This strategy must define:
 artifact_path: product/spec/extensibility-and-output-template-model
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-13'
+artifact_revision: '2026-03-14'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/extensibility-and-output-template-model.md
 created_at: '2026-03-13T08:39:49+02:00'
-updated_at: '2026-03-13T08:47:25+02:00'
+updated_at: '2026-03-14T17:15:00+02:00'
 changelog_ref: extensibility-and-output-template-model.changelog.jsonl

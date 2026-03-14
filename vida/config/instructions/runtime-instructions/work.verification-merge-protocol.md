@@ -12,12 +12,12 @@ Purpose: define the canonical executable admissibility and merge surface for rev
 
 ## Canonical Runtime Surfaces
 
-1. `taskflow-v0/src/gates/verification_merge.nim`
-2. `taskflow-v0 verification admissibility <required_results> <results_json_file|-> [required_categories_csv] [--json]`
-3. `taskflow-v0 verification merge <policy> <required_results> <results_json_file|-> [required_categories_csv] [quorum] [--json]`
+1. `system-maps/runtime-family.taskflow-map`
+2. `vida taskflow verification admissibility <required_results> <results_json_file|-> [required_categories_csv] [--json]`
+3. `vida taskflow verification merge <policy> <required_results> <results_json_file|-> [required_categories_csv] [quorum] [--json]`
 4. `docs/product/spec/verification-merge-law.md`
-5. `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md`
-6. `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`
+5. `runtime-instructions/work.verification-lane-protocol`
+6. `command-instructions/execution.implement-execution-protocol`
 
 ## Admissibility Rule
 
@@ -70,8 +70,8 @@ Layered runtime closure may rely on merged verification only when:
 
 ## References
 
-1. `vida/config/instructions/runtime-instructions/work.human-approval-protocol.md`
-2. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
+1. `runtime-instructions/work.human-approval-protocol`
+2. `runtime-instructions/work.taskflow-protocol`
 3. `docs/product/spec/canonical-runtime-layer-matrix.md`
 
 -----

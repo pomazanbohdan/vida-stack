@@ -33,8 +33,8 @@ This plan must align with all of the following:
 3. `docs/product/spec/canonical-relation-law.md`
 4. `docs/product/spec/canonical-runtime-readiness-law.md`
 5. `docs/product/spec/root-map-and-runtime-surface-model.md`
-6. `vida/config/instructions/system-maps/runtime-family.docflow-map.md`
-7. `vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
+6. `system-maps/runtime-family.docflow-map.md`
+7. `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
 8. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
 
 Alignment rule:
@@ -457,8 +457,8 @@ Primary donor/runtime sources inspected for parity:
 4. `codex-v0/docsys_project.yaml`
 5. `codex-v0/requirements-python.txt`
 6. `docs/process/documentation-tooling-map.md`
-7. `vida/config/instructions/system-maps/runtime-family.docflow-map.md`
-8. `vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
+7. `system-maps/runtime-family.docflow-map.md`
+8. `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
 9. `taskflow-v0/src/core/direct_consumption.nim`
 10. `install/install.sh`
 11. `scripts/docsys/print-markdown-summary-jsonl.py`

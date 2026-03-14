@@ -10,9 +10,9 @@ This protocol applies to CLI backend onboarding inside:
 
 1. `vida.config.yaml`
 2. `docs/framework/templates/vida.config.yaml.template`
-3. `taskflow-v0 system ...`
-4. `taskflow-v0 prepare-execution ...`
-5. `taskflow-v0 registry ...`
+3. `vida taskflow system ...`
+4. `vida taskflow prepare-execution ...`
+5. `vida taskflow registry ...`
 
 ## Lifecycle
 
@@ -67,7 +67,7 @@ This file does not own:
 3. orchestrator task-state ownership,
 4. worker packet law.
 
-Those generic runtime concerns remain owned by `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`.
+Those generic runtime concerns remain owned by `instruction-contracts/core.agent-system-protocol`.
 
 -----
 artifact_path: config/instructions/agent-backends/role.backend-lifecycle.protocol

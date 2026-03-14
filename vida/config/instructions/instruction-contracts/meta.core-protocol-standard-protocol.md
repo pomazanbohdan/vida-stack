@@ -15,10 +15,10 @@ This protocol governs only the standard for `core` protocol artifacts.
 
 It does not replace:
 
-1. the cluster stitching and owner split map in `vida/config/instructions/system-maps/framework.core-protocols-map.md`,
+1. the cluster stitching and owner split map in `system-maps/framework.core-protocols-map`,
 2. the framework-wide layer model in `docs/product/spec/framework-project-documentation-layer-model.md`,
 3. the runtime layer matrix in `docs/product/spec/canonical-runtime-layer-matrix.md`,
-4. the naming grammar in `vida/config/instructions/instruction-contracts/meta.protocol-naming-grammar-protocol.md`.
+4. the naming grammar in `instruction-contracts/meta.protocol-naming-grammar-protocol`.
 
 ## Core Principle
 
@@ -219,11 +219,11 @@ Changes to a `core` protocol standard or to a `core` protocol under this standar
 ## Routing
 
 1. for cluster composition and required peer edges:
-   - continue to `vida/config/instructions/system-maps/framework.core-protocols-map.md`
+   - continue to `system-maps/framework.core-protocols-map`
 2. for owner-layer placement:
-   - continue to `vida/config/instructions/system-maps/framework.protocol-layers-map.md`
+   - continue to `system-maps/framework.protocol-layers-map`
 3. for filename grammar and artifact naming:
-   - continue to `vida/config/instructions/instruction-contracts/meta.protocol-naming-grammar-protocol.md`
+   - continue to `instruction-contracts/meta.protocol-naming-grammar-protocol`
 4. for runtime-layer placement of runtime-side `core` concerns:
    - continue to `docs/product/spec/canonical-runtime-layer-matrix.md`
 

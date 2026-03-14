@@ -50,10 +50,10 @@ Activated immediately after bootstrap according to lane resolution.
 
 Canonical owners:
 
-1. `vida/config/instructions/agent-definitions/entry.orchestrator-entry.md`
-2. `vida/config/instructions/agent-definitions/entry.worker-entry.md`
-3. `vida/config/instructions/instruction-contracts/role.worker-thinking.md`
-4. `vida/config/instructions/instruction-contracts/overlay.session-context-continuity-protocol.md` in orchestrator lane
+1. `agent-definitions/entry.orchestrator-entry`
+2. `agent-definitions/entry.worker-entry`
+3. `instruction-contracts/role.worker-thinking`
+4. `instruction-contracts/overlay.session-context-continuity-protocol` in orchestrator lane
 
 Allowed responsibilities:
 
@@ -75,33 +75,33 @@ Activated only when the task route, risk, or artifact flow requires it.
 
 Canonical examples:
 
-1. `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`
-2. `vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md`
-3. `vida/config/instructions/runtime-instructions/work.web-validation-protocol.md`
-4. `vida/config/instructions/runtime-instructions/bridge.issue-contract-protocol.md`
-5. `vida/config/instructions/runtime-instructions/work.spec-intake-protocol.md`
-6. `vida/config/instructions/runtime-instructions/work.spec-delta-protocol.md`
-7. `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`
-8. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-9. `vida/config/instructions/runtime-instructions/work.problem-party-protocol.md`
-10. `vida/config/instructions/instruction-contracts/overlay.autonomous-execution-protocol.md`
-11. `vida/config/instructions/runtime-instructions/work.execution-priority-protocol.md`
-12. `vida/config/instructions/instruction-contracts/work.documentation-operation-protocol.md`
-13. `vida/config/instructions/instruction-contracts/work.documentation-layer7-migration-protocol.md`
-14. `vida/config/instructions/runtime-instructions/lane.agent-handoff-context-protocol.md`
-15. `vida/config/instructions/runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`
-16. `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md`
-17. `vida/config/instructions/agent-definitions/role.role-profile-contract.md`
-18. `vida/config/instructions/runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`
-19. `vida/config/instructions/runtime-instructions/work.verification-merge-protocol.md`
-20. `vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
-21. `vida/config/instructions/instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol.md`
-22. `vida/config/instructions/instruction-contracts/meta.protocol-naming-grammar-protocol.md`
-23. `vida/config/instructions/instruction-contracts/meta.core-protocol-standard-protocol.md`
-24. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
-25. `vida/config/instructions/instruction-contracts/core.skill-activation-protocol.md`
-26. `vida/config/instructions/instruction-contracts/core.packet-decomposition-protocol.md`
-27. `vida/config/instructions/instruction-contracts/core.agent-prompt-stack-protocol.md`
+1. `runtime-instructions/work.taskflow-protocol`
+2. `runtime-instructions/runtime.task-state-telemetry-protocol`
+3. `runtime-instructions/work.web-validation-protocol`
+4. `runtime-instructions/bridge.issue-contract-protocol`
+5. `runtime-instructions/work.spec-intake-protocol`
+6. `runtime-instructions/work.spec-delta-protocol`
+7. `command-instructions/execution.implement-execution-protocol`
+8. `instruction-contracts/core.agent-system-protocol`
+9. `runtime-instructions/work.problem-party-protocol`
+10. `instruction-contracts/overlay.autonomous-execution-protocol`
+11. `runtime-instructions/work.execution-priority-protocol`
+12. `instruction-contracts/work.documentation-operation-protocol`
+13. `instruction-contracts/work.documentation-layer7-migration-protocol`
+14. `runtime-instructions/lane.agent-handoff-context-protocol`
+15. `runtime-instructions/recovery.checkpoint-replay-recovery-protocol`
+16. `runtime-instructions/work.verification-lane-protocol`
+17. `agent-definitions/role.role-profile-contract`
+18. `runtime-instructions/runtime.runtime-kernel-bundle-protocol`
+19. `runtime-instructions/work.verification-merge-protocol`
+20. `runtime-instructions/runtime.direct-runtime-consumption-protocol`
+21. `instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol`
+22. `instruction-contracts/meta.protocol-naming-grammar-protocol`
+23. `instruction-contracts/meta.core-protocol-standard-protocol`
+24. `runtime-instructions/core.run-graph-protocol`
+25. `instruction-contracts/core.skill-activation-protocol`
+26. `instruction-contracts/core.packet-decomposition-protocol`
+27. `instruction-contracts/core.agent-prompt-stack-protocol`
 
 Rule:
 
@@ -113,10 +113,10 @@ Activated only near checkpoint, handoff, finish, or framework-diagnosis reflecti
 
 Canonical examples:
 
-1. `vida/config/instructions/runtime-instructions/work.task-state-reconciliation-protocol.md`
-2. `vida/config/instructions/diagnostic-instructions/analysis.silent-framework-diagnosis-protocol.md`
-3. `vida/config/instructions/diagnostic-instructions/analysis.framework-self-analysis-protocol.md`
-4. `vida/config/instructions/runtime-instructions/work.human-approval-protocol.md`
+1. `runtime-instructions/work.task-state-reconciliation-protocol`
+2. `diagnostic-instructions/analysis.silent-framework-diagnosis-protocol`
+3. `diagnostic-instructions/analysis.framework-self-analysis-protocol`
+4. `runtime-instructions/work.human-approval-protocol`
 
 Rule:
 
@@ -188,57 +188,58 @@ The following canonical protocol-bearing artifacts are explicitly covered by thi
 
 ### Triggered-domain coverage
 
-1. `vida/config/instructions/agent-backends/role.backend-lifecycle-protocol.md`
-2. `vida/config/instructions/agent-definitions/model.agent-definitions-contract.md`
-3. `vida/config/instructions/command-instructions/execution.bug-fix-protocol.md`
-4. `vida/config/instructions/command-instructions/routing.command-layer-protocol.md`
-5. `vida/config/instructions/command-instructions/routing.use-case-packs-protocol.md`
-6. `vida/config/instructions/command-instructions/planning.form-task-protocol.md`
-7. `vida/config/instructions/command-instructions/execution.project-bootstrap-protocol.md`
-8. `vida/config/instructions/diagnostic-instructions/escalation.debug-escalation-protocol.md`
-9. `vida/config/instructions/diagnostic-instructions/evaluation.library-evaluation-protocol.md`
-10. `vida/config/instructions/diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract.md`
-11. `vida/config/instructions/diagnostic-instructions/analysis.protocol-self-diagnosis-protocol.md`
-12. `vida/config/instructions/diagnostic-instructions/analysis.protocol-consistency-audit-protocol.md`
-13. `vida/config/instructions/diagnostic-instructions/analysis.self-reflection-protocol.md`
-14. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-15. `vida/config/instructions/instruction-contracts/core.skill-activation-protocol.md`
-16. `vida/config/instructions/instruction-contracts/core.packet-decomposition-protocol.md`
-17. `vida/config/instructions/instruction-contracts/core.agent-prompt-stack-protocol.md`
-18. `vida/config/instructions/instruction-contracts/overlay.step-thinking-protocol.md`
-19. `vida/config/instructions/instruction-contracts/overlay.session-context-continuity-protocol.md`
-20. `vida/config/instructions/instruction-contracts/lane.worker-dispatch-protocol.md`
-21. `vida/config/instructions/runtime-instructions/model.boot-packet-protocol.md`
-22. `vida/config/instructions/runtime-instructions/core.capability-registry-protocol.md`
-23. `vida/config/instructions/runtime-instructions/core.context-governance-protocol.md`
-24. `vida/config/instructions/runtime-instructions/work.document-lifecycle-protocol.md`
-25. `vida/config/instructions/runtime-instructions/runtime.export-protocol.md`
-26. `vida/config/instructions/runtime-instructions/runtime.framework-memory-protocol.md`
-27. `vida/config/instructions/runtime-instructions/bridge.project-overlay-protocol.md`
-28. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
-29. `vida/config/instructions/runtime-instructions/work.spec-contract-protocol.md`
-30. `vida/config/instructions/runtime-instructions/work.spec-freshness-protocol.md`
-31. `vida/config/instructions/runtime-instructions/bridge.spec-sync-protocol.md`
-32. `vida/config/instructions/runtime-instructions/bridge.task-approval-loop-protocol.md`
-33. `vida/config/instructions/runtime-instructions/observability.trace-grading-protocol.md`
-34. `vida/config/instructions/runtime-instructions/lane.agent-handoff-context-protocol.md`
-35. `vida/config/instructions/runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`
-36. `vida/config/instructions/runtime-instructions/work.verification-lane-protocol.md`
-37. `vida/config/instructions/agent-definitions/role.role-profile-contract.md`
-38. `vida/config/instructions/runtime-instructions/work.project-agent-extension-protocol.md`
-39. `vida/config/instructions/runtime-instructions/work.agent-lane-selection-protocol.md`
-40. `vida/config/instructions/runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`
-41. `vida/config/instructions/runtime-instructions/work.verification-merge-protocol.md`
-42. `vida/config/instructions/runtime-instructions/runtime.direct-runtime-consumption-protocol.md`
-43. `vida/config/instructions/runtime-instructions/work.development-evidence-sync-protocol.md`
-44. `vida/config/instructions/runtime-instructions/work.pack-handoff-protocol.md`
-45. `vida/config/instructions/runtime-instructions/work.pack-completion-gate-protocol.md`
-46. `vida/config/instructions/instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol.md`
-47. `vida/config/instructions/instruction-contracts/meta.protocol-naming-grammar-protocol.md`
-48. `vida/config/instructions/instruction-contracts/meta.core-protocol-standard-protocol.md`
-49. `vida/config/instructions/runtime-instructions/work.execution-health-check-protocol.md`
-50. `vida/config/instructions/runtime-instructions/work.command-execution-discipline-protocol.md`
-51. `vida/config/instructions/runtime-instructions/work.change-impact-reconciliation-protocol.md`
+1. `agent-backends/role.backend-lifecycle-protocol`
+2. `agent-definitions/model.agent-definitions-contract`
+3. `command-instructions/execution.bug-fix-protocol`
+4. `command-instructions/routing.command-layer-protocol`
+5. `command-instructions/routing.use-case-packs-protocol`
+6. `command-instructions/planning.form-task-protocol`
+7. `command-instructions/execution.project-bootstrap-protocol`
+8. `diagnostic-instructions/escalation.debug-escalation-protocol`
+9. `diagnostic-instructions/evaluation.library-evaluation-protocol`
+10. `diagnostic-instructions/evaluation.product-proving-pack-scaffold-contract`
+11. `diagnostic-instructions/analysis.protocol-self-diagnosis-protocol`
+12. `diagnostic-instructions/analysis.protocol-consistency-audit-protocol`
+13. `diagnostic-instructions/analysis.self-reflection-protocol`
+14. `instruction-contracts/core.orchestration-protocol`
+15. `instruction-contracts/core.skill-activation-protocol`
+16. `instruction-contracts/core.packet-decomposition-protocol`
+17. `instruction-contracts/core.agent-prompt-stack-protocol`
+18. `instruction-contracts/overlay.step-thinking-protocol`
+19. `instruction-contracts/overlay.session-context-continuity-protocol`
+20. `instruction-contracts/lane.worker-dispatch-protocol`
+21. `runtime-instructions/model.boot-packet-protocol`
+22. `runtime-instructions/core.capability-registry-protocol`
+23. `runtime-instructions/core.context-governance-protocol`
+24. `runtime-instructions/work.document-lifecycle-protocol`
+25. `runtime-instructions/runtime.export-protocol`
+26. `runtime-instructions/runtime.framework-memory-protocol`
+27. `runtime-instructions/bridge.project-overlay-protocol`
+28. `runtime-instructions/core.run-graph-protocol`
+29. `runtime-instructions/work.spec-contract-protocol`
+30. `runtime-instructions/work.spec-freshness-protocol`
+31. `runtime-instructions/bridge.spec-sync-protocol`
+32. `runtime-instructions/bridge.task-approval-loop-protocol`
+33. `runtime-instructions/observability.trace-grading-protocol`
+34. `runtime-instructions/lane.agent-handoff-context-protocol`
+35. `runtime-instructions/recovery.checkpoint-replay-recovery-protocol`
+36. `runtime-instructions/work.verification-lane-protocol`
+37. `agent-definitions/role.role-profile-contract`
+38. `runtime-instructions/work.project-agent-extension-protocol`
+39. `runtime-instructions/work.agent-lane-selection-protocol`
+40. `runtime-instructions/work.host-cli-agent-setup-protocol`
+41. `runtime-instructions/runtime.runtime-kernel-bundle-protocol`
+42. `runtime-instructions/work.verification-merge-protocol`
+43. `runtime-instructions/runtime.direct-runtime-consumption-protocol`
+44. `runtime-instructions/work.development-evidence-sync-protocol`
+45. `runtime-instructions/work.pack-handoff-protocol`
+46. `runtime-instructions/work.pack-completion-gate-protocol`
+47. `instruction-contracts/work.agent-system-new-protocol-development-and-update-protocol`
+48. `instruction-contracts/meta.protocol-naming-grammar-protocol`
+49. `instruction-contracts/meta.core-protocol-standard-protocol`
+50. `runtime-instructions/work.execution-health-check-protocol`
+51. `runtime-instructions/work.command-execution-discipline-protocol`
+52. `runtime-instructions/work.change-impact-reconciliation-protocol`
 
 Coverage rule:
 
@@ -285,7 +286,7 @@ When introducing a new instruction surface:
 
 1. assign one canonical owner,
 2. assign one activation class from this protocol,
-3. add it to `vida/config/instructions/system-maps/protocol.index.md`,
+3. add it to `system-maps/protocol.index`,
 4. update only the minimal pointers in `AGENTS.md` or lane-entry files,
 5. do not restate the full policy body in upper layers.
 

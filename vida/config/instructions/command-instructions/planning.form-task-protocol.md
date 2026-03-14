@@ -20,7 +20,7 @@ For `/vida-form-task`, FTP layers map to CLP as follows:
 4. `CL4 Materialization` -> `FTP-4 Task Pool Build` + `FTP-5 Dependency Graph + Track Routing`
 5. `CL5 Gates And Handoff` -> `FTP-6 Readiness Verdict` + `FTP-7 Launch Gate`
 
-Canonical layer source: `vida/config/instructions/command-instructions/routing.command-layer-protocol.md`
+Canonical layer source: `command-instructions/routing.command-layer-protocol`
 
 ## Core Contract
 
@@ -29,23 +29,23 @@ Canonical layer source: `vida/config/instructions/command-instructions/routing.c
 1. study approved spec inputs,
 2. generate task-scope options,
 3. ask structured approval questions,
-4. create/update tasks and dependencies in the DB-backed `taskflow-v0 task` surface,
+4. create/update tasks and dependencies in the DB-backed `vida taskflow task` surface,
 5. block implementation start until explicit user confirmation,
-6. hand off execution only to `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md`.
+6. hand off execution only to `command-instructions/execution.implement-execution-protocol`.
 7. own epic-level scope boundary and ordering approval before task generation.
 
 ## Mandatory Inputs
 
 1. Normalized `spec_intake` artifact when the upstream scope originated from mixed research, release signals, or unresolved user clarification.
 1. Spec scope and decisions.
-1.1. Equivalent bugfix paths may use approved `issue_contract` input from `vida/config/instructions/runtime-instructions/bridge.issue-contract-protocol.md` instead of a longer SCP artifact when the scope is already bounded.
+1.1. Equivalent bugfix paths may use approved `issue_contract` input from `runtime-instructions/bridge.issue-contract-protocol` instead of a longer SCP artifact when the scope is already bounded.
 1.2. Non-equivalent issue/release paths must carry `spec_delta` reconciliation state before task materialization continues.
 1.3. SCP-driven paths must carry a compact `draft_execution_spec` artifact before task-pool build.
 2. SCP readiness/confidence evidence.
 3. Relevant research references.
 4. Feature checklist entries in scope.
 5. Architecture decisions (`docs/decisions.md`).
-6. WVP evidence for external assumptions (`vida/config/instructions/runtime-instructions/work.web-validation-protocol.md`).
+6. WVP evidence for external assumptions (`runtime-instructions/work.web-validation-protocol`).
 7. Existing scope boundaries from `docs/specs/*` when relevant.
 
 ## Epic Scope Contract (Built-in)
@@ -72,7 +72,7 @@ FTP must decompose approved scope top-down before implementation handoff:
 3. `delivery_task`
    - one single-owner development contract suitable for one author lane plus downstream coach/verifier lanes.
 4. `execution_block`
-   - TaskFlow micro-step created downstream under `vida/config/instructions/runtime-instructions/work.taskflow-protocol.md`.
+   - TaskFlow micro-step created downstream under `runtime-instructions/work.taskflow-protocol`.
 
 Granularity rules:
 
@@ -174,7 +174,7 @@ bash todo-plan-validate.sh <task_id> [--diff-aware]
 3. `FTP-1 Preflight`:
    - verify spec readiness and blocker conditions.
 4. `FTP-1.5 Change-Impact Reconciliation`:
-   - if scope/AC/decision drift exists, route per `vida/config/instructions/runtime-instructions/work.change-impact-reconciliation-protocol.md` before task generation.
+   - if scope/AC/decision drift exists, route per `runtime-instructions/work.change-impact-reconciliation-protocol` before task generation.
 5. `FTP-2 Option Synthesis`:
    - build alternative task-scope strategies.
 6. `FTP-3 User Approval Questions`:
@@ -211,7 +211,7 @@ bash todo-plan-validate.sh <task_id> [--diff-aware]
 16. `BLK_DONE_RULE_MISSING`.
 
 `BLK_CHANGE_IMPACT_PENDING` is raised when approved spec/decisions changed after pool creation.
-Resolution route is owned by `vida/config/instructions/runtime-instructions/work.change-impact-reconciliation-protocol.md`.
+Resolution route is owned by `runtime-instructions/work.change-impact-reconciliation-protocol`.
 
 Task-pool rebuild obligations for this owner:
 
@@ -230,7 +230,7 @@ Task-pool rebuild obligations for this owner:
 
 Execution target:
 
-1. `/vida-implement` must run by `vida/config/instructions/command-instructions/execution.implement-execution-protocol.md` only.
+1. `/vida-implement` must run by `command-instructions/execution.implement-execution-protocol` only.
 
 Without confirmation, `/vida-form-task` ends with `WAITING_USER_CONFIRMATION` and no dev start.
 

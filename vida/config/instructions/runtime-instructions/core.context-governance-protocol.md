@@ -33,11 +33,11 @@ Activate this protocol when at least one is true:
 
 Primary activating companions:
 
-1. `vida/config/instructions/instruction-contracts/core.orchestration-protocol.md`
-2. `vida/config/instructions/instruction-contracts/core.agent-system-protocol.md`
-3. `vida/config/instructions/runtime-instructions/lane.agent-handoff-context-protocol.md`
-4. `vida/config/instructions/runtime-instructions/core.run-graph-protocol.md`
-5. `vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md`
+1. `instruction-contracts/core.orchestration-protocol`
+2. `instruction-contracts/core.agent-system-protocol`
+3. `runtime-instructions/lane.agent-handoff-context-protocol`
+4. `runtime-instructions/core.run-graph-protocol`
+5. `instruction-contracts/bridge.instruction-activation-protocol`
 
 ## Freshness Rules
 
