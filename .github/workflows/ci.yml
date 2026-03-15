@@ -130,8 +130,8 @@ jobs:
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" bash dist/vida-install.sh doctor --root "$INSTALL_ROOT" --bin-dir "$TMP_BIN"
 
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida root >/tmp/vida-root.txt
-          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida doctor >/tmp/vida-doctor.txt
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida boot --state-dir "$TMP_STATE"
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida doctor --state-dir "$TMP_STATE" >/tmp/vida-doctor.txt
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida status --state-dir "$TMP_STATE" --json >/tmp/vida-status.json
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida doctor --state-dir "$TMP_STATE" --json >/tmp/vida-doctor-json.txt
           VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida taskflow help >/tmp/vida-taskflow-help.txt
@@ -142,7 +142,8 @@ jobs:
           )
 
           grep -q "$INSTALL_ROOT/current" /tmp/vida-root.txt
-          grep -q "Doctor check passed" /tmp/vida-doctor.txt
+          grep -q "storage metadata: ok" /tmp/vida-doctor.txt
+          grep -q '"surface": "vida status"' /tmp/vida-status.json
           test -f "$TMP_PROJECT/AGENTS.md"
           test -f "$TMP_PROJECT/AGENTS.sidecar.md"
           test -f "$TMP_PROJECT/vida.config.yaml"
