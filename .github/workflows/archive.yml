@@ -54,27 +54,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Set up Nim
-        uses: jiro4989/setup-nim-action@v2
-        with:
-          nim-version: '2.2.8'
-
-      - name: Install Python runtime dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -m venv .venv
-          .venv/bin/python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
-          .venv/bin/python3 -m pip install --upgrade pip
-          .venv/bin/python3 -m pip install -r codex-v0/requirements-python.txt
-
-      - name: Install Nim dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd taskflow-v0
-          nimble install -y --depsOnly
-
       - name: Build release artifacts
         shell: bash
         run: |

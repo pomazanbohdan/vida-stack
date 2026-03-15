@@ -50,56 +50,14 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Set up Nim
-        uses: jiro4989/setup-nim-action@v2
-        with:
-          nim-version: '2.2.8'
-
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Python runtime dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -m venv .venv
-          .venv/bin/python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
-          .venv/bin/python3 -m pip install --upgrade pip
-          .venv/bin/python3 -m pip install -r codex-v0/requirements-python.txt
-
-      - name: Install Nim dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd taskflow-v0
-          nimble install -y --depsOnly
-
-      - name: Build taskflow runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-          nim c -d:release -o:_temp/taskflow-ci/bin/taskflow-v0 --nimcache:_temp/nimcache/vida_ci taskflow-v0/src/vida.nim
-
-      - name: Run taskflow Nim tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p _temp/nimcache/tests
-          for test_file in taskflow-v0/tests/test_*.nim; do
-            test_name="$(basename "${test_file}" .nim)"
-            nim c -r --nimcache:"_temp/nimcache/tests/${test_name}" "$test_file"
-          done
 
       - name: Run cargo test
         shell: bash
         run: |
           set -euo pipefail
-          cargo test --workspace
+          cargo test --workspace --locked
 
       - name: Build release assets and verify runtime-only package
         shell: bash
@@ -114,19 +72,23 @@ jobs:
           manifests = sorted(Path("dist").glob("vida-stack-v*.manifest.json"))
           assert manifests, "release manifest was not generated"
           data = json.loads(manifests[0].read_text())
-          expected_roots = ["AGENTS.md", "AGENTS.sidecar.md", "bin/taskflow-v0", "codex-v0/", "vida/"]
+          expected_roots = ["AGENTS.md", "AGENTS.sidecar.md", ".codex/", "bin/vida", "install/assets/", "vida/"]
           assert data["included_roots"] == expected_roots, data["included_roots"]
-          assert data["bundled_binaries"] == ["bin/taskflow-v0"], data["bundled_binaries"]
-          assert data["installer_managed_runtimes"] == ["taskflow-v0", "codex-v0"], data["installer_managed_runtimes"]
+          assert data["bundled_binaries"] == ["bin/vida"], data["bundled_binaries"]
+          assert data["installer_managed_runtimes"] == ["vida"], data["installer_managed_runtimes"]
+
           archive = sorted(Path("dist").glob("vida-stack-v*.tar.gz"))[0]
           with tarfile.open(archive, "r:gz") as tf:
             names = tf.getnames()
+
           assert any(name.endswith("/AGENTS.md") for name in names), names[:20]
           assert any(name.endswith("/AGENTS.sidecar.md") for name in names), names[:20]
-          assert any(name.endswith("/bin/taskflow-v0") for name in names), names[:20]
-          assert any("/codex-v0/codex.py" in name for name in names), names[:20]
+          assert any(name.endswith("/bin/vida") for name in names), names[:20]
+          assert any("/.codex/config.toml" in name for name in names), names[:20]
           assert any("/vida/root-map.md" in name for name in names), names[:20]
-          forbidden_roots = ("docs", "crates", "install", "scripts", "taskflow-v0")
+          assert any("/install/assets/vida.config.yaml.template" in name for name in names), names[:20]
+
+          forbidden_roots = ("crates", "scripts", "tests", "target")
           leaked = []
           for name in names:
             parts = name.split("/", 1)
@@ -147,60 +109,59 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TMP_ROOT="/tmp/vida-ci-install-root"
-          TMP_BIN="/tmp/vida-ci-install-bin"
+          TMP_ROOT="$(mktemp -d)"
+          INSTALL_ROOT="$TMP_ROOT/install-root"
+          TMP_BIN="$TMP_ROOT/bin"
+          TMP_STATE="$TMP_ROOT/state"
+          TMP_PROJECT="$TMP_ROOT/project"
           ARCHIVE_PATH="$(find dist -maxdepth 1 -name 'vida-stack-v*.tar.gz' | head -n 1)"
           test -n "$ARCHIVE_PATH"
-          rm -rf "$TMP_ROOT" "$TMP_BIN"
-          mkdir -p "$TMP_BIN"
-          bash dist/vida-install.sh install --archive "$ARCHIVE_PATH" --root "$TMP_ROOT" --bin-dir "$TMP_BIN" --force
-          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" bash dist/vida-install.sh doctor --root "$TMP_ROOT" --bin-dir "$TMP_BIN"
-          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida root >/tmp/vida-root.txt
-          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida doctor >/tmp/vida-doctor.txt
-          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida docflow help >/tmp/vida-docflow-help.txt
-          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida docflow overview --help >/tmp/vida-docflow-overview.txt
-          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" codex-v0 --help >/tmp/codex-v0-help.txt
-          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida taskflow --help >/tmp/vida-taskflow-help.txt
-          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida taskflow task ready --json >/tmp/vida-taskflow-ready-default.json
-          cat > "$TMP_ROOT/taskflow-python-wrapper.sh" <<EOF
-          #!/usr/bin/env bash
-          set -euo pipefail
-          printf '%s\n' "\$1" > /tmp/vida-taskflow-helper-path.txt
-          exec "$TMP_ROOT/current/.venv/bin/python3" "\$@"
-          EOF
-          chmod +x "$TMP_ROOT/taskflow-python-wrapper.sh"
-          VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" VIDA_V0_TURSO_PYTHON="$TMP_ROOT/taskflow-python-wrapper.sh" PATH="$TMP_BIN:$PATH" vida taskflow task ready --json >/tmp/vida-taskflow-ready.json
-          if VIDA_HOME="$TMP_ROOT" VIDA_ROOT="$TMP_ROOT/current" PATH="$TMP_BIN:$PATH" vida docflow summary --format toon >/tmp/vida-docflow-summary.txt 2>/tmp/vida-docflow-summary.err; then
-            echo "vida docflow summary unexpectedly succeeded in installed mode" >&2
-            exit 1
-          fi
-          grep -q "$TMP_ROOT/current" /tmp/vida-root.txt
-          grep -q "Doctor check passed" /tmp/vida-doctor.txt
-          grep -q "VIDA DocFlow compatibility bridge" /tmp/vida-docflow-help.txt
-          grep -q "vida docflow overview \\[args...\\]" /tmp/vida-docflow-help.txt
-          grep -q "codex.py overview" /tmp/vida-docflow-overview.txt
-          grep -q "Codex v0 compatibility wrapper" /tmp/codex-v0-help.txt
-          grep -q 'canonical installed launcher contract' /tmp/codex-v0-help.txt
-          grep -q "unsupported installed-mode command: summary" /tmp/vida-docflow-summary.err
-          grep -q "taskflow-v0 <command> \\[args...\\]" /tmp/vida-taskflow-help.txt
-          grep -q '^\[\]$' /tmp/vida-taskflow-ready-default.json
-          grep -q '^\[\]$' /tmp/vida-taskflow-ready.json
-          grep -q "$TMP_ROOT/current/taskflow-v0/helpers/turso_task_store.py" /tmp/vida-taskflow-helper-path.txt
-          grep -q "<fill-your-project-name>" "$TMP_ROOT/current/AGENTS.sidecar.md"
 
-      - name: Run codex validation
+          mkdir -p "$TMP_BIN" "$TMP_STATE" "$TMP_PROJECT"
+
+          bash dist/vida-install.sh install --archive "$ARCHIVE_PATH" --root "$INSTALL_ROOT" --bin-dir "$TMP_BIN" --force
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" bash dist/vida-install.sh doctor --root "$INSTALL_ROOT" --bin-dir "$TMP_BIN"
+
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida root >/tmp/vida-root.txt
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida doctor >/tmp/vida-doctor.txt
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida boot --state-dir "$TMP_STATE"
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida status --state-dir "$TMP_STATE" --json >/tmp/vida-status.json
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida doctor --state-dir "$TMP_STATE" --json >/tmp/vida-doctor-json.txt
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida taskflow help >/tmp/vida-taskflow-help.txt
+          VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida docflow help >/tmp/vida-docflow-help.txt
+          (
+            cd "$TMP_PROJECT"
+            VIDA_HOME="$INSTALL_ROOT" VIDA_ROOT="$INSTALL_ROOT/current" PATH="$TMP_BIN:$PATH" vida init >/tmp/vida-init.txt
+          )
+
+          grep -q "$INSTALL_ROOT/current" /tmp/vida-root.txt
+          grep -q "Doctor check passed" /tmp/vida-doctor.txt
+          test -f "$TMP_PROJECT/AGENTS.md"
+          test -f "$TMP_PROJECT/AGENTS.sidecar.md"
+          test -f "$TMP_PROJECT/vida.config.yaml"
+
+      - name: Run docflow validation
         shell: bash
         run: |
           set -euo pipefail
-          python3 codex-v0/codex.py fastcheck --profile active-canon
-          python3 codex-v0/codex.py activation-check --profile active-canon
-          python3 codex-v0/codex.py protocol-coverage-check --profile active-canon
-          python3 codex-v0/codex.py readiness-check --profile active-canon
-          python3 codex-v0/codex.py proofcheck --profile active-canon
+          cargo run -p vida -- docflow check-file --path README.md
+          cargo run -p vida -- docflow check-file --path VERSION-PLAN.md
+          cargo run -p vida -- docflow readiness-check --profile active-canon
 
       - name: Run runtime smoke
         shell: bash
         run: |
           set -euo pipefail
-          VIDA_ROOT="$PWD" _temp/taskflow-ci/bin/taskflow-v0 task import-jsonl .beads/issues.jsonl --json >/tmp/task-import.json
-          VIDA_ROOT="$PWD" _temp/taskflow-ci/bin/taskflow-v0 consume final "CI smoke proof path" --json >/tmp/direct-consume.json
+          STATE_DIR="_temp/ci-runtime-state"
+          rm -rf "$STATE_DIR"
+          cargo run -p vida -- boot --state-dir "$STATE_DIR"
+          cargo run -p vida -- status --state-dir "$STATE_DIR" --json >/tmp/ci-status.json
+          cargo run -p vida -- doctor --state-dir "$STATE_DIR" --json >/tmp/ci-doctor.json
+          cargo run -p vida -- task list --state-dir "$STATE_DIR" --json >/tmp/ci-task-list.json
+          cargo run -p vida -- task ready --state-dir "$STATE_DIR" --json >/tmp/ci-task-ready.json
+          cargo run -p vida -- task blocked --state-dir "$STATE_DIR" --json >/tmp/ci-task-blocked.json
+          cargo run -p vida -- orchestrator-init --state-dir "$STATE_DIR" --json >/tmp/ci-orchestrator-init.json
+          cargo run -p vida -- agent-init --role worker --state-dir "$STATE_DIR" --json >/tmp/ci-agent-init.json
+          cargo run -p vida -- project-activator --json >/tmp/ci-project-activator.json
+          cargo run -p vida -- protocol view bootstrap/router >/tmp/ci-protocol-router.txt
+
