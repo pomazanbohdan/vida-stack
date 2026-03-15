@@ -258,12 +258,12 @@ party_chat:
 
 agent_extensions:
   enabled: true
-  map_doc: .vida/project/agent-extensions/README.md
+  map_doc: docs/process/agent-extensions/README.md
   registries:
-    roles: .vida/project/agent-extensions/roles.yaml
-    skills: .vida/project/agent-extensions/skills.yaml
-    profiles: .vida/project/agent-extensions/profiles.yaml
-    flows: .vida/project/agent-extensions/flows.yaml
+    roles: docs/process/agent-extensions/roles.yaml
+    skills: docs/process/agent-extensions/skills.yaml
+    profiles: docs/process/agent-extensions/profiles.yaml
+    flows: docs/process/agent-extensions/flows.yaml
   enabled_framework_roles:
     - orchestrator
     - worker
