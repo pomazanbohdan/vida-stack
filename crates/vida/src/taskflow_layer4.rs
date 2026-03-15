@@ -58,23 +58,30 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("VIDA TaskFlow help: consume");
             println!();
             println!("Purpose:");
-            println!("  Inspect the bounded TaskFlow runtime-consumption bundle and enter the final closure handoff seam.");
-            println!("  Bundle inspection and final closure loop are launcher-owned and in-process over authoritative Rust state plus the bounded DocFlow branch.");
+            println!("  Inspect the bounded TaskFlow runtime-consumption bundle and drive the scheduler-owned closure handoff seam.");
+            println!("  Bundle inspection, final intake, continuation, and bounded advance are launcher-owned and in-process over authoritative Rust state plus the bounded DocFlow branch.");
             println!();
             println!("Canonical commands:");
             println!("  vida taskflow consume bundle [--json]");
             println!("  vida taskflow consume bundle check [--json]");
             println!("  vida taskflow consume final \"<request>\" --json");
+            println!("  vida taskflow consume continue [--run-id <run-id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]");
+            println!(
+                "  vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] [--json]"
+            );
             println!("  vida taskflow bootstrap-spec \"<request>\" --json");
             println!();
             println!("Failure modes:");
             println!("  `bundle` requires a booted authoritative state root and fails closed if runtime bundle surfaces are missing.");
             println!("  Unsupported consume modes fail closed.");
             println!("  `final` fails closed when the runtime bundle is not ready or the bounded DocFlow evidence branch returns blocking results.");
+            println!("  `continue` and `advance` fail closed when no lawful persisted dispatch receipt or packet can be resolved for the requested run.");
             println!();
             println!("Operator recipes:");
             println!("  Verify the active runtime bundle before closure packaging: vida taskflow consume bundle check --json");
-            println!("  Use `consume final` only when the current implementation/proof slice is complete and ready for final closure packaging.");
+            println!("  Materialize one routed intake packet: vida taskflow consume final \"<request>\" --json");
+            println!("  Resume one persisted chain from the latest or selected packet: vida taskflow consume continue [--run-id <run-id>] --json");
+            println!("  Let the bounded scheduler progress ready steps automatically: vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] --json");
             return;
         }
         Some("run-graph") => {
@@ -209,6 +216,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida taskflow task show <task-id> --json");
     println!("  vida taskflow run-graph status <task-id>");
     println!("  vida taskflow consume final \"proof path\" --json");
+    println!("  vida taskflow consume continue --json");
+    println!("  vida taskflow consume advance --max-rounds 4 --json");
     println!("  vida taskflow bootstrap-spec \"feature request\" --json");
     println!();
     println!("Operator recipes:");

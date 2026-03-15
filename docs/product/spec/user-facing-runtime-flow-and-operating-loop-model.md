@@ -70,12 +70,13 @@ Minimum user-facing surfaces:
    - CLI plus UI in Release 2
 2. `intake surface`
    - business conversations, requirements, tasks, and external artifacts enter here
+   - current launcher-owned intake/runtime seam is `vida taskflow consume final|continue|advance`
 3. `project configuration surface`
    - roles, skills, profiles, flows, teams, model/backend policy, and project activation settings
 4. `planning surface`
    - specifications, PBIs, task graphs, and delivery scope
 5. `execution surface`
-   - active runtime work, lane activity, progress, blockers, and recovery state
+   - active runtime work, lane activity, progress, blockers, recovery state, and persisted dispatch packets
 6. `artifact surface`
    - produced documentation, code artifacts, build outputs, and delivery outputs
 7. `approval surface`
@@ -130,8 +131,11 @@ Design-first intake rule:
 1. when one user request already includes research/specification/planning plus later implementation or code delivery, the intake surface must not jump directly into developer-lane execution,
 2. the runtime must first route that request into a design-first path,
 3. the preferred one-shot launcher surface for that path is `vida taskflow bootstrap-spec "<request>" --json`,
-4. that surface must materialize the feature epic, the spec-pack task, and the canonical design-doc scaffold before normal development-team execution begins,
-5. once the design artifact is finalized and validated through `vida docflow`, normal `TaskFlow` delivery orchestration may continue.
+4. the intake/runtime path may first be materialized through `vida taskflow consume final "<request>" --json`, which must emit the routed receipt, dispatch packet, and the bounded next lawful command sequence,
+5. once a lawful persisted packet exists, `vida taskflow consume continue` and `vida taskflow consume advance` become the canonical launcher-owned progression surfaces instead of manually reconstructing the handoff path,
+6. `vida taskflow bootstrap-spec "<request>" --json` remains the preferred tracked launcher action when the returned route is design-first,
+7. that surface must materialize the feature epic, the spec-pack task, and the canonical design-doc scaffold before normal development-team execution begins,
+8. once the design artifact is finalized and validated through `vida docflow`, normal `TaskFlow` delivery orchestration may continue.
 
 ## 4. Stage 1: Install / Init / Bootstrap
 
@@ -280,8 +284,9 @@ Before Stage-1 readiness is green, the runtime may expose only bounded surfaces 
 2. bounded installer-management commands,
 3. `status`,
 4. `doctor`,
-5. bounded protocol-binding and readiness query/remediation commands,
-6. help/recipe surfaces needed to recover to healthy state.
+5. `vida taskflow protocol-binding sync|status|check`,
+6. bounded `vida taskflow consume bundle|bundle check|final|continue|advance` query/progression surfaces when they remain launcher-owned and fail closed,
+7. help/recipe surfaces needed to recover to healthy state.
 
 Rule:
 

@@ -271,20 +271,28 @@ vida docflow readiness-check --profile active-canon
 
 vida taskflow task import-jsonl .vida/imports/tasks.seed.jsonl --json
 
-vida taskflow consume final "Runtime closure proof path"
+vida taskflow consume final "Runtime closure proof path" --json
+
+vida taskflow consume continue --json
+
+vida taskflow consume advance --max-rounds 4 --json
+
+vida taskflow protocol-binding sync --json
 ```
 
 ---
 
 ## 🧠 Architecture Direction
 
-`VIDA 0.2.x` is the semantic-freeze and proving line, with `v0.2.1` as the current hotfix release.
+`VIDA 0.2.x` is the semantic-freeze and proving line, now carrying the launcher-owned runtime-consumption scheduler surfaces that bridge toward `Release 1`.
 
 Its job is to make the transitional product trustworthy enough that `Release 1` can be built on stable semantics instead of moving heuristics.
 
 That means:
 
 - `vida taskflow` and `vida docflow` remain the current public runtime-family surfaces
+- `vida taskflow consume final|continue|advance` now form the canonical launcher-owned intake and bounded scheduler progression path
+- `vida taskflow protocol-binding sync|status|check` are the active protocol-binding bridge surfaces
 - source-of-truth law stays in `docs/product/spec/`, `vida/config/`, and `vida/config/instructions/`
 - current release work hardens semantics before compiled runtime substitution
 - Rust `taskflow` and `docflow` remain active parallel implementation tracks for `Release 1`

@@ -4086,61 +4086,67 @@ fn run_taskflow_task_bridge(project_root: &Path, args: &[String]) -> Result<Exit
                     _ => return Err("unsupported delegated task arguments".to_string()),
                 }
             }
-            let rows =
-                run_task_store_helper(project_root, &["list".to_string(), "--all".to_string()])?;
-            let entries = rows
-                .as_array()
-                .ok_or_else(|| "task list payload should be an array".to_string())?;
-            if display_id.is_empty() && !auto_display_from.is_empty() {
-                let next = next_display_id_payload(entries, &auto_display_from);
-                if !next
-                    .get("valid")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-                {
-                    if as_json {
-                        print_json_pretty(&next);
-                    } else {
-                        eprintln!(
-                            "{}",
-                            next.get("reason")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("invalid_parent_display_id")
-                        );
+            if (display_id.is_empty() && !auto_display_from.is_empty())
+                || (parent_id.is_empty() && !parent_display_id.is_empty())
+            {
+                let rows = run_task_store_helper(
+                    project_root,
+                    &["list".to_string(), "--all".to_string()],
+                )?;
+                let entries = rows
+                    .as_array()
+                    .ok_or_else(|| "task list payload should be an array".to_string())?;
+                if display_id.is_empty() && !auto_display_from.is_empty() {
+                    let next = next_display_id_payload(entries, &auto_display_from);
+                    if !next
+                        .get("valid")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        if as_json {
+                            print_json_pretty(&next);
+                        } else {
+                            eprintln!(
+                                "{}",
+                                next.get("reason")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("invalid_parent_display_id")
+                            );
+                        }
+                        return Ok(ExitCode::from(1));
                     }
-                    return Ok(ExitCode::from(1));
+                    display_id = next
+                        .get("next_display_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
                 }
-                display_id = next
-                    .get("next_display_id")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-            }
-            if parent_id.is_empty() && !parent_display_id.is_empty() {
-                let resolved = resolve_task_id_by_display_id(entries, &parent_display_id);
-                if !resolved
-                    .get("found")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-                {
-                    if as_json {
-                        print_json_pretty(&resolved);
-                    } else {
-                        eprintln!(
-                            "{}",
-                            resolved
-                                .get("reason")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("parent_display_id_not_found")
-                        );
+                if parent_id.is_empty() && !parent_display_id.is_empty() {
+                    let resolved = resolve_task_id_by_display_id(entries, &parent_display_id);
+                    if !resolved
+                        .get("found")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        if as_json {
+                            print_json_pretty(&resolved);
+                        } else {
+                            eprintln!(
+                                "{}",
+                                resolved
+                                    .get("reason")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("parent_display_id_not_found")
+                            );
+                        }
+                        return Ok(ExitCode::from(1));
                     }
-                    return Ok(ExitCode::from(1));
+                    parent_id = resolved
+                        .get("task_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
                 }
-                parent_id = resolved
-                    .get("task_id")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
             }
             let mut helper_args = vec![
                 "create".to_string(),
@@ -4171,11 +4177,16 @@ fn run_taskflow_task_bridge(project_root: &Path, args: &[String]) -> Result<Exit
             } else {
                 print_json_pretty(&payload);
             }
-            Ok(if helper_value_is_ok(&payload) {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(1)
-            })
+            Ok(
+                if helper_value_is_missing(&payload)
+                    || payload.get("reason").and_then(serde_json::Value::as_str)
+                        == Some("task_already_exists")
+                {
+                    ExitCode::from(1)
+                } else {
+                    ExitCode::SUCCESS
+                },
+            )
         }
         [head, subcommand, task_id, rest @ ..] if head == "task" && subcommand == "update" => {
             let mut helper_args = vec!["update".to_string(), task_id.clone()];
@@ -11359,7 +11370,7 @@ fn parse_taskflow_consume_advance_args(
             "--run-id" => {
                 let Some(value) = args.get(index + 1) else {
                     return Err(
-                        "Usage: vida taskflow consume advance [--run-id <run_id>] [--json]"
+                        "Usage: vida taskflow consume advance [--run-id <run_id>] [--max-rounds <n>] [--json]"
                             .to_string(),
                     );
                 };

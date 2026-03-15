@@ -57,24 +57,26 @@ Activation-path rule:
    - `middle` -> rate `4` and default `coach` runtime-role support for bounded spec-conformance review
    - `senior` -> rate `16`
    - `architect` -> rate `32`
-3. The same rendered Codex surface must also expose the internal development dispatch aliases from `vida.config.yaml -> host_environment.codex.dispatch_aliases`:
+3. The same rendered Codex surface may also materialize internal dispatch aliases from `vida.config.yaml -> host_environment.codex.dispatch_aliases`.
+4. Those aliases are compatibility/internal activation surfaces only, not the project-visible primary agent model:
    - `development_implementer` -> carried by `junior`; owns one bounded write-producing packet
    - `development_coach` -> carried by `middle`; owns formative packet-local review against approved spec, acceptance criteria, definition of done, and visible residual risks, then either approves forward or returns explicit rework
    - `development_verifier` -> carried by `senior`; owns independent proof and closure readiness
    - `development_escalation` -> carried by `architect`; owns architecture preparation and hard-conflict arbitration only when the normal packet cycle cannot close coherently
-4. The framework-owned Codex template must also initialize the local score-state surfaces:
+5. Project-visible carrier selection, reporting, and activation should still resolve to `junior|middle|senior|architect` plus explicit runtime role.
+6. The framework-owned Codex template must also initialize the local score-state surfaces:
    - `.vida/state/worker-scorecards.json`
    - `.vida/state/worker-strategy.json`
-5. Runtime feedback writeback for the selected host agent should use:
+7. Runtime feedback writeback for the selected host agent should use:
    - `vida agent-feedback --agent-id <tier> --score <0-100> --task-class <task_class> [--outcome <success|failure|neutral>] [--notes "..."]`
-6. The active Codex path must also maintain the local observability/history and budget-rollup surface:
+8. The active Codex path must also maintain the local observability/history and budget-rollup surface:
    - `.vida/state/host-agent-observability.json`
-7. `vida taskflow task ...` must use the native Rust StateStore bridge for core lifecycle operations; non-canonical external helper paths are forbidden in the active runtime.
-8. `vida taskflow task close ...` should refresh the same host-agent score/observability loop automatically when the bounded task can be mapped back into one lawful Codex task class.
-9. `vida status --json` should expose a bounded `host_agents` summary so the operator can inspect tier state, local stores, recent events, and total estimated budget units without reading raw state files.
-10. Project-local role/runtime tuning for Codex remains in `docs/process/codex-agent-configuration-guide.md`.
-11. That project guide must not be treated as the framework owner for selection/materialization.
-12. Rust runtime code must not hardcode dispatch-alias catalogs that duplicate overlay-owned alias definitions; activation must render from template/overlay owner state.
+9. `vida taskflow task ...` must use the native Rust StateStore bridge for core lifecycle operations; non-canonical external helper paths are forbidden in the active runtime.
+10. `vida taskflow task close ...` should refresh the same host-agent score/observability loop automatically when the bounded task can be mapped back into one lawful Codex task class.
+11. `vida status --json` should expose a bounded `host_agents` summary so the operator can inspect tier state, local stores, recent events, and total estimated budget units without reading raw state files.
+12. Project-local role/runtime tuning for Codex remains in `docs/process/codex-agent-configuration-guide.md`.
+13. That project guide must not be treated as the framework owner for selection/materialization.
+14. Rust runtime code must not hardcode dispatch-alias catalogs that duplicate overlay-owned alias definitions; activation must render from template/overlay owner state.
 
 ## Verification
 

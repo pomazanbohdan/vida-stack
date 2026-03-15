@@ -14,12 +14,14 @@ Purpose: define the canonical final-layer runtime consumption loop where `taskfl
 
 1. `system-maps/runtime-family.taskflow-map`
 2. `vida taskflow consume final <request_text> [--json]`
-3. `vida taskflow bundle check --json`
+3. `vida taskflow consume continue [--run-id <run_id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]`
 4. `system-maps/runtime-family.taskflow-map`
-5. `system-maps/runtime-family.docflow-map`
-6. `vida docflow overview --profile active-canon`
-7. `vida docflow readiness-check --profile active-canon`
-8. `vida docflow proofcheck --profile active-canon`
+5. `vida taskflow consume advance [--run-id <run_id>] [--max-rounds <n>] [--json]`
+6. `vida taskflow consume bundle check [--json]`
+7. `system-maps/runtime-family.docflow-map`
+8. `vida docflow overview --profile active-canon`
+9. `vida docflow readiness-check --profile active-canon`
+10. `vida docflow proofcheck --profile active-canon`
 
 ## Final Consumption Loop
 
@@ -29,9 +31,12 @@ The lawful final loop is:
 2. validate bundle readiness,
 3. resolve the lane class or conversational mode for the request,
 4. activate the bounded `DocFlow` branch,
-5. consume overview/readiness/proof evidence,
-6. persist the resulting runtime-consumption snapshot,
-7. keep closure authority in `taskflow`.
+5. emit the routed dispatch receipt plus the root runtime dispatch packet,
+6. consume overview/readiness/proof evidence,
+7. persist the resulting runtime-consumption snapshot,
+8. when a persisted lawful step already exists, resume it through `consume continue`,
+9. when repeated ready steps should advance automatically, use bounded `consume advance`,
+10. keep closure authority in `taskflow`.
 
 ## Bridge Rule
 
@@ -54,7 +59,9 @@ The snapshot must carry:
 2. bundle readiness verdict,
 3. lane-selection result,
 4. DocFlow evidence,
-5. final direct-consumption readiness verdict.
+5. final direct-consumption readiness verdict,
+6. persisted dispatch receipt and root dispatch packet references,
+7. downstream dispatch packet references when continuation has been materialized.
 
 ## Boundary Rule
 
@@ -62,7 +69,8 @@ This file owns:
 
 1. the final runtime-consumption loop,
 2. the requirement that `taskflow` explicitly activate the bounded `DocFlow` branch before closure trust,
-3. the runtime-owned persistence contract for final consumption snapshots.
+3. the runtime-owned persistence contract for final consumption snapshots,
+4. the canonical `final -> continue -> advance` runtime-consumption progression surface.
 
 This file does not own:
 

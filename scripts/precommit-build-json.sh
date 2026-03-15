@@ -20,6 +20,6 @@ printf '[precommit-build-json] Building vida\n'
 cargo build -q -p vida
 
 printf '[precommit-build-json] Building protocol-binding JSON artifacts\n'
-VIDA_ROOT="$ROOT_DIR" "$BIN_PATH" protocol-binding build --json >/dev/null
+VIDA_ROOT="$ROOT_DIR" "$BIN_PATH" taskflow protocol-binding sync --json >/dev/null
 
 printf '[precommit-build-json] OK\n'

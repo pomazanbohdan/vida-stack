@@ -437,47 +437,35 @@ EOF
 
 install_wrappers() {
   write_wrapper "$BIN_DIR/vida" '
-VIDA_HOME="${VIDA_HOME:-'"$INSTALL_ROOT"'}"
-VIDA_ROOT="${VIDA_ROOT:-$VIDA_HOME/current}"
-usage() {
-  cat <<'\''USAGE'\''
-VIDA launcher
+VIDA_HOME="'"$INSTALL_ROOT"'"
+VIDA_ROOT="$VIDA_HOME/current"
+RUNTIME_BIN="$VIDA_ROOT/bin/vida"
 
-Usage:
-  vida init
-  vida taskflow <args...>
-  vida docflow <args...>
-  vida doctor
-  vida upgrade [--version TAG]
-  vida use --version TAG
-  vida root
+runtime_usage() {
+  if [[ -x "$RUNTIME_BIN" ]]; then
+    "$RUNTIME_BIN" --help
+  else
+    cat <<'\''USAGE'\''
+VIDA runtime binary is missing.
 USAGE
+  fi
 }
 
-docflow_usage() {
+usage() {
+  runtime_usage
   cat <<'\''USAGE'\''
-VIDA DocFlow
 
-Usage:
-  vida docflow <args...>
+Installer management:
+  vida upgrade [--version TAG]
+  vida use --version TAG
+  vida install [--version TAG]
+  vida root
 USAGE
 }
 
 sub="${1:-help}"
 case "$sub" in
-  taskflow)
-    shift
-    exec "$VIDA_ROOT/bin/vida" taskflow "$@"
-    ;;
-  docflow)
-    shift
-    if [[ "${1:-help}" == "help" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-      docflow_usage
-      exit 0
-    fi
-    exec "$VIDA_ROOT/bin/vida" docflow "$@"
-    ;;
-  doctor|upgrade|install|init|use)
+  upgrade|install|use)
     exec "$VIDA_HOME/installer/install.sh" "$sub" --root "$VIDA_HOME" --bin-dir "'"$BIN_DIR"'" "${@:2}"
     ;;
   root)
@@ -487,8 +475,7 @@ case "$sub" in
     usage
     ;;
   *)
-    usage
-    exit 1
+    exec "$RUNTIME_BIN" "$@"
     ;;
 esac
 '
@@ -749,6 +736,7 @@ use_release() {
   local release_root="${INSTALL_ROOT}/releases/${version}"
   [[ -d "$release_root" ]] || fail "Installed release not found: ${release_root}"
   activate_release "$release_root" "${INSTALL_ROOT}/current"
+  install_wrappers
   log "Switched active VIDA release to ${version}"
 }
 

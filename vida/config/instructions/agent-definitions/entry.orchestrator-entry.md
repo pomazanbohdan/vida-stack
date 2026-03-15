@@ -156,6 +156,7 @@ Feature-delivery entry rule:
 8. when the launcher/runtime exposes `vida taskflow consume final <request> --json`, use that surface first to materialize the design-first route, tracked-flow bootstrap, and bounded next-command sequence instead of improvising the sequencing from chat alone.
 9. when the runtime returns a design-first bootstrap command, prefer `vida taskflow bootstrap-spec "<request>" --json` as the first tracked launcher action instead of opening ad hoc epic/spec/doc steps manually.
 10. once `bootstrap-spec` has materialized the feature epic, spec-pack task, and design document, keep the root session in orchestrator mode and hand normal write-producing implementation to the configured development lanes after the design gate is satisfied.
+11. when the runtime has already persisted a lawful handoff receipt or downstream packet, prefer `vida taskflow consume continue` or `vida taskflow consume advance` over rebuilding the intake path from chat or ad hoc local reasoning.
 
 ## Worker-First Orchestration
 

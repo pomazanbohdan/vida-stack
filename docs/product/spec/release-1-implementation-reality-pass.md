@@ -107,7 +107,7 @@ Overall restart interpretation:
 | Layer 6: Review, Verification, And Approval Gates | 56% | verification/doctor/closure guardrails are partly real and partly shell-owned | gate logic is not yet cleanly separated from launcher orchestration | bounded refactor |
 | Layer 7: Resumability, Checkpoint, And Recovery | 74% | strong run-graph, recovery, checkpoint, gate inspection surfaces already proven in `vida` and state store | native ownership exists behaviorally, but still shell-heavy structurally | keep behavior, carve into native modules |
 | Layer 8: Observability And Runtime Readiness | 78% | `vida status`, `vida doctor`, readiness-related proofs and summaries are already real | observability/readiness is strong operationally but still too concentrated in launcher/store | keep and refactor structurally |
-| Layer 9: Direct Runtime Consumption | 57% | `vida taskflow consume final` exists and bounded `DocFlow` activation is already proven | final seam is real but still bridge-heavy and not yet cleanly native in family-owned code | extend seam, refactor ownership |
+| Layer 9: Direct Runtime Consumption | 57% | `vida taskflow consume final|continue|advance` exist and bounded `DocFlow` activation is already proven | direct-consumption seam is real, persisted continuation is now present, but ownership is still bridge-heavy and not yet cleanly native in family-owned code | extend seam, refactor ownership |
 
 TaskFlow summary:
 

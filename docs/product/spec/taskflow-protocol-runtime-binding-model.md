@@ -75,11 +75,10 @@ Canonical shape:
 
 Current implemented bridge surface:
 
-1. `vida taskflow protocol-binding build [--json]`
-2. `vida taskflow protocol-binding sync [--json]`
-3. `vida taskflow protocol-binding status [--json]`
-4. `vida taskflow protocol-binding check [--json]`
-5. installed and launcher-owned delegation may still expose the same bounded surface through `vida taskflow ...` or installer bootstrap, but the current bridge still depends on one legacy script-era binding substrate during the `v0.2.2` slice
+1. `vida taskflow protocol-binding sync [--json]`
+2. `vida taskflow protocol-binding status [--json]`
+3. `vida taskflow protocol-binding check [--json]`
+4. installed and launcher-owned delegation may still expose the same bounded surface through `vida taskflow ...` or installer bootstrap, but the current bridge still depends on one legacy script-era binding substrate during the `v0.2.2` slice
 
 Current state rule:
 
