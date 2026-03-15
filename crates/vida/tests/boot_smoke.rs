@@ -217,7 +217,10 @@ fn create_minimal_release_archive(archive_path: &str) {
     );
     write_file(&format!("{package_root}/AGENTS.md"), "framework\n");
     write_file(&format!("{package_root}/AGENTS.sidecar.md"), "sidecar\n");
-    write_file(&format!("{package_root}/vida.config.yaml"), "project:\n  id: packaged\n");
+    write_file(
+        &format!("{package_root}/vida.config.yaml"),
+        "project:\n  id: packaged\n",
+    );
     write_file(&format!("{package_root}/.codex/config.toml"), "[agents]\n");
     write_file(
         &format!("{codex_agents_dir}/junior.toml"),
@@ -6789,10 +6792,7 @@ fn taskflow_task_create_routes_through_local_db_bridge_with_display_id_allocatio
     assert_eq!(parsed["status"], "open");
     assert!(parsed["display_id"].is_null());
     assert_eq!(parsed["description"], "bridge-task");
-    assert_eq!(
-        parsed["dependencies"][0]["depends_on_id"],
-        "vida-root"
-    );
+    assert_eq!(parsed["dependencies"][0]["depends_on_id"], "vida-root");
     assert!(!stderr.contains("delegated-taskflow-binary-ran"));
 }
 
@@ -7234,7 +7234,9 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
     let project_close_stderr = String::from_utf8_lossy(&project_close.stderr);
     let project_close_json: serde_json::Value =
         serde_json::from_str(&project_close_stdout).expect("project close json should parse");
-    let project_close_task = project_close_json.get("task").unwrap_or(&project_close_json);
+    let project_close_task = project_close_json
+        .get("task")
+        .unwrap_or(&project_close_json);
     assert_eq!(project_close_task["id"], "vida-child");
     assert_eq!(project_close_task["status"], "closed");
     assert_eq!(project_close_task["close_reason"], "done");
@@ -9350,10 +9352,7 @@ fn installer_install_populates_both_taskflow_helpers_in_current_layout() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(std::path::Path::new(&format!(
-        "{install_root}/current/bin/vida"
-    ))
-    .exists());
+    assert!(std::path::Path::new(&format!("{install_root}/current/bin/vida")).exists());
     assert!(std::path::Path::new(&format!(
         "{install_root}/current/install/assets/vida.config.yaml.template"
     ))

@@ -2651,26 +2651,134 @@ fn write_runtime_agent_extension_projections(project_root: &Path) -> Result<(), 
     Ok(())
 }
 
-fn preserve_existing_agents_as_sidecar(project_root: &Path) -> Result<(), String> {
+fn materialize_project_docs_scaffold(project_root: &Path) -> Result<(), String> {
+    let project_id = inferred_project_id_candidate(project_root);
+    let project_title = inferred_project_title(&project_id, None);
+    let source_root = resolve_init_bootstrap_source_root();
+    let feature_template_source =
+        source_root.join("docs/framework/templates/feature-design-document.template.md");
+    let feature_template = fs::read_to_string(&feature_template_source).map_err(|error| {
+        format!(
+            "Failed to read framework feature-design template source {}: {error}",
+            feature_template_source.display()
+        )
+    })?;
+
+    let generated_files = vec![
+        (
+            project_root.join("README.md"),
+            render_project_readme(&project_title),
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_ROOT_MAP),
+            render_project_root_map(),
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_PRODUCT_INDEX),
+            render_project_product_index(),
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_PRODUCT_SPEC_README),
+            render_project_product_spec_readme(),
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE),
+            feature_template,
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_ARCHITECTURE_DOC),
+            render_project_architecture_doc(),
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_PROCESS_README),
+            render_project_process_readme(),
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_DECISIONS_DOC),
+            "# Decisions\n\nRecord bounded architecture and product decisions here.\n".to_string(),
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_ENVIRONMENTS_DOC),
+            render_project_environments_doc(project_root),
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_OPERATIONS_DOC),
+            render_project_operations_doc(),
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_AGENT_SYSTEM_DOC),
+            render_project_agent_system_doc(),
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_DOC_TOOLING_DOC),
+            render_project_doc_tooling_map(),
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_CODEX_GUIDE_DOC),
+            render_project_codex_guide(),
+        ),
+        (
+            project_root.join(DEFAULT_PROJECT_RESEARCH_README),
+            render_project_research_readme(),
+        ),
+    ];
+
+    for (path, content) in generated_files {
+        write_file_if_missing(&path, &content)?;
+    }
+
+    Ok(())
+}
+
+fn materialize_framework_agents_and_sidecar(
+    project_root: &Path,
+    framework_agents: &Path,
+    sidecar_scaffold: &Path,
+) -> Result<(), String> {
     let agents = project_root.join("AGENTS.md");
     let sidecar = project_root.join("AGENTS.sidecar.md");
-    if !agents.exists() || sidecar.exists() {
-        return Ok(());
+    let framework_contents = fs::read_to_string(framework_agents)
+        .map_err(|error| format!("Failed to read {}: {error}", framework_agents.display()))?;
+
+    if agents.is_file() {
+        let existing_agents = fs::read_to_string(&agents)
+            .map_err(|error| format!("Failed to read {}: {error}", agents.display()))?;
+        if existing_agents != framework_contents {
+            if !sidecar.is_file() || file_contains_placeholder(&sidecar) {
+                if let Some(parent) = sidecar.parent() {
+                    ensure_dir(parent)?;
+                }
+                fs::write(&sidecar, existing_agents).map_err(|error| {
+                    format!(
+                        "Failed to preserve existing {} as {}: {error}",
+                        agents.display(),
+                        sidecar.display()
+                    )
+                })?;
+            } else {
+                let backup_path = project_root.join(".vida/receipts/AGENTS.pre-init.backup.md");
+                if let Some(parent) = backup_path.parent() {
+                    ensure_dir(parent)?;
+                }
+                if !backup_path.exists() {
+                    fs::write(&backup_path, existing_agents).map_err(|error| {
+                        format!("Failed to write {} backup: {error}", backup_path.display())
+                    })?;
+                }
+            }
+        }
     }
-    fs::rename(&agents, &sidecar).map_err(|error| {
-        format!(
-            "Failed to preserve existing {} as {}: {error}",
-            agents.display(),
-            sidecar.display()
-        )
-    })
+
+    copy_file_if_missing(sidecar_scaffold, &sidecar)?;
+    fs::write(&agents, framework_contents)
+        .map_err(|error| format!("Failed to write {}: {error}", agents.display()))
 }
 
 fn print_init_summary(project_root: &Path, activation_view: &serde_json::Value) {
     println!("vida init project bootstrap ready");
     println!("project root: {}", project_root.display());
     println!(
-        "materialized: AGENTS.md, AGENTS.sidecar.md, vida.config.yaml, .vida/config, .vida/db, .vida/cache, .vida/framework, .vida/project, .vida/project/agent-extensions/*, .vida/project/agent-extensions/*.sidecar.yaml, .vida/receipts, .vida/runtime, .vida/scratchpad"
+        "materialized: AGENTS.md, AGENTS.sidecar.md, vida.config.yaml, README.md, docs/project-root-map.md, docs/product/**, docs/process/**, docs/research/README.md, .vida/config, .vida/db, .vida/cache, .vida/framework, .vida/project, .vida/project/agent-extensions/*, .vida/project/agent-extensions/*.sidecar.yaml, .vida/receipts, .vida/runtime, .vida/scratchpad"
     );
     println!(
         "activation status: {}",
@@ -5706,16 +5814,15 @@ async fn run_init(args: BootArgs) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    if let Err(error) = preserve_existing_agents_as_sidecar(&project_root)
-        .and_then(|()| {
-            copy_file_if_missing(&sidecar_scaffold, &project_root.join("AGENTS.sidecar.md"))
-        })
-        .and_then(|()| copy_file_if_missing(&framework_agents, &project_root.join("AGENTS.md")))
-        .and_then(|()| {
-            copy_file_if_missing(&config_template, &project_root.join("vida.config.yaml"))
-        })
-        .and_then(|()| ensure_runtime_home(&project_root))
-        .and_then(|()| write_runtime_agent_extension_projections(&project_root))
+    if let Err(error) = materialize_framework_agents_and_sidecar(
+        &project_root,
+        &framework_agents,
+        &sidecar_scaffold,
+    )
+    .and_then(|()| copy_file_if_missing(&config_template, &project_root.join("vida.config.yaml")))
+    .and_then(|()| materialize_project_docs_scaffold(&project_root))
+    .and_then(|()| ensure_runtime_home(&project_root))
+    .and_then(|()| write_runtime_agent_extension_projections(&project_root))
     {
         eprintln!("{error}");
         return ExitCode::from(1);
@@ -13433,6 +13540,25 @@ mod tests {
             "host CLI templates should not materialize during bare `vida init`"
         );
         assert!(harness.path().join("vida.config.yaml").is_file());
+        assert!(harness.path().join("README.md").is_file());
+        assert!(harness.path().join(DEFAULT_PROJECT_ROOT_MAP).is_file());
+        assert!(harness.path().join(DEFAULT_PROJECT_PRODUCT_INDEX).is_file());
+        assert!(harness
+            .path()
+            .join(DEFAULT_PROJECT_PRODUCT_SPEC_README)
+            .is_file());
+        assert!(harness
+            .path()
+            .join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE)
+            .is_file());
+        assert!(harness
+            .path()
+            .join(DEFAULT_PROJECT_PROCESS_README)
+            .is_file());
+        assert!(harness
+            .path()
+            .join(DEFAULT_PROJECT_RESEARCH_README)
+            .is_file());
         assert!(harness.path().join(".vida/config").is_dir());
         assert!(harness.path().join(".vida/db").is_dir());
         assert!(harness.path().join(".vida/cache").is_dir());
@@ -13680,6 +13806,46 @@ mod tests {
             framework_agents.contains("VIDA Project Bootstrap Carrier"),
             "generated bootstrap carrier should replace root AGENTS.md"
         );
+    }
+
+    #[test]
+    fn init_replaces_agents_template_and_keeps_existing_sidecar_with_backup() {
+        let _lock = current_dir_lock().lock().expect("lock should succeed");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = CurrentDirGuard::change_to(harness.path());
+
+        fs::write(
+            harness.path().join("AGENTS.md"),
+            "project-specific bootstrap notes\n",
+        )
+        .expect("existing agents should be written");
+        fs::write(
+            harness.path().join("AGENTS.sidecar.md"),
+            "current sidecar content\n",
+        )
+        .expect("existing sidecar should be written");
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+
+        let framework_agents = fs::read_to_string(harness.path().join("AGENTS.md"))
+            .expect("framework agents should exist");
+        assert!(
+            framework_agents.contains("VIDA Project Bootstrap Carrier"),
+            "generated bootstrap carrier should replace root AGENTS.md"
+        );
+
+        let sidecar = fs::read_to_string(harness.path().join("AGENTS.sidecar.md"))
+            .expect("sidecar should still exist");
+        assert_eq!(sidecar, "current sidecar content\n");
+
+        let backup = fs::read_to_string(
+            harness
+                .path()
+                .join(".vida/receipts/AGENTS.pre-init.backup.md"),
+        )
+        .expect("agents backup should be written");
+        assert_eq!(backup, "project-specific bootstrap notes\n");
     }
 
     #[test]
@@ -13993,24 +14159,25 @@ mod tests {
             .expect("junior agent should exist");
         assert!(junior.contains("vida_rate = \"1\""));
         assert!(junior.contains("vida_runtime_roles = \"worker\""));
-        assert!(junior.contains(
-            "vida_task_classes = \"implementation,delivery_task,execution_block\""
-        ));
+        assert!(
+            junior.contains("vida_task_classes = \"implementation,delivery_task,execution_block\"")
+        );
 
         let middle = fs::read_to_string(harness.path().join(".codex/agents/middle.toml"))
             .expect("middle agent should exist");
         assert!(middle.contains("vida_rate = \"4\""));
         assert!(middle.contains("vida_runtime_roles = \"business_analyst,pm,coach,worker\""));
-        assert!(middle
-            .contains("vida_task_classes = \"specification,planning,coach,implementation_medium\""));
+        assert!(middle.contains(
+            "vida_task_classes = \"specification,planning,coach,implementation_medium\""
+        ));
 
         let senior = fs::read_to_string(harness.path().join(".codex/agents/senior.toml"))
             .expect("senior agent should exist");
         assert!(senior.contains("vida_rate = \"16\""));
         assert!(senior.contains("vida_runtime_roles = \"verifier,prover\""));
-        assert!(
-            senior.contains("vida_task_classes = \"verification,review,quality_gate,release_readiness\"")
-        );
+        assert!(senior.contains(
+            "vida_task_classes = \"verification,review,quality_gate,release_readiness\""
+        ));
 
         let architect = fs::read_to_string(harness.path().join(".codex/agents/architect.toml"))
             .expect("architect agent should exist");
