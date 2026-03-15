@@ -29,6 +29,20 @@ fi
 [[ -f "$SOURCE_PATH" ]] || fail "Release-note source not found: $SOURCE_PATH"
 
 awk '
+  BEGIN {
+    dropped_title = 0
+    dropped_blank_after_title = 0
+  }
   /^-----$/ { exit }
-  { print }
+  {
+    if (dropped_title == 0 && $0 ~ /^# /) {
+      dropped_title = 1
+      next
+    }
+    if (dropped_title == 1 && dropped_blank_after_title == 0 && $0 ~ /^[[:space:]]*$/) {
+      dropped_blank_after_title = 1
+      next
+    }
+    print
+  }
 ' "$SOURCE_PATH"

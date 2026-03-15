@@ -38,18 +38,18 @@ The public body should keep the release readable and operator-oriented.
 
 Required sections:
 
-1. release title,
-2. highlights or hotfix highlights,
-3. what changed or equivalent delta section,
-4. practical outcome or operator impact,
-5. proof snapshot, direction, or release-positioning section when it materially clarifies the slice.
+1. highlights or hotfix highlights,
+2. what changed or equivalent delta section,
+3. practical outcome or operator impact,
+4. proof snapshot, direction, or release-positioning section when it materially clarifies the slice.
 
 Rules:
 
 1. keep the body concise and scannable,
-2. prefer the canonical headings already used in the source artifact,
-3. keep exact commands only when they materially help the operator,
-4. avoid internal documentation metadata, internal artifact identifiers, or changelog bookkeeping in the public body.
+2. do not duplicate the release title inside the body when GitHub already renders it as the release page title,
+3. prefer the canonical headings already used in the source artifact,
+4. keep exact commands only when they materially help the operator,
+5. avoid internal documentation metadata, internal artifact identifiers, or changelog bookkeeping in the public body.
 
 ## Asset Rule
 
@@ -67,7 +67,7 @@ For the active release line:
 
 1. build the release assets,
 2. confirm the matching `install/release-notes-v*.md` artifact is current,
-3. render the public body from that artifact without the metadata footer,
+3. render the public body from that artifact without the metadata footer and without duplicating the top-level release title heading,
 4. create or edit the GitHub release using the rendered body,
 5. verify the release title, body, tag, and attached assets on GitHub after publication.
 
@@ -81,16 +81,18 @@ Rules:
 
 1. this helper renders the public body from the canonical `install/release-notes-v*.md` artifact or a directly supplied file path,
 2. it must strip the metadata footer at `-----`,
-3. GitHub release publication should consume that rendered output rather than the raw canonical file body.
+3. it must drop the first top-level release-title heading (`# ...`) from the public body render,
+4. GitHub release publication should consume that rendered output rather than the raw canonical file body.
 
 ## Current Interpretation
 
 For the active release line:
 
 1. public release pages should all follow one title convention: `Vida Stack vX.Y.Z`,
-2. the public release page is the operator-facing narrative surface,
-3. the canonical release-note artifact remains the documentation-owned source of truth,
-4. GitHub release formatting drift is a project-process bug and must be corrected through this protocol rather than by informal manual editing alone.
+2. the GitHub title is the only release-title surface; body content starts from the first subsection (for example, highlights),
+3. the public release page is the operator-facing narrative surface,
+4. the canonical release-note artifact remains the documentation-owned source of truth,
+5. GitHub release formatting drift is a project-process bug and must be corrected through this protocol rather than by informal manual editing alone.
 
 -----
 artifact_path: process/release-formatting-protocol
@@ -101,5 +103,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/release-formatting-protocol.md
 created_at: '2026-03-12T16:37:07+02:00'
-updated_at: '2026-03-15T09:08:41+02:00'
+updated_at: '2026-03-15T09:29:08+02:00'
 changelog_ref: release-formatting-protocol.changelog.jsonl

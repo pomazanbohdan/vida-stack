@@ -15,7 +15,94 @@ permissions:
   contents: write
 
 jobs:
-  archive:
+  build-assets:
+    name: Build assets (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-default
+            suffix: ''
+          - os: macos-latest
+            label: macos-x86_64
+            suffix: 'macos-x86_64'
+          - os: windows-latest
+            label: windows-x86_64
+            suffix: 'windows-x86_64'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            release_tag="${GITHUB_REF_NAME}"
+          else
+            release_tag="${{ inputs.tag }}"
+          fi
+          if [[ -z "${release_tag}" ]]; then
+            echo "Failed to resolve release tag." >&2
+            exit 1
+          fi
+          echo "RELEASE_TAG=${release_tag}" >> "$GITHUB_ENV"
+
+      - name: Check out requested tag for manual publish
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          git checkout --detach "refs/tags/${RELEASE_TAG}"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Build release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${{ matrix.suffix }}" ]]; then
+            export VIDA_RELEASE_SUFFIX="${{ matrix.suffix }}"
+          else
+            unset VIDA_RELEASE_SUFFIX
+          fi
+          bash scripts/build-release.sh "${RELEASE_TAG}"
+
+      - name: Collect release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _release_out
+          cp dist/vida-stack-"${RELEASE_TAG}"*.zip _release_out/
+          cp dist/vida-stack-"${RELEASE_TAG}"*.tar.gz _release_out/
+          cp dist/vida-stack-"${RELEASE_TAG}"*.sha256 _release_out/
+          cp dist/vida-stack-"${RELEASE_TAG}"*.manifest.json _release_out/
+          if [[ -z "${{ matrix.suffix }}" ]]; then
+            cp dist/vida-install.sh _release_out/
+          fi
+
+      - name: Upload packaged assets
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-assets-${{ matrix.label }}
+          path: _release_out/*
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub release
+    needs: build-assets
     runs-on: ubuntu-latest
 
     steps:
@@ -37,9 +124,7 @@ jobs:
             echo "Failed to resolve release tag." >&2
             exit 1
           fi
-          archive_base="vida-stack-${release_tag}"
           echo "RELEASE_TAG=${release_tag}" >> "$GITHUB_ENV"
-          echo "ARCHIVE_BASE=${archive_base}" >> "$GITHUB_ENV"
 
       - name: Check out requested tag for manual publish
         if: ${{ github.event_name == 'workflow_dispatch' }}
@@ -49,23 +134,16 @@ jobs:
           git fetch --tags --force
           git checkout --detach "refs/tags/${RELEASE_TAG}"
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Download all packaged assets
+        uses: actions/download-artifact@v6
         with:
-          python-version: '3.12'
+          path: _release_assets
 
-      - name: Build release artifacts
+      - name: Render public release body
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/build-release.sh "${RELEASE_TAG}"
-
-      - name: Upload archives
-        uses: actions/upload-artifact@v6
-        with:
-          name: ${{ env.ARCHIVE_BASE }}
-          path: dist/
-          if-no-files-found: error
+          scripts/render-public-release-notes.sh "${RELEASE_TAG}" > _release_assets/release-notes.md
 
       - name: Create or update GitHub release
         env:
@@ -73,15 +151,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          shopt -s nullglob globstar
+
+          assets=(
+            _release_assets/**/vida-stack-"${RELEASE_TAG}"*.zip
+            _release_assets/**/vida-stack-"${RELEASE_TAG}"*.tar.gz
+            _release_assets/**/vida-stack-"${RELEASE_TAG}"*.sha256
+            _release_assets/**/vida-stack-"${RELEASE_TAG}"*.manifest.json
+            _release_assets/**/vida-install.sh
+          )
+
+          if [[ ${#assets[@]} -eq 0 ]]; then
+            echo "No release assets were found to publish." >&2
+            exit 1
+          fi
+
           title="Vida Stack ${RELEASE_TAG}"
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             gh release edit "${RELEASE_TAG}" \
               --title "${title}" \
-              --notes-file dist/release-notes.md
-            gh release upload "${RELEASE_TAG}" dist/*.zip dist/*.tar.gz dist/*.sha256 dist/*.manifest.json dist/vida-install.sh --clobber
+              --notes-file _release_assets/release-notes.md
+            gh release upload "${RELEASE_TAG}" "${assets[@]}" --clobber
           else
             gh release create "${RELEASE_TAG}" \
-              dist/*.zip dist/*.tar.gz dist/*.sha256 dist/*.manifest.json dist/vida-install.sh \
+              "${assets[@]}" \
               --title "${title}" \
-              --notes-file dist/release-notes.md
+              --notes-file _release_assets/release-notes.md
           fi

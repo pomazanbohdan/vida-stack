@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:-}"
+RELEASE_SUFFIX="${VIDA_RELEASE_SUFFIX:-}"
 
 fail() {
   printf '[release-build] ERROR: %s\n' "$*" >&2
@@ -31,6 +32,9 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 ARCHIVE_BASE="vida-stack-${VERSION}"
+if [[ -n "$RELEASE_SUFFIX" ]]; then
+  ARCHIVE_BASE="${ARCHIVE_BASE}-${RELEASE_SUFFIX}"
+fi
 DIST_DIR="$ROOT_DIR/dist"
 PACKAGE_ROOT="$DIST_DIR/package"
 STAGE_DIR="$PACKAGE_ROOT/$ARCHIVE_BASE"
@@ -56,7 +60,12 @@ find "$STAGE_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
 find "$STAGE_DIR" -type f -name '*.pyc' -delete
 
 cargo build --release -p vida
-cp "$ROOT_DIR/target/release/vida" "$VIDA_BIN"
+RUNTIME_SOURCE="$ROOT_DIR/target/release/vida"
+if [[ -f "$ROOT_DIR/target/release/vida.exe" ]]; then
+  RUNTIME_SOURCE="$ROOT_DIR/target/release/vida.exe"
+fi
+[[ -f "$RUNTIME_SOURCE" ]] || fail "Missing built runtime binary: $RUNTIME_SOURCE"
+cp "$RUNTIME_SOURCE" "$VIDA_BIN"
 chmod +x "$VIDA_BIN"
 cp "$ROOT_DIR/docs/framework/templates/vida.config.yaml.template" "$INSTALL_ASSETS_DIR/vida.config.yaml.template"
 
