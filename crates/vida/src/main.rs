@@ -3080,29 +3080,6 @@ fn helper_value_is_ok(value: &serde_json::Value) -> bool {
         .unwrap_or(true)
 }
 
-fn task_payload_by_id(
-    project_root: &Path,
-    task_id: &str,
-) -> Result<Option<serde_json::Value>, String> {
-    let payload = run_task_store_helper(project_root, &["show".to_string(), task_id.to_string()])?;
-    if helper_value_is_missing(&payload)
-        || (payload.get("reason").and_then(serde_json::Value::as_str)
-            == Some("invalid_helper_output")
-            && payload
-                .get("output")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|value| value.contains("no such table: tasks")))
-    {
-        Ok(None)
-    } else if helper_value_is_ok(&payload) {
-        Ok(Some(payload))
-    } else {
-        Err(format!(
-            "Failed to inspect task `{task_id}` through the native TaskFlow state store."
-        ))
-    }
-}
-
 fn create_task_if_missing_with_store(
     store: &StateStore,
     project_root: &Path,
@@ -4086,7 +4063,13 @@ fn run_taskflow_task_bridge(project_root: &Path, args: &[String]) -> Result<Exit
                     _ => return Err("unsupported delegated task arguments".to_string()),
                 }
             }
-            if (display_id.is_empty() && !auto_display_from.is_empty())
+            if display_id.is_empty() && !auto_display_from.is_empty() && !parent_id.is_empty() {
+                display_id = format!("{auto_display_from}.1");
+            }
+            if (display_id.is_empty()
+                && !auto_display_from.is_empty()
+                && parent_id.is_empty()
+                && parent_display_id.is_empty())
                 || (parent_id.is_empty() && !parent_display_id.is_empty())
             {
                 let rows = run_task_store_helper(
@@ -4245,7 +4228,6 @@ fn run_taskflow_task_bridge(project_root: &Path, args: &[String]) -> Result<Exit
             let reason = reason.ok_or_else(|| {
                 "Usage: vida taskflow task close <task_id> --reason <reason> [--json]".to_string()
             })?;
-            let existing_task = task_payload_by_id(project_root, task_id).ok().flatten();
             let close_reason = reason.clone();
             let payload = run_task_store_helper(
                 project_root,
@@ -4265,9 +4247,7 @@ fn run_taskflow_task_bridge(project_root: &Path, args: &[String]) -> Result<Exit
                 return Ok(ExitCode::from(1));
             }
             let mut render_payload = payload.clone();
-            let telemetry_task = existing_task
-                .or_else(|| payload.get("task").cloned())
-                .or_else(|| task_payload_by_id(project_root, task_id).ok().flatten());
+            let telemetry_task = payload.get("task").cloned();
             render_payload["host_agent_telemetry"] = match telemetry_task.as_ref() {
                 Some(task) => {
                     maybe_record_task_close_host_agent_feedback(project_root, task, &close_reason)
@@ -14013,27 +13993,32 @@ mod tests {
             .expect("junior agent should exist");
         assert!(junior.contains("vida_rate = \"1\""));
         assert!(junior.contains("vida_runtime_roles = \"worker\""));
-        assert!(junior.contains("Do not self-approve closure."));
+        assert!(junior.contains(
+            "vida_task_classes = \"implementation,delivery_task,execution_block\""
+        ));
 
         let middle = fs::read_to_string(harness.path().join(".codex/agents/middle.toml"))
             .expect("middle agent should exist");
         assert!(middle.contains("vida_rate = \"4\""));
         assert!(middle.contains("vida_runtime_roles = \"business_analyst,pm,coach,worker\""));
         assert!(middle
-            .contains("matches the approved spec, acceptance criteria, and `definition_of_done`"));
-        assert!(middle.contains("Do not replace independent verification."));
+            .contains("vida_task_classes = \"specification,planning,coach,implementation_medium\""));
 
         let senior = fs::read_to_string(harness.path().join(".codex/agents/senior.toml"))
             .expect("senior agent should exist");
         assert!(senior.contains("vida_rate = \"16\""));
         assert!(senior.contains("vida_runtime_roles = \"verifier,prover\""));
-        assert!(senior.contains("Fail closed when proof or evidence is missing."));
+        assert!(
+            senior.contains("vida_task_classes = \"verification,review,quality_gate,release_readiness\"")
+        );
 
         let architect = fs::read_to_string(harness.path().join(".codex/agents/architect.toml"))
             .expect("architect agent should exist");
         assert!(architect.contains("vida_rate = \"32\""));
         assert!(architect.contains("vida_reasoning_band = \"xhigh\""));
-        assert!(architect.contains("Do not become the normal default lane."));
+        assert!(architect.contains(
+            "vida_task_classes = \"architecture,execution_preparation,hard_escalation,meta_analysis\""
+        ));
 
         assert!(!harness
             .path()

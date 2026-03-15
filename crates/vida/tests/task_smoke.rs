@@ -15,21 +15,6 @@ fn unique_state_dir() -> String {
     format!("/tmp/vida-task-state-{}-{}", std::process::id(), nanos)
 }
 
-fn repo_root() -> String {
-    env!("CARGO_MANIFEST_DIR")
-        .strip_suffix("/crates/vida")
-        .expect("crate manifest dir should end with /crates/vida")
-        .to_string()
-}
-
-fn donor_taskflow_runtime_name() -> String {
-    ["taskflow", "v0"].join("-")
-}
-
-fn donor_taskflow_launcher() -> String {
-    format!("{}/{}/src/vida", repo_root(), donor_taskflow_runtime_name())
-}
-
 fn sample_jsonl(path: &str) {
     fs::write(
         path,
@@ -393,48 +378,20 @@ fn task_show_fails_closed_for_missing_task_id() {
 fn donor_ready_output_matches_semantic_parity_fixture() {
     let temp_root = unique_state_dir();
     let jsonl_path = format!("{temp_root}/issues.jsonl");
-    fs::create_dir_all(format!("{temp_root}/.beads")).expect("beads dir should be created");
+    fs::create_dir_all(&temp_root).expect("temp dir should be created");
     sample_jsonl(&jsonl_path);
 
-    let donor_import = Command::new(donor_taskflow_launcher())
-        .args(["task", "import-jsonl", &jsonl_path, "--json"])
-        .env("VIDA_ROOT", &temp_root)
-        .env(
-            "VIDA_V0_TURSO_PYTHON",
-            "/home/unnamed/project/vida-stack/.venv/bin/python3",
-        )
-        .output()
-        .expect("donor import should run");
-    assert!(donor_import.status.success());
-
-    let donor_ready = Command::new(donor_taskflow_launcher())
-        .args(["task", "ready", "--json"])
-        .env("VIDA_ROOT", &temp_root)
-        .env(
-            "VIDA_V0_TURSO_PYTHON",
-            "/home/unnamed/project/vida-stack/.venv/bin/python3",
-        )
-        .output()
-        .expect("donor ready should run");
-    assert!(donor_ready.status.success());
-    let donor_stdout = String::from_utf8_lossy(&donor_ready.stdout);
-
-    let rust_state_dir = format!("{temp_root}/rust-state");
-    let _import_stdout = run_and_assert_success(
-        &["task", "import-jsonl", &jsonl_path, "--json"],
-        &rust_state_dir,
-    );
-    let rust_ready = run_and_assert_success(&["task", "ready", "--json"], &rust_state_dir);
+    let state_dir = format!("{temp_root}/state");
+    let _import_stdout =
+        run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
+    let rust_ready = run_and_assert_success(&["task", "ready", "--json"], &state_dir);
 
     let expected =
         include_str!("../../../tests/golden/taskflow/donor_ready_semantic.json").trim_end();
     assert_eq!(
-        donor_ready_semantic(&donor_stdout),
+        donor_ready_semantic(&rust_ready),
         normalize_json_fixture(expected)
     );
-    let rust_semantic = donor_ready_semantic(&rust_ready);
-    assert!(rust_semantic.contains("\"id\": \"vida-a\""));
-    assert!(rust_semantic.contains("\"id\": \"vida-c\""));
 
     let _ = fs::remove_dir_all(&temp_root);
 }
@@ -443,45 +400,16 @@ fn donor_ready_output_matches_semantic_parity_fixture() {
 fn donor_show_output_matches_semantic_parity_fixture() {
     let temp_root = unique_state_dir();
     let jsonl_path = format!("{temp_root}/issues.jsonl");
-    fs::create_dir_all(format!("{temp_root}/.beads")).expect("beads dir should be created");
+    fs::create_dir_all(&temp_root).expect("temp dir should be created");
     sample_jsonl(&jsonl_path);
 
-    let donor_import = Command::new(donor_taskflow_launcher())
-        .args(["task", "import-jsonl", &jsonl_path, "--json"])
-        .env("VIDA_ROOT", &temp_root)
-        .env(
-            "VIDA_V0_TURSO_PYTHON",
-            "/home/unnamed/project/vida-stack/.venv/bin/python3",
-        )
-        .output()
-        .expect("donor import should run");
-    assert!(donor_import.status.success());
-
-    let donor_show = Command::new(donor_taskflow_launcher())
-        .args(["task", "show", "vida-b", "--json"])
-        .env("VIDA_ROOT", &temp_root)
-        .env(
-            "VIDA_V0_TURSO_PYTHON",
-            "/home/unnamed/project/vida-stack/.venv/bin/python3",
-        )
-        .output()
-        .expect("donor show should run");
-    assert!(donor_show.status.success());
-    let donor_stdout = String::from_utf8_lossy(&donor_show.stdout);
-
-    let rust_state_dir = format!("{temp_root}/rust-state");
-    let _import_stdout = run_and_assert_success(
-        &["task", "import-jsonl", &jsonl_path, "--json"],
-        &rust_state_dir,
-    );
-    let rust_show = run_and_assert_success(&["task", "show", "vida-b", "--json"], &rust_state_dir);
+    let state_dir = format!("{temp_root}/state");
+    let _import_stdout =
+        run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
+    let rust_show = run_and_assert_success(&["task", "show", "vida-b", "--json"], &state_dir);
 
     let expected =
         include_str!("../../../tests/golden/taskflow/donor_show_semantic.json").trim_end();
-    assert_eq!(
-        donor_show_semantic(&donor_stdout),
-        normalize_json_fixture(expected)
-    );
     assert_eq!(
         donor_show_semantic(&rust_show),
         normalize_json_fixture(expected)
@@ -494,7 +422,7 @@ fn donor_show_output_matches_semantic_parity_fixture() {
 fn donor_list_output_matches_semantic_parity_fixture() {
     let temp_root = unique_state_dir();
     let jsonl_path = format!("{temp_root}/issues.jsonl");
-    fs::create_dir_all(format!("{temp_root}/.beads")).expect("beads dir should be created");
+    fs::create_dir_all(&temp_root).expect("temp dir should be created");
     fs::write(
         &jsonl_path,
         concat!(
@@ -506,42 +434,13 @@ fn donor_list_output_matches_semantic_parity_fixture() {
     )
     .expect("write task jsonl");
 
-    let donor_import = Command::new(donor_taskflow_launcher())
-        .args(["task", "import-jsonl", &jsonl_path, "--json"])
-        .env("VIDA_ROOT", &temp_root)
-        .env(
-            "VIDA_V0_TURSO_PYTHON",
-            "/home/unnamed/project/vida-stack/.venv/bin/python3",
-        )
-        .output()
-        .expect("donor import should run");
-    assert!(donor_import.status.success());
-
-    let donor_list = Command::new(donor_taskflow_launcher())
-        .args(["task", "list", "--json"])
-        .env("VIDA_ROOT", &temp_root)
-        .env(
-            "VIDA_V0_TURSO_PYTHON",
-            "/home/unnamed/project/vida-stack/.venv/bin/python3",
-        )
-        .output()
-        .expect("donor list should run");
-    assert!(donor_list.status.success());
-    let donor_stdout = String::from_utf8_lossy(&donor_list.stdout);
-
-    let rust_state_dir = format!("{temp_root}/rust-state");
-    let _import_stdout = run_and_assert_success(
-        &["task", "import-jsonl", &jsonl_path, "--json"],
-        &rust_state_dir,
-    );
-    let rust_list = run_and_assert_success(&["task", "list", "--json"], &rust_state_dir);
+    let state_dir = format!("{temp_root}/state");
+    let _import_stdout =
+        run_and_assert_success(&["task", "import-jsonl", &jsonl_path, "--json"], &state_dir);
+    let rust_list = run_and_assert_success(&["task", "list", "--json"], &state_dir);
 
     let expected =
         include_str!("../../../tests/golden/taskflow/donor_list_semantic.json").trim_end();
-    assert_eq!(
-        donor_list_semantic(&donor_stdout),
-        normalize_json_fixture(expected)
-    );
     assert_eq!(
         donor_list_semantic(&rust_list),
         normalize_json_fixture(expected)

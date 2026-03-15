@@ -4107,7 +4107,7 @@ mod tests {
             "docflow",
             "validate-footer",
             "--path",
-            "docs/process/test.md",
+            "notes/test.md",
             "--content",
             "# title\n\n-----\nartifact_path: process/test\n",
         ]);
@@ -4199,10 +4199,11 @@ mod tests {
         ]);
         let rendered = run(cli);
         assert!(rendered.contains("readiness-write"));
-        assert!(rendered.contains("rows: 1"));
+        assert!(rendered.contains("rows: 3"));
         let written = fs::read_to_string(&output).expect("readiness jsonl should exist");
         assert!(written.contains("\"artifact_path\":\"docs/process/a.md\""));
         assert!(written.contains("\"verdict\":\"blocking\""));
+        assert_eq!(written.lines().count(), 3);
         assert!(written.ends_with('\n'));
 
         fs::remove_dir_all(root).expect("temp root should be removed");
@@ -4600,7 +4601,7 @@ mod tests {
             "docflow",
             "readiness",
             "--path",
-            "docs/process/test.md",
+            "notes/test.md",
             "--content",
             "# title\n",
         ]);
@@ -4608,7 +4609,7 @@ mod tests {
         assert!(rendered.contains("readiness"));
         assert!(rendered.contains("rows: 1"));
         assert!(rendered.contains("verdict: blocking"));
-        assert!(rendered.contains("docs/process/test.md [blocking]"));
+        assert!(rendered.contains("notes/test.md [blocking]"));
     }
 
     #[test]
@@ -4718,9 +4719,11 @@ mod tests {
         let rendered = run(cli);
         assert!(rendered.contains("validation-tree"));
         assert!(rendered.contains("scanned_rows: 1"));
-        assert!(rendered.contains("issues: 1"));
+        assert!(rendered.contains("issues: 3"));
         assert!(rendered.contains("verdict: blocking"));
         assert!(rendered.contains("docs/process/a.md [missing_footer]"));
+        assert!(rendered.contains("docs/process/a.md [missing_agents_sidecar]"));
+        assert!(rendered.contains("docs/process/a.md [missing_project_doc_map_surface]"));
 
         fs::remove_dir_all(root).expect("temp root should be removed");
     }

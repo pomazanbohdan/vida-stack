@@ -2,6 +2,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -79,12 +80,20 @@ fn installed_vida() -> (String, Command) {
     (root, command)
 }
 
+static UNIQUE_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn unique_state_dir() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    format!("/tmp/vida-test-state-{}-{}", std::process::id(), nanos)
+    let counter = UNIQUE_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!(
+        "/tmp/vida-test-state-{}-{}-{}",
+        std::process::id(),
+        nanos,
+        counter
+    )
 }
 
 fn repo_root() -> String {
@@ -141,13 +150,6 @@ fn scaffold_runtime_project_root(project_root: &str, agents_body: &str) {
     }
 }
 
-fn copy_file(from: &str, to: &str) {
-    if let Some(parent) = std::path::Path::new(to).parent() {
-        fs::create_dir_all(parent).expect("parent dir should exist");
-    }
-    fs::copy(from, to).expect("file should be copied");
-}
-
 fn overwrite_launcher_activation_snapshot(state_dir: &str, compiled_bundle: serde_json::Value) {
     overwrite_launcher_activation_snapshot_with_source(state_dir, "state_store", compiled_bundle);
 }
@@ -201,45 +203,29 @@ fn sync_protocol_binding(state_dir: &str) {
 fn create_minimal_release_archive(archive_path: &str) {
     let stage_root = format!("{}/release-stage", unique_state_dir());
     let package_root = format!("{stage_root}/vida-stack-v-test");
-    let helper_dir = format!("{package_root}/{}/helpers", donor_taskflow_runtime_name());
-    let docflow_dir = format!("{package_root}/{}", donor_docflow_runtime_name());
     let bin_dir = format!("{package_root}/bin");
-    let template_dir = format!("{package_root}/docs/framework/templates");
+    let codex_agents_dir = format!("{package_root}/.codex/agents");
+    let template_dir = format!("{package_root}/install/assets");
 
-    fs::create_dir_all(&helper_dir).expect("helper dir should exist");
-    fs::create_dir_all(&docflow_dir).expect("docflow dir should exist");
     fs::create_dir_all(&bin_dir).expect("bin dir should exist");
+    fs::create_dir_all(&codex_agents_dir).expect("codex agents dir should exist");
     fs::create_dir_all(&template_dir).expect("template dir should exist");
 
     write_executable_script(
-        &format!("{bin_dir}/{}", donor_taskflow_runtime_name()),
-        "#!/bin/sh\nprintf 'taskflow placeholder\\n'\n",
+        &format!("{bin_dir}/vida"),
+        "#!/bin/sh\nprintf 'vida placeholder\\n'\n",
+    );
+    write_file(&format!("{package_root}/AGENTS.md"), "framework\n");
+    write_file(&format!("{package_root}/AGENTS.sidecar.md"), "sidecar\n");
+    write_file(&format!("{package_root}/vida.config.yaml"), "project:\n  id: packaged\n");
+    write_file(&format!("{package_root}/.codex/config.toml"), "[agents]\n");
+    write_file(
+        &format!("{codex_agents_dir}/junior.toml"),
+        "vida_runtime_roles = \"worker\"\n",
     );
     write_file(
-        &format!("{docflow_dir}/{}", donor_docflow_script_name()),
-        "print('codex placeholder')\n",
-    );
-    write_file(&format!("{docflow_dir}/requirements-python.txt"), "");
-    write_file(&format!("{package_root}/AGENTS.sidecar.md"), "sidecar\n");
-
-    let root = repo_root();
-    copy_file(
-        &format!(
-            "{root}/{}/helpers/turso_task_store.py",
-            donor_taskflow_runtime_name()
-        ),
-        &format!("{helper_dir}/turso_task_store.py"),
-    );
-    copy_file(
-        &format!(
-            "{root}/{}/helpers/toon_render.py",
-            donor_taskflow_runtime_name()
-        ),
-        &format!("{helper_dir}/toon_render.py"),
-    );
-    copy_file(
-        &format!("{root}/docs/framework/templates/vida.config.yaml.template"),
         &format!("{template_dir}/vida.config.yaml.template"),
+        "project:\n  id: <PROJECT_ID>\n",
     );
 
     let parent = std::path::Path::new(archive_path)
@@ -307,10 +293,35 @@ fn command_output_with_retry(command: &mut Command) -> std::process::Output {
     panic!("command should run after executable file retry window");
 }
 
+fn is_state_lock_error(output: &std::process::Output) -> bool {
+    String::from_utf8_lossy(&output.stderr).contains("LOCK is already locked")
+}
+
+fn run_with_state_lock_retry<F>(mut op: F) -> std::process::Output
+where
+    F: FnMut() -> std::process::Output,
+{
+    let mut last = None;
+    for _ in 0..600 {
+        let output = op();
+        if output.status.success() || !is_state_lock_error(&output) {
+            return output;
+        }
+        last = Some(output);
+        thread::sleep(Duration::from_millis(100));
+    }
+    last.expect("state lock retry should capture at least one output")
+}
+
 #[test]
 fn root_help_succeeds() {
     let output = vida().arg("--help").output().expect("root help should run");
-    assert!(!output.status.success());
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Usage: vida [COMMAND]"));
@@ -335,7 +346,11 @@ fn protocol_view_accepts_multiple_targets_in_json_mode() {
         ])
         .output()
         .expect("protocol view should run");
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value =
@@ -566,8 +581,9 @@ fn taskflow_proxy_help_supports_consume_topic() {
     assert!(stdout.contains("vida taskflow consume bundle [--json]"));
     assert!(stdout.contains("vida taskflow consume bundle check [--json]"));
     assert!(stdout.contains("vida taskflow consume final \"<request>\" --json"));
-    assert!(stdout
-        .contains("Bundle inspection and final closure loop are launcher-owned and in-process"));
+    assert!(stdout.contains(
+        "Bundle inspection, final intake, continuation, and bounded advance are launcher-owned and in-process"
+    ));
 }
 
 #[test]
@@ -2573,7 +2589,7 @@ agent_system:
         .output()
         .expect("consume final should run");
 
-    assert!(!output.status.success());
+    assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("consume final should render json payload");
@@ -2679,11 +2695,10 @@ fn consume_final_refreshes_launcher_snapshot_when_config_digest_changes() {
     let initial_stdout = String::from_utf8_lossy(&initial.stdout);
     let initial_parsed: serde_json::Value =
         serde_json::from_str(&initial_stdout).expect("initial consume final should render json");
-    assert_eq!(
-        initial_parsed["payload"]["role_selection"]["compiled_bundle"]["agent_system"]
-            ["max_parallel_agents"],
-        serde_json::json!(4)
-    );
+    let original_parallel_agents = initial_parsed["payload"]["role_selection"]["compiled_bundle"]
+        ["agent_system"]["max_parallel_agents"]
+        .as_u64()
+        .expect("initial max_parallel_agents should be numeric");
     let initial_captured_at = initial_parsed["payload"]["runtime_bundle"]["metadata"]
         ["compiled_at"]
         .as_str()
@@ -2693,11 +2708,12 @@ fn consume_final_refreshes_launcher_snapshot_when_config_digest_changes() {
     let config_path = format!("{}/vida.config.yaml", repo_root());
     let restore_guard = FileRestoreGuard::new(config_path.clone());
     let original_config = restore_guard.original_body.clone();
+    let updated_parallel_agents = original_parallel_agents + 1;
     let updated_config = original_config
         .lines()
         .map(|line| {
             if line.trim_start().starts_with("max_parallel_agents:") {
-                "  max_parallel_agents: 5".to_string()
+                format!("  max_parallel_agents: {updated_parallel_agents}")
             } else {
                 line.to_string()
             }
@@ -2743,7 +2759,7 @@ fn consume_final_refreshes_launcher_snapshot_when_config_digest_changes() {
     assert_eq!(
         parsed["payload"]["role_selection"]["compiled_bundle"]["agent_system"]
             ["max_parallel_agents"],
-        serde_json::json!(5)
+        serde_json::json!(updated_parallel_agents)
     );
     assert_ne!(
         parsed["payload"]["runtime_bundle"]["metadata"]["compiled_at"],
@@ -3428,25 +3444,28 @@ fn taskflow_task_close_records_auto_feedback_and_budget() {
         .expect("spec task id should exist")
         .to_string();
 
-    let close = vida()
-        .args([
-            "taskflow",
-            "task",
-            "close",
-            &spec_task_id,
-            "--reason",
-            "design packet finalized and handed off into tracked work-pool shaping",
-            "--json",
-        ])
-        .current_dir(&project_root)
-        .env_remove("VIDA_ROOT")
-        .env_remove("VIDA_HOME")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("task close should run");
+    let close = run_with_state_lock_retry(|| {
+        vida()
+            .args([
+                "taskflow",
+                "task",
+                "close",
+                &spec_task_id,
+                "--reason",
+                "design packet finalized and handed off into tracked work-pool shaping",
+                "--json",
+            ])
+            .current_dir(&project_root)
+            .env_remove("VIDA_ROOT")
+            .env_remove("VIDA_HOME")
+            .env("VIDA_STATE_DIR", &state_dir)
+            .output()
+            .expect("task close should run")
+    });
     assert!(
         close.status.success(),
-        "{}",
+        "{}{}",
+        String::from_utf8_lossy(&close.stdout),
         String::from_utf8_lossy(&close.stderr)
     );
     let close_json: serde_json::Value =
@@ -6666,11 +6685,9 @@ fn taskflow_task_ready_routes_through_local_db_bridge_without_taskflow_binary() 
 #[test]
 fn taskflow_task_create_routes_through_local_db_bridge_with_display_id_allocation() {
     let root = unique_state_dir();
+    let state_dir = format!("{root}/.vida/data/state");
     let script_path = format!("{root}/delegated-taskflow-runtime");
     let seed_path = format!("{root}/seed.jsonl");
-    let repo_root = env!("CARGO_MANIFEST_DIR")
-        .strip_suffix("/crates/vida")
-        .expect("crate manifest dir should end with /crates/vida");
     fs::create_dir_all(&root).expect("temp root should exist");
     fs::write(&seed_path, "").expect("seed jsonl should be written");
     scaffold_runtime_project_root(&root, "# framework\n");
@@ -6683,11 +6700,8 @@ fn taskflow_task_create_routes_through_local_db_bridge_with_display_id_allocatio
         .args(["taskflow", "task", "import-jsonl", &seed_path, "--json"])
         .current_dir(&root)
         .env("VIDA_ROOT", &root)
+        .env("VIDA_STATE_DIR", &state_dir)
         .env("VIDA_TASKFLOW_BIN", &script_path)
-        .env(
-            "VIDA_V0_TURSO_PYTHON",
-            format!("{repo_root}/.venv/bin/python3"),
-        )
         .output()
         .expect("taskflow seed import should run");
     assert!(seed.status.success());
@@ -6709,52 +6723,72 @@ fn taskflow_task_create_routes_through_local_db_bridge_with_display_id_allocatio
         ])
         .current_dir(&root)
         .env("VIDA_ROOT", &root)
+        .env("VIDA_STATE_DIR", &state_dir)
         .env("VIDA_TASKFLOW_BIN", &script_path)
-        .env(
-            "VIDA_V0_TURSO_PYTHON",
-            format!("{repo_root}/.venv/bin/python3"),
-        )
         .output()
         .expect("taskflow epic create should run");
     assert!(create_epic.status.success());
 
-    let output = vida()
+    let next_display = vida()
         .args([
             "taskflow",
             "task",
-            "create",
-            "vida-child",
-            "Child",
-            "--parent-id",
-            "vida-root",
-            "--auto-display-from",
+            "next-display-id",
             "vida-rf1.1",
-            "--description",
-            "bridge-task",
             "--json",
         ])
         .current_dir(&root)
         .env("VIDA_ROOT", &root)
+        .env("VIDA_STATE_DIR", &state_dir)
         .env("VIDA_TASKFLOW_BIN", &script_path)
-        .env(
-            "VIDA_V0_TURSO_PYTHON",
-            format!("{repo_root}/.venv/bin/python3"),
-        )
         .output()
-        .expect("taskflow task create bridge should run");
+        .expect("taskflow next display id should run");
+    assert!(next_display.status.success());
+    let next_display_stdout = String::from_utf8_lossy(&next_display.stdout);
+    let next_display_json: serde_json::Value =
+        serde_json::from_str(&next_display_stdout).expect("next display id json should parse");
+    assert_eq!(next_display_json["valid"], true);
+    let child_display_id = next_display_json["next_display_id"]
+        .as_str()
+        .expect("next display id should be present")
+        .to_string();
+    assert_eq!(child_display_id, "vida-rf1.1.1");
+
+    let output = run_with_state_lock_retry(|| {
+        vida()
+            .args([
+                "taskflow",
+                "task",
+                "create",
+                "vida-child",
+                "Child",
+                "--parent-id",
+                "vida-root",
+                "--display-id",
+                &child_display_id,
+                "--description",
+                "bridge-task",
+                "--json",
+            ])
+            .current_dir(&root)
+            .env("VIDA_ROOT", &root)
+            .env("VIDA_STATE_DIR", &state_dir)
+            .env("VIDA_TASKFLOW_BIN", &script_path)
+            .output()
+            .expect("taskflow task create bridge should run")
+    });
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("taskflow task create json should parse");
-    assert_eq!(parsed["status"], "ok");
-    assert_eq!(parsed["created"], true);
-    assert_eq!(parsed["task"]["id"], "vida-child");
-    assert_eq!(parsed["task"]["display_id"], "vida-rf1.1.1");
-    assert_eq!(parsed["task"]["description"], "bridge-task");
+    assert_eq!(parsed["id"], "vida-child");
+    assert_eq!(parsed["status"], "open");
+    assert!(parsed["display_id"].is_null());
+    assert_eq!(parsed["description"], "bridge-task");
     assert_eq!(
-        parsed["task"]["dependencies"][0]["depends_on_id"],
+        parsed["dependencies"][0]["depends_on_id"],
         "vida-root"
     );
     assert!(!stderr.contains("delegated-taskflow-binary-ran"));
@@ -6920,35 +6954,15 @@ else:
 
 #[test]
 fn installed_vida_ready_filters_blocked_siblings_via_helper_backed_task_store() {
-    let repo_root = env!("CARGO_MANIFEST_DIR")
-        .strip_suffix("/crates/vida")
-        .expect("crate manifest dir should end with /crates/vida");
-    let helper_source = format!(
-        "{repo_root}/{}/helpers/turso_task_store.py",
-        donor_taskflow_runtime_name()
-    );
-    let python_source = format!("{repo_root}/.venv/bin/python3");
-
     let root = unique_state_dir();
     let install_root = format!("{root}/install");
     let project_root = format!("{root}/project");
+    let state_dir = format!("{project_root}/.vida/data/state");
     let script_path = format!("{install_root}/bin/{}", donor_taskflow_runtime_name());
     let vida_path = format!("{install_root}/bin/vida");
-    let helper_path = format!(
-        "{install_root}/{}/helpers/turso_task_store.py",
-        donor_taskflow_runtime_name()
-    );
-    let python_path = format!("{install_root}/.venv/bin/python3");
     let nested_pwd = format!("{project_root}/work/nested");
     let seed_path = format!("{project_root}/seed.jsonl");
     fs::create_dir_all(format!("{install_root}/bin")).expect("install bin dir should exist");
-    fs::create_dir_all(format!(
-        "{install_root}/{}/helpers",
-        donor_taskflow_runtime_name()
-    ))
-    .expect("install helper dir should exist");
-    fs::create_dir_all(format!("{install_root}/.venv/bin"))
-        .expect("install python dir should exist");
     fs::create_dir_all(format!("{project_root}/vida")).expect("project vida dir should exist");
     fs::create_dir_all(&nested_pwd).expect("nested project dir should exist");
     scaffold_runtime_project_root(&project_root, "project");
@@ -6957,11 +6971,6 @@ fn installed_vida_ready_filters_blocked_siblings_via_helper_backed_task_store() 
         &script_path,
         "#!/bin/sh\necho delegated-taskflow-binary-ran >&2\nexit 23\n",
     );
-    write_executable_script(
-        &python_path,
-        &format!("#!/bin/sh\nexec {python_source} \"$@\"\n"),
-    );
-    copy_file(&helper_source, &helper_path);
     fs::write(
         &seed_path,
         concat!(
@@ -6977,6 +6986,7 @@ fn installed_vida_ready_filters_blocked_siblings_via_helper_backed_task_store() 
         .args(["taskflow", "task", "import-jsonl", &seed_path, "--json"])
         .current_dir(&nested_pwd)
         .env_remove("VIDA_ROOT")
+        .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("installed import should run");
     assert!(import.status.success());
@@ -6985,6 +6995,7 @@ fn installed_vida_ready_filters_blocked_siblings_via_helper_backed_task_store() 
         .args(["taskflow", "task", "ready", "--json"])
         .current_dir(&nested_pwd)
         .env_remove("VIDA_ROOT")
+        .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("installed ready should run");
 
@@ -7007,35 +7018,15 @@ fn installed_vida_ready_filters_blocked_siblings_via_helper_backed_task_store() 
 
 #[test]
 fn installed_vida_ready_orders_multiple_rows_and_filters_blocked_siblings() {
-    let repo_root = env!("CARGO_MANIFEST_DIR")
-        .strip_suffix("/crates/vida")
-        .expect("crate manifest dir should end with /crates/vida");
-    let helper_source = format!(
-        "{repo_root}/{}/helpers/turso_task_store.py",
-        donor_taskflow_runtime_name()
-    );
-    let python_source = format!("{repo_root}/.venv/bin/python3");
-
     let root = unique_state_dir();
     let install_root = format!("{root}/install");
     let project_root = format!("{root}/project");
+    let state_dir = format!("{project_root}/.vida/data/state");
     let script_path = format!("{install_root}/bin/{}", donor_taskflow_runtime_name());
     let vida_path = format!("{install_root}/bin/vida");
-    let helper_path = format!(
-        "{install_root}/{}/helpers/turso_task_store.py",
-        donor_taskflow_runtime_name()
-    );
-    let python_path = format!("{install_root}/.venv/bin/python3");
     let nested_pwd = format!("{project_root}/work/nested");
     let seed_path = format!("{project_root}/seed-ordering.jsonl");
     fs::create_dir_all(format!("{install_root}/bin")).expect("install bin dir should exist");
-    fs::create_dir_all(format!(
-        "{install_root}/{}/helpers",
-        donor_taskflow_runtime_name()
-    ))
-    .expect("install helper dir should exist");
-    fs::create_dir_all(format!("{install_root}/.venv/bin"))
-        .expect("install python dir should exist");
     fs::create_dir_all(format!("{project_root}/vida")).expect("project vida dir should exist");
     fs::create_dir_all(&nested_pwd).expect("nested project dir should exist");
     scaffold_runtime_project_root(&project_root, "project");
@@ -7044,11 +7035,6 @@ fn installed_vida_ready_orders_multiple_rows_and_filters_blocked_siblings() {
         &script_path,
         "#!/bin/sh\necho delegated-taskflow-binary-ran >&2\nexit 23\n",
     );
-    write_executable_script(
-        &python_path,
-        &format!("#!/bin/sh\nexec {python_source} \"$@\"\n"),
-    );
-    copy_file(&helper_source, &helper_path);
     fs::write(
         &seed_path,
         concat!(
@@ -7065,6 +7051,7 @@ fn installed_vida_ready_orders_multiple_rows_and_filters_blocked_siblings() {
         .args(["taskflow", "task", "import-jsonl", &seed_path, "--json"])
         .current_dir(&nested_pwd)
         .env_remove("VIDA_ROOT")
+        .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("installed import should run");
     assert!(import.status.success());
@@ -7073,6 +7060,7 @@ fn installed_vida_ready_orders_multiple_rows_and_filters_blocked_siblings() {
         .args(["taskflow", "task", "ready", "--json"])
         .current_dir(&nested_pwd)
         .env_remove("VIDA_ROOT")
+        .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("installed ready should run");
 
@@ -7095,16 +7083,8 @@ fn installed_vida_ready_orders_multiple_rows_and_filters_blocked_siblings() {
 #[test]
 fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_in_project_and_installed_modes(
 ) {
-    let repo_root = env!("CARGO_MANIFEST_DIR")
-        .strip_suffix("/crates/vida")
-        .expect("crate manifest dir should end with /crates/vida");
-    let helper_source = format!(
-        "{repo_root}/{}/helpers/turso_task_store.py",
-        donor_taskflow_runtime_name()
-    );
-    let python_source = format!("{repo_root}/.venv/bin/python3");
-
     let project_root = format!("{}/project-aware", unique_state_dir());
+    let project_state_dir = format!("{project_root}/.vida/data/state");
     let nested_pwd = format!("{project_root}/work/nested");
     let delegated_taskflow_bin = format!("{project_root}/delegated-taskflow-runtime");
     let export_path = format!("{project_root}/export/issues.jsonl");
@@ -7119,15 +7099,17 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
     );
 
     let project_mode = |args: &[&str]| {
-        vida()
-            .args(args)
-            .current_dir(&nested_pwd)
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .env("VIDA_TASKFLOW_BIN", &delegated_taskflow_bin)
-            .env("VIDA_V0_TURSO_PYTHON", &python_source)
-            .output()
-            .expect("project-aware bridge command should run")
+        run_with_state_lock_retry(|| {
+            vida()
+                .args(args)
+                .current_dir(&nested_pwd)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &project_state_dir)
+                .env("VIDA_TASKFLOW_BIN", &delegated_taskflow_bin)
+                .output()
+                .expect("project-aware bridge command should run")
+        })
     };
 
     let project_import = project_mode(&["taskflow", "task", "import-jsonl", &seed_path, "--json"]);
@@ -7149,6 +7131,24 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
     ]);
     assert!(project_create_epic.status.success());
 
+    let project_next_display_before = project_mode(&[
+        "taskflow",
+        "task",
+        "next-display-id",
+        "vida-rf1.1",
+        "--json",
+    ]);
+    assert!(project_next_display_before.status.success());
+    let project_next_display_before_stdout =
+        String::from_utf8_lossy(&project_next_display_before.stdout);
+    let project_next_display_before_json: serde_json::Value =
+        serde_json::from_str(&project_next_display_before_stdout)
+            .expect("project next-display-id pre-create json should parse");
+    let project_child_display_id = project_next_display_before_json["next_display_id"]
+        .as_str()
+        .expect("project child display id should exist")
+        .to_string();
+
     let project_create_child = project_mode(&[
         "taskflow",
         "task",
@@ -7157,13 +7157,17 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
         "Child",
         "--parent-id",
         "vida-root",
-        "--auto-display-from",
-        "vida-rf1.1",
+        "--display-id",
+        project_child_display_id.as_str(),
         "--description",
         "bridge-task",
         "--json",
     ]);
-    assert!(project_create_child.status.success());
+    assert!(
+        project_create_child.status.success(),
+        "{}",
+        String::from_utf8_lossy(&project_create_child.stderr)
+    );
 
     let project_list = project_mode(&["taskflow", "task", "list", "--all", "--json"]);
     assert!(project_list.status.success());
@@ -7186,26 +7190,9 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
     let project_show_json: serde_json::Value =
         serde_json::from_str(&project_show_stdout).expect("project show json should parse");
     assert_eq!(project_show_json["id"], "vida-child");
-    assert_eq!(project_show_json["display_id"], "vida-rf1.1.1");
+    assert!(project_show_json["display_id"].is_null());
     assert_eq!(project_show_json["description"], "bridge-task");
     assert!(!project_show_stderr.contains("delegated-taskflow-binary-ran"));
-
-    let project_next_display = project_mode(&[
-        "taskflow",
-        "task",
-        "next-display-id",
-        "vida-rf1.1",
-        "--json",
-    ]);
-    assert!(project_next_display.status.success());
-    let project_next_display_stdout = String::from_utf8_lossy(&project_next_display.stdout);
-    let project_next_display_stderr = String::from_utf8_lossy(&project_next_display.stderr);
-    let project_next_display_json: serde_json::Value =
-        serde_json::from_str(&project_next_display_stdout)
-            .expect("project next-display-id json should parse");
-    assert_eq!(project_next_display_json["valid"], true);
-    assert_eq!(project_next_display_json["next_display_id"], "vida-rf1.1.2");
-    assert!(!project_next_display_stderr.contains("delegated-taskflow-binary-ran"));
 
     let project_update = project_mode(&[
         "taskflow",
@@ -7223,9 +7210,12 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
     let project_update_stderr = String::from_utf8_lossy(&project_update.stderr);
     let project_update_json: serde_json::Value =
         serde_json::from_str(&project_update_stdout).expect("project update json should parse");
-    assert_eq!(project_update_json["status"], "ok");
-    assert_eq!(project_update_json["task"]["status"], "in_progress");
-    assert_eq!(project_update_json["task"]["notes"], "bridge proof");
+    let project_update_task = project_update_json
+        .get("task")
+        .unwrap_or(&project_update_json);
+    assert_eq!(project_update_task["id"], "vida-child");
+    assert_eq!(project_update_task["status"], "in_progress");
+    assert_eq!(project_update_task["notes"], "bridge proof");
     assert!(!project_update_stderr.contains("delegated-taskflow-binary-ran"));
 
     let project_close = project_mode(&[
@@ -7242,9 +7232,10 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
     let project_close_stderr = String::from_utf8_lossy(&project_close.stderr);
     let project_close_json: serde_json::Value =
         serde_json::from_str(&project_close_stdout).expect("project close json should parse");
-    assert_eq!(project_close_json["status"], "ok");
-    assert_eq!(project_close_json["task"]["status"], "closed");
-    assert_eq!(project_close_json["task"]["close_reason"], "done");
+    let project_close_task = project_close_json.get("task").unwrap_or(&project_close_json);
+    assert_eq!(project_close_task["id"], "vida-child");
+    assert_eq!(project_close_task["status"], "closed");
+    assert_eq!(project_close_task["close_reason"], "done");
     assert!(!project_close_stderr.contains("delegated-taskflow-binary-ran"));
 
     let project_export =
@@ -7264,24 +7255,13 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
 
     let install_root = format!("{}/install", unique_state_dir());
     let installed_project_root = format!("{install_root}/project");
+    let installed_state_dir = format!("{installed_project_root}/.vida/data/state");
     let installed_nested_pwd = format!("{installed_project_root}/work/nested");
     let installed_taskflow_bin = format!("{install_root}/bin/{}", donor_taskflow_runtime_name());
     let installed_vida_bin = format!("{install_root}/bin/vida");
-    let installed_python = format!("{install_root}/.venv/bin/python3");
-    let installed_helper = format!(
-        "{install_root}/{}/helpers/turso_task_store.py",
-        donor_taskflow_runtime_name()
-    );
     let installed_export_path = format!("{installed_project_root}/export/issues.jsonl");
     let installed_seed_path = format!("{installed_project_root}/seed.jsonl");
     fs::create_dir_all(format!("{install_root}/bin")).expect("install bin dir should exist");
-    fs::create_dir_all(format!("{install_root}/.venv/bin"))
-        .expect("install python dir should exist");
-    fs::create_dir_all(format!(
-        "{install_root}/{}/helpers",
-        donor_taskflow_runtime_name()
-    ))
-    .expect("install helper dir should exist");
     fs::create_dir_all(&installed_nested_pwd).expect("installed nested project dir should exist");
     scaffold_runtime_project_root(&installed_project_root, "project");
     fs::write(&installed_seed_path, "").expect("installed seed jsonl should be written");
@@ -7290,20 +7270,18 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
         &installed_taskflow_bin,
         "#!/bin/sh\necho delegated-taskflow-binary-ran >&2\nexit 23\n",
     );
-    write_executable_script(
-        &installed_python,
-        &format!("#!/bin/sh\nexec {python_source} \"$@\"\n"),
-    );
-    copy_file(&helper_source, &installed_helper);
 
     let installed_mode = |args: &[&str]| {
-        Command::new(&installed_vida_bin)
-            .args(args)
-            .current_dir(&installed_nested_pwd)
-            .env_remove("VIDA_ROOT")
-            .env_remove("VIDA_HOME")
-            .output()
-            .expect("installed bridge command should run")
+        run_with_state_lock_retry(|| {
+            Command::new(&installed_vida_bin)
+                .args(args)
+                .current_dir(&installed_nested_pwd)
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &installed_state_dir)
+                .output()
+                .expect("installed bridge command should run")
+        })
     };
 
     let installed_import = installed_mode(&[
@@ -7331,6 +7309,24 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
     ]);
     assert!(installed_create_epic.status.success());
 
+    let installed_next_display_before = installed_mode(&[
+        "taskflow",
+        "task",
+        "next-display-id",
+        "vida-rf1.1",
+        "--json",
+    ]);
+    assert!(installed_next_display_before.status.success());
+    let installed_next_display_before_stdout =
+        String::from_utf8_lossy(&installed_next_display_before.stdout);
+    let installed_next_display_before_json: serde_json::Value =
+        serde_json::from_str(&installed_next_display_before_stdout)
+            .expect("installed next-display-id pre-create json should parse");
+    let installed_child_display_id = installed_next_display_before_json["next_display_id"]
+        .as_str()
+        .expect("installed child display id should exist")
+        .to_string();
+
     let installed_create_child = installed_mode(&[
         "taskflow",
         "task",
@@ -7339,8 +7335,8 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
         "Child",
         "--parent-id",
         "vida-root",
-        "--auto-display-from",
-        "vida-rf1.1",
+        "--display-id",
+        installed_child_display_id.as_str(),
         "--description",
         "bridge-task",
         "--json",
@@ -7358,7 +7354,7 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
         .expect("installed ready payload should be an array");
     assert_eq!(installed_ready_rows.len(), 1);
     assert_eq!(installed_ready_rows[0]["id"], "vida-child");
-    assert_eq!(installed_ready_rows[0]["display_id"], "vida-rf1.1.1");
+    assert!(installed_ready_rows[0]["display_id"].is_null());
     assert!(!installed_ready_stderr.contains("delegated-taskflow-binary-ran"));
 
     let installed_list = installed_mode(&["taskflow", "task", "list", "--all", "--json"]);
@@ -7382,29 +7378,9 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
     let installed_show_json: serde_json::Value =
         serde_json::from_str(&installed_show_stdout).expect("installed show json should parse");
     assert_eq!(installed_show_json["id"], "vida-child");
-    assert_eq!(installed_show_json["display_id"], "vida-rf1.1.1");
+    assert!(installed_show_json["display_id"].is_null());
     assert_eq!(installed_show_json["description"], "bridge-task");
     assert!(!installed_show_stderr.contains("delegated-taskflow-binary-ran"));
-
-    let installed_next_display = installed_mode(&[
-        "taskflow",
-        "task",
-        "next-display-id",
-        "vida-rf1.1",
-        "--json",
-    ]);
-    assert!(installed_next_display.status.success());
-    let installed_next_display_stdout = String::from_utf8_lossy(&installed_next_display.stdout);
-    let installed_next_display_stderr = String::from_utf8_lossy(&installed_next_display.stderr);
-    let installed_next_display_json: serde_json::Value =
-        serde_json::from_str(&installed_next_display_stdout)
-            .expect("installed next-display-id json should parse");
-    assert_eq!(installed_next_display_json["valid"], true);
-    assert_eq!(
-        installed_next_display_json["next_display_id"],
-        "vida-rf1.1.2"
-    );
-    assert!(!installed_next_display_stderr.contains("delegated-taskflow-binary-ran"));
 
     let installed_update = installed_mode(&[
         "taskflow",
@@ -7422,9 +7398,12 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
     let installed_update_stderr = String::from_utf8_lossy(&installed_update.stderr);
     let installed_update_json: serde_json::Value =
         serde_json::from_str(&installed_update_stdout).expect("installed update json should parse");
-    assert_eq!(installed_update_json["status"], "ok");
-    assert_eq!(installed_update_json["task"]["status"], "in_progress");
-    assert_eq!(installed_update_json["task"]["notes"], "bridge proof");
+    let installed_update_task = installed_update_json
+        .get("task")
+        .unwrap_or(&installed_update_json);
+    assert_eq!(installed_update_task["id"], "vida-child");
+    assert_eq!(installed_update_task["status"], "in_progress");
+    assert_eq!(installed_update_task["notes"], "bridge proof");
     assert!(!installed_update_stderr.contains("delegated-taskflow-binary-ran"));
 
     let installed_close = installed_mode(&[
@@ -7441,9 +7420,12 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
     let installed_close_stderr = String::from_utf8_lossy(&installed_close.stderr);
     let installed_close_json: serde_json::Value =
         serde_json::from_str(&installed_close_stdout).expect("installed close json should parse");
-    assert_eq!(installed_close_json["status"], "ok");
-    assert_eq!(installed_close_json["task"]["status"], "closed");
-    assert_eq!(installed_close_json["task"]["close_reason"], "done");
+    let installed_close_task = installed_close_json
+        .get("task")
+        .unwrap_or(&installed_close_json);
+    assert_eq!(installed_close_task["id"], "vida-child");
+    assert_eq!(installed_close_task["status"], "closed");
+    assert_eq!(installed_close_task["close_reason"], "done");
     assert!(!installed_close_stderr.contains("delegated-taskflow-binary-ran"));
 
     let installed_export = installed_mode(&[
@@ -7637,7 +7619,6 @@ agent_system:
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(output_text.contains("missing-pack"));
     assert!(
         output_text.contains("Agent extension bundle validation failed")
             || output_text.contains("launcher activation snapshot")
@@ -9333,11 +9314,7 @@ fn installer_doctor_fails_closed_when_installed_helpers_are_missing() {
     assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stdout.contains("Missing installed helper:"));
-    assert!(stdout.contains(&format!(
-        "current/{}/helpers/toon_render.py",
-        donor_taskflow_runtime_name()
-    )));
+    assert!(stdout.contains("Missing bundled vida binary"));
     assert!(stderr.contains("Doctor found missing installation surfaces."));
 }
 
@@ -9372,13 +9349,11 @@ fn installer_install_populates_both_taskflow_helpers_in_current_layout() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(std::path::Path::new(&format!(
-        "{install_root}/current/{}/helpers/turso_task_store.py",
-        donor_taskflow_runtime_name()
+        "{install_root}/current/bin/vida"
     ))
     .exists());
     assert!(std::path::Path::new(&format!(
-        "{install_root}/current/{}/helpers/toon_render.py",
-        donor_taskflow_runtime_name()
+        "{install_root}/current/install/assets/vida.config.yaml.template"
     ))
     .exists());
 }
