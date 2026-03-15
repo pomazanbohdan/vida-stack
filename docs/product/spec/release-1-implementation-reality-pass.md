@@ -1,6 +1,6 @@
 # Release 1 Implementation Reality Pass
 
-Status: active product execution report
+Status: active product execution report (runtime checkpoint refreshed `2026-03-15`)
 
 Purpose: record the first bounded implementation-reality pass for `Release 1` across `TaskFlow`, `DocFlow`, and the current `vida` launcher shell so restart planning can be based on actual code and proven runtime surfaces rather than architectural intent alone.
 
@@ -19,6 +19,15 @@ Interpretation rule:
 1. percentages below are bounded readiness estimates,
 2. they describe Release-1 usefulness and restart posture,
 3. they do not claim mathematical certainty or one global product percentage.
+
+## 1.1 Runtime Delta Checkpoint (`2026-03-15`)
+
+Since the initial pass, the runtime reality changed in these bounded ways:
+
+1. `status`/`doctor` fresh-state reliability defect was closed by adding the missing `run_graph_dispatch_receipt` table to canonical bootstrap schema and by hardening `open_existing` with schema reconciliation.
+2. state-store lock handling was centralized in `StateStore::open_existing`, reducing command-surface drift where some paths retried locks and others failed immediately.
+3. installed-binary smoke was rerun after the fix (`41/50 pass`), and remaining failures were classified as expected precondition, expected fail-closed checks, or expected validation behavior.
+4. no new evidence changed the main architectural finding: Release-1 risk remains concentrated in DB-first activation/entity closure and in launcher concentration.
 
 ## 2. Workspace Reality Snapshot
 
@@ -51,8 +60,8 @@ Current Rust workspace members:
 
 Concentration findings:
 
-1. `crates/vida/src/main.rs` is `6937` lines
-2. `crates/vida/src/state_store.rs` is `8212` lines
+1. `crates/vida/src/main.rs` is `15079` lines
+2. `crates/vida/src/state_store.rs` is `8869` lines
 3. the `DocFlow` family is already decomposed into many bounded crates,
 4. the `TaskFlow` family has strong kernel/state foundations, but much runtime behavior still lives in the launcher shell.
 
@@ -224,10 +233,10 @@ Reason:
 artifact_path: product/spec/release-1-implementation-reality-pass
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-13'
+artifact_revision: '2026-03-15'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-implementation-reality-pass.md
 created_at: '2026-03-13T14:12:00+02:00'
-updated_at: '2026-03-13T09:51:57+02:00'
+updated_at: '2026-03-15T08:58:09+02:00'
 changelog_ref: release-1-implementation-reality-pass.changelog.jsonl

@@ -15,7 +15,7 @@ Status markers:
 | Category | Layer 1 | Layer 2 | Layer 3 | Layer 4 | Layer 5 | Layer 6 | Layer 7 | Layer 8 | Layer 9 |
 |---|---|---|---|---|---|---|---|---|---|
 | Layer name | Runtime Kernel Boundary | State, Route, And Receipt Kernel | Tracked Execution Substrate | Lane Routing And Assignment | Handoff And Context Governance | Review, Verification, And Approval Gates | Resumability, Checkpoint, And Gateway Recovery | Observability And Runtime Readiness | Direct Runtime Consumption |
-| Status | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Status | ✅ | ✅ | ✅ | 🟡 | ✅ | ✅ | ✅ | 🟡 | 🟡 |
 | Three-level protocol spine | `core` | `core` | `runtime-family execution` | `orchestration shell` | `orchestration shell` | `orchestration shell` + `runtime-family execution` gate seam | `runtime-family execution` | `runtime-family execution` | `runtime-family execution` + `DocFlow` activation seam |
 | Core value | one canonical split between config, state, receipts, proofs, projections, and runtime-owned artifacts | one lawful state/route/progression model with explicit stage and gate semantics | one bounded execution substrate that records how work is executed | one lawful way to select lanes, agents, and route receipts | one bounded packet-driven delegation model with governed context | one explicit quality and governance gate chain that keeps `coach`, `verifier`, and `approval` distinct | one lawful recovery model with explicit resumability and future gateway targeting | one explicit health/readiness gate before runtime trust or closure | runtime consumes canonical law directly and treats bridge files only as export or migration surfaces |
 | Required implementation | kernel scope, ownership rules, machine set boundaries | machine map, route law, receipt/proof taxonomy, stage and guard law | TaskFlow block lifecycle, execution plans, run-graph initialization, boot packet | route resolution, capability registry, assignment engine, route receipts, lane selection | worker packet contract, handoff law, context-governance ledger, bounded context shaping | coach/verifier/approval law, proof boundary, merge/admissibility rules, human approval | run-graph ledger, checkpoint/replay law, gateway handle law, replay-safe retry semantics | observability map, trace/proving surfaces, reconciliation, readiness verdicts and blockers | DB-first/runtime-owned truth, canonical bundle consumption, boot/migration/load from canonical law |
@@ -37,20 +37,21 @@ Matrix reading rule:
 | Layer | Alignment | Strongest evidence | Main current gap |
 |---|---|---|---|
 | Layer 1 | ✅ | `partial-development-kernel-model.md`, `canonical-machine-map.md`, `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`, `system-maps/runtime-family.taskflow-map.md` | no blocking gap for the current runtime kernel boundary; taskflow now composes and validates one executable kernel bundle over canonical law |
-| Layer 2 | ✅ | `vida-0.3-route-and-receipt-spec.md`, `canonical-machine-map.md`, `receipt-and-proof-law.md`, `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md` | no blocking gap for the current state/route/receipt kernel; machine, route, and receipt law now close through canonical specs plus executable bundle composition |
+| Layer 2 | ✅ | `vida-0.3-route-and-receipt-spec.md`, `canonical-machine-map.md`, `receipt-and-proof-law.md`, `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md` | no blocking gap for the current state/route/receipt kernel; as of `2026-03-15`, fresh booted state no longer fails `status/doctor` due to missing `run_graph_dispatch_receipt` table because bootstrap schema and `open_existing` schema reconciliation were hardened in Rust runtime code |
 | Layer 3 | ✅ | `runtime-instructions/work.taskflow-protocol.md`, `runtime-instructions/model.boot-packet-protocol.md`, `system-maps/runtime-family.taskflow-map.md` | no blocking gap for the current transitional execution substrate |
-| Layer 4 | ✅ | `core.agent-system-protocol.md`, `runtime-instructions/core.capability-registry-protocol.md`, `runtime-instructions/work.project-agent-extension-protocol.md`, `runtime-instructions/work.agent-lane-selection-protocol.md`, `system-maps/runtime-family.taskflow-map.md`, `crates/vida/src/main.rs` | no blocking gap for the current transitional routing/assignment layer; dynamic role extensions and auto-lane selection now have runtime-owned executable surfaces |
+| Layer 4 | 🟡 | `core.agent-system-protocol.md`, `runtime-instructions/core.capability-registry-protocol.md`, `runtime-instructions/work.project-agent-extension-protocol.md`, `runtime-instructions/work.agent-lane-selection-protocol.md`, `system-maps/runtime-family.taskflow-map.md`, `crates/vida/src/main.rs` | routing/assignment is executable, but proof-surface parity is still partial because some declared taskflow config/role-selection validation surfaces remain fail-closed/unsupported in the launcher |
 | Layer 5 | ✅ | `lane.worker-dispatch-protocol.md`, `runtime-instructions/lane.agent-handoff-context-protocol.md`, `runtime-instructions/core.context-governance-protocol.md` | no blocking gap for bounded handoff/context law in the current transitional runtime |
 | Layer 6 | ✅ | `runtime-instructions/work.verification-lane-protocol.md`, `runtime-instructions/work.verification-merge-protocol.md`, `verification-merge-law.md`, `system-maps/runtime-family.taskflow-map.md` | no blocking gap for verification merge/admissibility; taskflow now exposes executable verifier admissibility and merge policies |
 | Layer 7 | ✅ | `runtime-instructions/core.run-graph-protocol.md`, `runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`, `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`, `system-maps/runtime-family.taskflow-map.md` | no blocking gap for checkpoint lineage and gateway recovery in the current transitional runtime; recovery, gateway resolution, and resumable resume are executable surfaces |
-| Layer 8 | ✅ | `system-maps/observability.map.md`, `runtime-instructions.observability.trace-grading-protocol.md`, `runtime-instructions/work.task-state-reconciliation-protocol.md`, `canonical-runtime-readiness-law.md`, `vida docflow` readiness/proof checks | no blocking gap for readiness as a pre-consumption gate in the current canon |
-| Layer 9 | ✅ | `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`, `system-maps/runtime-family.taskflow-map.md`, `vida taskflow consume final|continue|advance`, `vida-0.3-db-first-runtime-spec.md` | no blocking gap for the current transitional direct runtime-consumption layer; taskflow now consumes the compiled bundle directly, persists continuation state, and activates DocFlow explicitly for final evidence before closure trust |
+| Layer 8 | 🟡 | `system-maps/observability.map.md`, `runtime-instructions.observability.trace-grading-protocol.md`, `runtime-instructions/work.task-state-reconciliation-protocol.md`, `canonical-runtime-readiness-law.md`, `vida docflow` readiness/proof checks | observability/readiness surfaces are strong and stable for bounded `status/doctor` checks, but status-family closure across config/flow/sync runtime surfaces is still partial |
+| Layer 9 | 🟡 | `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`, `system-maps/runtime-family.taskflow-map.md`, `vida taskflow consume final|continue|advance`, `vida-0.3-db-first-runtime-spec.md` | direct runtime consumption is operational, but full DB-first closure remains open for project activation entities (roles/skills/profiles/flows) where YAML projection still participates as active runtime input |
 
 Current codex-backed evidence:
 
 1. `vida docflow overview --profile active-canon` -> `177` active files, `0` missing footers, `0` missing changelogs
 2. `vida docflow readiness-check --profile active-canon` -> `OK`
 3. `vida docflow proofcheck --profile active-canon` -> `OK`
+4. post-fix runtime smoke on the installed binary (`2026-03-15`) -> `41/50 pass`, with remaining failures classified as expected precondition, expected fail-closed checks, or expected validation behavior; no remaining critical runtime defect after the schema/lock hardening pass
 
 Interpretation rule:
 
@@ -450,10 +451,10 @@ This spec absorbs and concentrates runtime-layer law previously scattered across
 artifact_path: product/spec/canonical-runtime-layer-matrix
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-10'
+artifact_revision: '2026-03-15'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/canonical-runtime-layer-matrix.md
 created_at: '2026-03-10T15:01:10+02:00'
-updated_at: '2026-03-13T09:09:25+02:00'
+updated_at: '2026-03-15T08:58:09+02:00'
 changelog_ref: canonical-runtime-layer-matrix.changelog.jsonl

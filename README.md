@@ -1,10 +1,10 @@
 <div align="center">
   <h1>🌌 Vida Stack</h1>
-  <p><b>The active repository for <code>VIDA 0.2.1</code>: the latest hotfix on the semantic-freeze and proving line for the next compiled autonomous delivery runtime.</b></p>
+  <p><b>The active repository for the <code>VIDA 0.9.0</code> transition slice: self-hosting stabilization and runtime hardening before <code>1.0.0</code>.</b></p>
   
   <p>
     <a href="#"><img src="https://img.shields.io/badge/Status-Active_Development-brightgreen" alt="Status"></a>
-    <a href="#"><img src="https://img.shields.io/badge/Release-0.2.1-blue" alt="Release"></a>
+    <a href="#"><img src="https://img.shields.io/badge/Release-0.9.0__transition-blue" alt="Release"></a>
     <a href="#"><img src="https://img.shields.io/badge/Runtime-TaskFlow-orange" alt="Runtime"></a>
     <a href="#"><img src="https://img.shields.io/badge/Docsys-DocFlow-teal" alt="Docsys"></a>
     <a href="#"><img src="https://img.shields.io/badge/Target-VIDA_1.0-purple" alt="Target"></a>
@@ -13,13 +13,19 @@
 </div>
 
 > [!NOTE]
-> **Current project capability:** `VIDA 0.2.1` already has enough proving infrastructure to keep hardening semantics, routing, and documentation law before the next public runtime release.
+> **Current project capability:** the repository is now in the `0.9.0 transition` phase (not final `1.0.0` closure).
 > - agent orchestration already works through the chief/root orchestrator and internal delegated lanes;
 > - agent roles, project activation, and bounded team topology can already be configured;
 > - framework and project specifications already govern documentation discipline and runtime routing;
-> - the project backlog can already live in DB-backed runtime state instead of only in flat files.
+> - the project backlog can already live in DB-backed runtime state instead of only in flat files;
+> - `vida status` / `vida doctor` are now stable on fresh booted state after schema and lock-handling hardening (`2026-03-15`).
 >
-> **Internal validation status:** the current framework/spec stack has already passed internal documentation/runtime validation through `check`, `activation-check`, `protocol-coverage-check`, `doctor`, and `proofcheck`.
+> **Current known gaps to `1.0.0`:**
+> - DB-first authority for roles/skills/profiles/flows is still not fully closed (YAML projection remains active source);
+> - activation/configurator lifecycle still depends on root `vida.config.yaml` bridge surfaces;
+> - some proof-surface commands declared in specs are still fail-closed/unsupported in the launcher.
+>
+> **Internal validation status:** the current framework/spec stack has passed bounded documentation/runtime checks (`check`, `activation-check`, `protocol-coverage-check`, `proofcheck`) and post-fix CLI smoke for the installed `vida` binary.
 > - consolidated audit: [docs/process/framework-three-layer-refactoring-audit.md](docs/process/framework-three-layer-refactoring-audit.md)
 > - proven environment/status conditions: [docs/process/vida1-development-conditions.md](docs/process/vida1-development-conditions.md)
 
@@ -34,7 +40,7 @@ Instead of treating prompts, scripts, task lists, and docs as disconnected artif
 - 🧭 **Boot, routing, and map-driven discovery** through `AGENTS.md`, `AGENTS.sidecar.md`, and framework maps
 - ✅ **Verification, approval, and proof gates**
 - 🧠 **Durable runtime state, receipts, and checkpoints**
-- 🔄 **Migration, compatibility, and release discipline**
+- 🔄 **Migration and release discipline**
 
 At the top level, VIDA is not designed as a `/commands`-first interaction shell.
 It is designed as a trigger-driven protocol system where conversational operator intent activates the lawful runtime path, which makes it possible to drive complex development processes through bounded natural-language control instead of a rigid command-only interface.
@@ -164,9 +170,9 @@ This surfaces the bounded project-activation view for the current directory:
 ```bash
 vida init
 vida project-activator
-vida upgrade --version v0.2.2
+vida upgrade --version <tag>
 vida doctor
-vida use --version v0.2.2
+vida use --version <tag>
 ```
 
 ---
@@ -175,7 +181,7 @@ vida use --version v0.2.2
 
 ### ⚙️ `vida taskflow`
 
-The current tracked-execution runtime family surface for the `0.2.x` line.
+The current tracked-execution runtime family surface for the `0.9.0` transition line.
 
 It already covers:
 
@@ -188,7 +194,7 @@ It already covers:
 
 ### 📚 `DocFlow`
 
-The current documentation and inventory proof runtime for the `0.2.x` proving line.
+The current documentation and inventory proof runtime for the transition line toward `1.0.0`.
 
 It already covers:
 
@@ -202,7 +208,7 @@ It already covers:
 
 The top-level product surface and release direction.
 
-In the current `0.2.x` line, the installer gives you one `vida` launcher and the active operator/runtime surfaces are `vida taskflow` and `vida docflow`.
+In the current `0.9.0` transition line, the installer gives you one `vida` launcher and the active operator/runtime surfaces are `vida taskflow` and `vida docflow`.
 
 The next product target behind that launcher is:
 
@@ -284,17 +290,17 @@ vida taskflow protocol-binding sync --json
 
 ## 🧠 Architecture Direction
 
-`VIDA 0.2.x` is the semantic-freeze and proving line, now carrying the launcher-owned runtime-consumption scheduler surfaces that bridge toward `Release 1`.
+`VIDA 0.9.0` transition is the self-hosting stabilization and runtime-hardening line before `Release 1`.
 
-Its job is to make the transitional product trustworthy enough that `Release 1` can be built on stable semantics instead of moving heuristics.
+Its job is to make the runtime trustworthy enough that `Release 1` can be built on stable DB-first semantics and predictable operator behavior.
 
 That means:
 
 - `vida taskflow` and `vida docflow` remain the current public runtime-family surfaces
 - `vida taskflow consume final|continue|advance` now form the canonical launcher-owned intake and bounded scheduler progression path
-- `vida taskflow protocol-binding sync|status|check` are the active protocol-binding bridge surfaces
+- `vida taskflow protocol-binding sync|status|check` are the active protocol-binding synchronization surfaces
 - source-of-truth law stays in `docs/product/spec/`, `vida/config/`, and `vida/config/instructions/`
-- current release work hardens semantics before compiled runtime substitution
+- current release work hardens semantics, schema migrations, and operator stability before `1.0` closure
 - Rust `taskflow` and `docflow` remain active parallel implementation tracks for `Release 1`
 - future `vida` composes those compiled runtimes into one CLI-first autonomous delivery runtime
 
@@ -325,10 +331,10 @@ For detailed rules, read [CONTRIBUTING.md](CONTRIBUTING.md).
 artifact_path: project/repository/readme
 artifact_type: repository_doc
 artifact_version: '1'
-artifact_revision: '2026-03-10'
+artifact_revision: '2026-03-15'
 schema_version: '1'
 status: canonical
 source_path: README.md
 created_at: '2026-03-06T22:42:30+02:00'
-updated_at: '2026-03-13T08:47:25+02:00'
+updated_at: '2026-03-15T09:05:34+02:00'
 changelog_ref: README.changelog.jsonl

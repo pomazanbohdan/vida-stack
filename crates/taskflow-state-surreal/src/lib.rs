@@ -16,6 +16,7 @@ pub const DEFAULT_STATE_TABLES: &[&str] = &[
     "routed_run_state",
     "governance_state",
     "resumability_capsule",
+    "run_graph_dispatch_receipt",
     "task_reconciliation_summary",
     "state_spine_manifest",
     "boot_compatibility_state",

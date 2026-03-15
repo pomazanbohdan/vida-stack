@@ -4405,21 +4405,6 @@ pub(crate) fn proxy_state_dir() -> PathBuf {
 pub(crate) async fn open_existing_state_store_with_retry(
     state_dir: PathBuf,
 ) -> Result<StateStore, StateStoreError> {
-    for attempt in 0..80 {
-        match StateStore::open_existing(state_dir.clone()).await {
-            Ok(store) => return Ok(store),
-            Err(StateStoreError::Db(error)) if attempt < 79 => {
-                let message = error.to_string();
-                if message.contains("LOCK") || message.contains("lock") {
-                    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-                    continue;
-                }
-                return Err(StateStoreError::Db(error));
-            }
-            Err(error) => return Err(error),
-        }
-    }
-
     StateStore::open_existing(state_dir).await
 }
 

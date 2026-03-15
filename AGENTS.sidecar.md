@@ -32,7 +32,7 @@ Purpose: provide the project docs map for the repository being developed on top 
 9. Project agent-extension map:
    - `docs/process/agent-extensions/README.md`
 10. Project-local TaskFlow runtime state and operator surfaces:
-   - `.vida/state/taskflow-state.db`
+   - `.vida/data/state/`
    - `vida taskflow help`
 
 ## Bootstrap Read Path
@@ -53,7 +53,7 @@ Purpose: provide the project docs map for the repository being developed on top 
 9. For documentation tooling or operator-command questions, continue to `docs/process/documentation-tooling-map.md`.
 10. For runtime-layering, runtime-readiness, or runtime-architecture questions, continue to `docs/product/spec/canonical-runtime-layer-matrix.md`.
 11. For project role/skill/profile/flow extension questions, continue to `docs/process/agent-extensions/README.md`.
-12. For project-local TaskFlow DB-first execution/bootstrap questions, prefer `vida status --json`, `vida taskflow help`, and the project-owned `.vida/state/taskflow-state.db` path rather than any installed shim or legacy task artifact fallback.
+12. For project-local TaskFlow DB-first execution/bootstrap questions, prefer `vida status --json`, `vida taskflow help`, and the project-owned `.vida/data/state/` runtime store path rather than installed shim or flat task-artifact fallback paths.
 13. After bootstrap, prefer the default `vida taskflow ...` shell path with project-local runtime resolution; do not reintroduce installed shim roots that point outside this repository.
 14. For project task-shaping, development-team, or delegated execution questions, continue early to `docs/process/team-development-and-orchestration-protocol.md`.
 15. For cheaper orchestrator-first project execution, continue early to `docs/process/project-orchestrator-operating-protocol.md`.
@@ -92,7 +92,7 @@ Project-routing rule:
    - `docs/process/documentation-tooling-map.md`
 7. `vida docflow` is the canonical project-side operator/runtime surface for bounded documentation validation, readiness, relation, and proof work once the relevant project/spec context is known.
 8. Do not postpone `vida docflow` usage until after broad manual documentation work when the task already depends on documentation mutation, validation, readiness, or proof-shaped output.
-9. For task/backlog lifecycle work, prefer the DB-backed `vida taskflow task` surface over legacy task artifacts.
+9. For task/backlog lifecycle work, prefer the DB-backed `vida taskflow task` surface over flat task artifacts.
 10. The expected local operator path is plain `vida taskflow ...` with project-local defaults already bound to this repository root; manual `VIDA_ROOT=...` overrides are fallback-only.
 11. For development work, assume `delivery_task` is the default decomposition leaf and use `execution_block` only when one-owner bounded closure still fails.
 12. For normal write-producing work, assume delegated agents are the default execution path once a lawful packet exists.
@@ -107,10 +107,10 @@ Project-routing rule:
 artifact_path: project/repository/agents.sidecar
 artifact_type: bootstrap_doc
 artifact_version: '1'
-artifact_revision: '2026-03-14'
+artifact_revision: '2026-03-15'
 schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: '2026-03-14T09:00:57+02:00'
+updated_at: '2026-03-15T09:05:34+02:00'
 changelog_ref: AGENTS.sidecar.changelog.jsonl
