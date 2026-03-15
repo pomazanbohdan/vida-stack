@@ -14,6 +14,27 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
 }
 
+normalize_path_for_python() {
+  local raw="$1"
+  local drive=""
+  local rest=""
+  local drive_upper=""
+
+  case "${OSTYPE:-}" in
+    msys*|cygwin*|win32*)
+      if [[ "$raw" =~ ^/([A-Za-z])(/.*)$ ]]; then
+        drive="${BASH_REMATCH[1]}"
+        rest="${BASH_REMATCH[2]}"
+        drive_upper="$(printf '%s' "$drive" | tr '[:lower:]' '[:upper:]')"
+        printf '%s:%s\n' "$drive_upper" "$rest"
+        return 0
+      fi
+      ;;
+  esac
+
+  printf '%s\n' "$raw"
+}
+
 infer_version() {
   local cargo_version
   cargo_version="$(awk -F'"' '/^version/ { print $2; exit }' "$ROOT_DIR/crates/vida/Cargo.toml")"
@@ -66,7 +87,12 @@ cp "$RUNTIME_SOURCE" "$VIDA_BIN"
 chmod +x "$VIDA_BIN"
 cp "$ROOT_DIR/docs/framework/templates/vida.config.yaml.template" "$INSTALL_ASSETS_DIR/vida.config.yaml.template"
 
-MANIFEST_OUT="$MANIFEST_OUT" ARCHIVE_BASE="$ARCHIVE_BASE" VERSION="$VERSION" python3 - <<'PY'
+PY_MANIFEST_OUT="$(normalize_path_for_python "$MANIFEST_OUT")"
+PY_PACKAGE_ROOT="$(normalize_path_for_python "$PACKAGE_ROOT")"
+PY_DIST_DIR="$(normalize_path_for_python "$DIST_DIR")"
+PY_INSTALLER_ASSET="$(normalize_path_for_python "$INSTALLER_ASSET")"
+
+MANIFEST_OUT="$PY_MANIFEST_OUT" ARCHIVE_BASE="$ARCHIVE_BASE" VERSION="$VERSION" python3 - <<'PY'
 import json
 import os
 from datetime import datetime, timezone
@@ -111,7 +137,7 @@ manifest = {
 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 PY
 
-PACKAGE_ROOT="$PACKAGE_ROOT" ARCHIVE_BASE="$ARCHIVE_BASE" DIST_DIR="$DIST_DIR" python3 - <<'PY'
+PACKAGE_ROOT="$PY_PACKAGE_ROOT" ARCHIVE_BASE="$ARCHIVE_BASE" DIST_DIR="$PY_DIST_DIR" python3 - <<'PY'
 import tarfile
 import zipfile
 import os
@@ -146,7 +172,7 @@ else
   ' "$ROOT_DIR/README.md" > "$RELEASE_NOTES_OUT"
 fi
 
-DIST_DIR="$DIST_DIR" ARCHIVE_BASE="$ARCHIVE_BASE" INSTALLER_ASSET="$INSTALLER_ASSET" python3 - <<'PY'
+DIST_DIR="$PY_DIST_DIR" ARCHIVE_BASE="$ARCHIVE_BASE" INSTALLER_ASSET="$PY_INSTALLER_ASSET" python3 - <<'PY'
 import hashlib
 import os
 from pathlib import Path

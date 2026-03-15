@@ -32,6 +32,7 @@ pub const DEFAULT_INSTRUCTION_SOURCE_ROOT: &str =
     "vida/config/instructions/bundles/framework-source";
 pub const DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT: &str =
     "vida/config/instructions/bundles/framework-memory-source";
+const VIDA_PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const REPO_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 const INSTRUCTION_STATE_SCHEMA: &str = r#"
 DEFINE TABLE instruction_artifact SCHEMALESS;
@@ -2320,12 +2321,13 @@ UPSERT instruction_source_artifact:framework-prompt-template-config-source CONTE
 UPSERT instruction_ingest_receipt:framework-bundle-seed CONTENT {
   receipt_id: 'framework-bundle-seed',
   source_root: 'vida/config/instructions/bundles/framework-source',
-  product_version: '0.1.0',
+  product_version: '__VIDA_PRODUCT_VERSION__',
   ingest_kind: 'seed',
   applied: true
 };
 
-"#;
+"#
+        .replace("__VIDA_PRODUCT_VERSION__", VIDA_PRODUCT_VERSION);
 
         self.db.query(query).await?;
         let _: Option<InstructionRuntimeStateRow> = self
@@ -2495,7 +2497,7 @@ UPSERT instruction_ingest_receipt:framework-bundle-seed CONTENT {
                 receipt_id,
                 slice: slice.to_string(),
                 source_root: source_root.to_string(),
-                product_version: "0.1.0".to_string(),
+                product_version: VIDA_PRODUCT_VERSION.to_string(),
                 ingest_kind: "scan".to_string(),
                 applied: true,
                 imported_count: imported,
