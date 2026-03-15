@@ -53,14 +53,6 @@ jobs:
           fi
           echo "RELEASE_TAG=${release_tag}" >> "$GITHUB_ENV"
 
-      - name: Check out requested tag for manual publish
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch --tags --force
-          git checkout --detach "refs/tags/${RELEASE_TAG}"
-
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -125,14 +117,6 @@ jobs:
             exit 1
           fi
           echo "RELEASE_TAG=${release_tag}" >> "$GITHUB_ENV"
-
-      - name: Check out requested tag for manual publish
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch --tags --force
-          git checkout --detach "refs/tags/${RELEASE_TAG}"
 
       - name: Download all packaged assets
         uses: actions/download-artifact@v6
