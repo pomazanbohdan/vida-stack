@@ -42,8 +42,8 @@ Options:
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- install
-  curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- upgrade --version v0.2.2
-  bash install/install.sh use --version v0.2.2
+  curl -fsSL https://raw.githubusercontent.com/pomazanbohdan/vida-stack/main/install/install.sh | bash -s -- upgrade --version <tag>
+  bash install/install.sh use --version <tag>
   bash install/install.sh doctor
 EOF
 }
@@ -581,6 +581,7 @@ install_management_script() {
   local version="$1"
   local target_dir="$2"
   local target="$target_dir/install.sh"
+  local source_script=""
 
   if [[ "$DRY_RUN" == "yes" ]]; then
     log "Would install management script into ${target}"
@@ -590,7 +591,12 @@ install_management_script() {
   mkdir -p "$target_dir"
 
   if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
-    cp "${BASH_SOURCE[0]}" "$target"
+    source_script="${BASH_SOURCE[0]}"
+    if [[ "$source_script" == "$target" ]]; then
+      log "Installer management script already current at ${target}"
+    else
+      cp "$source_script" "$target"
+    fi
   elif [[ -z "$ARCHIVE_FILE" ]]; then
     download_url_to_file "https://github.com/${REPO_SLUG}/releases/download/${version}/vida-install.sh" "$target"
   else

@@ -63,7 +63,7 @@ Rules:
 
 ## Publication Sequence
 
-For the active `0.2.x` line:
+For the active release line:
 
 1. build the release assets,
 2. confirm the matching `install/release-notes-v*.md` artifact is current,
@@ -83,11 +83,11 @@ Rules:
 2. it must strip the metadata footer at `-----`,
 3. GitHub release publication should consume that rendered output rather than the raw canonical file body.
 
-## Current 0.2.x Interpretation
+## Current Interpretation
 
-For the active proving line:
+For the active release line:
 
-1. `v0.2.0`, `v0.2.1`, and `v0.2.2` public release pages should all follow one title convention: `Vida Stack vX.Y.Z`,
+1. public release pages should all follow one title convention: `Vida Stack vX.Y.Z`,
 2. the public release page is the operator-facing narrative surface,
 3. the canonical release-note artifact remains the documentation-owned source of truth,
 4. GitHub release formatting drift is a project-process bug and must be corrected through this protocol rather than by informal manual editing alone.
@@ -96,10 +96,10 @@ For the active proving line:
 artifact_path: process/release-formatting-protocol
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-12'
+artifact_revision: '2026-03-15'
 schema_version: '1'
 status: canonical
 source_path: docs/process/release-formatting-protocol.md
 created_at: '2026-03-12T16:37:07+02:00'
-updated_at: '2026-03-12T16:37:07+02:00'
+updated_at: '2026-03-15T09:08:41+02:00'
 changelog_ref: release-formatting-protocol.changelog.jsonl
