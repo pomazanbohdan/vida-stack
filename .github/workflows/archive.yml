@@ -25,9 +25,9 @@ jobs:
           - os: ubuntu-latest
             label: linux-default
             suffix: ''
-          - os: macos-latest
-            label: macos-x86_64
-            suffix: 'macos-x86_64'
+          - os: macos-14
+            label: macos-arm64
+            suffix: 'macos-arm64'
           - os: windows-latest
             label: windows-x86_64
             suffix: 'windows-x86_64'

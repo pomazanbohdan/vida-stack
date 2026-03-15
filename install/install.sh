@@ -5,12 +5,15 @@ REPO_SLUG="${VIDA_INSTALL_REPO:-pomazanbohdan/vida-stack}"
 COMMAND="${1:-help}"
 VERSION="${VIDA_VERSION:-latest}"
 ARCHIVE_FILE="${VIDA_ARCHIVE_FILE:-}"
+INSTALL_TARGET="${VIDA_INSTALL_TARGET:-auto}"
 INSTALL_ROOT="${VIDA_HOME:-$HOME/.local/share/vida-stack}"
 BIN_DIR="${VIDA_BIN_DIR:-$HOME/.local/bin}"
 FORCE="no"
 DRY_RUN="no"
 KEEP_RELEASES="${VIDA_KEEP_RELEASES:-3}"
 SHELL_REFRESH_COMMAND=""
+TARGET_ASSET_LABEL=""
+TARGET_ASSET_SUFFIX=""
 
 Color_Off=''
 Red=''
@@ -34,6 +37,7 @@ Usage:
 Options:
   --version TAG      Release tag to install. Defaults to latest.
   --archive PATH     Local release archive instead of GitHub download.
+  --target TARGET    Release asset target: auto|linux-default|macos-arm64|windows-x86_64.
   --bin-dir PATH     Directory for launcher scripts. Defaults to ~/.local/bin.
   --root PATH        Install root. Defaults to ~/.local/share/vida-stack.
   --force            Overwrite an already installed release of the same version.
@@ -180,6 +184,101 @@ print(tag)
 '
 }
 
+extract_version_from_archive_name() {
+  local archive_name="$1"
+  local raw_version=""
+  if [[ "$archive_name" =~ ^vida-stack-(.+)\.tar\.gz$ ]]; then
+    raw_version="${BASH_REMATCH[1]}"
+  else
+    return 1
+  fi
+
+  for known_suffix in \
+    "-linux-default" \
+    "-macos-arm64" \
+    "-macos-x86_64" \
+    "-windows-x86_64"
+  do
+    if [[ "$raw_version" == *"$known_suffix" ]]; then
+      raw_version="${raw_version%"$known_suffix"}"
+      break
+    fi
+  done
+
+  [[ -n "$raw_version" ]] || return 1
+  printf '%s\n' "$raw_version"
+}
+
+resolve_install_target() {
+  local requested="$INSTALL_TARGET"
+  local os=""
+  local arch=""
+
+  if [[ "$requested" == "auto" ]]; then
+    os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    arch="$(uname -m | tr '[:upper:]' '[:lower:]')"
+
+    case "$os" in
+      linux*)
+        case "$arch" in
+          x86_64|amd64)
+            requested="linux-default"
+            ;;
+          *)
+            fail "Unsupported Linux architecture for automatic install target selection: ${arch}. Supported target: linux-default (x86_64)."
+            ;;
+        esac
+        ;;
+      darwin*)
+        case "$arch" in
+          arm64|aarch64)
+            requested="macos-arm64"
+            ;;
+          *)
+            fail "Unsupported macOS architecture for automatic install target selection: ${arch}. Supported target: macos-arm64."
+            ;;
+        esac
+        ;;
+      msys*|mingw*|cygwin*)
+        case "$arch" in
+          x86_64|amd64)
+            requested="windows-x86_64"
+            ;;
+          *)
+            fail "Unsupported Windows architecture for automatic install target selection: ${arch}. Supported target: windows-x86_64."
+            ;;
+        esac
+        ;;
+      *)
+        fail "Unsupported operating system for automatic install target selection: ${os}"
+        ;;
+    esac
+  fi
+
+  case "$requested" in
+    linux-default)
+      TARGET_ASSET_LABEL="linux-default"
+      TARGET_ASSET_SUFFIX=""
+      ;;
+    macos-arm64)
+      TARGET_ASSET_LABEL="macos-arm64"
+      TARGET_ASSET_SUFFIX="-macos-arm64"
+      ;;
+    windows-x86_64)
+      TARGET_ASSET_LABEL="windows-x86_64"
+      TARGET_ASSET_SUFFIX="-windows-x86_64"
+      ;;
+    *)
+      fail "Unsupported install target: ${requested}. Allowed: auto|linux-default|macos-arm64|windows-x86_64"
+      ;;
+  esac
+}
+
+archive_basename_for_version() {
+  local version="$1"
+  printf 'vida-stack-%s%s\n' "$version" "$TARGET_ASSET_SUFFIX"
+}
+
 tildify() {
   if [[ "$1" == "$HOME/"* ]]; then
     printf '~/%s\n' "${1#$HOME/}"
@@ -243,6 +342,10 @@ while [[ $# -gt 0 ]]; do
       ARCHIVE_FILE="${2:-}"
       shift 2
       ;;
+    --target)
+      INSTALL_TARGET="${2:-}"
+      shift 2
+      ;;
     --force)
       FORCE="yes"
       shift
@@ -269,9 +372,10 @@ resolve_version() {
 
   if [[ -n "$ARCHIVE_FILE" ]]; then
     local archive_name
+    local extracted
     archive_name="$(basename "$ARCHIVE_FILE")"
-    if [[ "$archive_name" =~ ^vida-stack-(.+)\.tar\.gz$ ]]; then
-      printf '%s\n' "${BASH_REMATCH[1]}"
+    if extracted="$(extract_version_from_archive_name "$archive_name")"; then
+      printf '%s\n' "$extracted"
       return 0
     fi
     fail "Unable to infer version from local archive name: ${archive_name}"
@@ -283,7 +387,8 @@ resolve_version() {
 
 download_release_archive() {
   local version="$1"
-  local destination="$2"
+  local archive_basename="$2"
+  local destination="$3"
   if [[ -n "$ARCHIVE_FILE" ]]; then
     log "Using local archive ${ARCHIVE_FILE}"
     if [[ "$DRY_RUN" == "yes" ]]; then
@@ -294,7 +399,7 @@ download_release_archive() {
     return 0
   fi
 
-  local url="https://github.com/${REPO_SLUG}/releases/download/${version}/vida-stack-${version}.tar.gz"
+  local url="https://github.com/${REPO_SLUG}/releases/download/${version}/${archive_basename}.tar.gz"
   log "Downloading ${url}"
   if [[ "$DRY_RUN" == "yes" ]]; then
     return 0
@@ -304,13 +409,14 @@ download_release_archive() {
 
 download_release_checksum() {
   local version="$1"
-  local destination="$2"
+  local archive_basename="$2"
+  local destination="$3"
   if [[ -n "$ARCHIVE_FILE" ]]; then
     log "Skipping checksum download for local archive"
     return 0
   fi
 
-  local url="https://github.com/${REPO_SLUG}/releases/download/${version}/vida-stack-${version}.sha256"
+  local url="https://github.com/${REPO_SLUG}/releases/download/${version}/${archive_basename}.sha256"
   log "Downloading ${url}"
   if [[ "$DRY_RUN" == "yes" ]]; then
     return 0
@@ -645,8 +751,9 @@ activate_release() {
 
 install_release() {
   local version="$1"
-  local temp_dir archive_path checksum_path extract_dir releases_dir current_link release_root env_file
+  local temp_dir archive_path checksum_path extract_dir releases_dir current_link release_root env_file archive_basename
   local installer_dir
+  resolve_install_target
   releases_dir="${INSTALL_ROOT}/releases"
   current_link="${INSTALL_ROOT}/current"
   release_root="${releases_dir}/${version}"
@@ -665,17 +772,20 @@ install_release() {
   fi
 
   temp_dir="$(mktemp -d)"
-  archive_path="${temp_dir}/vida-stack-${version}.tar.gz"
-  checksum_path="${temp_dir}/vida-stack-${version}.sha256"
+  archive_basename="$(archive_basename_for_version "$version")"
+  archive_path="${temp_dir}/${archive_basename}.tar.gz"
+  checksum_path="${temp_dir}/${archive_basename}.sha256"
   extract_dir="${temp_dir}/extract"
 
   trap "rm -rf '$temp_dir'" RETURN
 
-  download_release_archive "$version" "$archive_path"
-  download_release_checksum "$version" "$checksum_path"
+  download_release_archive "$version" "$archive_basename" "$archive_path"
+  download_release_checksum "$version" "$archive_basename" "$checksum_path"
   verify_archive_checksum "$archive_path" "$checksum_path"
 
   if [[ "$DRY_RUN" == "yes" ]]; then
+    log "Resolved release target: ${TARGET_ASSET_LABEL}"
+    log "Resolved archive: ${archive_basename}.tar.gz"
     log "Would extract archive into temporary directory"
     log "Would install release into ${release_root}"
     log "Would activate ${current_link}"
@@ -710,6 +820,7 @@ install_release() {
 
   log "Installed VIDA ${version} into ${release_root}"
   log "Active release: ${current_link}"
+  log "Release target: ${TARGET_ASSET_LABEL}"
   log "Launchers: ${BIN_DIR}/vida"
   print_install_summary "$version" "$release_root" "$current_link" "$env_file"
 }
