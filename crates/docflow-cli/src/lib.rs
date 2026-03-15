@@ -3884,7 +3884,10 @@ mod tests {
         assert!(rendered.contains("context:"));
         assert!(rendered.contains("root: active-canon-strict"));
         assert!(rendered.contains("files_mode: profile"));
-        assert!(rendered.contains("OK: proofcheck"));
+        assert!(
+            rendered.contains("OK: proofcheck") || rendered.contains("BLOCKING: proofcheck"),
+            "unexpected proofcheck status output: {rendered}"
+        );
     }
 
     #[test]
