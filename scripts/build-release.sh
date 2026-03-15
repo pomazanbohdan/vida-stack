@@ -23,9 +23,6 @@ infer_version() {
 
 require_cmd python3
 require_cmd cargo
-require_cmd tar
-require_cmd zip
-require_cmd sha256sum
 
 if [[ -z "$VERSION" ]]; then
   VERSION="$(infer_version)"
@@ -111,11 +108,26 @@ manifest = {
 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 PY
 
-(
-  cd "$PACKAGE_ROOT"
-  zip -qr "../${ARCHIVE_BASE}.zip" "$ARCHIVE_BASE"
-)
-tar -czf "$DIST_DIR/${ARCHIVE_BASE}.tar.gz" -C "$PACKAGE_ROOT" "$ARCHIVE_BASE"
+python3 - <<PY
+import tarfile
+import zipfile
+from pathlib import Path
+
+package_root = Path(${PACKAGE_ROOT@Q})
+archive_base = ${ARCHIVE_BASE@Q}
+dist_dir = Path(${DIST_DIR@Q})
+source_dir = package_root / archive_base
+zip_path = dist_dir / f"{archive_base}.zip"
+tar_path = dist_dir / f"{archive_base}.tar.gz"
+
+with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    for path in sorted(source_dir.rglob("*")):
+        if path.is_file():
+            zf.write(path, path.relative_to(package_root).as_posix())
+
+with tarfile.open(tar_path, "w:gz") as tf:
+    tf.add(source_dir, arcname=archive_base)
+PY
 
 cp "$ROOT_DIR/install/install.sh" "$INSTALLER_ASSET"
 chmod +x "$INSTALLER_ASSET"
@@ -130,10 +142,25 @@ else
   ' "$ROOT_DIR/README.md" > "$RELEASE_NOTES_OUT"
 fi
 
-(
-  cd "$DIST_DIR"
-  sha256sum "${ARCHIVE_BASE}.tar.gz" "${ARCHIVE_BASE}.zip" "$(basename "$INSTALLER_ASSET")" > "${ARCHIVE_BASE}.sha256"
-)
+python3 - <<PY
+import hashlib
+from pathlib import Path
+
+dist_dir = Path(${DIST_DIR@Q})
+archive_base = ${ARCHIVE_BASE@Q}
+files = [
+    dist_dir / f"{archive_base}.tar.gz",
+    dist_dir / f"{archive_base}.zip",
+    dist_dir / Path(${INSTALLER_ASSET@Q}).name,
+]
+out = dist_dir / f"{archive_base}.sha256"
+
+lines = []
+for path in files:
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    lines.append(f"{digest}  {path.name}")
+out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
 
 printf '[release-build] Built %s\n' "$ARCHIVE_BASE"
 printf '[release-build] Assets:\n'

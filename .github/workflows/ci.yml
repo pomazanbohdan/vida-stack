@@ -35,6 +35,7 @@ jobs:
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
         with:
+          shared-key: vida-ci-${{ runner.os }}
           cache-on-failure: false
 
       - name: Build workspace
@@ -52,6 +53,12 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: vida-ci-${{ runner.os }}
+          cache-on-failure: false
 
       - name: Run cargo test
         shell: bash
@@ -164,4 +171,3 @@ jobs:
           cargo run -p vida -- agent-init --role worker --state-dir "$STATE_DIR" --json >/tmp/ci-agent-init.json
           cargo run -p vida -- project-activator --json >/tmp/ci-project-activator.json
           cargo run -p vida -- protocol view bootstrap/router >/tmp/ci-protocol-router.txt
-

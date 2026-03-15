@@ -56,6 +56,12 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: vida-release-${{ matrix.label }}
+          cache-on-failure: false
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
