@@ -400,9 +400,11 @@ fn boot_succeeds() {
     assert!(stdout.contains("authoritative state store: kv-surrealkv"));
     assert!(stdout.contains("authoritative state spine: initialized (state-v1, 8 entity surfaces, mutation root vida task)"));
     assert!(stdout.contains("framework instruction bundle: seeded"));
-    assert!(stdout.contains("instruction source tree: _vida/instructions -> instruction_memory"));
     assert!(stdout.contains(
-        "instruction ingest: 3 imported, 0 unchanged, 0 updated from _vida/instructions"
+        "instruction source tree: vida/config/instructions/bundles/framework-source -> instruction_memory"
+    ));
+    assert!(stdout.contains(
+        "instruction ingest: 3 imported, 0 unchanged, 0 updated from vida/config/instructions/bundles/framework-source"
     ));
     assert!(stdout.contains("boot compatibility: compatible (normal_boot_allowed)"));
     assert!(stdout
@@ -415,7 +417,7 @@ fn boot_succeeds() {
         "effective instruction bundle receipt: effective-bundle-framework-agent-definition-"
     ));
     assert!(stdout.contains(
-        "framework memory ingest: 1 imported, 0 unchanged, 0 updated from _vida/framework-memory"
+        "framework memory ingest: 1 imported, 0 unchanged, 0 updated from vida/config/instructions/bundles/framework-memory-source"
     ));
 }
 
@@ -452,14 +454,14 @@ fn boot_is_idempotent_for_unchanged_source_trees() {
 
     let stdout = String::from_utf8_lossy(&second.stdout);
     assert!(stdout.contains(
-        "instruction ingest: 0 imported, 3 unchanged, 0 updated from _vida/instructions"
+        "instruction ingest: 0 imported, 3 unchanged, 0 updated from vida/config/instructions/bundles/framework-source"
     ));
     assert!(stdout.contains("effective instruction bundle: framework-agent-definition -> framework-instruction-contract -> framework-prompt-template-config"));
     assert!(stdout.contains(
         "effective instruction bundle receipt: effective-bundle-framework-agent-definition-"
     ));
     assert!(stdout.contains(
-        "framework memory ingest: 0 imported, 1 unchanged, 0 updated from _vida/framework-memory"
+        "framework memory ingest: 0 imported, 1 unchanged, 0 updated from vida/config/instructions/bundles/framework-memory-source"
     ));
     assert!(stdout.contains("boot compatibility: compatible (normal_boot_allowed)"));
     assert!(stdout

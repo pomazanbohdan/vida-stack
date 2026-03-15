@@ -28,8 +28,10 @@ use time::OffsetDateTime;
 const DEFAULT_STATE_DIR: &str = ".vida/data/state";
 pub const STATE_NAMESPACE: &str = "vida";
 pub const STATE_DATABASE: &str = "primary";
-pub const DEFAULT_INSTRUCTION_SOURCE_ROOT: &str = "_vida/instructions";
-pub const DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT: &str = "_vida/framework-memory";
+pub const DEFAULT_INSTRUCTION_SOURCE_ROOT: &str =
+    "vida/config/instructions/bundles/framework-source";
+pub const DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT: &str =
+    "vida/config/instructions/bundles/framework-memory-source";
 const REPO_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 const INSTRUCTION_STATE_SCHEMA: &str = r#"
 DEFINE TABLE instruction_artifact SCHEMALESS;
@@ -2257,7 +2259,7 @@ UPSERT instruction_diff_patch:framework-diff-substrate CONTENT {
 
 UPSERT source_tree_config:instruction CONTENT {
   slice: 'instruction_memory',
-  source_root: '_vida/instructions',
+  source_root: 'vida/config/instructions/bundles/framework-source',
   ingest_kind: 'git_tree',
   runtime_owner: 'db_mirror',
   nested_directories_supported: true,
@@ -2275,7 +2277,7 @@ UPSERT source_tree_config:project CONTENT {
 
 UPSERT source_tree_config:framework CONTENT {
   slice: 'framework_memory',
-  source_root: '_vida/framework-memory',
+  source_root: 'vida/config/instructions/bundles/framework-memory-source',
   ingest_kind: 'git_tree',
   runtime_owner: 'db_mirror',
   nested_directories_supported: true,
@@ -2286,8 +2288,8 @@ UPSERT instruction_source_artifact:framework-agent-definition-source CONTENT {
   source_artifact_id: 'framework-agent-definition-source',
   artifact_id: 'framework-agent-definition',
   slice: 'instruction_memory',
-  source_root: '_vida/instructions',
-  source_path: '_vida/instructions/framework/agent-definition.md',
+  source_root: 'vida/config/instructions/bundles/framework-source',
+  source_path: 'vida/config/instructions/bundles/framework-source/framework/agent-definition.md',
   content_hash: 'seed-framework-agent-definition-v1',
   ingest_status: 'seeded',
   hierarchy: ['framework']
@@ -2297,8 +2299,8 @@ UPSERT instruction_source_artifact:framework-instruction-contract-source CONTENT
   source_artifact_id: 'framework-instruction-contract-source',
   artifact_id: 'framework-instruction-contract',
   slice: 'instruction_memory',
-  source_root: '_vida/instructions',
-  source_path: '_vida/instructions/framework/instruction-contract.md',
+  source_root: 'vida/config/instructions/bundles/framework-source',
+  source_path: 'vida/config/instructions/bundles/framework-source/framework/instruction-contract.md',
   content_hash: 'seed-framework-instruction-contract-v1',
   ingest_status: 'seeded',
   hierarchy: ['framework']
@@ -2308,8 +2310,8 @@ UPSERT instruction_source_artifact:framework-prompt-template-config-source CONTE
   source_artifact_id: 'framework-prompt-template-config-source',
   artifact_id: 'framework-prompt-template-config',
   slice: 'instruction_memory',
-  source_root: '_vida/instructions',
-  source_path: '_vida/instructions/framework/prompt-template-config.md',
+  source_root: 'vida/config/instructions/bundles/framework-source',
+  source_path: 'vida/config/instructions/bundles/framework-source/framework/prompt-template-config.md',
   content_hash: 'seed-framework-prompt-template-config-v1',
   ingest_status: 'seeded',
   hierarchy: ['framework']
@@ -2317,7 +2319,7 @@ UPSERT instruction_source_artifact:framework-prompt-template-config-source CONTE
 
 UPSERT instruction_ingest_receipt:framework-bundle-seed CONTENT {
   receipt_id: 'framework-bundle-seed',
-  source_root: '_vida/instructions',
+  source_root: 'vida/config/instructions/bundles/framework-source',
   product_version: '0.1.0',
   ingest_kind: 'seed',
   applied: true
