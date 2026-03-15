@@ -64,7 +64,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo test --workspace --locked
+          cargo test --workspace --locked -- --test-threads=1
 
       - name: Build release assets and verify runtime-only package
         shell: bash
