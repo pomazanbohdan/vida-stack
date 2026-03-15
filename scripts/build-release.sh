@@ -66,17 +66,20 @@ cp "$RUNTIME_SOURCE" "$VIDA_BIN"
 chmod +x "$VIDA_BIN"
 cp "$ROOT_DIR/docs/framework/templates/vida.config.yaml.template" "$INSTALL_ASSETS_DIR/vida.config.yaml.template"
 
-python3 - <<PY
+MANIFEST_OUT="$MANIFEST_OUT" ARCHIVE_BASE="$ARCHIVE_BASE" VERSION="$VERSION" python3 - <<'PY'
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-manifest_path = Path(${MANIFEST_OUT@Q})
+manifest_path = Path(os.environ["MANIFEST_OUT"])
+archive_base = os.environ["ARCHIVE_BASE"]
+version = os.environ["VERSION"]
 manifest = {
-    "artifact_name": ${ARCHIVE_BASE@Q},
-    "version": ${VERSION@Q},
+    "artifact_name": archive_base,
+    "version": version,
     "built_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
-    "package_root": ${ARCHIVE_BASE@Q},
+    "package_root": archive_base,
     "included_roots": [
         "AGENTS.md",
         "AGENTS.sidecar.md",
@@ -108,14 +111,15 @@ manifest = {
 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 PY
 
-python3 - <<PY
+PACKAGE_ROOT="$PACKAGE_ROOT" ARCHIVE_BASE="$ARCHIVE_BASE" DIST_DIR="$DIST_DIR" python3 - <<'PY'
 import tarfile
 import zipfile
+import os
 from pathlib import Path
 
-package_root = Path(${PACKAGE_ROOT@Q})
-archive_base = ${ARCHIVE_BASE@Q}
-dist_dir = Path(${DIST_DIR@Q})
+package_root = Path(os.environ["PACKAGE_ROOT"])
+archive_base = os.environ["ARCHIVE_BASE"]
+dist_dir = Path(os.environ["DIST_DIR"])
 source_dir = package_root / archive_base
 zip_path = dist_dir / f"{archive_base}.zip"
 tar_path = dist_dir / f"{archive_base}.tar.gz"
@@ -142,16 +146,18 @@ else
   ' "$ROOT_DIR/README.md" > "$RELEASE_NOTES_OUT"
 fi
 
-python3 - <<PY
+DIST_DIR="$DIST_DIR" ARCHIVE_BASE="$ARCHIVE_BASE" INSTALLER_ASSET="$INSTALLER_ASSET" python3 - <<'PY'
 import hashlib
+import os
 from pathlib import Path
 
-dist_dir = Path(${DIST_DIR@Q})
-archive_base = ${ARCHIVE_BASE@Q}
+dist_dir = Path(os.environ["DIST_DIR"])
+archive_base = os.environ["ARCHIVE_BASE"]
+installer_asset = os.environ["INSTALLER_ASSET"]
 files = [
     dist_dir / f"{archive_base}.tar.gz",
     dist_dir / f"{archive_base}.zip",
-    dist_dir / Path(${INSTALLER_ASSET@Q}).name,
+    dist_dir / Path(installer_asset).name,
 ]
 out = dist_dir / f"{archive_base}.sha256"
 
