@@ -10,6 +10,12 @@ Purpose: define how the top-level orchestrator turns a non-trivial request into 
 4. Task state lives only in the canonical task-state surface; execution telemetry lives only in the canonical execution-telemetry surface when tracked execution is engaged.
 5. No interactive menu dependencies.
 
+Execution-carrier model:
+
+1. `agent` in host routing means execution carrier tier/model with cost and telemetry-backed effectiveness.
+2. runtime role remains an explicit activation state and must not be replaced by carrier identity.
+3. carrier selection order is mandatory: capability/admissibility first, local score/telemetry guard second, cheapest eligible carrier third.
+
 ## Hard Runtime Law
 
 1. Mandatory routing and verification requirements must be expressed as executable runtime behavior, not advisory phrasing.
@@ -418,6 +424,7 @@ Required lines:
 2. `Requests: active=<n> | in_work=<n> | blocked=<n>` for user-request conversation mode
 3. `Tasks: active=<n> | in_work=<n> | blocked=<n>` for development orchestration mode
 4. `Agents: active=<n> | working=<n> | waiting=<n>`
+5. `Reasoning summary: <one compact user-facing explanation of why this next step, finding set, or blocker state follows from the active evidence>`
 
 Counter semantics:
 
@@ -451,12 +458,15 @@ Rules:
 7. if `in_work>0`, the report is a progress/intermediate report and continued agent action is still expected after the report,
 8. do not omit the state block during development orchestration merely because the answer is short,
 9. if no delegated agents are active, still report `Agents: active=0 | working=0 | waiting=0`.
-10. if a bounded leaf just closed but the parent chain still requires `next_leaf_required`, the report must remain intermediate and must not be phrased as terminal closure.
-11. if the next lawful step is known pre-dispatch work (`shape packet`, `activate skills`, `dispatch`), a progress report must not suspend the route before that next step is executed or blocked explicitly.
-12. if a wait call times out while `in_work=1`, the report must remain explicitly intermediate and must not suspend execution unless a blocker was newly established.
-13. if a user-facing summary is emitted while `in_work=1`, that summary must not be the last action of the current execution turn; the orchestrator must immediately continue with the already-lawful next step or explicit blocker handling.
-14. a `final` user-facing report is invalid while any delegated agent remains active, any bounded handoff remains unresolved, or `in_work=1` for the represented request/task.
-15. if a delegated lane was just dispatched and no delegated return or blocker has yet been synthesized, a progress report must not become the boundary between dispatch and the next control action.
+10. `Reasoning summary` is mandatory in every user-facing progress, blocker, review, and closure report; it must describe the operative reasoning in concise external form rather than exposing private intermediate chain-of-thought.
+11. if a bounded leaf just closed but the parent chain still requires `next_leaf_required`, the report must remain intermediate and must not be phrased as terminal closure.
+12. if the next lawful step is known pre-dispatch work (`shape packet`, `activate skills`, `dispatch`), a progress report must not suspend the route before that next step is executed or blocked explicitly.
+13. if a wait call times out while `in_work=1`, the report must remain explicitly intermediate and must not suspend execution unless a blocker was newly established.
+14. if a user-facing summary is emitted while `in_work=1`, that summary must not be the last action of the current execution turn; the orchestrator must immediately continue with the already-lawful next step or explicit blocker handling.
+15. a `final` user-facing report is invalid while any delegated agent remains active, any bounded handoff remains unresolved, or `in_work=1` for the represented request/task.
+16. if a delegated lane was just dispatched and no delegated return or blocker has yet been synthesized, a progress report must not become the boundary between dispatch and the next control action.
+17. a closure-ready final report must end with the explicit terminal line `Session status: completed, closing this session.`
+18. immediately after that terminal line, emit one extra blank line.
 
 ## Final-Report Gate
 
@@ -473,6 +483,10 @@ If any item is false:
 1. emit at most an intermediate/progress report,
 2. continue execution or wait lawfully,
 3. do not transfer control to `final`.
+
+When all final-report gate conditions are true:
+1. the final user-facing report must include the explicit terminal line `Session status: completed, closing this session.`,
+2. that terminal line must be followed by one extra blank line.
 
 Terminal-phrasing rule:
 

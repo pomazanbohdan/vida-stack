@@ -74,6 +74,41 @@ fn json_bool_field(value: &serde_json::Value, key: &str) -> Option<bool> {
     value.get(key)?.as_bool()
 }
 
+fn codex_carrier_backend_from_assignment(assignment: &serde_json::Value) -> Option<String> {
+    json_string_field(assignment, "selected_tier")
+        .or_else(|| json_string_field(assignment, "activation_agent_type"))
+        .filter(|value| !value.is_empty())
+}
+
+fn selected_backend_from_route(
+    execution_plan: &serde_json::Value,
+    route: &serde_json::Value,
+) -> String {
+    route
+        .get("preferred_agent_tier")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            route
+                .get("preferred_agent_type")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            route
+                .get("codex_runtime_assignment")
+                .and_then(codex_carrier_backend_from_assignment)
+        })
+        .or_else(|| {
+            execution_plan
+                .get("codex_runtime_assignment")
+                .and_then(codex_carrier_backend_from_assignment)
+        })
+        .or_else(|| json_string_field(route, "subagents"))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 pub(crate) fn default_run_graph_status(
     task_id: &str,
     task_class: &str,
@@ -617,18 +652,42 @@ pub(crate) fn merge_run_graph_meta(
     mut status: RunGraphStatus,
     meta: &serde_json::Value,
 ) -> RunGraphStatus {
-    status.next_node = json_string_field(meta, "next_node").or(status.next_node);
-    status.selected_backend =
-        json_string_field(meta, "selected_backend").unwrap_or(status.selected_backend);
-    status.lane_id = json_string_field(meta, "lane_id").unwrap_or(status.lane_id);
-    status.lifecycle_stage =
-        json_string_field(meta, "lifecycle_stage").unwrap_or(status.lifecycle_stage);
-    status.policy_gate = json_string_field(meta, "policy_gate").unwrap_or(status.policy_gate);
-    status.handoff_state = json_string_field(meta, "handoff_state").unwrap_or(status.handoff_state);
-    status.context_state = json_string_field(meta, "context_state").unwrap_or(status.context_state);
-    status.checkpoint_kind =
-        json_string_field(meta, "checkpoint_kind").unwrap_or(status.checkpoint_kind);
-    status.resume_target = json_string_field(meta, "resume_target").unwrap_or(status.resume_target);
+    if let Some(next_node) = meta.get("next_node") {
+        status.next_node = next_node.as_str().map(ToOwned::to_owned);
+    }
+    if let Some(selected_backend) = meta
+        .get("selected_backend")
+        .and_then(|value| value.as_str())
+    {
+        status.selected_backend = selected_backend.to_string();
+    }
+    if let Some(lane_id) = meta.get("lane_id").and_then(|value| value.as_str()) {
+        status.lane_id = lane_id.to_string();
+    }
+    if let Some(lifecycle_stage) = meta.get("lifecycle_stage").and_then(|value| value.as_str()) {
+        status.lifecycle_stage = lifecycle_stage.to_string();
+    }
+    if let Some(policy_gate) = meta.get("policy_gate").and_then(|value| value.as_str()) {
+        status.policy_gate = policy_gate.to_string();
+    }
+    if let Some(handoff_state) = meta.get("handoff_state") {
+        status.handoff_state = handoff_state
+            .as_str()
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| "none".to_string());
+    }
+    if let Some(context_state) = meta.get("context_state").and_then(|value| value.as_str()) {
+        status.context_state = context_state.to_string();
+    }
+    if let Some(checkpoint_kind) = meta.get("checkpoint_kind").and_then(|value| value.as_str()) {
+        status.checkpoint_kind = checkpoint_kind.to_string();
+    }
+    if let Some(resume_target) = meta.get("resume_target") {
+        status.resume_target = resume_target
+            .as_str()
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| "none".to_string());
+    }
     status.recovery_ready =
         json_bool_field(meta, "recovery_ready").unwrap_or(status.recovery_ready);
     status
@@ -692,11 +751,9 @@ fn run_graph_transition(
 fn implementation_analysis_gate(
     implementation: &serde_json::Value,
 ) -> (Option<String>, String, bool) {
+    let writer_node = implementation_writer_node(implementation);
     let coach_required = json_bool_field(implementation, "coach_required").unwrap_or(false);
-    let coach_node = json_string_field(implementation, "coach_route_task_class")
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "coach".to_string());
-    let next_node = coach_required.then_some(coach_node);
+    let next_node = Some(writer_node);
     let policy_gate = if coach_required {
         json_string_field(implementation, "verification_gate")
             .filter(|value| !value.is_empty())
@@ -705,8 +762,16 @@ fn implementation_analysis_gate(
         "not_required".to_string()
     };
     let recovery_ready = next_node.is_some()
+        || coach_required
         || json_bool_field(implementation, "independent_verification_required").unwrap_or(false);
     (next_node, policy_gate, recovery_ready)
+}
+
+fn implementation_writer_node(implementation: &serde_json::Value) -> String {
+    json_string_field(implementation, "writer_route_task_class")
+        .or_else(|| json_string_field(implementation, "implementer_route_task_class"))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "writer".to_string())
 }
 
 fn implementation_verification_gate(
@@ -727,6 +792,52 @@ fn implementation_verification_gate(
         "not_required".to_string()
     };
     (next_node, policy_gate)
+}
+
+fn implementation_writer_handoff(
+    implementation: &serde_json::Value,
+    verification: &serde_json::Value,
+) -> (String, Option<String>, String, DispatchTargetFormat, bool) {
+    let coach_required = json_bool_field(implementation, "coach_required").unwrap_or(false);
+    if coach_required {
+        let coach_node = json_string_field(implementation, "coach_route_task_class")
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "coach".to_string());
+        let (next_node, policy_gate) =
+            implementation_verification_gate(implementation, verification);
+        return (
+            coach_node,
+            next_node,
+            policy_gate,
+            DispatchTargetFormat::Direct,
+            true,
+        );
+    }
+
+    let verification_required =
+        json_bool_field(implementation, "independent_verification_required").unwrap_or(false);
+    if verification_required {
+        let verification_node = json_string_field(implementation, "verification_route_task_class")
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "verification".to_string());
+        return (
+            verification_node,
+            None,
+            json_string_field(verification, "verification_gate")
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "verification_summary".to_string()),
+            DispatchTargetFormat::Lane,
+            false,
+        );
+    }
+
+    (
+        implementation_writer_node(implementation),
+        None,
+        "not_required".to_string(),
+        DispatchTargetFormat::Lane,
+        false,
+    )
 }
 
 pub(crate) async fn derive_seeded_run_graph_status(
@@ -751,8 +862,7 @@ pub(crate) async fn derive_seeded_run_graph_status(
     } else {
         &execution_plan["development_flow"]["implementation"]
     };
-    let selected_backend =
-        json_string_field(route, "subagents").unwrap_or_else(|| "unknown".to_string());
+    let selected_backend = selected_backend_from_route(execution_plan, route);
     let lane_node = if is_conversation {
         selection.selected_role.clone()
     } else {
@@ -891,30 +1001,90 @@ pub(crate) async fn derive_advanced_run_graph_status(
             );
         }
 
-        let coach_node = json_string_field(&implementation, "coach_route_task_class")
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "coach".to_string());
-        if existing.next_node.as_deref() != Some(coach_node.as_str()) {
+        let writer_node = implementation_writer_node(&implementation);
+        if existing.next_node.as_deref() != Some(writer_node.as_str()) {
             return Err(format!(
-                "run-graph advance expected next node `{coach_node}` for the implementation analysis handoff, got `{}`",
+                "run-graph advance expected next node `{writer_node}` for the implementation analysis handoff, got `{}`",
                 existing.next_node.as_deref().unwrap_or("none")
             ));
         }
 
+        let coach_required = json_bool_field(&implementation, "coach_required").unwrap_or(false);
         let verification = compiled_control.verification.clone();
         let (next_node, policy_gate) =
             implementation_verification_gate(&implementation, &verification);
         return Ok(TaskflowRunGraphAdvancePayload {
             status: run_graph_transition(
                 &existing,
-                coach_node.clone(),
-                next_node,
-                format!("{coach_node}_lane"),
-                "coach_active".to_string(),
+                writer_node.clone(),
+                if coach_required {
+                    json_string_field(&implementation, "coach_route_task_class")
+                        .filter(|value| !value.is_empty())
+                        .or(next_node)
+                } else {
+                    next_node
+                },
+                format!("{writer_node}_lane"),
+                "writer_active".to_string(),
                 policy_gate,
                 "execution_cursor",
-                DispatchTargetFormat::Direct,
+                DispatchTargetFormat::Lane,
                 true,
+            ),
+        });
+    }
+
+    if existing.task_class == "implementation"
+        && existing.route_task_class == "implementation"
+        && existing.active_node == implementation_writer_node(&implementation)
+    {
+        if implementation.is_null() {
+            return Err(
+                "run-graph advance failed: implementation route is unavailable in the compiled activation snapshot."
+                    .to_string(),
+            );
+        }
+
+        let verification = compiled_control.verification.clone();
+        let (active_node, next_node, policy_gate, target_format, recovery_ready) =
+            implementation_writer_handoff(&implementation, &verification);
+        if existing.next_node.as_deref() != Some(active_node.as_str())
+            && !existing.next_node.is_none()
+        {
+            return Err(format!(
+                "run-graph advance expected next node `{active_node}` for the implementation writer handoff, got `{}`",
+                existing.next_node.as_deref().unwrap_or("none")
+            ));
+        }
+
+        if active_node == existing.active_node && next_node.is_none() {
+            let mut status = run_graph_transition(
+                &existing,
+                existing.active_node.clone(),
+                None,
+                existing.lane_id.clone(),
+                "implementation_complete".to_string(),
+                "not_required".to_string(),
+                &existing.checkpoint_kind,
+                DispatchTargetFormat::Lane,
+                false,
+            );
+            status.status = "completed".to_string();
+            status.context_state = existing.context_state;
+            return Ok(TaskflowRunGraphAdvancePayload { status });
+        }
+
+        return Ok(TaskflowRunGraphAdvancePayload {
+            status: run_graph_transition(
+                &existing,
+                active_node.clone(),
+                next_node,
+                format!("{active_node}_lane"),
+                format!("{active_node}_active"),
+                policy_gate,
+                "execution_cursor",
+                target_format,
+                recovery_ready,
             ),
         });
     }
@@ -1123,8 +1293,22 @@ mod tests {
 
         let (next_node, policy_gate, recovery_ready) =
             implementation_analysis_gate(&implementation);
-        assert_eq!(next_node, Some("coach".to_string()));
+        assert_eq!(next_node, Some("writer".to_string()));
         assert_eq!(policy_gate, "targeted_verification");
+        assert!(recovery_ready);
+    }
+
+    #[test]
+    fn implementation_analysis_gate_keeps_writer_step_when_coach_is_disabled() {
+        let implementation = serde_json::json!({
+            "coach_required": false,
+            "independent_verification_required": false
+        });
+
+        let (next_node, policy_gate, recovery_ready) =
+            implementation_analysis_gate(&implementation);
+        assert_eq!(next_node, Some("writer".to_string()));
+        assert_eq!(policy_gate, "not_required");
         assert!(recovery_ready);
     }
 
@@ -1142,6 +1326,41 @@ mod tests {
             implementation_verification_gate(&implementation, &verification);
         assert_eq!(next_node, None);
         assert_eq!(policy_gate, "not_required");
+    }
+
+    #[test]
+    fn merge_run_graph_meta_allows_explicit_null_to_clear_handoff_fields() {
+        let merged = merge_run_graph_meta(
+            RunGraphStatus {
+                run_id: "run-1".to_string(),
+                task_id: "run-1".to_string(),
+                task_class: "implementation".to_string(),
+                active_node: "writer".to_string(),
+                next_node: Some("coach".to_string()),
+                status: "ready".to_string(),
+                route_task_class: "implementation".to_string(),
+                selected_backend: "codex".to_string(),
+                lane_id: "writer_lane".to_string(),
+                lifecycle_stage: "writer_active".to_string(),
+                policy_gate: "targeted_verification".to_string(),
+                handoff_state: "awaiting_coach".to_string(),
+                context_state: "sealed".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.writer_lane".to_string(),
+                recovery_ready: true,
+            },
+            &serde_json::json!({
+                "next_node": null,
+                "handoff_state": null,
+                "resume_target": null,
+                "recovery_ready": false
+            }),
+        );
+
+        assert_eq!(merged.next_node, None);
+        assert_eq!(merged.handoff_state, "none");
+        assert_eq!(merged.resume_target, "none");
+        assert!(!merged.recovery_ready);
     }
 }
 

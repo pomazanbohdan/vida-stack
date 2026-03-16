@@ -8,6 +8,11 @@ Explicit boot map:
 
 1. `system-maps/bootstrap.worker-boot-flow`
 
+Execution-carrier model:
+1. The selected host `agent` is an execution carrier (model/tier/cost/effectiveness), not a runtime role.
+2. Your packet runtime role (`worker` or another lawful role) remains explicit and separate.
+3. A carrier may execute multiple roles only when runtime-role/task-class admissibility allows it.
+
 `AGENTS.md` remains the L0 orchestrator contract. Workers must not inherit the full orchestrator role.
 
 ## Core Rule
@@ -90,7 +95,7 @@ Return:
 8. recommended next action when work remains.
 
 Reporting rule:
-1. If the worker packet/runtime requires user-facing or lane-facing status output, emit the runtime-visible `Thinking mode` label and mandatory counters from the active `vida agent-init` reporting contract instead of improvising a local log prefix.
+1. If the worker packet/runtime requires user-facing or lane-facing status output, emit the runtime-visible `Thinking mode` label, mandatory counters, and `Reasoning summary` from the active `vida agent-init` reporting contract instead of improvising a local log prefix.
 
 When `impact_tail_policy: required_for_non_stc` applies, also return:
 

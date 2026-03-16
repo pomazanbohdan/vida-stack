@@ -15,7 +15,7 @@ Product/spec inputs:
 3. `docs/product/spec/project-activation-and-configurator-model.md`
 4. `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 5. `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`
-6. `docs/product/spec/release-1-wave-plan.md`
+6. `docs/product/spec/release-1-plan.md`
 7. `docs/product/spec/compiled-runtime-bundle-contract.md`
 8. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
 
@@ -381,5 +381,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/research/runtime-home-and-surface-migration-research.md
 created_at: '2026-03-12T23:59:50+02:00'
-updated_at: '2026-03-12T23:59:50+02:00'
+updated_at: 2026-03-16T10:02:36.814104963Z
 changelog_ref: runtime-home-and-surface-migration-research.changelog.jsonl

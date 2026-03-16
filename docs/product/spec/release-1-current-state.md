@@ -1,8 +1,8 @@
-# Release 1 Implementation Reality Pass
+# Release 1 Current State
 
 Status: active product execution report (runtime checkpoint refreshed `2026-03-15`)
 
-Purpose: record the first bounded implementation-reality pass for `Release 1` across `TaskFlow`, `DocFlow`, and the current `vida` launcher shell so restart planning can be based on actual code and proven runtime surfaces rather than architectural intent alone.
+Purpose: record the bounded implementation-reality checkpoint for `Release 1` across `TaskFlow`, `DocFlow`, and the current `vida` launcher shell so execution planning can be based on actual code and proven runtime surfaces rather than architectural intent alone.
 
 ## 1. Method
 
@@ -17,7 +17,7 @@ This reality pass is based on:
 Interpretation rule:
 
 1. percentages below are bounded readiness estimates,
-2. they describe Release-1 usefulness and restart posture,
+2. they describe Release-1 usefulness and current execution posture,
 3. they do not claim mathematical certainty or one global product percentage.
 
 ## 1.1 Runtime Delta Checkpoint (`2026-03-15`)
@@ -28,6 +28,34 @@ Since the initial pass, the runtime reality changed in these bounded ways:
 2. state-store lock handling was centralized in `StateStore::open_existing`, reducing command-surface drift where some paths retried locks and others failed immediately.
 3. installed-binary smoke was rerun after the fix (`41/50 pass`), and remaining failures were classified as expected precondition, expected fail-closed checks, or expected validation behavior.
 4. no new evidence changed the main architectural finding: Release-1 risk remains concentrated in DB-first activation/entity closure and in launcher concentration.
+
+## 1.2 Airtable Delta Checkpoint (`2026-03-16`)
+
+The Airtable `Vida` `Spec` table was refreshed and now sharpens Release-1 scope in these ways:
+
+1. P0 production-baseline tracks are now explicit:
+   - trace, telemetry, and evidence foundation
+   - tool contract and side-effect control
+   - retrieval, freshness, and citation reliability
+   - identity, delegation, and approval enforcement
+   - runtime SLO, failure recovery, and rollback
+2. P1 control-maturity tracks are now also explicit:
+   - prompt lifecycle and controlled rollout
+   - process evaluation and feedback loop
+   - memory governance operationalization
+   - safety, red teaming, and FinOps maturity
+3. starter workflows, escalation flows, feedback triage, prompt rollout, and memory approval are now described as canonical operating patterns rather than future optional examples.
+4. benchmark/control metrics are now explicit product surfaces:
+   - tool input accuracy
+   - tool output utilization
+   - safety defect rate
+   - cost per successful task
+   - prompt regression rate
+
+Interpretation:
+
+1. Release 1 is no longer accurately described as runtime-refactor-only work.
+2. Release 1 must now be judged against production trust/control readiness as well as architectural cleanup.
 
 ## 2. Workspace Reality Snapshot
 
@@ -98,11 +126,25 @@ Rewrite-pressure scale:
 | `vida` launcher shell | 52% | 20% | 15% | 45% | 20% | high | launcher is functionally rich but too concentrated; much runtime ownership still sits in monolithic shell code |
 | bridge donors (`taskflow-v0`, `codex-v0`) | 65% for continuity value | 25% | 35% | 20% | 20% | medium | valuable as donor/proof/continuity surfaces, but wrong as long-term owners |
 
-Overall restart interpretation:
+Overall execution interpretation:
 
 1. the codebase is not early-stage,
-2. it is substantial enough to restart through control and carving, not through wholesale rewrite,
+2. it is substantial enough to progress through control and carving, not through wholesale rewrite,
 3. the main risk is ownership concentration, not lack of implementation.
+
+## 4.1 Airtable Delta Gap Ledger
+
+| Airtable track | Current local posture | Gap severity | Notes |
+|---|---|---|---|
+| Trace, telemetry, and evidence foundation | partial observability/readiness surfaces exist | high | local canon is strong on receipts and state, but not yet explicit enough on trace model, audit export, and side-effect evidence linkage |
+| Tool contract and side-effect control | contract direction exists, runtime enforcement incomplete | high | must become a first-class Release-1 closure gate |
+| Retrieval freshness and citation reliability | conceptually present in broader architecture, not yet closure-owned in Release-1 surfaces | high | needs source registry, freshness posture, and citation contract |
+| Identity, delegation, and approval enforcement | approval/policy law exists, enterprise-grade principal/delegation enforcement remains incomplete | high | must move from guidance into explicit runtime contract and proof |
+| Runtime SLO, failure recovery, and rollback | recovery/checkpoint posture is meaningful, operational SLO and incident model remain weak | high | restore/reconcile alone is not enough for production closure |
+| Prompt lifecycle and controlled rollout | largely absent as Release-1 owner surface | medium-high | should be added now as explicit P1 control track |
+| Process evaluation and feedback loop | evaluation exists architecturally, process-quality loop is under-specified | medium-high | feedback ingestion and remediation linkage need owner status |
+| Memory governance operationalization | policy intent exists, operational memory controls remain under-specified | medium-high | consent, TTL, deletion, and approval posture need explicit bounded closure |
+| Safety, red teaming, and FinOps maturity | some governance direction exists, explicit release-gating metrics and attack-class testing remain absent | medium-high | needs to be tracked as P1/P2 maturity rather than implied later work |
 
 ## 5. TaskFlow Layer Reality
 
@@ -122,7 +164,7 @@ TaskFlow summary:
 
 1. functional readiness is ahead of architectural cleanliness,
 2. the biggest TaskFlow problem is not missing code, but launcher concentration,
-3. restart should prioritize carve-out and seam-hardening, not broad rewrite of already-proven stores and flow projections.
+3. execution should prioritize carve-out and seam-hardening, not broad rewrite of already-proven stores and flow projections.
 
 ## 6. DocFlow Layer Reality
 
@@ -145,7 +187,7 @@ DocFlow summary:
 
 ## 7. Release-1 Slice Reality
 
-| Release-1 slice | Estimated readiness | Main current reality | Main current gap | Restart priority |
+| Release-1 slice | Estimated readiness | Main current reality | Main current gap | Execution priority |
 |---|---:|---|---|---|
 | Slice 1: Operational Spine | 68% | real shell, state, doctor/status, protocol-binding and many taskflow/docflow commands already exist | native ownership is still split across launcher and donors | highest |
 | Slice 2: Project Activation Surface | 54% | law is clear and some shell/config path exists | DB-first activation/configurator closure is not yet stable enough as the sole path | high |
@@ -157,7 +199,8 @@ Release-1 summary:
 
 1. Release 1 is materially underway, not conceptual,
 2. it is not ready to close because the critical path still runs through activation, compiled control, and seam hardening,
-3. the restart should focus on Slice 1, Slice 2, Slice 3, and Slice 5 before broadening Slice 4 work.
+3. execution should focus on Slice 1, Slice 2, Slice 3, and Slice 5 before broadening Slice 4 work,
+4. slice execution must now carry the Airtable P0 production-baseline tracks explicitly rather than assuming they are downstream hardening.
 
 ## 8. Seam Reality
 
@@ -165,7 +208,7 @@ Release-1 summary:
 |---|---:|---|---|---|
 | Segment 1: TaskFlow -> DocFlow activation | 58% | explicit activation exists in `consume final` path | seam is real but still shell-heavy and bridge-shaped | extend and carve out |
 | Segment 2: DocFlow proof return -> TaskFlow closure path | 52% | readiness/proof outputs already exist in `DocFlow` | final native contract for TaskFlow consumption still needs hardening | extend with seam-specific contract tests |
-| Segment 3: Release-1 closure admission | 34% | closure rules are explicit and some proofs exist | Wave-5 hardening, restore/reconcile, and final admission proof remain open | keep narrow, do not widen scope |
+| Segment 3: Release-1 closure admission | 34% | closure rules are explicit and some proofs exist | final hardening, restore/reconcile, and final admission proof remain open | keep narrow, do not widen scope |
 
 Seam summary:
 
@@ -193,16 +236,16 @@ Recommended product-wide posture:
    - only bridge-only or wrongly owned slices that block native family ownership
    - not the already-proven family foundations
 
-Approximate restart-wide action split:
+Approximate execution-wide action split:
 
 1. keep: `45-50%`
 2. extend: `25-30%`
 3. refactor/carve out: `20-25%`
 4. replace/rewrite: `5-10%`
 
-## 10. Restart Implication
+## 10. Execution Implication
 
-The right restart is:
+The right execution posture is:
 
 1. not a fresh rewrite,
 2. not indefinite continuation of the current launcher concentration,
@@ -210,7 +253,7 @@ The right restart is:
 
 Best immediate next moves:
 
-1. build the first reality-backed backlog from this report,
+1. build the first reality-backed execution queue from this report,
 2. isolate launcher concentration tasks for `TaskFlow`,
 3. isolate seam-hardening tasks for Slice 5,
 4. keep `DocFlow` progressing mostly through extension rather than redesign.
@@ -227,16 +270,16 @@ Confidence by area:
 Reason:
 
 1. crate topology and proven-condition evidence are strong,
-2. but some shell-owned behavior is still concentrated enough that exact carve-out size will sharpen only after the next backlog pass.
+2. but some shell-owned behavior is still concentrated enough that exact carve-out size will sharpen only after the next execution-pass refresh.
 
 -----
-artifact_path: product/spec/release-1-implementation-reality-pass
+artifact_path: product/spec/release-1-current-state
 artifact_type: product_spec
 artifact_version: '1'
 artifact_revision: '2026-03-15'
 schema_version: '1'
 status: canonical
-source_path: docs/product/spec/release-1-implementation-reality-pass.md
+source_path: docs/product/spec/release-1-current-state.md
 created_at: '2026-03-13T14:12:00+02:00'
-updated_at: '2026-03-15T08:58:09+02:00'
-changelog_ref: release-1-implementation-reality-pass.changelog.jsonl
+updated_at: 2026-03-16T11:12:01.233256745Z
+changelog_ref: release-1-current-state.changelog.jsonl

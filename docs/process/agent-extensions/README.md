@@ -22,6 +22,8 @@ Purpose: provide the project-owned bridge/export map for custom roles, custom sk
    - source/export bridge for project profiles that bind roles and skills
 4. `docs/process/agent-extensions/flows.yaml`
    - source/export bridge for project custom flow sets and their role chains
+5. `docs/process/agent-extensions/dispatch-aliases.yaml`
+   - source/export bridge for runtime dispatch aliases that bind flow lanes to runtime roles and carrier preferences without hardcoding them in Rust
 
 ## Active Runtime Projection Family
 
@@ -30,7 +32,8 @@ Purpose: provide the project-owned bridge/export map for custom roles, custom sk
 3. `.vida/project/agent-extensions/skills.yaml`
 4. `.vida/project/agent-extensions/profiles.yaml`
 5. `.vida/project/agent-extensions/flows.yaml`
-6. matching `.vida/project/agent-extensions/*.sidecar.yaml`
+6. `.vida/project/agent-extensions/dispatch-aliases.yaml`
+7. matching `.vida/project/agent-extensions/*.sidecar.yaml`
 
 Runtime rule:
 

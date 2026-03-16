@@ -232,8 +232,8 @@ This model complements:
    - operator-facing placement of `execution_preparation`
 4. `compiled-autonomous-delivery-runtime-architecture.md`
    - top-level v1 runtime architecture
-5. `release-1-wave-plan.md`
-   - delivery sequencing for introducing this stage
+5. `release-1-plan.md`
+   - active Release-1 execution sequencing and owner plan for introducing this stage
 6. `docs/product/research/execution-preparation-and-developer-handoff-survey.md`
    - external grounding for the dedicated pre-execution architecture-preparation stage and structured developer handoff
 

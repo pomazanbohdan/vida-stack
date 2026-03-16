@@ -29,6 +29,12 @@
 > - consolidated audit: [docs/process/framework-three-layer-refactoring-audit.md](docs/process/framework-three-layer-refactoring-audit.md)
 > - proven environment/status conditions: [docs/process/vida1-development-conditions.md](docs/process/vida1-development-conditions.md)
 
+> [!IMPORTANT]
+> **Execution-carrier model (canonical):**
+> - `agent` means execution carrier (model/tier/cost/effectiveness), not runtime lane identity;
+> - `role` is a separate runtime activation state (`worker`, `coach`, `verifier`, `solution_architect`, ...);
+> - runtime selects by capability/admissibility first, then local score/telemetry guard, then cheapest eligible carrier.
+
 ## ✨ What Is VIDA?
 
 **Vida Stack** is building a real control plane for agent-driven product engineering.
@@ -255,9 +261,8 @@ These standards are designed so each layer is independently coherent and future 
 ### Spec navigation
 
 - 📑 [Current Spec Map](docs/product/spec/current-spec-map.md)
-- 🗺️ [Release 1 Program Map](docs/product/spec/release-1-program-map.md)
+- 🧭 [Release 1](docs/product/spec/release-1-plan.md)
 - 🎯 [Compiled Autonomous Delivery Runtime Architecture](docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md)
-- 🌊 [Release 1 Wave Plan](docs/product/spec/release-1-wave-plan.md)
 - 🧱 [Runtime Surface Model](docs/product/spec/root-map-and-runtime-surface-model.md)
 - 👥 [Role / Skill / Profile / Flow Model](docs/product/spec/agent-role-skill-profile-flow-model.md)
 - 🧠 [Role Selection & Conversation Modes](docs/product/spec/agent-lane-selection-and-conversation-mode-model.md)

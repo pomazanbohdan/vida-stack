@@ -10,6 +10,11 @@ Explicit boot map:
 
 1. `system-maps/bootstrap.orchestrator-boot-flow`
 
+Execution-carrier model:
+1. In host-agent execution, `agent` is the execution carrier (model/tier/cost/effectiveness).
+2. Runtime role is separate lane identity (`worker`, `coach`, `verifier`, `solution_architect`, and other lawful roles).
+3. Orchestrator must preserve that split: admissibility first, local score/telemetry guard second, cheapest eligible carrier third.
+
 ## Core Contract
 
 Mission:
@@ -65,7 +70,7 @@ Instruction activation rule:
 5. when the host project exposes a project-owned top-level orchestrator operating protocol through the project docs map or overlay, apply it as a project-layer narrowing of upper-lane routing and decomposition posture without weakening framework invariants.
 6. when the host project exposes project-owned packet-template, prompt-stack, or boot-readiness validation protocols through the project docs map or overlay, treat them as lawful project-layer narrowing of packet rendering, prompt interpretation, and startup validation without weakening framework invariants.
 7. when tracked execution or orchestrator-led continuation is active, the runtime-visible control loop in `core.orchestration` must remain explicit enough to answer lawful-next, replan, and parallel-safety questions without broad rereads.
-8. when the runtime exposes a reporting contract through `vida orchestrator-init`, treat that contract as the mandatory user-facing log/report prefix for `Thinking mode`, `Requests|Tasks`, and `Agents` counters rather than as optional style guidance.
+8. when the runtime exposes a reporting contract through `vida orchestrator-init`, treat that contract as the mandatory user-facing log/report prefix for `Thinking mode`, `Requests|Tasks`, `Agents`, and `Reasoning summary` rather than as optional style guidance.
 
 ## Request Intent Gate
 
@@ -155,8 +160,11 @@ Feature-delivery entry rule:
 7. only after the bounded file set, proof target, rollout, and tracked execution packet are explicit may the orchestrator delegate normal write-producing work.
 8. when the launcher/runtime exposes `vida taskflow consume final <request> --json`, use that surface first to materialize the design-first route, tracked-flow bootstrap, and bounded next-command sequence instead of improvising the sequencing from chat alone.
 9. when the runtime returns a design-first bootstrap command, prefer `vida taskflow bootstrap-spec "<request>" --json` as the first tracked launcher action instead of opening ad hoc epic/spec/doc steps manually.
-10. once `bootstrap-spec` has materialized the feature epic, spec-pack task, and design document, keep the root session in orchestrator mode and hand normal write-producing implementation to the configured development lanes after the design gate is satisfied.
-11. when the runtime has already persisted a lawful handoff receipt or downstream packet, prefer `vida taskflow consume continue` or `vida taskflow consume advance` over rebuilding the intake path from chat or ad hoc local reasoning.
+10. operator-facing plain/runtime surfaces must expose that `bootstrap-spec` command as the next tracked command rather than presenting separate ad hoc epic/spec/doc creation steps that invite root-session reconstruction.
+11. once `bootstrap-spec` has materialized the feature epic, spec-pack task, and design document, keep the root session in orchestrator mode and hand normal write-producing implementation to the configured development lanes after the design gate is satisfied.
+12. if the runtime launches a `business_analyst` or `pm` lane after `bootstrap-spec`, treat that lane as the active outstanding handoff until bounded evidence returns; do not present `work-pool-pack` as execution-ready merely because the lane was launched.
+13. once `bootstrap-spec` finishes, operator-facing surfaces must keep the downstream orchestrated chain visible: publish the required execution-plan gate, the active launched lane when one is waiting, design finalization/check commands, spec close command, and the next tracked work-pool/dev handoff commands.
+14. when the runtime has already persisted a lawful handoff receipt or downstream packet, prefer `vida taskflow consume continue` or `vida taskflow consume advance` over rebuilding the intake path from chat or ad hoc local reasoning.
 
 ## Worker-First Orchestration
 
@@ -222,6 +230,7 @@ User-facing reporting rule:
 5. Surface raw worker output only when the user explicitly requests it or when unresolved conflict remains decision-relevant.
 6. Use the mandatory reporting block from `AGENTS.md` for user-facing reports.
 7. During development orchestration, refresh those counters from the current bounded task/orchestration state before reporting progress or closure.
+8. For closure-ready final reports, include the explicit terminal line `Session status: completed, closing this session.` and then emit one extra blank line.
 
 ## Log-Read Budget
 

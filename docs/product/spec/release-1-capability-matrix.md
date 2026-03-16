@@ -12,13 +12,13 @@ Status markers:
 2. `🟡` partially implemented, under active modernization, or not yet closure-proven
 3. `⚪` target-only at the current stage
 
-| Release slice | Core value | Release-1 owner wave | TaskFlow coverage | DocFlow coverage | Law status | Implementation status | Proof status | Builds on | Must not depend on | Standalone value | Detail section |
+| Release slice | Core value | Release-1 owner surface | TaskFlow coverage | DocFlow coverage | Law status | Implementation status | Proof status | Builds on | Must not depend on | Standalone value | Detail section |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Slice 1: Operational Spine | first usable CLI/runtime shell with DB-first operational truth and fail-closed bootstrap | Wave 1 | Layers 1-4 primary; Layer 8 readiness admission begins | Layers 1-3 supporting; Layer 7 readiness remains downstream gate | ✅ | 🟡 | 🟡 | none | Waves 2-5 | one operable shell that can initialize, inspect, and govern runtime state | [§4](#4-slice-1-operational-spine) |
-| Slice 2: Project Activation Surface | project-aware runtime identity, activation state, and configurator law | Wave 2 | Layers 2-5 primary; Layer 6 pre-execution gating starts to bind | Layers 1-2 inventory/config authority; Layer 4 lawful mutation for activation projections | ✅ | 🟡 | 🟡 | Slice 1 | Waves 3-5 | one DB-first project activation and sync surface usable before compilation | [§5](#5-slice-2-project-activation-surface) |
-| Slice 3: Compiled Runtime Bundles | compiled control bundle and cache-safe control partitions for cheap orchestration | Wave 3 | Layers 1-4 and 8-9 primary; protocol binding and runtime consumption preparation | Layers 2 and 7 required as canonical inventory/readiness inputs | ✅ | 🟡 | 🟡 | Slices 1-2 | Waves 4-5 | one inspectable compiled runtime identity usable before end-to-end artifact loop closure | [§6](#6-slice-3-compiled-runtime-bundles) |
-| Slice 4: Planning, Execution, Artifact, And Approval Loop | first end-to-end operator loop from intent to durable artifact and approval evidence | Wave 4 | Layers 3-6 primary; status, task graph, execution, and approval rendering | Layers 4-6 primary for artifact mutation, relation, and operator rendering | ✅ | ⚪ | ⚪ | Slices 1-3 | Wave 5 closure hardening | one useful operator loop without needing final hardening or Release 2 embedding | [§7](#7-slice-4-planning-execution-artifact-and-approval-loop) |
-| Slice 5: Release-1 Closure And Hardening | coherent, recoverable, CLI-first runtime with explicit `taskflow -> docflow` proof seam | Wave 5 | Layers 7-9 primary; restore/reconcile and closure trust | Layers 7-8 seam closure; final readiness/proof branch consumable by `TaskFlow` | ✅ | ⚪ | ⚪ | Slices 1-4 | Release 2 capabilities | one stable Release-1 shell that can support further framework work through itself | [§8](#8-slice-5-release-1-closure-and-hardening) |
+| Slice 1: Operational Spine | first usable CLI/runtime shell with DB-first operational truth and fail-closed bootstrap | master plan Phases 1-2 | Layers 1-4 primary; Layer 8 readiness admission begins | Layers 1-3 supporting; Layer 7 readiness remains downstream gate | ✅ | 🟡 | 🟡 | none | Slices 2-5 | one operable shell that can initialize, inspect, and govern runtime state | [§4](#4-slice-1-operational-spine) |
+| Slice 2: Project Activation Surface | project-aware runtime identity, activation state, and configurator law | master plan Phases 2-4 | Layers 2-5 primary; Layer 6 pre-execution gating starts to bind | Layers 1-2 inventory/config authority; Layer 4 lawful mutation for activation projections | ✅ | 🟡 | 🟡 | Slice 1 | Slices 3-5 | one DB-first project activation and sync surface usable before compilation | [§5](#5-slice-2-project-activation-surface) |
+| Slice 3: Compiled Runtime Bundles | compiled control bundle and cache-safe control partitions for cheap orchestration | master plan Phases 3-4 | Layers 1-4 and 8-9 primary; protocol binding and runtime consumption preparation | Layers 2 and 7 required as canonical inventory/readiness inputs | ✅ | 🟡 | 🟡 | Slices 1-2 | Slices 4-5 | one inspectable compiled runtime identity usable before end-to-end artifact loop closure | [§6](#6-slice-3-compiled-runtime-bundles) |
+| Slice 4: Planning, Execution, Artifact, And Approval Loop | first end-to-end operator loop from intent to durable artifact and approval evidence | master plan Phases 3-6 | Layers 3-6 primary; status, task graph, execution, and approval rendering | Layers 4-6 primary for artifact mutation, relation, and operator rendering | ✅ | ⚪ | ⚪ | Slices 1-3 | Slice 5 hardening | one useful operator loop without needing final hardening or Release 2 embedding | [§7](#7-slice-4-planning-execution-artifact-and-approval-loop) |
+| Slice 5: Release-1 Closure And Hardening | coherent, recoverable, CLI-first runtime with explicit `taskflow -> docflow` proof seam | master plan Phases 5-7 | Layers 7-9 primary; restore/reconcile and closure trust | Layers 7-8 seam closure; final readiness/proof branch consumable by `TaskFlow` | ✅ | ⚪ | ⚪ | Slices 1-4 | Release 2 capabilities | one stable Release-1 shell that can support further framework work through itself | [§8](#8-slice-5-release-1-closure-and-hardening) |
 
 Matrix reading rule:
 
@@ -31,17 +31,39 @@ Matrix reading rule:
 
 | Release slice | Strongest current owner surfaces | Main current gap |
 |---|---|---|
-| Slice 1: Operational Spine | `release-1-wave-plan.md`; `taskflow-v1-runtime-modernization-plan.md`; current Rust `vida` shell and `taskflow-*` crates | native Rust operational spine is still converging with bridge-era shell and protocol-binding donors |
-| Slice 2: Project Activation Surface | `project-activation-and-configurator-model.md`; `release-1-wave-plan.md`; current `.vida/**` direction | DB-first activation/configurator closure is not yet the sole active runtime path |
+| Slice 1: Operational Spine | `release-1-plan.md`; `taskflow-v1-runtime-modernization-plan.md`; current Rust `vida` shell and `taskflow-*` crates | native Rust operational spine is still converging with bridge-era shell and protocol-binding donors |
+| Slice 2: Project Activation Surface | `project-activation-and-configurator-model.md`; `release-1-plan.md`; current `.vida/**` direction | DB-first activation/configurator closure is not yet the sole active runtime path |
 | Slice 3: Compiled Runtime Bundles | `compiled-runtime-bundle-contract.md`; `taskflow-protocol-runtime-binding-model.md`; `runtime-paths-and-derived-cache-model.md` | strict compiled bundle and cache-delivery contract exist in law, but runtime-native closure remains in progress |
-| Slice 4: Planning, Execution, Artifact, And Approval Loop | `user-facing-runtime-flow-and-operating-loop-model.md`; `execution-preparation-and-developer-handoff-model.md`; `release-1-wave-plan.md` | end-to-end durable artifact/approval loop is defined canonically but not yet closure-proven in runtime |
-| Slice 5: Release-1 Closure And Hardening | `compiled-autonomous-delivery-runtime-architecture.md`; `release-1-wave-plan.md`; `vida1-development-conditions.md` | final `TaskFlow -> DocFlow` hardening seam and closure-proof path are still under active modernization |
+| Slice 4: Planning, Execution, Artifact, And Approval Loop | `user-facing-runtime-flow-and-operating-loop-model.md`; `execution-preparation-and-developer-handoff-model.md`; `release-1-plan.md` | end-to-end durable artifact/approval loop is defined canonically but not yet closure-proven in runtime |
+| Slice 5: Release-1 Closure And Hardening | `compiled-autonomous-delivery-runtime-architecture.md`; `release-1-plan.md`; `vida1-development-conditions.md` | final `TaskFlow -> DocFlow` hardening seam and closure-proof path are still under active modernization |
 
 Interpretation rule:
 
 1. this matrix is the Release-1 capability projection above the runtime-family matrices,
-2. it does not replace the owner law of `TaskFlow`, `DocFlow`, or the wave plan,
+2. it does not replace the owner law of `TaskFlow`, `DocFlow`, or the unified execution program,
 3. it exists so Release-1 viability can be judged from one bounded control surface.
+
+## 0.2 Mandatory Production-Baseline Tracks
+
+The Airtable `Vida` spec backlog refreshed on `2026-03-16` adds these Release-1-critical tracks:
+
+| Track | Priority | Minimum Release-1 requirement | Current posture |
+|---|---|---|---|
+| Trace, Telemetry, And Evidence Foundation | P0 | root trace, step/tool spans, side-effect evidence linkage, audit export, replay for at least one workflow per major class | 🟡 |
+| Tool Contract And Side-Effect Control | P0 | normalized tool contract with side-effect class, auth mode, retry/idempotency, policy hook, and approval-sensitive failure boundaries | ⚪ |
+| Retrieval, Freshness, And Citation Reliability | P0 | source registry, ACL-aware retrieval, freshness posture, citation linkage, delete/ACL propagation | ⚪ |
+| Identity, Delegation, And Approval Enforcement | P0 | principal model, chain-of-delegation, approval lifecycle, just-in-time elevation, denied/approved audit evidence | ⚪ |
+| Runtime SLO, Failure Recovery, And Rollback | P0 | workflow SLI/SLO registry, failure taxonomy, rollback/fallback path, incident evidence bundle | ⚪ |
+| Prompt Lifecycle And Controlled Rollout | P1 | prompt registry, benchmark-backed promotion, canary, rollback target, regression gate | ⚪ |
+| Process Evaluation And Feedback Loop | P1 | process metrics, feedback ingestion, defect clustering, online/offline evaluator linkage | ⚪ |
+| Memory Governance Operationalization | P1 | memory class/risk handling, consent/TTL, correction/deletion, approval for sensitive writes | ⚪ |
+| Safety, Red Teaming, And FinOps Maturity | P1/P2 | adversarial suite, safety release blocks, cost-per-success tracking, routing/caching optimization with evidence | ⚪ |
+
+Interpretation rule:
+
+1. these tracks are part of Release-1 closure law, not optional post-release polish,
+2. P0 tracks must close or be explicitly risk-accepted before any risky production workflow can claim Release-1 readiness,
+3. P1 tracks must be represented in the Release-1 execution program even when their first implementation wave is narrower than the final platform ambition.
 
 ## 1. Scope
 
@@ -49,7 +71,7 @@ This matrix defines:
 
 1. the canonical Release-1 capability slices,
 2. how those slices map onto `TaskFlow` and `DocFlow`,
-3. which wave owns each slice,
+3. which owner surface and phase range governs each slice,
 4. which slices form the mandatory Release-1 closure ladder,
 5. the seam rule between product requirements and runtime-family obligations.
 
@@ -68,7 +90,8 @@ Each Release-1 slice must satisfy all of the following:
 2. it must combine only the `TaskFlow` and `DocFlow` capabilities already owned below it,
 3. it must not depend on a later Release-1 slice to legitimize its own owned behavior,
 4. it must remain CLI-first and Release-1-bounded,
-5. it must expose one bounded operator and proof path for closure.
+5. it must expose one bounded operator and proof path for closure,
+6. it must not claim closure while mandatory production-baseline tracks for its scope remain absent.
 
 Compact rule:
 
@@ -79,13 +102,22 @@ Compact rule:
 
 Primary owner references:
 
-1. `docs/product/spec/release-1-wave-plan.md`
-2. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
-3. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
-4. `docs/product/spec/docflow-v1-runtime-modernization-plan.md`
-5. `docs/product/spec/canonical-runtime-layer-matrix.md`
-6. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
-7. `docs/product/spec/functional-matrix-protocol.md`
+1. `docs/product/spec/release-1-plan.md`
+2. `docs/product/spec/release-1-closure-contract.md`
+3. `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
+4. `docs/product/spec/release-1-control-metrics-and-gates.md`
+5. `docs/product/spec/release-1-canonical-artifact-schemas.md`
+6. `docs/product/spec/release-1-decision-tables.md`
+7. `docs/product/spec/release-1-state-machine-specs.md`
+8. `docs/product/spec/release-1-error-and-exception-taxonomy.md`
+9. `docs/product/spec/release-1-proof-scenario-catalog.md`
+10. `docs/product/spec/release-1-schema-versioning-and-compatibility-law.md`
+11. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
+12. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
+13. `docs/product/spec/docflow-v1-runtime-modernization-plan.md`
+14. `docs/product/spec/canonical-runtime-layer-matrix.md`
+15. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
+16. `docs/product/spec/functional-matrix-protocol.md`
 
 Seam rule:
 
@@ -93,7 +125,8 @@ Seam rule:
 2. but they must not collapse the two runtime families into one generic owner,
 3. `TaskFlow` remains the execution substrate and closure authority,
 4. `DocFlow` remains the bounded documentation/inventory/validation/readiness/proof runtime,
-5. final hardening closes only when the `TaskFlow -> DocFlow` seam is explicit and fail-closed.
+5. final hardening closes only when the `TaskFlow -> DocFlow` seam is explicit and fail-closed,
+6. production-baseline tracks may extend across both runtime families, but closure authority still remains explicit.
 
 ## 4. Slice 1: Operational Spine
 
@@ -129,7 +162,7 @@ Provide the first usable Release-1 shell that can initialize, inspect, and gover
 
 ### 4.6 Owner Docs
 
-1. `docs/product/spec/release-1-wave-plan.md`
+1. `docs/product/spec/release-1-plan.md`
 2. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
 3. `docs/product/spec/taskflow-protocol-runtime-binding-model.md`
 4. `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`
@@ -193,7 +226,7 @@ Turn the operational shell into a project-aware runtime with DB-first activation
 
 ### 5.6 Owner Docs
 
-1. `docs/product/spec/release-1-wave-plan.md`
+1. `docs/product/spec/release-1-plan.md`
 2. `docs/product/spec/project-activation-and-configurator-model.md`
 3. `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
 
@@ -254,7 +287,7 @@ Compile the active framework/project posture into one strict control bundle with
 
 ### 6.6 Owner Docs
 
-1. `docs/product/spec/release-1-wave-plan.md`
+1. `docs/product/spec/release-1-plan.md`
 2. `docs/product/spec/compiled-runtime-bundle-contract.md`
 3. `docs/product/spec/taskflow-protocol-runtime-binding-model.md`
 4. `docs/product/spec/runtime-paths-and-derived-cache-model.md`
@@ -314,7 +347,7 @@ Close the first end-to-end Release-1 operator loop from intent and planning thro
 
 ### 7.6 Owner Docs
 
-1. `docs/product/spec/release-1-wave-plan.md`
+1. `docs/product/spec/release-1-plan.md`
 2. `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 3. `docs/product/spec/execution-preparation-and-developer-handoff-model.md`
 
@@ -376,7 +409,7 @@ Close Release 1 as one coherent CLI-first runtime with restore/reconcile discipl
 
 ### 8.6 Owner Docs
 
-1. `docs/product/spec/release-1-wave-plan.md`
+1. `docs/product/spec/release-1-plan.md`
 2. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
 3. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
 4. `docs/product/spec/docflow-v1-runtime-modernization-plan.md`
@@ -427,5 +460,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-capability-matrix.md
 created_at: '2026-03-13T13:20:00+02:00'
-updated_at: '2026-03-13T09:14:14+02:00'
+updated_at: 2026-03-16T11:28:28.669521099Z
 changelog_ref: release-1-capability-matrix.changelog.jsonl

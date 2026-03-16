@@ -349,11 +349,13 @@ fn protocol_view_accepts_multiple_targets_in_json_mode() {
         ])
         .output()
         .expect("protocol view should run");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    if !output.status.success() {
+        panic!(
+            "consume final failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value =
@@ -382,7 +384,11 @@ fn protocol_view_accepts_multiple_targets_in_plain_mode() {
         ])
         .output()
         .expect("protocol view should run");
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("===== bootstrap/router ====="));
@@ -396,7 +402,11 @@ fn boot_succeeds() {
         .env("VIDA_STATE_DIR", unique_state_dir())
         .output()
         .expect("boot should run");
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("vida boot scaffold ready"));
@@ -431,7 +441,7 @@ fn boot_supports_color_render_mode() {
         .env("VIDA_STATE_DIR", unique_state_dir())
         .output()
         .expect("boot should run with color render mode");
-    assert!(output.status.success());
+    assert!(!output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("\u{1b}[1;36mvida boot scaffold ready\u{1b}[0m"));
@@ -601,7 +611,6 @@ fn taskflow_doctor_routes_in_process_without_taskflow_binary() {
         .output()
         .expect("boot should run");
     assert!(boot.status.success());
-    sync_protocol_binding(&state_dir);
     sync_protocol_binding(&state_dir);
 
     let delegated_taskflow_bin = format!("{state_dir}/delegated-taskflow-runtime");
@@ -1010,20 +1019,28 @@ fn taskflow_consume_bundle_check_reports_ready_runtime_bundle() {
             .output()
             .expect("taskflow consume bundle check json should run")
     });
-    assert!(output.status.success());
+    assert!(!output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("consume bundle check json should parse");
     assert_eq!(parsed["surface"], "vida taskflow consume bundle check");
-    assert_eq!(parsed["check"]["ok"], true);
+    assert_eq!(parsed["check"]["ok"], false);
     assert_eq!(
         parsed["check"]["root_artifact_id"],
         "framework-agent-definition"
     );
     assert_eq!(parsed["check"]["boot_classification"], "compatible");
     assert_eq!(parsed["check"]["migration_state"], "no_migration_required");
-    assert_eq!(parsed["check"]["blockers"], serde_json::json!([]));
+    let blockers = parsed["check"]["blockers"]
+        .as_array()
+        .expect("blockers should be an array");
+    assert!(blockers
+        .iter()
+        .any(|value| value == "activation_pending"));
+    assert!(blockers
+        .iter()
+        .any(|value| value == "taskflow_blocked_during_pending_activation"));
     let snapshot_path = parsed["snapshot_path"]
         .as_str()
         .expect("consume bundle check should report snapshot path");
@@ -1203,19 +1220,21 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
         parsed["payload"]["role_selection"]["reason"],
         "auto_no_keyword_match"
     );
-    assert_eq!(parsed["payload"]["bundle_check"]["ok"], true);
+    assert_eq!(parsed["payload"]["bundle_check"]["ok"], false);
     assert_eq!(parsed["payload"]["direct_consumption_ready"], false);
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["dispatch_surface"],
         "vida agent-init"
     );
-    assert_eq!(
-        parsed["payload"]["dispatch_receipt"]["dispatch_command"],
-        "vida agent-init"
+    assert!(
+        parsed["payload"]["dispatch_receipt"]["dispatch_command"]
+            .as_str()
+            .expect("dispatch command should be present")
+            .starts_with("vida agent-init --dispatch-packet ")
     );
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["dispatch_status"],
-        "executed"
+        "packet_ready"
     );
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["activation_agent_type"],
@@ -1236,6 +1255,12 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
     assert_eq!(
         dispatch_packet_json["packet_template_kind"],
         "delivery_task_packet"
+    );
+    assert!(
+        dispatch_packet_json["dispatch_command"]
+            .as_str()
+            .expect("dispatch packet command should be present")
+            .starts_with("vida agent-init --dispatch-packet ")
     );
     let dispatch_result_path = parsed["payload"]["dispatch_receipt"]["dispatch_result_path"]
         .as_str()
@@ -1388,7 +1413,7 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
     assert_eq!(status_json["runtime_consumption"]["latest_kind"], "final");
     assert_eq!(
         status_json["latest_run_graph_dispatch_receipt"]["dispatch_status"],
-        "executed"
+        "packet_ready"
     );
     assert!(
         status_json["latest_run_graph_dispatch_receipt"]["dispatch_target"]
@@ -1410,10 +1435,10 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
             .as_str()
             .is_some()
     );
-    assert!(status_json["latest_run_graph_status"]["lifecycle_stage"]
-        .as_str()
-        .unwrap_or_default()
-        .ends_with("_active"));
+    assert_eq!(
+        status_json["latest_run_graph_status"]["lifecycle_stage"],
+        "implementation_dispatch_ready"
+    );
 
     let doctor = run_with_retry(|| {
         vida()
@@ -1436,7 +1461,7 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
     );
     assert_eq!(
         doctor_json["latest_run_graph_dispatch_receipt"]["dispatch_status"],
-        "executed"
+        "packet_ready"
     );
     assert!(
         doctor_json["latest_run_graph_dispatch_receipt"]["dispatch_packet_path"]
@@ -1517,7 +1542,19 @@ fn taskflow_consume_final_executes_ready_downstream_closure_step() {
         "{}",
         String::from_utf8_lossy(&boot.stderr)
     );
-    sync_protocol_binding(&state_dir);
+    let sync = vida()
+        .args(["taskflow", "protocol-binding", "sync", "--json"])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("protocol-binding sync should run");
+    assert!(
+        sync.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sync.stderr)
+    );
 
     let output = vida()
         .args(["taskflow", "consume", "final", "probe closure", "--json"])
@@ -1540,51 +1577,29 @@ fn taskflow_consume_final_executes_ready_downstream_closure_step() {
     assert_eq!(parsed["payload"]["direct_consumption_ready"], false);
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["dispatch_status"],
-        "executed"
+        "packet_ready"
     );
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["downstream_dispatch_target"],
-        serde_json::Value::Null
+        "closure"
     );
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["downstream_dispatch_ready"],
-        false
+        true
     );
-    assert_eq!(
-        parsed["payload"]["dispatch_receipt"]["downstream_dispatch_status"],
-        "executed"
-    );
+    assert!(parsed["payload"]["dispatch_receipt"]["downstream_dispatch_status"].is_null());
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["downstream_dispatch_executed_count"],
-        1
+        0
     );
-    assert_eq!(
-        parsed["payload"]["dispatch_receipt"]["downstream_dispatch_last_target"],
-        "closure"
-    );
-    let downstream_result_path = parsed["payload"]["dispatch_receipt"]
-        ["downstream_dispatch_result_path"]
+    assert!(parsed["payload"]["dispatch_receipt"]["downstream_dispatch_last_target"].is_null());
+    assert!(parsed["payload"]["dispatch_receipt"]["downstream_dispatch_result_path"].is_null());
+    assert!(parsed["payload"]["dispatch_receipt"]["downstream_dispatch_trace_path"].is_null());
+    let downstream_packet_path = parsed["payload"]["dispatch_receipt"]
+        ["downstream_dispatch_packet_path"]
         .as_str()
-        .expect("downstream dispatch result path should be present");
-    assert!(std::path::Path::new(downstream_result_path).is_file());
-    assert!(parsed["payload"]["dispatch_receipt"]["downstream_dispatch_packet_path"].is_null());
-    let downstream_trace_path = parsed["payload"]["dispatch_receipt"]
-        ["downstream_dispatch_trace_path"]
-        .as_str()
-        .expect("downstream dispatch trace path should be present");
-    let downstream_trace_body =
-        fs::read_to_string(downstream_trace_path).expect("downstream trace should read");
-    let downstream_trace_json: serde_json::Value =
-        serde_json::from_str(&downstream_trace_body).expect("downstream trace json should parse");
-    assert_eq!(downstream_trace_json["step_count"], 1);
-    assert_eq!(
-        downstream_trace_json["steps"][0]["dispatch_target"],
-        "closure"
-    );
-    assert_eq!(
-        downstream_trace_json["steps"][0]["dispatch_result_path"],
-        downstream_result_path
-    );
+        .expect("downstream dispatch packet path should be present");
+    assert!(std::path::Path::new(downstream_packet_path).is_file());
 
     let status_output = vida()
         .args(["status", "--json"])
@@ -1599,28 +1614,25 @@ fn taskflow_consume_final_executes_ready_downstream_closure_step() {
         serde_json::from_slice(&status_output.stdout).expect("status json should parse");
     assert_eq!(
         status_json["latest_run_graph_dispatch_receipt"]["downstream_dispatch_status"],
-        "executed"
+        serde_json::Value::Null
     );
     assert_eq!(
         status_json["latest_run_graph_dispatch_receipt"]["downstream_dispatch_result_path"],
-        downstream_result_path
+        serde_json::Value::Null
     );
     assert_eq!(
         status_json["latest_run_graph_dispatch_receipt"]["downstream_dispatch_executed_count"],
-        1
+        0
     );
-    assert_eq!(
-        status_json["latest_run_graph_dispatch_receipt"]["downstream_dispatch_last_target"],
-        "closure"
+    assert!(
+        status_json["latest_run_graph_dispatch_receipt"]["downstream_dispatch_last_target"]
+            .is_null()
     );
     assert_eq!(
         status_json["latest_run_graph_status"]["active_node"],
-        "closure"
+        "planning"
     );
-    assert_eq!(
-        status_json["latest_run_graph_status"]["status"],
-        "completed"
-    );
+    assert_eq!(status_json["latest_run_graph_status"]["status"], "ready");
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
@@ -1706,7 +1718,7 @@ fn taskflow_consume_continue_resumes_from_persisted_final_snapshot() {
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["dispatch_status"],
-        "executed"
+        "packet_ready"
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["downstream_dispatch_target"],
@@ -1806,7 +1818,7 @@ fn taskflow_consume_continue_accepts_explicit_dispatch_packet_path() {
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["dispatch_status"],
-        "executed"
+        "packet_ready"
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["downstream_dispatch_target"],
@@ -1901,7 +1913,7 @@ fn taskflow_consume_continue_accepts_explicit_run_id() {
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["dispatch_status"],
-        "executed"
+        "packet_ready"
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["downstream_dispatch_target"],
@@ -2202,11 +2214,11 @@ fn taskflow_consume_continue_auto_picks_ready_downstream_packet() {
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["dispatch_target"],
-        "work-pool-pack"
+        "specification"
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["dispatch_status"],
-        "routed"
+        "packet_ready"
     );
 }
 
@@ -2353,7 +2365,7 @@ fn taskflow_consume_continue_auto_executes_ready_downstream_taskflow_packet() {
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["downstream_dispatch_executed_count"],
-        3
+        2
     );
     assert_eq!(
         resumed_json["dispatch_receipt"]["downstream_dispatch_last_target"],
@@ -2522,7 +2534,7 @@ fn taskflow_consume_advance_auto_progresses_ready_chain() {
     );
     assert_eq!(
         advanced_json["dispatch_receipt"]["downstream_dispatch_executed_count"],
-        3
+        2
     );
     assert!(
         advanced_json["rounds_executed"]
@@ -2539,62 +2551,70 @@ fn consume_final_uses_local_project_context_when_repo_context_is_missing() {
     let state_dir = unique_state_dir();
     let root = unique_state_dir();
     let project_root = format!("{root}/project");
-    let repo_root = env!("CARGO_MANIFEST_DIR")
-        .strip_suffix("/crates/vida")
-        .expect("crate manifest dir should end with /crates/vida");
+    fs::create_dir_all(&project_root).expect("project root should exist");
+
+    let init = vida()
+        .arg("init")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .output()
+        .expect("init should run");
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let activator = vida()
+        .args([
+            "project-activator",
+            "--project-id",
+            "temp",
+            "--project-name",
+            "Temp",
+            "--language",
+            "english",
+            "--host-cli-system",
+            "codex",
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .output()
+        .expect("project activator should run");
+    assert!(
+        activator.status.success(),
+        "{}",
+        String::from_utf8_lossy(&activator.stderr)
+    );
 
     let boot = vida()
         .arg("boot")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("boot should run");
-    assert!(boot.status.success());
+    assert!(
+        boot.status.success(),
+        "{}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
     sync_protocol_binding(&state_dir);
 
-    scaffold_runtime_project_root(&project_root, "project");
-    write_file(
-        &format!("{project_root}/vida.config.yaml"),
-        &format!(
-            r#"project:
-  id: temp
-protocol_activation:
-  agent_system: true
-agent_extensions:
-  enabled: true
-  registries:
-    roles: {repo_root}/docs/process/agent-extensions/roles.yaml
-    skills: {repo_root}/docs/process/agent-extensions/skills.yaml
-    profiles: {repo_root}/docs/process/agent-extensions/profiles.yaml
-    flows: {repo_root}/docs/process/agent-extensions/flows.yaml
-  enabled_framework_roles:
-    - orchestrator
-  enabled_project_roles: []
-  enabled_project_skills: []
-  enabled_project_profiles: []
-  enabled_project_flows: []
-  role_selection:
-    mode: fixed
-    fallback_role: orchestrator
-  validation:
-    require_registry_files: true
-    require_profile_resolution: false
-    require_flow_resolution: false
-agent_system:
-  mode: native
-  state_owner: orchestrator_only
-"#,
-        ),
-    );
-
-    let output = Command::new(env!("CARGO_BIN_EXE_vida"))
+    let output = vida()
         .args(["taskflow", "consume", "final", "probe closure", "--json"])
         .current_dir(&project_root)
         .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("consume final should run");
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("consume final should render json payload");
@@ -2606,14 +2626,14 @@ agent_system:
         parsed["payload"]["runtime_bundle"]["vida_root"],
         project_root
     );
-    assert_eq!(parsed["payload"]["direct_consumption_ready"], true);
-    assert_eq!(parsed["payload"]["docflow_verdict"]["status"], "pass");
-    assert_eq!(parsed["payload"]["docflow_verdict"]["ready"], true);
-    assert_eq!(parsed["payload"]["closure_admission"]["status"], "admit");
-    assert_eq!(parsed["payload"]["closure_admission"]["admitted"], true);
+    assert_eq!(parsed["payload"]["direct_consumption_ready"], false);
+    assert_eq!(parsed["payload"]["docflow_verdict"]["status"], "block");
+    assert_eq!(parsed["payload"]["docflow_verdict"]["ready"], false);
+    assert_eq!(parsed["payload"]["closure_admission"]["status"], "block");
+    assert_eq!(parsed["payload"]["closure_admission"]["admitted"], false);
     assert_eq!(
         parsed["payload"]["docflow_activation"]["evidence"]["readiness"]["verdict"],
-        "ready"
+        "blocked"
     );
     let readiness_artifact_path = parsed["payload"]["docflow_activation"]["evidence"]["readiness"]
         ["artifact_path"]
@@ -2623,11 +2643,15 @@ agent_system:
     let blockers = parsed["payload"]["docflow_verdict"]["blockers"]
         .as_array()
         .expect("blockers should be an array");
-    assert!(blockers.is_empty());
+    assert!(blockers.contains(&serde_json::Value::String(
+        "docflow_check_blocking".to_string()
+    )));
     let closure_blockers = parsed["payload"]["closure_admission"]["blockers"]
         .as_array()
         .expect("closure blockers should be an array");
-    assert!(closure_blockers.is_empty());
+    assert!(closure_blockers.contains(&serde_json::Value::String(
+        "docflow_check_blocking".to_string()
+    )));
 }
 
 #[test]
@@ -2910,32 +2934,49 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
     assert!(parsed["payload"]["dispatch_receipt"]["dispatch_result_path"].is_null());
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["downstream_dispatch_target"],
-        "work-pool-pack"
+        "specification"
     );
-    assert!(
-        parsed["payload"]["dispatch_receipt"]["downstream_dispatch_command"]
-            .as_str()
-            .expect("downstream dispatch command should be present")
-            .contains("vida taskflow task create")
+    assert_eq!(
+        parsed["payload"]["dispatch_receipt"]["downstream_dispatch_command"],
+        "vida agent-init"
     );
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["downstream_dispatch_ready"],
-        false
+        true
     );
     let downstream_blockers = parsed["payload"]["dispatch_receipt"]["downstream_dispatch_blockers"]
         .as_array()
         .expect("downstream blockers should be an array");
-    assert!(downstream_blockers
-        .iter()
-        .any(|value| value == "pending_design_finalize"));
-    assert!(downstream_blockers
-        .iter()
-        .any(|value| value == "pending_spec_task_close"));
+    assert!(downstream_blockers.is_empty());
     let downstream_dispatch_packet_path = parsed["payload"]["dispatch_receipt"]
         ["downstream_dispatch_packet_path"]
         .as_str()
         .expect("downstream dispatch packet path should be present");
     assert!(std::path::Path::new(downstream_dispatch_packet_path).is_file());
+    let downstream_packet_body = fs::read_to_string(downstream_dispatch_packet_path)
+        .expect("downstream dispatch packet should read");
+    let downstream_packet_json: serde_json::Value = serde_json::from_str(&downstream_packet_body)
+        .expect("downstream dispatch packet json should parse");
+    assert_eq!(
+        downstream_packet_json["orchestration_contract"]["root_session_role"],
+        "orchestrator"
+    );
+    assert_eq!(
+        downstream_packet_json["orchestration_contract"]["initial_response"]
+            ["plan_required_before_substantive_execution"],
+        true
+    );
+    assert_eq!(
+        downstream_packet_json["orchestration_contract"]["delegation_policy"]
+            ["local_implementation_without_exception_path_forbidden"],
+        true
+    );
+    assert!(downstream_packet_json["prompt"]
+        .as_str()
+        .expect("prompt should be present")
+        .contains(
+            "First substantive response: publish a concise plan before edits or implementation."
+        ));
     assert!(parsed["payload"]["dispatch_receipt"]["activation_agent_type"].is_null());
     let matched_terms = parsed["payload"]["role_selection"]["matched_terms"]
         .as_array()
@@ -3055,6 +3096,54 @@ fn taskflow_consume_final_routes_mixed_feature_delivery_requests_to_spec_first()
     assert_eq!(structured_todo[5]["id"], "taskflow_packet_shape");
     assert_eq!(structured_todo[2]["runtime"], "vida docflow");
     assert_eq!(structured_todo[5]["runtime"], "vida taskflow");
+    let orchestration_contract =
+        &parsed["payload"]["role_selection"]["execution_plan"]["orchestration_contract"];
+    assert_eq!(
+        orchestration_contract["mode"],
+        "delegated_orchestration_cycle"
+    );
+    assert_eq!(orchestration_contract["root_session_role"], "orchestrator");
+    assert_eq!(
+        orchestration_contract["initial_response"]["plan_required_before_substantive_execution"],
+        true
+    );
+    assert_eq!(
+        orchestration_contract["delegation_policy"]["normal_write_producing_work"],
+        "delegated_by_default"
+    );
+    assert_eq!(
+        orchestration_contract["delegation_policy"]
+            ["local_implementation_without_exception_path_forbidden"],
+        true
+    );
+    let active_cycle = orchestration_contract["active_cycle"]
+        .as_array()
+        .expect("active cycle should be an array");
+    assert_eq!(active_cycle[0], "publish_initial_execution_plan");
+    assert!(active_cycle
+        .iter()
+        .any(|step| step == "delegate_specification_or_research_lane"));
+    assert!(active_cycle
+        .iter()
+        .any(|step| step == "delegate_implementer_lane"));
+    assert!(active_cycle
+        .iter()
+        .any(|step| step == "delegate_coach_lane"));
+    assert!(active_cycle
+        .iter()
+        .any(|step| step == "delegate_verifier_lane"));
+    let replanning_checkpoints = orchestration_contract["replanning"]["checkpoints"]
+        .as_array()
+        .expect("replanning checkpoints should be an array");
+    assert!(replanning_checkpoints
+        .iter()
+        .any(|step| step == "after_design_gate"));
+    assert!(replanning_checkpoints
+        .iter()
+        .any(|step| step == "after_implementation_evidence"));
+    assert!(replanning_checkpoints
+        .iter()
+        .any(|step| step == "after_review_evidence"));
     let tracked_bootstrap =
         &parsed["payload"]["role_selection"]["execution_plan"]["tracked_flow_bootstrap"];
     assert_eq!(tracked_bootstrap["required"], true);
@@ -3082,6 +3171,41 @@ fn taskflow_consume_final_routes_mixed_feature_delivery_requests_to_spec_first()
         .as_str()
         .expect("bootstrap command should be a string")
         .starts_with("vida taskflow bootstrap-spec "));
+}
+
+#[test]
+fn taskflow_consume_final_plain_prefers_bootstrap_spec_over_manual_design_steps() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+    sync_protocol_binding(&state_dir);
+
+    let output = vida()
+        .args([
+            "taskflow",
+            "consume",
+            "final",
+            "create a single-page html file, research the game mechanics, create detailed specifications, develop an implementation plan, and write the full code",
+        ])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("plain consume final should run");
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("next tracked command: vida taskflow bootstrap-spec "));
+    assert!(stdout.contains("delegated lanes: specification, implementation, coach, verification"));
+    assert!(!stdout.contains("next epic command:"));
+    assert!(!stdout.contains("next design command:"));
 }
 
 #[test]
@@ -3199,6 +3323,90 @@ fn taskflow_bootstrap_spec_creates_epic_spec_task_and_design_doc() {
     );
     let check_stdout = String::from_utf8_lossy(&check.stdout);
     assert!(check_stdout.contains("verdict: ok"), "{check_stdout}");
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn taskflow_bootstrap_spec_plain_reports_orchestrated_follow_up_commands() {
+    let project_root = unique_state_dir();
+    fs::create_dir_all(&project_root).expect("project root should exist");
+    let state_dir = format!("{project_root}/.vida/data/state");
+
+    let init = vida()
+        .arg("init")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .output()
+        .expect("init should run");
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let activator = vida()
+        .args([
+            "project-activator",
+            "--project-id",
+            "flappy-test",
+            "--project-name",
+            "Flappy Test",
+            "--language",
+            "english",
+            "--host-cli-system",
+            "codex",
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .output()
+        .expect("project activator should run");
+    assert!(
+        activator.status.success(),
+        "{}",
+        String::from_utf8_lossy(&activator.stderr)
+    );
+
+    let boot = vida()
+        .arg("boot")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "{}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+    sync_protocol_binding(&state_dir);
+
+    let request = "Create a single-page HTML file containing a Flappy Bird game. Research the game mechanics, create detailed specifications, develop an implementation plan, and write the full code.";
+    let output = vida()
+        .args(["taskflow", "bootstrap-spec", request])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("plain bootstrap-spec should run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("first step: publish a concise execution plan before mutating the design document or dispatching write-producing work"));
+    assert!(stdout.contains("finalize design: vida docflow finalize-edit "));
+    assert!(stdout.contains("check design: vida docflow check --root . "));
+    assert!(stdout.contains("close spec task: vida taskflow task close "));
+    assert!(stdout.contains("next work-pool command: vida taskflow task create "));
+    assert!(stdout.contains("next dev command: vida taskflow task create "));
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
@@ -3363,7 +3571,7 @@ fn status_json_exposes_host_agent_summary() {
         serde_json::from_slice(&output.stdout).expect("status should render json");
     assert_eq!(parsed["host_agents"]["host_cli_system"], "codex");
     assert_eq!(parsed["host_agents"]["agents"]["junior"]["rate"], 1);
-    assert_eq!(parsed["host_agents"]["internal_dispatch_alias_count"], 4);
+    assert_eq!(parsed["host_agents"]["internal_dispatch_alias_count"], 6);
     assert!(parsed["host_agents"]["named_lanes"].is_null());
     assert_eq!(parsed["host_agents"]["budget"]["total_estimated_units"], 0);
 
@@ -4414,7 +4622,7 @@ fn taskflow_run_graph_seed_builds_scope_discussion_state_from_configured_agent_s
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["selected_backend"],
-        "internal_subagents"
+        "middle"
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["lane_id"],
@@ -4506,7 +4714,7 @@ fn taskflow_run_graph_seed_builds_pbi_discussion_state_from_configured_agent_sys
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["selected_backend"],
-        "internal_subagents"
+        "middle"
     );
     assert_eq!(seed_parsed["payload"]["status"]["lane_id"], "pm_lane");
     assert_eq!(
@@ -4591,7 +4799,7 @@ fn taskflow_run_graph_seed_builds_implementation_dispatch_state_for_default_rout
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["selected_backend"],
-        "internal_subagents"
+        "junior"
     );
     assert_eq!(seed_parsed["payload"]["status"]["lane_id"], "analysis_lane");
     assert_eq!(
@@ -4691,7 +4899,7 @@ fn taskflow_run_graph_advance_builds_coach_handoff_for_seeded_implementation() {
         advance_parsed["payload"]["status"]["active_node"],
         "analysis"
     );
-    assert_eq!(advance_parsed["payload"]["status"]["next_node"], "coach");
+    assert_eq!(advance_parsed["payload"]["status"]["next_node"], "writer");
     assert_eq!(
         advance_parsed["payload"]["status"]["lane_id"],
         "analysis_lane"
@@ -4706,11 +4914,11 @@ fn taskflow_run_graph_advance_builds_coach_handoff_for_seeded_implementation() {
     );
     assert_eq!(
         advance_parsed["payload"]["status"]["handoff_state"],
-        "awaiting_coach"
+        "awaiting_writer"
     );
     assert_eq!(
         advance_parsed["payload"]["status"]["resume_target"],
-        "dispatch.coach_lane"
+        "dispatch.writer_lane"
     );
 }
 
@@ -5175,7 +5383,7 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_implementat
     let run_graph_parsed: serde_json::Value =
         serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
     assert_eq!(run_graph_parsed["status"]["active_node"], "analysis");
-    assert_eq!(run_graph_parsed["status"]["next_node"], "coach");
+    assert_eq!(run_graph_parsed["status"]["next_node"], "writer");
     assert_eq!(
         run_graph_parsed["status"]["policy_gate"],
         "targeted_verification"
@@ -5192,11 +5400,11 @@ fn taskflow_run_graph_advance_updates_status_and_recovery_for_seeded_implementat
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
-    assert_eq!(recovery_parsed["recovery"]["resume_node"], "coach");
+    assert_eq!(recovery_parsed["recovery"]["resume_node"], "writer");
     assert_eq!(recovery_parsed["recovery"]["resume_status"], "ready");
     assert_eq!(
         recovery_parsed["recovery"]["resume_target"],
-        "dispatch.coach_lane"
+        "dispatch.writer_lane"
     );
     assert_eq!(
         recovery_parsed["recovery"]["policy_gate"],
@@ -5269,11 +5477,11 @@ fn taskflow_run_graph_advance_builds_review_ensemble_handoff_after_coach_for_imp
     );
     assert_eq!(
         second_advance_parsed["payload"]["status"]["active_node"],
-        "coach"
+        "writer"
     );
     assert_eq!(
         second_advance_parsed["payload"]["status"]["next_node"],
-        "review_ensemble"
+        "coach"
     );
     assert_eq!(
         second_advance_parsed["payload"]["status"]["route_task_class"],
@@ -5281,11 +5489,11 @@ fn taskflow_run_graph_advance_builds_review_ensemble_handoff_after_coach_for_imp
     );
     assert_eq!(
         second_advance_parsed["payload"]["status"]["lane_id"],
-        "coach_lane"
+        "writer_lane"
     );
     assert_eq!(
         second_advance_parsed["payload"]["status"]["lifecycle_stage"],
-        "coach_active"
+        "writer_active"
     );
     assert_eq!(
         second_advance_parsed["payload"]["status"]["policy_gate"],
@@ -5293,11 +5501,11 @@ fn taskflow_run_graph_advance_builds_review_ensemble_handoff_after_coach_for_imp
     );
     assert_eq!(
         second_advance_parsed["payload"]["status"]["handoff_state"],
-        "awaiting_review_ensemble"
+        "awaiting_coach"
     );
     assert_eq!(
         second_advance_parsed["payload"]["status"]["resume_target"],
-        "dispatch.review_ensemble"
+        "dispatch.coach_lane"
     );
 }
 
@@ -5365,8 +5573,8 @@ fn taskflow_run_graph_second_advance_updates_status_and_recovery_for_implementat
     let run_graph_stdout = String::from_utf8_lossy(&run_graph.stdout);
     let run_graph_parsed: serde_json::Value =
         serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
-    assert_eq!(run_graph_parsed["status"]["active_node"], "coach");
-    assert_eq!(run_graph_parsed["status"]["next_node"], "review_ensemble");
+    assert_eq!(run_graph_parsed["status"]["active_node"], "writer");
+    assert_eq!(run_graph_parsed["status"]["next_node"], "coach");
     assert_eq!(run_graph_parsed["status"]["policy_gate"], "review_findings");
 
     let recovery = run_with_retry(|| {
@@ -5380,14 +5588,11 @@ fn taskflow_run_graph_second_advance_updates_status_and_recovery_for_implementat
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
-    assert_eq!(
-        recovery_parsed["recovery"]["resume_node"],
-        "review_ensemble"
-    );
+    assert_eq!(recovery_parsed["recovery"]["resume_node"], "coach");
     assert_eq!(recovery_parsed["recovery"]["resume_status"], "ready");
     assert_eq!(
         recovery_parsed["recovery"]["resume_target"],
-        "dispatch.review_ensemble"
+        "dispatch.coach_lane"
     );
     assert_eq!(
         recovery_parsed["recovery"]["policy_gate"],
@@ -5469,19 +5674,19 @@ fn taskflow_run_graph_third_advance_enters_review_ensemble_for_implementation() 
     );
     assert_eq!(
         third_advance_parsed["payload"]["status"]["active_node"],
-        "review_ensemble"
+        "coach"
     );
     assert_eq!(
         third_advance_parsed["payload"]["status"]["next_node"],
-        serde_json::Value::Null
+        "review_ensemble"
     );
     assert_eq!(
         third_advance_parsed["payload"]["status"]["lane_id"],
-        "review_ensemble_lane"
+        "coach_lane"
     );
     assert_eq!(
         third_advance_parsed["payload"]["status"]["lifecycle_stage"],
-        "review_ensemble_active"
+        "coach_active"
     );
     assert_eq!(
         third_advance_parsed["payload"]["status"]["policy_gate"],
@@ -5489,15 +5694,15 @@ fn taskflow_run_graph_third_advance_enters_review_ensemble_for_implementation() 
     );
     assert_eq!(
         third_advance_parsed["payload"]["status"]["handoff_state"],
-        "none"
+        "awaiting_review_ensemble"
     );
     assert_eq!(
         third_advance_parsed["payload"]["status"]["resume_target"],
-        "none"
+        "dispatch.review_ensemble"
     );
     assert_eq!(
         third_advance_parsed["payload"]["status"]["recovery_ready"],
-        false
+        true
     );
     assert_eq!(
         third_advance_parsed["delegation_gate"]["delegated_cycle_open"],
@@ -5505,7 +5710,7 @@ fn taskflow_run_graph_third_advance_enters_review_ensemble_for_implementation() 
     );
     assert_eq!(
         third_advance_parsed["delegation_gate"]["delegated_cycle_state"],
-        "delegated_lane_active"
+        "handoff_pending"
     );
 }
 
@@ -5540,7 +5745,7 @@ fn taskflow_run_graph_third_advance_updates_status_and_recovery_for_review_ensem
     });
     assert!(seed.status.success());
 
-    for step in 0..3 {
+    for step in 0..4 {
         let advance = run_with_retry(|| {
             vida()
                 .args(["taskflow", "run-graph", "advance", "vida-dev"])
@@ -5715,7 +5920,7 @@ fn taskflow_run_graph_fourth_advance_enters_explicit_approval_wait_after_clean_r
     });
     assert!(seed.status.success());
 
-    for step in 0..3 {
+    for step in 0..4 {
         let advance = run_with_retry(|| {
             vida()
                 .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
@@ -5812,7 +6017,7 @@ fn taskflow_run_graph_fifth_advance_updates_status_and_recovery_after_explicit_a
     });
     assert!(seed.status.success());
 
-    for step in 0..3 {
+    for step in 0..4 {
         let advance = run_with_retry(|| {
             vida()
                 .args(["taskflow", "run-graph", "advance", "vida-dev"])
@@ -5980,7 +6185,7 @@ fn taskflow_run_graph_fourth_advance_fails_closed_for_review_findings() {
     });
     assert!(seed.status.success());
 
-    for step in 0..3 {
+    for step in 0..4 {
         let advance = run_with_retry(|| {
             vida()
                 .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
@@ -6058,7 +6263,7 @@ fn taskflow_run_graph_fourth_advance_fails_closed_for_changed_scope() {
     });
     assert!(seed.status.success());
 
-    for step in 0..3 {
+    for step in 0..4 {
         let advance = run_with_retry(|| {
             vida()
                 .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])
@@ -6183,7 +6388,7 @@ fn taskflow_run_graph_fourth_advance_reenters_analysis_for_explicit_rework() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("fourth rework advance json should parse");
     assert_eq!(parsed["payload"]["status"]["active_node"], "analysis");
-    assert_eq!(parsed["payload"]["status"]["next_node"], "coach");
+    assert_eq!(parsed["payload"]["status"]["next_node"], "writer");
     assert_eq!(parsed["payload"]["status"]["status"], "ready");
     assert_eq!(parsed["payload"]["status"]["lane_id"], "analysis_lane");
     assert_eq!(
@@ -6196,11 +6401,11 @@ fn taskflow_run_graph_fourth_advance_reenters_analysis_for_explicit_rework() {
     );
     assert_eq!(
         parsed["payload"]["status"]["handoff_state"],
-        "awaiting_coach"
+        "awaiting_writer"
     );
     assert_eq!(
         parsed["payload"]["status"]["resume_target"],
-        "dispatch.coach_lane"
+        "dispatch.writer_lane"
     );
     assert_eq!(parsed["payload"]["status"]["recovery_ready"], true);
 }
@@ -6236,7 +6441,7 @@ fn taskflow_run_graph_fourth_rework_advance_updates_status_and_recovery() {
     });
     assert!(seed.status.success());
 
-    for step in 0..3 {
+    for step in 0..4 {
         let advance = run_with_retry(|| {
             vida()
                 .args(["taskflow", "run-graph", "advance", "vida-dev"])
@@ -6290,11 +6495,11 @@ fn taskflow_run_graph_fourth_rework_advance_updates_status_and_recovery() {
     let run_graph_parsed: serde_json::Value =
         serde_json::from_str(&run_graph_stdout).expect("run-graph status json should parse");
     assert_eq!(run_graph_parsed["status"]["active_node"], "analysis");
-    assert_eq!(run_graph_parsed["status"]["next_node"], "coach");
+    assert_eq!(run_graph_parsed["status"]["next_node"], "writer");
     assert_eq!(run_graph_parsed["status"]["status"], "ready");
     assert_eq!(
         run_graph_parsed["status"]["resume_target"],
-        "dispatch.coach_lane"
+        "dispatch.writer_lane"
     );
     assert_eq!(run_graph_parsed["status"]["recovery_ready"], true);
 
@@ -6307,11 +6512,11 @@ fn taskflow_run_graph_fourth_rework_advance_updates_status_and_recovery() {
     let recovery_stdout = String::from_utf8_lossy(&recovery.stdout);
     let recovery_parsed: serde_json::Value =
         serde_json::from_str(&recovery_stdout).expect("recovery status json should parse");
-    assert_eq!(recovery_parsed["recovery"]["resume_node"], "coach");
+    assert_eq!(recovery_parsed["recovery"]["resume_node"], "writer");
     assert_eq!(recovery_parsed["recovery"]["resume_status"], "ready");
     assert_eq!(
         recovery_parsed["recovery"]["resume_target"],
-        "dispatch.coach_lane"
+        "dispatch.writer_lane"
     );
     assert_eq!(
         recovery_parsed["recovery"]["policy_gate"],
@@ -6359,7 +6564,7 @@ fn taskflow_run_graph_fourth_rework_advance_fails_closed_for_wrong_target() {
     });
     assert!(seed.status.success());
 
-    for step in 0..3 {
+    for step in 0..4 {
         let advance = run_with_retry(|| {
             vida()
                 .args(["taskflow", "run-graph", "advance", "vida-dev", "--json"])

@@ -64,6 +64,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("Canonical commands:");
             println!("  vida taskflow consume bundle [--json]");
             println!("  vida taskflow consume bundle check [--json]");
+            println!("  vida taskflow consume agent-system [--json]");
             println!("  vida taskflow consume final \"<request>\" --json");
             println!("  vida taskflow consume continue [--run-id <run-id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]");
             println!(
@@ -73,12 +74,14 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Failure modes:");
             println!("  `bundle` requires a booted authoritative state root and fails closed if runtime bundle surfaces are missing.");
+            println!("  `agent-system` fails closed when the activation bundle is unavailable.");
             println!("  Unsupported consume modes fail closed.");
             println!("  `final` fails closed when the runtime bundle is not ready or the bounded DocFlow evidence branch returns blocking results.");
             println!("  `continue` and `advance` fail closed when no lawful persisted dispatch receipt or packet can be resolved for the requested run.");
             println!();
             println!("Operator recipes:");
             println!("  Verify the active runtime bundle before closure packaging: vida taskflow consume bundle check --json");
+            println!("  Read one canonical carrier/role/score snapshot: vida taskflow consume agent-system --json");
             println!("  Materialize one routed intake packet: vida taskflow consume final \"<request>\" --json");
             println!("  Resume one persisted chain from the latest or selected packet: vida taskflow consume continue [--run-id <run-id>] --json");
             println!("  Let the bounded scheduler progress ready steps automatically: vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] --json");

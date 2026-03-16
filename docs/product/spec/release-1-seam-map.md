@@ -49,7 +49,7 @@ Status markers:
 |---|---|---|---|---|---|---|---|---|---|
 | Segment 1: Runtime trust handoff | `TaskFlow` Layer 9 | `DocFlow` Layers 7-8 | `TaskFlow` enters direct runtime consumption or final closure path | runtime state, compiled control/bundle state, active canonical inventory, explicit readiness branch activation | readiness verdict, blocking reasons, proof-ready documentation branch | ✅ | 🟡 | 🟡 | native Rust seam still converges while both runtime families are under active modernization |
 | Segment 2: Readiness/proof return | `DocFlow` Layers 7-8 | `TaskFlow` Layer 9 closure path | `DocFlow` finishes bounded readiness/proof evaluation for the requested closure scope | canonical inventory, validation state, relation/readiness artifacts, projection parity where declared | explicit pass/block verdict consumable by `TaskFlow`; no hidden shared state | ✅ | 🟡 | 🟡 | final `docflow-rs` Layer-8-ready seam is not yet closure-proven end-to-end |
-| Segment 3: Product closure admission | `TaskFlow` final closure authority | `Release 1` closure proof | `TaskFlow` receives green downstream readiness/proof and bounded restore/reconcile state | executable runtime state, downstream proof receipts, restore/reconcile discipline, operator closure evidence | Release-1 closure admission or fail-closed blocker | ✅ | ⚪ | ⚪ | Wave-5 hardening and closure-proof surfaces remain open |
+| Segment 3: Product closure admission | `TaskFlow` final closure authority | `Release 1` closure proof | `TaskFlow` receives green downstream readiness/proof and bounded restore/reconcile state | executable runtime state, downstream proof receipts, restore/reconcile discipline, operator closure evidence | Release-1 closure admission or fail-closed blocker | ✅ | ⚪ | ⚪ | final hardening and closure-proof surfaces remain open |
 
 Matrix reading rule:
 
@@ -63,11 +63,19 @@ Primary owner references:
 
 1. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
 2. `docs/product/spec/release-1-capability-matrix.md`
-3. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
-4. `docs/product/spec/docflow-v1-runtime-modernization-plan.md`
-5. `docs/product/spec/canonical-runtime-layer-matrix.md`
-6. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
-7. `docs/product/spec/release-1-wave-plan.md`
+3. `docs/product/spec/release-1-closure-contract.md`
+4. `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
+5. `docs/product/spec/release-1-control-metrics-and-gates.md`
+6. `docs/product/spec/release-1-canonical-artifact-schemas.md`
+7. `docs/product/spec/release-1-decision-tables.md`
+8. `docs/product/spec/release-1-state-machine-specs.md`
+9. `docs/product/spec/release-1-error-and-exception-taxonomy.md`
+10. `docs/product/spec/release-1-proof-scenario-catalog.md`
+11. `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`
+12. `docs/product/spec/docflow-v1-runtime-modernization-plan.md`
+13. `docs/product/spec/canonical-runtime-layer-matrix.md`
+14. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
+15. `docs/product/spec/release-1-plan.md`
 
 Owner rule:
 
@@ -81,14 +89,14 @@ The seam activates only when one of the following is true:
 
 1. `TaskFlow` enters Layer 9 direct runtime consumption,
 2. `TaskFlow` evaluates final runtime-trust closure for the bounded scope,
-3. Release-1 Wave 5 closure or hardening proof is being evaluated,
+3. Release-1 closure or hardening proof is being evaluated,
 4. a restore/reconcile flow requires renewed readiness/proof admission before trust is restored.
 
 Trigger rule:
 
 1. `DocFlow` is not a hidden always-on closure owner for every runtime step,
 2. the seam activates explicitly at the trust/closure boundary,
-3. before that boundary, earlier `TaskFlow` waves may proceed independently when they do not require the seam.
+3. before that boundary, earlier bounded `TaskFlow` slices may proceed independently when they do not require the seam.
 
 ## 6. Seam Input Contract
 
@@ -140,7 +148,8 @@ The seam fails closed when any of the following is true:
 2. `DocFlow` cannot produce an explicit readiness/proof verdict,
 3. required inventory/readiness/proof inputs are missing or mismatched,
 4. restore/reconcile state is not trustworthy enough for closure,
-5. operator-facing closure evidence is incomplete.
+5. operator-facing closure evidence is incomplete,
+6. required production-baseline controls are not proven for the bounded risky workflow classes in scope.
 
 Minimum blocker families:
 
@@ -149,6 +158,11 @@ Minimum blocker families:
 3. `missing_inventory_or_projection_evidence`
 4. `restore_reconcile_not_green`
 5. `missing_closure_proof`
+6. `missing_trace_or_audit_evidence`
+7. `missing_tool_policy_or_approval_enforcement`
+8. `missing_retrieval_freshness_or_citation_contract`
+9. `missing_slo_failure_or_rollback_control`
+10. `missing_prompt_or_evaluation_release_gate`
 
 ## 10. Proof Surface
 
@@ -158,15 +172,23 @@ The seam is considered closure-ready only when bounded proof exists across all o
 2. `DocFlow` Layer-7 readiness proof,
 3. `DocFlow` Layer-8-ready seam proof sufficient for `TaskFlow` consumption,
 4. explicit seam verification that `TaskFlow` consumes `DocFlow` outputs rather than bypassing them,
-5. Release-1 Wave-5 closure proof.
+5. Release-1 final closure proof,
+6. trace/evidence proof for side-effecting or risky workflow classes,
+7. approval/policy proof for sensitive actions,
+8. citation/freshness proof for retrieval-grounded answer classes,
+9. rollback/failure-handling proof for production workflow classes.
 
 Current proof anchors:
 
 1. `docs/product/spec/release-1-capability-matrix.md`
 2. `docs/product/spec/canonical-runtime-layer-matrix.md`
 3. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
-4. `docs/process/vida1-development-conditions.md`
-5. bounded `proofcheck`, `readiness-check`, and runtime/operator proof surfaces named by the owner specs
+4. `docs/product/spec/release-1-closure-contract.md`
+5. `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
+6. `docs/product/spec/release-1-control-metrics-and-gates.md`
+7. `docs/product/spec/release-1-canonical-artifact-schemas.md`
+8. `docs/process/vida1-development-conditions.md`
+9. bounded `proofcheck`, `readiness-check`, and runtime/operator proof surfaces named by the owner specs
 
 ## 11. Closure Rule
 
@@ -177,7 +199,9 @@ Release 1 is not closure-ready unless all are true:
 3. `TaskFlow` can activate `DocFlow` at the trust/closure boundary,
 4. `DocFlow` can return explicit readiness/proof outputs,
 5. `TaskFlow` remains the final closure authority,
-6. Wave-5 hardening proofs are green enough to trust the full chain.
+6. final hardening proofs are green enough to trust the full chain,
+7. mandatory P0 production-baseline tracks are green enough for the workflow classes that Release 1 claims to support,
+8. any still-open P1 control track is explicitly bounded in scope and not silently assumed complete.
 
 -----
 artifact_path: product/spec/release-1-seam-map
@@ -188,5 +212,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-seam-map.md
 created_at: '2026-03-13T13:42:00+02:00'
-updated_at: '2026-03-13T09:20:47+02:00'
+updated_at: 2026-03-16T11:28:28.675452672Z
 changelog_ref: release-1-seam-map.changelog.jsonl

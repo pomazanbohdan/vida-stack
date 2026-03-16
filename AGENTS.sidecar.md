@@ -19,19 +19,21 @@ Purpose: provide the project docs map for the repository being developed on top 
    - `docs/product/index.md`
 3. Product spec map:
    - `docs/product/spec/current-spec-map.md`
-4. Project documentation system:
+4. Product spec provenance companion:
+   - `docs/product/spec/current-spec-provenance-map.md`
+5. Project documentation system:
    - `docs/product/spec/project-documentation-law.md`
-5. Documentation/product alignment matrix:
+6. Documentation/product alignment matrix:
    - `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
-6. Canonical runtime readiness law used by the project:
+7. Canonical runtime readiness law used by the project:
    - `docs/product/spec/canonical-runtime-readiness-law.md`
-7. Canonical runtime layer matrix:
+8. Canonical runtime layer matrix:
    - `docs/product/spec/canonical-runtime-layer-matrix.md`
-8. Documentation tooling map:
+9. Documentation tooling map:
    - `docs/process/documentation-tooling-map.md`
-9. Project agent-extension map:
+10. Project agent-extension map:
    - `docs/process/agent-extensions/README.md`
-10. Project-local TaskFlow runtime state and operator surfaces:
+11. Project-local TaskFlow runtime state and operator surfaces:
    - `.vida/data/state/`
    - `vida taskflow help`
 
@@ -102,6 +104,7 @@ Project-routing rule:
 16. Before bounded work begins, inspect the current available skill catalog and activate the minimal relevant skill set or make `no_applicable_skill` explicit.
 17. Use the canonical project packet-template and prompt-stack protocols rather than inventing packet structure or prompt-layer precedence ad hoc.
 18. Treat boot readiness as incomplete until the project boot-readiness validation protocol can be satisfied for the current session.
+19. Keep the live root bootstrap carrier `AGENTS.md` synchronized with `install/assets/AGENTS.scaffold.md`; when one changes, update the other in the same bounded change.
 
 -----
 artifact_path: project/repository/agents.sidecar
@@ -112,5 +115,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: '2026-03-15T09:05:34+02:00'
+updated_at: 2026-03-16T10:06:24.472459377Z
 changelog_ref: AGENTS.sidecar.changelog.jsonl

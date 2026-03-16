@@ -15,7 +15,7 @@ Product/spec inputs:
 3. `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 4. `docs/product/spec/release-build-packaging-law.md`
 5. `docs/product/spec/runtime-paths-and-derived-cache-model.md`
-6. `docs/product/spec/release-1-wave-plan.md`
+6. `docs/product/spec/release-1-plan.md`
 7. `docs/product/spec/project-activation-and-configurator-model.md`
 
 Research inputs:
@@ -314,5 +314,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/research/embedded-runtime-bootstrap-and-projection-research.md
 created_at: '2026-03-12T23:59:58+02:00'
-updated_at: '2026-03-12T23:59:58+02:00'
+updated_at: 2026-03-16T10:02:36.837669581Z
 changelog_ref: embedded-runtime-bootstrap-and-projection-research.changelog.jsonl

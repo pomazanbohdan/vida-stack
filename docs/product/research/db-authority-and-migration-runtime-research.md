@@ -11,7 +11,7 @@ How should VIDA turn embedded framework artifacts, project activation state, pro
 Product/spec inputs:
 
 1. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
-2. `docs/product/spec/release-1-wave-plan.md`
+2. `docs/product/spec/release-1-plan.md`
 3. `docs/product/spec/embedded-runtime-and-editable-projection-model.md`
 4. `docs/product/spec/runtime-paths-and-derived-cache-model.md`
 5. `docs/product/spec/project-activation-and-configurator-model.md`
@@ -286,5 +286,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/research/db-authority-and-migration-runtime-research.md
 created_at: '2026-03-12T23:59:40+02:00'
-updated_at: '2026-03-12T23:59:40+02:00'
+updated_at: 2026-03-16T10:02:36.821253383Z
 changelog_ref: db-authority-and-migration-runtime-research.changelog.jsonl

@@ -96,7 +96,7 @@ Read this map when:
 14. when one decision inside that design needs durable standalone recording, link a separate ADR rather than collapsing the whole change into one narrative document.
 15. use `vida taskflow bootstrap-spec "<request>" --json` as the preferred one-shot launcher surface when a design-first feature request must materialize the initial feature epic, spec-pack task, and canonical design-doc scaffold in one pass.
 16. `vida docflow check-file`, `check`, `fastcheck`, and `readiness-check` now fail closed when a canonical project-visible doc is missing its required owning-map registration or when `AGENTS.sidecar.md` omits required bootstrap-visible documentation pointers.
-17. use `vida docflow report-check --path <file>` when the bounded proof target is the required runtime reporting prefix shape (`Thinking mode`, `Requests|Tasks`, `Agents`) rather than markdown footer law.
+17. use `vida docflow report-check --path <file>` when the bounded proof target is the required runtime reporting prefix shape (`Thinking mode`, `Requests|Tasks`, `Agents`, `Reasoning summary`) rather than markdown footer law.
 18. when a documentation change creates or reroutes a canonical project-visible document surface, update the owning map/index and, when bootstrap-visible topology changed, update `docs/project-root-map.md` and `AGENTS.sidecar.md` in the same bounded change.
 
 ## Boundary Rule

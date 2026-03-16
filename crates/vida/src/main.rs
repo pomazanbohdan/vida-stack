@@ -41,6 +41,8 @@ const DEFAULT_AGENT_EXTENSION_PROFILES_YAML: &str =
     include_str!("../../../docs/process/agent-extensions/profiles.yaml");
 const DEFAULT_AGENT_EXTENSION_FLOWS_YAML: &str =
     include_str!("../../../docs/process/agent-extensions/flows.yaml");
+const DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_YAML: &str =
+    include_str!("../../../docs/process/agent-extensions/dispatch-aliases.yaml");
 const DEFAULT_RUNTIME_AGENT_EXTENSIONS_README: &str = r#"# Runtime Agent Extensions
 
 This directory holds the active runtime-owned agent-extension projections for the project.
@@ -56,6 +58,8 @@ const DEFAULT_AGENT_EXTENSION_ROLES_SIDECAR_YAML: &str = "version: 1\nroles: []\
 const DEFAULT_AGENT_EXTENSION_SKILLS_SIDECAR_YAML: &str = "version: 1\nskills: []\n";
 const DEFAULT_AGENT_EXTENSION_PROFILES_SIDECAR_YAML: &str = "version: 1\nprofiles: []\n";
 const DEFAULT_AGENT_EXTENSION_FLOWS_SIDECAR_YAML: &str = "version: 1\nflow_sets: []\n";
+const DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_SIDECAR_YAML: &str =
+    "version: 1\ndispatch_aliases: []\n";
 const PROJECT_ID_PLACEHOLDER: &str = "__PROJECT_ID__";
 const DOCS_ROOT_PLACEHOLDER: &str = "__DOCS_ROOT__";
 const PROCESS_ROOT_PLACEHOLDER: &str = "__PROCESS_ROOT__";
@@ -1874,7 +1878,7 @@ fn apply_host_cli_selection(project_root: &Path, cli_system: &str) -> Result<(),
     }
     let contents = fs::read_to_string(&config_path)
         .map_err(|error| format!("Failed to read {}: {error}", config_path.display()))?;
-    let updated = if contents.contains(HOST_CLI_PLACEHOLDER) {
+    let mut updated = if contents.contains(HOST_CLI_PLACEHOLDER) {
         contents.replace(HOST_CLI_PLACEHOLDER, cli_system)
     } else if contents.contains("host_environment:") && contents.contains("cli_system:") {
         let mut rewritten = String::new();
@@ -1895,8 +1899,34 @@ fn apply_host_cli_selection(project_root: &Path, cli_system: &str) -> Result<(),
             contents.trim_end()
         )
     };
+    if cli_system == "codex" {
+        updated = apply_agent_only_development_defaults(&updated);
+    }
     fs::write(&config_path, updated)
         .map_err(|error| format!("Failed to write {}: {error}", config_path.display()))
+}
+
+fn apply_agent_only_development_defaults(contents: &str) -> String {
+    let mut updated = contents.to_string();
+    updated =
+        set_yaml_bool_in_top_level_section(&updated, "protocol_activation", "agent_system", true);
+    updated = set_yaml_bool_in_top_level_section(
+        &updated,
+        "autonomous_execution",
+        "agent_only_development",
+        true,
+    );
+    updated = set_yaml_bool_in_top_level_section(&updated, "agent_system", "init_on_boot", true);
+    updated = set_yaml_scalar_in_top_level_section(&updated, "agent_system", "mode", "native");
+    updated = set_yaml_scalar_in_top_level_section(
+        &updated,
+        "agent_system",
+        "state_owner",
+        "orchestrator_only",
+    );
+    updated =
+        set_yaml_scalar_in_top_level_section(&updated, "agent_system", "max_parallel_agents", "4");
+    updated
 }
 
 fn materialize_host_cli_template(project_root: &Path, cli_system: &str) -> Result<(), String> {
@@ -1922,7 +1952,7 @@ fn materialize_host_cli_template(project_root: &Path, cli_system: &str) -> Resul
                 }
             };
             let codex_dispatch_aliases =
-                overlay_codex_dispatch_alias_catalog(&overlay, &codex_roles);
+                codex_dispatch_alias_catalog_for_root(&overlay, project_root, &codex_roles);
             if !codex_roles.is_empty() {
                 render_codex_template_from_catalog(
                     project_root,
@@ -2066,6 +2096,38 @@ fn resolve_project_activation_answers(
         documentation_language,
         todo_protocol_language,
     })
+}
+
+fn project_activator_supplied_required_input(input_id: &str, args: &ProjectActivatorArgs) -> bool {
+    match input_id {
+        "project_id" => {
+            trimmed_non_empty(args.project_id.as_deref()).is_some()
+                || trimmed_non_empty(args.project_name.as_deref()).is_some()
+        }
+        "language" => {
+            trimmed_non_empty(args.language.as_deref()).is_some()
+                || trimmed_non_empty(args.user_communication_language.as_deref()).is_some()
+                || trimmed_non_empty(args.reasoning_language.as_deref()).is_some()
+                || trimmed_non_empty(args.documentation_language.as_deref()).is_some()
+                || trimmed_non_empty(args.todo_protocol_language.as_deref()).is_some()
+        }
+        "host_cli_system" => trimmed_non_empty(args.host_cli_system.as_deref()).is_some(),
+        _ => false,
+    }
+}
+
+fn missing_required_activation_inputs(
+    view: &serde_json::Value,
+    args: &ProjectActivatorArgs,
+) -> Vec<String> {
+    view["interview"]["required_inputs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|input| input["id"].as_str())
+        .filter(|id| !project_activator_supplied_required_input(id, args))
+        .map(|id| id.to_string())
+        .collect()
 }
 
 fn apply_project_activation_answers(
@@ -2535,7 +2597,7 @@ Default feature-delivery flow:\n\n\
 }
 
 fn render_project_agent_system_doc() -> String {
-    "# Agent System\n\nProject activation owns host CLI agent-template selection and runtime admission.\n\n- default framework agent templates become available only after the selected host CLI template is materialized\n- the current supported host CLI system list is framework-owned; the current supported value is `codex`\n- Codex carrier-tier metadata is owned by `vida.config.yaml -> host_environment.codex.agents`\n- `vida.config.yaml -> host_environment.codex.dispatch_aliases` is the canonical internal alias registry and is not the primary project-visible agent model\n- `.codex/**` is the rendered host executor surface, not the owner of tier/rate/task-class policy\n- project activation materializes the carrier tiers into `.codex/config.toml` and `.codex/agents/*.toml`\n- runtime chooses the cheapest capable configured carrier tier that still satisfies the local score guard from `.vida/state/worker-strategy.json`\n- project-local agent extensions remain under `.vida/project/agent-extensions/`\n- research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists\n".to_string()
+    "# Agent System\n\nProject activation owns host CLI agent-template selection and runtime admission.\n\n- default framework agent templates become available only after the selected host CLI template is materialized\n- the current supported host CLI system list is framework-owned; the current supported value is `codex`\n- Codex carrier-tier metadata is owned by `vida.config.yaml -> host_environment.codex.agents`\n- dispatch aliases are owned by the configured registry path under `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` and are not the primary project-visible agent model\n- `.codex/**` is the rendered host executor surface, not the owner of tier/rate/task-class policy\n- project activation materializes the carrier tiers into `.codex/config.toml` and `.codex/agents/*.toml`\n- runtime chooses the cheapest capable configured carrier tier that still satisfies the local score guard from `.vida/state/worker-strategy.json`\n- project-local agent extensions remain under `.vida/project/agent-extensions/`\n- research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists\n".to_string()
 }
 
 fn render_project_doc_tooling_map() -> String {
@@ -2565,7 +2627,7 @@ fn render_project_research_readme() -> String {
 }
 
 fn render_project_codex_guide() -> String {
-    "# Codex Agent Configuration Guide\n\nThis project uses framework-materialized `.codex/**` as the local Codex runtime surface.\n\nSource-of-truth rule:\n\n- `vida.config.yaml -> host_environment.codex.agents` owns carrier-tier metadata, rates, runtime-role fit, and task-class fit\n- `vida.config.yaml -> host_environment.codex.dispatch_aliases` is the canonical internal alias registry for executor-local overlays\n- `.codex/**` is the rendered executor surface used by Codex after activation\n- `.codex/config.toml` should expose the carrier tiers materialized from overlay\n\nCarrier rule:\n\n- the primary visible agent model is `junior`, `middle`, `senior`, `architect`\n- runtime role remains explicit activation state such as `worker`, `coach`, `verifier`, or `solution_architect`\n- internal alias ids may exist in overlay state, but they must not replace the carrier-tier model at the project surface\n\nWorking rule:\n\n1. The root session stays the orchestrator.\n2. Documentation/specification work should complete the bounded design document first.\n3. Before delegated implementation starts, open the feature epic/spec task in `vida taskflow` and close the spec task only after the design artifact is finalized.\n4. After a bounded packet exists, route research, specification, planning, implementation, review, and verification through the configured tier ladder instead of collapsing into root-session coding.\n5. Let runtime choose the cheapest capable configured carrier tier with a healthy local score from `.vida/state/worker-strategy.json` and pass the lawful runtime role explicitly.\n6. Use `.vida/project/agent-extensions/**` for project-local role and skill overlays; do not treat `.codex/**` as the owner of framework or product law.\n".to_string()
+    "# Codex Agent Configuration Guide\n\nThis project uses framework-materialized `.codex/**` as the local Codex runtime surface.\n\nSource-of-truth rule:\n\n- `vida.config.yaml -> host_environment.codex.agents` owns carrier-tier metadata, rates, runtime-role fit, and task-class fit\n- `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` owns the dispatch-alias registry for executor-local overlays\n- `.codex/**` is the rendered executor surface used by Codex after activation\n- `.codex/config.toml` should expose the carrier tiers materialized from overlay\n\nCarrier rule:\n\n- the primary visible agent model is `junior`, `middle`, `senior`, `architect`\n- runtime role remains explicit activation state such as `worker`, `coach`, `verifier`, or `solution_architect`\n- internal alias ids may exist in registry state, but they must not replace the carrier-tier model at the project surface\n\nWorking rule:\n\n1. The root session stays the orchestrator.\n2. Documentation/specification work should complete the bounded design document first.\n3. Before delegated implementation starts, open the feature epic/spec task in `vida taskflow` and close the spec task only after the design artifact is finalized.\n4. After a bounded packet exists, route research, specification, planning, implementation, review, and verification through the configured tier ladder instead of collapsing into root-session coding.\n5. Let runtime choose the cheapest capable configured carrier tier with a healthy local score from `.vida/state/worker-strategy.json` and pass the lawful runtime role explicitly.\n6. Use `.vida/project/agent-extensions/**` for project-local role and skill overlays; do not treat `.codex/**` as the owner of framework or product law.\n".to_string()
 }
 
 fn runtime_agent_extensions_root(project_root: &Path) -> PathBuf {
@@ -2600,6 +2662,10 @@ fn write_runtime_agent_extension_projections(project_root: &Path) -> Result<(), 
     )?;
     write_file_if_missing(&root.join("flows.yaml"), DEFAULT_AGENT_EXTENSION_FLOWS_YAML)?;
     write_file_if_missing(
+        &root.join("dispatch-aliases.yaml"),
+        DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_YAML,
+    )?;
+    write_file_if_missing(
         &root.join("roles.sidecar.yaml"),
         DEFAULT_AGENT_EXTENSION_ROLES_SIDECAR_YAML,
     )?;
@@ -2614,6 +2680,10 @@ fn write_runtime_agent_extension_projections(project_root: &Path) -> Result<(), 
     write_file_if_missing(
         &root.join("flows.sidecar.yaml"),
         DEFAULT_AGENT_EXTENSION_FLOWS_SIDECAR_YAML,
+    )?;
+    write_file_if_missing(
+        &root.join("dispatch-aliases.sidecar.yaml"),
+        DEFAULT_AGENT_EXTENSION_DISPATCH_ALIASES_SIDECAR_YAML,
     )?;
 
     let receipt_path = project_root.join(".vida/receipts/agent-extensions-bootstrap.json");
@@ -2631,13 +2701,15 @@ fn write_runtime_agent_extension_projections(project_root: &Path) -> Result<(), 
                 ".vida/project/agent-extensions/roles.yaml",
                 ".vida/project/agent-extensions/skills.yaml",
                 ".vida/project/agent-extensions/profiles.yaml",
-                ".vida/project/agent-extensions/flows.yaml"
+                ".vida/project/agent-extensions/flows.yaml",
+                ".vida/project/agent-extensions/dispatch-aliases.yaml"
             ],
             "sidecar_projection_files": [
                 ".vida/project/agent-extensions/roles.sidecar.yaml",
                 ".vida/project/agent-extensions/skills.sidecar.yaml",
                 ".vida/project/agent-extensions/profiles.sidecar.yaml",
-                ".vida/project/agent-extensions/flows.sidecar.yaml"
+                ".vida/project/agent-extensions/flows.sidecar.yaml",
+                ".vida/project/agent-extensions/dispatch-aliases.sidecar.yaml"
             ],
             "source": "vida init default runtime projection bootstrap"
         });
@@ -2838,6 +2910,26 @@ fn taskflow_native_state_root(project_root: &Path) -> PathBuf {
     project_root.join(state_store::default_state_dir())
 }
 
+async fn open_task_store_for_native_bridge(
+    state_root: PathBuf,
+) -> Result<StateStore, StateStoreError> {
+    if state_root.exists() {
+        StateStore::open_existing(state_root).await
+    } else {
+        StateStore::open(state_root).await
+    }
+}
+
+fn is_datastore_lock_contention(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("database at")
+        && normalized.contains("lock")
+        && normalized.contains("locked")
+        || normalized.contains("problem with the datastore")
+            && normalized.contains("lock")
+            && normalized.contains("locked")
+}
+
 fn task_record_json(task: &TaskRecord) -> serde_json::Value {
     serde_json::to_value(task).expect("task record should serialize")
 }
@@ -2866,14 +2958,14 @@ fn run_task_store_native_fallback(
                 }
             }
             let tasks = block_on_state_store(async {
-                let store = StateStore::open(state_root.clone()).await?;
+                let store = open_task_store_for_native_bridge(state_root.clone()).await?;
                 store.list_tasks(status.as_deref(), include_all).await
             })?;
             Ok(serde_json::to_value(tasks).expect("task list should serialize"))
         }
         [subcommand, task_id] if subcommand == "show" => {
             match block_on_state_store(async {
-                let store = StateStore::open(state_root.clone()).await?;
+                let store = open_task_store_for_native_bridge(state_root.clone()).await?;
                 store.show_task(task_id).await
             }) {
                 Ok(task) => Ok(task_record_json(&task)),
@@ -2887,14 +2979,14 @@ fn run_task_store_native_fallback(
         }
         [subcommand] if subcommand == "ready" => {
             let tasks = block_on_state_store(async {
-                let store = StateStore::open(state_root.clone()).await?;
+                let store = open_task_store_for_native_bridge(state_root.clone()).await?;
                 store.ready_tasks().await
             })?;
             Ok(serde_json::to_value(tasks).expect("ready task list should serialize"))
         }
         [subcommand, source] if subcommand == "import-jsonl" => {
             let summary = block_on_state_store(async {
-                let store = StateStore::open(state_root.clone()).await?;
+                let store = open_task_store_for_native_bridge(state_root.clone()).await?;
                 store.import_tasks_from_jsonl(Path::new(source)).await
             })?;
             Ok(serde_json::json!({
@@ -2907,7 +2999,7 @@ fn run_task_store_native_fallback(
         }
         [subcommand, target] if subcommand == "export-jsonl" => {
             let exported_count = block_on_state_store(async {
-                let store = StateStore::open(state_root.clone()).await?;
+                let store = open_task_store_for_native_bridge(state_root.clone()).await?;
                 store.export_tasks_to_jsonl(Path::new(target)).await
             })?;
             Ok(serde_json::json!({
@@ -2957,7 +3049,7 @@ fn run_task_store_native_fallback(
                 }
             }
             match block_on_state_store(async {
-                let store = StateStore::open(state_root.clone()).await?;
+                let store = open_task_store_for_native_bridge(state_root.clone()).await?;
                 store
                     .create_task(
                         task_id,
@@ -3027,7 +3119,7 @@ fn run_task_store_native_fallback(
                 }
             }
             match block_on_state_store(async {
-                let store = StateStore::open(state_root.clone()).await?;
+                let store = open_task_store_for_native_bridge(state_root.clone()).await?;
                 store
                     .update_task(
                         task_id,
@@ -3051,7 +3143,7 @@ fn run_task_store_native_fallback(
         }
         [subcommand, task_id, flag, reason] if subcommand == "close" && flag == "--reason" => {
             match block_on_state_store(async {
-                let store = StateStore::open(state_root.clone()).await?;
+                let store = open_task_store_for_native_bridge(state_root.clone()).await?;
                 store.close_task(task_id, reason).await
             }) {
                 Ok(task) => Ok(serde_json::json!({
@@ -3074,6 +3166,18 @@ fn run_task_store_helper(
     project_root: &Path,
     args: &[String],
 ) -> Result<serde_json::Value, String> {
+    const MAX_ATTEMPTS: usize = 8;
+    let mut delay_ms = 25u64;
+    for attempt in 1..=MAX_ATTEMPTS {
+        match run_task_store_native_fallback(project_root, args) {
+            Ok(value) => return Ok(value),
+            Err(error) if attempt < MAX_ATTEMPTS && is_datastore_lock_contention(&error) => {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                delay_ms = (delay_ms * 2).min(400);
+            }
+            Err(error) => return Err(error),
+        }
+    }
     run_task_store_native_fallback(project_root, args)
 }
 
@@ -3488,9 +3592,12 @@ fn execute_taskflow_bootstrap_spec_with_store(
             "registered_in": [DEFAULT_PROJECT_PRODUCT_SPEC_README],
         },
         "next": {
+            "plan_note": "publish a concise execution plan before mutating the design document or dispatching write-producing work",
             "finalize_command": tracked["docflow"]["finalize_command"].clone(),
             "check_command": tracked["docflow"]["check_command"].clone(),
             "close_spec_task_command": tracked["spec_task"]["close_command"].clone(),
+            "work_pool_create_command": tracked["work_pool_task"]["create_command"].clone(),
+            "dev_task_create_command": tracked["dev_task"]["create_command"].clone(),
         },
         "receipt_path": receipt_path,
         "changed_files": changed_files,
@@ -3876,7 +3983,7 @@ fn build_host_agent_status_summary(project_root: &Path) -> Option<serde_json::Va
                 );
             }
             let overlay_dispatch_aliases =
-                overlay_codex_dispatch_alias_catalog(&overlay, &codex_roles);
+                codex_dispatch_alias_catalog_for_root(&overlay, project_root, &codex_roles);
 
             Some(serde_json::json!({
                 "host_cli_system": "codex",
@@ -4479,6 +4586,24 @@ async fn run_taskflow_bootstrap_spec(args: &[String]) -> ExitCode {
             "receipt path",
             payload["receipt_path"].as_str().unwrap_or(""),
         );
+        if let Some(note) = payload["next"]["plan_note"].as_str() {
+            print_surface_line(RenderMode::Plain, "first step", note);
+        }
+        if let Some(command) = payload["next"]["finalize_command"].as_str() {
+            print_surface_line(RenderMode::Plain, "finalize design", command);
+        }
+        if let Some(command) = payload["next"]["check_command"].as_str() {
+            print_surface_line(RenderMode::Plain, "check design", command);
+        }
+        if let Some(command) = payload["next"]["close_spec_task_command"].as_str() {
+            print_surface_line(RenderMode::Plain, "close spec task", command);
+        }
+        if let Some(command) = payload["next"]["work_pool_create_command"].as_str() {
+            print_surface_line(RenderMode::Plain, "next work-pool command", command);
+        }
+        if let Some(command) = payload["next"]["dev_task_create_command"].as_str() {
+            print_surface_line(RenderMode::Plain, "next dev command", command);
+        }
     }
 
     ExitCode::SUCCESS
@@ -4487,7 +4612,11 @@ async fn run_taskflow_bootstrap_spec(args: &[String]) -> ExitCode {
 pub(crate) fn proxy_state_dir() -> PathBuf {
     std::env::var_os("VIDA_STATE_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(state_store::default_state_dir)
+        .unwrap_or_else(|| {
+            resolve_runtime_project_root()
+                .map(|project_root| taskflow_native_state_root(&project_root))
+                .unwrap_or_else(|_| state_store::default_state_dir())
+        })
 }
 
 pub(crate) async fn open_existing_state_store_with_retry(
@@ -5144,7 +5273,9 @@ async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
     if matches!(args.args.first().map(String::as_str), Some("consume")) {
         if matches!(
             args.args.get(1).map(String::as_str),
-            None | Some("bundle" | "final" | "continue" | "advance" | "--help" | "-h")
+            None | Some(
+                "bundle" | "agent-system" | "final" | "continue" | "advance" | "--help" | "-h"
+            )
         ) {
             return run_taskflow_consume(&args.args).await;
         }
@@ -5203,7 +5334,16 @@ fn run_docflow_proxy(args: ProxyArgs) -> ExitCode {
 
     match DocflowCli::try_parse_from(argv.clone()) {
         Ok(_cli) => {
-            let project_root = resolve_repo_root().unwrap_or_else(|_| repo_runtime_root());
+            let project_root = match resolve_repo_root() {
+                Ok(project_root) => project_root,
+                Err(_) => match std::env::current_dir() {
+                    Ok(current_dir) => current_dir,
+                    Err(error) => {
+                        eprintln!("Failed to resolve current directory: {error}");
+                        return ExitCode::from(1);
+                    }
+                },
+            };
             match run_docflow_cli_command(&project_root, &args.args) {
                 Ok(output) => println!("{output}"),
                 Err(error) => {
@@ -5412,6 +5552,69 @@ async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                                 "execution posture",
                                 "after the bounded design document is ready, delegate normal write-producing work through the configured development team instead of collapsing directly into root-session coding",
                             );
+                            if let Some(rule) = init_view["project_activation"]
+                                ["normal_work_defaults"]["execution_carrier_model"]
+                                ["selection_rule"]
+                                .as_str()
+                            {
+                                print_surface_line(
+                                    RenderMode::Plain,
+                                    "agent model",
+                                    "agent=execution carrier; role=runtime activation state",
+                                );
+                                print_surface_line(RenderMode::Plain, "carrier selection", rule);
+                            }
+                            if let Some(command) = init_view["project_activation"]
+                                ["normal_work_defaults"]["execution_carrier_model"]
+                                ["inspect_commands"]["snapshot"]
+                                .as_str()
+                            {
+                                print_surface_line(
+                                    RenderMode::Plain,
+                                    "agent snapshot cmd",
+                                    command,
+                                );
+                            }
+                            if let Some(command) = init_view["project_activation"]
+                                ["normal_work_defaults"]["execution_carrier_model"]
+                                ["inspect_commands"]["carrier_catalog"]
+                                .as_str()
+                            {
+                                print_surface_line(
+                                    RenderMode::Plain,
+                                    "carrier catalog cmd",
+                                    command,
+                                );
+                            }
+                            if let Some(command) = init_view["project_activation"]
+                                ["normal_work_defaults"]["execution_carrier_model"]
+                                ["inspect_commands"]["runtime_roles"]
+                                .as_str()
+                            {
+                                print_surface_line(RenderMode::Plain, "runtime roles cmd", command);
+                            }
+                            if let Some(command) = init_view["project_activation"]
+                                ["normal_work_defaults"]["execution_carrier_model"]
+                                ["inspect_commands"]["scores"]
+                                .as_str()
+                            {
+                                print_surface_line(
+                                    RenderMode::Plain,
+                                    "carrier scores cmd",
+                                    command,
+                                );
+                            }
+                            if let Some(command) = init_view["project_activation"]
+                                ["normal_work_defaults"]["execution_carrier_model"]
+                                ["inspect_commands"]["selection_preview"]
+                                .as_str()
+                            {
+                                print_surface_line(
+                                    RenderMode::Plain,
+                                    "selection preview cmd",
+                                    command,
+                                );
+                            }
                         }
                     }
                     ExitCode::SUCCESS
@@ -5456,7 +5659,97 @@ async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
-            let selection = if let Some(role) = args.role.clone() {
+            let packet_arg_count = usize::from(args.dispatch_packet.is_some())
+                + usize::from(args.downstream_packet.is_some());
+            if packet_arg_count > 1 {
+                eprintln!(
+                    "Agent init accepts at most one packet source: use either `--dispatch-packet` or `--downstream-packet`."
+                );
+                return ExitCode::from(2);
+            }
+            let selection = if let Some(packet_path) = args.dispatch_packet.as_deref() {
+                if args.role.is_some() || args.request_text.is_some() {
+                    eprintln!(
+                        "Agent init packet activation is exclusive: do not combine packet flags with `--role` or request text."
+                    );
+                    return ExitCode::from(2);
+                }
+                let packet = match read_dispatch_packet(packet_path) {
+                    Ok(packet) => packet,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+                let selected_role = packet
+                    .get("activation_runtime_role")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| {
+                        packet
+                            .get("role_selection")
+                            .and_then(|value| value.get("selected_role"))
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("unknown");
+                if selected_role == "orchestrator" || selected_role == "unknown" {
+                    eprintln!(
+                        "Dispatch packet activation requires a non-orchestrator runtime role."
+                    );
+                    return ExitCode::from(2);
+                }
+                serde_json::json!({
+                    "mode": "dispatch_packet",
+                    "selected_role": selected_role,
+                    "request_text": packet.get("request_text").and_then(serde_json::Value::as_str).unwrap_or_default(),
+                    "dispatch_target": packet.get("dispatch_target").and_then(serde_json::Value::as_str).unwrap_or_default(),
+                    "dispatch_packet_path": packet_path,
+                    "packet_kind": packet.get("packet_kind").cloned().unwrap_or(serde_json::Value::Null),
+                    "packet_template_kind": packet.get("packet_template_kind").cloned().unwrap_or(serde_json::Value::Null),
+                    "packet": packet,
+                })
+            } else if let Some(packet_path) = args.downstream_packet.as_deref() {
+                if args.role.is_some() || args.request_text.is_some() {
+                    eprintln!(
+                        "Agent init packet activation is exclusive: do not combine packet flags with `--role` or request text."
+                    );
+                    return ExitCode::from(2);
+                }
+                let packet = match read_dispatch_packet(packet_path) {
+                    Ok(packet) => packet,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+                let selected_role = packet
+                    .get("activation_runtime_role")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| {
+                        packet
+                            .get("role_selection")
+                            .and_then(|value| value.get("selected_role"))
+                            .and_then(serde_json::Value::as_str)
+                    })
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("unknown");
+                if selected_role == "orchestrator" || selected_role == "unknown" {
+                    eprintln!(
+                        "Downstream packet activation requires a non-orchestrator runtime role."
+                    );
+                    return ExitCode::from(2);
+                }
+                serde_json::json!({
+                    "mode": "downstream_packet",
+                    "selected_role": selected_role,
+                    "request_text": packet.get("request_text").and_then(serde_json::Value::as_str).unwrap_or_default(),
+                    "dispatch_target": packet.get("downstream_dispatch_target").and_then(serde_json::Value::as_str).unwrap_or_default(),
+                    "downstream_packet_path": packet_path,
+                    "packet_kind": packet.get("packet_kind").cloned().unwrap_or(serde_json::Value::Null),
+                    "packet_template_kind": packet.get("packet_template_kind").cloned().unwrap_or(serde_json::Value::Null),
+                    "packet": packet,
+                })
+            } else if let Some(role) = args.role.clone() {
                 let compiled_bundle = &bundle.activation_bundle;
                 if !role_exists_in_lane_bundle(compiled_bundle, &role) || role == "orchestrator" {
                     eprintln!(
@@ -5536,6 +5829,15 @@ async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     "selected role",
                     selection["selected_role"].as_str().unwrap_or("unknown"),
                 );
+                if let Some(mode) = selection["mode"].as_str() {
+                    print_surface_line(RenderMode::Plain, "mode", mode);
+                }
+                if let Some(path) = selection["dispatch_packet_path"].as_str() {
+                    print_surface_line(RenderMode::Plain, "dispatch packet", path);
+                }
+                if let Some(path) = selection["downstream_packet_path"].as_str() {
+                    print_surface_line(RenderMode::Plain, "downstream packet", path);
+                }
                 if let Some(fallback_surface) = init_view["source_mode_fallback_surface"].as_str() {
                     print_surface_line(RenderMode::Plain, "fallback surface", fallback_surface);
                 }
@@ -5899,7 +6201,7 @@ fn file_contains_placeholder(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn build_project_activator_view(project_root: &Path) -> serde_json::Value {
+pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::Value {
     let agents_md = project_root.join("AGENTS.md");
     let agents_sidecar = project_root.join("AGENTS.sidecar.md");
     let codex_tree = project_root.join(".codex");
@@ -5928,12 +6230,16 @@ fn build_project_activator_view(project_root: &Path) -> serde_json::Value {
     let runtime_agent_extension_skills = runtime_agent_extensions.join("skills.yaml");
     let runtime_agent_extension_profiles = runtime_agent_extensions.join("profiles.yaml");
     let runtime_agent_extension_flows = runtime_agent_extensions.join("flows.yaml");
+    let runtime_agent_extension_dispatch_aliases =
+        runtime_agent_extensions.join("dispatch-aliases.yaml");
     let runtime_agent_extension_role_sidecar = runtime_agent_extensions.join("roles.sidecar.yaml");
     let runtime_agent_extension_skill_sidecar =
         runtime_agent_extensions.join("skills.sidecar.yaml");
     let runtime_agent_extension_profile_sidecar =
         runtime_agent_extensions.join("profiles.sidecar.yaml");
     let runtime_agent_extension_flow_sidecar = runtime_agent_extensions.join("flows.sidecar.yaml");
+    let runtime_agent_extension_dispatch_alias_sidecar =
+        runtime_agent_extensions.join("dispatch-aliases.sidecar.yaml");
 
     let sidecar_missing = !agents_sidecar.is_file();
     let sidecar_has_placeholders =
@@ -6057,10 +6363,12 @@ fn build_project_activator_view(project_root: &Path) -> serde_json::Value {
         &runtime_agent_extension_skills,
         &runtime_agent_extension_profiles,
         &runtime_agent_extension_flows,
+        &runtime_agent_extension_dispatch_aliases,
         &runtime_agent_extension_role_sidecar,
         &runtime_agent_extension_skill_sidecar,
         &runtime_agent_extension_profile_sidecar,
         &runtime_agent_extension_flow_sidecar,
+        &runtime_agent_extension_dispatch_alias_sidecar,
     ]
     .iter()
     .any(|path| !path.exists());
@@ -6147,14 +6455,14 @@ fn build_project_activator_view(project_root: &Path) -> serde_json::Value {
     }
     let mut one_shot_example_parts = vec!["vida project-activator".to_string()];
     if project_id_missing {
-        one_shot_example_parts.push(format!("--project-id {}", inferred_project_id));
+        one_shot_example_parts.push("--project-id <project-id>".to_string());
     }
     if user_communication_language_missing
         || reasoning_language_missing
         || documentation_language_missing
         || todo_protocol_language_missing
     {
-        one_shot_example_parts.push("--language english".to_string());
+        one_shot_example_parts.push("--language <language>".to_string());
     }
     if host_cli_selection_required {
         one_shot_example_parts.push("--host-cli-system codex".to_string());
@@ -6261,10 +6569,12 @@ fn build_project_activator_view(project_root: &Path) -> serde_json::Value {
             "skills_registry": runtime_agent_extension_skills.is_file(),
             "profiles_registry": runtime_agent_extension_profiles.is_file(),
             "flows_registry": runtime_agent_extension_flows.is_file(),
+            "dispatch_aliases_registry": runtime_agent_extension_dispatch_aliases.is_file(),
             "roles_sidecar": runtime_agent_extension_role_sidecar.is_file(),
             "skills_sidecar": runtime_agent_extension_skill_sidecar.is_file(),
             "profiles_sidecar": runtime_agent_extension_profile_sidecar.is_file(),
             "flows_sidecar": runtime_agent_extension_flow_sidecar.is_file(),
+            "dispatch_aliases_sidecar": runtime_agent_extension_dispatch_alias_sidecar.is_file(),
             "bundle_ready": agent_extensions_ready,
             "validation_error": agent_extension_validation_error,
         },
@@ -6311,6 +6621,21 @@ fn build_project_activator_view(project_root: &Path) -> serde_json::Value {
                 "strategy_store": CODEX_WORKER_STRATEGY_STATE,
                 "scorecards_store": CODEX_WORKER_SCORECARDS_STATE
             },
+            "execution_carrier_model": {
+                "agent_identity": "execution_carrier",
+                "runtime_role_identity": "activation_state",
+                "selection_rule": "capability_first_then_score_guard_then_cheapest_tier",
+                "carrier_catalog_owner": "vida.config.yaml -> host_environment.codex.agents",
+                "strategy_store": CODEX_WORKER_STRATEGY_STATE,
+                "scorecards_store": CODEX_WORKER_SCORECARDS_STATE,
+                "inspect_commands": {
+                    "snapshot": "vida taskflow consume agent-system --json",
+                    "carrier_catalog": "vida taskflow consume agent-system --json | jq '.snapshot.carriers'",
+                    "runtime_roles": "vida taskflow consume agent-system --json | jq '.snapshot.runtime_roles'",
+                    "scores": "vida taskflow consume agent-system --json | jq '.snapshot.worker_strategy.agents'",
+                    "selection_preview": "vida taskflow consume final \"<request>\" --json | jq '.payload.role_selection.execution_plan.codex_runtime_assignment'"
+                }
+            },
             "recommended_flow": [
                 "create or update one bounded design document before code execution when the request asks for research/specification/planning and implementation together",
                 "open one feature epic and one spec-pack task in vida taskflow before delegated implementation begins",
@@ -6347,7 +6672,7 @@ fn build_project_activator_view(project_root: &Path) -> serde_json::Value {
     })
 }
 
-fn merge_project_activation_into_init_view(
+pub(crate) fn merge_project_activation_into_init_view(
     mut init_view: serde_json::Value,
     project_activation_view: &serde_json::Value,
 ) -> serde_json::Value {
@@ -6398,6 +6723,48 @@ async fn run_project_activator(args: ProjectActivatorArgs) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let pre_activation_view = build_project_activator_view(&project_root);
+    let activation_pending = pre_activation_view["activation_pending"]
+        .as_bool()
+        .unwrap_or(true);
+    let activation_mutation_requested = args.host_cli_system.is_some()
+        || args.project_id.is_some()
+        || args.project_name.is_some()
+        || args.language.is_some()
+        || args.user_communication_language.is_some()
+        || args.reasoning_language.is_some()
+        || args.documentation_language.is_some()
+        || args.todo_protocol_language.is_some();
+    if activation_pending && activation_mutation_requested {
+        let missing_inputs = missing_required_activation_inputs(&pre_activation_view, &args);
+        if !missing_inputs.is_empty() {
+            let missing_flags = pre_activation_view["interview"]["required_inputs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|input| {
+                    input["id"]
+                        .as_str()
+                        .map(|id| missing_inputs.iter().any(|missing| missing == id))
+                        .unwrap_or(false)
+                })
+                .filter_map(|input| input["flag"].as_str())
+                .collect::<Vec<_>>();
+            let mut message = format!(
+                "Project activation is still pending and fails closed until the bounded activation interview is complete. Missing required inputs: {}.",
+                if missing_flags.is_empty() {
+                    missing_inputs.join(", ")
+                } else {
+                    missing_flags.join(", ")
+                }
+            );
+            if let Some(example) = pre_activation_view["interview"]["one_shot_example"].as_str() {
+                message.push_str(&format!(" Use `{example}`."));
+            }
+            eprintln!("{message}");
+            return ExitCode::from(2);
+        }
+    }
     let mut host_cli_activated = None;
     let mut changed_files = Vec::new();
     let activation_answers = resolve_project_activation_answers(&project_root, &args);
@@ -8286,6 +8653,103 @@ fn overlay_codex_dispatch_alias_catalog(
     rows
 }
 
+fn materialize_codex_dispatch_alias_catalog(
+    configured_aliases: &[serde_json::Value],
+    agent_catalog: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
+    let carrier_rows = agent_catalog
+        .iter()
+        .filter_map(|row| Some((row["tier"].as_str()?.to_string(), row.clone())))
+        .collect::<HashMap<_, _>>();
+    let mut rows = configured_aliases
+        .iter()
+        .filter_map(|value| {
+            let lane_id = value["alias_id"].as_str()?.trim();
+            let carrier_tier = value["carrier_tier"].as_str()?.trim();
+            let mut row = carrier_rows.get(carrier_tier)?.clone();
+            let runtime_role = json_string(value.get("runtime_role"))
+                .or_else(|| json_string(value.get("default_runtime_role")))
+                .unwrap_or_default();
+            let runtime_roles = value["runtime_roles"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let task_classes = value["task_classes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            row["role_id"] = serde_json::Value::String(lane_id.to_string());
+            row["description"] = value
+                .get("description")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            row["config_file"] = serde_json::Value::String(format!("agents/{lane_id}.toml"));
+            row["default_runtime_role"] = serde_json::Value::String(runtime_role.clone());
+            row["runtime_roles"] = serde_json::json!(if runtime_roles.is_empty() && !runtime_role.is_empty() {
+                vec![runtime_role]
+            } else {
+                runtime_roles
+            });
+            row["task_classes"] = serde_json::json!(task_classes);
+            row["template_role_id"] = serde_json::Value::String(carrier_tier.to_string());
+            row["carrier_tier"] = row["tier"].clone();
+            row["developer_instructions"] = value
+                .get("developer_instructions")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            Some(row)
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        left["role_id"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["role_id"].as_str().unwrap_or_default())
+    });
+    rows
+}
+
+fn codex_dispatch_alias_catalog_for_root(
+    config: &serde_yaml::Value,
+    root: &Path,
+    agent_catalog: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
+    let require_registry_files = yaml_bool(
+        yaml_lookup(
+            config,
+            &["agent_extensions", "validation", "require_registry_files"],
+        ),
+        false,
+    );
+    let configured_path = yaml_string(yaml_lookup(
+        config,
+        &["agent_extensions", "registries", "dispatch_aliases"],
+    ));
+    if let Some(path) = configured_path.as_deref() {
+        if let Ok(registry) = load_registry_projection(
+            root,
+            Some(path),
+            "dispatch_aliases",
+            "alias_id",
+            "dispatch_aliases",
+            require_registry_files,
+        ) {
+            let rows =
+                registry_rows_by_key(&registry, "dispatch_aliases", "alias_id", &[]);
+            if !rows.is_empty() {
+                return materialize_codex_dispatch_alias_catalog(&rows, agent_catalog);
+            }
+        }
+    }
+    overlay_codex_dispatch_alias_catalog(config, agent_catalog)
+}
+
 fn registry_rows_by_key(
     registry: &serde_yaml::Value,
     key: &str,
@@ -8973,6 +9437,517 @@ fn role_supports_codex_task_class(role: &serde_json::Value, task_class: &str) ->
     task_classes.is_empty() || task_classes.iter().any(|value| *value == task_class)
 }
 
+fn codex_dispatch_alias_row<'a>(
+    compiled_bundle: &'a serde_json::Value,
+    alias_id: &str,
+) -> Option<&'a serde_json::Value> {
+    compiled_bundle["codex_multi_agent"]["dispatch_aliases"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["role_id"].as_str() == Some(alias_id))
+}
+
+fn build_codex_runtime_assignment_from_dispatch_alias(
+    compiled_bundle: &serde_json::Value,
+    alias_id: &str,
+    fallback_task_class: &str,
+) -> serde_json::Value {
+    let Some(alias) = codex_dispatch_alias_row(compiled_bundle, alias_id) else {
+        return serde_json::json!({
+            "enabled": false,
+            "reason": "dispatch_alias_missing",
+            "dispatch_alias_id": alias_id,
+            "task_class": fallback_task_class,
+        });
+    };
+    let runtime_role = json_string(alias.get("default_runtime_role"))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| codex_runtime_role_for_task_class(fallback_task_class).to_string());
+    let task_class = alias["task_classes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .find(|value| !value.is_empty())
+        .unwrap_or(fallback_task_class)
+        .to_string();
+    let mut assignment = build_codex_runtime_assignment_from_resolved_constraints(
+        compiled_bundle,
+        alias_id,
+        &task_class,
+        &runtime_role,
+    );
+    if let Some(map) = assignment.as_object_mut() {
+        map.insert(
+            "dispatch_alias_id".to_string(),
+            serde_json::Value::String(alias_id.to_string()),
+        );
+        map.insert(
+            "dispatch_alias_runtime_role".to_string(),
+            serde_json::Value::String(runtime_role),
+        );
+        map.insert(
+            "dispatch_alias_task_class".to_string(),
+            serde_json::Value::String(task_class),
+        );
+        map.insert(
+            "dispatch_alias_description".to_string(),
+            alias.get("description")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        );
+        map.insert(
+            "preferred_carrier_tier".to_string(),
+            alias.get("carrier_tier")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        );
+        map.insert(
+            "developer_instructions".to_string(),
+            alias.get("developer_instructions")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        );
+    }
+    assignment
+}
+
+fn resolve_dispatch_alias_id(
+    compiled_bundle: &serde_json::Value,
+    preferred_alias_id: &str,
+    task_class: &str,
+) -> Option<String> {
+    if !preferred_alias_id.is_empty()
+        && codex_dispatch_alias_row(compiled_bundle, preferred_alias_id).is_some()
+    {
+        return Some(preferred_alias_id.to_string());
+    }
+    let runtime_role = codex_runtime_role_for_task_class(task_class);
+    compiled_bundle["codex_multi_agent"]["dispatch_aliases"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|alias| {
+            role_supports_runtime_role(alias, runtime_role)
+                && role_supports_codex_task_class(alias, task_class)
+        })
+        .and_then(|alias| alias["role_id"].as_str().map(str::to_string))
+}
+
+fn request_requires_execution_preparation(
+    compiled_bundle: &serde_json::Value,
+    selection: &RuntimeConsumptionLaneSelection,
+) -> bool {
+    let selected_flow = compiled_bundle["default_flow_set"]
+        .as_str()
+        .and_then(|flow_id| compiled_bundle["all_project_flow_catalog"].get(flow_id));
+    if let Some(policy) = selected_flow.and_then(|flow| flow.get("execution_preparation_policy")) {
+        let mode = policy["mode"].as_str().unwrap_or_default();
+        let gated_task_classes = policy["task_classes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>();
+        let task_class = selection.execution_plan["codex_runtime_assignment"]["task_class"]
+            .as_str()
+            .unwrap_or("implementation");
+        let validation_gate = if json_bool(policy.get("honor_validation_gate"), false) {
+            json_bool(
+                compiled_bundle["autonomous_execution"]
+                    .get("validation_report_required_before_implementation"),
+                false,
+            )
+        } else {
+            false
+        };
+        match mode {
+            "always" => return true,
+            "never" => return false,
+            "required_for_task_classes" => {
+                return gated_task_classes.iter().any(|value| *value == task_class);
+            }
+            "required_for_code_shaped_work" => {
+                if gated_task_classes.iter().any(|value| *value == task_class) {
+                    return validation_gate || task_class == "implementation";
+                }
+                return false;
+            }
+            _ => {}
+        }
+    }
+    let normalized_request = selection.request.to_lowercase();
+    let architecture_signals = contains_keywords(
+        &normalized_request,
+        &[
+            "architecture".to_string(),
+            "architect".to_string(),
+            "cross-cutting".to_string(),
+            "cross cutting".to_string(),
+            "migration".to_string(),
+            "refactor".to_string(),
+            "topology".to_string(),
+            "boundary".to_string(),
+            "cross-scope".to_string(),
+            "cross scope".to_string(),
+        ],
+    );
+    let write_signals = contains_keywords(
+        &normalized_request,
+        &[
+            "implement".to_string(),
+            "implementation".to_string(),
+            "write code".to_string(),
+            "write the code".to_string(),
+            "patch".to_string(),
+            "refactor".to_string(),
+            "build".to_string(),
+        ],
+    );
+    let task_class = json_string(
+        compiled_bundle["role_selection"]
+            .get("selected_task_class")
+            .or_else(|| selection.execution_plan["codex_runtime_assignment"].get("task_class")),
+    )
+    .unwrap_or_default();
+    let validation_gate = json_bool(
+        compiled_bundle["autonomous_execution"]
+            .get("validation_report_required_before_implementation"),
+        false,
+    );
+    task_class == "implementation"
+        && (validation_gate || architecture_signals.len() >= 1 || write_signals.len() >= 1)
+}
+
+fn legacy_development_flow_templates() -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({
+            "lane_id": "specification",
+            "dispatch_target": "specification",
+            "dispatch_alias": "development_specification",
+            "task_class": "specification",
+            "packet_template_kind": "delivery_task_packet",
+            "closure_class": "law",
+            "stage": "design_gate",
+            "inclusion_rule": "when_design_gate",
+            "completion_blocker": "pending_specification_evidence",
+        }),
+        serde_json::json!({
+            "lane_id": "execution_preparation",
+            "dispatch_target": "execution_preparation",
+            "dispatch_alias": "development_execution_preparation",
+            "task_class": "execution_preparation",
+            "packet_template_kind": "escalation_packet",
+            "closure_class": "refactor",
+            "stage": "execution",
+            "inclusion_rule": "when_execution_preparation_required",
+            "completion_blocker": "pending_execution_preparation_evidence",
+        }),
+        serde_json::json!({
+            "lane_id": "implementation",
+            "dispatch_target": "implementer",
+            "dispatch_alias": "development_implementer",
+            "task_class": "implementation",
+            "packet_template_kind": "delivery_task_packet",
+            "closure_class": "implementation",
+            "stage": "execution",
+            "inclusion_rule": "always",
+            "completion_blocker": "pending_implementation_evidence",
+        }),
+        serde_json::json!({
+            "lane_id": "coach",
+            "dispatch_target": "coach",
+            "dispatch_alias": "development_coach",
+            "task_class": "coach",
+            "packet_template_kind": "coach_review_packet",
+            "closure_class": "proof",
+            "stage": "execution",
+            "inclusion_rule": "when_flow_requires_coach",
+            "completion_blocker": "pending_review_clean_evidence",
+        }),
+        serde_json::json!({
+            "lane_id": "verification",
+            "dispatch_target": "verification",
+            "dispatch_alias": "development_verifier",
+            "task_class": "verification",
+            "packet_template_kind": "verifier_proof_packet",
+            "closure_class": "proof",
+            "stage": "execution",
+            "inclusion_rule": "when_flow_requires_verification",
+            "completion_blocker": "pending_verification_evidence",
+        }),
+    ]
+}
+
+fn resolved_development_flow_templates(
+    compiled_bundle: &serde_json::Value,
+) -> Vec<serde_json::Value> {
+    let flow_id = compiled_bundle["default_flow_set"]
+        .as_str()
+        .unwrap_or_default();
+    if let Some(flow) = compiled_bundle["all_project_flow_catalog"]
+        .get(flow_id)
+        .or_else(|| compiled_bundle["project_flow_catalog"].get(flow_id))
+    {
+        if flow["flow_class"].as_str() == Some("development") {
+            let templates = flow["lane_templates"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            if !templates.is_empty() {
+                return templates;
+            }
+        }
+    }
+    legacy_development_flow_templates()
+}
+
+fn lane_template_included(
+    lane_template: &serde_json::Value,
+    requires_design_gate: bool,
+    requires_execution_preparation: bool,
+) -> bool {
+    match lane_template["inclusion_rule"]
+        .as_str()
+        .unwrap_or("always")
+    {
+        "when_design_gate" => requires_design_gate,
+        "when_execution_preparation_required" => requires_execution_preparation,
+        "when_flow_requires_coach" => true,
+        "when_flow_requires_verification" => true,
+        _ => true,
+    }
+}
+
+fn build_resolved_development_dispatch_contract(
+    compiled_bundle: &serde_json::Value,
+    selection: &RuntimeConsumptionLaneSelection,
+    requires_design_gate: bool,
+) -> serde_json::Value {
+    let flow_id = compiled_bundle["default_flow_set"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let requires_execution_preparation =
+        request_requires_execution_preparation(compiled_bundle, selection);
+    let resolved_lanes = resolved_development_flow_templates(compiled_bundle)
+        .into_iter()
+        .filter(|lane| {
+            lane_template_included(lane, requires_design_gate, requires_execution_preparation)
+        })
+        .map(|lane_template| {
+            let preferred_dispatch_alias = lane_template["dispatch_alias"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let task_class = lane_template["task_class"]
+                .as_str()
+                .unwrap_or("implementation");
+            let dispatch_alias = resolve_dispatch_alias_id(
+                compiled_bundle,
+                &preferred_dispatch_alias,
+                task_class,
+            )
+            .unwrap_or_default();
+            let activation = if dispatch_alias.is_empty() {
+                serde_json::json!({
+                    "enabled": false,
+                    "reason": "dispatch_alias_missing_from_lane_template",
+                })
+            } else {
+                build_codex_runtime_assignment_from_dispatch_alias(
+                    compiled_bundle,
+                    &dispatch_alias,
+                    task_class,
+                )
+            };
+            serde_json::json!({
+                "lane_id": lane_template["lane_id"],
+                "dispatch_target": lane_template["dispatch_target"],
+                "dispatch_alias": dispatch_alias,
+                "task_class": task_class,
+                "runtime_role": activation["activation_runtime_role"],
+                "packet_template_kind": lane_template["packet_template_kind"],
+                "closure_class": lane_template["closure_class"],
+                "stage": lane_template["stage"],
+                "completion_blocker": lane_template["completion_blocker"],
+                "activation": activation,
+            })
+        })
+        .collect::<Vec<_>>();
+    let lane_sequence = resolved_lanes
+        .iter()
+        .filter_map(|lane| lane["dispatch_target"].as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    let execution_lane_sequence = resolved_lanes
+        .iter()
+        .filter(|lane| lane["stage"].as_str() != Some("design_gate"))
+        .filter_map(|lane| lane["dispatch_target"].as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    let lane_catalog = resolved_lanes.iter().fold(
+        serde_json::Map::new(),
+        |mut acc, lane| {
+            if let Some(dispatch_target) = lane["dispatch_target"].as_str() {
+                acc.insert(dispatch_target.to_string(), lane.clone());
+            }
+            acc
+        },
+    );
+    serde_json::json!({
+        "selected_flow_set": flow_id,
+        "execution_preparation_required": requires_execution_preparation,
+        "root_session_must_remain_orchestrator": true,
+        "packet_family_required": [
+            "delivery_task_packet",
+            "execution_block_packet",
+            "coach_review_packet",
+            "verifier_proof_packet",
+            "escalation_packet"
+        ],
+        "resolved_lanes": resolved_lanes,
+        "lane_sequence": lane_sequence,
+        "execution_lane_sequence": execution_lane_sequence,
+        "lane_catalog": lane_catalog,
+        "specification_activation": dispatch_contract_lane(
+            &serde_json::json!({"development_flow": {"dispatch_contract": {"lane_catalog": lane_catalog.clone()}}}),
+            "specification"
+        ).map(dispatch_contract_lane_activation).cloned().unwrap_or(serde_json::Value::Null),
+        "implementer_activation": dispatch_contract_lane(
+            &serde_json::json!({"development_flow": {"dispatch_contract": {"lane_catalog": lane_catalog.clone()}}}),
+            "implementer"
+        ).map(dispatch_contract_lane_activation).cloned().unwrap_or(serde_json::Value::Null),
+        "coach_activation": dispatch_contract_lane(
+            &serde_json::json!({"development_flow": {"dispatch_contract": {"lane_catalog": lane_catalog.clone()}}}),
+            "coach"
+        ).map(dispatch_contract_lane_activation).cloned().unwrap_or(serde_json::Value::Null),
+        "verifier_activation": dispatch_contract_lane(
+            &serde_json::json!({"development_flow": {"dispatch_contract": {"lane_catalog": lane_catalog.clone()}}}),
+            "verification"
+        ).map(dispatch_contract_lane_activation).cloned().unwrap_or(serde_json::Value::Null),
+        "escalation_activation": dispatch_contract_lane(
+            &serde_json::json!({"development_flow": {"dispatch_contract": {"lane_catalog": lane_catalog.clone()}}}),
+            "execution_preparation"
+        ).map(dispatch_contract_lane_activation).cloned().unwrap_or(serde_json::Value::Null),
+    })
+}
+
+fn dispatch_contract_lane<'a>(
+    execution_plan: &'a serde_json::Value,
+    dispatch_target: &str,
+) -> Option<&'a serde_json::Value> {
+    if let Some(lane) =
+        execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"].get(dispatch_target)
+    {
+        return Some(lane);
+    }
+    let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
+    match dispatch_target {
+        "implementer" => dispatch_contract.get("implementer_activation"),
+        "specification" => dispatch_contract.get("specification_activation"),
+        "coach" => dispatch_contract.get("coach_activation"),
+        "verification" => dispatch_contract.get("verifier_activation"),
+        "escalation" | "execution_preparation" => dispatch_contract.get("escalation_activation"),
+        _ => None,
+    }
+}
+
+fn dispatch_contract_lane_activation<'a>(lane: &'a serde_json::Value) -> &'a serde_json::Value {
+    lane.get("activation").unwrap_or(lane)
+}
+
+fn dispatch_contract_lane_sequence(dispatch_contract: &serde_json::Value) -> Vec<String> {
+    let explicit = dispatch_contract["lane_sequence"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if !explicit.is_empty() {
+        return explicit;
+    }
+    let mut legacy = Vec::new();
+    if dispatch_contract.get("specification_activation").is_some() {
+        legacy.push("specification".to_string());
+    }
+    if dispatch_contract.get("escalation_activation").is_some() {
+        legacy.push("execution_preparation".to_string());
+    }
+    if dispatch_contract.get("implementer_activation").is_some() {
+        legacy.push("implementer".to_string());
+    }
+    if dispatch_contract.get("coach_activation").is_some() {
+        legacy.push("coach".to_string());
+    }
+    if dispatch_contract.get("verifier_activation").is_some() {
+        legacy.push("verification".to_string());
+    }
+    legacy
+}
+
+fn dispatch_contract_execution_lane_sequence(dispatch_contract: &serde_json::Value) -> Vec<String> {
+    let explicit = dispatch_contract["execution_lane_sequence"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if !explicit.is_empty() {
+        return explicit;
+    }
+    dispatch_contract_lane_sequence(dispatch_contract)
+        .into_iter()
+        .filter(|target| target != "specification")
+        .collect()
+}
+
+fn canonical_lane_target_for_runtime_role(runtime_role: &str) -> Option<&'static str> {
+    match runtime_role {
+        "business_analyst" | "pm" => Some("specification"),
+        "worker" => Some("implementer"),
+        "coach" => Some("coach"),
+        "verifier" | "prover" => Some("verification"),
+        "solution_architect" => Some("execution_preparation"),
+        _ => None,
+    }
+}
+
+fn orchestration_lane_step_label(dispatch_target: &str) -> &'static str {
+    match dispatch_target {
+        "specification" => "delegate_specification_or_research_lane",
+        "implementer" => "delegate_implementer_lane",
+        "coach" => "delegate_coach_lane",
+        "verification" => "delegate_verifier_lane",
+        "execution_preparation" => "delegate_execution_preparation_lane",
+        _ => "delegate_lane",
+    }
+}
+
+fn orchestration_checkpoint_label(dispatch_target: &str) -> &'static str {
+    match dispatch_target {
+        "implementer" => "after_implementation_evidence",
+        "coach" => "after_review_evidence",
+        "verification" => "after_verification_evidence",
+        "specification" => "after_design_gate",
+        "execution_preparation" => "after_execution_preparation_evidence",
+        _ => "after_lane_evidence",
+    }
+}
+
+fn display_lane_label(dispatch_target: &str) -> String {
+    match dispatch_target {
+        "implementer" => "implementation".to_string(),
+        "specification" => "specification".to_string(),
+        "coach" => "coach".to_string(),
+        "verification" => "verification".to_string(),
+        "execution_preparation" => "execution_preparation".to_string(),
+        _ => dispatch_target.to_string(),
+    }
+}
+
+
 fn build_codex_runtime_assignment_from_resolved_constraints(
     compiled_bundle: &serde_json::Value,
     conversation_role: &str,
@@ -9117,6 +10092,106 @@ fn build_codex_runtime_assignment(
     )
 }
 
+fn execution_plan_agent_only_development_required(execution_plan: &serde_json::Value) -> bool {
+    json_bool(
+        execution_plan["autonomous_execution"].get("agent_only_development"),
+        false,
+    )
+}
+
+fn build_runtime_orchestration_contract(
+    requires_design_gate: bool,
+    agent_only_development: bool,
+    dispatch_contract: &serde_json::Value,
+) -> serde_json::Value {
+    let execution_lane_sequence = dispatch_contract["execution_lane_sequence"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>();
+    let active_cycle = if requires_design_gate {
+        let mut cycle = vec![
+            "publish_initial_execution_plan".to_string(),
+            "delegate_specification_or_research_lane".to_string(),
+            "replan_after_design_gate".to_string(),
+            "shape_work_pool_and_dev_packets".to_string(),
+        ];
+        cycle.extend(
+            execution_lane_sequence
+                .iter()
+                .map(|lane| orchestration_lane_step_label(lane).to_string()),
+        );
+        cycle.push("synthesize_closure_or_replan".to_string());
+        serde_json::json!(cycle)
+    } else {
+        let mut cycle = vec!["publish_initial_execution_plan".to_string()];
+        cycle.extend(
+            execution_lane_sequence
+                .iter()
+                .map(|lane| orchestration_lane_step_label(lane).to_string()),
+        );
+        cycle.push("synthesize_closure_or_replan".to_string());
+        serde_json::json!(cycle)
+    };
+    let replanning_checkpoints = if requires_design_gate {
+        let mut checkpoints = vec![
+            "after_design_gate".to_string(),
+            "after_work_pool_shape".to_string(),
+            "after_dev_packet_shape".to_string(),
+        ];
+        checkpoints.extend(
+            execution_lane_sequence
+                .iter()
+                .map(|lane| orchestration_checkpoint_label(lane).to_string()),
+        );
+        serde_json::json!(checkpoints)
+    } else {
+        let mut checkpoints = vec!["after_packet_shape".to_string()];
+        checkpoints.extend(
+            execution_lane_sequence
+                .iter()
+                .map(|lane| orchestration_checkpoint_label(lane).to_string()),
+        );
+        serde_json::json!(checkpoints)
+    };
+
+    serde_json::json!({
+        "mode": "delegated_orchestration_cycle",
+        "root_session_role": "orchestrator",
+        "root_session_must_remain_orchestrator": true,
+        "initial_response": {
+            "plan_required_before_substantive_execution": true,
+            "plan_scope": "one bounded active cycle",
+            "must_happen_before": [
+                "design_doc_mutation",
+                "packet_dispatch",
+                "implementation_work"
+            ],
+            "minimum_fields": [
+                "active_bounded_unit",
+                "next_steps",
+                "delegation_targets",
+                "proof_target"
+            ],
+            "operator_message": "publish a concise execution plan before mutating docs, dispatching work, or entering implementation"
+        },
+        "delegation_policy": {
+            "normal_write_producing_work": "delegated_by_default",
+            "agent_only_development_required": agent_only_development,
+            "generic_single_worker_dispatch_forbidden": true,
+            "local_implementation_without_exception_path_forbidden": true,
+            "required_lanes": dispatch_contract["lane_sequence"]
+        },
+        "replanning": {
+            "required": true,
+            "checkpoints": replanning_checkpoints,
+            "trigger_rule": "replan after each bounded gate or delegated evidence return before the next write-producing step"
+        },
+        "active_cycle": active_cycle
+    })
+}
+
 pub(crate) fn build_runtime_execution_plan_from_snapshot(
     compiled_bundle: &serde_json::Value,
     selection: &RuntimeConsumptionLaneSelection,
@@ -9140,49 +10215,27 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
     } else {
         serde_json::Value::Null
     };
+    let agent_only_development = json_bool(
+        compiled_bundle["autonomous_execution"].get("agent_only_development"),
+        false,
+    );
+    let dispatch_contract = build_resolved_development_dispatch_contract(
+        compiled_bundle,
+        selection,
+        requires_design_gate,
+    );
+    let orchestration_contract =
+        build_runtime_orchestration_contract(
+            requires_design_gate,
+            agent_only_development,
+            &dispatch_contract,
+        );
     let codex_runtime_assignment =
         build_codex_runtime_assignment(compiled_bundle, selection, requires_design_gate);
-    let implementer_activation = build_codex_runtime_assignment_from_resolved_constraints(
-        compiled_bundle,
-        "implementation",
-        "implementation",
-        "worker",
-    );
-    let coach_activation = build_codex_runtime_assignment_from_resolved_constraints(
-        compiled_bundle,
-        "coach",
-        "coach",
-        "coach",
-    );
-    let verifier_activation = build_codex_runtime_assignment_from_resolved_constraints(
-        compiled_bundle,
-        "verification",
-        "verification",
-        "verifier",
-    );
-    let escalation_activation = build_codex_runtime_assignment_from_resolved_constraints(
-        compiled_bundle,
-        "architecture",
-        "architecture",
-        "solution_architect",
-    );
-    let lane_sequence = [
-        implementer_activation["activation_agent_type"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
-        coach_activation["activation_agent_type"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
-        verifier_activation["activation_agent_type"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
-    ]
-    .into_iter()
-    .filter(|value| !value.is_empty())
-    .collect::<Vec<_>>();
+    let lane_sequence = dispatch_contract["lane_sequence"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     serde_json::json!({
         "status": if requires_design_gate {
             "design_first"
@@ -9192,6 +10245,10 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
         "system_mode": json_string(json_lookup(agent_system, &["mode"])).unwrap_or_default(),
         "state_owner": json_string(json_lookup(agent_system, &["state_owner"])).unwrap_or_default(),
         "max_parallel_agents": json_lookup(agent_system, &["max_parallel_agents"]).cloned().unwrap_or(serde_json::Value::Null),
+        "autonomous_execution": {
+            "agent_only_development": agent_only_development,
+        },
+        "orchestration_contract": orchestration_contract,
         "default_route": summarize_agent_route_from_snapshot(compiled_bundle, agent_system, "default"),
         "conversation_stage": {
             "selected_role": selection.selected_role,
@@ -9301,19 +10358,7 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
             },
             "lane_sequence": lane_sequence,
             "generic_single_worker_dispatch_forbidden": true,
-            "dispatch_contract": {
-                "root_session_must_remain_orchestrator": true,
-                "packet_family_required": [
-                    "delivery_task_packet",
-                    "execution_block_packet",
-                    "coach_review_packet",
-                    "verifier_proof_packet"
-                ],
-                "implementer_activation": implementer_activation,
-                "coach_activation": coach_activation,
-                "verifier_activation": verifier_activation,
-                "escalation_activation": escalation_activation
-            },
+            "dispatch_contract": dispatch_contract,
             "timeout_policy": {
                 "worker_wait_timeout_is_not_root_write_permission": true,
                 "generic_internal_worker_fallback_forbidden": true,
@@ -9514,6 +10559,10 @@ fn build_compiled_agent_extension_bundle_for_root(
         config,
         &["agent_extensions", "registries", "flows"],
     ));
+    let dispatch_aliases_path = yaml_string(yaml_lookup(
+        config,
+        &["agent_extensions", "registries", "dispatch_aliases"],
+    ));
     let require_registry_files = yaml_bool(
         yaml_lookup(
             config,
@@ -9651,6 +10700,23 @@ fn build_compiled_agent_extension_bundle_for_root(
             serde_yaml::Value::Null
         }
     };
+    let dispatch_aliases_registry = match dispatch_aliases_path.as_deref() {
+        Some(path) => match load_registry_projection(
+            root,
+            Some(path),
+            "dispatch_aliases",
+            "alias_id",
+            "dispatch_aliases",
+            require_registry_files,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                validation_errors.push(error);
+                serde_yaml::Value::Null
+            }
+        },
+        None => serde_yaml::Value::Null,
+    };
     let enabled_project_roles = effective_enabled_registry_ids(
         config,
         &["agent_extensions", "enabled_project_roles"],
@@ -9720,7 +10786,13 @@ fn build_compiled_agent_extension_bundle_for_root(
         })
         .collect::<Vec<_>>();
     validation_errors.extend(codex_validation_errors);
-    let codex_dispatch_aliases = overlay_codex_dispatch_alias_catalog(config, &codex_roles);
+    let dispatch_alias_rows =
+        registry_rows_by_key(&dispatch_aliases_registry, "dispatch_aliases", "alias_id", &[]);
+    let codex_dispatch_aliases = if dispatch_alias_rows.is_empty() {
+        overlay_codex_dispatch_alias_catalog(config, &codex_roles)
+    } else {
+        materialize_codex_dispatch_alias_catalog(&dispatch_alias_rows, &codex_roles)
+    };
     let codex_dispatch_alias_validation_errors = codex_dispatch_aliases
         .iter()
         .filter_map(|row| {
@@ -9809,10 +10881,12 @@ fn build_compiled_agent_extension_bundle_for_root(
         "flow_id",
         &enabled_project_flows,
     );
+    let all_project_flows = registry_rows_by_key(&flows_registry, "flow_sets", "flow_id", &[]);
     let project_role_map = registry_row_map_by_id(&project_roles, "role_id");
     let project_skill_map = registry_row_map_by_id(&project_skills, "skill_id");
     let project_profile_map = registry_row_map_by_id(&project_profiles, "profile_id");
     let project_flow_map = registry_row_map_by_id(&project_flows, "flow_id");
+    let all_project_flow_map = registry_row_map_by_id(&all_project_flows, "flow_id");
     let enabled_framework_roles = yaml_string_list(yaml_lookup(
         config,
         &["agent_extensions", "enabled_framework_roles"],
@@ -9903,6 +10977,7 @@ fn build_compiled_agent_extension_bundle_for_root(
         "project_role_catalog": project_role_map,
         "project_profile_catalog": project_profile_map,
         "project_flow_catalog": project_flow_map,
+        "all_project_flow_catalog": all_project_flow_map,
         "agent_system": serde_json::to_value(yaml_lookup(config, &["agent_system"]).cloned().unwrap_or(serde_yaml::Value::Null))
             .unwrap_or(serde_json::Value::Null),
         "autonomous_execution": serde_json::to_value(yaml_lookup(config, &["autonomous_execution"]).cloned().unwrap_or(serde_yaml::Value::Null))
@@ -10268,29 +11343,36 @@ fn build_taskflow_handoff_plan(
     let execution_plan = &role_selection.execution_plan;
     let development_flow = &execution_plan["development_flow"];
     let dispatch_contract = &development_flow["dispatch_contract"];
+    let lane_catalog = dispatch_contract["lane_catalog"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    let activation_chain = lane_catalog
+        .iter()
+        .map(|(target, lane)| {
+            (
+                target.clone(),
+                dispatch_contract_lane_activation(lane).clone(),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
     if execution_plan["status"] == "design_first" {
         return serde_json::json!({
             "status": "spec_first_handoff_required",
+            "orchestration_contract": execution_plan["orchestration_contract"],
             "tracked_flow_bootstrap": execution_plan["tracked_flow_bootstrap"],
             "design_packet_activation": execution_plan["codex_runtime_assignment"],
-            "post_design_activation_chain": {
-                "implementer": dispatch_contract["implementer_activation"],
-                "coach": dispatch_contract["coach_activation"],
-                "verifier": dispatch_contract["verifier_activation"],
-                "escalation": dispatch_contract["escalation_activation"],
-            },
+            "post_design_activation_chain": activation_chain,
+            "post_design_lane_contract": lane_catalog,
             "handoff_ready": true,
         });
     }
 
     serde_json::json!({
         "status": "execution_handoff_ready",
-        "activation_chain": {
-            "implementer": dispatch_contract["implementer_activation"],
-            "coach": dispatch_contract["coach_activation"],
-            "verifier": dispatch_contract["verifier_activation"],
-            "escalation": dispatch_contract["escalation_activation"],
-        },
+        "orchestration_contract": execution_plan["orchestration_contract"],
+        "activation_chain": activation_chain,
+        "lane_contract": lane_catalog,
         "runtime_assignment": execution_plan["codex_runtime_assignment"],
         "lane_sequence": development_flow["lane_sequence"],
         "handoff_ready": true,
@@ -10320,6 +11402,35 @@ fn runtime_consumption_run_id(role_selection: &RuntimeConsumptionLaneSelection) 
     }
 }
 
+fn codex_carrier_backend_from_assignment(assignment: &serde_json::Value) -> Option<String> {
+    json_string(assignment.get("selected_tier"))
+        .or_else(|| json_string(assignment.get("activation_agent_type")))
+        .filter(|value| !value.is_empty())
+}
+
+fn codex_carrier_backend_from_route(route: &serde_json::Value) -> Option<String> {
+    let route_assignment = route
+        .get("activation")
+        .or_else(|| route.get("codex_runtime_assignment"))
+        .unwrap_or(&serde_json::Value::Null);
+    json_string(route.get("preferred_agent_tier"))
+        .or_else(|| json_string(route.get("preferred_agent_type")))
+        .or_else(|| codex_carrier_backend_from_assignment(route_assignment))
+        .filter(|value| !value.is_empty())
+}
+
+fn selected_backend_from_execution_plan_route(
+    execution_plan: &serde_json::Value,
+    route: &serde_json::Value,
+) -> Option<String> {
+    codex_carrier_backend_from_route(route)
+        .or_else(|| {
+            codex_carrier_backend_from_assignment(&execution_plan["codex_runtime_assignment"])
+        })
+        .or_else(|| json_string(route.get("subagents")))
+        .filter(|value| !value.is_empty())
+}
+
 fn build_runtime_consumption_dispatch_receipt(
     role_selection: &RuntimeConsumptionLaneSelection,
     run_graph_bootstrap: &serde_json::Value,
@@ -10336,15 +11447,13 @@ fn build_runtime_consumption_dispatch_receipt(
     let dispatch_target = json_string(latest_status.get("next_node"))
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| role_selection.selected_role.clone());
-    let selected_backend = json_string(latest_status.get("selected_backend"))
-        .or_else(|| {
-            json_string(
-                role_selection.execution_plan["development_flow"]["implementation"]
-                    .get("subagents"),
-            )
-        })
-        .filter(|value| !value.is_empty());
     let is_taskflow_pack = matches!(dispatch_target.as_str(), "spec-pack" | "work-pool-pack");
+    let selected_route = if role_selection.conversational_mode.is_some() {
+        &role_selection.execution_plan["default_route"]
+    } else {
+        dispatch_contract_lane(&role_selection.execution_plan, &dispatch_target)
+            .unwrap_or(&role_selection.execution_plan["codex_runtime_assignment"])
+    };
     let dispatch_surface = match dispatch_target.as_str() {
         "spec-pack" => Some("vida taskflow bootstrap-spec".to_string()),
         "work-pool-pack" => Some("vida taskflow task create".to_string()),
@@ -10353,8 +11462,12 @@ fn build_runtime_consumption_dispatch_receipt(
         }
         _ => None,
     };
-    let codex_runtime_assignment = &role_selection.execution_plan["development_flow"]
-        ["implementation"]["codex_runtime_assignment"];
+    let codex_runtime_assignment = dispatch_contract_lane(
+        &role_selection.execution_plan,
+        &dispatch_target,
+    )
+    .map(dispatch_contract_lane_activation)
+    .unwrap_or(&role_selection.execution_plan["codex_runtime_assignment"]);
     let activation_agent_type = if is_taskflow_pack {
         None
     } else {
@@ -10364,6 +11477,27 @@ fn build_runtime_consumption_dispatch_receipt(
         None
     } else {
         json_string(codex_runtime_assignment.get("activation_runtime_role"))
+    };
+    let selected_backend = if is_taskflow_pack {
+        json_string(latest_status.get("selected_backend"))
+            .or_else(|| {
+                selected_backend_from_execution_plan_route(
+                    &role_selection.execution_plan,
+                    selected_route,
+                )
+            })
+            .filter(|value| !value.is_empty())
+    } else {
+        activation_agent_type
+            .clone()
+            .or_else(|| {
+                selected_backend_from_execution_plan_route(
+                    &role_selection.execution_plan,
+                    selected_route,
+                )
+            })
+            .or_else(|| json_string(latest_status.get("selected_backend")))
+            .filter(|value| !value.is_empty())
     };
 
     crate::state_store::RunGraphDispatchReceipt {
@@ -10393,6 +11527,7 @@ fn build_runtime_consumption_dispatch_receipt(
         downstream_dispatch_result_path: None,
         downstream_dispatch_trace_path: None,
         downstream_dispatch_executed_count: 0,
+        downstream_dispatch_active_target: None,
         downstream_dispatch_last_target: None,
         activation_agent_type,
         activation_runtime_role,
@@ -10405,7 +11540,6 @@ fn downstream_activation_fields(
     role_selection: &RuntimeConsumptionLaneSelection,
     dispatch_target: &str,
 ) -> (String, Option<String>, Option<String>, Option<String>) {
-    let dispatch_contract = &role_selection.execution_plan["development_flow"]["dispatch_contract"];
     match dispatch_target {
         "spec-pack" | "work-pool-pack" | "dev-pack" => (
             "taskflow_pack".to_string(),
@@ -10418,37 +11552,24 @@ fn downstream_activation_fields(
             None,
             None,
         ),
-        "implementer" => (
-            "agent_lane".to_string(),
-            Some("vida agent-init".to_string()),
-            json_string(dispatch_contract["implementer_activation"].get("activation_agent_type")),
-            json_string(dispatch_contract["implementer_activation"].get("activation_runtime_role")),
-        ),
-        "coach" => (
-            "agent_lane".to_string(),
-            Some("vida agent-init".to_string()),
-            json_string(dispatch_contract["coach_activation"].get("activation_agent_type")),
-            json_string(dispatch_contract["coach_activation"].get("activation_runtime_role")),
-        ),
-        "verification" => (
-            "agent_lane".to_string(),
-            Some("vida agent-init".to_string()),
-            json_string(dispatch_contract["verifier_activation"].get("activation_agent_type")),
-            json_string(dispatch_contract["verifier_activation"].get("activation_runtime_role")),
-        ),
-        "escalation" => (
-            "agent_lane".to_string(),
-            Some("vida agent-init".to_string()),
-            json_string(dispatch_contract["escalation_activation"].get("activation_agent_type")),
-            json_string(dispatch_contract["escalation_activation"].get("activation_runtime_role")),
-        ),
         "closure" => ("closure".to_string(), None, None, None),
-        _ => (
-            "agent_lane".to_string(),
-            Some("vida agent-init".to_string()),
-            None,
-            None,
-        ),
+        _ => {
+            let lane = dispatch_contract_lane(&role_selection.execution_plan, dispatch_target);
+            (
+                "agent_lane".to_string(),
+                Some("vida agent-init".to_string()),
+                lane.and_then(|row| {
+                    json_string(
+                        dispatch_contract_lane_activation(row).get("activation_agent_type"),
+                    )
+                }),
+                lane.and_then(|row| {
+                    json_string(
+                        dispatch_contract_lane_activation(row).get("activation_runtime_role"),
+                    )
+                }),
+            )
+        }
     }
 }
 
@@ -10462,6 +11583,10 @@ fn build_downstream_dispatch_receipt(
         .expect("rfc3339 timestamp should render");
     let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
         downstream_activation_fields(role_selection, &dispatch_target);
+    let selected_backend = activation_agent_type
+        .clone()
+        .or_else(|| receipt.selected_backend.clone())
+        .filter(|value| !value.is_empty());
     Some(crate::state_store::RunGraphDispatchReceipt {
         run_id: receipt.run_id.clone(),
         dispatch_target: dispatch_target.clone(),
@@ -10485,10 +11610,11 @@ fn build_downstream_dispatch_receipt(
         downstream_dispatch_result_path: None,
         downstream_dispatch_trace_path: None,
         downstream_dispatch_executed_count: 0,
+        downstream_dispatch_active_target: None,
         downstream_dispatch_last_target: None,
         activation_agent_type,
         activation_runtime_role,
-        selected_backend: receipt.selected_backend.clone(),
+        selected_backend,
         recorded_at,
     })
 }
@@ -10507,6 +11633,36 @@ fn root_receipt_fields_from_downstream_step(
     root_receipt.downstream_dispatch_status = step_receipt.downstream_dispatch_status.clone();
     root_receipt.downstream_dispatch_result_path =
         step_receipt.downstream_dispatch_result_path.clone();
+    root_receipt.downstream_dispatch_active_target =
+        step_receipt.downstream_dispatch_active_target.clone();
+}
+
+fn active_downstream_dispatch_target(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Option<String> {
+    if receipt.dispatch_kind == "agent_lane" && receipt.dispatch_status != "executed" {
+        Some(receipt.dispatch_target.clone())
+    } else {
+        None
+    }
+}
+
+fn agent_init_packet_flag_for_path(packet_path: &str) -> &'static str {
+    if packet_path.contains("/downstream-dispatch-packets/")
+        || packet_path.contains("downstream-dispatch-packets")
+    {
+        "--downstream-packet"
+    } else {
+        "--dispatch-packet"
+    }
+}
+
+fn agent_init_command_for_packet_path(packet_path: &str) -> String {
+    format!(
+        "vida agent-init {} {} --json",
+        agent_init_packet_flag_for_path(packet_path),
+        shell_quote(packet_path)
+    )
 }
 
 fn write_runtime_downstream_dispatch_trace(
@@ -10562,17 +11718,17 @@ fn runtime_dispatch_command_for_target(
 }
 
 fn runtime_dispatch_packet_kind(
-    receipt: &crate::state_store::RunGraphDispatchReceipt,
-) -> &'static str {
-    match receipt.dispatch_kind.as_str() {
-        "taskflow_pack" => "tracked_flow_packet",
-        _ => match receipt.activation_runtime_role.as_deref() {
-            Some("coach") => "coach_review_packet",
-            Some("verifier") => "verifier_proof_packet",
-            Some("solution_architect") => "escalation_packet",
-            _ => "delivery_task_packet",
-        },
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+    dispatch_kind: &str,
+) -> String {
+    if dispatch_kind == "taskflow_pack" {
+        return "tracked_flow_packet".to_string();
     }
+    dispatch_contract_lane(execution_plan, dispatch_target)
+        .and_then(|lane| json_string(lane.get("packet_template_kind")))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "delivery_task_packet".to_string())
 }
 
 fn derive_downstream_dispatch_preview(
@@ -10585,7 +11741,28 @@ fn derive_downstream_dispatch_preview(
     bool,
     Vec<String>,
 ) {
+    let agent_only_development =
+        execution_plan_agent_only_development_required(&role_selection.execution_plan);
+    let dispatch_contract = &role_selection.execution_plan["development_flow"]["dispatch_contract"];
+    let lane_sequence = dispatch_contract_lane_sequence(dispatch_contract);
+    let execution_lane_sequence = dispatch_contract_execution_lane_sequence(dispatch_contract);
     match receipt.dispatch_target.as_str() {
+        "spec-pack" if agent_only_development => (
+            Some(
+                lane_sequence
+                    .first()
+                    .map(|value| value.as_str())
+                    .unwrap_or("specification")
+                    .to_string(),
+            ),
+            Some("vida agent-init".to_string()),
+            Some(
+                "after spec-pack task materialization, dispatch the business-analyst lane for bounded research/specification/planning before work-pool shaping"
+                    .to_string(),
+            ),
+            true,
+            Vec::new(),
+        ),
         "spec-pack" => {
             let blockers = vec![
                 "pending_design_finalize".to_string(),
@@ -10623,7 +11800,13 @@ fn derive_downstream_dispatch_preview(
             },
         ),
         "dev-pack" => (
-            Some("implementer".to_string()),
+            Some(
+                execution_lane_sequence
+                    .first()
+                    .map(|value| value.as_str())
+                    .unwrap_or("implementer")
+                    .to_string(),
+            ),
             Some("vida agent-init".to_string()),
             Some(
                 "after the dev packet is created, activate the selected implementer lane for bounded execution"
@@ -10633,37 +11816,81 @@ fn derive_downstream_dispatch_preview(
             Vec::new(),
         ),
         _ if receipt.dispatch_kind == "agent_lane" => {
-            let coach_required = json_bool(
-                role_selection.execution_plan["development_flow"]["implementation"]
-                    .get("coach_required"),
-                false,
-            );
-            let verification_required = json_bool(
-                role_selection.execution_plan["development_flow"]["implementation"]
-                    .get("independent_verification_required"),
-                false,
-            );
-            if receipt.activation_runtime_role.as_deref() == Some("worker") && coach_required {
-                (
-                    Some("coach".to_string()),
-                    Some("vida agent-init".to_string()),
+            let current_lane =
+                dispatch_contract_lane(&role_selection.execution_plan, &receipt.dispatch_target);
+            if current_lane.and_then(|lane| lane["stage"].as_str()) == Some("design_gate")
+                || (receipt.dispatch_target == "specification"
+                    && current_lane.and_then(|lane| lane["stage"].as_str()).is_none()
+                    && dispatch_contract.get("specification_activation").is_some())
+            {
+                let evidence_blocker = current_lane
+                    .and_then(|lane| lane["completion_blocker"].as_str())
+                    .unwrap_or("pending_specification_evidence");
+                return (
+                    Some("work-pool-pack".to_string()),
+                    json_string(
+                        role_selection.execution_plan["tracked_flow_bootstrap"]["work_pool_task"]
+                            .get("create_command"),
+                    ),
                     Some(
-                        "after implementer execution evidence exists, activate the coach lane for bounded review"
+                        if receipt.dispatch_status == "executed" {
+                            "after specification/planning evidence is recorded, finalize the design doc and close spec-pack before work-pool shaping"
+                        } else {
+                            "specification/planning lane is active; wait for bounded evidence return before design finalization, spec-pack closure, and work-pool shaping"
+                        }
                             .to_string(),
                     ),
                     false,
-                    vec!["pending_implementation_evidence".to_string()],
-                )
-            } else if verification_required {
+                    vec![
+                        evidence_blocker.to_string(),
+                        "pending_design_finalize".to_string(),
+                        "pending_spec_task_close".to_string(),
+                    ],
+                );
+            }
+            let current_index = execution_lane_sequence
+                .iter()
+                .position(|target| target == &receipt.dispatch_target);
+            let effective_current_target = current_index
+                .map(|_| receipt.dispatch_target.clone())
+                .or_else(|| {
+                    receipt
+                        .activation_runtime_role
+                        .as_deref()
+                        .and_then(canonical_lane_target_for_runtime_role)
+                        .map(str::to_string)
+                });
+            let current_index = current_index.or_else(|| {
+                receipt
+                    .activation_runtime_role
+                    .as_deref()
+                    .and_then(canonical_lane_target_for_runtime_role)
+                    .and_then(|target| {
+                        execution_lane_sequence
+                            .iter()
+                            .position(|candidate| candidate == target)
+                    })
+            });
+            let Some(current_index) = current_index else {
+                return (None, None, None, false, Vec::new());
+            };
+            let next_target = execution_lane_sequence.get(current_index + 1);
+            if let Some(next_target) = next_target {
+                let blocker = effective_current_target
+                    .as_deref()
+                    .and_then(|target| dispatch_contract_lane(&role_selection.execution_plan, target))
+                    .and_then(|lane| lane["completion_blocker"].as_str())
+                    .unwrap_or("pending_lane_evidence")
+                    .to_string();
                 (
-                    Some("verification".to_string()),
+                    Some(next_target.clone()),
                     Some("vida agent-init".to_string()),
-                    Some(
-                        "after review-clean implementation evidence exists, activate the verifier lane for independent proof"
-                            .to_string(),
-                    ),
+                    Some(format!(
+                        "after `{}` evidence is recorded, activate `{}` for the next bounded lane",
+                        receipt.dispatch_target, next_target
+                    )),
                     false,
-                    vec!["pending_review_clean_evidence".to_string()],
+                    vec![blocker],
                 )
             } else {
                 (
@@ -10703,6 +11930,7 @@ fn refresh_downstream_dispatch_preview(
     receipt.downstream_dispatch_status = None;
     receipt.downstream_dispatch_result_path = None;
     receipt.downstream_dispatch_trace_path = None;
+    receipt.downstream_dispatch_active_target = active_downstream_dispatch_target(receipt);
     receipt.downstream_dispatch_last_target = None;
     receipt.downstream_dispatch_executed_count = 0;
     receipt.downstream_dispatch_packet_path = write_runtime_downstream_dispatch_packet(
@@ -10712,6 +11940,227 @@ fn refresh_downstream_dispatch_preview(
         receipt,
     )?;
     Ok(())
+}
+
+fn runtime_packet_handoff_task_class(
+    dispatch_target: &str,
+    handoff_runtime_role: &str,
+) -> &'static str {
+    match dispatch_target {
+        "specification" => "specification",
+        "planning" => "planning",
+        "coach" => "coach",
+        "verification" => "verification",
+        "escalation" => "architecture",
+        "implementer" => "implementation",
+        _ => match handoff_runtime_role {
+            "business_analyst" => "specification",
+            "pm" => "planning",
+            "coach" => "coach",
+            "verifier" => "verification",
+            "solution_architect" => "architecture",
+            _ => "implementation",
+        },
+    }
+}
+
+fn runtime_delivery_task_packet(
+    run_id: &str,
+    dispatch_target: &str,
+    handoff_runtime_role: &str,
+    handoff_task_class: &str,
+    closure_class: &str,
+    request_text: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "packet_id": format!("{run_id}::{dispatch_target}::delivery"),
+        "backlog_id": run_id,
+        "release_slice": "none",
+        "owner": "taskflow",
+        "closure_class": closure_class,
+        "goal": format!("Execute bounded `{dispatch_target}` handoff for the active runtime request"),
+        "non_goals": [
+            "unbounded repository-wide rewrites",
+            "out-of-scope taskflow state mutation"
+        ],
+        "scope_in": [
+            format!("dispatch_target:{dispatch_target}"),
+            format!("runtime_role:{handoff_runtime_role}")
+        ],
+        "scope_out": [
+            "mutation outside bounded packet scope",
+            "closure without recorded handoff evidence"
+        ],
+        "owned_paths": [],
+        "read_only_paths": [
+            ".vida/data/state/runtime-consumption",
+            "docs/product/spec",
+            "docs/process"
+        ],
+        "inputs": [
+            "role_selection_full",
+            "run_graph_bootstrap",
+            "taskflow_handoff_plan"
+        ],
+        "outputs": [
+            "dispatch_result_artifact",
+            "updated_run_graph_dispatch_receipt"
+        ],
+        "definition_of_done": [
+            format!("`{dispatch_target}` handoff produces a bounded runtime result artifact"),
+            "dispatch receipt and downstream preview are refreshed consistently"
+        ],
+        "verification_command": format!("vida taskflow consume continue --run-id {run_id} --json"),
+        "proof_target": "runtime dispatch result artifact plus updated dispatch receipt",
+        "active_skills": "no_applicable_skill",
+        "stop_rules": [
+            "stop after writing bounded dispatch result or explicit blocker",
+            "do not widen scope beyond the active packet target"
+        ],
+        "blocking_question": format!("What is the next bounded action required for `{dispatch_target}`?"),
+        "handoff_runtime_role": handoff_runtime_role,
+        "handoff_task_class": handoff_task_class,
+        "handoff_selection": "runtime_selected_tier",
+        "request_excerpt": request_text.chars().take(240).collect::<String>(),
+    })
+}
+
+fn runtime_execution_block_packet(
+    run_id: &str,
+    dispatch_target: &str,
+    handoff_runtime_role: &str,
+    handoff_task_class: &str,
+    closure_class: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "packet_id": format!("{run_id}::{dispatch_target}::execution-block"),
+        "parent_packet_id": format!("{run_id}::{dispatch_target}::delivery"),
+        "backlog_id": run_id,
+        "owner": "taskflow",
+        "closure_class": closure_class,
+        "goal": format!("Resolve bounded execution blocker for `{dispatch_target}`"),
+        "scope_in": [
+            format!("dispatch_target:{dispatch_target}")
+        ],
+        "scope_out": [
+            "new feature scope without bounded packet update"
+        ],
+        "owned_paths": [],
+        "definition_of_done": [
+            "bounded blocker is resolved with receipt-backed evidence"
+        ],
+        "verification_command": format!("vida taskflow consume continue --run-id {run_id} --json"),
+        "proof_target": "runtime receipt evidence that blocker is resolved or escalated",
+        "active_skills": "no_applicable_skill",
+        "stop_rules": [
+            "stop once blocker resolution evidence is recorded"
+        ],
+        "blocking_question": format!("Which explicit blocker prevents closing `{dispatch_target}` now?"),
+        "handoff_runtime_role": handoff_runtime_role,
+        "handoff_task_class": handoff_task_class,
+        "handoff_selection": "runtime_selected_tier"
+    })
+}
+
+fn runtime_coach_review_packet(
+    run_id: &str,
+    dispatch_target: &str,
+    proof_target: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "packet_id": format!("{run_id}::{dispatch_target}::coach-review"),
+        "source_packet_id": format!("{run_id}::implementer::delivery"),
+        "review_goal": format!("Judge whether `{dispatch_target}` remains aligned with the approved bounded packet, acceptance criteria, and definition of done"),
+        "owned_paths": [],
+        "definition_of_done": [
+            "coach review returns bounded approval-forward or bounded rework evidence"
+        ],
+        "proof_target": proof_target,
+        "active_skills": "no_applicable_skill",
+        "review_focus": [
+            "spec_conformance",
+            "acceptance_criteria_alignment",
+            "bounded_scope_drift"
+        ],
+        "blocking_question": format!("Does `{dispatch_target}` match the approved bounded contract cleanly enough to proceed?"),
+        "handoff_runtime_role": "coach",
+        "handoff_task_class": "coach",
+        "handoff_selection": "runtime_selected_tier",
+    })
+}
+
+fn runtime_verifier_proof_packet(
+    run_id: &str,
+    dispatch_target: &str,
+    proof_target: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "packet_id": format!("{run_id}::{dispatch_target}::verifier-proof"),
+        "source_packet_id": format!("{run_id}::implementer::delivery"),
+        "proof_goal": format!("Independently verify bounded closure readiness for `{dispatch_target}`"),
+        "verification_command": format!("vida taskflow consume continue --run-id {run_id} --json"),
+        "proof_target": proof_target,
+        "owned_paths": [],
+        "active_skills": "no_applicable_skill",
+        "blocking_question": format!("What proof is still missing before `{dispatch_target}` can close?"),
+        "handoff_runtime_role": "verifier",
+        "handoff_task_class": "verification",
+        "handoff_selection": "runtime_selected_tier",
+    })
+}
+
+fn runtime_escalation_packet(run_id: &str, dispatch_target: &str) -> serde_json::Value {
+    serde_json::json!({
+        "packet_id": format!("{run_id}::{dispatch_target}::escalation"),
+        "source_packet_id": format!("{run_id}::{dispatch_target}::delivery"),
+        "conflict_type": "architecture",
+        "decision_needed": format!("Resolve the bounded architecture-preparation or escalation decision for `{dispatch_target}`"),
+        "options": [
+            "approve current bounded route",
+            "reshape bounded handoff",
+            "block execution pending architectural clarification"
+        ],
+        "constraints": [
+            "preserve one bounded packet owner",
+            "do not widen scope without a new bounded packet"
+        ],
+        "active_skills": "no_applicable_skill",
+        "blocking_question": format!("Which architectural decision is required before `{dispatch_target}` can proceed coherently?"),
+        "handoff_runtime_role": "solution_architect",
+        "handoff_task_class": "architecture",
+        "handoff_selection": "runtime_selected_tier",
+    })
+}
+
+fn runtime_packet_prompt(
+    run_id: &str,
+    dispatch_target: &str,
+    handoff_runtime_role: &str,
+    request_text: &str,
+    orchestration_contract: &serde_json::Value,
+) -> String {
+    let replan_points = orchestration_contract["replanning"]["checkpoints"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nFirst substantive response: publish a concise plan before edits or implementation.\nLocal orchestrator coding is forbidden without an explicit exception path.\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
+    )
+}
+
+fn runtime_dispatch_command_for_packet_path(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    packet_path: &str,
+) -> Option<String> {
+    match receipt.dispatch_kind.as_str() {
+        "taskflow_pack" => runtime_dispatch_command_for_target(role_selection, &receipt.dispatch_target),
+        "agent_lane" => Some(agent_init_command_for_packet_path(packet_path)),
+        _ => runtime_dispatch_command_for_target(role_selection, &receipt.dispatch_target),
+    }
 }
 
 fn write_runtime_dispatch_packet(
@@ -10731,16 +12180,88 @@ fn write_runtime_dispatch_packet(
         .expect("rfc3339 timestamp should render")
         .replace(':', "-");
     let packet_path = packet_dir.join(format!("{}-{ts}.json", receipt.run_id));
+    let packet_path_display = packet_path.display().to_string();
+    let packet_template_kind = runtime_dispatch_packet_kind(
+        &role_selection.execution_plan,
+        &receipt.dispatch_target,
+        &receipt.dispatch_kind,
+    );
+    let handoff_runtime_role = receipt
+        .activation_runtime_role
+        .as_deref()
+        .unwrap_or(role_selection.selected_role.as_str());
+    let handoff_task_class =
+        runtime_packet_handoff_task_class(&receipt.dispatch_target, handoff_runtime_role);
+    let closure_class = dispatch_contract_lane(&role_selection.execution_plan, &receipt.dispatch_target)
+        .and_then(|lane| lane["closure_class"].as_str())
+        .unwrap_or("implementation");
+    let activation_command =
+        runtime_dispatch_command_for_packet_path(role_selection, receipt, &packet_path_display);
+    let delivery_task_packet = runtime_delivery_task_packet(
+        &receipt.run_id,
+        &receipt.dispatch_target,
+        handoff_runtime_role,
+        handoff_task_class,
+        closure_class,
+        &role_selection.request,
+    );
+    let execution_block_packet = runtime_execution_block_packet(
+        &receipt.run_id,
+        &receipt.dispatch_target,
+        handoff_runtime_role,
+        handoff_task_class,
+        closure_class,
+    );
     let body = serde_json::json!({
         "packet_kind": "runtime_dispatch_packet",
-        "packet_template_kind": runtime_dispatch_packet_kind(receipt),
+        "packet_template_kind": packet_template_kind,
+        "delivery_task_packet": if packet_template_kind == "delivery_task_packet" {
+            delivery_task_packet.clone()
+        } else {
+            serde_json::Value::Null
+        },
+        "execution_block_packet": if packet_template_kind == "execution_block_packet" {
+            execution_block_packet
+        } else {
+            serde_json::Value::Null
+        },
+        "coach_review_packet": if packet_template_kind == "coach_review_packet" {
+            runtime_coach_review_packet(
+                &receipt.run_id,
+                &receipt.dispatch_target,
+                "bounded implementation result versus approved spec and definition of done",
+            )
+        } else {
+            serde_json::Value::Null
+        },
+        "verifier_proof_packet": if packet_template_kind == "verifier_proof_packet" {
+            runtime_verifier_proof_packet(
+                &receipt.run_id,
+                &receipt.dispatch_target,
+                "independent bounded proof and closure readiness",
+            )
+        } else {
+            serde_json::Value::Null
+        },
+        "escalation_packet": if packet_template_kind == "escalation_packet" {
+            runtime_escalation_packet(&receipt.run_id, &receipt.dispatch_target)
+        } else {
+            serde_json::Value::Null
+        },
+        "prompt": runtime_packet_prompt(
+            &receipt.run_id,
+            &receipt.dispatch_target,
+            handoff_runtime_role,
+            &role_selection.request,
+            &role_selection.execution_plan["orchestration_contract"],
+        ),
         "recorded_at": receipt.recorded_at,
         "run_id": receipt.run_id,
         "dispatch_target": receipt.dispatch_target,
         "dispatch_status": receipt.dispatch_status,
         "dispatch_kind": receipt.dispatch_kind,
         "dispatch_surface": receipt.dispatch_surface,
-        "dispatch_command": runtime_dispatch_command_for_target(role_selection, &receipt.dispatch_target),
+        "dispatch_command": activation_command,
         "activation_agent_type": receipt.activation_agent_type,
         "activation_runtime_role": receipt.activation_runtime_role,
         "selected_backend": receipt.selected_backend,
@@ -10754,6 +12275,7 @@ fn write_runtime_dispatch_packet(
         "role_selection_full": role_selection,
         "taskflow_handoff_plan": taskflow_handoff_plan,
         "run_graph_bootstrap": run_graph_bootstrap,
+        "orchestration_contract": role_selection.execution_plan["orchestration_contract"],
     });
     let encoded = serde_json::to_string_pretty(&body)
         .map_err(|error| format!("Failed to encode dispatch packet: {error}"))?;
@@ -10802,6 +12324,12 @@ async fn execute_runtime_dispatch_handoff(
             "note": "runtime downstream scheduler reached closure without additional lane activation",
         })),
         _ => {
+            let dispatch_packet_path = receipt.dispatch_packet_path.as_deref().ok_or_else(|| {
+                format!(
+                    "Agent lane dispatch for `{}` is missing dispatch_packet_path",
+                    receipt.dispatch_target
+                )
+            })?;
             let bundle =
                 crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload(store)
                     .await?;
@@ -10813,6 +12341,9 @@ async fn execute_runtime_dispatch_handoff(
             Ok(serde_json::json!({
                 "surface": "vida agent-init",
                 "status": "ok",
+                "execution_state": "packet_ready",
+                "activation_command": agent_init_command_for_packet_path(dispatch_packet_path),
+                "dispatch_packet_path": dispatch_packet_path,
                 "init": init_view,
                 "selection": serde_json::to_value(role_selection)
                     .expect("lane selection should serialize"),
@@ -10861,15 +12392,31 @@ async fn execute_and_record_dispatch_receipt(
     let dispatch_result_path =
         write_runtime_dispatch_result(state_root, receipt, &execution_result)?;
     receipt.dispatch_result_path = Some(dispatch_result_path);
-    receipt.dispatch_status = "executed".to_string();
-    if let Some(run_id) = json_string(run_graph_bootstrap.get("run_id")) {
-        if let Ok(status) = store.run_graph_status(&run_id).await {
-            let executed_status =
-                apply_first_handoff_execution_to_run_graph_status(&status, receipt);
-            store
-                .record_run_graph_status(&executed_status)
-                .await
-                .map_err(|error| format!("Failed to record executed run-graph status: {error}"))?;
+    let execution_state = json_string(execution_result.get("execution_state"))
+        .or_else(|| {
+            if receipt.dispatch_kind == "agent_lane" {
+                Some("packet_ready".to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "executed".to_string());
+    receipt.dispatch_status = execution_state;
+    if let Some(dispatch_command) = json_string(execution_result.get("activation_command")) {
+        receipt.dispatch_command = Some(dispatch_command);
+    }
+    if receipt.dispatch_status == "executed" {
+        if let Some(run_id) = json_string(run_graph_bootstrap.get("run_id")) {
+            if let Ok(status) = store.run_graph_status(&run_id).await {
+                let executed_status =
+                    apply_first_handoff_execution_to_run_graph_status(&status, receipt);
+                store
+                    .record_run_graph_status(&executed_status)
+                    .await
+                    .map_err(|error| {
+                        format!("Failed to record executed run-graph status: {error}")
+                    })?;
+            }
         }
     }
     Ok(())
@@ -10930,9 +12477,12 @@ async fn execute_downstream_dispatch_chain(
             .map_err(|error| {
                 format!("Failed to write chained downstream runtime dispatch packet: {error}")
             })?;
-        downstream_receipt.downstream_dispatch_status = Some("executed".to_string());
+        downstream_receipt.downstream_dispatch_status =
+            Some(downstream_receipt.dispatch_status.clone());
         downstream_receipt.downstream_dispatch_result_path =
             downstream_receipt.dispatch_result_path.clone();
+        downstream_receipt.downstream_dispatch_active_target =
+            active_downstream_dispatch_target(&downstream_receipt);
         if let Some(packet_path) = downstream_receipt
             .downstream_dispatch_packet_path
             .as_deref()
@@ -10950,7 +12500,9 @@ async fn execute_downstream_dispatch_chain(
 
         downstream_trace
             .push(serde_json::to_value(&downstream_receipt).unwrap_or(serde_json::Value::Null));
-        root_receipt.downstream_dispatch_executed_count += 1;
+        if downstream_receipt.dispatch_status == "executed" {
+            root_receipt.downstream_dispatch_executed_count += 1;
+        }
         root_receipt.downstream_dispatch_last_target =
             Some(downstream_receipt.dispatch_target.clone());
         root_receipt_fields_from_downstream_step(root_receipt, &downstream_receipt);
@@ -10976,24 +12528,111 @@ fn downstream_dispatch_packet_body(
     role_selection: &RuntimeConsumptionLaneSelection,
     run_graph_bootstrap: &serde_json::Value,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
+    packet_path: Option<&Path>,
 ) -> serde_json::Value {
+    let downstream_target = receipt
+        .downstream_dispatch_target
+        .as_deref()
+        .unwrap_or_default();
+    let handoff_runtime_role = receipt
+        .activation_runtime_role
+        .as_deref()
+        .unwrap_or(role_selection.selected_role.as_str());
+    let packet_template_kind = if downstream_target.is_empty() {
+        "delivery_task_packet".to_string()
+    } else {
+        runtime_dispatch_packet_kind(
+            &role_selection.execution_plan,
+            downstream_target,
+            if matches!(downstream_target, "spec-pack" | "work-pool-pack" | "dev-pack") {
+                "taskflow_pack"
+            } else {
+                "agent_lane"
+            },
+        )
+    };
+    let activation_command = packet_path
+        .and_then(|path| path.to_str())
+        .map(agent_init_command_for_packet_path);
+    let handoff_task_class = runtime_packet_handoff_task_class(downstream_target, handoff_runtime_role);
+    let closure_class = dispatch_contract_lane(&role_selection.execution_plan, downstream_target)
+        .and_then(|lane| lane["closure_class"].as_str())
+        .unwrap_or("implementation");
+    let delivery_task_packet = runtime_delivery_task_packet(
+        &receipt.run_id,
+        downstream_target,
+        handoff_runtime_role,
+        handoff_task_class,
+        closure_class,
+        &role_selection.request,
+    );
+    let execution_block_packet = runtime_execution_block_packet(
+        &receipt.run_id,
+        downstream_target,
+        handoff_runtime_role,
+        handoff_task_class,
+        closure_class,
+    );
     let body = serde_json::json!({
         "packet_kind": "runtime_downstream_dispatch_packet",
+        "packet_template_kind": packet_template_kind,
+        "delivery_task_packet": if packet_template_kind == "delivery_task_packet" {
+            delivery_task_packet
+        } else {
+            serde_json::Value::Null
+        },
+        "execution_block_packet": if packet_template_kind == "execution_block_packet" {
+            execution_block_packet
+        } else {
+            serde_json::Value::Null
+        },
+        "coach_review_packet": if packet_template_kind == "coach_review_packet" {
+            runtime_coach_review_packet(
+                &receipt.run_id,
+                downstream_target,
+                "bounded implementation result versus approved spec and definition of done",
+            )
+        } else {
+            serde_json::Value::Null
+        },
+        "verifier_proof_packet": if packet_template_kind == "verifier_proof_packet" {
+            runtime_verifier_proof_packet(
+                &receipt.run_id,
+                downstream_target,
+                "independent bounded proof and closure readiness",
+            )
+        } else {
+            serde_json::Value::Null
+        },
+        "escalation_packet": if packet_template_kind == "escalation_packet" {
+            runtime_escalation_packet(&receipt.run_id, downstream_target)
+        } else {
+            serde_json::Value::Null
+        },
+        "prompt": runtime_packet_prompt(
+            &receipt.run_id,
+            downstream_target,
+            handoff_runtime_role,
+            &role_selection.request,
+            &role_selection.execution_plan["orchestration_contract"],
+        ),
         "recorded_at": receipt.recorded_at,
         "run_id": receipt.run_id,
         "source_dispatch_target": receipt.dispatch_target,
         "source_dispatch_status": receipt.dispatch_status,
         "downstream_dispatch_target": receipt.downstream_dispatch_target,
-        "downstream_dispatch_command": receipt.downstream_dispatch_command,
+        "downstream_dispatch_command": activation_command.or_else(|| receipt.downstream_dispatch_command.clone()),
         "downstream_dispatch_note": receipt.downstream_dispatch_note,
         "downstream_dispatch_ready": receipt.downstream_dispatch_ready,
         "downstream_dispatch_blockers": receipt.downstream_dispatch_blockers,
         "downstream_dispatch_status": receipt.downstream_dispatch_status,
         "downstream_dispatch_result_path": receipt.downstream_dispatch_result_path,
+        "downstream_dispatch_active_target": receipt.downstream_dispatch_active_target,
         "activation_agent_type": receipt.activation_agent_type,
         "activation_runtime_role": receipt.activation_runtime_role,
         "role_selection_full": role_selection,
         "run_graph_bootstrap": run_graph_bootstrap,
+        "orchestration_contract": role_selection.execution_plan["orchestration_contract"],
     });
     body
 }
@@ -11004,7 +12643,12 @@ fn write_runtime_downstream_dispatch_packet_at(
     run_graph_bootstrap: &serde_json::Value,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<(), String> {
-    let body = downstream_dispatch_packet_body(role_selection, run_graph_bootstrap, receipt);
+    let body = downstream_dispatch_packet_body(
+        role_selection,
+        run_graph_bootstrap,
+        receipt,
+        Some(packet_path),
+    );
     let encoded = serde_json::to_string_pretty(&body)
         .map_err(|error| format!("Failed to encode downstream dispatch packet: {error}"))?;
     std::fs::write(packet_path, encoded)
@@ -11110,16 +12754,22 @@ fn fallback_runtime_consumption_run_graph_status(
         Some("scope_discussion") => "spec-pack".to_string(),
         Some("pbi_discussion") => "work-pool-pack".to_string(),
         _ if role_selection.execution_plan["status"] == "design_first" => "spec-pack".to_string(),
-        _ => role_selection.selected_role.clone(),
+        _ => dispatch_contract_execution_lane_sequence(
+            &role_selection.execution_plan["development_flow"]["dispatch_contract"],
+        )
+            .first()
+            .map(|value| value.as_str())
+            .unwrap_or(role_selection.selected_role.as_str())
+            .to_string(),
+    };
+    let selected_route = if conversational_mode.is_some() {
+        &role_selection.execution_plan["default_route"]
+    } else {
+        dispatch_contract_lane(&role_selection.execution_plan, &route_target)
+            .unwrap_or(&role_selection.execution_plan["codex_runtime_assignment"])
     };
     let route_backend =
-        json_string(role_selection.execution_plan["default_route"].get("subagents"))
-            .or_else(|| {
-                json_string(
-                    role_selection.execution_plan["development_flow"]["implementation"]
-                        .get("subagents"),
-                )
-            })
+        selected_backend_from_execution_plan_route(&role_selection.execution_plan, selected_route)
             .unwrap_or_else(|| "unknown".to_string());
     crate::state_store::RunGraphStatus {
         run_id: run_id.to_string(),
@@ -11538,6 +13188,10 @@ async fn resume_inputs_from_downstream_packet(
         })?;
     let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
         downstream_activation_fields(&role_selection, dispatch_target);
+    let selected_backend = activation_agent_type
+        .clone()
+        .or_else(|| root_receipt.selected_backend.clone())
+        .filter(|value| !value.is_empty());
     let dispatch_ready = packet
         .get("downstream_dispatch_ready")
         .and_then(serde_json::Value::as_bool)
@@ -11592,10 +13246,14 @@ async fn resume_inputs_from_downstream_packet(
             .map(str::to_string),
         downstream_dispatch_trace_path: None,
         downstream_dispatch_executed_count: 0,
+        downstream_dispatch_active_target: packet
+            .get("downstream_dispatch_active_target")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
         downstream_dispatch_last_target: None,
         activation_agent_type,
         activation_runtime_role,
-        selected_backend: root_receipt.selected_backend.clone(),
+        selected_backend,
         recorded_at,
     };
     Ok((
@@ -12086,6 +13744,124 @@ async fn run_taskflow_consume(args: &[String]) -> ExitCode {
         [head, flag] if head == "consume" && matches!(flag.as_str(), "--help" | "-h") => {
             print_taskflow_proxy_help(Some("consume"));
             ExitCode::SUCCESS
+        }
+        [head, subcommand] if head == "consume" && subcommand == "agent-system" => {
+            let state_dir = proxy_state_dir();
+            match open_existing_state_store_with_retry(state_dir).await {
+                Ok(store) => match build_taskflow_consume_bundle_payload(&store).await {
+                    Ok(payload) => {
+                        let snapshot = build_taskflow_agent_system_snapshot(
+                            &payload.config_path,
+                            &payload.activation_bundle,
+                        );
+                        let snapshot_path = match write_runtime_consumption_snapshot(
+                            store.root(),
+                            "agent-system",
+                            &serde_json::json!({
+                                "surface": "vida taskflow consume agent-system",
+                                "snapshot": &snapshot,
+                            }),
+                        ) {
+                            Ok(path) => path,
+                            Err(error) => {
+                                eprintln!("{error}");
+                                return ExitCode::from(1);
+                            }
+                        };
+                        print_surface_header(
+                            RenderMode::Plain,
+                            "vida taskflow consume agent-system",
+                        );
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "materialization",
+                            snapshot["materialization_mode"]
+                                .as_str()
+                                .unwrap_or("unknown"),
+                        );
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "selection rule",
+                            snapshot["agent_model"]["selection_rule"]
+                                .as_str()
+                                .unwrap_or("unknown"),
+                        );
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "carriers",
+                            &snapshot["carriers"]
+                                .as_array()
+                                .map(|rows| rows.len().to_string())
+                                .unwrap_or_else(|| "0".to_string()),
+                        );
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "runtime roles",
+                            &snapshot["runtime_roles"]
+                                .as_array()
+                                .map(|rows| rows.len().to_string())
+                                .unwrap_or_else(|| "0".to_string()),
+                        );
+                        print_surface_line(RenderMode::Plain, "snapshot path", &snapshot_path);
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("{error}");
+                        ExitCode::from(1)
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        [head, subcommand, flag]
+            if head == "consume" && subcommand == "agent-system" && flag == "--json" =>
+        {
+            let state_dir = proxy_state_dir();
+            match open_existing_state_store_with_retry(state_dir).await {
+                Ok(store) => match build_taskflow_consume_bundle_payload(&store).await {
+                    Ok(payload) => {
+                        let snapshot = build_taskflow_agent_system_snapshot(
+                            &payload.config_path,
+                            &payload.activation_bundle,
+                        );
+                        let snapshot_path = match write_runtime_consumption_snapshot(
+                            store.root(),
+                            "agent-system",
+                            &serde_json::json!({
+                                "surface": "vida taskflow consume agent-system",
+                                "snapshot": &snapshot,
+                            }),
+                        ) {
+                            Ok(path) => path,
+                            Err(error) => {
+                                eprintln!("{error}");
+                                return ExitCode::from(1);
+                            }
+                        };
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "surface": "vida taskflow consume agent-system",
+                                "snapshot": snapshot,
+                                "snapshot_path": snapshot_path,
+                            }))
+                            .expect("consume agent-system should render as json")
+                        );
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("{error}");
+                        ExitCode::from(1)
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
         }
         [head, subcommand] if head == "consume" && subcommand == "bundle" => {
             let state_dir = proxy_state_dir();
@@ -12625,6 +14401,33 @@ async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     "false"
                                 },
                             );
+                            if let Some(mode) = payload.role_selection.execution_plan
+                                ["orchestration_contract"]["mode"]
+                                .as_str()
+                            {
+                                print_surface_line(RenderMode::Plain, "execution mode", mode);
+                            }
+                            if let Some(message) = payload.role_selection.execution_plan
+                                ["orchestration_contract"]["initial_response"]["operator_message"]
+                                .as_str()
+                            {
+                                print_surface_line(RenderMode::Plain, "first step", message);
+                            }
+                            let replanning = payload.role_selection.execution_plan
+                                ["orchestration_contract"]["replanning"]["checkpoints"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            if !replanning.is_empty() {
+                                print_surface_line(
+                                    RenderMode::Plain,
+                                    "replan checkpoints",
+                                    &replanning,
+                                );
+                            }
                             if payload.role_selection.execution_plan["status"] == "design_first" {
                                 if let Some(feature_slug) = payload.role_selection.execution_plan
                                     ["tracked_flow_bootstrap"]["feature_slug"]
@@ -12637,23 +14440,30 @@ async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     );
                                 }
                                 if let Some(command) = payload.role_selection.execution_plan
-                                    ["tracked_flow_bootstrap"]["epic"]["create_command"]
+                                    ["tracked_flow_bootstrap"]["bootstrap_command"]
                                     .as_str()
                                 {
                                     print_surface_line(
                                         RenderMode::Plain,
-                                        "next epic command",
+                                        "next tracked command",
                                         command,
                                     );
                                 }
-                                if let Some(command) = payload.role_selection.execution_plan
-                                    ["tracked_flow_bootstrap"]["docflow"]["init_command"]
-                                    .as_str()
-                                {
+                                let required_lanes = payload.role_selection.execution_plan
+                                    ["orchestration_contract"]["delegation_policy"]
+                                    ["required_lanes"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(serde_json::Value::as_str)
+                                    .map(display_lane_label)
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                if !required_lanes.is_empty() {
                                     print_surface_line(
                                         RenderMode::Plain,
-                                        "next design command",
-                                        command,
+                                        "delegated lanes",
+                                        &required_lanes,
                                     );
                                 }
                             } else if let Some(agent_type) = payload.taskflow_handoff_plan
@@ -12749,6 +14559,10 @@ async fn run_taskflow_consume(args: &[String]) -> ExitCode {
             );
             ExitCode::from(2)
         }
+        [head, subcommand, ..] if head == "consume" && subcommand == "agent-system" => {
+            eprintln!("Usage: vida taskflow consume agent-system [--json]");
+            ExitCode::from(2)
+        }
         [head, subcommand, ..] if head == "consume" && subcommand == "final" => {
             eprintln!("Usage: vida taskflow consume final <request_text> [--json]");
             ExitCode::from(2)
@@ -12781,6 +14595,91 @@ fn print_surface_ok(render: RenderMode, label: &str, value: &str) {
             println!("✅ \x1b[1;34m{label}\x1b[0m: \x1b[1;32mok\x1b[0m ({value})")
         }
     }
+}
+
+fn build_taskflow_agent_system_snapshot(
+    config_path: &str,
+    activation_bundle: &serde_json::Value,
+) -> serde_json::Value {
+    let mut carriers = activation_bundle["codex_multi_agent"]["roles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|row| {
+            serde_json::json!({
+                "carrier_id": row["role_id"],
+                "tier": row["tier"],
+                "rate": row["rate"],
+                "default_runtime_role": row["default_runtime_role"],
+                "runtime_roles": row["runtime_roles"],
+                "task_classes": row["task_classes"],
+                "reasoning_band": row["reasoning_band"],
+                "model_reasoning_effort": row["model_reasoning_effort"],
+            })
+        })
+        .collect::<Vec<_>>();
+    carriers.sort_by(|left, right| {
+        left["rate"]
+            .as_u64()
+            .unwrap_or(u64::MAX)
+            .cmp(&right["rate"].as_u64().unwrap_or(u64::MAX))
+            .then_with(|| {
+                left["carrier_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .cmp(right["carrier_id"].as_str().unwrap_or_default())
+            })
+    });
+
+    let mut runtime_roles = carriers
+        .iter()
+        .flat_map(|row| {
+            row["runtime_roles"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    runtime_roles.sort();
+
+    let selection_rule = activation_bundle["codex_multi_agent"]["worker_strategy"]
+        ["selection_policy"]["rule"]
+        .as_str()
+        .unwrap_or("capability_first_then_score_guard_then_cheapest_tier");
+
+    serde_json::json!({
+        "materialization_mode": "config_materialized_runtime_projection",
+        "source_of_truth": {
+            "carrier_catalog_owner": "vida.config.yaml -> host_environment.codex.agents",
+            "dispatch_alias_owner": "vida.config.yaml -> agent_extensions.registries.dispatch_aliases",
+            "runtime_config_path": config_path,
+        },
+        "agent_model": {
+            "agent_identity": "execution_carrier",
+            "runtime_role_identity": "activation_state",
+            "selection_rule": selection_rule,
+        },
+        "agent_system": {
+            "mode": activation_bundle["agent_system"]["mode"],
+            "state_owner": activation_bundle["agent_system"]["state_owner"],
+            "max_parallel_agents": activation_bundle["agent_system"]["max_parallel_agents"],
+            "autonomous_enabled": activation_bundle["autonomous_execution"]["enabled"],
+        },
+        "carriers": carriers,
+        "runtime_roles": runtime_roles,
+        "worker_strategy": {
+            "selection_policy": activation_bundle["codex_multi_agent"]["worker_strategy"]["selection_policy"],
+            "agents": activation_bundle["codex_multi_agent"]["worker_strategy"]["agents"],
+            "store_path": activation_bundle["codex_multi_agent"]["worker_strategy"]["store_path"],
+            "scorecards_path": activation_bundle["codex_multi_agent"]["worker_strategy"]["scorecards_path"],
+        },
+        "dispatch_aliases": activation_bundle["codex_multi_agent"]["dispatch_aliases"],
+    })
 }
 
 fn print_task_list(render: RenderMode, tasks: &[TaskRecord], as_json: bool) {
@@ -13056,7 +14955,7 @@ enum Command {
     Boot(BootArgs),
     #[command(about = "render the compiled startup view for the orchestrator lane")]
     OrchestratorInit(InitArgs),
-    #[command(about = "render the bounded startup view for a worker/agent lane")]
+    #[command(about = "render the bounded startup view or packet activation view for a worker/agent lane")]
     AgentInit(AgentInitArgs),
     #[command(about = "resolve and render framework protocol/guide surfaces")]
     Protocol(ProtocolArgs),
@@ -13332,6 +15231,12 @@ struct AgentInitArgs {
     #[arg(long = "role")]
     role: Option<String>,
 
+    #[arg(long = "dispatch-packet")]
+    dispatch_packet: Option<String>,
+
+    #[arg(long = "downstream-packet")]
+    downstream_packet: Option<String>,
+
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     state_dir: Option<PathBuf>,
 
@@ -13406,7 +15311,7 @@ fn print_root_help() {
         "  boot      initialize authoritative state and instruction/framework-memory surfaces"
     );
     println!("  orchestrator-init  render the compiled startup view for the orchestrator lane");
-    println!("  agent-init         render the bounded startup view for a worker/agent lane");
+    println!("  agent-init         render the bounded startup view or packet activation view for a worker/agent lane");
     println!("  protocol  resolve and render framework protocol/guide surfaces");
     println!(
         "  project-activator  inspect project activation posture and bounded onboarding next steps"
@@ -13953,6 +15858,11 @@ mod tests {
         )
         .expect("flows registry should exist");
         fs::write(
+            root.join(".vida/project/agent-extensions/dispatch-aliases.yaml"),
+            "version: 1\ndispatch_aliases: []\n",
+        )
+        .expect("dispatch aliases registry should exist");
+        fs::write(
             root.join(".vida/project/agent-extensions/roles.sidecar.yaml"),
             "version: 1\nroles: []\n",
         )
@@ -13972,6 +15882,11 @@ mod tests {
             "version: 1\nflow_sets: []\n",
         )
         .expect("flows sidecar should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/dispatch-aliases.sidecar.yaml"),
+            "version: 1\ndispatch_aliases: []\n",
+        )
+        .expect("dispatch aliases sidecar should exist");
 
         let view = build_project_activator_view(root);
 
@@ -14021,6 +15936,30 @@ mod tests {
     }
 
     #[test]
+    fn project_activator_fails_closed_for_partial_activation_submission() {
+        let _lock = current_dir_lock().lock().expect("lock should succeed");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = CurrentDirGuard::change_to(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::from(2)
+        );
+
+        assert!(!harness.path().join(".codex/config.toml").exists());
+        let view = build_project_activator_view(harness.path());
+        assert_eq!(view["activation_pending"], true);
+        assert!(view["host_environment"]["selected_cli_system"].is_null());
+    }
+
+    #[test]
     fn project_activator_accepts_host_cli_selection_and_materializes_codex_template() {
         let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
@@ -14031,6 +15970,12 @@ mod tests {
         assert_eq!(
             runtime.block_on(run(cli(&[
                 "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
                 "--host-cli-system",
                 "codex",
                 "--json"
@@ -14046,6 +15991,12 @@ mod tests {
             .expect("config should exist");
         assert!(config.contains("cli_system: codex"));
         assert!(config.contains("host_environment:"));
+        assert!(config.contains("protocol_activation:\n  agent_system: true"));
+        assert!(config.contains("agent_only_development: true"));
+        assert!(config.contains("agent_system:\n  init_on_boot: true"));
+        assert!(config.contains("mode: native"));
+        assert!(config.contains("state_owner: orchestrator_only"));
+        assert!(config.contains("max_parallel_agents: 4"));
 
         let view = build_project_activator_view(harness.path());
         assert_eq!(view["host_environment"]["selected_cli_system"], "codex");
@@ -14142,6 +16093,53 @@ mod tests {
                 "--json"
             ]))),
             ExitCode::SUCCESS
+        );
+
+        let view = build_project_activator_view(harness.path());
+        assert_eq!(
+            view["normal_work_defaults"]["execution_carrier_model"]["agent_identity"],
+            "execution_carrier"
+        );
+        assert_eq!(
+            view["normal_work_defaults"]["execution_carrier_model"]["runtime_role_identity"],
+            "activation_state"
+        );
+        assert_eq!(
+            view["normal_work_defaults"]["execution_carrier_model"]["selection_rule"],
+            "capability_first_then_score_guard_then_cheapest_tier"
+        );
+        assert!(
+            view["normal_work_defaults"]["execution_carrier_model"]["inspect_commands"]["snapshot"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("vida taskflow consume agent-system --json")
+        );
+        assert!(
+            view["normal_work_defaults"]["execution_carrier_model"]["inspect_commands"]
+                ["carrier_catalog"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(".snapshot.carriers")
+        );
+        assert!(
+            view["normal_work_defaults"]["execution_carrier_model"]["inspect_commands"]
+                ["runtime_roles"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("roles")
+        );
+        assert!(
+            view["normal_work_defaults"]["execution_carrier_model"]["inspect_commands"]["scores"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(".snapshot.worker_strategy.agents")
+        );
+        assert!(
+            view["normal_work_defaults"]["execution_carrier_model"]["inspect_commands"]
+                ["selection_preview"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("codex_runtime_assignment")
         );
 
         let config = fs::read_to_string(harness.path().join(".codex/config.toml"))
@@ -14313,6 +16311,378 @@ mod tests {
         );
         assert_eq!(architecture["rate"], 32);
         assert_eq!(architecture["estimated_task_price_units"], 128);
+    }
+
+    #[test]
+    fn selected_backend_prefers_carrier_tier_over_internal_subagents() {
+        let execution_plan = serde_json::json!({
+            "codex_runtime_assignment": {
+                "selected_tier": "middle",
+                "activation_agent_type": "middle",
+            },
+            "development_flow": {
+                "implementation": {
+                    "preferred_agent_tier": "junior",
+                    "preferred_agent_type": "junior",
+                    "subagents": "internal_subagents",
+                    "codex_runtime_assignment": {
+                        "selected_tier": "junior",
+                        "activation_agent_type": "junior",
+                    }
+                }
+            },
+            "default_route": {
+                "subagents": "internal_subagents"
+            },
+            "status": "execution_ready",
+        });
+        let route = &execution_plan["development_flow"]["implementation"];
+        assert_eq!(
+            selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
+            Some("junior")
+        );
+    }
+
+    #[test]
+    fn fallback_run_graph_status_uses_carrier_tier_for_conversation_routes() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "research and specification".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("spec-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec!["research".to_string(), "specification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "status": "design_first",
+                "codex_runtime_assignment": {
+                    "selected_tier": "middle",
+                    "activation_agent_type": "middle"
+                },
+                "default_route": {
+                    "subagents": "internal_subagents"
+                },
+                "development_flow": {
+                    "implementation": {
+                        "preferred_agent_tier": "junior",
+                        "subagents": "internal_subagents"
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+
+        let status = fallback_runtime_consumption_run_graph_status(&role_selection, "run-test");
+        assert_eq!(status.selected_backend, "middle");
+    }
+
+    #[test]
+    fn downstream_receipt_backend_prefers_activation_agent_type() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "implement".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["implementation".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "implementer_activation": {
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        },
+                        "coach_activation": {
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "coach"
+                        },
+                        "verifier_activation": {
+                            "activation_agent_type": "senior",
+                            "activation_runtime_role": "verifier"
+                        },
+                        "escalation_activation": {
+                            "activation_agent_type": "architect",
+                            "activation_runtime_role": "solution_architect"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let root_receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-test".to_string(),
+            dispatch_target: "work-pool-pack".to_string(),
+            dispatch_status: "routed".to_string(),
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida taskflow task create".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            downstream_dispatch_target: Some("implementer".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("taskflow_state_store".to_string()),
+            recorded_at: "2026-03-15T00:00:00Z".to_string(),
+        };
+
+        let downstream = build_downstream_dispatch_receipt(&role_selection, &root_receipt)
+            .expect("downstream receipt should build");
+        assert_eq!(downstream.activation_agent_type.as_deref(), Some("junior"));
+        assert_eq!(downstream.selected_backend.as_deref(), Some("junior"));
+    }
+
+    #[test]
+    fn spec_pack_downstream_routes_to_specification_lane_when_agent_only_enabled() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "research and specification".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("spec-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec!["research".to_string(), "specification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "autonomous_execution": {
+                    "agent_only_development": true
+                },
+                "tracked_flow_bootstrap": {
+                    "work_pool_task": {
+                        "create_command": "vida taskflow task create feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
+                    }
+                },
+                "development_flow": {
+                    "implementation": {
+                        "coach_required": false,
+                        "independent_verification_required": false
+                    },
+                    "dispatch_contract": {
+                        "specification_activation": {
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "business_analyst"
+                        },
+                        "implementer_activation": {
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        },
+                        "coach_activation": {
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "coach"
+                        },
+                        "verifier_activation": {
+                            "activation_agent_type": "senior",
+                            "activation_runtime_role": "verifier"
+                        },
+                        "escalation_activation": {
+                            "activation_agent_type": "architect",
+                            "activation_runtime_role": "solution_architect"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-spec".to_string(),
+            dispatch_target: "spec-pack".to_string(),
+            dispatch_status: "executed".to_string(),
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida taskflow bootstrap-spec".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-03-15T00:00:00Z".to_string(),
+        };
+
+        let (target, command, _note, ready, blockers) =
+            derive_downstream_dispatch_preview(&role_selection, &receipt);
+        assert_eq!(target.as_deref(), Some("specification"));
+        assert_eq!(command.as_deref(), Some("vida agent-init"));
+        assert!(ready);
+        assert!(blockers.is_empty());
+    }
+
+    #[test]
+    fn packet_ready_specification_lane_stays_active_while_work_pool_handoff_remains_blocked() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "research and specification".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("spec-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec!["research".to_string(), "specification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "tracked_flow_bootstrap": {
+                    "work_pool_task": {
+                        "create_command": "vida taskflow task create feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
+                    }
+                },
+                "development_flow": {
+                    "implementation": {
+                        "coach_required": false,
+                        "independent_verification_required": false
+                    },
+                    "dispatch_contract": {
+                        "specification_activation": {
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "business_analyst"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-spec".to_string(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "packet_ready".to_string(),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-03-15T00:00:00Z".to_string(),
+        };
+
+        let (target, command, note, ready, blockers) =
+            derive_downstream_dispatch_preview(&role_selection, &receipt);
+        assert_eq!(target.as_deref(), Some("work-pool-pack"));
+        assert_eq!(
+            command.as_deref(),
+            Some(
+                "vida taskflow task create feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
+            )
+        );
+        assert!(!ready);
+        assert!(blockers.contains(&"pending_specification_evidence".to_string()));
+        assert!(blockers.contains(&"pending_design_finalize".to_string()));
+        assert!(blockers.contains(&"pending_spec_task_close".to_string()));
+        assert_eq!(
+            active_downstream_dispatch_target(&receipt).as_deref(),
+            Some("specification")
+        );
+        assert!(note
+            .as_deref()
+            .unwrap_or_default()
+            .contains("wait for bounded evidence return"));
+    }
+
+    #[test]
+    fn specification_downstream_activation_uses_specification_contract() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "research and specification".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("spec-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec!["research".to_string(), "specification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "specification_activation": {
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "business_analyst"
+                        },
+                        "implementer_activation": {
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        },
+                        "coach_activation": {
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "coach"
+                        },
+                        "verifier_activation": {
+                            "activation_agent_type": "senior",
+                            "activation_runtime_role": "verifier"
+                        },
+                        "escalation_activation": {
+                            "activation_agent_type": "architect",
+                            "activation_runtime_role": "solution_architect"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+
+        let (_kind, surface, agent_type, runtime_role) =
+            downstream_activation_fields(&role_selection, "specification");
+        assert_eq!(surface.as_deref(), Some("vida agent-init"));
+        assert_eq!(agent_type.as_deref(), Some("middle"));
+        assert_eq!(runtime_role.as_deref(), Some("business_analyst"));
     }
 
     #[test]
@@ -14564,6 +16934,7 @@ mod tests {
                 "    skills: .vida/project/agent-extensions/skills.yaml\n",
                 "    profiles: .vida/project/agent-extensions/profiles.yaml\n",
                 "    flows: .vida/project/agent-extensions/flows.yaml\n",
+                "    dispatch_aliases: .vida/project/agent-extensions/dispatch-aliases.yaml\n",
                 "  enabled_framework_roles:\n",
                 "    - orchestrator\n",
                 "    - worker\n",
@@ -14619,6 +16990,11 @@ mod tests {
         )
         .expect("flows registry should exist");
         fs::write(
+            root.join(".vida/project/agent-extensions/dispatch-aliases.yaml"),
+            "version: 1\ndispatch_aliases: []\n",
+        )
+        .expect("dispatch aliases registry should exist");
+        fs::write(
             root.join(".vida/project/agent-extensions/skills.sidecar.yaml"),
             "version: 1\nskills: []\n",
         )
@@ -14633,6 +17009,11 @@ mod tests {
             "version: 1\nflow_sets: []\n",
         )
         .expect("flows sidecar should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/dispatch-aliases.sidecar.yaml"),
+            "version: 1\ndispatch_aliases: []\n",
+        )
+        .expect("dispatch aliases sidecar should exist");
 
         let overlay =
             read_yaml_file_checked(&root.join("vida.config.yaml")).expect("overlay should parse");
@@ -14657,6 +17038,7 @@ mod tests {
                 "    skills: .vida/project/agent-extensions/skills.yaml\n",
                 "    profiles: .vida/project/agent-extensions/profiles.yaml\n",
                 "    flows: .vida/project/agent-extensions/flows.yaml\n",
+                "    dispatch_aliases: .vida/project/agent-extensions/dispatch-aliases.yaml\n",
                 "  enabled_framework_roles:\n",
                 "    - orchestrator\n",
                 "    - business_analyst\n",
@@ -14715,6 +17097,11 @@ mod tests {
         )
         .expect("flows registry should exist");
         fs::write(
+            root.join(".vida/project/agent-extensions/dispatch-aliases.yaml"),
+            "version: 1\ndispatch_aliases: []\n",
+        )
+        .expect("dispatch aliases registry should exist");
+        fs::write(
             root.join(".vida/project/agent-extensions/roles.sidecar.yaml"),
             "version: 1\nroles: []\n",
         )
@@ -14734,6 +17121,21 @@ mod tests {
             "version: 1\nflow_sets: []\n",
         )
         .expect("flows sidecar should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/dispatch-aliases.sidecar.yaml"),
+            "version: 1\ndispatch_aliases: []\n",
+        )
+        .expect("dispatch aliases sidecar should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/dispatch-aliases.yaml"),
+            "version: 1\ndispatch_aliases: []\n",
+        )
+        .expect("dispatch aliases registry should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/dispatch-aliases.sidecar.yaml"),
+            "version: 1\ndispatch_aliases: []\n",
+        )
+        .expect("dispatch aliases sidecar should exist");
 
         let overlay =
             read_yaml_file_checked(&root.join("vida.config.yaml")).expect("overlay should parse");

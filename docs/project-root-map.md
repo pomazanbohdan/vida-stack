@@ -18,19 +18,21 @@ This map does not cover extracted secondary bundles by default.
    - current product/documentation index for the active project
 2. `docs/product/spec/current-spec-map.md`
    - current product spec canon
-3. `docs/process/README.md`
+3. `docs/product/spec/current-spec-provenance-map.md`
+   - detailed source-lineage companion for the active product spec canon
+4. `docs/process/README.md`
    - project process lane
-4. `docs/project-memory/README.md`
+5. `docs/project-memory/README.md`
    - project-memory lane
-5. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
+6. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
    - documentation/product alignment matrix
-6. `docs/product/spec/canonical-runtime-layer-matrix.md`
+7. `docs/product/spec/canonical-runtime-layer-matrix.md`
    - runtime capability layering matrix for the active project canon
-7. `docs/product/spec/repository-two-project-surface-model.md`
+8. `docs/product/spec/repository-two-project-surface-model.md`
    - active-project vs extracted-bundle boundary law
-8. `docs/process/documentation-tooling-map.md`
+9. `docs/process/documentation-tooling-map.md`
    - project-owned documentation tooling map
-9. `docs/process/agent-extensions/README.md`
+10. `docs/process/agent-extensions/README.md`
    - project-owned agent role/skill/profile/flow extension map
 
 ## Activation Triggers
@@ -49,20 +51,22 @@ Do not use this map as the default route for extracted bundles unless the task e
 1. Product/spec questions:
    - continue to `docs/product/index.md`
    - then to `docs/product/spec/current-spec-map.md`
-2. Documentation alignment / documentation-state questions:
+2. Product/spec provenance or absorbed-history questions:
+   - continue to `docs/product/spec/current-spec-provenance-map.md`
+3. Documentation alignment / documentation-state questions:
    - continue to `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
-3. Runtime layering / runtime architecture / runtime readiness questions:
+4. Runtime layering / runtime architecture / runtime readiness questions:
    - continue to `docs/product/spec/canonical-runtime-layer-matrix.md`
-4. Process/runbook questions for the active project:
+5. Process/runbook questions for the active project:
    - continue to `docs/process/README.md`
-5. Project-memory questions:
+6. Project-memory questions:
    - continue to `docs/project-memory/README.md`
-6. Extracted secondary bundle questions:
+7. Extracted secondary bundle questions:
    - do not continue through active project docs by default
    - enter the named bundle directly under `projects/<name>/**`
-7. Documentation tooling / operator-command questions:
+8. Documentation tooling / operator-command questions:
    - continue to `docs/process/documentation-tooling-map.md`
-8. Project agent-system extension questions:
+9. Project agent-system extension questions:
    - continue to `docs/process/agent-extensions/README.md`
 
 ## Boundary Rule
@@ -80,5 +84,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/project-root-map.md
 created_at: '2026-03-10T08:45:00+02:00'
-updated_at: '2026-03-12T07:48:27+02:00'
+updated_at: 2026-03-16T10:05:31.520957193Z
 changelog_ref: project-root-map.changelog.jsonl

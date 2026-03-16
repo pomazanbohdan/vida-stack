@@ -2,7 +2,7 @@
 
 Status: active project process doc
 
-Purpose: define the project-owned operating protocol for manager-led multi-agent development so `.codex`, VIDA orchestration, and Release-1 restart execution all use the same bounded delivery-task model.
+Purpose: define the project-owned operating protocol for manager-led multi-agent development so `.codex`, VIDA orchestration, and Release-1 execution all use the same bounded delivery-task model.
 
 ## Scope
 
@@ -165,7 +165,7 @@ Size heuristic:
 The orchestrator must:
 
 1. classify the active request,
-2. bind it to the active backlog or restart unit,
+2. bind it to the active backlog item or bounded execution unit,
 3. initialize the available skill catalog and activate the relevant skill set,
 4. shape one lawful packet,
 5. choose the lane sequence,
@@ -350,7 +350,7 @@ If any of those fail:
 
 ## Mapping To Current Release-1 Work
 
-For the active Release-1 restart line:
+For the active Release-1 execution line:
 
 1. `R1-Bxx` backlog items are not yet delegated packets,
 2. each `R1-Bxx` must first be split into one or more delivery-task packets,
@@ -385,7 +385,7 @@ After bootstrap, development agents must know immediately:
 10. for project role/skill/profile/flow registries, read `docs/process/agent-extensions/README.md`,
 11. for canonical spec-to-task decomposition law, read `command-instructions/planning.form-task-protocol.md`,
 12. for delegated packet invariants, read `instruction-contracts/lane.worker-dispatch-protocol.md`,
-13. for Release-1 restart backlog ownership, read `docs/product/spec/release-1-restart-backlog.md`.
+13. for Release-1 execution-program ownership, read `docs/product/spec/release-1-plan.md`.
 
 -----
 artifact_path: process/team-development-and-orchestration-protocol
@@ -396,5 +396,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/team-development-and-orchestration-protocol.md
 created_at: '2026-03-13T17:00:00+02:00'
-updated_at: '2026-03-13T19:11:00+02:00'
+updated_at: 2026-03-16T08:15:49.128428218Z
 changelog_ref: team-development-and-orchestration-protocol.changelog.jsonl

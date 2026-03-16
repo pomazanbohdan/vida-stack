@@ -20,7 +20,7 @@ Product/spec inputs:
 
 1. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
 2. `docs/product/spec/compiled-runtime-bundle-contract.md`
-3. `docs/product/spec/release-1-wave-plan.md`
+3. `docs/product/spec/release-1-plan.md`
 4. `docs/product/spec/taskflow-protocol-runtime-binding-model.md`
 5. `docs/product/spec/embedded-runtime-and-editable-projection-model.md`
 6. `docs/product/spec/runtime-paths-and-derived-cache-model.md`
@@ -436,5 +436,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/research/compiled-control-bundle-contract-research.md
 created_at: '2026-03-12T23:58:00+02:00'
-updated_at: '2026-03-12T23:58:00+02:00'
+updated_at: 2026-03-16T10:02:36.849439195Z
 changelog_ref: compiled-control-bundle-contract-research.changelog.jsonl

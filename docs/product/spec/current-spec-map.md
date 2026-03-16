@@ -2,183 +2,196 @@
 
 Status: active canonical map
 
-Revision: `2026-03-14`
+Revision: `2026-03-16`
 
-Purpose: define the current product-spec home, show absorbed historical sources, and anchor each current artifact to executable product law.
+Purpose: define the current product-spec home, provide a short active registry of product-law artifacts, and route detailed source lineage to the provenance companion map.
+
+Companion rule:
+1. `docs/product/spec/current-spec-map.md` is the short active registry.
+2. `docs/product/spec/current-spec-provenance-map.md` carries detailed `Sources` lineage for the same canon.
 
 ## Current Canon
 
-1. [partial-development-kernel-model.md](/home/unnamed/project/vida-stack/docs/product/spec/partial-development-kernel-model.md)
-   Sources: promoted state/route kernel lineage preserved in `docs/process/framework-source-lineage-index.md`
+### Core
+
+1. [partial-development-kernel-model.md](partial-development-kernel-model.md)
    Config families: `vida/config/machines/**`, `vida/config/routes/**`, `vida/config/policies/**`
-2. [canonical-machine-map.md](/home/unnamed/project/vida-stack/docs/product/spec/canonical-machine-map.md)
-   Sources: promoted machine/state lineage preserved in `docs/process/framework-source-lineage-index.md`
+2. [canonical-machine-map.md](canonical-machine-map.md)
    Config families: `vida/config/machines/**`
-3. [receipt-and-proof-law.md](/home/unnamed/project/vida-stack/docs/product/spec/receipt-and-proof-law.md)
-   Sources: `docs/process/framework-source-lineage-index.md`
+3. [receipt-and-proof-law.md](receipt-and-proof-law.md)
    Config families: `vida/config/receipts/**`, `vida/config/policies/**`
-4. [external-pattern-borrow-map.md](/home/unnamed/project/vida-stack/docs/product/spec/external-pattern-borrow-map.md)
-   Sources: `docs/process/framework-source-lineage-index.md`, external-source synthesis
+4. [external-pattern-borrow-map.md](external-pattern-borrow-map.md)
    Config families: cross-cutting product law only
-5. [projection-listener-checkpoint-model.md](/home/unnamed/project/vida-stack/docs/product/spec/projection-listener-checkpoint-model.md)
-   Sources: Eventuous, Elsa, LangGraph research promoted through the borrow map
+5. [projection-listener-checkpoint-model.md](projection-listener-checkpoint-model.md)
    Config families: `vida/config/machines/**`, runtime consumption by the TaskFlow runtime family
-6. [gateway-resume-handle-and-trigger-index.md](/home/unnamed/project/vida-stack/docs/product/spec/gateway-resume-handle-and-trigger-index.md)
-   Sources: Elsa trigger/bookmark semantics
+6. [gateway-resume-handle-and-trigger-index.md](gateway-resume-handle-and-trigger-index.md)
    Config families: future route/gateway law
-7. [machine-definition-lint-law.md](/home/unnamed/project/vida-stack/docs/product/spec/machine-definition-lint-law.md)
-   Sources: `python-statemachine` strict validation semantics
+7. [machine-definition-lint-law.md](machine-definition-lint-law.md)
    Config families: future machine lint
-8. [checkpoint-commit-and-replay-model.md](/home/unnamed/project/vida-stack/docs/product/spec/checkpoint-commit-and-replay-model.md)
-   Sources: Eventuous and LangGraph checkpoint/replay semantics
+8. [checkpoint-commit-and-replay-model.md](checkpoint-commit-and-replay-model.md)
    Config families: runtime-derived checkpoint law
-9. [verification-merge-law.md](/home/unnamed/project/vida-stack/docs/product/spec/verification-merge-law.md)
-   Sources: Elsa merge regressions, verification parallelism research
+9. [verification-merge-law.md](verification-merge-law.md)
    Config families: future verification routing law
-10. [instruction-artifact-model.md](/home/unnamed/project/vida-stack/docs/product/spec/instruction-artifact-model.md)
-   Sources: promoted instruction-kernel lineage in `docs/process/framework-source-lineage-index.md`, `vida/config/instructions/**`
-   Config families: `vida/config/instructions/**`
-11. [skill-management-and-activation-law.md](/home/unnamed/project/vida-stack/docs/product/spec/skill-management-and-activation-law.md)
-   Sources: product migration decisions in this cutover
-   Config families: `skills/**`, `activation/**`
-12. [instruction-migration-map.md](/home/unnamed/project/vida-stack/docs/product/spec/instruction-migration-map.md)
-   Sources: `agent-definitions/model.agent-definitions-contract.md`, `vida/config/instructions/**`
-   Config families: `vida/config/instructions/**`
-13. [project-documentation-law.md](/home/unnamed/project/vida-stack/docs/product/spec/project-documentation-law.md)
-   Sources: current markdown-first operating model and document-sidecar migration decisions
+10. [instruction-artifact-model.md](instruction-artifact-model.md)
+    Config families: `vida/config/instructions/**`
+11. [skill-management-and-activation-law.md](skill-management-and-activation-law.md)
+    Config families: `skills/**`, `activation/**`
+12. [instruction-migration-map.md](instruction-migration-map.md)
+    Config families: `vida/config/instructions/**`
+
+### Documentation And Inventory
+
+1. [project-documentation-law.md](project-documentation-law.md)
    Config families: project documentation governance only
-14. [canonical-documentation-and-inventory-layer-matrix.md](/home/unnamed/project/vida-stack/docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md)
-   Sources: `docs/product/spec/project-documentation-law.md`, `docs/product/spec/instruction-artifact-model.md`, promoted instruction/migration lineage in `docs/process/framework-source-lineage-index.md`, `vida/config/**`
+2. [canonical-documentation-and-inventory-layer-matrix.md](canonical-documentation-and-inventory-layer-matrix.md)
    Config families: canonical inventory, validation, mutation, relation, readiness, and runtime-consumption architecture across `vida/config/**`
-15. [canonical-inventory-law.md](/home/unnamed/project/vida-stack/docs/product/spec/canonical-inventory-law.md)
-   Sources: `docs/product/spec/project-documentation-law.md`, `docs/product/spec/current-spec-map.md`, `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`, `instruction_catalog.yaml`, `projection_manifest.yaml`
+3. [canonical-inventory-law.md](canonical-inventory-law.md)
    Config families: canonical inventory, registry structure, coverage, source/projection linkage, and version-tuple visibility across active canon
-16. [canonical-relation-law.md](/home/unnamed/project/vida-stack/docs/product/spec/canonical-relation-law.md)
-   Sources: `docs/product/spec/project-documentation-law.md`, `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`, `docs/process/documentation-tooling-map.md`, `vida docflow`
+4. [canonical-relation-law.md](canonical-relation-law.md)
    Config families: canonical dependencies, direct/reverse references, artifact impact, task impact, and relation validation across active canon
-17. [canonical-runtime-readiness-law.md](/home/unnamed/project/vida-stack/docs/product/spec/canonical-runtime-readiness-law.md)
-   Sources: promoted instruction/migration/readiness lineage in `docs/process/framework-source-lineage-index.md`, `vida/config/migration/**`, `vida/config/instructions/**`, `vida docflow`
+5. [canonical-runtime-readiness-law.md](canonical-runtime-readiness-law.md)
    Config families: source-version tuples, compatibility classes, projection parity, canonical bundles, boot-gate artifacts, and fail-closed readiness verdicts across active canon
-18. [canonical-layer-documentation-template.md](/home/unnamed/project/vida-stack/docs/product/spec/canonical-layer-documentation-template.md)
-   Sources: `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`, promoted Layer 1 through Layer 7 specs, and current documentation operation law
+6. [canonical-layer-documentation-template.md](canonical-layer-documentation-template.md)
    Config families: canonical layer-law authoring shape for Layers 1 through 7
-19. [functional-matrix-protocol.md](/home/unnamed/project/vida-stack/docs/product/spec/functional-matrix-protocol.md)
-   Sources: `docs/product/spec/canonical-runtime-layer-matrix.md`, `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`, `docs/product/spec/taskflow-protocol-runtime-binding-model.md`, and the current need to keep layered capability maps owner-linked, code-linked, seam-explicit, and proof-linked
+7. [functional-matrix-protocol.md](functional-matrix-protocol.md)
    Config families: canonical functional/capability matrix design, row schema, law-versus-implementation-versus-proof status split, seam protocol, bridge posture, and update/review rules for matrix-bearing specs
-20. [framework-project-documentation-layer-model.md](/home/unnamed/project/vida-stack/docs/product/spec/framework-project-documentation-layer-model.md)
-   Sources: `AGENTS.md`, `AGENTS.sidecar.md`, `system-maps/framework.map.md`, `system-maps/framework.index.md`, and the current framework/project documentation restructuring decisions
+8. [framework-project-documentation-layer-model.md](framework-project-documentation-layer-model.md)
    Config families: framework canon vs role/bootstrap/governance/project documentation layering, derivation boundaries, two-map bootstrap, and root-map requirements
-21. [root-map-and-runtime-surface-model.md](/home/unnamed/project/vida-stack/docs/product/spec/root-map-and-runtime-surface-model.md)
-   Sources: `AGENTS.md`, `AGENTS.sidecar.md`, `system-maps/framework.map.md`, `system-maps/framework.index.md`, and the current runtime-surface optimization decisions for `DocFlow`, `taskflow`, and future runtime families
+9. [root-map-and-runtime-surface-model.md](root-map-and-runtime-surface-model.md)
    Config families: framework root map, project root map, runtime-family submaps, template maps, and activation-trigger discoverability across active canon
-22. [canonical-runtime-layer-matrix.md](/home/unnamed/project/vida-stack/docs/product/spec/canonical-runtime-layer-matrix.md)
-   Sources: promoted route/runtime/readiness lineage in `docs/process/framework-source-lineage-index.md`, `docs/product/spec/partial-development-kernel-model.md`, `docs/product/spec/canonical-machine-map.md`, `docs/product/spec/projection-listener-checkpoint-model.md`, `docs/product/spec/gateway-resume-handle-and-trigger-index.md`, `docs/product/spec/verification-merge-law.md`, `docs/product/spec/canonical-runtime-readiness-law.md`, `runtime-instructions/work.taskflow-protocol.md`, `runtime-instructions/lane.agent-handoff-context-protocol.md`, and `runtime-instructions/recovery.checkpoint-replay-recovery-protocol.md`
+10. [project-document-naming-law.md](project-document-naming-law.md)
+    Config families: `docs/product/spec/**`, `docs/process/**`, `docs/product/research/**`, `docs/project-memory/**`, lane-root naming, reserved filename handling, and bounded rename-wave law for project-owned documentation
+11. [feature-design-and-adr-model.md](feature-design-and-adr-model.md)
+    Config families: structured feature/change design artifacts, linked ADR split, framework design-template routing, and bounded proof/rollout authoring for project and framework changes
+
+### Runtime And Agent Control
+
+1. [canonical-runtime-layer-matrix.md](canonical-runtime-layer-matrix.md)
    Config families: layered runtime capability progression across `vida/config/**`, TaskFlow runtime-family implementation surfaces, runtime ledgers, readiness gates, and future direct runtime consumption
-23. [agent-role-skill-profile-flow-model.md](/home/unnamed/project/vida-stack/docs/product/spec/agent-role-skill-profile-flow-model.md)
-   Sources: `agent-definitions/model.agent-definitions-contract.md`, `agent-definitions/role.role-profile-contract.md`, `instruction-contracts/core.agent-system-protocol.md`, `runtime-instructions/work.project-agent-extension-protocol.md`, `docs/product/spec/instruction-artifact-model.md`, and the current runtime/project-extension design decisions
+2. [agent-role-skill-profile-flow-model.md](agent-role-skill-profile-flow-model.md)
    Config families: framework role law, project role/skill/profile/flow activation through `vida.config.yaml`, project-owned agent-extension registries, and runtime validation for the TaskFlow runtime family
-24. [agent-lane-selection-and-conversation-mode-model.md](/home/unnamed/project/vida-stack/docs/product/spec/agent-lane-selection-and-conversation-mode-model.md)
-   Sources: `agent-definitions/entry.orchestrator-entry.md`, `command-instructions/routing.use-case-packs-protocol.md`, `command-instructions/planning.form-task-protocol.md`, `runtime-instructions/work.taskflow-protocol.md`, `runtime-instructions/work.agent-lane-selection-protocol.md`, and the current lane-selection/runtime-conversation design decisions
+3. [agent-lane-selection-and-conversation-mode-model.md](agent-lane-selection-and-conversation-mode-model.md)
    Config families: overlay-driven auto-lane selection, bounded conversational modes, one-task scope/PBI discussion, and lawful handoff into pack/taskflow routing
-25. [repository-two-project-surface-model.md](/home/unnamed/project/vida-stack/docs/product/spec/repository-two-project-surface-model.md)
-   Sources: `AGENTS.sidecar.md`, `system-maps/framework.map.md`, root `vida.config.yaml`, and the current repository separation decisions for `vida-stack` and extracted `vida-mobile`
-   Config families: active current-project routing, extracted second-project bundle boundaries, root config continuity, and two-project repository map discipline
-26. [party-chat-v2-problem-party-model.md](/home/unnamed/project/vida-stack/docs/product/spec/party-chat-v2-problem-party-model.md)
-   Sources: Airtable `Vida` base `Table 1` records `Party Chat v2 Spec — Part 1/4` through `Part 4/4`, `runtime-instructions/work.problem-party-protocol.md`, `docs/product/spec/agent-role-skill-profile-flow-model.md`, and the current project extension/runtime integration decisions
+4. [party-chat-v2-problem-party-model.md](party-chat-v2-problem-party-model.md)
    Config families: `docs/process/agent-extensions/**`, `vida.config.yaml`, `.vida/logs/problem-party/**`, single-agent or multi-agent Party Chat execution plans, and runtime consumption by the TaskFlow runtime family
-27. [autonomous-report-continuation-law.md](/home/unnamed/project/vida-stack/docs/product/spec/autonomous-report-continuation-law.md)
-   Sources: `agent-definitions/entry.orchestrator-entry.md`, `command-instructions/routing.command-layer-protocol.md`, `command-instructions/operator.vida-research-guide.md`, `runtime-instructions/work.spec-intake-protocol.md`, `runtime-instructions/work.taskflow-protocol.md`, `runtime-instructions/bridge.project-overlay-protocol.md`, and the current overlay/routing continuation decisions
+5. [autonomous-report-continuation-law.md](autonomous-report-continuation-law.md)
    Config families: `vida.config.yaml`, `vida/config/instructions/**`, TaskFlow routing and autonomous execution behavior
-28. [taskflow-v1-runtime-modernization-plan.md](/home/unnamed/project/vida-stack/docs/product/spec/taskflow-v1-runtime-modernization-plan.md)
-   Sources: `docs/product/spec/canonical-runtime-layer-matrix.md`, `docs/product/spec/party-chat-v2-problem-party-model.md`, `runtime-instructions/work.taskflow-protocol.md`, `runtime-instructions/work.problem-party-protocol.md`, the TaskFlow runtime-family implementation source tree, and the current TaskFlow v1 runtime modernization decisions
+6. [taskflow-v1-runtime-modernization-plan.md](taskflow-v1-runtime-modernization-plan.md)
    Config families: TaskFlow runtime-family implementation surfaces, `vida/config/instructions/**`, runtime feature registration, shared runtime kernel, provider registry, modular config validation, and the active TaskFlow modernization backlog
-29. [docflow-v1-runtime-modernization-plan.md](/home/unnamed/project/vida-stack/docs/product/spec/docflow-v1-runtime-modernization-plan.md)
-   Sources: `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`, `docs/product/spec/canonical-inventory-law.md`, `docs/product/spec/canonical-relation-law.md`, `docs/product/spec/canonical-runtime-readiness-law.md`, `docs/product/spec/root-map-and-runtime-surface-model.md`, `system-maps/runtime-family.docflow-map.md`, `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`, `docs/process/documentation-tooling-map.md`, `vida docflow`, `vida/config/docflow/docsys_policy.yaml`, and the current DocFlow runtime modernization decisions
+7. [docflow-v1-runtime-modernization-plan.md](docflow-v1-runtime-modernization-plan.md)
    Config families: DocFlow runtime-family implementation surfaces, canonical `vida/config/docflow-*.current.jsonl` artifacts, `vida/config/instructions/**`, documentation tooling operator surfaces, runtime-family migration, and explicit final `taskflow -> docflow` consumption seams
-30. [compiled-autonomous-delivery-runtime-architecture.md](/home/unnamed/project/vida-stack/docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md)
-   Sources: `docs/product/spec/canonical-runtime-layer-matrix.md`, `docs/product/spec/root-map-and-runtime-surface-model.md`, `docs/product/spec/agent-role-skill-profile-flow-model.md`, `docs/product/spec/agent-lane-selection-and-conversation-mode-model.md`, `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`, `docs/product/spec/docflow-v1-runtime-modernization-plan.md`, `runtime-instructions/work.project-agent-extension-protocol.md`, `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`, `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`, and current OpenAI/Anthropic/Microsoft official orchestration baselines
+8. [compiled-autonomous-delivery-runtime-architecture.md](compiled-autonomous-delivery-runtime-architecture.md)
    Config families: `vida/config/instructions/**`, `.vida/config/**`, `.vida/project/**`, `.vida/cache/**`, transitional source-mode bridge surfaces such as root `vida.config.yaml` and `docs/process/agent-extensions/**`, TaskFlow runtime-family implementation surfaces, DocFlow runtime-family implementation surfaces, and future compiled orchestration bundle surfaces
-31. [emerging-architectural-patterns-model.md](/home/unnamed/project/vida-stack/docs/product/spec/emerging-architectural-patterns-model.md)
-   Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/canonical-runtime-layer-matrix.md`, `docs/product/spec/team-coordination-model.md`, `docs/product/spec/status-families-and-query-surface-model.md`, OpenAI Prompt Caching docs, Anthropic Prompt Caching docs, LiteLLM docs, Portkey AI Gateway docs, Helicone AI Gateway docs, `vllm-project/semantic-router`, and the current production-pattern synthesis around runtime-owned tool execution, graph-based multi-agent orchestration, reliability/evaluation/governance, caching, and gateway-layer improvements
+9. [emerging-architectural-patterns-model.md](emerging-architectural-patterns-model.md)
    Config families: runtime loop ownership, specialist-agent topology, routing, verifier aggregation, persistent workflow state, production observability, evaluation posture, governance/security expectations, caching strategy, and gateway/proxy control surfaces across `vida/config/instructions/**`, TaskFlow runtime-family implementation surfaces, and future compiled runtime surfaces
-32. [release-1-wave-plan.md](/home/unnamed/project/vida-stack/docs/product/spec/release-1-wave-plan.md)
-   Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`, `docs/product/spec/docflow-v1-runtime-modernization-plan.md`, `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`, `runtime-instructions/work.project-agent-extension-protocol.md`, and current Rust/TaskFlow operator-shell donor proofs
-   Config families: Release-1 execution sequencing across `vida/config/**`, TaskFlow runtime-family implementation surfaces, DocFlow runtime-family implementation surfaces, and current Rust `vida` operator surfaces
-33. [compiled-runtime-bundle-contract.md](/home/unnamed/project/vida-stack/docs/product/spec/compiled-runtime-bundle-contract.md)
-   Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/agent-role-skill-profile-flow-model.md`, `docs/product/spec/agent-lane-selection-and-conversation-mode-model.md`, `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`, `runtime-instructions/work.project-agent-extension-protocol.md`, and current OpenAI/Anthropic/Microsoft official orchestration baselines
-   Config families: compiled control bundles with `control_core`, `activation_bundle`, `protocol_binding_registry`, and `cache_delivery_contract`, `.vida/config/**`, `.vida/project/**`, `.vida/db/**`, `.vida/cache/**`, runtime init/boot activation, bundle validation, and future machine-readable orchestration bundle surfaces
-34. [project-activation-and-configurator-model.md](/home/unnamed/project/vida-stack/docs/product/spec/project-activation-and-configurator-model.md)
-   Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/agent-role-skill-profile-flow-model.md`, `docs/product/spec/runtime-paths-and-derived-cache-model.md`, `runtime-instructions/work.project-agent-extension-protocol.md`, transitional root `vida.config.yaml`, and the current DB-first activation decisions for Release 1
-   Config families: DB-first project activation, `.vida/config/**`, `.vida/project/**`, roles/skills/profiles/flows/agents/teams/model/backend policy, sync/reconcile surfaces, and project lifecycle control
-35. [team-coordination-model.md](/home/unnamed/project/vida-stack/docs/product/spec/team-coordination-model.md)
-   Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/agent-role-skill-profile-flow-model.md`, `docs/product/spec/agent-lane-selection-and-conversation-mode-model.md`, and current OpenAI/Anthropic/Microsoft official multi-agent coordination baselines
-   Config families: team composition, coordination pattern, activation, shared policy, handoff/context posture, and closure semantics
-36. [status-families-and-query-surface-model.md](/home/unnamed/project/vida-stack/docs/product/spec/status-families-and-query-surface-model.md)
-   Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`, `docs/product/spec/docflow-v1-runtime-modernization-plan.md`, and current `vida` boot/status/doctor/memory shell surfaces
-   Config families: CLI query/status families, operator-facing render surfaces, bounded runtime snapshots, and status-family routing
-37. [project-protocol-promotion-law.md](/home/unnamed/project/vida-stack/docs/product/spec/project-protocol-promotion-law.md)
-   Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/compiled-runtime-bundle-contract.md`, `runtime-instructions/work.project-agent-extension-protocol.md`, and the current project activation versus executable bundle admission decisions
-   Config families: known versus compiled project protocol admission, project discovery/mapping, executable bundle promotion, and fail-closed protocol binding
-38. [project-document-naming-law.md](/home/unnamed/project/vida-stack/docs/product/spec/project-document-naming-law.md)
-   Sources: `docs/product/spec/project-documentation-law.md`, `docs/product/spec/framework-project-documentation-layer-model.md`, `docs/product/spec/instruction-artifact-model.md`, and the current project-doc naming standardization decisions for `docs/**`
-   Config families: `docs/product/spec/**`, `docs/process/**`, `docs/product/research/**`, `docs/project-memory/**`, lane-root naming, reserved filename handling, and bounded rename-wave law for project-owned documentation
-39. [github-public-repository-law.md](/home/unnamed/project/vida-stack/docs/product/spec/github-public-repository-law.md)
-   Sources: `docs/product/spec/project-documentation-law.md`, `docs/product/spec/project-document-naming-law.md`, root repository narrative/governance files, and official GitHub public-repository/community-health documentation
+10. [compiled-runtime-bundle-contract.md](compiled-runtime-bundle-contract.md)
+    Config families: compiled control bundles with `control_core`, `activation_bundle`, `protocol_binding_registry`, and `cache_delivery_contract`, `.vida/config/**`, `.vida/project/**`, `.vida/db/**`, `.vida/cache/**`, runtime init/boot activation, bundle validation, and future machine-readable orchestration bundle surfaces
+11. [project-activation-and-configurator-model.md](project-activation-and-configurator-model.md)
+    Config families: DB-first project activation, `.vida/config/**`, `.vida/project/**`, roles/skills/profiles/flows/agents/teams/model/backend policy, sync/reconcile surfaces, and project lifecycle control
+12. [team-coordination-model.md](team-coordination-model.md)
+    Config families: team composition, coordination pattern, activation, shared policy, handoff/context posture, and closure semantics
+13. [status-families-and-query-surface-model.md](status-families-and-query-surface-model.md)
+    Config families: CLI query/status families, operator-facing render surfaces, bounded runtime snapshots, and status-family routing
+14. [project-protocol-promotion-law.md](project-protocol-promotion-law.md)
+    Config families: known versus compiled project protocol admission, project discovery/mapping, executable bundle promotion, and fail-closed protocol binding
+15. [taskflow-protocol-runtime-binding-model.md](taskflow-protocol-runtime-binding-model.md)
+    Config families: script-era protocol binding bridge, Rust-native protocol runtime crate, activation resolution, gate enforcement, protocol receipts, binding matrices, and the dedicated TaskFlow protocol-binding subrelease
+16. [user-facing-runtime-flow-and-operating-loop-model.md](user-facing-runtime-flow-and-operating-loop-model.md)
+    Config families: operator-facing install/init/bootstrap flow, project-local runtime onboarding, project activation/config sequencing, intake/planning sequencing, execution/approval/resume sequencing, bounded pre-readiness allowlists, runtime bootstrap posture, and the staged user-facing operating loop across `.vida/**`, installed runtime assets, and DB-first readiness state
+17. [bootstrap-carriers-and-project-activator-model.md](bootstrap-carriers-and-project-activator-model.md)
+    Config families: bootstrap carriers, runtime init command split, project activator pipeline, sidecar/project-map enrichment, host-template onboarding, and bounded protocol-load separation between orchestrator and agent lanes
+18. [execution-preparation-and-developer-handoff-model.md](execution-preparation-and-developer-handoff-model.md)
+    Config families: `solution_architect`, execution preparation, architecture-preparation reports, developer handoff packets, change-boundary shaping, dependency-impact summaries, and fail-closed pre-execution gating for code-shaped work
+19. [operational-state-and-synchronization-model.md](operational-state-and-synchronization-model.md)
+    Config families: DB-first operational state, filesystem projection, Git lineage, synchronization law, conflict handling, and reactive domain routing
+20. [host-agent-layer-status-matrix.md](host-agent-layer-status-matrix.md)
+    Config families: host-agent activation layers, overlay-owned tier ladders, tier selection economics, local score/state surfaces, task-close feedback ingestion, and status/budget observability over `.vida/state/**`
+
+### Project And Packaging
+
+1. [repository-two-project-surface-model.md](repository-two-project-surface-model.md)
+   Config families: active current-project routing, extracted second-project bundle boundaries, root config continuity, and two-project repository map discipline
+2. [github-public-repository-law.md](github-public-repository-law.md)
    Config families: root repository entrypoints, `.github/**`, public-repository community surfaces, code ownership, issue/PR templates, security disclosure, and release/tag publication posture
-40. [release-build-packaging-law.md](/home/unnamed/project/vida-stack/docs/product/spec/release-build-packaging-law.md)
-   Sources: `docs/product/spec/github-public-repository-law.md`, `docs/process/release-formatting-protocol.md`, `install/install.sh`, `scripts/build-release.sh`, and the current 0.2.x release-archive minimization decisions
+3. [release-build-packaging-law.md](release-build-packaging-law.md)
    Config families: public release archive composition, installer/archive boundary, runtime-only package contents, sidecar scaffold packaging, and public release-page formatting alignment
-41. [taskflow-protocol-runtime-binding-model.md](/home/unnamed/project/vida-stack/docs/product/spec/taskflow-protocol-runtime-binding-model.md)
-   Sources: `docs/product/spec/canonical-runtime-layer-matrix.md`, `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`, `docs/product/spec/compiled-runtime-bundle-contract.md`, `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`, `runtime-instructions/runtime.direct-runtime-consumption-protocol.md`, `instruction-contracts/bridge.instruction-activation-protocol.md`, and `diagnostic-instructions/analysis.protocol-consistency-audit-protocol.md`
-   Config families: script-era protocol binding bridge, Rust-native protocol runtime crate, activation resolution, gate enforcement, protocol receipts, binding matrices, and the dedicated TaskFlow protocol-binding subrelease
-42. [embedded-runtime-and-editable-projection-model.md](/home/unnamed/project/vida-stack/docs/product/spec/embedded-runtime-and-editable-projection-model.md)
-   Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/compiled-runtime-bundle-contract.md`, `docs/product/spec/project-activation-and-configurator-model.md`, `docs/product/spec/release-build-packaging-law.md`, `docs/product/spec/taskflow-protocol-runtime-binding-model.md`, `runtime-instructions/runtime.runtime-kernel-bundle-protocol.md`, and the current installed/runtime bootstrap direction
+4. [embedded-runtime-and-editable-projection-model.md](embedded-runtime-and-editable-projection-model.md)
    Config families: embedded framework artifacts, binary-only runtime execution, project projection export/import loops, hidden runtime-owned config/activation surfaces under `.vida/**`, DB-first runtime truth, and release/runtime separation between sealed framework state and editable project surfaces
-43. [runtime-paths-and-derived-cache-model.md](/home/unnamed/project/vida-stack/docs/product/spec/runtime-paths-and-derived-cache-model.md)
-   Sources: `docs/product/spec/embedded-runtime-and-editable-projection-model.md`, `docs/product/spec/project-activation-and-configurator-model.md`, `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/taskflow-protocol-runtime-binding-model.md`, TaskFlow runtime-family implementation surfaces, `crates/vida/**`, and the current `.vida/` path/cache unification decisions
+5. [runtime-paths-and-derived-cache-model.md](runtime-paths-and-derived-cache-model.md)
    Config families: `.vida/config/**`, `.vida/db/**`, `.vida/cache/**`, `.vida/framework/**`, `.vida/project/**`, derived serving cache invalidation, hidden runtime-owned config and activation surfaces, and bridge migration away from root runtime files
-44. [user-facing-runtime-flow-and-operating-loop-model.md](/home/unnamed/project/vida-stack/docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md)
-   Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/release-1-wave-plan.md`, `docs/product/spec/embedded-runtime-and-editable-projection-model.md`, `docs/product/spec/project-activation-and-configurator-model.md`, `docs/product/spec/project-protocol-promotion-law.md`, `docs/product/spec/agent-lane-selection-and-conversation-mode-model.md`, `docs/product/spec/checkpoint-commit-and-replay-model.md`, `docs/product/spec/gateway-resume-handle-and-trigger-index.md`, `docs/product/spec/status-families-and-query-surface-model.md`, `docs/product/spec/runtime-paths-and-derived-cache-model.md`, `docs/product/research/execution-approval-and-interrupt-resume-survey.md`, and the current operator-journey concretization decisions for install, init, bootstrap, project activation, intake/planning, execution, approval, interrupt/resume, readiness gating, and bounded remediation
-   Config families: operator-facing install/init/bootstrap flow, project-local runtime onboarding, project activation/config sequencing, intake/planning sequencing, execution/approval/resume sequencing, bounded pre-readiness allowlists, runtime bootstrap posture, and the staged user-facing operating loop across `.vida/**`, installed runtime assets, and DB-first readiness state
-45. [bootstrap-carriers-and-project-activator-model.md](/home/unnamed/project/vida-stack/docs/product/spec/bootstrap-carriers-and-project-activator-model.md)
-   Sources: `AGENTS.md`, `AGENTS.sidecar.md`, `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, `docs/product/spec/root-map-and-runtime-surface-model.md`, `docs/product/spec/framework-project-documentation-layer-model.md`, `docs/product/spec/project-activation-and-configurator-model.md`, and the current onboarding/init split decisions for orchestrator-init, agent-init, project-activator, and sidecar enrichment
-   Config families: bootstrap carriers, runtime init command split, project activator pipeline, sidecar/project-map enrichment, host-template onboarding, and bounded protocol-load separation between orchestrator and agent lanes
-46. [execution-preparation-and-developer-handoff-model.md](/home/unnamed/project/vida-stack/docs/product/spec/execution-preparation-and-developer-handoff-model.md)
-   Sources: `docs/product/spec/agent-role-skill-profile-flow-model.md`, `docs/product/spec/team-coordination-model.md`, `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/release-1-wave-plan.md`, and the current v1 decision to insert an explicit preparation stage between planning and code-shaped implementation
-   Config families: `solution_architect`, execution preparation, architecture-preparation reports, developer handoff packets, change-boundary shaping, dependency-impact summaries, and fail-closed pre-execution gating for code-shaped work
-47. [release-1-program-map.md](/home/unnamed/project/vida-stack/docs/product/spec/release-1-program-map.md)
-   Sources: `VERSION-PLAN.md`, `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/release-1-wave-plan.md`, `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`, `docs/product/spec/docflow-v1-runtime-modernization-plan.md`, and `docs/process/vida1-development-conditions.md`
-   Config families: Release-1 navigation ownership, working entrypoint routing, execution-program discovery, runtime-track coordination, and proof-surface navigation
-48. [release-1-capability-matrix.md](/home/unnamed/project/vida-stack/docs/product/spec/release-1-capability-matrix.md)
-   Sources: `docs/product/spec/release-1-wave-plan.md`, `docs/product/spec/release-1-program-map.md`, `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`, `docs/product/spec/docflow-v1-runtime-modernization-plan.md`, `docs/product/spec/canonical-runtime-layer-matrix.md`, `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`, and `docs/process/vida1-development-conditions.md`
-   Config families: Release-1 capability ladder, cross-track closure over TaskFlow and DocFlow, wave-to-runtime-family mapping, release-slice proof surfaces, and fail-closed Release-1 seam ownership
-49. [release-1-seam-map.md](/home/unnamed/project/vida-stack/docs/product/spec/release-1-seam-map.md)
-   Sources: `docs/product/spec/release-1-capability-matrix.md`, `docs/product/spec/release-1-wave-plan.md`, `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`, `docs/product/spec/docflow-v1-runtime-modernization-plan.md`, `docs/product/spec/canonical-runtime-layer-matrix.md`, `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`, and `docs/process/vida1-development-conditions.md`
-   Config families: Release-1 closure seam, TaskFlow-to-DocFlow activation and proof return contract, fail-closed blocker classes, and final hardening admission for Release 1
-50. [release-1-restart-plan.md](/home/unnamed/project/vida-stack/docs/product/spec/release-1-restart-plan.md)
-   Sources: `docs/product/spec/release-1-capability-matrix.md`, `docs/product/spec/release-1-seam-map.md`, `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`, `docs/product/spec/docflow-v1-runtime-modernization-plan.md`, `docs/process/vida1-development-conditions.md`, and the current need to restart active development over the existing codebase through controlled closure units
-   Config families: Release-1 restart posture, freeze boundaries, implementation-reality mapping, gap mapping, matrix-first decomposition, critical-path restart order, and bounded vertical closure resumption
-51. [release-1-implementation-reality-pass.md](/home/unnamed/project/vida-stack/docs/product/spec/release-1-implementation-reality-pass.md)
-   Sources: `docs/product/spec/release-1-capability-matrix.md`, `docs/product/spec/release-1-seam-map.md`, `docs/product/spec/taskflow-v1-runtime-modernization-plan.md`, `docs/product/spec/docflow-v1-runtime-modernization-plan.md`, `docs/process/vida1-development-conditions.md`, workspace crate topology, and current launcher concentration findings
-   Config families: Release-1 implementation readiness by slice/layer/seam, keep-versus-refactor-versus-rewrite posture, launcher concentration risk, and reality-backed restart inputs
-52. [release-1-restart-backlog.md](/home/unnamed/project/vida-stack/docs/product/spec/release-1-restart-backlog.md)
-   Sources: `docs/product/spec/release-1-restart-plan.md`, `docs/product/spec/release-1-implementation-reality-pass.md`, `docs/product/spec/release-1-seam-map.md`, and `docs/product/spec/release-1-capability-matrix.md`
-   Config families: restart execution queue, bounded closure units, restart priority bands, critical-path ordering, and keep-versus-extend-versus-refactor execution posture for Release 1
-53. [operational-state-and-synchronization-model.md](/home/unnamed/project/vida-stack/docs/product/spec/operational-state-and-synchronization-model.md)
-   Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/embedded-runtime-and-editable-projection-model.md`, `docs/product/spec/runtime-paths-and-derived-cache-model.md`, and the current DB-first synchronization boundary decisions
-   Config families: DB-first operational state, filesystem projection, Git lineage, synchronization law, conflict handling, and reactive domain routing
-54. [extensibility-and-output-template-model.md](/home/unnamed/project/vida-stack/docs/product/spec/extensibility-and-output-template-model.md)
-   Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/project-activation-and-configurator-model.md`, `docs/product/spec/project-protocol-promotion-law.md`, and `docs/product/spec/agent-role-skill-profile-flow-model.md`
+6. [extensibility-and-output-template-model.md](extensibility-and-output-template-model.md)
    Config families: sealed/augmentable/replaceable surfaces, protocol-versus-template distinction, root output rendering, and project-replaceable template boundaries
-55. [external-architecture-baseline.md](/home/unnamed/project/vida-stack/docs/product/spec/external-architecture-baseline.md)
-   Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, official OpenAI/Anthropic/Microsoft architecture references, and explicit vendor-alignment preservation
+7. [external-architecture-baseline.md](external-architecture-baseline.md)
    Config families: external orchestration baseline, guardrail boundary alignment, subagent specialization alignment, and runtime-state ownership references
-56. [feature-design-and-adr-model.md](/home/unnamed/project/vida-stack/docs/product/spec/feature-design-and-adr-model.md)
-   Sources: framework source template `docs/framework/templates/feature-design-document.template.md`, project-local materialized template `docs/product/spec/templates/feature-design-document.template.md`, official OpenAI/Anthropic prompt-structuring guidance, Microsoft/AWS ADR guidance, and the current need to keep bounded change design separate from durable decision records
-   Config families: structured feature/change design artifacts, linked ADR split, framework design-template routing, and bounded proof/rollout authoring for project and framework changes
-57. [host-agent-layer-status-matrix.md](/home/unnamed/project/vida-stack/docs/product/spec/host-agent-layer-status-matrix.md)
-   Sources: `vida.config.yaml`, `docs/process/codex-agent-configuration-guide.md`, `docs/product/spec/agent-role-skill-profile-flow-model.md`, `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`, `work.host-cli-agent-setup-protocol.md`, and current Rust launcher/runtime status surfaces
-   Config families: host-agent activation layers, overlay-owned tier ladders, tier selection economics, local score/state surfaces, task-close feedback ingestion, and status/budget observability over `.vida/state/**`
+
+### Release 1
+
+1. [release-1-plan.md](release-1-plan.md)
+   Config families: Release-1 execution ownership, mandatory capability closure, V1 target architecture, crate/file decomposition, stateful agent-lane governance, phase ordering, and platform-shape preservation
+   Registered path: `docs/product/spec/release-1-plan.md`
+2. [release-1-capability-matrix.md](release-1-capability-matrix.md)
+   Config families: Release-1 capability ladder, cross-track closure, slice mapping, proof surfaces, and fail-closed seam ownership
+   Registered path: `docs/product/spec/release-1-capability-matrix.md`
+3. [release-1-seam-map.md](release-1-seam-map.md)
+   Config families: Release-1 closure seam, TaskFlow-to-DocFlow activation/proof return, blocker classes, and final hardening admission
+   Registered path: `docs/product/spec/release-1-seam-map.md`
+4. [release-1-current-state.md](release-1-current-state.md)
+   Config families: Release-1 readiness by slice/layer/seam, keep-versus-refactor posture, launcher concentration risk, and current state inputs
+   Registered path: `docs/product/spec/release-1-current-state.md`
+5. [release-1-closure-contract.md](release-1-closure-contract.md)
+   Config families: Release-1 definition of done, non-waivable blockers, risk-acceptance law, and closure evidence bundle
+   Registered path: `docs/product/spec/release-1-closure-contract.md`
+6. [release-1-workflow-classification-and-risk-matrix.md](release-1-workflow-classification-and-risk-matrix.md)
+   Config families: Release-1 workflow classes, risk tiers, approval posture, lifecycle variants, and supported workflow surface
+   Registered path: `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
+7. [release-1-control-metrics-and-gates.md](release-1-control-metrics-and-gates.md)
+   Config families: Release-1 control metrics, gate thresholds, release-candidate evidence windows, and workflow-tier gate binding
+   Registered path: `docs/product/spec/release-1-control-metrics-and-gates.md`
+8. [release-1-canonical-artifact-schemas.md](release-1-canonical-artifact-schemas.md)
+   Config families: Release-1 minimum machine-readable contracts for traces, approvals, tool contracts, evaluation runs, incidents, memory records, and closure admission
+   Registered path: `docs/product/spec/release-1-canonical-artifact-schemas.md`
+9. [release-1-decision-tables.md](release-1-decision-tables.md)
+   Config families: Release-1 executable control rules for approval, delegation, tool use, retrieval trust, memory writes, and rollback gates
+   Registered path: `docs/product/spec/release-1-decision-tables.md`
+10. [release-1-state-machine-specs.md](release-1-state-machine-specs.md)
+   Config families: Release-1 canonical FSMs for lanes, approvals, tools, incidents, and prompt rollout
+   Registered path: `docs/product/spec/release-1-state-machine-specs.md`
+11. [release-1-error-and-exception-taxonomy.md](release-1-error-and-exception-taxonomy.md)
+   Config families: Release-1 blocker codes, failure vocabulary, and exception-path taxonomy
+   Registered path: `docs/product/spec/release-1-error-and-exception-taxonomy.md`
+12. [release-1-ownership-to-code-map.md](release-1-ownership-to-code-map.md)
+   Config families: Release-1 owner-doc to crate/module placement, shell boundary discipline, and anti-drift ownership mapping
+   Registered path: `docs/product/spec/release-1-ownership-to-code-map.md`
+13. [release-1-proof-scenario-catalog.md](release-1-proof-scenario-catalog.md)
+   Config families: Release-1 minimum proof scenarios, negative-control scenarios, and scenario evidence requirements
+   Registered path: `docs/product/spec/release-1-proof-scenario-catalog.md`
+14. [release-1-schema-versioning-and-compatibility-law.md](release-1-schema-versioning-and-compatibility-law.md)
+   Config families: Release-1 artifact schema evolution, compatibility classes, mixed-version rules, and migration law
+   Registered path: `docs/product/spec/release-1-schema-versioning-and-compatibility-law.md`
+15. [release-1-runtime-enum-and-code-contracts.md](release-1-runtime-enum-and-code-contracts.md)
+   Config families: Release-1 canonical enum/value contracts for workflow classes, risk tiers, statuses, gate levels, blocker codes, and compatibility classes
+   Registered path: `docs/product/spec/release-1-runtime-enum-and-code-contracts.md`
+16. [release-1-conformance-matrix.md](release-1-conformance-matrix.md)
+   Config families: Release-1 doc-to-code-to-proof mapping, conformance posture, and bounded implementation targets
+   Registered path: `docs/product/spec/release-1-conformance-matrix.md`
+17. [release-1-operator-surface-contract.md](release-1-operator-surface-contract.md)
+   Config families: Release-1 stable operator output contracts for status, doctor, consume, lane, approval, and recovery surfaces
+   Registered path: `docs/product/spec/release-1-operator-surface-contract.md`
+18. [release-1-unsupported-surface-contract.md](release-1-unsupported-surface-contract.md)
+   Config families: Release-1 unsupported and architecture-reserved surface boundaries and denial posture
+   Registered path: `docs/product/spec/release-1-unsupported-surface-contract.md`
+19. [release-1-fixture-and-golden-data-contract.md](release-1-fixture-and-golden-data-contract.md)
+   Config families: Release-1 canonical fixtures, golden scenarios, and compatibility-proof sample contracts
+   Registered path: `docs/product/spec/release-1-fixture-and-golden-data-contract.md`
+20. [release-1-risk-acceptance-register.md](release-1-risk-acceptance-register.md)
+   Config families: Release-1 explicit open-risk tracking, bounded acceptances, and closure-governance visibility
+   Registered path: `docs/product/spec/release-1-risk-acceptance-register.md`
+
+### Support
+
+1. [current-spec-provenance-map.md](current-spec-provenance-map.md)
+   Config families: detailed source lineage, absorbed historical inputs, and provenance routing for the active product-spec canon
+   Registered path: `docs/product/spec/current-spec-provenance-map.md`
 
 ## Routing Pointers
 
@@ -187,15 +200,18 @@ Use this map through the project-doc route rather than as a standalone bootstrap
 1. Active project-doc bootstrap:
    - `AGENTS.sidecar.md`
 2. Current project root map:
-   - `docs/project-root-map.md`
+   - `../../project-root-map.md`
 3. Documentation/system/tooling follow-up:
-   - `docs/process/documentation-tooling-map.md`
+   - `../../process/documentation-tooling-map.md`
+4. Detailed source-lineage follow-up:
+   - `current-spec-provenance-map.md`
 
 Activation rule:
 
-1. read this spec map when product/spec canon questions are active,
-2. prefer `docs/project-root-map.md` first when the task is still choosing between product/process/project-memory lanes,
-3. do not use this file as a replacement for framework root-map routing.
+1. read this spec map when active product/spec canon questions are active,
+2. prefer `../../project-root-map.md` first when the task is still choosing between product/process/project-memory lanes,
+3. use the provenance companion only when detailed source lineage or absorbed-history questions are active,
+4. do not use this file as a replacement for framework root-map routing.
 
 ## Current Rule
 
@@ -220,10 +236,10 @@ Activation rule:
 artifact_path: product/spec/current-spec-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-14'
+artifact_revision: '2026-03-16'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: '2026-03-14T17:15:00+02:00'
+updated_at: 2026-03-16T11:34:41.626135419Z
 changelog_ref: current-spec-map.changelog.jsonl

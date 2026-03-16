@@ -2,6 +2,12 @@
 
 Use this directory for bounded product-facing feature/change design documents and linked ADRs.
 
+Top-level execution model:
+
+1. `agent` is execution carrier (model/tier/cost/effectiveness), not runtime role identity.
+2. `role` remains explicit runtime activation state.
+3. Runtime binds admissible carrier to role/task-class and selects by capability/admissibility -> score guard -> cheapest eligible.
+
 Default rule:
 
 1. If a request asks for research, detailed specifications, implementation planning, and then code, create or update one bounded design document before implementation.
@@ -19,3 +25,7 @@ Suggested homes:
 Active design docs:
 
 - `docs/product/spec/clarify-spec-scope-design.md`
+- `docs/product/spec/feature-specification-design.md`
+- `docs/product/spec/flappy-bird-design.md`
+- `docs/product/spec/api-constraints-specification-make-bounded-patch-design.md`
+- `docs/product/spec/flappy-bird-flappy-bird-every-mechanism-design.md`

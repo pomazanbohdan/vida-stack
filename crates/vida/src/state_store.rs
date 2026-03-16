@@ -910,6 +910,28 @@ impl StateStore {
         task_id: &str,
         reason: &str,
     ) -> Result<TaskRecord, StateStoreError> {
+        let tasks = self.all_tasks().await?;
+        let open_children = tasks
+            .iter()
+            .filter(|task| {
+                task.id != task_id
+                    && task.status != "closed"
+                    && task.dependencies.iter().any(|dependency| {
+                        dependency.edge_type == "parent-child"
+                            && dependency.depends_on_id == task_id
+                    })
+            })
+            .map(|task| task.id.clone())
+            .collect::<Vec<_>>();
+        if !open_children.is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "cannot close task `{task_id}` while open child tasks exist: {}",
+                    open_children.join(", ")
+                ),
+            });
+        }
+
         let mut task = self.show_task(task_id).await?;
         let now = unix_timestamp_nanos().to_string();
         task.status = "closed".to_string();
@@ -1677,19 +1699,6 @@ impl StateStore {
         status: &RunGraphStatus,
     ) -> Result<(), StateStoreError> {
         let updated_at = unix_timestamp_nanos().to_string();
-        let _: Option<ExecutionPlanStateRow> = self
-            .db
-            .upsert(("execution_plan_state", status.run_id.as_str()))
-            .content(ExecutionPlanStateRow {
-                run_id: status.run_id.clone(),
-                task_id: status.task_id.clone(),
-                task_class: status.task_class.clone(),
-                active_node: status.active_node.clone(),
-                next_node: status.next_node.clone(),
-                status: status.status.clone(),
-                updated_at: updated_at.clone(),
-            })
-            .await?;
         let _: Option<RoutedRunStateRow> = self
             .db
             .upsert(("routed_run_state", status.run_id.as_str()))
@@ -1722,6 +1731,19 @@ impl StateStore {
                 resume_target: status.resume_target.clone(),
                 recovery_ready: status.recovery_ready,
                 updated_at,
+            })
+            .await?;
+        let _: Option<ExecutionPlanStateRow> = self
+            .db
+            .upsert(("execution_plan_state", status.run_id.as_str()))
+            .content(ExecutionPlanStateRow {
+                run_id: status.run_id.clone(),
+                task_id: status.task_id.clone(),
+                task_class: status.task_class.clone(),
+                active_node: status.active_node.clone(),
+                next_node: status.next_node.clone(),
+                status: status.status.clone(),
+                updated_at: unix_timestamp_nanos().to_string(),
             })
             .await?;
         Ok(())
@@ -3668,6 +3690,7 @@ pub struct RunGraphDispatchReceipt {
     pub downstream_dispatch_result_path: Option<String>,
     pub downstream_dispatch_trace_path: Option<String>,
     pub downstream_dispatch_executed_count: u32,
+    pub downstream_dispatch_active_target: Option<String>,
     pub downstream_dispatch_last_target: Option<String>,
     pub activation_agent_type: Option<String>,
     pub activation_runtime_role: Option<String>,
@@ -3894,6 +3917,7 @@ pub struct RunGraphDispatchReceiptSummary {
     pub downstream_dispatch_result_path: Option<String>,
     pub downstream_dispatch_trace_path: Option<String>,
     pub downstream_dispatch_executed_count: u32,
+    pub downstream_dispatch_active_target: Option<String>,
     pub downstream_dispatch_last_target: Option<String>,
     pub activation_agent_type: Option<String>,
     pub activation_runtime_role: Option<String>,
@@ -3923,6 +3947,7 @@ impl RunGraphDispatchReceiptSummary {
             downstream_dispatch_result_path: receipt.downstream_dispatch_result_path,
             downstream_dispatch_trace_path: receipt.downstream_dispatch_trace_path,
             downstream_dispatch_executed_count: receipt.downstream_dispatch_executed_count,
+            downstream_dispatch_active_target: receipt.downstream_dispatch_active_target,
             downstream_dispatch_last_target: receipt.downstream_dispatch_last_target,
             activation_agent_type: receipt.activation_agent_type,
             activation_runtime_role: receipt.activation_runtime_role,
@@ -5207,6 +5232,77 @@ hierarchy: framework,contracts
         let ready_ids = ready.into_iter().map(|task| task.id).collect::<Vec<_>>();
         assert_eq!(ready_ids, vec!["vida-c", "vida-a"]);
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn close_task_fails_closed_when_open_child_tasks_exist() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-close-task-open-child-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels: Vec<String> = Vec::new();
+
+        store
+            .create_task(
+                "vida-root",
+                "Root",
+                "root",
+                "epic",
+                "open",
+                1,
+                None,
+                &labels,
+                "tester",
+                ".",
+            )
+            .await
+            .expect("create root task");
+        store
+            .create_task(
+                "vida-child",
+                "Child",
+                "child",
+                "task",
+                "open",
+                2,
+                Some("vida-root"),
+                &labels,
+                "tester",
+                ".",
+            )
+            .await
+            .expect("create child task");
+
+        let error = store
+            .close_task("vida-root", "done")
+            .await
+            .expect_err("closing parent with open child should fail");
+        match error {
+            StateStoreError::InvalidTaskRecord { reason } => {
+                assert!(reason.contains("cannot close task `vida-root`"));
+                assert!(reason.contains("vida-child"));
+            }
+            other => panic!("expected InvalidTaskRecord, got {other}"),
+        }
+
+        store
+            .close_task("vida-child", "done")
+            .await
+            .expect("child close should succeed");
+        let closed_parent = store
+            .close_task("vida-root", "done")
+            .await
+            .expect("parent close should succeed after child closure");
+        assert_eq!(closed_parent.status, "closed");
+
+        drop(store);
         let _ = fs::remove_dir_all(&root);
     }
 

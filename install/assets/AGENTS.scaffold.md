@@ -10,6 +10,8 @@ Core rule:
 1. Use command-first bootstrap through the local `vida` binary.
 2. Use `AGENTS.sidecar.md` as the project docs map.
 3. Use bounded framework canonical ids through `vida protocol view <id>` only when the runtime init surfaces leave an edge case unresolved.
+4. In host-agent execution, treat agent ids as execution carriers (model/tier/cost/effectiveness), while runtime role remains a separate activation state.
+5. Runtime may bind any admissible carrier to any runtime role when role/task-class constraints allow it, then select by capability/admissibility, local score/telemetry guard, and cheapest eligible carrier.
 
 Canonical bootstrap routes:
 1. Main/root lane: `vida orchestrator-init`
@@ -49,6 +51,11 @@ Host CLI rule:
 2. Project documentation ownership belongs to project docs resolved through `AGENTS.sidecar.md`.
 3. Framework owner law remains in the framework runtime and bounded protocol-view surfaces.
 4. Do not treat this generated carrier as the owner of framework policy.
+
+## Final Report Rule
+
+1. For closure-ready final user-facing reports, end with the explicit terminal line `Session status: completed, closing this session.`
+2. Immediately after that terminal line, emit one extra blank line.
 
 -----
 artifact_path: install/assets/agents-scaffold

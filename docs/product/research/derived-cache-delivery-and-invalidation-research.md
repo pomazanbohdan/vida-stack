@@ -13,7 +13,7 @@ Product/spec inputs:
 1. `docs/product/spec/runtime-paths-and-derived-cache-model.md`
 2. `docs/product/spec/compiled-runtime-bundle-contract.md`
 3. `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`
-4. `docs/product/spec/release-1-wave-plan.md`
+4. `docs/product/spec/release-1-plan.md`
 5. `docs/product/spec/project-activation-and-configurator-model.md`
 6. `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
 
@@ -360,5 +360,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/research/derived-cache-delivery-and-invalidation-research.md
 created_at: '2026-03-12T23:59:55+02:00'
-updated_at: '2026-03-12T23:59:55+02:00'
+updated_at: 2026-03-16T10:02:36.795557275Z
 changelog_ref: derived-cache-delivery-and-invalidation-research.changelog.jsonl

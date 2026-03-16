@@ -77,7 +77,7 @@ Layout rule:
 
 1. the active root Codex session is the orchestrator and must remain outside the delegated agent list,
 2. `vida.config.yaml -> host_environment.codex.agents` owns carrier-tier/rate/runtime-role/task-class metadata,
-3. `vida.config.yaml -> host_environment.codex.dispatch_aliases` is the canonical internal alias registry for executor-local overlays and is not the primary project-visible agent model,
+3. `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` is the canonical internal alias registry for executor-local overlays and is not the primary project-visible agent model,
 4. `.codex/config.toml` is the rendered delegated carrier-tier registration surface, including thread/depth caps and per-role config-file mapping,
 5. `.codex/agents/*.toml` are rendered host-executor surfaces and must not become the owner of tier or dispatch-alias policy,
 6. project activation should render `.codex/**` from the overlay catalog while preserving the framework-owned tier instruction bodies from the template source,
@@ -115,7 +115,7 @@ Minimum tier topology:
 
 Internal dispatch aliases:
 
-1. canonical `dispatch_aliases` may exist in `vida.config.yaml` as the internal overlay surface,
+1. canonical `dispatch_aliases` should live in the registry path declared by `vida.config.yaml -> agent_extensions.registries.dispatch_aliases`,
 2. it is not the primary visible agent model of the project,
 3. the primary visible agent model is the carrier ladder `junior -> middle -> senior -> architect`,
 4. runtime role is activation-time state such as `worker`, `coach`, `verifier`, or `solution_architect`.
@@ -123,7 +123,7 @@ Internal dispatch aliases:
 Ownership note:
 
 1. optional named aliases are not Rust-owned catalogs,
-2. they should be treated as internal dispatch projections from `vida.config.yaml -> host_environment.codex.dispatch_aliases`, not as the operational team model,
+2. they should be treated as internal dispatch projections from the configured dispatch-alias registry, not as the operational team model,
 3. carrier tiers remain the primary activated agent ids; alias ids, runtime-role coverage, task-class coverage, and overlay instruction bodies should be changed in overlay/template owner state and then re-materialized through activation.
 
 Packet posture:

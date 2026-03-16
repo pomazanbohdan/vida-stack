@@ -25,7 +25,7 @@ Purpose: define the framework-owned activation boundary for host CLI agent templ
    - `codex` -> `.codex/**`
 3. Materialization must use a framework-owned template source, not a mutable project-local workaround.
 4. When overlay metadata already declares host-agent tiers in `vida.config.yaml -> host_environment.codex.agents`, activation must render `.codex/**` from that overlay catalog while preserving framework-owned template instruction bodies.
-5. When overlay metadata also declares internal dispatch aliases in `vida.config.yaml -> host_environment.codex.dispatch_aliases`, activation must render those alias carriers into `.codex/**` from overlay/template owner state instead of Rust-owned fallback catalogs.
+5. When overlay metadata declares internal dispatch aliases through `vida.config.yaml -> agent_extensions.registries.dispatch_aliases`, activation must render those alias carriers into `.codex/**` from registry/template owner state instead of Rust-owned fallback catalogs.
 6. Existing project-local host CLI configuration must not be overwritten silently.
 7. When the selected template exposes default agent definitions, the activator should surface those defaults in its activation view so the operator knows which agents become available after restart.
 
@@ -33,7 +33,7 @@ Purpose: define the framework-owned activation boundary for host CLI agent templ
 
 1. The selected host CLI system must be recorded in root `vida.config.yaml`.
 2. Host-executor carrier-tier metadata should be recorded in `vida.config.yaml -> host_environment.codex.agents`.
-3. Internal dispatch aliases should be recorded in `vida.config.yaml -> host_environment.codex.dispatch_aliases`.
+3. Internal dispatch aliases should be recorded in the registry pointed to by `vida.config.yaml -> agent_extensions.registries.dispatch_aliases`.
 4. Host CLI selection must remain separate from project docs mapping and from framework owner law.
 5. `.codex/**` is a rendered host surface; it must not become the owner of tier rates, runtime-role fit, task-class fit, or dispatch-alias instruction bodies when those values are already declared in the project overlay.
 6. Project-specific runtime tuning for a selected CLI system may live in project-owned docs/process surfaces, but the selection/materialization boundary itself remains framework-owned.
@@ -57,7 +57,7 @@ Activation-path rule:
    - `middle` -> rate `4` and default `coach` runtime-role support for bounded spec-conformance review
    - `senior` -> rate `16`
    - `architect` -> rate `32`
-3. The same rendered Codex surface may also materialize internal dispatch aliases from `vida.config.yaml -> host_environment.codex.dispatch_aliases`.
+3. The same rendered Codex surface may also materialize internal dispatch aliases from the configured dispatch-alias registry.
 4. Those aliases are compatibility/internal activation surfaces only, not the project-visible primary agent model:
    - `development_implementer` -> carried by `junior`; owns one bounded write-producing packet
    - `development_coach` -> carried by `middle`; owns formative packet-local review against approved spec, acceptance criteria, definition of done, and visible residual risks, then either approves forward or returns explicit rework

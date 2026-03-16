@@ -301,7 +301,7 @@ This protocol currently governs and should strengthen at least:
 Related authoring references:
 
 1. `docs/product/spec/canonical-layer-documentation-template.md`
-2. `docs/product/spec/release-1-program-map.md`
+2. `docs/product/spec/release-1-plan.md`
 
 Interpretation rule:
 
@@ -334,5 +334,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/functional-matrix-protocol.md
 created_at: '2026-03-13T08:54:35+02:00'
-updated_at: '2026-03-13T09:09:25+02:00'
+updated_at: 2026-03-16T08:38:28.77831166Z
 changelog_ref: functional-matrix-protocol.changelog.jsonl

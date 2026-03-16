@@ -34,6 +34,13 @@ Canonical runtime init targets:
 2. `vida agent-init`
 3. `vida project-activator` when onboarding/activation is still pending
 
+Execution-carrier model:
+
+1. `agent` in host routing means execution carrier tier/model with cost and telemetry-backed effectiveness.
+2. runtime role is a separate activation state and is not replaced by carrier identity.
+3. runtime may bind any admissible carrier to any runtime role when role/task-class constraints allow it.
+4. carrier selection is capability/admissibility first, then local score/telemetry guard, then cheapest eligible carrier.
+
 Bounded protocol inspection surfaces:
 
 1. `bootstrap/router`
@@ -72,6 +79,7 @@ Carrier split:
    - `vida project-activator`
 4. while activation is pending:
    - collect the bounded activation interview inputs first (`project id`, language policy, supported host CLI system),
+   - fail closed on partial activation submissions; do not materialize host templates or write activation state from only one interview field,
    - prefer `vida docflow` for documentation/readiness inspection,
    - do not enter `vida taskflow` or any non-canonical external TaskFlow runtime
 5. for framework bootstrap inspection:

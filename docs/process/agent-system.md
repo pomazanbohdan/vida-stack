@@ -5,7 +5,7 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - default framework agent templates become available only after the selected host CLI template is materialized
 - the current supported host CLI system list is framework-owned; the current supported value is `codex`
 - Codex carrier-tier metadata is owned by `vida.config.yaml -> host_environment.codex.agents`
-- `vida.config.yaml -> host_environment.codex.dispatch_aliases` is the canonical internal alias registry and is not the primary project-visible agent model
+- dispatch aliases are owned by the configured registry path under `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` and are not the primary project-visible agent model
 - `.codex/**` is the rendered host executor surface, not the owner of tier/rate/task-class policy
 - project activation materializes the carrier tiers into `.codex/config.toml` and `.codex/agents/*.toml`
 - runtime chooses the cheapest capable configured carrier tier that still satisfies the local score guard from `.vida/state/worker-strategy.json`

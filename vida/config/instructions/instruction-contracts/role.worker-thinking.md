@@ -4,6 +4,10 @@ Purpose: provide a compact worker-safe subset of VIDA thinking algorithms for de
 
 This file is the canonical worker-lane thinking subset.
 
+Execution-carrier note:
+1. host `agent` is the selected execution carrier (model/tier/cost/effectiveness),
+2. worker thinking rules in this file apply to runtime role behavior, not to carrier identity.
+
 Do not use it as a replacement for the full orchestrator thinking protocol.
 
 ## Allowed Modes

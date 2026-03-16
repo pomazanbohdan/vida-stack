@@ -8,15 +8,16 @@ Shared rules:
 2. Boot/read activation is owned by `instruction-contracts/bridge.instruction-activation-protocol` and `agent-definitions/entry.orchestrator-entry`.
 3. Web/internet validation is owned by `runtime-instructions/work.web-validation-protocol`.
 4. User-facing reporting must not expose intermediate chain-of-thought; `Thinking mode` remains a reporting label only.
-5. This protocol governs reasoning inside one active step only; cross-step continuity, invariant carry-forward, and session context preservation belong to `instruction-contracts/overlay.session-context-continuity-protocol`.
-6. PR-CoT, MAR, 5-SOL, and META must preserve impact analysis covering:
+5. When a user-facing report is required, the agent must still expose a concise external reasoning summary covering the dominant evidence, decision path, or blocker without revealing hidden intermediate reasoning traces.
+6. This protocol governs reasoning inside one active step only; cross-step continuity, invariant carry-forward, and session context preservation belong to `instruction-contracts/overlay.session-context-continuity-protocol`.
+7. PR-CoT, MAR, 5-SOL, and META must preserve impact analysis covering:
    - affected scope,
    - contract impact,
    - operational impact,
    - follow-up,
    - residual risks.
-7. Named algorithms below are canonical flow templates built from reusable reasoning blocks; META may assemble the smallest lawful block flow instead of executing whole named algorithms by default.
-8. Use compact-triggered execution by default:
+8. Named algorithms below are canonical flow templates built from reusable reasoning blocks; META may assemble the smallest lawful block flow instead of executing whole named algorithms by default.
+9. Use compact-triggered execution by default:
    - start with the minimum lawful structure needed for the current step,
    - expand evidence, packets, categories, or rubrics only when conflict, uncertainty, preservation risk, or admissibility pressure requires it,
    - prefer compact receipts over narrative restatement unless escalation, closure proof, or user request requires expansion.

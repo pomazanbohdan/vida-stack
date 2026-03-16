@@ -135,7 +135,9 @@ Design-first intake rule:
 5. once a lawful persisted packet exists, `vida taskflow consume continue` and `vida taskflow consume advance` become the canonical launcher-owned progression surfaces instead of manually reconstructing the handoff path,
 6. `vida taskflow bootstrap-spec "<request>" --json` remains the preferred tracked launcher action when the returned route is design-first,
 7. that surface must materialize the feature epic, the spec-pack task, and the canonical design-doc scaffold before normal development-team execution begins,
-8. once the design artifact is finalized and validated through `vida docflow`, normal `TaskFlow` delivery orchestration may continue.
+8. when the runtime launches a bounded `business_analyst` or `pm` lane from that design-first path, that launch is an active wait state, not completion proof,
+9. `work-pool-pack` shaping must remain blocked until specification/planning evidence returns and the design artifact is finalized and validated through `vida docflow`,
+10. only after that evidence plus spec-pack closure may normal `TaskFlow` delivery orchestration continue.
 
 ## 4. Stage 1: Install / Init / Bootstrap
 
@@ -339,8 +341,8 @@ This model refines and connects:
 
 1. `compiled-autonomous-delivery-runtime-architecture.md`
    - top-level runtime/product direction
-2. `release-1-wave-plan.md`
-   - Release-1 delivery sequencing
+2. `release-1-plan.md`
+   - active Release-1 execution sequencing
 3. `embedded-runtime-and-editable-projection-model.md`
    - embedded-versus-projection runtime split
 4. `project-activation-and-configurator-model.md`

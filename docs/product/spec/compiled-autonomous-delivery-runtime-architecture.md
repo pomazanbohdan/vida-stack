@@ -70,8 +70,8 @@ Release-1 rule:
 
 Boundary note:
 
-1. the practical Release-1 working entrypoint is `docs/product/spec/release-1-program-map.md`,
-2. the detailed execution program is owned by `docs/product/spec/release-1-wave-plan.md`,
+1. the practical Release-1 working entrypoint and detailed execution program are owned by `docs/product/spec/release-1-plan.md`,
+2. the active seam and closure hardening surface is `docs/product/spec/release-1-seam-map.md`,
 3. the version ladder remains owned by `VERSION-PLAN.md`.
 
 ### Release 2: Host-Project Integration
@@ -96,7 +96,7 @@ Boundary rule:
 The detailed operator-surface inventory and end-to-end operating journey are owned by:
 
 1. `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`
-2. `docs/product/spec/release-1-program-map.md`
+2. `docs/product/spec/release-1-plan.md`
 
 Anchor rule:
 
@@ -446,13 +446,13 @@ This architecture aligns with:
 
 1. `docs/product/spec/external-architecture-baseline.md`
 2. `docs/product/spec/current-spec-map.md`
-3. the active Release-1 program surfaces mapped in `docs/product/spec/release-1-program-map.md`
+3. the active Release-1 program surfaces mapped in `docs/product/spec/release-1-plan.md`
 
 Interpretation rule:
 
 1. external baselines inform this architecture but do not replace VIDA-owned product law,
 2. the current spec map remains the full registry,
-3. the Release-1 program map remains the bounded working entrypoint for the current release line.
+3. `release-1-plan.md` remains the bounded Release-1 working entrypoint for the current release line.
 
 ## 14. Current Rule
 
@@ -471,5 +471,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md
 created_at: '2026-03-11T17:26:46+02:00'
-updated_at: '2026-03-13T08:47:25+02:00'
+updated_at: 2026-03-16T08:48:58.585356384Z
 changelog_ref: compiled-autonomous-delivery-runtime-architecture.changelog.jsonl

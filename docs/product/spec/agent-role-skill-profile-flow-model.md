@@ -2,18 +2,38 @@
 
 Status: active product law
 
-Purpose: define the canonical distinction between `role`, `skill`, `profile`, and `flow set`, and define how projects may extend them dynamically through `vida.config.yaml` without redefining framework runtime law.
+Purpose: define the canonical distinction between `execution carrier`, `role`, `skill`, `profile`, and `flow set`, and define how projects may extend them dynamically through `vida.config.yaml` without redefining framework runtime law.
 
 ## 1. Canonical Runtime Objects
 
-VIDA recognizes four different composition objects for runtime agent behavior:
+VIDA recognizes five different composition objects for runtime agent behavior:
 
-1. `role`
-2. `skill`
-3. `profile`
-4. `flow set`
+1. `execution carrier`
+2. `role`
+3. `skill`
+4. `profile`
+5. `flow set`
 
 These objects are related, but they are not interchangeable.
+
+## 1.1 Execution Carrier
+
+`execution carrier` answers: which executor/model tier runs the bounded packet?
+
+It owns:
+
+1. model family and reasoning-effort envelope,
+2. internal rate (cost units),
+3. local effective score and lifecycle state,
+4. admissibility metadata (`runtime_roles`, `task_classes`),
+5. telemetry-backed adaptation surfaces.
+
+Carrier rule:
+
+1. the carrier is not the runtime role,
+2. runtime role remains explicit activation state (`worker`, `coach`, `verifier`, `solution_architect`, and other lawful roles),
+3. one carrier may execute multiple runtime roles when admissibility metadata allows it,
+4. runtime must select the cheapest admissible carrier that satisfies role/task-class constraints and local score guard from telemetry state.
 
 ## 2. Role
 
@@ -189,27 +209,29 @@ Shared-skill rule:
 
 Instead it must compile one runtime identity from:
 
-1. resolved framework base role,
-2. optional project role derived from that base,
-3. validated project skill attachments,
-4. enabled shared skill attachments,
-5. validated project profile,
-6. selected standard or custom flow set,
-7. route/gate constraints from framework runtime law.
+1. resolved execution carrier candidate set,
+2. resolved framework base role,
+3. optional project role derived from that base,
+4. validated project skill attachments,
+5. enabled shared skill attachments,
+6. validated project profile,
+7. selected standard or custom flow set,
+8. route/gate constraints from framework runtime law.
 
 ### 8.1 Compiled Runtime Identity Shape
 
 Required compiled identity shape:
 
-1. `base_role`
-2. `validated_project_role`
-3. `validated_project_skills`
-4. `enabled_shared_skills`
-5. `validated_profile`
-6. `selected_flow_set`
-7. `route_constraints`
-8. `gate_constraints`
-9. `cost_quality_constraints`
+1. `selected_execution_carrier`
+2. `base_role`
+3. `validated_project_role`
+4. `validated_project_skills`
+5. `enabled_shared_skills`
+6. `validated_profile`
+7. `selected_flow_set`
+8. `route_constraints`
+9. `gate_constraints`
+10. `cost_quality_constraints`
 
 The orchestrator must consume this compiled identity instead of rediscovering the same logic ad hoc on every request.
 
@@ -222,6 +244,14 @@ The orchestrator must consume this compiled identity instead of rediscovering th
 5. local score-store path when score refresh is runtime-local,
 6. local observability/history store path when host-agent telemetry is runtime-local,
 7. local budget rollup surface when spend tracking is runtime-local.
+
+Carrier-selection proof fields should expose at least:
+
+1. selected carrier id/tier,
+2. activation runtime role,
+3. admissibility evidence (`supports_runtime_role`, `supports_task_class`),
+4. effective score and lifecycle state from telemetry stores,
+5. selection rule path (`capability -> score guard -> cheapest`).
 
 ## 9. Validation Rule
 

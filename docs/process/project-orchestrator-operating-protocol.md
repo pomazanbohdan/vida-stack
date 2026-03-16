@@ -42,13 +42,12 @@ For active project development orchestration, the minimum project-side read set 
 
 1. `docs/process/project-orchestrator-operating-protocol.md`
 2. `docs/process/project-packet-and-lane-runtime-capsule.md`
-3. `docs/product/spec/release-1-program-map.md` when Release-1 work is active
-4. `docs/product/spec/release-1-restart-backlog.md` when restart execution is active
-5. `docs/product/spec/release-1-seam-map.md` when closure or handoff work is active
+3. `docs/product/spec/release-1-plan.md` when Release-1 work is active
+4. `docs/product/spec/release-1-seam-map.md` when closure or handoff work is active
 
 The orchestrator should not widen beyond that set unless a blocker or ambiguity requires it.
 
-Preferred restart helpers:
+Preferred startup helpers:
 
 1. `docs/process/project-orchestrator-startup-bundle.md`
 2. `docs/process/project-orchestrator-session-start-protocol.md`
@@ -302,7 +301,7 @@ If those answers are not visible from the minimum read set, do not continue into
 8. for full prompt-stack law, read `docs/process/project-agent-prompt-stack-protocol.md`,
 9. for full delegated-lane law and closure edge cases, read `docs/process/team-development-and-orchestration-protocol.md`,
 10. for Codex role/runtime posture, read `docs/process/codex-agent-configuration-guide.md`,
-11. for Release-1 restart ownership, read `docs/product/spec/release-1-restart-backlog.md`,
+11. for Release-1 execution ownership, read `docs/product/spec/release-1-plan.md`,
 12. for Release-1 closure bottlenecks, read `docs/product/spec/release-1-seam-map.md`.
 
 -----
@@ -314,5 +313,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-operating-protocol.md
 created_at: '2026-03-13T18:40:00+02:00'
-updated_at: '2026-03-13T12:39:11+02:00'
+updated_at: 2026-03-16T08:30:26.630461215Z
 changelog_ref: project-orchestrator-operating-protocol.changelog.jsonl

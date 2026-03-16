@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use time::format_description::well_known::Rfc3339;
 
 use crate::{
-    doctor_launcher_summary_for_root, protocol_binding_compiled_payload_import_evidence,
+    build_project_activator_view, doctor_launcher_summary_for_root,
+    merge_project_activation_into_init_view, protocol_binding_compiled_payload_import_evidence,
     read_or_sync_launcher_activation_snapshot, DoctorLauncherSummary, StateStore,
     TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload, TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
 };
@@ -133,6 +134,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         "artifact_count": effective_instruction_bundle.projected_artifacts.len(),
     });
     let project_protocol_projections = build_project_protocol_projections(vida_root);
+    let project_activation_view = build_project_activator_view(vida_root);
     let mut activation_bundle = activation_snapshot.compiled_bundle.clone();
     if let serde_json::Value::Object(bundle) = &mut activation_bundle {
         bundle.insert(
@@ -190,22 +192,28 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             "startup_bundle_revision": startup_bundle_revision,
         },
     });
-    let orchestrator_init_view = build_orchestrator_init_view(
-        vida_root,
-        &control_core,
-        &project_protocol_projections,
-        &protocol_binding_registry,
-        &cache_delivery_contract,
-        &boot_compatibility.classification,
-        &migration_preflight.migration_state,
+    let orchestrator_init_view = merge_project_activation_into_init_view(
+        build_orchestrator_init_view(
+            vida_root,
+            &control_core,
+            &project_protocol_projections,
+            &protocol_binding_registry,
+            &cache_delivery_contract,
+            &boot_compatibility.classification,
+            &migration_preflight.migration_state,
+        ),
+        &project_activation_view,
     );
-    let agent_init_view = build_agent_init_view(
-        vida_root,
-        &activation_bundle,
-        &project_protocol_projections,
-        &protocol_binding_registry,
-        &boot_compatibility.classification,
-        &migration_preflight.migration_state,
+    let agent_init_view = merge_project_activation_into_init_view(
+        build_agent_init_view(
+            vida_root,
+            &activation_bundle,
+            &project_protocol_projections,
+            &protocol_binding_registry,
+            &boot_compatibility.classification,
+            &migration_preflight.migration_state,
+        ),
+        &project_activation_view,
     );
 
     Ok(TaskflowConsumeBundlePayload {
@@ -434,6 +442,28 @@ pub(crate) fn taskflow_consume_bundle_check(
         .unwrap_or(true)
     {
         blockers.push("missing_retrieval_only_optional_context_boundary".to_string());
+    }
+    if payload
+        .orchestrator_init_view
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        == Some("pending_activation")
+        || payload
+            .agent_init_view
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            == Some("pending_activation")
+    {
+        blockers.push("activation_pending".to_string());
+    }
+    if payload
+        .orchestrator_init_view
+        .get("execution_gate")
+        .and_then(|value| value.get("taskflow_admitted"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(false)
+    {
+        blockers.push("taskflow_blocked_during_pending_activation".to_string());
     }
 
     TaskflowConsumeBundleCheck {
