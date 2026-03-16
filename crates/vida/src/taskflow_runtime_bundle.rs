@@ -4,7 +4,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::{
     build_project_activator_view, doctor_launcher_summary_for_root,
-    merge_project_activation_into_init_view, protocol_binding_compiled_payload_import_evidence,
+    merge_project_activation_into_init_view,
     read_or_sync_launcher_activation_snapshot, DoctorLauncherSummary, StateStore,
     TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload, TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
 };
@@ -88,7 +88,8 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .await
         .map_err(|error| format!("Failed to read protocol binding rows: {error}"))?;
     let compiled_payload_import_evidence =
-        protocol_binding_compiled_payload_import_evidence(store).await;
+        crate::taskflow_protocol_binding::protocol_binding_compiled_payload_import_evidence(store)
+            .await;
     let protocol_binding_ready = protocol_binding_receipt.is_some()
         && !protocol_binding_rows.is_empty()
         && compiled_payload_import_evidence.imported
@@ -465,6 +466,21 @@ pub(crate) fn taskflow_consume_bundle_check(
     {
         blockers.push("taskflow_blocked_during_pending_activation".to_string());
     }
+    let activation_status = if payload
+        .orchestrator_init_view
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        == Some("pending_activation")
+        || payload
+            .agent_init_view
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            == Some("pending_activation")
+    {
+        "pending_activation".to_string()
+    } else {
+        "activation_ready".to_string()
+    };
 
     TaskflowConsumeBundleCheck {
         ok: blockers.is_empty(),
@@ -473,6 +489,7 @@ pub(crate) fn taskflow_consume_bundle_check(
         artifact_count,
         boot_classification,
         migration_state,
+        activation_status,
     }
 }
 

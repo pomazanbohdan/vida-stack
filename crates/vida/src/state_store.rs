@@ -4,6 +4,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::release1_contracts::{
+    canonical_blocker_code_str, canonical_compatibility_class_str, canonical_lane_status_str,
+    derive_lane_status, BlockerCode, CompatibilityClass, LaneStatus,
+};
 use serde_json::Deserializer;
 use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::types::SurrealValue;
@@ -1346,9 +1350,9 @@ impl StateStore {
         };
 
         let compatibility_classification = if blockers.is_empty() {
-            "compatible"
+            CompatibilityClass::Compatible
         } else {
-            "incompatible"
+            CompatibilityClass::Incompatible
         };
         let migration_state = if blockers.is_empty() {
             "no_migration_required"
@@ -1362,7 +1366,7 @@ impl StateStore {
         };
 
         let summary = MigrationPreflightSummary {
-            compatibility_classification: compatibility_classification.to_string(),
+            compatibility_classification: compatibility_classification.as_str().to_string(),
             migration_state: migration_state.to_string(),
             blockers,
             source_version_tuple,
@@ -1408,7 +1412,11 @@ impl StateStore {
             .select(("migration_runtime_state", "primary"))
             .await?;
         Ok(row.map(|row| MigrationPreflightSummary {
-            compatibility_classification: row.compatibility_classification,
+            compatibility_classification: canonical_compatibility_class_str(
+                &row.compatibility_classification,
+            )
+            .unwrap_or(CompatibilityClass::Incompatible.as_str())
+            .to_string(),
             migration_state: row.migration_state,
             blockers: row.blockers,
             source_version_tuple: row.source_version_tuple,
@@ -3675,11 +3683,16 @@ pub struct RunGraphDispatchReceipt {
     pub run_id: String,
     pub dispatch_target: String,
     pub dispatch_status: String,
+    #[serde(default = "default_run_graph_lane_status")]
+    pub lane_status: String,
+    pub supersedes_receipt_id: Option<String>,
+    pub exception_path_receipt_id: Option<String>,
     pub dispatch_kind: String,
     pub dispatch_surface: Option<String>,
     pub dispatch_command: Option<String>,
     pub dispatch_packet_path: Option<String>,
     pub dispatch_result_path: Option<String>,
+    pub blocker_code: Option<String>,
     pub downstream_dispatch_target: Option<String>,
     pub downstream_dispatch_command: Option<String>,
     pub downstream_dispatch_note: Option<String>,
@@ -3755,6 +3768,7 @@ pub struct RunGraphDelegationGateSummary {
     pub delegated_cycle_open: bool,
     pub delegated_cycle_state: String,
     pub local_exception_takeover_gate: String,
+    pub blocker_code: Option<String>,
     pub reporting_pause_gate: String,
 }
 
@@ -3779,6 +3793,15 @@ impl RunGraphDelegationGateSummary {
         } else {
             "delegated_cycle_clear".to_string()
         };
+        let blocker_code = if local_exception_takeover_gate == "blocked_open_delegated_cycle" {
+            Some(
+                canonical_blocker_code_str(BlockerCode::OpenDelegatedCycle.as_str())
+                    .unwrap_or(BlockerCode::OpenDelegatedCycle.as_str())
+                    .to_string(),
+            )
+        } else {
+            None
+        };
         let reporting_pause_gate = if delegated_cycle_open {
             "non_blocking_only".to_string()
         } else if status.status == "completed" {
@@ -3793,18 +3816,20 @@ impl RunGraphDelegationGateSummary {
             delegated_cycle_open,
             delegated_cycle_state,
             local_exception_takeover_gate,
+            blocker_code,
             reporting_pause_gate,
         }
     }
 
     pub fn as_display(&self) -> String {
         format!(
-            "node={} lifecycle={} delegated_cycle_open={} delegated_cycle_state={} local_exception_takeover_gate={} reporting_pause_gate={}",
+            "node={} lifecycle={} delegated_cycle_open={} delegated_cycle_state={} local_exception_takeover_gate={} blocker_code={} reporting_pause_gate={}",
             self.active_node,
             self.lifecycle_stage,
             self.delegated_cycle_open,
             self.delegated_cycle_state,
             self.local_exception_takeover_gate,
+            self.blocker_code.as_deref().unwrap_or("none"),
             self.reporting_pause_gate
         )
     }
@@ -3902,11 +3927,15 @@ pub struct RunGraphDispatchReceiptSummary {
     pub run_id: String,
     pub dispatch_target: String,
     pub dispatch_status: String,
+    pub lane_status: String,
+    pub supersedes_receipt_id: Option<String>,
+    pub exception_path_receipt_id: Option<String>,
     pub dispatch_kind: String,
     pub dispatch_surface: Option<String>,
     pub dispatch_command: Option<String>,
     pub dispatch_packet_path: Option<String>,
     pub dispatch_result_path: Option<String>,
+    pub blocker_code: Option<String>,
     pub downstream_dispatch_target: Option<String>,
     pub downstream_dispatch_command: Option<String>,
     pub downstream_dispatch_note: Option<String>,
@@ -3928,15 +3957,38 @@ pub struct RunGraphDispatchReceiptSummary {
 #[allow(dead_code)]
 impl RunGraphDispatchReceiptSummary {
     fn from_receipt(receipt: RunGraphDispatchReceipt) -> Self {
+        let lane_status = if receipt.lane_status.trim().is_empty() {
+            derive_lane_status(
+                &receipt.dispatch_status,
+                receipt.supersedes_receipt_id.as_deref(),
+                receipt.exception_path_receipt_id.as_deref(),
+            )
+            .as_str()
+            .to_string()
+        } else {
+            canonical_lane_status_str(&receipt.lane_status)
+                .unwrap_or(receipt.lane_status.as_str())
+                .to_string()
+        };
+        let blocker_code = receipt
+            .blocker_code
+            .as_deref()
+            .and_then(canonical_blocker_code_str)
+            .map(str::to_string)
+            .or(receipt.blocker_code.clone());
         Self {
             run_id: receipt.run_id,
             dispatch_target: receipt.dispatch_target,
             dispatch_status: receipt.dispatch_status,
+            lane_status,
+            supersedes_receipt_id: receipt.supersedes_receipt_id,
+            exception_path_receipt_id: receipt.exception_path_receipt_id,
             dispatch_kind: receipt.dispatch_kind,
             dispatch_surface: receipt.dispatch_surface,
             dispatch_command: receipt.dispatch_command,
             dispatch_packet_path: receipt.dispatch_packet_path,
             dispatch_result_path: receipt.dispatch_result_path,
+            blocker_code,
             downstream_dispatch_target: receipt.downstream_dispatch_target,
             downstream_dispatch_command: receipt.downstream_dispatch_command,
             downstream_dispatch_note: receipt.downstream_dispatch_note,
@@ -3958,10 +4010,14 @@ impl RunGraphDispatchReceiptSummary {
 
     pub fn as_display(&self) -> String {
         format!(
-            "run={} target={} status={} kind={} surface={} command={} packet={} result={} next_target={} next_command={} next_note={} next_ready={} next_blockers={} next_packet={} next_status={} next_result={} next_trace={} next_count={} next_last_target={} agent={} runtime_role={} backend={} recorded_at={}",
+            "run={} target={} status={} lane_status={} supersedes_receipt_id={} exception_path_receipt_id={} blocker_code={} kind={} surface={} command={} packet={} result={} next_target={} next_command={} next_note={} next_ready={} next_blockers={} next_packet={} next_status={} next_result={} next_trace={} next_count={} next_last_target={} agent={} runtime_role={} backend={} recorded_at={}",
             self.run_id,
             self.dispatch_target,
             self.dispatch_status,
+            self.lane_status,
+            self.supersedes_receipt_id.as_deref().unwrap_or("none"),
+            self.exception_path_receipt_id.as_deref().unwrap_or("none"),
+            self.blocker_code.as_deref().unwrap_or("none"),
             self.dispatch_kind,
             self.dispatch_surface.as_deref().unwrap_or("none"),
             self.dispatch_command.as_deref().unwrap_or("none"),
@@ -3988,6 +4044,10 @@ impl RunGraphDispatchReceiptSummary {
             self.recorded_at
         )
     }
+}
+
+fn default_run_graph_lane_status() -> String {
+    LaneStatus::LaneOpen.as_str().to_string()
 }
 
 #[derive(Debug, serde::Serialize, PartialEq, Eq)]
@@ -6033,6 +6093,7 @@ hierarchy: framework,contracts
             gate.local_exception_takeover_gate,
             "blocked_open_delegated_cycle"
         );
+        assert_eq!(gate.blocker_code.as_deref(), Some("open_delegated_cycle"));
         assert_eq!(gate.reporting_pause_gate, "non_blocking_only");
     }
 
@@ -6057,6 +6118,7 @@ hierarchy: framework,contracts
             gate.local_exception_takeover_gate,
             "blocked_open_delegated_cycle"
         );
+        assert_eq!(gate.blocker_code.as_deref(), Some("open_delegated_cycle"));
         assert_eq!(gate.reporting_pause_gate, "non_blocking_only");
     }
 
@@ -6078,7 +6140,97 @@ hierarchy: framework,contracts
         assert!(!gate.delegated_cycle_open);
         assert_eq!(gate.delegated_cycle_state, "clear");
         assert_eq!(gate.local_exception_takeover_gate, "delegated_cycle_clear");
+        assert_eq!(gate.blocker_code, None);
         assert_eq!(gate.reporting_pause_gate, "closure_candidate");
+    }
+
+    #[test]
+    fn run_graph_recovery_summary_reports_blocked_delegated_cycle_takeover_gate() {
+        let status = sample_run_graph_status();
+        let summary = RunGraphRecoverySummary::from_status(status);
+        assert_eq!(
+            summary.delegation_gate.local_exception_takeover_gate,
+            "blocked_open_delegated_cycle"
+        );
+        assert_eq!(
+            summary.delegation_gate.blocker_code.as_deref(),
+            Some("open_delegated_cycle")
+        );
+    }
+
+    #[test]
+    fn run_graph_recovery_summary_reports_clear_delegated_cycle_takeover_gate() {
+        let mut status = sample_run_graph_status();
+        status.active_node = "review_ensemble".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lane_id = "review_ensemble_lane".to_string();
+        status.lifecycle_stage = "implementation_complete".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+
+        let summary = RunGraphRecoverySummary::from_status(status);
+        assert_eq!(
+            summary.delegation_gate.local_exception_takeover_gate,
+            "delegated_cycle_clear"
+        );
+        assert_eq!(summary.delegation_gate.blocker_code, None);
+    }
+
+    fn sample_dispatch_receipt_with_status(dispatch_status: &str) -> RunGraphDispatchReceipt {
+        RunGraphDispatchReceipt {
+            run_id: "run-vida-a".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: dispatch_status.to_string(),
+            lane_status: String::new(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-03-15T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn run_graph_dispatch_receipt_summary_prefers_exception_lane_status_over_dispatch_mapping() {
+        let mut receipt = sample_dispatch_receipt_with_status("executed");
+        receipt.exception_path_receipt_id = Some("receipt-exception-1".to_string());
+        receipt.supersedes_receipt_id = Some("receipt-superseded-1".to_string());
+
+        let summary = RunGraphDispatchReceiptSummary::from_receipt(receipt);
+
+        assert_eq!(summary.lane_status, "lane_exception_takeover");
+    }
+
+    #[test]
+    fn run_graph_dispatch_receipt_summary_prefers_superseded_lane_status_over_dispatch_mapping() {
+        let mut receipt = sample_dispatch_receipt_with_status("routed");
+        receipt.supersedes_receipt_id = Some("receipt-superseded-2".to_string());
+
+        let summary = RunGraphDispatchReceiptSummary::from_receipt(receipt);
+
+        assert_eq!(summary.lane_status, "lane_superseded");
     }
 
     #[tokio::test]

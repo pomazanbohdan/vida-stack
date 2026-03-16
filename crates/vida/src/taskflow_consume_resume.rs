@@ -1,0 +1,737 @@
+use std::process::ExitCode;
+
+fn missing_dispatch_packet_path_error(latest: bool) -> String {
+    let _ = super::blocker_code_str(super::BlockerCode::MissingPacket);
+    if latest {
+        "Latest persisted dispatch receipt is missing dispatch_packet_path".to_string()
+    } else {
+        "Persisted dispatch receipt is missing dispatch_packet_path".to_string()
+    }
+}
+
+fn missing_dispatch_receipt_error(run_id: &str) -> String {
+    let _ = super::blocker_code_str(super::BlockerCode::MissingLaneReceipt);
+    format!("No persisted run-graph dispatch receipt exists for run_id `{run_id}`")
+}
+
+pub(crate) fn read_dispatch_packet(path: &str) -> Result<serde_json::Value, String> {
+    let body = std::fs::read_to_string(path)
+        .map_err(|error| format!("Failed to read persisted dispatch packet: {error}"))?;
+    serde_json::from_str(&body)
+        .map_err(|error| format!("Failed to parse persisted dispatch packet: {error}"))
+}
+
+async fn resume_inputs_from_downstream_packet(
+    store: &super::StateStore,
+    requested_run_id: Option<&str>,
+    packet_path: &str,
+) -> Result<
+    (
+        crate::state_store::RunGraphDispatchReceipt,
+        String,
+        super::RuntimeConsumptionLaneSelection,
+        serde_json::Value,
+    ),
+    String,
+> {
+    let packet = read_dispatch_packet(packet_path)?;
+    let run_id = packet
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Persisted downstream dispatch packet is missing run_id".to_string())?;
+    if let Some(requested_run_id) = requested_run_id {
+        if requested_run_id != run_id {
+            return Err(format!(
+                "Requested run_id `{requested_run_id}` does not match persisted downstream dispatch packet run_id `{run_id}`"
+            ));
+        }
+    }
+    let root_receipt = match store.run_graph_dispatch_receipt(run_id).await {
+        Ok(Some(receipt)) => receipt,
+        Ok(None) => return Err(missing_dispatch_receipt_error(run_id)),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read persisted run-graph dispatch receipt: {error}"
+            ))
+        }
+    };
+    let role_selection: super::RuntimeConsumptionLaneSelection = serde_json::from_value(
+        packet
+            .get("role_selection_full")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
+    .map_err(|error| {
+        format!("Failed to decode role_selection from downstream dispatch packet: {error}")
+    })?;
+    let dispatch_target = packet
+        .get("downstream_dispatch_target")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "Persisted downstream dispatch packet is missing downstream_dispatch_target".to_string()
+        })?;
+    let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
+        super::downstream_activation_fields(&role_selection, dispatch_target);
+    let selected_backend = activation_agent_type
+        .clone()
+        .or_else(|| root_receipt.selected_backend.clone())
+        .filter(|value| !value.is_empty());
+    let dispatch_ready = packet
+        .get("downstream_dispatch_ready")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let dispatch_command = packet
+        .get("downstream_dispatch_command")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let downstream_dispatch_note = packet
+        .get("downstream_dispatch_note")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let downstream_dispatch_blockers = packet
+        .get("downstream_dispatch_blockers")
+        .and_then(serde_json::Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let recorded_at = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("rfc3339 timestamp should render");
+    let dispatch_status = if dispatch_ready {
+        "routed".to_string()
+    } else {
+        "blocked".to_string()
+    };
+    let supersedes_receipt_id = packet
+        .get("downstream_supersedes_receipt_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let exception_path_receipt_id = packet
+        .get("downstream_exception_path_receipt_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let parsed_downstream_lane_status = packet
+        .get("downstream_lane_status")
+        .and_then(serde_json::Value::as_str)
+        .and_then(super::canonical_lane_status_str)
+        .and_then(super::LaneStatus::from_str);
+    let missing_lane_evidence_blocker = super::missing_downstream_lane_evidence_blocker(
+        parsed_downstream_lane_status,
+        supersedes_receipt_id.as_deref(),
+        exception_path_receipt_id.as_deref(),
+    );
+    if let Some(code) = missing_lane_evidence_blocker {
+        let _ = super::blocker_code_value(code);
+        return Err(match code {
+            super::BlockerCode::ExceptionPathMissing => {
+                "Persisted downstream dispatch packet is missing downstream_exception_path_receipt_id"
+                    .to_string()
+            }
+            super::BlockerCode::MissingLaneReceipt => {
+                "Persisted downstream dispatch packet is missing downstream_supersedes_receipt_id"
+                    .to_string()
+            }
+            _ => "Persisted downstream dispatch packet is missing required lane evidence"
+                .to_string(),
+        });
+    }
+    let closure_completed = matches!(
+        parsed_downstream_lane_status,
+        Some(super::LaneStatus::LaneCompleted)
+    ) && dispatch_status == "executed";
+    let receipt = crate::state_store::RunGraphDispatchReceipt {
+        run_id: run_id.to_string(),
+        dispatch_target: dispatch_target.to_string(),
+        dispatch_status: dispatch_status.clone(),
+        lane_status: {
+            let mut lane_status = super::derive_lane_status(
+                &dispatch_status,
+                supersedes_receipt_id.as_deref(),
+                exception_path_receipt_id.as_deref(),
+            );
+            if closure_completed {
+                lane_status = super::LaneStatus::LaneCompleted;
+            }
+            lane_status.as_str().to_string()
+        },
+        supersedes_receipt_id,
+        exception_path_receipt_id,
+        dispatch_kind,
+        dispatch_surface,
+        dispatch_command,
+        dispatch_packet_path: Some(packet_path.to_string()),
+        dispatch_result_path: None,
+        blocker_code: if missing_lane_evidence_blocker
+            == Some(super::BlockerCode::ExceptionPathMissing)
+        {
+            super::blocker_code_value(super::BlockerCode::ExceptionPathMissing)
+        } else if missing_lane_evidence_blocker == Some(super::BlockerCode::MissingLaneReceipt) {
+            super::blocker_code_value(super::BlockerCode::MissingLaneReceipt)
+        } else if dispatch_status == "blocked" {
+            super::blocker_code_value(super::BlockerCode::MissingPacket)
+        } else {
+            None
+        },
+        downstream_dispatch_target: None,
+        downstream_dispatch_command: None,
+        downstream_dispatch_note,
+        downstream_dispatch_ready: false,
+        downstream_dispatch_blockers,
+        downstream_dispatch_packet_path: None,
+        downstream_dispatch_status: packet
+            .get("downstream_dispatch_status")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        downstream_dispatch_result_path: packet
+            .get("downstream_dispatch_result_path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        downstream_dispatch_trace_path: None,
+        downstream_dispatch_executed_count: 0,
+        downstream_dispatch_active_target: packet
+            .get("downstream_dispatch_active_target")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        downstream_dispatch_last_target: None,
+        activation_agent_type,
+        activation_runtime_role,
+        selected_backend,
+        recorded_at,
+    };
+    Ok((
+        receipt,
+        packet_path.to_string(),
+        role_selection,
+        packet
+            .get("run_graph_bootstrap")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    ))
+}
+
+async fn maybe_resume_inputs_from_ready_downstream_packet(
+    store: &super::StateStore,
+    requested_run_id: Option<&str>,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<
+    Option<(
+        crate::state_store::RunGraphDispatchReceipt,
+        String,
+        super::RuntimeConsumptionLaneSelection,
+        serde_json::Value,
+    )>,
+    String,
+> {
+    let Some(packet_path) = receipt.downstream_dispatch_packet_path.as_deref() else {
+        return Ok(None);
+    };
+    let packet = read_dispatch_packet(packet_path)?;
+    let packet_ready = packet
+        .get("downstream_dispatch_ready")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if !packet_ready {
+        return Ok(None);
+    }
+    resume_inputs_from_downstream_packet(store, requested_run_id, packet_path)
+        .await
+        .map(Some)
+}
+
+async fn resolve_runtime_consumption_resume_inputs(
+    store: &super::StateStore,
+    requested_run_id: Option<&str>,
+    requested_dispatch_packet_path: Option<&str>,
+    requested_downstream_packet_path: Option<&str>,
+) -> Result<
+    (
+        crate::state_store::RunGraphDispatchReceipt,
+        String,
+        super::RuntimeConsumptionLaneSelection,
+        serde_json::Value,
+    ),
+    String,
+> {
+    let dispatch_packet = if let Some(packet_path) = requested_dispatch_packet_path {
+        let packet = read_dispatch_packet(packet_path)?;
+        let run_id = packet
+            .get("run_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "Persisted dispatch packet is missing run_id".to_string())?;
+        if let Some(requested_run_id) = requested_run_id {
+            if requested_run_id != run_id {
+                return Err(format!(
+                    "Requested run_id `{requested_run_id}` does not match persisted dispatch packet run_id `{run_id}`"
+                ));
+            }
+        }
+        let receipt = match store.run_graph_dispatch_receipt(run_id).await {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => return Err(missing_dispatch_receipt_error(run_id)),
+            Err(error) => {
+                return Err(format!(
+                    "Failed to read persisted run-graph dispatch receipt: {error}"
+                ))
+            }
+        };
+        (receipt, packet_path.to_string(), packet)
+    } else if let Some(packet_path) = requested_downstream_packet_path {
+        return resume_inputs_from_downstream_packet(store, requested_run_id, packet_path).await;
+    } else if let Some(run_id) = requested_run_id {
+        let receipt = match store.run_graph_dispatch_receipt(run_id).await {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => return Err(missing_dispatch_receipt_error(run_id)),
+            Err(error) => {
+                return Err(format!(
+                    "Failed to read persisted run-graph dispatch receipt: {error}"
+                ))
+            }
+        };
+        if let Some(resume) =
+            maybe_resume_inputs_from_ready_downstream_packet(store, requested_run_id, &receipt)
+                .await?
+        {
+            return Ok(resume);
+        }
+        let packet_path = receipt
+            .dispatch_packet_path
+            .clone()
+            .ok_or_else(|| missing_dispatch_packet_path_error(false))?;
+        let packet = read_dispatch_packet(&packet_path)?;
+        (receipt, packet_path, packet)
+    } else {
+        let receipt = match store.latest_run_graph_dispatch_receipt().await {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => {
+                return Err("No persisted run-graph dispatch receipt is available".to_string())
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Failed to read persisted run-graph dispatch receipt: {error}"
+                ))
+            }
+        };
+        if let Some(resume) =
+            maybe_resume_inputs_from_ready_downstream_packet(store, requested_run_id, &receipt)
+                .await?
+        {
+            return Ok(resume);
+        }
+        let packet_path = receipt
+            .dispatch_packet_path
+            .clone()
+            .ok_or_else(|| missing_dispatch_packet_path_error(true))?;
+        let packet = read_dispatch_packet(&packet_path)?;
+        (receipt, packet_path, packet)
+    };
+
+    let (dispatch_receipt, dispatch_packet_path, dispatch_packet) = dispatch_packet;
+    let role_selection: super::RuntimeConsumptionLaneSelection = serde_json::from_value(
+        dispatch_packet
+            .get("role_selection_full")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
+    .map_err(|error| format!("Failed to decode role_selection from dispatch packet: {error}"))?;
+    let run_graph_bootstrap = dispatch_packet
+        .get("run_graph_bootstrap")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    Ok((
+        dispatch_receipt,
+        dispatch_packet_path,
+        role_selection,
+        run_graph_bootstrap,
+    ))
+}
+
+pub(crate) fn parse_taskflow_consume_continue_args(
+    args: &[String],
+) -> Result<(bool, Option<String>, Option<String>, Option<String>), String> {
+    let mut as_json = false;
+    let mut run_id = None;
+    let mut dispatch_packet_path = None;
+    let mut downstream_packet_path = None;
+    let mut index = 2usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => {
+                as_json = true;
+                index += 1;
+            }
+            "--run-id" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("Usage: vida taskflow consume continue [--run-id <run_id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]".to_string());
+                };
+                run_id = Some(value.clone());
+                index += 2;
+            }
+            "--dispatch-packet" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("Usage: vida taskflow consume continue [--run-id <run_id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]".to_string());
+                };
+                dispatch_packet_path = Some(value.clone());
+                index += 2;
+            }
+            "--downstream-packet" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("Usage: vida taskflow consume continue [--run-id <run_id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]".to_string());
+                };
+                downstream_packet_path = Some(value.clone());
+                index += 2;
+            }
+            other => {
+                return Err(format!(
+                    "Unsupported argument `{other}`. Usage: vida taskflow consume continue [--run-id <run_id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]"
+                ));
+            }
+        }
+    }
+    if dispatch_packet_path.is_some() && downstream_packet_path.is_some() {
+        return Err(
+            "Use only one packet source: --dispatch-packet <path> or --downstream-packet <path>"
+                .to_string(),
+        );
+    }
+    Ok((
+        as_json,
+        run_id,
+        dispatch_packet_path,
+        downstream_packet_path,
+    ))
+}
+
+pub(crate) fn parse_taskflow_consume_advance_args(
+    args: &[String],
+) -> Result<(bool, Option<String>, usize), String> {
+    let mut as_json = false;
+    let mut run_id = None;
+    let mut max_rounds = 8usize;
+    let mut index = 2usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => {
+                as_json = true;
+                index += 1;
+            }
+            "--run-id" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(
+                        "Usage: vida taskflow consume advance [--run-id <run_id>] [--max-rounds <n>] [--json]"
+                            .to_string(),
+                    );
+                };
+                run_id = Some(value.clone());
+                index += 2;
+            }
+            "--max-rounds" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(
+                        "Usage: vida taskflow consume advance [--run-id <run_id>] [--max-rounds <n>] [--json]"
+                            .to_string(),
+                    );
+                };
+                max_rounds = value
+                    .parse::<usize>()
+                    .map_err(|_| "Expected a positive integer for --max-rounds".to_string())?;
+                if max_rounds == 0 {
+                    return Err("--max-rounds must be greater than zero".to_string());
+                }
+                index += 2;
+            }
+            other => {
+                return Err(format!(
+                    "Unsupported argument `{other}`. Usage: vida taskflow consume advance [--run-id <run_id>] [--max-rounds <n>] [--json]"
+                ));
+            }
+        }
+    }
+    Ok((as_json, run_id, max_rounds))
+}
+
+pub(crate) async fn run_taskflow_consume_resume_command(
+    state_dir: std::path::PathBuf,
+    as_json: bool,
+    requested_run_id: Option<String>,
+    requested_dispatch_packet_path: Option<String>,
+    requested_downstream_packet_path: Option<String>,
+    surface_name: &str,
+    emit_output: bool,
+) -> ExitCode {
+    match super::StateStore::open_existing(state_dir).await {
+        Ok(store) => {
+            let mut dispatch_receipt;
+            let dispatch_packet_path;
+            let role_selection;
+            let run_graph_bootstrap;
+            match resolve_runtime_consumption_resume_inputs(
+                &store,
+                requested_run_id.as_deref(),
+                requested_dispatch_packet_path.as_deref(),
+                requested_downstream_packet_path.as_deref(),
+            )
+            .await
+            {
+                Ok((receipt, packet_path, selection, bootstrap)) => {
+                    dispatch_receipt = receipt;
+                    dispatch_packet_path = packet_path;
+                    role_selection = selection;
+                    run_graph_bootstrap = bootstrap;
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(1);
+                }
+            }
+            if dispatch_receipt.dispatch_status == "routed" {
+                let allow_taskflow_pack_execution = dispatch_receipt.dispatch_kind
+                    != "taskflow_pack"
+                    || super::taskflow_task_bridge::infer_project_root_from_state_root(store.root()).is_some();
+                if allow_taskflow_pack_execution {
+                    if let Err(error) = super::execute_and_record_dispatch_receipt(
+                        store.root(),
+                        &store,
+                        &role_selection,
+                        &run_graph_bootstrap,
+                        &mut dispatch_receipt,
+                    )
+                    .await
+                    {
+                        eprintln!("Failed to execute resumed runtime dispatch handoff: {error}");
+                        return ExitCode::from(1);
+                    }
+                    if let Err(error) = super::refresh_downstream_dispatch_preview(
+                        store.root(),
+                        &role_selection,
+                        &run_graph_bootstrap,
+                        &mut dispatch_receipt,
+                    ) {
+                        eprintln!("Failed to refresh resumed downstream dispatch preview: {error}");
+                        return ExitCode::from(1);
+                    }
+                }
+            }
+            if let Err(error) = super::execute_downstream_dispatch_chain(
+                store.root(),
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut dispatch_receipt,
+            )
+            .await
+            {
+                eprintln!("{error}");
+                return ExitCode::from(1);
+            }
+            if let Err(error) = store
+                .record_run_graph_dispatch_receipt(&dispatch_receipt)
+                .await
+            {
+                eprintln!("Failed to record resumed run-graph dispatch receipt: {error}");
+                return ExitCode::from(1);
+            }
+            let resume_snapshot = serde_json::json!({
+                "surface": surface_name,
+                "source_run_id": dispatch_receipt.run_id,
+                "source_dispatch_packet_path": dispatch_packet_path,
+                "dispatch_receipt": &dispatch_receipt,
+            });
+            let snapshot_path = match super::write_runtime_consumption_snapshot(
+                store.root(),
+                "final",
+                &resume_snapshot,
+            ) {
+                Ok(path) => path,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(1);
+                }
+            };
+            if !emit_output {
+                return ExitCode::SUCCESS;
+            }
+            if as_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "surface": surface_name,
+                        "source_run_id": dispatch_receipt.run_id,
+                        "source_dispatch_packet_path": dispatch_packet_path,
+                        "dispatch_receipt": dispatch_receipt,
+                        "snapshot_path": snapshot_path,
+                    }))
+                    .expect("resume command should render as json")
+                );
+            } else {
+                super::print_surface_header(super::RenderMode::Plain, surface_name);
+                super::print_surface_line(
+                    super::RenderMode::Plain,
+                    "source run",
+                    &dispatch_receipt.run_id,
+                );
+                super::print_surface_line(
+                    super::RenderMode::Plain,
+                    "source packet",
+                    &dispatch_packet_path,
+                );
+                super::print_surface_line(
+                    super::RenderMode::Plain,
+                    "snapshot path",
+                    &snapshot_path,
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+pub(crate) async fn run_taskflow_consume_advance_command(
+    state_dir: std::path::PathBuf,
+    as_json: bool,
+    requested_run_id: Option<String>,
+    max_rounds: usize,
+) -> ExitCode {
+    let mut rounds = 0usize;
+    let mut last_result: Option<(String, crate::state_store::RunGraphDispatchReceipt, String)> =
+        None;
+
+    while rounds < max_rounds {
+        let before_status =
+            match super::StateStore::open_existing(state_dir.clone()).await {
+                Ok(store) => match resolve_runtime_consumption_resume_inputs(
+                    &store,
+                    requested_run_id.as_deref(),
+                    None,
+                    None,
+                )
+                .await
+                {
+                    Ok((receipt, packet_path, _, _)) => Some((receipt, packet_path)),
+                    Err(_) => None,
+                },
+                Err(_) => None,
+            };
+
+        let exit = run_taskflow_consume_resume_command(
+            state_dir.clone(),
+            true,
+            requested_run_id.clone(),
+            None,
+            None,
+            "vida taskflow consume advance",
+            false,
+        )
+        .await;
+        if exit != ExitCode::SUCCESS {
+            return exit;
+        }
+
+        let store = match super::StateStore::open_existing(state_dir.clone()).await {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!("Failed to reopen authoritative state store after advance: {error}");
+                return ExitCode::from(1);
+            }
+        };
+        let after_receipt = match store.latest_run_graph_dispatch_receipt().await {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => {
+                eprintln!("No persisted run-graph dispatch receipt is available after advance");
+                return ExitCode::from(1);
+            }
+            Err(error) => {
+                eprintln!(
+                    "Failed to read persisted run-graph dispatch receipt after advance: {error}"
+                );
+                return ExitCode::from(1);
+            }
+        };
+        let after_packet_path = after_receipt
+            .dispatch_packet_path
+            .clone()
+            .or_else(|| after_receipt.downstream_dispatch_packet_path.clone())
+            .unwrap_or_else(|| "none".to_string());
+        let snapshot_path = match super::runtime_consumption_summary(store.root()) {
+            Ok(summary) => summary
+                .latest_snapshot_path
+                .unwrap_or_else(|| "none".to_string()),
+            Err(_) => "none".to_string(),
+        };
+        last_result = Some((
+            after_packet_path.clone(),
+            after_receipt.clone(),
+            snapshot_path,
+        ));
+        rounds += 1;
+
+        let progressed = match before_status {
+            Some((before_receipt, before_packet_path)) => {
+                before_packet_path != after_packet_path
+                    || before_receipt.dispatch_status != after_receipt.dispatch_status
+                    || before_receipt.downstream_dispatch_target
+                        != after_receipt.downstream_dispatch_target
+                    || before_receipt.downstream_dispatch_executed_count
+                        != after_receipt.downstream_dispatch_executed_count
+            }
+            None => true,
+        };
+
+        let has_more_ready_work = after_receipt.downstream_dispatch_ready
+            || (after_receipt.dispatch_status == "routed"
+                && (after_receipt.dispatch_kind != "taskflow_pack"
+                    || super::taskflow_task_bridge::infer_project_root_from_state_root(store.root()).is_some()));
+        if !progressed || !has_more_ready_work {
+            break;
+        }
+    }
+
+    let Some((source_dispatch_packet_path, dispatch_receipt, snapshot_path)) = last_result else {
+        eprintln!("No advance step was executed");
+        return ExitCode::from(1);
+    };
+
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "surface": "vida taskflow consume advance",
+                "source_run_id": dispatch_receipt.run_id,
+                "source_dispatch_packet_path": source_dispatch_packet_path,
+                "dispatch_receipt": dispatch_receipt,
+                "snapshot_path": snapshot_path,
+                "rounds_executed": rounds,
+            }))
+            .expect("advance should render as json")
+        );
+    } else {
+        super::print_surface_header(super::RenderMode::Plain, "vida taskflow consume advance");
+        super::print_surface_line(
+            super::RenderMode::Plain,
+            "source run",
+            &dispatch_receipt.run_id,
+        );
+        super::print_surface_line(
+            super::RenderMode::Plain,
+            "source packet",
+            &source_dispatch_packet_path,
+        );
+        super::print_surface_line(
+            super::RenderMode::Plain,
+            "rounds executed",
+            &rounds.to_string(),
+        );
+        super::print_surface_line(super::RenderMode::Plain, "snapshot path", &snapshot_path);
+    }
+    ExitCode::SUCCESS
+}

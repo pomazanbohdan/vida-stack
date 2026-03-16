@@ -1,7 +1,7 @@
 use crate::{
     build_runtime_execution_plan_from_snapshot, build_runtime_lane_selection_with_store,
-    open_existing_state_store_with_retry, print_surface_header, print_surface_line,
-    proxy_state_dir, read_or_sync_launcher_activation_snapshot,
+    print_surface_header, print_surface_line,
+    taskflow_task_bridge::proxy_state_dir, read_or_sync_launcher_activation_snapshot,
     state_store::{RunGraphStatus, StateStore, StateStoreError},
     taskflow_layer4::print_taskflow_proxy_help,
     RenderMode, RuntimeConsumptionLaneSelection,
@@ -146,7 +146,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         }
         [head, subcommand] if head == "recovery" && subcommand == "gate-latest" => {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.latest_run_graph_gate_summary().await {
                     Ok(Some(summary)) => {
                         print_surface_header(
@@ -180,7 +180,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             if head == "recovery" && subcommand == "gate-latest" && flag == "--json" =>
         {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.latest_run_graph_gate_summary().await {
                     Ok(summary) => {
                         println!(
@@ -206,7 +206,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         }
         [head, subcommand, run_id] if head == "recovery" && subcommand == "gate" => {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.run_graph_gate_summary(run_id).await {
                     Ok(summary) => {
                         print_surface_header(RenderMode::Plain, "vida taskflow recovery gate");
@@ -229,7 +229,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             if head == "recovery" && subcommand == "gate" && flag == "--json" =>
         {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.run_graph_gate_summary(run_id).await {
                     Ok(summary) => {
                         println!(
@@ -256,7 +256,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         }
         [head, subcommand] if head == "recovery" && subcommand == "checkpoint-latest" => {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.latest_run_graph_checkpoint_summary().await {
                     Ok(Some(summary)) => {
                         print_surface_header(
@@ -290,7 +290,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             if head == "recovery" && subcommand == "checkpoint-latest" && flag == "--json" =>
         {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.latest_run_graph_checkpoint_summary().await {
                     Ok(summary) => {
                         println!(
@@ -316,7 +316,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         }
         [head, subcommand, run_id] if head == "recovery" && subcommand == "checkpoint" => {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.run_graph_checkpoint_summary(run_id).await {
                     Ok(summary) => {
                         print_surface_header(
@@ -342,7 +342,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             if head == "recovery" && subcommand == "checkpoint" && flag == "--json" =>
         {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.run_graph_checkpoint_summary(run_id).await {
                     Ok(summary) => {
                         println!(
@@ -369,7 +369,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         }
         [head, subcommand] if head == "recovery" && subcommand == "latest" => {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.latest_run_graph_recovery_summary().await {
                     Ok(Some(summary)) => {
                         print_surface_header(RenderMode::Plain, "vida taskflow recovery latest");
@@ -397,7 +397,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             if head == "recovery" && subcommand == "latest" && flag == "--json" =>
         {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.latest_run_graph_recovery_summary().await {
                     Ok(summary) => {
                         println!(
@@ -423,7 +423,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
         }
         [head, subcommand, run_id] if head == "recovery" && subcommand == "status" => {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.run_graph_recovery_summary(run_id).await {
                     Ok(summary) => {
                         print_surface_header(RenderMode::Plain, "vida taskflow recovery status");
@@ -446,7 +446,7 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             if head == "recovery" && subcommand == "status" && flag == "--json" =>
         {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.run_graph_recovery_summary(run_id).await {
                     Ok(summary) => {
                         println!(
@@ -507,7 +507,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
         }
         [head, subcommand] if head == "run-graph" && subcommand == "latest" => {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.latest_run_graph_status().await {
                     Ok(Some(status)) => {
                         print_surface_header(RenderMode::Plain, "vida taskflow run-graph latest");
@@ -540,7 +540,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
             if head == "run-graph" && subcommand == "latest" && flag == "--json" =>
         {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.latest_run_graph_status().await {
                     Ok(status) => {
                         let delegation_gate =
@@ -569,7 +569,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
         }
         [head, subcommand, run_id] if head == "run-graph" && subcommand == "status" => {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.run_graph_status(run_id).await {
                     Ok(status) => {
                         print_surface_header(RenderMode::Plain, "vida taskflow run-graph status");
@@ -597,7 +597,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
             if head == "run-graph" && subcommand == "status" && flag == "--json" =>
         {
             let state_dir = proxy_state_dir();
-            match open_existing_state_store_with_retry(state_dir).await {
+            match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.run_graph_status(run_id).await {
                     Ok(status) => {
                         let delegation_gate = status.delegation_gate();
