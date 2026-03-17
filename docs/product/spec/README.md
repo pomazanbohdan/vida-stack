@@ -29,3 +29,4 @@ Active design docs:
 - `docs/product/spec/flappy-bird-design.md`
 - `docs/product/spec/api-constraints-specification-make-bounded-patch-design.md`
 - `docs/product/spec/flappy-bird-flappy-bird-every-mechanism-design.md`
+- `docs/product/spec/spec-proof-auto-flow-design.md`

@@ -41,6 +41,8 @@ Boundary rule:
 6. `final` is invalid while any delegated agent/handoff remains active or unresolved,
 7. local write work requires explicit exception-path receipt,
 8. exception-path receipt is not sufficient while an open delegated cycle for the same packet remains active.
+9. when user intent is explicit continuation (`continue development`, `продовжи агентами`, or equivalent), `final` user-facing transfer is fail-closed forbidden until the user explicitly requests stop/closure.
+10. if a premature closure-style response was emitted, the immediate next action is mandatory recovery: return to commentary mode, record violation, and resume dispatch on the next lawful slice.
 
 ## Escalate To Owner File When
 

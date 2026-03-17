@@ -5,8 +5,8 @@ use crate::state_store::StateStore;
 
 use super::{
     build_runtime_lane_selection_with_store, ensure_launcher_bootstrap, normalize_root_arg,
-    print_surface_header, print_surface_line, role_exists_in_lane_bundle,
-    state_store, sync_launcher_activation_snapshot, AgentInitArgs, BootArgs, InitArgs, RenderMode,
+    print_surface_header, print_surface_line, role_exists_in_lane_bundle, state_store,
+    sync_launcher_activation_snapshot, AgentInitArgs, BootArgs, InitArgs, RenderMode,
 };
 use crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload;
 
@@ -96,13 +96,10 @@ pub(crate) fn resolve_init_agents_source(root: &Path) -> Result<PathBuf, String>
 }
 
 pub(crate) fn resolve_init_sidecar_source(root: &Path) -> Result<PathBuf, String> {
-    let candidates = [
-        root.join("install/assets/AGENTS.sidecar.scaffold.md"),
-        root.join("AGENTS.sidecar.md"),
-    ];
+    let candidates = [root.join("AGENTS.sidecar.md")];
     first_existing_path(&candidates).ok_or_else(|| {
         format!(
-            "Unable to resolve project sidecar scaffold. Checked: {}",
+            "Unable to resolve project sidecar source. Checked: {}",
             candidates
                 .iter()
                 .map(|path| path.display().to_string())
@@ -1092,7 +1089,8 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     );
                     return ExitCode::from(2);
                 }
-                let packet = match super::taskflow_consume_resume::read_dispatch_packet(packet_path) {
+                let packet = match super::taskflow_consume_resume::read_dispatch_packet(packet_path)
+                {
                     Ok(packet) => packet,
                     Err(error) => {
                         eprintln!("{error}");
@@ -1133,7 +1131,8 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     );
                     return ExitCode::from(2);
                 }
-                let packet = match super::taskflow_consume_resume::read_dispatch_packet(packet_path) {
+                let packet = match super::taskflow_consume_resume::read_dispatch_packet(packet_path)
+                {
                     Ok(packet) => packet,
                     Err(error) => {
                         eprintln!("{error}");

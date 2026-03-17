@@ -105,6 +105,9 @@ Project-routing rule:
 17. Use the canonical project packet-template and prompt-stack protocols rather than inventing packet structure or prompt-layer precedence ad hoc.
 18. Treat boot readiness as incomplete until the project boot-readiness validation protocol can be satisfied for the current session.
 19. Keep the live root bootstrap carrier `AGENTS.md` synchronized with `install/assets/AGENTS.scaffold.md`; when one changes, update the other in the same bounded change.
+20. Synchronization is bidirectional and mandatory: if either `AGENTS.md` or `install/assets/AGENTS.scaffold.md` is changed, update the counterpart in the same bounded change before closure.
+21. During active development, if a runtime/workflow blockage is detected and that blockage does not conform to project specs or canonical runtime requirements, treat it as implementation debt: fix the code path to restore spec-compliant behavior, prove it with bounded tests/evidence, and then continue execution without manual blocker bypass hacks.
+22. After completing a complex task, or after fixing any error/blocking condition, run a fresh release build, update the system-installed binary, and continue development immediately in the next cycle.
 
 -----
 artifact_path: project/repository/agents.sidecar

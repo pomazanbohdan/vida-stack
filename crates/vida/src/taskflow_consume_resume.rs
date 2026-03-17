@@ -1,3 +1,4 @@
+use crate::taskflow_run_graph::validate_run_graph_resume_gate;
 use std::process::ExitCode;
 
 fn missing_dispatch_packet_path_error(latest: bool) -> String {
@@ -12,6 +13,81 @@ fn missing_dispatch_packet_path_error(latest: bool) -> String {
 fn missing_dispatch_receipt_error(run_id: &str) -> String {
     let _ = super::blocker_code_str(super::BlockerCode::MissingLaneReceipt);
     format!("No persisted run-graph dispatch receipt exists for run_id `{run_id}`")
+}
+
+fn validate_receipt_packet_pair(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    packet: &serde_json::Value,
+    packet_path: &str,
+    packet_label: &str,
+) -> Result<(), String> {
+    let packet_run_id = packet
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("Persisted {packet_label} is missing run_id"))?;
+    if packet_run_id != receipt.run_id {
+        return Err(format!(
+            "Persisted {packet_label} run_id `{packet_run_id}` does not match dispatch receipt run_id `{}`",
+            receipt.run_id
+        ));
+    }
+    if let Some(expected_dispatch_packet_path) = receipt.dispatch_packet_path.as_deref() {
+        if expected_dispatch_packet_path != packet_path {
+            return Err(format!(
+                "Persisted dispatch receipt expects dispatch_packet_path `{expected_dispatch_packet_path}` but resolved `{packet_path}`"
+            ));
+        }
+    }
+    if let Some(packet_lane_status) = packet
+        .get("lane_status")
+        .and_then(serde_json::Value::as_str)
+        .and_then(super::canonical_lane_status_str)
+        .and_then(super::LaneStatus::from_str)
+    {
+        let packet_dispatch_status = packet
+            .get("dispatch_status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("routed");
+        let mut derived_lane_status = super::derive_lane_status(
+            packet_dispatch_status,
+            packet
+                .get("supersedes_receipt_id")
+                .and_then(serde_json::Value::as_str),
+            packet
+                .get("exception_path_receipt_id")
+                .and_then(serde_json::Value::as_str),
+        );
+        if packet_lane_status == super::LaneStatus::LaneCompleted
+            && packet_dispatch_status == "executed"
+        {
+            derived_lane_status = super::LaneStatus::LaneCompleted;
+        }
+        if packet_lane_status != derived_lane_status {
+            return Err(format!(
+                "Persisted {packet_label} lane_status `{}` conflicts with derived lane_status `{}` from lane evidence",
+                packet_lane_status.as_str(),
+                derived_lane_status.as_str()
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn validate_run_graph_resume_state(
+    store: &super::StateStore,
+    run_id: &str,
+) -> Result<(), String> {
+    let status = store.run_graph_status(run_id).await.map_err(|error| {
+        format!("Failed to read persisted run-graph state for `{run_id}`: {error}")
+    })?;
+    if status.run_id != run_id {
+        return Err(format!(
+            "Persisted run-graph state mismatch: requested run_id `{run_id}` resolved to `{}`",
+            status.run_id
+        ));
+    }
+    validate_run_graph_resume_gate(&status)
 }
 
 pub(crate) fn read_dispatch_packet(path: &str) -> Result<serde_json::Value, String> {
@@ -56,6 +132,13 @@ async fn resume_inputs_from_downstream_packet(
             ))
         }
     };
+    validate_receipt_packet_pair(
+        &root_receipt,
+        &packet,
+        packet_path,
+        "downstream dispatch packet",
+    )?;
+    validate_run_graph_resume_state(store, run_id).await?;
     let role_selection: super::RuntimeConsumptionLaneSelection = serde_json::from_value(
         packet
             .get("role_selection_full")
@@ -82,6 +165,10 @@ async fn resume_inputs_from_downstream_packet(
         .get("downstream_dispatch_ready")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    let downstream_dispatch_status = packet
+        .get("downstream_dispatch_status")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
     let dispatch_command = packet
         .get("downstream_dispatch_command")
         .and_then(serde_json::Value::as_str)
@@ -103,11 +190,6 @@ async fn resume_inputs_from_downstream_packet(
     let recorded_at = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .expect("rfc3339 timestamp should render");
-    let dispatch_status = if dispatch_ready {
-        "routed".to_string()
-    } else {
-        "blocked".to_string()
-    };
     let supersedes_receipt_id = packet
         .get("downstream_supersedes_receipt_id")
         .and_then(serde_json::Value::as_str)
@@ -144,22 +226,44 @@ async fn resume_inputs_from_downstream_packet(
     let closure_completed = matches!(
         parsed_downstream_lane_status,
         Some(super::LaneStatus::LaneCompleted)
-    ) && dispatch_status == "executed";
+    ) && downstream_dispatch_status.as_deref() == Some("executed");
+    let dispatch_status = if closure_completed {
+        "executed".to_string()
+    } else if matches!(
+        downstream_dispatch_status.as_deref(),
+        Some("executed" | "blocked" | "routed" | "packet_ready")
+    ) {
+        downstream_dispatch_status
+            .as_deref()
+            .expect("status checked as Some")
+            .to_string()
+    } else if dispatch_ready {
+        "routed".to_string()
+    } else {
+        "blocked".to_string()
+    };
+    let mut derived_lane_status = super::derive_lane_status(
+        &dispatch_status,
+        supersedes_receipt_id.as_deref(),
+        exception_path_receipt_id.as_deref(),
+    );
+    if closure_completed {
+        derived_lane_status = super::LaneStatus::LaneCompleted;
+    }
+    if let Some(packet_lane_status) = parsed_downstream_lane_status {
+        if packet_lane_status != derived_lane_status {
+            return Err(format!(
+                "Persisted downstream dispatch packet lane_status `{}` conflicts with derived lane_status `{}` from downstream lane evidence",
+                packet_lane_status.as_str(),
+                derived_lane_status.as_str()
+            ));
+        }
+    }
     let receipt = crate::state_store::RunGraphDispatchReceipt {
         run_id: run_id.to_string(),
         dispatch_target: dispatch_target.to_string(),
         dispatch_status: dispatch_status.clone(),
-        lane_status: {
-            let mut lane_status = super::derive_lane_status(
-                &dispatch_status,
-                supersedes_receipt_id.as_deref(),
-                exception_path_receipt_id.as_deref(),
-            );
-            if closure_completed {
-                lane_status = super::LaneStatus::LaneCompleted;
-            }
-            lane_status.as_str().to_string()
-        },
+        lane_status: derived_lane_status.as_str().to_string(),
         supersedes_receipt_id,
         exception_path_receipt_id,
         dispatch_kind,
@@ -184,10 +288,7 @@ async fn resume_inputs_from_downstream_packet(
         downstream_dispatch_ready: false,
         downstream_dispatch_blockers,
         downstream_dispatch_packet_path: None,
-        downstream_dispatch_status: packet
-            .get("downstream_dispatch_status")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string),
+        downstream_dispatch_status,
         downstream_dispatch_result_path: packet
             .get("downstream_dispatch_result_path")
             .and_then(serde_json::Value::as_str)
@@ -281,6 +382,8 @@ async fn resolve_runtime_consumption_resume_inputs(
                 ))
             }
         };
+        validate_receipt_packet_pair(&receipt, &packet, packet_path, "dispatch packet")?;
+        validate_run_graph_resume_state(store, run_id).await?;
         (receipt, packet_path.to_string(), packet)
     } else if let Some(packet_path) = requested_downstream_packet_path {
         return resume_inputs_from_downstream_packet(store, requested_run_id, packet_path).await;
@@ -305,6 +408,8 @@ async fn resolve_runtime_consumption_resume_inputs(
             .clone()
             .ok_or_else(|| missing_dispatch_packet_path_error(false))?;
         let packet = read_dispatch_packet(&packet_path)?;
+        validate_receipt_packet_pair(&receipt, &packet, &packet_path, "dispatch packet")?;
+        validate_run_graph_resume_state(store, run_id).await?;
         (receipt, packet_path, packet)
     } else {
         let receipt = match store.latest_run_graph_dispatch_receipt().await {
@@ -329,6 +434,8 @@ async fn resolve_runtime_consumption_resume_inputs(
             .clone()
             .ok_or_else(|| missing_dispatch_packet_path_error(true))?;
         let packet = read_dispatch_packet(&packet_path)?;
+        validate_receipt_packet_pair(&receipt, &packet, &packet_path, "dispatch packet")?;
+        validate_run_graph_resume_state(store, &receipt.run_id).await?;
         (receipt, packet_path, packet)
     };
 
@@ -490,10 +597,24 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     return ExitCode::from(1);
                 }
             }
+            if dispatch_receipt.dispatch_status == "packet_ready" {
+                dispatch_receipt.dispatch_status = "routed".to_string();
+                dispatch_receipt.lane_status = super::derive_lane_status(
+                    &dispatch_receipt.dispatch_status,
+                    dispatch_receipt.supersedes_receipt_id.as_deref(),
+                    dispatch_receipt.exception_path_receipt_id.as_deref(),
+                )
+                .as_str()
+                .to_string();
+                dispatch_receipt.blocker_code = None;
+            }
             if dispatch_receipt.dispatch_status == "routed" {
                 let allow_taskflow_pack_execution = dispatch_receipt.dispatch_kind
                     != "taskflow_pack"
-                    || super::taskflow_task_bridge::infer_project_root_from_state_root(store.root()).is_some();
+                    || super::taskflow_task_bridge::infer_project_root_from_state_root(
+                        store.root(),
+                    )
+                    .is_some();
                 if allow_taskflow_pack_execution {
                     if let Err(error) = super::execute_and_record_dispatch_receipt(
                         store.root(),
@@ -607,21 +728,20 @@ pub(crate) async fn run_taskflow_consume_advance_command(
         None;
 
     while rounds < max_rounds {
-        let before_status =
-            match super::StateStore::open_existing(state_dir.clone()).await {
-                Ok(store) => match resolve_runtime_consumption_resume_inputs(
-                    &store,
-                    requested_run_id.as_deref(),
-                    None,
-                    None,
-                )
-                .await
-                {
-                    Ok((receipt, packet_path, _, _)) => Some((receipt, packet_path)),
-                    Err(_) => None,
-                },
+        let before_status = match super::StateStore::open_existing(state_dir.clone()).await {
+            Ok(store) => match resolve_runtime_consumption_resume_inputs(
+                &store,
+                requested_run_id.as_deref(),
+                None,
+                None,
+            )
+            .await
+            {
+                Ok((receipt, packet_path, _, _)) => Some((receipt, packet_path)),
                 Err(_) => None,
-            };
+            },
+            Err(_) => None,
+        };
 
         let exit = run_taskflow_consume_resume_command(
             state_dir.clone(),
@@ -690,7 +810,10 @@ pub(crate) async fn run_taskflow_consume_advance_command(
         let has_more_ready_work = after_receipt.downstream_dispatch_ready
             || (after_receipt.dispatch_status == "routed"
                 && (after_receipt.dispatch_kind != "taskflow_pack"
-                    || super::taskflow_task_bridge::infer_project_root_from_state_root(store.root()).is_some()));
+                    || super::taskflow_task_bridge::infer_project_root_from_state_root(
+                        store.root(),
+                    )
+                    .is_some()));
         if !progressed || !has_more_ready_work {
             break;
         }

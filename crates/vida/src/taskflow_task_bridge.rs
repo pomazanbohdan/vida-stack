@@ -24,6 +24,72 @@ pub(crate) fn infer_project_root_from_state_root(state_root: &Path) -> Option<Pa
         .map(Path::to_path_buf)
 }
 
+fn read_runtime_consumption_snapshot(state_root: &Path) -> Result<serde_json::Value, String> {
+    let summary = crate::runtime_consumption_summary(state_root)?;
+    if summary.latest_kind.as_deref() != Some("final") {
+        return Err(
+            "execution_preparation_gate_blocked: latest runtime-consumption snapshot is not `final`"
+                .to_string(),
+        );
+    }
+    let snapshot_path = summary.latest_snapshot_path.ok_or_else(|| {
+        "execution_preparation_gate_blocked: missing runtime-consumption snapshot".to_string()
+    })?;
+    let snapshot_body = std::fs::read_to_string(&snapshot_path).map_err(|error| {
+        format!(
+            "execution_preparation_gate_blocked: failed to read runtime-consumption snapshot: {error}"
+        )
+    })?;
+    serde_json::from_str::<serde_json::Value>(&snapshot_body).map_err(|error| {
+        format!(
+            "execution_preparation_gate_blocked: failed to parse runtime-consumption snapshot: {error}"
+        )
+    })
+}
+
+fn has_execution_preparation_blocker(snapshot: &serde_json::Value) -> bool {
+    let mut blockers: Vec<&str> = Vec::new();
+    if let Some(rows) = snapshot["closure_admission"]["blockers"].as_array() {
+        blockers.extend(rows.iter().filter_map(serde_json::Value::as_str));
+    }
+    if let Some(code) = snapshot["dispatch_receipt"]["blocker_code"].as_str() {
+        blockers.push(code);
+    }
+    blockers.iter().any(|value| {
+        *value == "pending_execution_preparation_evidence"
+            || *value == "missing_execution_preparation_contract"
+    })
+}
+
+pub(crate) fn enforce_execution_preparation_contract_gate(
+    state_root: &Path,
+) -> Result<(), String> {
+    let snapshot = read_runtime_consumption_snapshot(state_root)?;
+    let contract = &snapshot["operator_contracts"];
+    let contract_ready = contract["contract_id"].as_str() == Some("release-1-operator-contracts")
+        && contract["schema_version"].as_str() == Some("release-1-v1")
+        && contract["status"].is_string()
+        && contract["blocker_codes"].is_array()
+        && contract["next_actions"].is_array()
+        && contract["artifact_refs"].is_object();
+    if !contract_ready {
+        return Err(
+            "execution_preparation_gate_blocked: missing or invalid release-1 operator contract"
+                .to_string(),
+        );
+    }
+    if contract["status"].as_str() != Some("ok") {
+        return Err(
+            "execution_preparation_gate_blocked: release-1 operator contract is not admitted"
+                .to_string(),
+        );
+    }
+    if has_execution_preparation_blocker(&snapshot) {
+        return Err("execution_preparation_gate_blocked: pending_execution_preparation_evidence".to_string());
+    }
+    Ok(())
+}
+
 async fn open_task_store_for_native_bridge(
     state_root: PathBuf,
 ) -> Result<StateStore, StateStoreError> {
@@ -855,11 +921,13 @@ pub(crate) fn run_taskflow_task_bridge(
             let mut render_payload = payload.clone();
             let telemetry_task = payload.get("task").cloned();
             render_payload["host_agent_telemetry"] = match telemetry_task.as_ref() {
-                Some(task) => crate::agent_feedback_surface::maybe_record_task_close_host_agent_feedback(
-                    project_root,
-                    task,
-                    &close_reason,
-                ),
+                Some(task) => {
+                    crate::agent_feedback_surface::maybe_record_task_close_host_agent_feedback(
+                        project_root,
+                        task,
+                        &close_reason,
+                    )
+                }
                 None => serde_json::json!({
                     "status": "skipped",
                     "reason": "task_payload_unavailable_before_close"

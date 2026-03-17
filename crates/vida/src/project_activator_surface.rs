@@ -14,6 +14,13 @@ pub(crate) struct ProjectActivationAnswers {
     pub(crate) todo_protocol_language: String,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ProjectActivationStatusTruth {
+    pub(crate) status: String,
+    pub(crate) activation_pending: bool,
+    pub(crate) next_steps: Vec<String>,
+}
+
 const SUPPORTED_HOST_CLI_SYSTEMS: &[&str] = &["codex"];
 const HOST_CLI_PLACEHOLDER: &str = "__HOST_CLI_SYSTEM__";
 
@@ -74,7 +81,12 @@ fn set_yaml_scalar_in_top_level_section(
     format!("{}\n", lines.join("\n"))
 }
 
-fn set_yaml_bool_in_top_level_section(contents: &str, section: &str, key: &str, value: bool) -> String {
+fn set_yaml_bool_in_top_level_section(
+    contents: &str,
+    section: &str,
+    key: &str,
+    value: bool,
+) -> String {
     set_yaml_scalar_in_top_level_section(
         contents,
         section,
@@ -419,7 +431,7 @@ pub(crate) fn materialize_host_cli_template(
                 }
             };
             let codex_dispatch_aliases =
-                codex_dispatch_alias_catalog_for_root(&overlay, project_root, &codex_roles);
+                codex_dispatch_alias_catalog_for_root(&overlay, project_root, &codex_roles)?;
             if !codex_roles.is_empty() {
                 render_codex_template_from_catalog(
                     project_root,
@@ -998,7 +1010,7 @@ pub(crate) fn codex_dispatch_alias_catalog_for_root(
     config: &serde_yaml::Value,
     root: &Path,
     agent_catalog: &[serde_json::Value],
-) -> Vec<serde_json::Value> {
+) -> Result<Vec<serde_json::Value>, String> {
     let require_registry_files = yaml_bool(
         yaml_lookup(
             config,
@@ -1011,21 +1023,24 @@ pub(crate) fn codex_dispatch_alias_catalog_for_root(
         &["agent_extensions", "registries", "dispatch_aliases"],
     ));
     if let Some(path) = configured_path.as_deref() {
-        if let Ok(registry) = load_registry_projection(
+        let registry = load_registry_projection(
             root,
             Some(path),
             "dispatch_aliases",
             "alias_id",
             "dispatch_aliases",
             require_registry_files,
-        ) {
-            let rows = registry_rows_by_key(&registry, "dispatch_aliases", "alias_id", &[]);
-            if !rows.is_empty() {
-                return materialize_codex_dispatch_alias_catalog(&rows, agent_catalog);
-            }
+        )
+        .map_err(|error| format!("failed to load dispatch aliases registry `{path}`: {error}"))?;
+        let rows = registry_rows_by_key(&registry, "dispatch_aliases", "alias_id", &[]);
+        if !rows.is_empty() {
+            return Ok(materialize_codex_dispatch_alias_catalog(
+                &rows,
+                agent_catalog,
+            ));
         }
     }
-    overlay_codex_dispatch_alias_catalog(config, agent_catalog)
+    Ok(overlay_codex_dispatch_alias_catalog(config, agent_catalog))
 }
 
 pub(crate) fn file_contains_placeholder(path: &Path) -> bool {
@@ -1550,8 +1565,39 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     })
 }
 
+pub(crate) fn canonical_project_activation_status_truth(
+    project_root: &Path,
+) -> ProjectActivationStatusTruth {
+    let view = build_project_activator_view(project_root);
+    let activation_pending = view["activation_pending"].as_bool().unwrap_or(true);
+    let status = view["status"]
+        .as_str()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            if activation_pending {
+                "pending_activation".to_string()
+            } else {
+                "ready_enough_for_normal_work".to_string()
+            }
+        });
+    let next_steps = view["next_steps"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    ProjectActivationStatusTruth {
+        status,
+        activation_pending,
+        next_steps,
+    }
+}
+
 pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> ExitCode {
-    let _ = args.state_dir;
     let project_root = match std::env::current_dir() {
         Ok(path) => path,
         Err(error) => {
@@ -1571,6 +1617,27 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         || args.reasoning_language.is_some()
         || args.documentation_language.is_some()
         || args.todo_protocol_language.is_some();
+    let mut activation_state_dir: Option<std::path::PathBuf> = None;
+    let mut activation_store: Option<super::StateStore> = None;
+    if activation_mutation_requested {
+        let state_dir = args
+            .state_dir
+            .clone()
+            .unwrap_or_else(super::state_store::default_state_dir);
+        match super::StateStore::open(state_dir.clone()).await {
+            Ok(store) => {
+                activation_state_dir = Some(state_dir);
+                activation_store = Some(store);
+            }
+            Err(error) => {
+                eprintln!(
+                    "Project activation failed closed before mutation: unable to initialize authoritative state store at {}: {error}",
+                    state_dir.display()
+                );
+                return ExitCode::from(1);
+            }
+        }
+    }
     if activation_pending && activation_mutation_requested {
         let missing_inputs = missing_required_activation_inputs(&pre_activation_view, &args);
         if !missing_inputs.is_empty() {
@@ -1651,13 +1718,74 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
             return ExitCode::from(1);
         }
     };
+    let mut activation_truth_sync = None;
+    if activation_mutation_requested {
+        let state_dir = activation_state_dir.as_ref().expect(
+            "activation state dir should be captured when activation mutation is requested",
+        );
+        let store = activation_store
+            .as_ref()
+            .expect("activation store should be initialized before activation mutation");
+        match super::sync_launcher_activation_snapshot(&store).await {
+            Ok(snapshot) => {
+                let read_back = match store.read_launcher_activation_snapshot().await {
+                    Ok(current) => current,
+                    Err(error) => {
+                        eprintln!(
+                            "Project activation failed closed after mutation: unable to read back DB-first activation truth from authoritative state store: {error}"
+                        );
+                        return ExitCode::from(1);
+                    }
+                };
+                if read_back.source != snapshot.source
+                    || read_back.source_config_path != snapshot.source_config_path
+                    || read_back.source_config_digest != snapshot.source_config_digest
+                {
+                    eprintln!(
+                        "Project activation failed closed after mutation: DB-first activation truth read-back mismatch in authoritative state store."
+                    );
+                    return ExitCode::from(1);
+                }
+                if read_back.source != "state_store" {
+                    eprintln!(
+                        "Project activation failed closed after mutation: DB-first activation truth source must be `state_store`."
+                    );
+                    return ExitCode::from(1);
+                }
+                if read_back.source_config_path.trim().is_empty()
+                    || read_back.source_config_digest.trim().is_empty()
+                {
+                    eprintln!(
+                        "Project activation failed closed after mutation: DB-first activation truth metadata is incomplete in authoritative state store."
+                    );
+                    return ExitCode::from(1);
+                }
+                activation_truth_sync = Some(serde_json::json!({
+                    "source": snapshot.source,
+                    "source_config_path": snapshot.source_config_path,
+                    "source_config_digest": snapshot.source_config_digest,
+                    "read_back_verified": true,
+                }));
+            }
+            Err(error) => {
+                eprintln!(
+                    "Project activation failed closed after mutation: unable to persist DB-first activation truth in authoritative state store: {error}"
+                );
+                return ExitCode::from(1);
+            }
+        }
+    }
 
     let mut view = build_project_activator_view(&project_root);
     if let Some(path) = activation_receipt_path.as_deref() {
-        view["activation_log"] = serde_json::json!({
+        let mut activation_log = serde_json::json!({
             "receipt_path": path,
             "changed_files": changed_files,
         });
+        if let Some(sync) = activation_truth_sync {
+            activation_log["db_first_activation_truth"] = sync;
+        }
+        view["activation_log"] = activation_log;
     }
     if args.json {
         let payload = if let Some(host_cli_activated) = host_cli_activated.as_deref() {

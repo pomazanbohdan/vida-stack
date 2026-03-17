@@ -8,7 +8,7 @@ Purpose: provide a clean project docs map scaffold for the repository being deve
 2. This sidecar is the project docs map only.
 3. It carries only project-document discovery pointers and project-document orientation.
 4. It must not become a second framework map or a mixed runtime/bootstrap carrier.
-5. Framework-owned discovery starts from the bootstrap route selected by `AGENTS.md` and continues through bounded framework shorthand ids interpreted through `vida protocol view` when deeper framework inspection is needed.
+5. This scaffold is project-owned template material; it is not a framework owner-policy surface.
 
 ## Project Canonical Maps
 
@@ -40,15 +40,17 @@ Fill in the project-owned canonical surfaces used by this repository.
 1. Use `AGENTS.md` for framework lane routing and hard invariants.
 2. Use this sidecar only for project docs discovery and project-document orientation.
 3. Replace all placeholder paths with project-owned canonical targets before relying on this sidecar in active work.
+4. Keep `AGENTS.md` synchronized with `install/assets/AGENTS.scaffold.md`; when one changes, update the other in the same bounded change.
+5. Treat that synchronization as bidirectional and mandatory: changing either side requires updating its counterpart before closure.
 
 -----
 artifact_path: install/assets/agents-sidecar-scaffold
 artifact_type: bootstrap_doc
 artifact_version: '1'
-artifact_revision: '2026-03-14'
+artifact_revision: '2026-03-17'
 schema_version: '1'
 status: canonical
 source_path: install/assets/AGENTS.sidecar.scaffold.md
 created_at: '2026-03-12T12:20:00+02:00'
-updated_at: '2026-03-14T09:00:57+02:00'
+updated_at: '2026-03-17T06:25:00+02:00'
 changelog_ref: AGENTS.sidecar.scaffold.changelog.jsonl

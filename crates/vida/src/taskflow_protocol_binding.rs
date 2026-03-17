@@ -4,6 +4,13 @@ use std::process::ExitCode;
 
 use super::state_store::{ProtocolBindingState, ProtocolBindingSummary, StateStore};
 
+#[derive(Clone, serde::Serialize)]
+struct ProtocolBindingDecisionGateStatus {
+    policy_gate: String,
+    ready: bool,
+    blocker_code: Option<String>,
+}
+
 struct TaskflowProtocolBindingSeed {
     protocol_id: &'static str,
     source_path: &'static str,
@@ -87,6 +94,21 @@ impl ProtocolBindingCompiledPayloadImportEvidence {
     }
 }
 
+fn has_non_empty_string_field(payload: &serde_json::Value, path: &[&str]) -> bool {
+    let mut current = payload;
+    for segment in path {
+        let Some(next) = current.get(*segment) else {
+            return false;
+        };
+        current = next;
+    }
+    current
+        .as_str()
+        .map(str::trim)
+        .map(|value| !value.is_empty())
+        .unwrap_or(false)
+}
+
 pub(crate) async fn protocol_binding_compiled_payload_import_evidence(
     store: &StateStore,
 ) -> ProtocolBindingCompiledPayloadImportEvidence {
@@ -135,6 +157,20 @@ pub(crate) async fn protocol_binding_compiled_payload_import_evidence(
         blockers.push("missing_launcher_activation_snapshot".to_string());
     } else if !ProtocolBindingCompiledPayloadImportEvidence::trusted(&source) {
         blockers.push(format!("untrusted_compiled_payload_source:{source}"));
+    }
+    if let Some(snapshot) = activation_snapshot.as_ref() {
+        if !has_non_empty_string_field(&snapshot.compiled_bundle, &["role_selection", "mode"]) {
+            blockers.push("invalid_compiled_bundle_role_selection_mode".to_string());
+        }
+        if !has_non_empty_string_field(&snapshot.compiled_bundle, &["agent_system", "mode"]) {
+            blockers.push("invalid_compiled_bundle_agent_system_mode".to_string());
+        }
+        if !has_non_empty_string_field(
+            &snapshot.compiled_bundle,
+            &["agent_system", "state_owner"],
+        ) {
+            blockers.push("invalid_compiled_bundle_agent_system_state_owner".to_string());
+        }
     }
     if let Some(receipt) = effective_bundle_receipt.as_ref() {
         if receipt.receipt_id.trim().is_empty() {
@@ -263,7 +299,10 @@ fn protocol_binding_check_ok(
     rows: &[ProtocolBindingState],
     evidence: &ProtocolBindingCompiledPayloadImportEvidence,
 ) -> bool {
-    evidence.imported
+    protocol_binding_decision_gate_status(summary, evidence)
+        .blocker_code
+        .is_none()
+        && evidence.imported
         && evidence.trusted
         && summary.total_receipts > 0
         && summary.total_bindings == taskflow_protocol_binding_seeds().len()
@@ -275,6 +314,35 @@ fn protocol_binding_check_ok(
         && rows
             .iter()
             .all(|row| row.binding_status == "fully-runtime-bound" && row.blockers.is_empty())
+}
+
+fn protocol_binding_decision_gate_status(
+    summary: &ProtocolBindingSummary,
+    evidence: &ProtocolBindingCompiledPayloadImportEvidence,
+) -> ProtocolBindingDecisionGateStatus {
+    let policy_gate = "retrieval_evidence";
+    let receipt_hint = if summary.total_receipts > 0 {
+        Some("protocol_binding_summary_receipt")
+    } else {
+        Some(evidence.effective_bundle_receipt_id.as_str())
+    };
+    let runtime_ready = evidence.imported
+        && evidence.trusted
+        && summary.total_receipts > 0
+        && summary.unbound_count == 0
+        && summary.blocking_issue_count == 0
+        && summary.fully_runtime_bound_count == taskflow_protocol_binding_seeds().len();
+    let blocker = super::release1_contracts::evaluate_policy_gate_protocol_binding(
+        policy_gate,
+        receipt_hint,
+        runtime_ready,
+    );
+    let blocker_code = blocker.and_then(super::release1_contracts::blocker_code_value);
+    ProtocolBindingDecisionGateStatus {
+        policy_gate: policy_gate.to_string(),
+        ready: blocker_code.is_none(),
+        blocker_code,
+    }
 }
 
 pub(crate) async fn run_taskflow_protocol_binding(args: &[String]) -> ExitCode {
@@ -528,6 +596,7 @@ pub(crate) async fn run_taskflow_protocol_binding(args: &[String]) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
+                    let decision_gate = protocol_binding_decision_gate_status(&summary, &evidence);
                     let ok = protocol_binding_check_ok(&summary, &rows, &evidence);
                     super::print_surface_header(
                         super::RenderMode::Plain,
@@ -551,6 +620,18 @@ pub(crate) async fn run_taskflow_protocol_binding(args: &[String]) -> ExitCode {
                         } else {
                             "blocked"
                         },
+                    );
+                    super::print_surface_line(
+                        super::RenderMode::Plain,
+                        "decision gate",
+                        &format!(
+                            "{} ({})",
+                            decision_gate.policy_gate,
+                            decision_gate
+                                .blocker_code
+                                .as_deref()
+                                .unwrap_or("ready")
+                        ),
                     );
                     if ok {
                         ExitCode::SUCCESS
@@ -585,12 +666,14 @@ pub(crate) async fn run_taskflow_protocol_binding(args: &[String]) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
+                    let decision_gate = protocol_binding_decision_gate_status(&summary, &evidence);
                     let ok = protocol_binding_check_ok(&summary, &rows, &evidence);
                     println!(
                         "{}",
                         serde_json::to_string_pretty(&serde_json::json!({
                             "surface": "vida taskflow protocol-binding check",
                             "ok": ok,
+                            "decision_gate": decision_gate,
                             "compiled_payload_import_evidence": evidence,
                             "summary": summary,
                             "bindings": rows,

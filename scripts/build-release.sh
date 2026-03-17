@@ -70,7 +70,7 @@ cp "$ROOT_DIR/AGENTS.md" "$STAGE_DIR/AGENTS.md"
 awk '
   /^-----$/ { exit }
   { print }
-' "$ROOT_DIR/install/assets/AGENTS.sidecar.scaffold.md" > "$STAGE_DIR/AGENTS.sidecar.md"
+' "$ROOT_DIR/AGENTS.sidecar.md" > "$STAGE_DIR/AGENTS.sidecar.md"
 cp -R "$ROOT_DIR/.codex" "$STAGE_DIR/.codex"
 cp -R "$ROOT_DIR/vida" "$STAGE_DIR/vida"
 

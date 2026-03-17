@@ -5,11 +5,8 @@ use crate::state_store::{
 use crate::{print_surface_header, print_surface_line, RenderMode};
 
 pub(crate) fn print_task_list(render: RenderMode, tasks: &[TaskRecord], as_json: bool) {
-    if as_json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(tasks).expect("task list should render as json")
-        );
+    if crate::surface_render::print_surface_json(tasks, as_json, "task list should render as json")
+    {
         return;
     }
 
@@ -20,11 +17,7 @@ pub(crate) fn print_task_list(render: RenderMode, tasks: &[TaskRecord], as_json:
 }
 
 pub(crate) fn print_task_show(render: RenderMode, task: &TaskRecord, as_json: bool) {
-    if as_json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(task).expect("task should render as json")
-        );
+    if crate::surface_render::print_surface_json(task, as_json, "task should render as json") {
         return;
     }
 
@@ -55,12 +48,11 @@ pub(crate) fn print_task_dependencies(
     dependencies: &[TaskDependencyStatus],
     as_json: bool,
 ) {
-    if as_json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(dependencies)
-                .expect("task dependencies should render as json")
-        );
+    if crate::surface_render::print_surface_json(
+        dependencies,
+        as_json,
+        "task dependencies should render as json",
+    ) {
         return;
     }
 
@@ -88,11 +80,11 @@ pub(crate) fn print_task_dependencies(
 }
 
 pub(crate) fn print_blocked_tasks(render: RenderMode, tasks: &[BlockedTaskRecord], as_json: bool) {
-    if as_json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(tasks).expect("blocked tasks should render as json")
-        );
+    if crate::surface_render::print_surface_json(
+        tasks,
+        as_json,
+        "blocked tasks should render as json",
+    ) {
         return;
     }
 
@@ -121,11 +113,11 @@ pub(crate) fn print_task_dependency_tree(
     tree: &TaskDependencyTreeNode,
     as_json: bool,
 ) {
-    if as_json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(tree).expect("task dependency tree should render as json")
-        );
+    if crate::surface_render::print_surface_json(
+        tree,
+        as_json,
+        "task dependency tree should render as json",
+    ) {
         return;
     }
 
@@ -175,11 +167,11 @@ pub(crate) fn print_task_graph_issues(
     issues: &[TaskGraphIssue],
     as_json: bool,
 ) {
-    if as_json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(issues).expect("task graph issues should render as json")
-        );
+    if crate::surface_render::print_surface_json(
+        issues,
+        as_json,
+        "task graph issues should render as json",
+    ) {
         return;
     }
 
@@ -207,12 +199,11 @@ pub(crate) fn print_task_dependency_mutation(
     dependency: &TaskDependencyRecord,
     as_json: bool,
 ) {
-    if as_json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(dependency)
-                .expect("task dependency mutation should render as json")
-        );
+    if crate::surface_render::print_surface_json(
+        dependency,
+        as_json,
+        "task dependency mutation should render as json",
+    ) {
         return;
     }
 
@@ -223,11 +214,11 @@ pub(crate) fn print_task_dependency_mutation(
 }
 
 pub(crate) fn print_task_critical_path(render: RenderMode, path: &TaskCriticalPath, as_json: bool) {
-    if as_json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(path).expect("critical path should render as json")
-        );
+    if crate::surface_render::print_surface_json(
+        path,
+        as_json,
+        "critical path should render as json",
+    ) {
         return;
     }
 

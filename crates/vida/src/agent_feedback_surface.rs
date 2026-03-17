@@ -1,5 +1,16 @@
 use std::process::ExitCode;
 
+const MAX_FEEDBACK_NOTES_BYTES: usize = 2048;
+
+fn canonical_feedback_outcome(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "success" => Some("success"),
+        "failure" => Some("failure"),
+        "neutral" => Some("neutral"),
+        _ => None,
+    }
+}
+
 pub(crate) async fn run_agent_feedback(args: super::AgentFeedbackArgs) -> ExitCode {
     let project_root = match super::resolve_runtime_project_root() {
         Ok(root) => root,
@@ -8,7 +19,16 @@ pub(crate) async fn run_agent_feedback(args: super::AgentFeedbackArgs) -> ExitCo
             return ExitCode::from(2);
         }
     };
-    let outcome = args.outcome.as_deref().unwrap_or("success");
+    let outcome_input = args.outcome.as_deref().unwrap_or("success");
+    let outcome = match canonical_feedback_outcome(outcome_input) {
+        Some(canonical) => canonical,
+        None => {
+            eprintln!(
+                "Unsupported feedback outcome `{outcome_input}`. Allowed values: success, failure, neutral."
+            );
+            return ExitCode::from(2);
+        }
+    };
     let task_class = args.task_class.as_deref().unwrap_or("unspecified");
     let input = super::HostAgentFeedbackInput {
         agent_id: &args.agent_id,
@@ -95,7 +115,7 @@ pub(crate) async fn run_agent_feedback(args: super::AgentFeedbackArgs) -> ExitCo
 
 fn infer_feedback_outcome_from_close_reason(reason: &str) -> &'static str {
     let normalized = reason.to_ascii_lowercase();
-    if super::contains_keywords(
+    let inferred = if super::contains_keywords(
         &normalized,
         &[
             "fail".to_string(),
@@ -126,7 +146,8 @@ fn infer_feedback_outcome_from_close_reason(reason: &str) -> &'static str {
         "neutral"
     } else {
         "success"
-    }
+    };
+    canonical_feedback_outcome(inferred).expect("inferred feedback outcome must be canonical")
 }
 
 fn default_feedback_score(outcome: &str, task_class: &str) -> u64 {
@@ -142,15 +163,39 @@ fn default_feedback_score(outcome: &str, task_class: &str) -> u64 {
     }
 }
 
+fn canonical_close_status_from_reason(reason: &str) -> Option<(&'static str, &'static str)> {
+    let normalized = reason.to_ascii_lowercase();
+    let approval_keywords = [
+        "approval_wait".to_string(),
+        "awaiting_approval".to_string(),
+        "approval required".to_string(),
+        "pending approval".to_string(),
+    ];
+    if !super::contains_keywords(&normalized, &approval_keywords).is_empty() {
+        return Some(("awaiting_approval", "approval_required"));
+    }
+
+    let blocker_keywords = [
+        "blocked".to_string(),
+        "blocker".to_string(),
+        "lane_blocked".to_string(),
+        "blocked_pending".to_string(),
+    ];
+    if !super::contains_keywords(&normalized, &blocker_keywords).is_empty() {
+        return Some(("blocked", "blocked"));
+    }
+
+    None
+}
+
 pub(crate) fn maybe_record_task_close_host_agent_feedback(
     project_root: &std::path::Path,
     task: &serde_json::Value,
     close_reason: &str,
 ) -> serde_json::Value {
-    let overlay =
-        match super::project_activator_surface::read_yaml_file_checked(
-            &project_root.join("vida.config.yaml"),
-        ) {
+    let overlay = match super::project_activator_surface::read_yaml_file_checked(
+        &project_root.join("vida.config.yaml"),
+    ) {
         Ok(overlay) => overlay,
         Err(error) => {
             return serde_json::json!({
@@ -208,6 +253,17 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
             "runtime_role": runtime_role,
         });
     }
+    if let Some((canonical_status, canonical_gate)) = canonical_close_status_from_reason(close_reason) {
+        return serde_json::json!({
+            "status": "skipped",
+            "reason": "feedback_deferred_for_canonical_close_status",
+            "task_class": task_class,
+            "runtime_role": runtime_role,
+            "assignment": assignment,
+            "canonical_status": canonical_status,
+            "canonical_gate": canonical_gate,
+        });
+    }
     let outcome = infer_feedback_outcome_from_close_reason(close_reason);
     let score = default_feedback_score(outcome, &task_class);
     let input = super::HostAgentFeedbackInput {
@@ -251,6 +307,15 @@ fn append_host_agent_feedback(
 ) -> Result<serde_json::Value, String> {
     if input.score > 100 {
         return Err("Feedback score must be between 0 and 100.".to_string());
+    }
+    if let Some(notes) = input.notes {
+        if notes.len() > MAX_FEEDBACK_NOTES_BYTES {
+            return Err(format!(
+                "Feedback notes exceed bounded ingestion contract: {} bytes > {} bytes.",
+                notes.len(),
+                MAX_FEEDBACK_NOTES_BYTES
+            ));
+        }
     }
     let overlay = super::project_activator_surface::read_yaml_file_checked(
         &project_root.join("vida.config.yaml"),

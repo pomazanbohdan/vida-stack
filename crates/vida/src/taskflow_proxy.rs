@@ -5,10 +5,10 @@ use crate::taskflow_run_graph::{
     run_taskflow_recovery, run_taskflow_run_graph, run_taskflow_run_graph_mutation,
 };
 use crate::taskflow_spec_bootstrap::run_taskflow_bootstrap_spec;
-use crate::taskflow_task_bridge::run_taskflow_task_bridge;
-use crate::{
-    resolve_repo_root, taskflow_consume, taskflow_protocol_binding, Command, ProxyArgs,
+use crate::taskflow_task_bridge::{
+    enforce_execution_preparation_contract_gate, proxy_state_dir, run_taskflow_task_bridge,
 };
+use crate::{resolve_repo_root, taskflow_consume, taskflow_protocol_binding, Command, ProxyArgs};
 use clap::Parser;
 
 async fn route_taskflow_doctor(args: &[String]) -> ExitCode {
@@ -17,7 +17,9 @@ async fn route_taskflow_doctor(args: &[String]) -> ExitCode {
         .collect::<Vec<_>>();
     match super::Cli::try_parse_from(argv) {
         Ok(cli) => match cli.command {
-            Some(Command::Doctor(doctor_args)) => crate::doctor_surface::run_doctor(doctor_args).await,
+            Some(Command::Doctor(doctor_args)) => {
+                crate::doctor_surface::run_doctor(doctor_args).await
+            }
             _ => {
                 eprintln!("Unsupported `vida taskflow doctor` routing request.");
                 ExitCode::from(2)
@@ -85,8 +87,19 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
     }
 
     if matches!(args.args.first().map(String::as_str), Some("consume")) {
+        let consume_subcommand = args.args.get(1).map(String::as_str);
+        if matches!(consume_subcommand, Some("continue" | "advance")) {
+            let state_root = proxy_state_dir();
+            if let Err(error) = enforce_execution_preparation_contract_gate(&state_root) {
+                eprintln!(
+                    "{error}\nFail-closed: `vida taskflow consume {}` requires release-1 execution-preparation evidence/contract.",
+                    consume_subcommand.unwrap_or("unknown")
+                );
+                return ExitCode::from(1);
+            }
+        }
         if matches!(
-            args.args.get(1).map(String::as_str),
+            consume_subcommand,
             None | Some(
                 "bundle" | "agent-system" | "final" | "continue" | "advance" | "--help" | "-h"
             )

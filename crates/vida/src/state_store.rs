@@ -6,7 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::release1_contracts::{
     canonical_blocker_code_str, canonical_compatibility_class_str, canonical_lane_status_str,
-    derive_lane_status, BlockerCode, CompatibilityClass, LaneStatus,
+    canonical_release1_contract_type_str, canonical_release1_schema_version_str,
+    derive_lane_status, BlockerCode, CompatibilityClass, LaneStatus, Release1ContractType,
+    Release1SchemaVersion,
 };
 use serde_json::Deserializer;
 use surrealdb::engine::local::{Db, SurrealKv};
@@ -1366,6 +1368,16 @@ impl StateStore {
         };
 
         let summary = MigrationPreflightSummary {
+            contract_type: canonical_release1_contract_type_str(
+                Release1ContractType::OperatorContracts.as_str(),
+            )
+            .unwrap_or(Release1ContractType::OperatorContracts.as_str())
+            .to_string(),
+            schema_version: canonical_release1_schema_version_str(
+                Release1SchemaVersion::V1.as_str(),
+            )
+            .unwrap_or(Release1SchemaVersion::V1.as_str())
+            .to_string(),
             compatibility_classification: compatibility_classification.as_str().to_string(),
             migration_state: migration_state.to_string(),
             blockers,
@@ -1378,6 +1390,8 @@ impl StateStore {
             .upsert(("migration_runtime_state", "primary"))
             .content(MigrationRuntimeStateRow {
                 state_id: "primary".to_string(),
+                contract_type: summary.contract_type.clone(),
+                schema_version: summary.schema_version.clone(),
                 migration_state: summary.migration_state.clone(),
                 compatibility_classification: summary.compatibility_classification.clone(),
                 blockers: summary.blockers.clone(),
@@ -1392,6 +1406,8 @@ impl StateStore {
             .upsert(("migration_compatibility_receipt", "primary"))
             .content(MigrationCompatibilityReceiptRow {
                 receipt_id: "primary".to_string(),
+                contract_type: summary.contract_type.clone(),
+                schema_version: summary.schema_version.clone(),
                 compatibility_classification: summary.compatibility_classification.clone(),
                 migration_state: summary.migration_state.clone(),
                 blockers: summary.blockers.clone(),
@@ -1412,6 +1428,12 @@ impl StateStore {
             .select(("migration_runtime_state", "primary"))
             .await?;
         Ok(row.map(|row| MigrationPreflightSummary {
+            contract_type: canonical_release1_contract_type_str(&row.contract_type)
+                .unwrap_or(Release1ContractType::OperatorContracts.as_str())
+                .to_string(),
+            schema_version: canonical_release1_schema_version_str(&row.schema_version)
+                .unwrap_or(Release1SchemaVersion::V1.as_str())
+                .to_string(),
             compatibility_classification: canonical_compatibility_class_str(
                 &row.compatibility_classification,
             )
@@ -1706,6 +1728,7 @@ impl StateStore {
         &self,
         status: &RunGraphStatus,
     ) -> Result<(), StateStoreError> {
+        status.validate_memory_governance()?;
         let updated_at = unix_timestamp_nanos().to_string();
         let _: Option<RoutedRunStateRow> = self
             .db
@@ -1827,6 +1850,13 @@ impl StateStore {
         Ok(Some(self.run_graph_status(&latest.run_id).await?))
     }
 
+    pub async fn ensure_memory_governance_guard(&self) -> Result<(), StateStoreError> {
+        let Some(status) = self.latest_run_graph_status().await? else {
+            return Ok(());
+        };
+        status.validate_memory_governance()
+    }
+
     pub async fn latest_run_graph_dispatch_receipt_summary(
         &self,
     ) -> Result<Option<RunGraphDispatchReceiptSummary>, StateStoreError> {
@@ -1834,11 +1864,13 @@ impl StateStore {
             .db
             .query("SELECT * FROM run_graph_dispatch_receipt ORDER BY recorded_at DESC LIMIT 1;")
             .await?;
-        let rows: Vec<RunGraphDispatchReceipt> = query.take(0)?;
+        let rows: Vec<RunGraphDispatchReceiptStored> = query.take(0)?;
         let Some(latest) = rows.into_iter().next() else {
             return Ok(None);
         };
-        Ok(Some(RunGraphDispatchReceiptSummary::from_receipt(latest)))
+        Ok(Some(RunGraphDispatchReceiptSummary::from_receipt(
+            latest.into(),
+        )))
     }
 
     pub async fn latest_run_graph_dispatch_receipt(
@@ -1848,8 +1880,8 @@ impl StateStore {
             .db
             .query("SELECT * FROM run_graph_dispatch_receipt ORDER BY recorded_at DESC LIMIT 1;")
             .await?;
-        let rows: Vec<RunGraphDispatchReceipt> = query.take(0)?;
-        Ok(rows.into_iter().next())
+        let rows: Vec<RunGraphDispatchReceiptStored> = query.take(0)?;
+        Ok(rows.into_iter().next().map(Into::into))
     }
 
     pub async fn run_graph_dispatch_receipt(
@@ -1859,6 +1891,7 @@ impl StateStore {
         self.db
             .select(("run_graph_dispatch_receipt", run_id))
             .await
+            .map(|row: Option<RunGraphDispatchReceiptStored>| row.map(Into::into))
             .map_err(Into::into)
     }
 
@@ -2136,6 +2169,24 @@ impl StateStore {
             .await?;
         let rows: Vec<ProtocolBindingReceipt> = query.take(0)?;
         Ok(rows.into_iter().next())
+    }
+
+    pub async fn latest_protocol_binding_cache_token(
+        &self,
+    ) -> Result<Option<String>, StateStoreError> {
+        let Some(receipt) = self.latest_protocol_binding_receipt().await? else {
+            return Ok(None);
+        };
+        if receipt.receipt_id.trim().is_empty()
+            || receipt.recorded_at.trim().is_empty()
+            || receipt.primary_state_authority.trim().is_empty()
+        {
+            return Ok(None);
+        }
+        Ok(Some(format!(
+            "{}::{}::{}",
+            receipt.primary_state_authority, receipt.receipt_id, receipt.recorded_at
+        )))
     }
 
     pub async fn latest_protocol_binding_rows(
@@ -3511,6 +3562,10 @@ pub struct BootCompatibilitySummary {
 #[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
 struct MigrationRuntimeStateRow {
     state_id: String,
+    #[serde(default = "default_release1_contract_type")]
+    contract_type: String,
+    #[serde(default = "default_release1_schema_version")]
+    schema_version: String,
     migration_state: String,
     compatibility_classification: String,
     blockers: Vec<String>,
@@ -3522,6 +3577,10 @@ struct MigrationRuntimeStateRow {
 #[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
 struct MigrationCompatibilityReceiptRow {
     receipt_id: String,
+    #[serde(default = "default_release1_contract_type")]
+    contract_type: String,
+    #[serde(default = "default_release1_schema_version")]
+    schema_version: String,
     compatibility_classification: String,
     migration_state: String,
     blockers: Vec<String>,
@@ -3532,11 +3591,21 @@ struct MigrationCompatibilityReceiptRow {
 
 #[derive(Debug)]
 pub struct MigrationPreflightSummary {
+    pub contract_type: String,
+    pub schema_version: String,
     pub compatibility_classification: String,
     pub migration_state: String,
     pub blockers: Vec<String>,
     pub source_version_tuple: Vec<String>,
     pub next_step: String,
+}
+
+fn default_release1_contract_type() -> String {
+    Release1ContractType::OperatorContracts.as_str().to_string()
+}
+
+fn default_release1_schema_version() -> String {
+    Release1SchemaVersion::V1.as_str().to_string()
 }
 
 #[derive(Debug)]
@@ -3683,7 +3752,10 @@ pub struct RunGraphDispatchReceipt {
     pub run_id: String,
     pub dispatch_target: String,
     pub dispatch_status: String,
-    #[serde(default = "default_run_graph_lane_status")]
+    #[serde(
+        default = "default_run_graph_lane_status",
+        deserialize_with = "deserialize_run_graph_lane_status"
+    )]
     pub lane_status: String,
     pub supersedes_receipt_id: Option<String>,
     pub exception_path_receipt_id: Option<String>,
@@ -3712,6 +3784,80 @@ pub struct RunGraphDispatchReceipt {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
+struct RunGraphDispatchReceiptStored {
+    run_id: String,
+    dispatch_target: String,
+    dispatch_status: String,
+    lane_status: Option<String>,
+    supersedes_receipt_id: Option<String>,
+    exception_path_receipt_id: Option<String>,
+    dispatch_kind: String,
+    dispatch_surface: Option<String>,
+    dispatch_command: Option<String>,
+    dispatch_packet_path: Option<String>,
+    dispatch_result_path: Option<String>,
+    blocker_code: Option<String>,
+    downstream_dispatch_target: Option<String>,
+    downstream_dispatch_command: Option<String>,
+    downstream_dispatch_note: Option<String>,
+    downstream_dispatch_ready: bool,
+    downstream_dispatch_blockers: Vec<String>,
+    downstream_dispatch_packet_path: Option<String>,
+    downstream_dispatch_status: Option<String>,
+    downstream_dispatch_result_path: Option<String>,
+    downstream_dispatch_trace_path: Option<String>,
+    downstream_dispatch_executed_count: u32,
+    downstream_dispatch_active_target: Option<String>,
+    downstream_dispatch_last_target: Option<String>,
+    activation_agent_type: Option<String>,
+    activation_runtime_role: Option<String>,
+    selected_backend: Option<String>,
+    recorded_at: String,
+}
+
+impl From<RunGraphDispatchReceiptStored> for RunGraphDispatchReceipt {
+    fn from(stored: RunGraphDispatchReceiptStored) -> Self {
+        let normalized_lane_status = normalize_run_graph_lane_status(
+            stored.lane_status.as_deref(),
+            &stored.dispatch_status,
+            stored.supersedes_receipt_id.as_deref(),
+            stored.exception_path_receipt_id.as_deref(),
+        );
+        Self {
+            run_id: stored.run_id,
+            dispatch_target: stored.dispatch_target,
+            dispatch_status: stored.dispatch_status,
+            lane_status: normalized_lane_status,
+            supersedes_receipt_id: stored.supersedes_receipt_id,
+            exception_path_receipt_id: stored.exception_path_receipt_id,
+            dispatch_kind: stored.dispatch_kind,
+            dispatch_surface: stored.dispatch_surface,
+            dispatch_command: stored.dispatch_command,
+            dispatch_packet_path: stored.dispatch_packet_path,
+            dispatch_result_path: stored.dispatch_result_path,
+            blocker_code: stored.blocker_code,
+            downstream_dispatch_target: stored.downstream_dispatch_target,
+            downstream_dispatch_command: stored.downstream_dispatch_command,
+            downstream_dispatch_note: stored.downstream_dispatch_note,
+            downstream_dispatch_ready: stored.downstream_dispatch_ready,
+            downstream_dispatch_blockers: stored.downstream_dispatch_blockers,
+            downstream_dispatch_packet_path: stored.downstream_dispatch_packet_path,
+            downstream_dispatch_status: stored.downstream_dispatch_status,
+            downstream_dispatch_result_path: stored.downstream_dispatch_result_path,
+            downstream_dispatch_trace_path: stored.downstream_dispatch_trace_path,
+            downstream_dispatch_executed_count: stored.downstream_dispatch_executed_count,
+            downstream_dispatch_active_target: stored.downstream_dispatch_active_target,
+            downstream_dispatch_last_target: stored.downstream_dispatch_last_target,
+            activation_agent_type: stored.activation_agent_type,
+            activation_runtime_role: stored.activation_runtime_role,
+            selected_backend: stored.selected_backend,
+            recorded_at: stored.recorded_at,
+        }
+    }
+}
+
+#[allow(dead_code)]
 #[derive(Debug, serde::Serialize)]
 pub struct RunGraphStatus {
     pub run_id: String,
@@ -3734,6 +3880,29 @@ pub struct RunGraphStatus {
 
 #[allow(dead_code)]
 impl RunGraphStatus {
+    fn validate_memory_governance(&self) -> Result<(), StateStoreError> {
+        if !requires_memory_governance_enforcement(&self.policy_gate) {
+            return Ok(());
+        }
+        if self.context_state != "sealed" {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "memory governance evidence shaping required for policy_gate `{}`: context_state must be `sealed`, got `{}`",
+                    self.policy_gate, self.context_state
+                ),
+            });
+        }
+        if !handoff_state_links_consent_ttl(&self.handoff_state) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "memory governance linkage required for policy_gate `{}`: handoff_state must link consent+ttl, got `{}`",
+                    self.policy_gate, self.handoff_state
+                ),
+            });
+        }
+        Ok(())
+    }
+
     pub fn as_display(&self) -> String {
         format!(
             "run={} task={} class={} node={} status={} next={} route={} backend={} lane={} lifecycle={} gate={} handoff={} context={} checkpoint={} resume_target={} recovery_ready={}",
@@ -3759,6 +3928,20 @@ impl RunGraphStatus {
     pub fn delegation_gate(&self) -> RunGraphDelegationGateSummary {
         RunGraphDelegationGateSummary::from_status(self)
     }
+}
+
+fn requires_memory_governance_enforcement(policy_gate: &str) -> bool {
+    let normalized = policy_gate.trim().to_ascii_lowercase();
+    normalized.contains("consent")
+        || normalized.contains("ttl")
+        || normalized.contains("correction")
+        || normalized.contains("delete")
+        || normalized.contains("deletion")
+}
+
+fn handoff_state_links_consent_ttl(handoff_state: &str) -> bool {
+    let normalized = handoff_state.trim().to_ascii_lowercase();
+    normalized.contains("consent") && normalized.contains("ttl")
 }
 
 #[derive(Debug, serde::Serialize, PartialEq, Eq, Clone)]
@@ -4048,6 +4231,39 @@ impl RunGraphDispatchReceiptSummary {
 
 fn default_run_graph_lane_status() -> String {
     LaneStatus::LaneOpen.as_str().to_string()
+}
+
+fn normalize_run_graph_lane_status(
+    value: Option<&str>,
+    dispatch_status: &str,
+    supersedes_receipt_id: Option<&str>,
+    exception_path_receipt_id: Option<&str>,
+) -> String {
+    match value {
+        Some(raw) if !raw.trim().is_empty() => {
+            canonical_lane_status_str(raw).unwrap_or(raw).to_string()
+        }
+        _ => derive_lane_status(
+            dispatch_status,
+            supersedes_receipt_id,
+            exception_path_receipt_id,
+        )
+        .as_str()
+        .to_string(),
+    }
+}
+
+fn deserialize_run_graph_lane_status<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <Option<String> as serde::Deserialize>::deserialize(deserializer)?;
+    match value.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => {
+            Ok(canonical_lane_status_str(raw).unwrap_or(raw).to_string())
+        }
+        _ => Ok(default_run_graph_lane_status()),
+    }
 }
 
 #[derive(Debug, serde::Serialize, PartialEq, Eq)]
@@ -6081,6 +6297,63 @@ hierarchy: framework,contracts
         }
     }
 
+    #[tokio::test]
+    async fn run_graph_status_fails_closed_when_correction_requires_sealed_evidence_context() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-governance-fail-closed-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let mut status = sample_run_graph_status();
+        status.policy_gate = "memory_correction_required".to_string();
+        status.context_state = "open".to_string();
+
+        let error = store
+            .record_run_graph_status(&status)
+            .await
+            .expect_err("unsealed evidence context should fail closed");
+        assert!(error
+            .to_string()
+            .contains("memory governance evidence shaping required"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_status_fails_closed_when_memory_governance_linkage_is_missing() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-governance-linkage-fail-closed-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let mut status = sample_run_graph_status();
+        status.policy_gate = "memory_delete_required".to_string();
+        status.context_state = "sealed".to_string();
+        status.handoff_state = "awaiting_coach".to_string();
+
+        let error = store
+            .record_run_graph_status(&status)
+            .await
+            .expect_err("missing consent/ttl linkage should fail closed");
+        assert!(error
+            .to_string()
+            .contains("memory governance linkage required"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn delegation_gate_marks_handoff_pending_when_resume_target_is_open() {
         let status = sample_run_graph_status();
@@ -6233,6 +6506,61 @@ hierarchy: framework,contracts
         assert_eq!(summary.lane_status, "lane_superseded");
     }
 
+    #[test]
+    fn run_graph_dispatch_receipt_deserialize_tolerates_null_lane_status() {
+        let receipt = sample_dispatch_receipt_with_status("executed");
+        let mut value = serde_json::to_value(receipt).expect("serialize receipt");
+        value["lane_status"] = serde_json::Value::Null;
+
+        let parsed: RunGraphDispatchReceipt =
+            serde_json::from_value(value).expect("deserialize receipt with null lane_status");
+
+        assert_eq!(parsed.lane_status, "lane_open");
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_tolerates_persisted_null_lane_status() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-null-lane-status-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut receipt = sample_dispatch_receipt_with_status("executed");
+        receipt.run_id = "runnulllanestatus".to_string();
+        receipt.recorded_at = "2026-03-16T00:00:00Z".to_string();
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+        store
+            .db
+            .query("UPDATE run_graph_dispatch_receipt:runnulllanestatus SET lane_status = NONE;")
+            .await
+            .expect("set persisted lane_status to NONE");
+
+        let summary = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect("load summary")
+            .expect("summary exists");
+        assert_eq!(summary.lane_status, "lane_running");
+
+        let receipt = store
+            .latest_run_graph_dispatch_receipt()
+            .await
+            .expect("load receipt")
+            .expect("receipt exists");
+        assert_eq!(receipt.lane_status, "lane_running");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[tokio::test]
     async fn migration_preflight_reports_no_migration_required_for_seeded_runtime() {
         let nanos = SystemTime::now()
@@ -6259,6 +6587,8 @@ hierarchy: framework,contracts
             .evaluate_migration_preflight()
             .await
             .expect("migration preflight should succeed");
+        assert_eq!(summary.contract_type, "release-1-operator-contracts");
+        assert_eq!(summary.schema_version, "release-1-v1");
         assert_eq!(summary.compatibility_classification, "compatible");
         assert_eq!(summary.migration_state, "no_migration_required");
         assert!(summary.blockers.is_empty());
@@ -6406,6 +6736,8 @@ hierarchy: framework,contracts
             .evaluate_migration_preflight()
             .await
             .expect("migration preflight should succeed");
+        assert_eq!(summary.contract_type, "release-1-operator-contracts");
+        assert_eq!(summary.schema_version, "release-1-v1");
         assert_eq!(summary.compatibility_classification, "compatible");
         assert_eq!(summary.migration_state, "no_migration_required");
 
@@ -6431,6 +6763,8 @@ hierarchy: framework,contracts
             .await
             .expect("latest migration preflight should load")
             .expect("persisted migration preflight should exist");
+        assert_eq!(persisted.contract_type, "release-1-operator-contracts");
+        assert_eq!(persisted.schema_version, "release-1-v1");
         assert_eq!(persisted.compatibility_classification, "compatible");
         assert_eq!(persisted.migration_state, "no_migration_required");
         assert!(persisted.blockers.is_empty());

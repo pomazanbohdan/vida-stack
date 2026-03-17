@@ -467,6 +467,8 @@ Rules:
 16. if a delegated lane was just dispatched and no delegated return or blocker has yet been synthesized, a progress report must not become the boundary between dispatch and the next control action.
 17. a closure-ready final report must end with the explicit terminal line `Session status: completed, closing this session.`
 18. immediately after that terminal line, emit one extra blank line.
+19. when user intent is explicit continuation (`continue development`, `продовжи агентами`, or equivalent), transfer to `final` is fail-closed forbidden until the user explicitly requests stop/closure.
+20. under continuation intent, closure-style wording (`done`, `finished`, `that is all`, or equivalent terminal semantics) is protocol-invalid even if framed as an intermediate summary.
 
 ## Final-Report Gate
 
@@ -483,6 +485,7 @@ If any item is false:
 1. emit at most an intermediate/progress report,
 2. continue execution or wait lawfully,
 3. do not transfer control to `final`.
+4. when continuation intent is active, remain in commentary/progress mode and continue dispatch on the next lawful slice.
 
 When all final-report gate conditions are true:
 1. the final user-facing report must include the explicit terminal line `Session status: completed, closing this session.`,
@@ -493,6 +496,7 @@ Terminal-phrasing rule:
 1. user-facing wording that sounds closure-ready, terminal, or “done for now” is forbidden until the final-report gate passes,
 2. this applies even when local bounded workaround work has completed technically,
 3. closure-ready phrasing belongs only after delegated state is synthesized and the represented request/task is actually closure-ready.
+4. if terminal phrasing was emitted prematurely, recovery is mandatory in the very next turn: acknowledge the violation, restate active continuation state, and resume dispatch immediately.
 
 ## Continuation Receipt Contract
 

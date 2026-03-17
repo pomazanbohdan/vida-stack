@@ -1,4 +1,5 @@
 mod agent_feedback_surface;
+mod cli;
 mod config_value_utils;
 mod docflow_proxy;
 mod doctor_surface;
@@ -18,6 +19,7 @@ mod taskflow_consume_resume;
 mod taskflow_layer4;
 mod taskflow_protocol_binding;
 mod taskflow_proxy;
+mod taskflow_routing;
 mod taskflow_run_graph;
 mod taskflow_runtime_bundle;
 mod taskflow_spec_bootstrap;
@@ -32,15 +34,16 @@ use std::{
     fs,
 };
 
-use clap::{Args, Parser, Subcommand};
-use docflow_cli::{
-    CheckArgs as DocflowCheckArgs, Cli as DocflowCli, Command as DocflowCommand,
-    ProofcheckArgs as DocflowProofcheckArgs, RegistryScanArgs,
-};
+use clap::Parser;
+pub(crate) use cli::*;
 pub(crate) use config_value_utils::{
     csv_json_string_list, json_bool, json_lookup, json_string, json_string_list,
     load_project_overlay_yaml, split_csv_like, yaml_bool, yaml_lookup, yaml_string,
     yaml_string_list,
+};
+use docflow_cli::{
+    CheckArgs as DocflowCheckArgs, Cli as DocflowCli, Command as DocflowCommand,
+    ProofcheckArgs as DocflowProofcheckArgs, RegistryScanArgs,
 };
 pub(crate) use init_surfaces::resolve_init_bootstrap_source_root;
 pub(crate) use project_activator_surface::build_project_activator_view;
@@ -51,7 +54,9 @@ use release1_contracts::{
     missing_downstream_lane_evidence_blocker, BlockerCode, LaneStatus,
 };
 use state_store::{LauncherActivationSnapshot, StateStore, StateStoreError};
-pub(crate) use surface_render::{print_surface_header, print_surface_line, print_surface_ok};
+pub(crate) use surface_render::{
+    print_root_help, print_surface_header, print_surface_line, print_surface_ok,
+};
 use task_cli_render::{
     print_blocked_tasks, print_task_critical_path, print_task_dependencies,
     print_task_dependency_mutation, print_task_dependency_tree, print_task_graph_issues,
@@ -59,6 +64,11 @@ use task_cli_render::{
 };
 use taskflow_layer4::print_taskflow_proxy_help;
 use taskflow_proxy::run_taskflow_proxy;
+pub(crate) use taskflow_routing::{
+    dispatch_contract_execution_lane_sequence, dispatch_contract_lane,
+    dispatch_contract_lane_activation, dispatch_contract_lane_sequence,
+    selected_backend_from_execution_plan_route,
+};
 use taskflow_runtime_bundle::{
     blocking_runtime_bundle, build_taskflow_consume_bundle_payload, taskflow_consume_bundle_check,
 };
@@ -286,6 +296,11 @@ fn resolve_runtime_project_root() -> Result<PathBuf, String> {
     }
 }
 
+pub(crate) fn resolve_status_project_root(state_root: &Path) -> Option<PathBuf> {
+    taskflow_task_bridge::infer_project_root_from_state_root(state_root)
+        .or_else(|| resolve_runtime_project_root().ok())
+}
+
 fn ensure_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path)
         .map_err(|error| format!("Failed to create {}: {error}", path.display()))
@@ -318,6 +333,41 @@ fn shell_quote(value: &str) -> String {
         return "''".to_string();
     }
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn build_task_create_command(
+    task_id: &str,
+    title: &str,
+    task_type: &str,
+    parent_id: Option<&str>,
+    labels: &[&str],
+    description_quoted: Option<&str>,
+) -> String {
+    let mut command = format!(
+        "vida taskflow task create {} {} --type {} --status open",
+        task_id,
+        shell_quote(title),
+        task_type
+    );
+    if let Some(parent_id) = parent_id {
+        command.push_str(&format!(" --parent-id {parent_id}"));
+    }
+    for label in labels {
+        command.push_str(&format!(" --labels {label}"));
+    }
+    if let Some(description_quoted) = description_quoted {
+        command.push_str(&format!(" --description {description_quoted}"));
+    }
+    command.push_str(" --json");
+    command
+}
+
+fn build_task_close_command(task_id: &str, reason: &str) -> String {
+    format!(
+        "vida taskflow task close {} --reason {} --json",
+        task_id,
+        shell_quote(reason)
+    )
 }
 
 fn infer_feature_request_slug(request: &str) -> String {
@@ -406,7 +456,6 @@ fn is_missing_or_placeholder(value: Option<&str>, placeholder: &str) -> bool {
         _ => false,
     }
 }
-
 
 fn codex_worker_scorecards_state_path(project_root: &Path) -> PathBuf {
     project_root.join(CODEX_WORKER_SCORECARDS_STATE)
@@ -1653,16 +1702,17 @@ fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_json::Value
             "task_id": epic_task_id,
             "title": epic_title,
             "runtime": "vida taskflow",
-            "create_command": format!(
-                "vida taskflow task create {} {} --type epic --status open --labels feature-request --labels spec-first --description {} --json",
-                epic_task_id,
-                shell_quote(&epic_title),
-                quoted_request,
+            "create_command": build_task_create_command(
+                &epic_task_id,
+                &epic_title,
+                "epic",
+                None,
+                &["feature-request", "spec-first"],
+                Some(&quoted_request),
             ),
-            "close_command": format!(
-                "vida taskflow task close {} --reason {} --json",
-                epic_task_id,
-                shell_quote("feature delivery closed after proof and runtime handoff"),
+            "close_command": build_task_close_command(
+                &epic_task_id,
+                "feature delivery closed after proof and runtime handoff",
             )
         },
         "spec_task": {
@@ -1670,17 +1720,17 @@ fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_json::Value
             "task_id": spec_task_id,
             "title": spec_title,
             "runtime": "vida taskflow",
-            "create_command": format!(
-                "vida taskflow task create {} {} --type task --status open --parent-id {} --labels spec-pack --labels documentation --description {} --json",
-                spec_task_id,
-                shell_quote(&spec_title),
-                epic_task_id,
-                shell_quote("bounded design/spec packet for the feature request"),
+            "create_command": build_task_create_command(
+                &spec_task_id,
+                &spec_title,
+                "task",
+                Some(&epic_task_id),
+                &["spec-pack", "documentation"],
+                Some(&shell_quote("bounded design/spec packet for the feature request")),
             ),
-            "close_command": format!(
-                "vida taskflow task close {} --reason {} --json",
-                spec_task_id,
-                shell_quote("design packet finalized and handed off into tracked work-pool shaping"),
+            "close_command": build_task_close_command(
+                &spec_task_id,
+                "design packet finalized and handed off into tracked work-pool shaping",
             )
         },
         "work_pool_task": {
@@ -1688,16 +1738,17 @@ fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_json::Value
             "task_id": work_pool_task_id,
             "title": work_pool_title,
             "runtime": "vida taskflow",
-            "create_command": format!(
-                "vida taskflow task create {} {} --type task --status open --parent-id {} --labels work-pool-pack --json",
-                work_pool_task_id,
-                shell_quote(&work_pool_title),
-                epic_task_id,
+            "create_command": build_task_create_command(
+                &work_pool_task_id,
+                &work_pool_title,
+                "task",
+                Some(&epic_task_id),
+                &["work-pool-pack"],
+                None,
             ),
-            "close_command": format!(
-                "vida taskflow task close {} --reason {} --json",
-                work_pool_task_id,
-                shell_quote("work-pool packet closed after delegated execution packet was shaped"),
+            "close_command": build_task_close_command(
+                &work_pool_task_id,
+                "work-pool packet closed after delegated execution packet was shaped",
             )
         },
         "dev_task": {
@@ -1705,16 +1756,17 @@ fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_json::Value
             "task_id": dev_task_id,
             "title": dev_title,
             "runtime": "vida taskflow",
-            "create_command": format!(
-                "vida taskflow task create {} {} --type task --status open --parent-id {} --labels dev-pack --json",
-                dev_task_id,
-                shell_quote(&dev_title),
-                epic_task_id,
+            "create_command": build_task_create_command(
+                &dev_task_id,
+                &dev_title,
+                "task",
+                Some(&epic_task_id),
+                &["dev-pack"],
+                None,
             ),
-            "close_command": format!(
-                "vida taskflow task close {} --reason {} --json",
-                dev_task_id,
-                shell_quote("delegated development packet reached proof-ready closure"),
+            "close_command": build_task_close_command(
+                &dev_task_id,
+                "delegated development packet reached proof-ready closure",
             )
         },
         "docflow": {
@@ -2255,77 +2307,6 @@ fn build_resolved_development_dispatch_contract(
     })
 }
 
-fn dispatch_contract_lane<'a>(
-    execution_plan: &'a serde_json::Value,
-    dispatch_target: &str,
-) -> Option<&'a serde_json::Value> {
-    if let Some(lane) =
-        execution_plan["development_flow"]["dispatch_contract"]["lane_catalog"].get(dispatch_target)
-    {
-        return Some(lane);
-    }
-    let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
-    match dispatch_target {
-        "implementer" => dispatch_contract.get("implementer_activation"),
-        "specification" => dispatch_contract.get("specification_activation"),
-        "coach" => dispatch_contract.get("coach_activation"),
-        "verification" => dispatch_contract.get("verifier_activation"),
-        "escalation" | "execution_preparation" => dispatch_contract.get("escalation_activation"),
-        _ => None,
-    }
-}
-
-fn dispatch_contract_lane_activation<'a>(lane: &'a serde_json::Value) -> &'a serde_json::Value {
-    lane.get("activation").unwrap_or(lane)
-}
-
-fn dispatch_contract_lane_sequence(dispatch_contract: &serde_json::Value) -> Vec<String> {
-    let explicit = dispatch_contract["lane_sequence"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if !explicit.is_empty() {
-        return explicit;
-    }
-    let mut legacy = Vec::new();
-    if dispatch_contract.get("specification_activation").is_some() {
-        legacy.push("specification".to_string());
-    }
-    if dispatch_contract.get("escalation_activation").is_some() {
-        legacy.push("execution_preparation".to_string());
-    }
-    if dispatch_contract.get("implementer_activation").is_some() {
-        legacy.push("implementer".to_string());
-    }
-    if dispatch_contract.get("coach_activation").is_some() {
-        legacy.push("coach".to_string());
-    }
-    if dispatch_contract.get("verifier_activation").is_some() {
-        legacy.push("verification".to_string());
-    }
-    legacy
-}
-
-fn dispatch_contract_execution_lane_sequence(dispatch_contract: &serde_json::Value) -> Vec<String> {
-    let explicit = dispatch_contract["execution_lane_sequence"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if !explicit.is_empty() {
-        return explicit;
-    }
-    dispatch_contract_lane_sequence(dispatch_contract)
-        .into_iter()
-        .filter(|target| target != "specification")
-        .collect()
-}
-
 fn canonical_lane_target_for_runtime_role(runtime_role: &str) -> Option<&'static str> {
     match runtime_role {
         "business_analyst" | "pm" => Some("specification"),
@@ -2682,6 +2663,12 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
             "required": requires_design_gate,
             "status": if requires_design_gate {
                 "blocked_pending_design_packet"
+            } else {
+                "not_required"
+            },
+            "developer_handoff_packet_required": requires_design_gate,
+            "developer_handoff_packet_status": if requires_design_gate {
+                "blocked_pending_developer_handoff_packet"
             } else {
                 "not_required"
             },
@@ -3334,14 +3321,18 @@ fn build_compiled_agent_extension_bundle_for_root(
     let profile_ids = registry_ids_by_key(&profiles_registry, "profiles", "profile_id");
     let flow_ids = registry_ids_by_key(&flows_registry, "flow_sets", "flow_id");
 
-    let missing_roles = project_activator_surface::collect_missing_registry_ids(&role_ids, &enabled_project_roles);
+    let missing_roles =
+        project_activator_surface::collect_missing_registry_ids(&role_ids, &enabled_project_roles);
     if !missing_roles.is_empty() {
         validation_errors.push(format!(
             "agent extension roles registry is missing enabled role ids: {}",
             missing_roles.join(", ")
         ));
     }
-    let missing_skills = project_activator_surface::collect_missing_registry_ids(&skill_ids, &enabled_project_skills);
+    let missing_skills = project_activator_surface::collect_missing_registry_ids(
+        &skill_ids,
+        &enabled_project_skills,
+    );
     if !missing_skills.is_empty() {
         validation_errors.push(format!(
             "agent extension skills registry is missing enabled skill ids: {}",
@@ -3349,8 +3340,10 @@ fn build_compiled_agent_extension_bundle_for_root(
         ));
     }
     if require_profile_resolution {
-        let missing_profiles =
-            project_activator_surface::collect_missing_registry_ids(&profile_ids, &enabled_project_profiles);
+        let missing_profiles = project_activator_surface::collect_missing_registry_ids(
+            &profile_ids,
+            &enabled_project_profiles,
+        );
         if !missing_profiles.is_empty() {
             validation_errors.push(format!(
                 "agent extension profiles registry is missing enabled profile ids: {}",
@@ -3359,7 +3352,10 @@ fn build_compiled_agent_extension_bundle_for_root(
         }
     }
     if require_flow_resolution {
-        let missing_flows = project_activator_surface::collect_missing_registry_ids(&flow_ids, &enabled_project_flows);
+        let missing_flows = project_activator_surface::collect_missing_registry_ids(
+            &flow_ids,
+            &enabled_project_flows,
+        );
         if !missing_flows.is_empty() {
             validation_errors.push(format!(
                 "agent extension flows registry is missing enabled flow ids: {}",
@@ -3587,6 +3583,14 @@ fn build_docflow_runtime_verdict(
     if !readiness.ok {
         blockers.push("missing_readiness_verdict".to_string());
     }
+    if readiness
+        .artifact_path
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(str::is_empty)
+    {
+        blockers.push("missing_inventory_or_projection_evidence".to_string());
+    }
     if !proof.ok {
         blockers.push("missing_proof_verdict".to_string());
     }
@@ -3616,6 +3620,7 @@ fn build_runtime_closure_admission(
     let mut blockers = Vec::new();
     if !bundle_check.ok {
         blockers.push("missing_closure_proof".to_string());
+        blockers.extend(bundle_check.blockers.iter().cloned());
     }
     if !docflow_verdict.ready {
         blockers.extend(docflow_verdict.blockers.iter().cloned());
@@ -3640,6 +3645,7 @@ fn build_runtime_closure_admission(
     }
     if role_selection.execution_plan["status"] == "design_first" {
         blockers.push("pending_design_packet".to_string());
+        blockers.push("pending_developer_handoff_packet".to_string());
     }
     blockers.sort();
     blockers.dedup();
@@ -3724,41 +3730,10 @@ fn runtime_consumption_run_id(role_selection: &RuntimeConsumptionLaneSelection) 
     }
 }
 
-fn codex_carrier_backend_from_assignment(assignment: &serde_json::Value) -> Option<String> {
-    json_string(assignment.get("selected_tier"))
-        .or_else(|| json_string(assignment.get("activation_agent_type")))
-        .filter(|value| !value.is_empty())
-}
-
-fn codex_carrier_backend_from_route(route: &serde_json::Value) -> Option<String> {
-    let route_assignment = route
-        .get("activation")
-        .or_else(|| route.get("codex_runtime_assignment"))
-        .unwrap_or(&serde_json::Value::Null);
-    json_string(route.get("preferred_agent_tier"))
-        .or_else(|| json_string(route.get("preferred_agent_type")))
-        .or_else(|| codex_carrier_backend_from_assignment(route_assignment))
-        .filter(|value| !value.is_empty())
-}
-
-fn selected_backend_from_execution_plan_route(
-    execution_plan: &serde_json::Value,
-    route: &serde_json::Value,
-) -> Option<String> {
-    codex_carrier_backend_from_route(route)
-        .or_else(|| {
-            codex_carrier_backend_from_assignment(&execution_plan["codex_runtime_assignment"])
-        })
-        .or_else(|| json_string(route.get("subagents")))
-        .filter(|value| !value.is_empty())
-}
-
 fn missing_agent_lane_dispatch_packet_error(dispatch_target: &str) -> String {
     let _ = blocker_code_str(BlockerCode::MissingPacket);
     format!("Agent lane dispatch for `{dispatch_target}` is missing dispatch_packet_path")
 }
-
-
 
 fn downstream_activation_fields(
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -4125,6 +4100,11 @@ fn derive_downstream_dispatch_preview(
                     .and_then(|lane| lane["completion_blocker"].as_str())
                     .unwrap_or("pending_lane_evidence")
                     .to_string();
+                let has_lane_evidence = receipt.dispatch_status == "executed"
+                    || receipt
+                        .dispatch_result_path
+                        .as_deref()
+                        .is_some_and(|path| !path.trim().is_empty());
                 (
                     Some(next_target.clone()),
                     Some("vida agent-init".to_string()),
@@ -4132,8 +4112,12 @@ fn derive_downstream_dispatch_preview(
                         "after `{}` evidence is recorded, activate `{}` for the next bounded lane",
                         receipt.dispatch_target, next_target
                     )),
-                    false,
-                    vec![blocker],
+                    has_lane_evidence,
+                    if has_lane_evidence {
+                        Vec::new()
+                    } else {
+                        vec![blocker]
+                    },
                 )
             } else {
                 (
@@ -4540,10 +4524,10 @@ async fn execute_runtime_dispatch_handoff(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<serde_json::Value, String> {
-    let project_root =
-        taskflow_task_bridge::infer_project_root_from_state_root(state_root).unwrap_or(std::env::current_dir().map_err(
-            |error| format!("Failed to resolve current directory for dispatch execution: {error}"),
-        )?);
+    let project_root = taskflow_task_bridge::infer_project_root_from_state_root(state_root)
+        .unwrap_or(std::env::current_dir().map_err(|error| {
+            format!("Failed to resolve current directory for dispatch execution: {error}")
+        })?);
     match receipt.dispatch_target.as_str() {
         "spec-pack" => execute_taskflow_bootstrap_spec_with_store(
             &project_root,
@@ -4642,13 +4626,6 @@ async fn execute_and_record_dispatch_receipt(
         write_runtime_dispatch_result(state_root, receipt, &execution_result)?;
     receipt.dispatch_result_path = Some(dispatch_result_path);
     let execution_state = json_string(execution_result.get("execution_state"))
-        .or_else(|| {
-            if receipt.dispatch_kind == "agent_lane" {
-                Some("packet_ready".to_string())
-            } else {
-                None
-            }
-        })
         .unwrap_or_else(|| "executed".to_string());
     receipt.dispatch_status = execution_state;
     let closure_completed = receipt.dispatch_target == "closure"
@@ -4696,7 +4673,13 @@ async fn execute_downstream_dispatch_chain(
     run_graph_bootstrap: &serde_json::Value,
     root_receipt: &mut crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<(), String> {
-    if root_receipt.dispatch_status != "executed" || !root_receipt.downstream_dispatch_ready {
+    let root_lane_has_execution_evidence = root_receipt.dispatch_status == "executed"
+        || (root_receipt.dispatch_status == "packet_ready"
+            && root_receipt
+                .dispatch_result_path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty()));
+    if !root_lane_has_execution_evidence || !root_receipt.downstream_dispatch_ready {
         return Ok(());
     }
 
@@ -5272,21 +5255,95 @@ fn emit_taskflow_consume_final_json(
     store: &StateStore,
     payload: &TaskflowDirectConsumptionPayload,
 ) -> Result<(), String> {
+    let payload_json = serde_json::to_value(payload)
+        .map_err(|error| format!("Failed to encode consume-final payload as json: {error}"))?;
+    let consume_final_blocker_codes = consume_final_operator_blocker_codes(&payload_json);
+    let consume_final_next_actions = consume_final_operator_next_actions(&payload_json);
+    let consume_final_status = if consume_final_blocker_codes.is_empty() {
+        "ok"
+    } else {
+        "blocked"
+    };
     let snapshot = serde_json::json!({
         "surface": "vida taskflow consume final",
-        "payload": payload,
+        "payload": payload_json,
     });
     let snapshot_path = write_runtime_consumption_snapshot(store.root(), "final", &snapshot)?;
+    let operator_contracts = build_release1_operator_contracts_envelope(
+        consume_final_status,
+        consume_final_blocker_codes.clone(),
+        consume_final_next_actions.clone(),
+        serde_json::json!({
+            "runtime_consumption_latest_snapshot_path": snapshot_path,
+            "latest_run_graph_dispatch_receipt_id": payload_json["dispatch_receipt"]["run_id"].as_str(),
+            "latest_task_reconciliation_receipt_id": payload_json["task_reconciliation_receipt"]["receipt_id"].as_str(),
+            "consume_final_surface": "vida taskflow consume final",
+        }),
+    );
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
             "surface": "vida taskflow consume final",
-            "payload": payload,
+            "status": consume_final_status,
+            "blocker_codes": consume_final_blocker_codes,
+            "next_actions": consume_final_next_actions,
+            "artifact_refs": operator_contracts["artifact_refs"].clone(),
+            "operator_contracts": operator_contracts,
+            "payload": payload_json,
             "snapshot_path": snapshot_path,
         }))
         .expect("consume final should render as json")
     );
     Ok(())
+}
+
+pub(crate) fn build_release1_operator_contracts_envelope(
+    status: &str,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    artifact_refs: serde_json::Value,
+) -> serde_json::Value {
+    serde_json::json!({
+        "contract_id": "release-1-operator-contracts",
+        "schema_version": "release-1-v1",
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "artifact_refs": artifact_refs,
+    })
+}
+
+fn consume_final_operator_blocker_codes(payload: &serde_json::Value) -> Vec<String> {
+    let mut blocker_codes = Vec::new();
+    if payload["bundle_check"]["activation_status"].as_str() != Some("activation_ready") {
+        blocker_codes.push("bundle_activation_not_ready".to_string());
+    }
+    if payload["docflow_verdict"]["status"].as_str() == Some("block") {
+        blocker_codes.push("docflow_verdict_block".to_string());
+    }
+    if payload["closure_admission"]["status"].as_str() == Some("block") {
+        blocker_codes.push("closure_admission_block".to_string());
+    }
+    blocker_codes
+}
+
+fn consume_final_operator_next_actions(payload: &serde_json::Value) -> Vec<String> {
+    let mut next_actions = Vec::new();
+    if payload["bundle_check"]["activation_status"].as_str() != Some("activation_ready") {
+        next_actions.push("Resolve activation blockers before consume-final handoff.".to_string());
+    }
+    if payload["docflow_verdict"]["status"].as_str() == Some("block") {
+        next_actions.push(
+            "Run `vida docflow proofcheck --profile active-canon` and clear blockers.".to_string(),
+        );
+    }
+    if payload["closure_admission"]["status"].as_str() == Some("block") {
+        next_actions.push(
+            "Run `vida taskflow consume bundle check --json` and resolve closure blockers."
+                .to_string(),
+        );
+    }
+    next_actions
 }
 
 fn write_runtime_consumption_snapshot(
@@ -5380,415 +5437,6 @@ fn runtime_consumption_summary(state_root: &Path) -> Result<RuntimeConsumptionSu
 
 fn normalize_root_arg(path: &Path) -> String {
     path.to_string_lossy().to_string()
-}
-
-#[derive(clap::ValueEnum, Debug, Clone, Copy, Default)]
-pub(crate) enum RenderMode {
-    #[default]
-    Plain,
-    Color,
-    #[value(name = "color_emoji")]
-    ColorEmoji,
-}
-
-#[derive(Parser, Debug)]
-#[command(
-    name = "vida",
-    disable_help_subcommand = true,
-    about = "VIDA Binary Foundation",
-    long_about = "VIDA Binary Foundation\n\nRoot commands stay fail-closed. TaskFlow remains execution authority; DocFlow remains the documentation/readiness surface.",
-    after_help = "Runtime-family help paths:\n  vida taskflow help\n  vida docflow help"
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-#[derive(Subcommand, Debug)]
-enum Command {
-    #[command(about = "bootstrap framework carriers into the current project")]
-    Init(BootArgs),
-    #[command(about = "initialize authoritative state and instruction/framework-memory surfaces")]
-    Boot(BootArgs),
-    #[command(about = "render the compiled startup view for the orchestrator lane")]
-    OrchestratorInit(InitArgs),
-    #[command(
-        about = "render the bounded startup view or packet activation view for a worker/agent lane"
-    )]
-    AgentInit(AgentInitArgs),
-    #[command(about = "resolve and render framework protocol/guide surfaces")]
-    Protocol(ProtocolArgs),
-    #[command(about = "inspect project activation posture and bounded onboarding next steps")]
-    ProjectActivator(ProjectActivatorArgs),
-    #[command(about = "record host-agent feedback and refresh local strategy state")]
-    AgentFeedback(AgentFeedbackArgs),
-    #[command(about = "task import/list/show/ready over the authoritative state store")]
-    Task(TaskArgs),
-    #[command(about = "inspect the effective instruction bundle")]
-    Memory(MemoryArgs),
-    #[command(about = "inspect backend, state spine, and latest receipts")]
-    Status(StatusArgs),
-    #[command(about = "run bounded runtime integrity checks")]
-    Doctor(DoctorArgs),
-    #[command(about = "delegate to the TaskFlow runtime family")]
-    Taskflow(ProxyArgs),
-    #[command(about = "delegate to the DocFlow runtime family")]
-    Docflow(ProxyArgs),
-    #[command(external_subcommand)]
-    External(Vec<String>),
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct ProxyArgs {
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-    args: Vec<String>,
-}
-
-#[derive(Args, Debug, Clone)]
-struct TaskArgs {
-    #[command(subcommand)]
-    command: TaskCommand,
-}
-
-#[derive(Subcommand, Debug, Clone)]
-enum TaskCommand {
-    ImportJsonl(TaskImportJsonlArgs),
-    List(TaskListArgs),
-    Show(TaskShowArgs),
-    Ready(TaskReadyArgs),
-    Deps(TaskDepsArgs),
-    ReverseDeps(TaskDepsArgs),
-    Blocked(TaskBlockedArgs),
-    Tree(TaskDepsArgs),
-    ValidateGraph(TaskBlockedArgs),
-    Dep(TaskDepArgs),
-    CriticalPath(TaskBlockedArgs),
-}
-
-#[derive(Args, Debug, Clone)]
-struct TaskDepArgs {
-    #[command(subcommand)]
-    command: TaskDependencyCommand,
-}
-
-#[derive(Subcommand, Debug, Clone)]
-enum TaskDependencyCommand {
-    Add(TaskDependencyMutationCommandArgs),
-    Remove(TaskDependencyTargetCommandArgs),
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct TaskDependencyMutationCommandArgs {
-    task_id: String,
-    depends_on_id: String,
-    edge_type: String,
-
-    #[arg(long = "created-by", default_value = "vida")]
-    created_by: String,
-
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
-
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
-    render: RenderMode,
-
-    #[arg(long = "json")]
-    json: bool,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct TaskDependencyTargetCommandArgs {
-    task_id: String,
-    depends_on_id: String,
-    edge_type: String,
-
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
-
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
-    render: RenderMode,
-
-    #[arg(long = "json")]
-    json: bool,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct TaskImportJsonlArgs {
-    path: PathBuf,
-
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
-
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
-    render: RenderMode,
-
-    #[arg(long = "json")]
-    json: bool,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct TaskListArgs {
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
-
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
-    render: RenderMode,
-
-    #[arg(long = "status")]
-    status: Option<String>,
-
-    #[arg(long = "all")]
-    all: bool,
-
-    #[arg(long = "json")]
-    json: bool,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct TaskShowArgs {
-    task_id: String,
-
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
-
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
-    render: RenderMode,
-
-    #[arg(long = "json")]
-    json: bool,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct TaskReadyArgs {
-    #[arg(long = "scope")]
-    scope: Option<String>,
-
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
-
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
-    render: RenderMode,
-
-    #[arg(long = "json")]
-    json: bool,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct TaskDepsArgs {
-    task_id: String,
-
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
-
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
-    render: RenderMode,
-
-    #[arg(long = "json")]
-    json: bool,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct TaskBlockedArgs {
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
-
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
-    render: RenderMode,
-
-    #[arg(long = "json")]
-    json: bool,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct BootArgs {
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
-
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
-    render: RenderMode,
-
-    #[arg(long = "instruction-source-root", env = "VIDA_INSTRUCTION_SOURCE_ROOT")]
-    instruction_source_root: Option<PathBuf>,
-
-    #[arg(
-        long = "framework-memory-source-root",
-        env = "VIDA_FRAMEWORK_MEMORY_SOURCE_ROOT"
-    )]
-    framework_memory_source_root: Option<PathBuf>,
-
-    #[arg(hide = true, trailing_var_arg = true, allow_hyphen_values = true)]
-    extra_args: Vec<String>,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct InitArgs {
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
-
-    #[arg(long = "json")]
-    json: bool,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct ProjectActivatorArgs {
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
-
-    #[arg(long = "project-id")]
-    project_id: Option<String>,
-
-    #[arg(long = "project-name")]
-    project_name: Option<String>,
-
-    #[arg(long = "language")]
-    language: Option<String>,
-
-    #[arg(long = "user-communication-language")]
-    user_communication_language: Option<String>,
-
-    #[arg(long = "reasoning-language")]
-    reasoning_language: Option<String>,
-
-    #[arg(long = "documentation-language")]
-    documentation_language: Option<String>,
-
-    #[arg(long = "todo-protocol-language")]
-    todo_protocol_language: Option<String>,
-
-    #[arg(long = "host-cli-system")]
-    host_cli_system: Option<String>,
-
-    #[arg(long = "json")]
-    json: bool,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct AgentFeedbackArgs {
-    #[arg(long = "agent-id")]
-    agent_id: String,
-
-    #[arg(long = "score")]
-    score: u64,
-
-    #[arg(long = "outcome")]
-    outcome: Option<String>,
-
-    #[arg(long = "task-class")]
-    task_class: Option<String>,
-
-    #[arg(long = "notes")]
-    notes: Option<String>,
-
-    #[arg(long = "json")]
-    json: bool,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct AgentInitArgs {
-    request_text: Option<String>,
-
-    #[arg(long = "role")]
-    role: Option<String>,
-
-    #[arg(long = "dispatch-packet")]
-    dispatch_packet: Option<String>,
-
-    #[arg(long = "downstream-packet")]
-    downstream_packet: Option<String>,
-
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
-
-    #[arg(long = "json")]
-    json: bool,
-}
-
-#[derive(Args, Debug, Clone)]
-struct ProtocolArgs {
-    #[command(subcommand)]
-    command: ProtocolCommand,
-}
-
-#[derive(Subcommand, Debug, Clone)]
-enum ProtocolCommand {
-    View(ProtocolViewArgs),
-}
-
-#[derive(Args, Debug, Clone)]
-struct ProtocolViewArgs {
-    #[arg(required = true, num_args = 1..)]
-    names: Vec<String>,
-
-    #[arg(long = "json")]
-    json: bool,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct MemoryArgs {
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
-
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
-    render: RenderMode,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct StatusArgs {
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
-
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
-    render: RenderMode,
-
-    #[arg(long = "json")]
-    json: bool,
-}
-
-#[derive(Args, Debug, Clone, Default)]
-struct DoctorArgs {
-    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
-    state_dir: Option<PathBuf>,
-
-    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
-    render: RenderMode,
-
-    #[arg(long = "json")]
-    json: bool,
-}
-
-fn print_root_help() {
-    println!("VIDA Binary Foundation");
-    println!();
-    println!("Usage:");
-    println!("  vida <command>");
-    println!("  vida taskflow <args...>");
-    println!("  vida docflow <args...>");
-    println!();
-    println!("Root commands:");
-    println!("  init      bootstrap framework carriers into the current project");
-    println!(
-        "  boot      initialize authoritative state and instruction/framework-memory surfaces"
-    );
-    println!("  orchestrator-init  render the compiled startup view for the orchestrator lane");
-    println!("  agent-init         render the bounded startup view or packet activation view for a worker/agent lane");
-    println!("  protocol  resolve and render framework protocol/guide surfaces");
-    println!(
-        "  project-activator  inspect project activation posture and bounded onboarding next steps"
-    );
-    println!("  agent-feedback  record host-agent feedback and refresh local strategy state");
-    println!("  task      task import/list/show/ready over the authoritative state store");
-    println!("  memory    inspect the effective instruction bundle");
-    println!("  status    inspect backend, state spine, and latest receipts");
-    println!("  doctor    run bounded runtime integrity checks");
-    println!("  taskflow  delegate to the TaskFlow runtime family");
-    println!("  docflow   delegate to the DocFlow runtime family");
-    println!();
-    println!("Notes:");
-    println!("  - root commands stay fail-closed");
-    println!("  - runtime-family help paths are `vida taskflow help` and `vida docflow help`");
-    println!(
-        "  - TaskFlow remains execution authority; DocFlow remains documentation/readiness surface"
-    );
 }
 
 #[cfg(test)]
@@ -6690,8 +6338,10 @@ mod tests {
             ExitCode::SUCCESS
         );
 
-        let config =
-            project_activator_surface::read_yaml_file_checked(&harness.path().join("vida.config.yaml")).expect("config");
+        let config = project_activator_surface::read_yaml_file_checked(
+            &harness.path().join("vida.config.yaml"),
+        )
+        .expect("config");
         let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
             .expect("bundle should compile");
         let pack_router = pack_router_keywords_json(&config);
@@ -7161,6 +6811,84 @@ mod tests {
     }
 
     #[test]
+    fn executed_worker_lane_sets_downstream_ready_without_evidence_blocker() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["implementer", "coach", "verification"],
+                        "implementer_activation": {
+                            "completion_blocker": "pending_implementation_evidence",
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        },
+                        "coach_activation": {
+                            "completion_blocker": "pending_review_clean_evidence",
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "coach"
+                        },
+                        "verifier_activation": {
+                            "completion_blocker": "pending_verification_evidence",
+                            "activation_agent_type": "senior",
+                            "activation_runtime_role": "verifier"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-dev".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: Some("dispatch-result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-03-17T00:00:00Z".to_string(),
+        };
+
+        let (target, _command, _note, ready, blockers) =
+            derive_downstream_dispatch_preview(&role_selection, &receipt);
+        assert_eq!(target.as_deref(), Some("coach"));
+        assert!(ready);
+        assert!(blockers.is_empty());
+    }
+
+    #[test]
     fn codex_dispatch_aliases_are_loaded_from_overlay_not_rust_catalog() {
         let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
@@ -7196,8 +6924,10 @@ mod tests {
         assert!(!codex_config.contains("[agents.custom_impl_lane]"));
         assert!(!codex_config.contains("[agents.development_implementer]"));
 
-        let config =
-            project_activator_surface::read_yaml_file_checked(&harness.path().join("vida.config.yaml")).expect("config");
+        let config = project_activator_surface::read_yaml_file_checked(
+            &harness.path().join("vida.config.yaml"),
+        )
+        .expect("config");
         let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
             .expect("bundle should compile");
         let pack_router = pack_router_keywords_json(&config);
@@ -7240,8 +6970,10 @@ mod tests {
         let updated = config_body.replace("dispatch_aliases:", "named_lanes:");
         fs::write(&config_path, updated).expect("config should be rewritten");
 
-        let config =
-            project_activator_surface::read_yaml_file_checked(&harness.path().join("vida.config.yaml")).expect("config");
+        let config = project_activator_surface::read_yaml_file_checked(
+            &harness.path().join("vida.config.yaml"),
+        )
+        .expect("config");
         let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
             .expect("bundle should compile");
         let dispatch_aliases = bundle["codex_multi_agent"]["dispatch_aliases"]
@@ -7249,6 +6981,41 @@ mod tests {
             .expect("dispatch aliases should still be an array");
 
         assert!(dispatch_aliases.is_empty());
+    }
+
+    #[test]
+    fn project_activator_fails_closed_when_dispatch_alias_registry_is_configured_but_missing() {
+        let _lock = current_dir_lock().lock().expect("lock should succeed");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = CurrentDirGuard::change_to(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+
+        let config_path = harness.path().join("vida.config.yaml");
+        let config_body =
+            fs::read_to_string(&config_path).expect("config should be readable after init");
+        let updated = config_body.replace(
+            "dispatch_aliases: .vida/project/agent-extensions/dispatch-aliases.yaml",
+            "dispatch_aliases: .vida/project/agent-extensions/missing-dispatch-aliases.yaml",
+        );
+        fs::write(&config_path, updated).expect("config should be rewritten");
+
+        assert_ne!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
     }
 
     #[test]
@@ -7494,7 +7261,8 @@ mod tests {
         .expect("dispatch aliases sidecar should exist");
 
         let overlay =
-            project_activator_surface::read_yaml_file_checked(&root.join("vida.config.yaml")).expect("overlay should parse");
+            project_activator_surface::read_yaml_file_checked(&root.join("vida.config.yaml"))
+                .expect("overlay should parse");
         let bundle = build_compiled_agent_extension_bundle_for_root(&overlay, root)
             .expect("bundle should compile");
         assert_eq!(bundle["project_roles"][0]["description"], "overridden");
@@ -7616,7 +7384,8 @@ mod tests {
         .expect("dispatch aliases sidecar should exist");
 
         let overlay =
-            project_activator_surface::read_yaml_file_checked(&root.join("vida.config.yaml")).expect("overlay should parse");
+            project_activator_surface::read_yaml_file_checked(&root.join("vida.config.yaml"))
+                .expect("overlay should parse");
         let bundle = build_compiled_agent_extension_bundle_for_root(&overlay, root)
             .expect("bundle should compile from registries");
         assert_eq!(bundle["project_roles"][0]["role_id"], "role_a");
@@ -7717,7 +7486,8 @@ mod tests {
         .expect("flows sidecar should exist");
 
         let overlay =
-            project_activator_surface::read_yaml_file_checked(&root.join("vida.config.yaml")).expect("overlay should parse");
+            project_activator_surface::read_yaml_file_checked(&root.join("vida.config.yaml"))
+                .expect("overlay should parse");
         let error = build_compiled_agent_extension_bundle_for_root(&overlay, root)
             .expect_err("bundle should fail closed");
         assert!(error.contains("missing_skill"));
@@ -7828,11 +7598,8 @@ mod tests {
             "# scaffold\n",
         )
         .expect("generated AGENTS scaffold should exist");
-        fs::write(
-            root.join("install/assets/AGENTS.sidecar.scaffold.md"),
-            "# sidecar\n",
-        )
-        .expect("sidecar scaffold should exist");
+        fs::write(root.join("AGENTS.sidecar.md"), "# sidecar\n")
+            .expect("project sidecar should exist");
         fs::write(
             root.join("install/assets/vida.config.yaml.template"),
             "project:\n  id: demo\n",
@@ -7965,6 +7732,96 @@ mod tests {
     }
 
     #[test]
+    fn taskflow_consume_final_verdict_blocks_when_readiness_artifact_path_missing() {
+        let registry = RuntimeConsumptionEvidence {
+            surface: "registry".to_string(),
+            ok: true,
+            row_count: 1,
+            verdict: None,
+            artifact_path: None,
+            output: String::new(),
+        };
+        let check = RuntimeConsumptionEvidence {
+            surface: "check".to_string(),
+            ok: true,
+            row_count: 0,
+            verdict: None,
+            artifact_path: None,
+            output: String::new(),
+        };
+        let readiness = RuntimeConsumptionEvidence {
+            surface: "readiness".to_string(),
+            ok: true,
+            row_count: 0,
+            verdict: Some("ready".to_string()),
+            artifact_path: None,
+            output: String::new(),
+        };
+        let proof = RuntimeConsumptionEvidence {
+            surface: "proof".to_string(),
+            ok: true,
+            row_count: 1,
+            verdict: None,
+            artifact_path: None,
+            output: "✅ OK: proofcheck".to_string(),
+        };
+
+        let verdict = build_docflow_runtime_verdict(&registry, &check, &readiness, &proof);
+
+        assert_eq!(verdict.status, "block");
+        assert!(!verdict.ready);
+        assert_eq!(
+            verdict.blockers,
+            vec!["missing_inventory_or_projection_evidence"]
+        );
+    }
+
+    #[test]
+    fn taskflow_consume_final_verdict_blocks_when_readiness_artifact_path_empty() {
+        let registry = RuntimeConsumptionEvidence {
+            surface: "registry".to_string(),
+            ok: true,
+            row_count: 1,
+            verdict: None,
+            artifact_path: None,
+            output: String::new(),
+        };
+        let check = RuntimeConsumptionEvidence {
+            surface: "check".to_string(),
+            ok: true,
+            row_count: 0,
+            verdict: None,
+            artifact_path: None,
+            output: String::new(),
+        };
+        let readiness = RuntimeConsumptionEvidence {
+            surface: "readiness".to_string(),
+            ok: true,
+            row_count: 0,
+            verdict: Some("ready".to_string()),
+            artifact_path: Some("   ".to_string()),
+            output: String::new(),
+        };
+        let proof = RuntimeConsumptionEvidence {
+            surface: "proof".to_string(),
+            ok: true,
+            row_count: 1,
+            verdict: None,
+            artifact_path: None,
+            output: "✅ OK: proofcheck".to_string(),
+        };
+
+        let verdict = build_docflow_runtime_verdict(&registry, &check, &readiness, &proof);
+
+        assert_eq!(verdict.status, "block");
+        assert!(!verdict.ready);
+        assert_eq!(
+            verdict.blockers,
+            vec!["missing_inventory_or_projection_evidence"]
+        );
+    }
+
+    #[test]
     fn taskflow_consume_final_closure_admission_reports_admit() {
         let bundle_check = TaskflowConsumeBundleCheck {
             ok: true,
@@ -8070,6 +7927,7 @@ mod tests {
         assert_eq!(
             admission.blockers,
             vec![
+                "boot_incompatible",
                 "missing_closure_proof",
                 "missing_docflow_activation",
                 "missing_readiness_verdict",
@@ -8129,6 +7987,9 @@ mod tests {
 
         assert_eq!(admission.status, "block");
         assert!(!admission.admitted);
-        assert_eq!(admission.blockers, vec!["pending_design_packet"]);
+        assert_eq!(
+            admission.blockers,
+            vec!["pending_design_packet", "pending_developer_handoff_packet"]
+        );
     }
 }

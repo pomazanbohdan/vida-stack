@@ -1,9 +1,9 @@
 use crate::{
     build_runtime_execution_plan_from_snapshot, build_runtime_lane_selection_with_store,
-    print_surface_header, print_surface_line,
-    taskflow_task_bridge::proxy_state_dir, read_or_sync_launcher_activation_snapshot,
+    print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
     state_store::{RunGraphStatus, StateStore, StateStoreError},
     taskflow_layer4::print_taskflow_proxy_help,
+    taskflow_task_bridge::proxy_state_dir,
     RenderMode, RuntimeConsumptionLaneSelection,
 };
 use std::process::ExitCode;
@@ -636,16 +636,95 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
     }
 }
 
-fn print_run_graph_json_error(surface: &str, run_id: &str, error: &str) {
+fn print_run_graph_json_error(
+    surface: &str,
+    run_id: &str,
+    error: &str,
+    evidence: Option<serde_json::Value>,
+) {
+    let mut payload = serde_json::json!({
+        "surface": surface,
+        "run_id": run_id,
+        "error": error,
+    });
+    if let Some(evidence) = evidence {
+        payload["incident"] = evidence["incident"].clone();
+        payload["blockers"] = evidence["blockers"].clone();
+    }
     println!(
         "{}",
-        serde_json::to_string_pretty(&serde_json::json!({
-            "surface": surface,
-            "run_id": run_id,
-            "error": error,
-        }))
-        .expect("run-graph error should render as json")
+        serde_json::to_string_pretty(&payload).expect("run-graph error should render as json")
     );
+}
+
+fn run_graph_blocker_code(status: &str) -> Option<&'static str> {
+    match status {
+        "denied" => Some("implementation_review_denied"),
+        "expired" => Some("implementation_review_expired"),
+        "review_findings" => Some("implementation_review_findings"),
+        "changed_scope" => Some("implementation_review_changed_scope"),
+        _ => None,
+    }
+}
+
+fn run_graph_blocker_evidence(
+    run_id: &str,
+    active_node: &str,
+    status: &str,
+    route_task_class: &str,
+    policy_gate: &str,
+    resume_target: &str,
+    next_node: Option<&str>,
+    error: &str,
+) -> Result<Option<serde_json::Value>, String> {
+    let is_blocked_advance = error.starts_with("run-graph advance blocked:");
+    if !is_blocked_advance {
+        return Ok(None);
+    }
+    let blocker_code = run_graph_blocker_code(status).ok_or_else(|| {
+        format!(
+            "run-graph advance blocked without explicit blocker evidence for `{}` status `{}`; refusing to continue (fail-closed)",
+            run_id, status
+        )
+    })?;
+    Ok(Some(serde_json::json!({
+        "incident": {
+            "code": "run_graph_advance_blocked",
+            "run_id": run_id,
+            "active_node": active_node,
+            "status": status,
+            "route_task_class": route_task_class,
+        },
+        "blockers": [{
+            "code": blocker_code,
+            "policy_gate": policy_gate,
+            "resume_target": resume_target,
+            "next_node": next_node,
+            "source": "run_graph_state",
+        }]
+    })))
+}
+
+pub(crate) fn validate_run_graph_resume_gate(status: &RunGraphStatus) -> Result<(), String> {
+    if !status.recovery_ready {
+        return Err(format!(
+            "Run-graph resume gate denied for `{}`: recovery_ready is false",
+            status.run_id
+        ));
+    }
+    if status.resume_target == "none" || !status.resume_target.starts_with("dispatch.") {
+        return Err(format!(
+            "Run-graph resume gate denied for `{}`: resume_target `{}` is not a dispatch target",
+            status.run_id, status.resume_target
+        ));
+    }
+    if !status.delegation_gate().delegated_cycle_open {
+        return Err(format!(
+            "Run-graph resume gate denied for `{}`: delegated cycle is not open",
+            status.run_id
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn merge_run_graph_meta(
@@ -838,6 +917,44 @@ fn implementation_writer_handoff(
         DispatchTargetFormat::Lane,
         false,
     )
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum ImplementationVerificationOutcome {
+    ReworkReady,
+    Clean,
+    Approved,
+    FindingsBlocked,
+    UnexpectedStatus,
+}
+
+fn implementation_verification_outcome(status: &str) -> ImplementationVerificationOutcome {
+    const OUTCOME_TABLE: &[(&str, ImplementationVerificationOutcome)] = &[
+        (
+            "rework_ready",
+            ImplementationVerificationOutcome::ReworkReady,
+        ),
+        ("clean", ImplementationVerificationOutcome::Clean),
+        ("approved", ImplementationVerificationOutcome::Approved),
+        ("denied", ImplementationVerificationOutcome::FindingsBlocked),
+        (
+            "expired",
+            ImplementationVerificationOutcome::FindingsBlocked,
+        ),
+        (
+            "review_findings",
+            ImplementationVerificationOutcome::FindingsBlocked,
+        ),
+        (
+            "changed_scope",
+            ImplementationVerificationOutcome::FindingsBlocked,
+        ),
+    ];
+
+    OUTCOME_TABLE
+        .iter()
+        .find_map(|(key, outcome)| (*key == status).then_some(*outcome))
+        .unwrap_or(ImplementationVerificationOutcome::UnexpectedStatus)
 }
 
 pub(crate) async fn derive_seeded_run_graph_status(
@@ -1136,8 +1253,8 @@ pub(crate) async fn derive_advanced_run_graph_status(
         if existing.active_node != verification_node {
             // fall through
         } else {
-            match existing.status.as_str() {
-                "rework_ready" => {
+            match implementation_verification_outcome(existing.status.as_str()) {
+                ImplementationVerificationOutcome::ReworkReady => {
                     let analysis_node =
                         json_string_field(&implementation, "analysis_route_task_class")
                             .filter(|value| !value.is_empty())
@@ -1166,7 +1283,7 @@ pub(crate) async fn derive_advanced_run_graph_status(
                         ),
                     });
                 }
-                "clean" => {
+                ImplementationVerificationOutcome::Clean => {
                     let mut status = run_graph_transition(
                         &existing,
                         existing.active_node.clone(),
@@ -1182,7 +1299,7 @@ pub(crate) async fn derive_advanced_run_graph_status(
                     status.context_state = existing.context_state;
                     return Ok(TaskflowRunGraphAdvancePayload { status });
                 }
-                "approved" => {
+                ImplementationVerificationOutcome::Approved => {
                     let mut status = run_graph_transition(
                         &existing,
                         existing.active_node.clone(),
@@ -1198,15 +1315,16 @@ pub(crate) async fn derive_advanced_run_graph_status(
                     status.context_state = existing.context_state;
                     return Ok(TaskflowRunGraphAdvancePayload { status });
                 }
-                "review_findings" | "changed_scope" => {
+                ImplementationVerificationOutcome::FindingsBlocked => {
                     return Err(format!(
                         "run-graph advance blocked: implementation review findings require explicit scope/rework resolution before completion; got status `{}`",
                         existing.status
                     ));
                 }
-                other => {
+                ImplementationVerificationOutcome::UnexpectedStatus => {
                     return Err(format!(
-                        "run-graph advance expected `{verification_node}` status `clean` to enter approval wait or `approved` to complete implementation, got `{other}`"
+                        "run-graph advance expected `{verification_node}` status `clean` to enter approval wait or `approved` to complete implementation, got `{}`",
+                        existing.status
                     ));
                 }
             }
@@ -1329,6 +1447,46 @@ mod tests {
     }
 
     #[test]
+    fn implementation_verification_outcome_uses_expected_table_mappings() {
+        assert_eq!(
+            implementation_verification_outcome("rework_ready"),
+            ImplementationVerificationOutcome::ReworkReady
+        );
+        assert_eq!(
+            implementation_verification_outcome("clean"),
+            ImplementationVerificationOutcome::Clean
+        );
+        assert_eq!(
+            implementation_verification_outcome("approved"),
+            ImplementationVerificationOutcome::Approved
+        );
+        assert_eq!(
+            implementation_verification_outcome("denied"),
+            ImplementationVerificationOutcome::FindingsBlocked
+        );
+        assert_eq!(
+            implementation_verification_outcome("expired"),
+            ImplementationVerificationOutcome::FindingsBlocked
+        );
+        assert_eq!(
+            implementation_verification_outcome("review_findings"),
+            ImplementationVerificationOutcome::FindingsBlocked
+        );
+        assert_eq!(
+            implementation_verification_outcome("changed_scope"),
+            ImplementationVerificationOutcome::FindingsBlocked
+        );
+    }
+
+    #[test]
+    fn implementation_verification_outcome_defaults_for_unexpected_status() {
+        assert_eq!(
+            implementation_verification_outcome("paused"),
+            ImplementationVerificationOutcome::UnexpectedStatus
+        );
+    }
+
+    #[test]
     fn merge_run_graph_meta_allows_explicit_null_to_clear_handoff_fields() {
         let merged = merge_run_graph_meta(
             RunGraphStatus {
@@ -1361,6 +1519,55 @@ mod tests {
         assert_eq!(merged.handoff_state, "none");
         assert_eq!(merged.resume_target, "none");
         assert!(!merged.recovery_ready);
+    }
+
+    #[test]
+    fn validate_run_graph_resume_gate_requires_dispatch_resume_target() {
+        let status = RunGraphStatus {
+            run_id: "run-1".to_string(),
+            task_id: "run-1".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "writer".to_string(),
+            next_node: None,
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "codex".to_string(),
+            lane_id: "writer_lane".to_string(),
+            lifecycle_stage: "writer_active".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: true,
+        };
+
+        let error = validate_run_graph_resume_gate(&status).expect_err("should fail");
+        assert!(error.contains("resume_target"));
+    }
+
+    #[test]
+    fn validate_run_graph_resume_gate_accepts_open_delegation_cycle() {
+        let status = RunGraphStatus {
+            run_id: "run-1".to_string(),
+            task_id: "run-1".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "writer".to_string(),
+            next_node: Some("coach".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "codex".to_string(),
+            lane_id: "writer_lane".to_string(),
+            lifecycle_stage: "writer_active".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "awaiting_coach".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.coach".to_string(),
+            recovery_ready: true,
+        };
+
+        validate_run_graph_resume_gate(&status).expect("should pass");
     }
 }
 
@@ -1429,15 +1636,52 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                         "vida taskflow run-graph advance",
                         task_id,
                         &message,
+                        None,
                     );
                     return ExitCode::from(1);
                 }
             };
+            let blocker_context = (
+                existing.run_id.clone(),
+                existing.active_node.clone(),
+                existing.status.to_string(),
+                existing.route_task_class.clone(),
+                existing.policy_gate.clone(),
+                existing.resume_target.clone(),
+                existing.next_node.clone(),
+            );
             let payload = match derive_advanced_run_graph_status(&store, existing).await {
                 Ok(payload) => payload,
                 Err(error) => {
+                    let evidence = match run_graph_blocker_evidence(
+                        &blocker_context.0,
+                        &blocker_context.1,
+                        &blocker_context.2,
+                        &blocker_context.3,
+                        &blocker_context.4,
+                        &blocker_context.5,
+                        blocker_context.6.as_deref(),
+                        &error,
+                    ) {
+                        Ok(evidence) => evidence,
+                        Err(guard_error) => {
+                            eprintln!("{guard_error}");
+                            print_run_graph_json_error(
+                                "vida taskflow run-graph advance",
+                                task_id,
+                                &guard_error,
+                                None,
+                            );
+                            return ExitCode::from(1);
+                        }
+                    };
                     eprintln!("{error}");
-                    print_run_graph_json_error("vida taskflow run-graph advance", task_id, &error);
+                    print_run_graph_json_error(
+                        "vida taskflow run-graph advance",
+                        task_id,
+                        &error,
+                        evidence,
+                    );
                     return ExitCode::from(1);
                 }
             };
@@ -1463,6 +1707,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                         "vida taskflow run-graph advance",
                         task_id,
                         &message,
+                        None,
                     );
                     ExitCode::from(1)
                 }

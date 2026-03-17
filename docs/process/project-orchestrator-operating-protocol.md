@@ -74,13 +74,21 @@ Intent-binding clarification:
 
 1. `continue development` authorizes orchestrator-led continuation only after the active bounded unit is explicitly bound,
 2. `continue the next task` or equivalent ordinal wording does not by itself authorize choosing the first ready TaskFlow/backlog candidate,
-3. if the user did not name the bounded unit and the runtime does not show one uniquely evidenced active continuation unit, fail closed to clarification or explicit ambiguity report before shaping/dispatch.
+3. if the user did not name the bounded unit and the runtime does not show one uniquely evidenced active continuation unit, fail closed to clarification or explicit ambiguity report before shaping/dispatch,
+4. `продовжи агентами`, `continue by agents`, and equivalent delegated-continuation wording sets sticky orchestration intent for the active session until the user explicitly requests stop/final closure.
 
 Loop binding rule:
 
 1. once steps 3-7 become lawful for the active bounded unit, the orchestrator must continue through them in the same active cycle unless a real blocker appears,
 2. commentary/progress visibility between those steps does not authorize stopping the cycle,
-3. context gathering that already answers packet ownership and next route is not a closure point.
+3. context gathering that already answers packet ownership and next route is not a closure point,
+4. interim status summaries must remain commentary-style while continuation intent is active,
+5. final closure wording/reporting is forbidden while continuation intent is active unless the user explicitly asks to end/finalize the session.
+6. before emitting any final report, the orchestrator must pass a pre-response gate:
+   - `active delegated agents == 0`,
+   - delegated handoff state is resolved,
+   - no ready continuation item exists in TaskFlow unless the user explicitly requests stop/closure.
+7. if any pre-response gate check fails, continue orchestration and reporting through commentary updates only.
 
 The orchestrator must not:
 

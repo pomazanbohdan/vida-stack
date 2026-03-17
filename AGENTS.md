@@ -12,6 +12,7 @@ Core rule:
 3. Use bounded framework canonical ids through `vida protocol view <id>` only when the runtime init surfaces leave an edge case unresolved.
 4. In host-agent execution, treat agent ids as execution carriers (model/tier/cost/effectiveness), while runtime role remains a separate activation state.
 5. Runtime may bind any admissible carrier to any runtime role when role/task-class constraints allow it, then select by capability/admissibility, local score/telemetry guard, and cheapest eligible carrier.
+6. L0 thinking activation: keep `instruction-contracts/overlay.step-thinking-protocol` and `instruction-contracts/overlay.session-context-continuity-protocol` active for orchestrator lanes; worker lanes activate them only when the packet/runtime explicitly requires them.
 
 Canonical bootstrap routes:
 1. Main/root lane: `vida orchestrator-init`
@@ -42,8 +43,9 @@ Host CLI rule:
    - `vida orchestrator-init`
    - or `vida agent-init`
 3. If the init surface reports `pending_activation`, run `vida project-activator` before ordinary work.
-4. Prefer project-local docs/process/spec guidance resolved from `AGENTS.sidecar.md`.
-5. Open deeper framework protocol surfaces only on demand through canonical shorthand ids interpreted via `vida protocol view`.
+4. Keep the L0 thinking activation rule active from Core rule before continuing lane-specific work.
+5. Prefer project-local docs/process/spec guidance resolved from `AGENTS.sidecar.md`.
+6. Open deeper framework protocol surfaces only on demand through canonical shorthand ids interpreted via `vida protocol view`.
 
 ## Working Boundary
 
@@ -54,8 +56,15 @@ Host CLI rule:
 
 ## Final Report Rule
 
-1. For closure-ready final user-facing reports, end with the explicit terminal line `Session status: completed, closing this session.`
-2. Immediately after that terminal line, emit one extra blank line.
+1. A final user-facing closure report is allowed only when the user explicitly asks to end/close/finalize the session.
+2. Requests such as `продовжи агентами`, `continue by agents`, or equivalent continuation wording are sticky orchestration intent, not closure intent.
+3. Under sticky continuation intent, keep operating through commentary/progress updates and do not emit a final closure report.
+4. Before any final closure report, enforce a pre-response gate: `active_agents == 0`, no unresolved delegated handoff state, and no ready TaskFlow continuation item unless the user explicitly asks to stop.
+5. If that gate fails, continue orchestration via commentary and do not emit final closure wording.
+6. For closure-ready final user-facing reports, end with the explicit terminal line `Session status: completed, closing this session.`
+7. Immediately after that terminal line, emit one extra blank line.
+8. Under sticky continuation intent, `final` channel/user-facing terminal wording is fail-closed forbidden; only `commentary`/progress updates are lawful until the user explicitly requests stop/closure.
+9. If a premature closure-style message is emitted by mistake, immediately re-enter commentary mode, acknowledge protocol violation, and continue TaskFlow dispatch without waiting for additional user confirmation.
 
 -----
 artifact_path: install/assets/agents-scaffold

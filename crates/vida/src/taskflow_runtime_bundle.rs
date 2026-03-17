@@ -4,9 +4,9 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::{
     build_project_activator_view, doctor_launcher_summary_for_root,
-    merge_project_activation_into_init_view,
-    read_or_sync_launcher_activation_snapshot, DoctorLauncherSummary, StateStore,
-    TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload, TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
+    merge_project_activation_into_init_view, read_or_sync_launcher_activation_snapshot,
+    DoctorLauncherSummary, StateStore, TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload,
+    TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
 };
 
 const PROJECT_STARTUP_PROTOCOL_SURFACES: [(&str, &str, &str, &str); 4] = [
@@ -34,6 +34,11 @@ const PROJECT_STARTUP_PROTOCOL_SURFACES: [(&str, &str, &str, &str); 4] = [
         "lane_bundle",
         "orchestrator-init",
     ),
+];
+const RETRIEVAL_OPTIONAL_CONTEXT_BOUNDARY_REQUIRED: [&str; 3] = [
+    "full_project_owner_protocols",
+    "non_promoted_project_docs",
+    "broad_repo_manual_scan",
 ];
 
 pub(crate) async fn build_taskflow_consume_bundle_payload(
@@ -87,6 +92,11 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .latest_protocol_binding_rows()
         .await
         .map_err(|error| format!("Failed to read protocol binding rows: {error}"))?;
+    let protocol_binding_cache_token = store
+        .latest_protocol_binding_cache_token()
+        .await
+        .map_err(|error| format!("Failed to read protocol binding cache token: {error}"))?
+        .unwrap_or_default();
     let compiled_payload_import_evidence =
         crate::taskflow_protocol_binding::protocol_binding_compiled_payload_import_evidence(store)
             .await;
@@ -159,6 +169,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             .as_ref()
             .map(|receipt| receipt.recorded_at.clone())
             .unwrap_or_default(),
+        "protocol_binding_cache_token": protocol_binding_cache_token,
         "compiled_at": activation_snapshot.captured_at,
         "binding_status": protocol_binding_registry["binding_status"]
             .as_str()
@@ -179,6 +190,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             "framework_revision": metadata["framework_revision"],
             "project_activation_revision": activation_snapshot.source_config_digest,
             "protocol_binding_revision": metadata["protocol_binding_revision"],
+            "protocol_binding_cache_token": metadata["protocol_binding_cache_token"],
             "startup_bundle_revision": startup_bundle_revision,
         },
         "retrieval_only_optional_context_boundary": [
@@ -190,7 +202,14 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             "source_version_tuple": control_core["source_version_tuple"],
             "project_activation_revision": activation_snapshot.source_config_digest,
             "protocol_binding_revision": metadata["protocol_binding_revision"],
+            "protocol_binding_cache_token": metadata["protocol_binding_cache_token"],
             "startup_bundle_revision": startup_bundle_revision,
+        },
+        "retrieval_trust_evidence": {
+            "source": "taskflow_runtime_bundle",
+            "citation": activation_snapshot.source_config_path,
+            "freshness": metadata["compiled_at"],
+            "acl": protocol_binding_registry["receipt_id"],
         },
     });
     let orchestrator_init_view = merge_project_activation_into_init_view(
@@ -435,15 +454,14 @@ pub(crate) fn taskflow_consume_bundle_check(
     {
         blockers.push("missing_invalidation_tuple".to_string());
     }
-    if payload
-        .cache_delivery_contract
-        .get("retrieval_only_optional_context_boundary")
-        .and_then(serde_json::Value::as_array)
-        .map(|rows| rows.is_empty())
-        .unwrap_or(true)
-    {
-        blockers.push("missing_retrieval_only_optional_context_boundary".to_string());
-    }
+    blockers.extend(cache_contract_consistency_blockers(payload));
+    blockers.extend(cache_registry_contract_blockers(payload));
+    blockers.extend(retrieval_optional_context_boundary_blockers(
+        &payload.cache_delivery_contract,
+    ));
+    blockers.extend(retrieval_trust_evidence_blockers(
+        &payload.cache_delivery_contract,
+    ));
     if payload
         .orchestrator_init_view
         .get("status")
@@ -493,6 +511,258 @@ pub(crate) fn taskflow_consume_bundle_check(
     }
 }
 
+fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -> Vec<String> {
+    let mut blockers = Vec::new();
+    let cache_key_inputs = payload
+        .cache_delivery_contract
+        .get("cache_key_inputs")
+        .and_then(serde_json::Value::as_object);
+    let invalidation_tuple = payload
+        .cache_delivery_contract
+        .get("invalidation_tuple")
+        .and_then(serde_json::Value::as_object);
+
+    let Some(cache_key_inputs) = cache_key_inputs else {
+        return blockers;
+    };
+    let Some(invalidation_tuple) = invalidation_tuple else {
+        return blockers;
+    };
+
+    let cache_required = [
+        "source_version_tuple",
+        "project_activation_revision",
+        "protocol_binding_revision",
+        "protocol_binding_cache_token",
+        "startup_bundle_revision",
+    ];
+    for key in cache_required {
+        if !cache_key_inputs.contains_key(key) {
+            blockers.push(format!("missing_cache_key_input:{key}"));
+        }
+    }
+
+    let invalidation_required = [
+        "framework_revision",
+        "project_activation_revision",
+        "protocol_binding_revision",
+        "protocol_binding_cache_token",
+        "startup_bundle_revision",
+    ];
+    for key in invalidation_required {
+        if !invalidation_tuple.contains_key(key) {
+            blockers.push(format!("missing_invalidation_tuple_key:{key}"));
+        }
+    }
+
+    if cache_key_inputs
+        .get("source_version_tuple")
+        .and_then(serde_json::Value::as_array)
+        .map(|rows| rows.is_empty())
+        .unwrap_or(true)
+    {
+        blockers.push("invalid_cache_key_input:source_version_tuple".to_string());
+    }
+    for key in [
+        "project_activation_revision",
+        "protocol_binding_revision",
+        "protocol_binding_cache_token",
+        "startup_bundle_revision",
+    ] {
+        if cache_key_inputs
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::is_empty)
+            .unwrap_or(true)
+        {
+            blockers.push(format!("invalid_cache_key_input:{key}"));
+        }
+    }
+    for key in [
+        "framework_revision",
+        "project_activation_revision",
+        "protocol_binding_revision",
+        "protocol_binding_cache_token",
+        "startup_bundle_revision",
+    ] {
+        if invalidation_tuple
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::is_empty)
+            .unwrap_or(true)
+        {
+            blockers.push(format!("invalid_invalidation_tuple_key:{key}"));
+        }
+    }
+
+    let metadata = payload.metadata.as_object();
+    if let Some(metadata) = metadata {
+        for key in [
+            "framework_revision",
+            "project_activation_revision",
+            "protocol_binding_revision",
+            "protocol_binding_cache_token",
+        ] {
+            if !metadata.contains_key(key) {
+                blockers.push(format!("missing_metadata_tuple_key:{key}"));
+            }
+            if metadata
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::is_empty)
+                .unwrap_or(true)
+            {
+                blockers.push(format!("invalid_metadata_tuple_key:{key}"));
+            }
+        }
+        for (left, right, blocker_code) in [
+            (
+                metadata.get("project_activation_revision"),
+                cache_key_inputs.get("project_activation_revision"),
+                "cache_key_mismatch:project_activation_revision",
+            ),
+            (
+                metadata.get("protocol_binding_revision"),
+                cache_key_inputs.get("protocol_binding_revision"),
+                "cache_key_mismatch:protocol_binding_revision",
+            ),
+            (
+                metadata.get("protocol_binding_cache_token"),
+                cache_key_inputs.get("protocol_binding_cache_token"),
+                "cache_key_mismatch:protocol_binding_cache_token",
+            ),
+            (
+                metadata.get("framework_revision"),
+                invalidation_tuple.get("framework_revision"),
+                "invalidation_tuple_mismatch:framework_revision",
+            ),
+            (
+                cache_key_inputs.get("project_activation_revision"),
+                invalidation_tuple.get("project_activation_revision"),
+                "invalidation_tuple_mismatch:project_activation_revision",
+            ),
+            (
+                cache_key_inputs.get("protocol_binding_revision"),
+                invalidation_tuple.get("protocol_binding_revision"),
+                "invalidation_tuple_mismatch:protocol_binding_revision",
+            ),
+            (
+                cache_key_inputs.get("protocol_binding_cache_token"),
+                invalidation_tuple.get("protocol_binding_cache_token"),
+                "invalidation_tuple_mismatch:protocol_binding_cache_token",
+            ),
+            (
+                cache_key_inputs.get("startup_bundle_revision"),
+                invalidation_tuple.get("startup_bundle_revision"),
+                "invalidation_tuple_mismatch:startup_bundle_revision",
+            ),
+        ] {
+            if left.is_some() && right.is_some() && left != right {
+                blockers.push(blocker_code.to_string());
+            }
+        }
+    }
+    let protocol_binding_revision = cache_key_inputs
+        .get("protocol_binding_revision")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let protocol_binding_cache_token = cache_key_inputs
+        .get("protocol_binding_cache_token")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let protocol_binding_receipt_id = payload
+        .protocol_binding_registry
+        .get("receipt_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let protocol_binding_status = payload
+        .protocol_binding_registry
+        .get("binding_status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("blocked");
+    if !protocol_binding_revision.is_empty()
+        && (protocol_binding_receipt_id.is_empty() || protocol_binding_status != "bound")
+    {
+        blockers.push("cache_tuple_protocol_binding_evidence_untrusted".to_string());
+    }
+    if !protocol_binding_revision.is_empty()
+        && !protocol_binding_cache_token.contains(protocol_binding_receipt_id)
+    {
+        blockers.push("cache_tuple_protocol_binding_token_mismatch".to_string());
+    }
+
+    blockers.sort();
+    blockers.dedup();
+    blockers
+}
+
+fn cache_registry_contract_blockers(payload: &TaskflowConsumeBundlePayload) -> Vec<String> {
+    let Some(triggered_domain_bundle) = payload
+        .cache_delivery_contract
+        .get("triggered_domain_bundle")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return vec!["missing_triggered_domain_bundle_partition".to_string()];
+    };
+
+    let includes_registry_contract = triggered_domain_bundle
+        .iter()
+        .any(|entry| entry.as_str() == Some("protocol_binding_registry"));
+    if includes_registry_contract {
+        Vec::new()
+    } else {
+        vec!["cache_registry_contract_missing_triggered_domain_binding".to_string()]
+    }
+}
+
+fn retrieval_optional_context_boundary_blockers(
+    cache_delivery_contract: &serde_json::Value,
+) -> Vec<String> {
+    let Some(rows) = cache_delivery_contract
+        .get("retrieval_only_optional_context_boundary")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return vec!["missing_retrieval_only_optional_context_boundary".to_string()];
+    };
+    if rows.is_empty() {
+        return vec!["missing_retrieval_only_optional_context_boundary".to_string()];
+    }
+    let values = rows
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut blockers = RETRIEVAL_OPTIONAL_CONTEXT_BOUNDARY_REQUIRED
+        .iter()
+        .filter(|required| !values.contains(**required))
+        .map(|required| format!("missing_retrieval_optional_boundary_entry:{required}"))
+        .collect::<Vec<_>>();
+    blockers.sort();
+    blockers
+}
+
+fn retrieval_trust_evidence_blockers(cache_delivery_contract: &serde_json::Value) -> Vec<String> {
+    let Some(evidence) = cache_delivery_contract
+        .get("retrieval_trust_evidence")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return vec!["missing_retrieval_trust_evidence".to_string()];
+    };
+
+    let mut blockers = Vec::new();
+    for key in ["source", "citation", "freshness", "acl"] {
+        if evidence
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::is_empty)
+            .unwrap_or(true)
+        {
+            blockers.push(format!("missing_retrieval_trust_evidence_field:{key}"));
+        }
+    }
+    blockers.sort();
+    blockers
+}
+
 pub(crate) fn blocking_runtime_bundle(error: &str) -> TaskflowConsumeBundlePayload {
     let current_exe = std::env::current_exe()
         .map(|path| path.display().to_string())
@@ -520,6 +790,7 @@ pub(crate) fn blocking_runtime_bundle(error: &str) -> TaskflowConsumeBundlePaylo
             "framework_revision": "",
             "project_activation_revision": "",
             "protocol_binding_revision": "",
+            "protocol_binding_cache_token": "",
             "compiled_at": time::OffsetDateTime::now_utc()
                 .format(&Rfc3339)
                 .expect("rfc3339 timestamp should render"),
@@ -552,6 +823,7 @@ pub(crate) fn blocking_runtime_bundle(error: &str) -> TaskflowConsumeBundlePaylo
             "invalidation_tuple": {},
             "retrieval_only_optional_context_boundary": [],
             "cache_key_inputs": {},
+            "retrieval_trust_evidence": {},
             "error": error,
         }),
         orchestrator_init_view: serde_json::json!({
@@ -680,6 +952,142 @@ fn read_project_protocol_projection(
             "stage": stage,
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        cache_contract_consistency_blockers, retrieval_optional_context_boundary_blockers,
+        retrieval_trust_evidence_blockers,
+        TaskflowConsumeBundlePayload,
+    };
+
+    #[test]
+    fn retrieval_optional_boundary_requires_all_canonical_entries() {
+        let contract = serde_json::json!({
+            "retrieval_only_optional_context_boundary": ["full_project_owner_protocols"]
+        });
+        let blockers = retrieval_optional_context_boundary_blockers(&contract);
+        assert!(blockers.iter().any(
+            |row| row == "missing_retrieval_optional_boundary_entry:non_promoted_project_docs"
+        ));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_retrieval_optional_boundary_entry:broad_repo_manual_scan"));
+    }
+
+    #[test]
+    fn retrieval_optional_boundary_passes_with_canonical_entries() {
+        let contract = serde_json::json!({
+            "retrieval_only_optional_context_boundary": [
+                "non_promoted_project_docs",
+                "full_project_owner_protocols",
+                "broad_repo_manual_scan"
+            ]
+        });
+        let blockers = retrieval_optional_context_boundary_blockers(&contract);
+        assert!(blockers.is_empty());
+    }
+
+    #[test]
+    fn cache_contract_consistency_blocks_missing_required_keys() {
+        let mut payload = minimal_payload_for_cache_checks();
+        payload.cache_delivery_contract = serde_json::json!({
+            "cache_key_inputs": {
+                "source_version_tuple": ["release-1"],
+                "project_activation_revision": "pa-1"
+            },
+            "invalidation_tuple": {
+                "framework_revision": "release-1",
+                "project_activation_revision": "pa-1"
+            }
+        });
+
+        let blockers = cache_contract_consistency_blockers(&payload);
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_cache_key_input:protocol_binding_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_invalidation_tuple_key:startup_bundle_revision"));
+    }
+
+    #[test]
+    fn cache_contract_consistency_blocks_mismatched_revisions() {
+        let mut payload = minimal_payload_for_cache_checks();
+        payload.metadata = serde_json::json!({
+            "framework_revision": "release-1",
+            "project_activation_revision": "pa-1",
+            "protocol_binding_revision": "pb-1",
+        });
+        payload.cache_delivery_contract = serde_json::json!({
+            "cache_key_inputs": {
+                "source_version_tuple": ["release-1"],
+                "project_activation_revision": "pa-1",
+                "protocol_binding_revision": "pb-2",
+                "startup_bundle_revision": "sb-1"
+            },
+            "invalidation_tuple": {
+                "framework_revision": "release-2",
+                "project_activation_revision": "pa-1",
+                "protocol_binding_revision": "pb-2",
+                "startup_bundle_revision": "sb-2"
+            }
+        });
+
+        let blockers = cache_contract_consistency_blockers(&payload);
+        assert!(blockers
+            .iter()
+            .any(|row| row == "cache_key_mismatch:protocol_binding_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalidation_tuple_mismatch:framework_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalidation_tuple_mismatch:startup_bundle_revision"));
+    }
+
+    #[test]
+    fn retrieval_trust_evidence_requires_all_fields() {
+        let contract = serde_json::json!({
+            "retrieval_trust_evidence": {
+                "source": "taskflow_runtime_bundle",
+                "citation": "/tmp/project/vida.config.yaml",
+                "freshness": "2026-03-17T00:00:00Z"
+            }
+        });
+        let blockers = retrieval_trust_evidence_blockers(&contract);
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_retrieval_trust_evidence_field:acl"));
+    }
+
+    fn minimal_payload_for_cache_checks() -> TaskflowConsumeBundlePayload {
+        TaskflowConsumeBundlePayload {
+            artifact_name: "taskflow_runtime_bundle".to_string(),
+            artifact_type: "runtime_bundle".to_string(),
+            generated_at: "2026-03-17T00:00:00Z".to_string(),
+            vida_root: "/tmp/project".to_string(),
+            config_path: "/tmp/project/vida.config.yaml".to_string(),
+            activation_source: "state_store".to_string(),
+            launcher_runtime_paths: crate::DoctorLauncherSummary {
+                vida: "vida".to_string(),
+                project_root: "/tmp/project".to_string(),
+                taskflow_surface: "vida taskflow".to_string(),
+            },
+            metadata: serde_json::json!({}),
+            control_core: serde_json::json!({}),
+            activation_bundle: serde_json::json!({}),
+            protocol_binding_registry: serde_json::json!({}),
+            cache_delivery_contract: serde_json::json!({}),
+            orchestrator_init_view: serde_json::json!({}),
+            agent_init_view: serde_json::json!({}),
+            boot_compatibility: serde_json::json!({}),
+            migration_preflight: serde_json::json!({}),
+            task_store: serde_json::json!({}),
+            run_graph: serde_json::json!({}),
+        }
+    }
 }
 
 fn parse_markdown_artifact_metadata(raw: &str) -> std::collections::HashMap<String, String> {

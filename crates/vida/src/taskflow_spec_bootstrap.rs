@@ -214,7 +214,7 @@ fn register_design_doc_in_spec_readme(
             &readme_path,
             crate::init_surfaces::render_project_product_spec_readme(),
         )
-            .map_err(|error| format!("Failed to write {}: {error}", readme_path.display()))?;
+        .map_err(|error| format!("Failed to write {}: {error}", readme_path.display()))?;
     }
     let mut content = fs::read_to_string(&readme_path)
         .map_err(|error| format!("Failed to read {}: {error}", readme_path.display()))?;
@@ -322,25 +322,97 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
     request_text: &str,
     tracked: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let feature_slug = tracked["feature_slug"]
-        .as_str()
-        .unwrap_or("feature-request");
-    let design_doc_path = tracked["design_doc_path"]
-        .as_str()
-        .unwrap_or("docs/product/spec/feature-request-design.md");
-    let artifact_path = tracked["design_artifact_path"]
-        .as_str()
-        .unwrap_or("product/spec/feature-request-design");
-    let epic_task_id = tracked["epic"]["task_id"]
-        .as_str()
-        .unwrap_or("feature-request");
-    let epic_title = tracked["epic"]["title"].as_str().unwrap_or("Feature epic");
-    let spec_task_id = tracked["spec_task"]["task_id"]
-        .as_str()
-        .unwrap_or("feature-request-spec");
-    let spec_title = tracked["spec_task"]["title"]
-        .as_str()
-        .unwrap_or("Spec pack");
+    fn required_bool(value: &serde_json::Value, path: &str) -> Result<bool, String> {
+        value
+            .as_bool()
+            .ok_or_else(|| format!("missing required tracked bootstrap evidence `{path}`"))
+    }
+    fn required_str<'a>(value: &'a serde_json::Value, path: &str) -> Result<&'a str, String> {
+        value
+            .as_str()
+            .filter(|entry| !entry.trim().is_empty())
+            .ok_or_else(|| format!("missing required tracked bootstrap evidence `{path}`"))
+    }
+
+    if !tracked.is_object() {
+        return Err(
+            "missing required tracked bootstrap evidence `tracked_flow_bootstrap`".to_string(),
+        );
+    }
+
+    let required = required_bool(&tracked["required"], "tracked_flow_bootstrap.required")?;
+    if !required {
+        return Err(
+            "tracked bootstrap evidence `tracked_flow_bootstrap.required` must be true".to_string(),
+        );
+    }
+    let status = required_str(&tracked["status"], "tracked_flow_bootstrap.status")?;
+    if status != "pending" {
+        return Err(format!(
+            "tracked bootstrap evidence `tracked_flow_bootstrap.status` must be `pending`, got `{status}`"
+        ));
+    }
+    let bootstrap_command = required_str(
+        &tracked["bootstrap_command"],
+        "tracked_flow_bootstrap.bootstrap_command",
+    )?;
+    if !bootstrap_command.contains("vida taskflow bootstrap-spec")
+        || !bootstrap_command.contains("--json")
+    {
+        return Err(
+            "tracked bootstrap evidence `tracked_flow_bootstrap.bootstrap_command` is invalid"
+                .to_string(),
+        );
+    }
+
+    let feature_slug = required_str(
+        &tracked["feature_slug"],
+        "tracked_flow_bootstrap.feature_slug",
+    )?;
+    let design_doc_path = required_str(
+        &tracked["design_doc_path"],
+        "tracked_flow_bootstrap.design_doc_path",
+    )?;
+    let artifact_path = required_str(
+        &tracked["design_artifact_path"],
+        "tracked_flow_bootstrap.design_artifact_path",
+    )?;
+    let epic_task_id = required_str(
+        &tracked["epic"]["task_id"],
+        "tracked_flow_bootstrap.epic.task_id",
+    )?;
+    let epic_title = required_str(
+        &tracked["epic"]["title"],
+        "tracked_flow_bootstrap.epic.title",
+    )?;
+    let spec_task_id = required_str(
+        &tracked["spec_task"]["task_id"],
+        "tracked_flow_bootstrap.spec_task.task_id",
+    )?;
+    let spec_title = required_str(
+        &tracked["spec_task"]["title"],
+        "tracked_flow_bootstrap.spec_task.title",
+    )?;
+    let finalize_command = required_str(
+        &tracked["docflow"]["finalize_command"],
+        "tracked_flow_bootstrap.docflow.finalize_command",
+    )?;
+    let check_command = required_str(
+        &tracked["docflow"]["check_command"],
+        "tracked_flow_bootstrap.docflow.check_command",
+    )?;
+    let close_spec_task_command = required_str(
+        &tracked["spec_task"]["close_command"],
+        "tracked_flow_bootstrap.spec_task.close_command",
+    )?;
+    let work_pool_create_command = required_str(
+        &tracked["work_pool_task"]["create_command"],
+        "tracked_flow_bootstrap.work_pool_task.create_command",
+    )?;
+    let dev_task_create_command = required_str(
+        &tracked["dev_task"]["create_command"],
+        "tracked_flow_bootstrap.dev_task.create_command",
+    )?;
 
     let mut changed_files = Vec::new();
     let (_, epic_created) = create_task_if_missing_with_store(
@@ -431,6 +503,25 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
     Ok(serde_json::json!({
         "surface": "vida taskflow bootstrap-spec",
         "status": "ok",
+        "admission": {
+            "status": "admitted",
+            "admitted": true,
+            "consumed_evidence": [
+                "tracked_flow_bootstrap.required",
+                "tracked_flow_bootstrap.status",
+                "tracked_flow_bootstrap.bootstrap_command",
+                "tracked_flow_bootstrap.feature_slug",
+                "tracked_flow_bootstrap.design_doc_path",
+                "tracked_flow_bootstrap.design_artifact_path",
+                "tracked_flow_bootstrap.epic.task_id",
+                "tracked_flow_bootstrap.spec_task.task_id",
+                "tracked_flow_bootstrap.docflow.finalize_command",
+                "tracked_flow_bootstrap.docflow.check_command",
+                "tracked_flow_bootstrap.spec_task.close_command",
+                "tracked_flow_bootstrap.work_pool_task.create_command",
+                "tracked_flow_bootstrap.dev_task.create_command",
+            ],
+        },
         "request": request_text,
         "feature_slug": feature_slug,
         "epic": {
@@ -448,11 +539,11 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
         },
         "next": {
             "plan_note": "publish a concise execution plan before mutating the design document or dispatching write-producing work",
-            "finalize_command": tracked["docflow"]["finalize_command"].clone(),
-            "check_command": tracked["docflow"]["check_command"].clone(),
-            "close_spec_task_command": tracked["spec_task"]["close_command"].clone(),
-            "work_pool_create_command": tracked["work_pool_task"]["create_command"].clone(),
-            "dev_task_create_command": tracked["dev_task"]["create_command"].clone(),
+            "finalize_command": finalize_command,
+            "check_command": check_command,
+            "close_spec_task_command": close_spec_task_command,
+            "work_pool_create_command": work_pool_create_command,
+            "dev_task_create_command": dev_task_create_command,
         },
         "receipt_path": receipt_path,
         "changed_files": changed_files,

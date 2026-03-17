@@ -90,6 +90,11 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             Ok(selection) => selection,
                             Err(error) => {
                                 if as_json {
+                                    let dispatch_receipt = blocked_dispatch_receipt(
+                                        "unresolved_lane_selection",
+                                        &bundle_check,
+                                        &runtime_bundle,
+                                    );
                                     let payload = super::TaskflowDirectConsumptionPayload {
                                         artifact_name: "taskflow_direct_runtime_consumption"
                                             .to_string(),
@@ -142,10 +147,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                             "handoff_ready": false,
                                             "reason": "unresolved_lane_selection",
                                         }),
-                                        dispatch_receipt: serde_json::json!({
-                                            "status": "blocked",
-                                            "reason": "unresolved_lane_selection",
-                                        }),
+                                        dispatch_receipt,
                                     };
                                     if let Err(snapshot_error) =
                                         super::emit_taskflow_consume_final_json(&store, &payload)
@@ -158,11 +160,6 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         };
-                        let closure_admission = super::build_runtime_closure_admission(
-                            &bundle_check,
-                            &docflow_verdict,
-                            &role_selection,
-                        );
                         let taskflow_handoff_plan =
                             super::build_taskflow_handoff_plan(&role_selection);
                         let run_graph_bootstrap =
@@ -171,11 +168,108 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 &role_selection,
                             )
                             .await;
-                        let mut dispatch_receipt =
-                            build_runtime_consumption_dispatch_receipt(
+                        let mut closure_admission = super::build_runtime_closure_admission(
+                            &bundle_check,
+                            &docflow_verdict,
+                            &role_selection,
+                        );
+                        let execution_preparation_gate =
+                            build_execution_preparation_evidence_gate(
                                 &role_selection,
+                                &taskflow_handoff_plan,
                                 &run_graph_bootstrap,
                             );
+                        let retrieval_policy_gate =
+                            build_retrieval_policy_decision_gate(&bundle_check);
+                        let approval_delegation_gate = build_approval_delegation_evidence_gate(
+                            &role_selection,
+                            &run_graph_bootstrap,
+                        );
+                        if let Some(blocker_code) = execution_preparation_gate.blocker_code() {
+                            if !closure_admission
+                                .blockers
+                                .iter()
+                                .any(|value| value == blocker_code)
+                            {
+                                closure_admission.blockers.push(blocker_code.to_string());
+                                closure_admission.blockers.sort();
+                                closure_admission.blockers.dedup();
+                            }
+                            closure_admission.status = "block".to_string();
+                            closure_admission.admitted = false;
+                        }
+                        if let Some(blocker_code) = retrieval_policy_gate.blocker_code() {
+                            if !closure_admission
+                                .blockers
+                                .iter()
+                                .any(|value| value == blocker_code)
+                            {
+                                closure_admission.blockers.push(blocker_code.to_string());
+                                closure_admission.blockers.sort();
+                                closure_admission.blockers.dedup();
+                            }
+                            closure_admission.status = "block".to_string();
+                            closure_admission.admitted = false;
+                        }
+                        if let Some(blocker_code) = approval_delegation_gate.blocker_code() {
+                            if !closure_admission
+                                .blockers
+                                .iter()
+                                .any(|value| value == blocker_code)
+                            {
+                                closure_admission.blockers.push(blocker_code.to_string());
+                                closure_admission.blockers.sort();
+                                closure_admission.blockers.dedup();
+                            }
+                            closure_admission.status = "block".to_string();
+                            closure_admission.admitted = false;
+                        }
+                        let mut dispatch_receipt = build_runtime_consumption_dispatch_receipt(
+                            &role_selection,
+                            &run_graph_bootstrap,
+                        );
+                        if let Some(blocker_code) = execution_preparation_gate.blocker_code() {
+                            dispatch_receipt.dispatch_status = "blocked".to_string();
+                            dispatch_receipt.blocker_code = Some(blocker_code.to_string());
+                            dispatch_receipt.downstream_dispatch_ready = false;
+                            if !dispatch_receipt
+                                .downstream_dispatch_blockers
+                                .iter()
+                                .any(|value| value == blocker_code)
+                            {
+                                dispatch_receipt
+                                    .downstream_dispatch_blockers
+                                    .insert(0, blocker_code.to_string());
+                            }
+                        }
+                        if let Some(blocker_code) = retrieval_policy_gate.blocker_code() {
+                            dispatch_receipt.dispatch_status = "blocked".to_string();
+                            dispatch_receipt.blocker_code = Some(blocker_code.to_string());
+                            dispatch_receipt.downstream_dispatch_ready = false;
+                            if !dispatch_receipt
+                                .downstream_dispatch_blockers
+                                .iter()
+                                .any(|value| value == blocker_code)
+                            {
+                                dispatch_receipt
+                                    .downstream_dispatch_blockers
+                                    .insert(0, blocker_code.to_string());
+                            }
+                        }
+                        if let Some(blocker_code) = approval_delegation_gate.blocker_code() {
+                            dispatch_receipt.dispatch_status = "blocked".to_string();
+                            dispatch_receipt.blocker_code = Some(blocker_code.to_string());
+                            dispatch_receipt.downstream_dispatch_ready = false;
+                            if !dispatch_receipt
+                                .downstream_dispatch_blockers
+                                .iter()
+                                .any(|value| value == blocker_code)
+                            {
+                                dispatch_receipt
+                                    .downstream_dispatch_blockers
+                                    .insert(0, blocker_code.to_string());
+                            }
+                        }
                         dispatch_receipt.dispatch_command =
                             super::runtime_dispatch_command_for_target(
                                 &role_selection,
@@ -208,7 +302,10 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         dispatch_receipt.dispatch_packet_path = Some(dispatch_packet_path);
                         let allow_taskflow_pack_execution = dispatch_receipt.dispatch_kind
                             != "taskflow_pack"
-                            || super::taskflow_task_bridge::infer_project_root_from_state_root(store.root()).is_some();
+                            || super::taskflow_task_bridge::infer_project_root_from_state_root(
+                                store.root(),
+                            )
+                            .is_some();
                         if dispatch_receipt.dispatch_status == "routed"
                             && allow_taskflow_pack_execution
                         {
@@ -251,7 +348,10 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             && !closure_admission
                                 .blockers
                                 .iter()
-                                .any(|row| row == "pending_design_packet");
+                                .any(|row| {
+                                    row == "pending_design_packet"
+                                        || row == "pending_execution_preparation_evidence"
+                                });
                         let payload = super::TaskflowDirectConsumptionPayload {
                             artifact_name: "taskflow_direct_runtime_consumption".to_string(),
                             artifact_type: "runtime_consumption".to_string(),
@@ -459,6 +559,11 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 &docflow_verdict,
                                 &role_selection,
                             );
+                            let dispatch_receipt = blocked_dispatch_receipt(
+                                "docflow_activation_failed",
+                                &bundle_check,
+                                &runtime_bundle,
+                            );
                             let payload = super::TaskflowDirectConsumptionPayload {
                                 artifact_name: "taskflow_direct_runtime_consumption".to_string(),
                                 artifact_type: "runtime_consumption".to_string(),
@@ -483,10 +588,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     "handoff_ready": false,
                                     "reason": "docflow_activation_failed",
                                 }),
-                                dispatch_receipt: serde_json::json!({
-                                    "status": "blocked",
-                                    "reason": "docflow_activation_failed",
-                                }),
+                                dispatch_receipt,
                                 direct_consumption_ready: false,
                             };
                             if let Err(snapshot_error) =
@@ -513,6 +615,195 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
         }
         _ => ExitCode::from(2),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExecutionPreparationEvidenceGate {
+    missing_evidence_or_handoff_packet: bool,
+}
+
+impl ExecutionPreparationEvidenceGate {
+    fn blocker_code(self) -> Option<&'static str> {
+        if self.missing_evidence_or_handoff_packet {
+            Some("pending_execution_preparation_evidence")
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ApprovalDelegationEvidenceGate {
+    missing_approval_or_delegation_evidence: bool,
+}
+
+impl ApprovalDelegationEvidenceGate {
+    fn blocker_code(self) -> Option<&'static str> {
+        if self.missing_approval_or_delegation_evidence {
+            Some("pending_approval_delegation_evidence")
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RetrievalPolicyDecisionGate {
+    blocker_code: Option<String>,
+}
+
+impl RetrievalPolicyDecisionGate {
+    fn blocker_code(&self) -> Option<&str> {
+        self.blocker_code.as_deref()
+    }
+}
+
+fn build_execution_preparation_evidence_gate(
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    taskflow_handoff_plan: &serde_json::Value,
+    run_graph_bootstrap: &serde_json::Value,
+) -> ExecutionPreparationEvidenceGate {
+    let execution_plan = &role_selection.execution_plan;
+    let dispatch_contract = &execution_plan["development_flow"]["dispatch_contract"];
+    let execution_preparation_required = super::json_bool(
+        dispatch_contract.get("execution_preparation_required"),
+        false,
+    ) || dispatch_contract["lane_catalog"]
+        .get("execution_preparation")
+        .is_some()
+        || dispatch_contract["lane_sequence"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .any(|target| target == "execution_preparation");
+    if !execution_preparation_required {
+        return ExecutionPreparationEvidenceGate {
+            missing_evidence_or_handoff_packet: false,
+        };
+    }
+
+    let handoff_ready = super::json_bool(taskflow_handoff_plan.get("handoff_ready"), false)
+        && super::json_bool(run_graph_bootstrap.get("handoff_ready"), false);
+    let packet_ready = run_graph_bootstrap
+        .get("execution_preparation_packet_path")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+        || super::json_bool(
+            run_graph_bootstrap.get("execution_preparation_handoff_packet_ready"),
+            false,
+        );
+    let evidence_ready = super::json_bool(
+        run_graph_bootstrap.get("execution_preparation_evidence_ready"),
+        false,
+    ) || run_graph_bootstrap["evidence"]["execution_preparation"]["status"].as_str()
+        == Some("ready")
+        || run_graph_bootstrap["evidence"]["execution_preparation"]["ready"].as_bool()
+            == Some(true);
+
+    ExecutionPreparationEvidenceGate {
+        missing_evidence_or_handoff_packet: !(handoff_ready && packet_ready && evidence_ready),
+    }
+}
+
+fn build_approval_delegation_evidence_gate(
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    run_graph_bootstrap: &serde_json::Value,
+) -> ApprovalDelegationEvidenceGate {
+    let execution_plan = &role_selection.execution_plan;
+    let delegated_mode = execution_plan["orchestration_contract"]["mode"].as_str()
+        == Some("delegated_orchestration_cycle");
+    if !delegated_mode {
+        return ApprovalDelegationEvidenceGate {
+            missing_approval_or_delegation_evidence: false,
+        };
+    }
+
+    let latest_status = &run_graph_bootstrap["latest_status"];
+    let handoff_state = latest_status["handoff_state"].as_str().unwrap_or_default();
+    let policy_gate = latest_status["policy_gate"].as_str().unwrap_or_default();
+    let lifecycle_stage = latest_status["lifecycle_stage"].as_str().unwrap_or_default();
+    let combined = format!(
+        "{} {} {}",
+        handoff_state.to_ascii_lowercase(),
+        policy_gate.to_ascii_lowercase(),
+        lifecycle_stage.to_ascii_lowercase()
+    );
+    let approval_or_delegation_wait =
+        combined.contains("approval") || combined.contains("delegat");
+    if !approval_or_delegation_wait {
+        return ApprovalDelegationEvidenceGate {
+            missing_approval_or_delegation_evidence: false,
+        };
+    }
+
+    let evidence_ready = super::json_bool(
+        run_graph_bootstrap.get("approval_delegation_evidence_ready"),
+        false,
+    ) || super::json_bool(latest_status.get("approval_delegation_evidence_ready"), false)
+        || run_graph_bootstrap["evidence"]["approval_delegation"]["status"].as_str()
+            == Some("ready")
+        || run_graph_bootstrap["evidence"]["approval_delegation"]["ready"].as_bool() == Some(true);
+
+    ApprovalDelegationEvidenceGate {
+        missing_approval_or_delegation_evidence: !evidence_ready,
+    }
+}
+
+fn build_retrieval_policy_decision_gate(
+    bundle_check: &super::TaskflowConsumeBundleCheck,
+) -> RetrievalPolicyDecisionGate {
+    let has_protocol_binding_receipt = !bundle_check
+        .blockers
+        .iter()
+        .any(|code| code == "missing_protocol_binding_receipt");
+    let protocol_binding_runtime_ready = !bundle_check
+        .blockers
+        .iter()
+        .any(|code| code == "protocol_binding_not_runtime_ready");
+
+    let blocker_code = super::release1_contracts::evaluate_policy_gate_protocol_binding(
+        "retrieval_evidence",
+        if has_protocol_binding_receipt {
+            Some("bundle_check_protocol_binding_receipt")
+        } else {
+            None
+        },
+        protocol_binding_runtime_ready,
+    )
+    .and_then(super::release1_contracts::blocker_code_value);
+
+    RetrievalPolicyDecisionGate { blocker_code }
+}
+
+fn blocked_dispatch_receipt(
+    reason: &str,
+    bundle_check: &super::TaskflowConsumeBundleCheck,
+    runtime_bundle: &super::TaskflowConsumeBundlePayload,
+) -> serde_json::Value {
+    let mut downstream_dispatch_blockers = bundle_check.blockers.clone();
+    if !downstream_dispatch_blockers.iter().any(|row| row == reason) {
+        downstream_dispatch_blockers.insert(0, reason.to_string());
+    }
+
+    serde_json::json!({
+        "status": "blocked",
+        "dispatch_status": "blocked",
+        "dispatch_kind": "none",
+        "dispatch_target": "none",
+        "dispatch_surface": "vida taskflow consume final",
+        "blocker_code": reason,
+        "downstream_dispatch_blockers": downstream_dispatch_blockers,
+        "artifact_refs": {
+            "root_artifact_id": bundle_check.root_artifact_id,
+            "bundle_artifact_name": runtime_bundle.artifact_name,
+            "cache_delivery_contract": {
+                "cache_key_inputs_present": runtime_bundle.cache_delivery_contract["cache_key_inputs"].is_object(),
+                "invalidation_tuple_present": runtime_bundle.cache_delivery_contract["invalidation_tuple"].is_object(),
+            },
+        },
+    })
 }
 
 fn build_runtime_consumption_dispatch_receipt(
@@ -544,7 +835,8 @@ fn build_runtime_consumption_dispatch_receipt(
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
                 .or_else(|| {
-                    role_selection.execution_plan["codex_runtime_assignment"]["activation_agent_type"]
+                    role_selection.execution_plan["codex_runtime_assignment"]
+                        ["activation_agent_type"]
                         .as_str()
                         .map(str::to_string)
                 })
@@ -561,7 +853,8 @@ fn build_runtime_consumption_dispatch_receipt(
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
                 .or_else(|| {
-                    role_selection.execution_plan["codex_runtime_assignment"]["activation_runtime_role"]
+                    role_selection.execution_plan["codex_runtime_assignment"]
+                        ["activation_runtime_role"]
                         .as_str()
                         .map(str::to_string)
                 })
@@ -580,7 +873,8 @@ fn build_runtime_consumption_dispatch_receipt(
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string)
                     .or_else(|| {
-                        role_selection.execution_plan["codex_runtime_assignment"]["selected_agent_id"]
+                        role_selection.execution_plan["codex_runtime_assignment"]
+                            ["selected_agent_id"]
                             .as_str()
                             .map(str::to_string)
                     })
@@ -633,5 +927,225 @@ fn build_runtime_consumption_dispatch_receipt(
         activation_runtime_role,
         selected_backend,
         recorded_at,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_approval_delegation_evidence_gate, build_execution_preparation_evidence_gate,
+        build_retrieval_policy_decision_gate, ApprovalDelegationEvidenceGate,
+        ExecutionPreparationEvidenceGate, RetrievalPolicyDecisionGate,
+    };
+
+    #[test]
+    fn execution_preparation_gate_blocks_when_required_and_handoff_or_evidence_missing() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "architecture refactor implementation".to_string(),
+            selected_role: "orchestrator".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_preparation_required": true,
+                        "lane_sequence": ["execution_preparation", "implementer"],
+                        "lane_catalog": {
+                            "execution_preparation": {
+                                "completion_blocker": "pending_execution_preparation_evidence"
+                            }
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+
+        let taskflow_handoff_plan = serde_json::json!({
+            "handoff_ready": false,
+        });
+        let run_graph_bootstrap = serde_json::json!({
+            "handoff_ready": false,
+            "execution_preparation_packet_path": "",
+            "execution_preparation_evidence_ready": false,
+        });
+
+        let gate = build_execution_preparation_evidence_gate(
+            &role_selection,
+            &taskflow_handoff_plan,
+            &run_graph_bootstrap,
+        );
+
+        assert_eq!(
+            gate.blocker_code(),
+            Some("pending_execution_preparation_evidence")
+        );
+    }
+
+    #[test]
+    fn execution_preparation_gate_passes_when_required_with_handoff_packet_and_evidence() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "architecture refactor implementation".to_string(),
+            selected_role: "orchestrator".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_preparation_required": true,
+                        "lane_sequence": ["execution_preparation", "implementer"],
+                        "lane_catalog": {
+                            "execution_preparation": {
+                                "completion_blocker": "pending_execution_preparation_evidence"
+                            }
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+
+        let taskflow_handoff_plan = serde_json::json!({
+            "handoff_ready": true,
+        });
+        let run_graph_bootstrap = serde_json::json!({
+            "handoff_ready": true,
+            "execution_preparation_packet_path": "/tmp/packet.json",
+            "execution_preparation_evidence_ready": true,
+            "evidence": {
+                "execution_preparation": {
+                    "status": "ready",
+                    "ready": true
+                }
+            }
+        });
+
+        let gate = build_execution_preparation_evidence_gate(
+            &role_selection,
+            &taskflow_handoff_plan,
+            &run_graph_bootstrap,
+        );
+
+        assert_eq!(gate, ExecutionPreparationEvidenceGate {
+            missing_evidence_or_handoff_packet: false
+        });
+    }
+
+    #[test]
+    fn approval_delegation_gate_blocks_when_wait_branch_lacks_evidence() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "implementation".to_string(),
+            selected_role: "orchestrator".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "orchestration_contract": {
+                    "mode": "delegated_orchestration_cycle"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "latest_status": {
+                "handoff_state": "awaiting_approval",
+                "policy_gate": "approval_required",
+                "lifecycle_stage": "implementation_review_wait"
+            }
+        });
+
+        let gate = build_approval_delegation_evidence_gate(&role_selection, &run_graph_bootstrap);
+        assert_eq!(
+            gate.blocker_code(),
+            Some("pending_approval_delegation_evidence")
+        );
+    }
+
+    #[test]
+    fn approval_delegation_gate_passes_when_wait_branch_has_evidence() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "implementation".to_string(),
+            selected_role: "orchestrator".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "orchestration_contract": {
+                    "mode": "delegated_orchestration_cycle"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "approval_delegation_evidence_ready": true,
+            "latest_status": {
+                "handoff_state": "awaiting_delegation",
+                "policy_gate": "delegation_evidence_required",
+                "lifecycle_stage": "delegation_wait",
+            }
+        });
+
+        let gate = build_approval_delegation_evidence_gate(&role_selection, &run_graph_bootstrap);
+        assert_eq!(gate, ApprovalDelegationEvidenceGate {
+            missing_approval_or_delegation_evidence: false
+        });
+    }
+
+    #[test]
+    fn retrieval_policy_gate_blocks_when_protocol_binding_is_not_ready() {
+        let bundle_check = crate::TaskflowConsumeBundleCheck {
+            ok: false,
+            blockers: vec![
+                "missing_protocol_binding_receipt".to_string(),
+                "protocol_binding_not_runtime_ready".to_string(),
+            ],
+            root_artifact_id: "artifact-1".to_string(),
+            artifact_count: 1,
+            boot_classification: "compatible".to_string(),
+            migration_state: "stable".to_string(),
+            activation_status: "ready".to_string(),
+        };
+
+        let gate = build_retrieval_policy_decision_gate(&bundle_check);
+        assert_eq!(
+            gate,
+            RetrievalPolicyDecisionGate {
+                blocker_code: Some("missing_protocol_binding_receipt".to_string())
+            }
+        );
     }
 }

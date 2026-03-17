@@ -233,12 +233,75 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
         Ok(store) => match super::build_taskflow_consume_bundle_payload(&store).await {
             Ok(payload) => {
                 let check = super::taskflow_consume_bundle_check(&payload);
+                let mut effective_blockers = check.blockers.clone();
+                let seam_closure_admission_receipt_check =
+                    taskflow_docflow_seam_receipt_backed_check(&payload);
+                if !seam_closure_admission_receipt_check["receipt_backed"]
+                    .as_bool()
+                    .unwrap_or(false)
+                {
+                    effective_blockers.push("missing_protocol_binding_receipt".to_string());
+                }
+                let db_first_activation_truth =
+                    match super::read_or_sync_launcher_activation_snapshot(&store).await {
+                        Ok(snapshot) => {
+                            if let Some(error) =
+                                db_first_activation_snapshot_validation_error(&snapshot)
+                            {
+                                effective_blockers
+                                    .push("missing_launcher_activation_snapshot".to_string());
+                                serde_json::json!({
+                                    "ok": false,
+                                    "error": error,
+                                    "source": snapshot.source,
+                                    "source_config_path": snapshot.source_config_path,
+                                    "source_config_digest": snapshot.source_config_digest,
+                                })
+                            } else {
+                                serde_json::json!({
+                                    "ok": true,
+                                    "source": snapshot.source,
+                                    "source_config_path": snapshot.source_config_path,
+                                    "source_config_digest": snapshot.source_config_digest,
+                                })
+                            }
+                        }
+                        Err(error) => {
+                            effective_blockers.push("missing_launcher_activation_snapshot".to_string());
+                            serde_json::json!({
+                                "ok": false,
+                                "error": error,
+                            })
+                        }
+                    };
+                let blocker_codes = normalize_consume_bundle_blocker_codes(&effective_blockers);
+                let next_actions = consume_bundle_check_next_actions(&blocker_codes);
+                let artifact_refs = serde_json::json!({
+                    "root_artifact_id": check.root_artifact_id,
+                    "bundle_artifact_name": payload.artifact_name,
+                    "surface": "vida taskflow consume bundle check"
+                });
+                let operator_contracts = serde_json::json!({
+                    "contract_id": "release-1-operator-contracts",
+                    "schema_version": "release-1-v1",
+                    "status": if blocker_codes.is_empty() { "pass" } else { "blocked" },
+                    "blocker_codes": blocker_codes,
+                    "next_actions": next_actions,
+                    "artifact_refs": artifact_refs,
+                });
                 let snapshot_path = match super::write_runtime_consumption_snapshot(
                     store.root(),
                     "bundle-check",
                     &serde_json::json!({
                         "surface": "vida taskflow consume bundle check",
                         "check": &check,
+                        "seam_closure_admission_receipt_check": &seam_closure_admission_receipt_check,
+                        "db_first_activation_truth": &db_first_activation_truth,
+                        "effective_blockers": &effective_blockers,
+                        "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                        "next_actions": operator_contracts["next_actions"].clone(),
+                        "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                        "operator_contracts": &operator_contracts,
                         "bundle": &payload,
                     }),
                 ) {
@@ -253,7 +316,14 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                         "{}",
                         serde_json::to_string_pretty(&serde_json::json!({
                             "surface": "vida taskflow consume bundle check",
-                            "check": check,
+                            "check": &check,
+                            "seam_closure_admission_receipt_check": &seam_closure_admission_receipt_check,
+                            "db_first_activation_truth": &db_first_activation_truth,
+                            "effective_blockers": &effective_blockers,
+                            "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                            "next_actions": operator_contracts["next_actions"].clone(),
+                            "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                            "operator_contracts": &operator_contracts,
                             "snapshot_path": snapshot_path,
                         }))
                         .expect("consume bundle check should render as json")
@@ -266,7 +336,11 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                     super::print_surface_line(
                         super::RenderMode::Plain,
                         "ok",
-                        if check.ok { "true" } else { "false" },
+                        if blocker_codes.is_empty() {
+                            "true"
+                        } else {
+                            "false"
+                        },
                     );
                     super::print_surface_line(
                         super::RenderMode::Plain,
@@ -278,12 +352,26 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                         "artifact count",
                         &check.artifact_count.to_string(),
                     );
-                    if !check.blockers.is_empty() {
+                    if !effective_blockers.is_empty() {
                         super::print_surface_line(
                             super::RenderMode::Plain,
                             "blockers",
-                            &check.blockers.join(", "),
+                            &effective_blockers.join(", "),
                         );
+                        let actions = operator_contracts["next_actions"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(serde_json::Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(" | ");
+                        if !actions.is_empty() {
+                            super::print_surface_line(
+                                super::RenderMode::Plain,
+                                "next actions",
+                                &actions,
+                            );
+                        }
                     }
                     super::print_surface_line(
                         super::RenderMode::Plain,
@@ -291,7 +379,7 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                         &snapshot_path,
                     );
                 }
-                if check.ok {
+                if blocker_codes.is_empty() {
                     ExitCode::SUCCESS
                 } else {
                     ExitCode::from(1)
@@ -307,6 +395,91 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+fn consume_bundle_check_next_actions(blockers: &[String]) -> Vec<String> {
+    if blockers.is_empty() {
+        return vec![];
+    }
+    let mut next_actions = Vec::new();
+    if blockers
+        .iter()
+        .any(|code| code == "missing_protocol_binding_receipt")
+    {
+        next_actions.push(
+            "Run `vida taskflow protocol-binding sync --json` to materialize the missing receipt."
+                .to_string(),
+        );
+    }
+    if blockers
+        .iter()
+        .any(|code| code == "protocol_binding_not_runtime_ready")
+    {
+        next_actions.push(
+            "Run `vida taskflow protocol-binding check --json` and clear runtime-readiness blockers."
+                .to_string(),
+        );
+    }
+    if blockers
+        .iter()
+        .any(|code| code == "missing_launcher_activation_snapshot")
+    {
+        next_actions.push(
+            "Run `vida boot` (or `vida taskflow protocol-binding sync --json`) to materialize launcher activation snapshot in the authoritative state store."
+                .to_string(),
+        );
+    }
+    if next_actions.is_empty() {
+        next_actions
+            .push("Resolve consume-bundle-check blockers before closure packaging.".to_string());
+    }
+    next_actions
+}
+
+fn normalize_consume_bundle_blocker_codes(blockers: &[String]) -> Vec<String> {
+    let canonical =
+        crate::release1_contracts::canonical_blocker_code_list(blockers.iter().map(String::as_str));
+    if canonical.is_empty() && !blockers.is_empty() {
+        return crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::UnsupportedBlockerCode,
+        )
+        .into_iter()
+        .collect();
+    }
+    canonical
+}
+
+fn db_first_activation_snapshot_validation_error(
+    snapshot: &crate::state_store::LauncherActivationSnapshot,
+) -> Option<String> {
+    if snapshot.source != "state_store" {
+        return Some(format!(
+            "authoritative launcher activation source must be `state_store`, got `{}`",
+            snapshot.source
+        ));
+    }
+    if snapshot.source_config_path.trim().is_empty() {
+        return Some("authoritative launcher activation source_config_path is empty".to_string());
+    }
+    if snapshot.source_config_digest.trim().is_empty() {
+        return Some("authoritative launcher activation source_config_digest is empty".to_string());
+    }
+    None
+}
+
+fn taskflow_docflow_seam_receipt_backed_check(
+    payload: &super::TaskflowConsumeBundlePayload,
+) -> serde_json::Value {
+    let total_receipts = payload.protocol_binding_registry["summary"]["total_receipts"]
+        .as_u64()
+        .unwrap_or(0);
+    serde_json::json!({
+        "status": if total_receipts > 0 { "pass" } else { "block" },
+        "receipt_backed": total_receipts > 0,
+        "total_receipts": total_receipts,
+        "surface": "vida taskflow protocol-binding status --json",
+        "notes": "TaskFlow->DocFlow seam closure admission requires receipt-backed protocol-binding evidence.",
+    })
 }
 
 fn build_taskflow_agent_system_snapshot(
@@ -363,6 +536,8 @@ fn build_taskflow_agent_system_snapshot(
         ["selection_policy"]["rule"]
         .as_str()
         .unwrap_or("capability_first_then_score_guard_then_cheapest_tier");
+    let max_parallel_agents =
+        normalize_agent_system_max_parallel_agents(&activation_bundle["agent_system"]);
 
     serde_json::json!({
         "materialization_mode": "config_materialized_runtime_projection",
@@ -379,7 +554,7 @@ fn build_taskflow_agent_system_snapshot(
         "agent_system": {
             "mode": activation_bundle["agent_system"]["mode"],
             "state_owner": activation_bundle["agent_system"]["state_owner"],
-            "max_parallel_agents": activation_bundle["agent_system"]["max_parallel_agents"],
+            "max_parallel_agents": max_parallel_agents,
             "autonomous_enabled": activation_bundle["autonomous_execution"]["enabled"],
         },
         "carriers": carriers,
@@ -392,4 +567,456 @@ fn build_taskflow_agent_system_snapshot(
         },
         "dispatch_aliases": activation_bundle["codex_multi_agent"]["dispatch_aliases"],
     })
+}
+
+fn normalize_agent_system_max_parallel_agents(agent_system: &serde_json::Value) -> u64 {
+    agent_system["max_parallel_agents"]
+        .as_u64()
+        .filter(|value| *value > 0)
+        .unwrap_or(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_taskflow_agent_system_snapshot, consume_bundle_check_next_actions,
+        normalize_agent_system_max_parallel_agents, normalize_consume_bundle_blocker_codes,
+    };
+
+    #[test]
+    fn normalize_agent_system_max_parallel_agents_uses_positive_numeric_value() {
+        let agent_system = serde_json::json!({
+            "max_parallel_agents": 4
+        });
+
+        assert_eq!(normalize_agent_system_max_parallel_agents(&agent_system), 4);
+    }
+
+    #[test]
+    fn normalize_agent_system_max_parallel_agents_falls_back_when_value_is_not_positive_number() {
+        let zero_value = serde_json::json!({
+            "max_parallel_agents": 0
+        });
+        let string_value = serde_json::json!({
+            "max_parallel_agents": "4"
+        });
+        let missing_value = serde_json::json!({});
+
+        assert_eq!(normalize_agent_system_max_parallel_agents(&zero_value), 1);
+        assert_eq!(normalize_agent_system_max_parallel_agents(&string_value), 1);
+        assert_eq!(
+            normalize_agent_system_max_parallel_agents(&missing_value),
+            1
+        );
+    }
+
+    #[test]
+    fn agent_system_snapshot_exposes_normalized_parallel_agents_value() {
+        let activation_bundle = serde_json::json!({
+            "agent_system": {
+                "mode": "native",
+                "state_owner": "orchestrator_only",
+                "max_parallel_agents": 0
+            },
+            "autonomous_execution": {
+                "enabled": true
+            },
+            "codex_multi_agent": {
+                "roles": [],
+                "worker_strategy": {
+                    "selection_policy": {
+                        "rule": "capability_first_then_score_guard_then_cheapest_tier"
+                    },
+                    "agents": {},
+                    "store_path": ".vida/data/state/agents.json",
+                    "scorecards_path": ".vida/data/state/agent-scorecards.json"
+                },
+                "dispatch_aliases": {}
+            }
+        });
+
+        let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
+        assert_eq!(snapshot["agent_system"]["max_parallel_agents"], 1);
+    }
+
+    #[test]
+    fn agent_system_snapshot_uses_default_selection_rule_when_missing() {
+        let activation_bundle = serde_json::json!({
+            "agent_system": {
+                "mode": "native",
+                "state_owner": "orchestrator_only",
+                "max_parallel_agents": 4
+            },
+            "autonomous_execution": {
+                "enabled": true
+            },
+            "codex_multi_agent": {
+                "roles": [],
+                "worker_strategy": {
+                    "selection_policy": {},
+                    "agents": {},
+                    "store_path": ".vida/data/state/agents.json",
+                    "scorecards_path": ".vida/data/state/agent-scorecards.json"
+                },
+                "dispatch_aliases": {}
+            }
+        });
+
+        let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
+        assert_eq!(
+            snapshot["agent_model"]["selection_rule"],
+            "capability_first_then_score_guard_then_cheapest_tier"
+        );
+    }
+
+    #[test]
+    fn agent_system_snapshot_runtime_roles_are_sorted_and_deduped() {
+        let activation_bundle = serde_json::json!({
+            "agent_system": {
+                "mode": "native",
+                "state_owner": "orchestrator_only",
+                "max_parallel_agents": 4
+            },
+            "autonomous_execution": {
+                "enabled": true
+            },
+            "codex_multi_agent": {
+                "roles": [
+                    {
+                        "role_id": "a",
+                        "rate": 2,
+                        "runtime_roles": ["review", "implementation"],
+                        "task_classes": [],
+                        "default_runtime_role": "implementation",
+                        "reasoning_band": "medium",
+                        "model_reasoning_effort": "medium"
+                    },
+                    {
+                        "role_id": "b",
+                        "rate": 1,
+                        "runtime_roles": ["implementation", "verification"],
+                        "task_classes": [],
+                        "default_runtime_role": "verification",
+                        "reasoning_band": "low",
+                        "model_reasoning_effort": "low"
+                    }
+                ],
+                "worker_strategy": {
+                    "selection_policy": {
+                        "rule": "capability_first_then_score_guard_then_cheapest_tier"
+                    },
+                    "agents": {},
+                    "store_path": ".vida/data/state/agents.json",
+                    "scorecards_path": ".vida/data/state/agent-scorecards.json"
+                },
+                "dispatch_aliases": {}
+            }
+        });
+
+        let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
+        assert_eq!(
+            snapshot["runtime_roles"],
+            serde_json::json!(["implementation", "review", "verification"])
+        );
+    }
+
+    #[test]
+    fn agent_system_snapshot_carriers_are_sorted_by_rate_then_id() {
+        let activation_bundle = serde_json::json!({
+            "agent_system": {
+                "mode": "native",
+                "state_owner": "orchestrator_only",
+                "max_parallel_agents": 4
+            },
+            "autonomous_execution": {
+                "enabled": true
+            },
+            "codex_multi_agent": {
+                "roles": [
+                    {
+                        "role_id": "z-role",
+                        "rate": 3,
+                        "runtime_roles": ["implementation"],
+                        "task_classes": [],
+                        "default_runtime_role": "implementation",
+                        "reasoning_band": "medium",
+                        "model_reasoning_effort": "medium"
+                    },
+                    {
+                        "role_id": "a-role",
+                        "rate": 1,
+                        "runtime_roles": ["verification"],
+                        "task_classes": [],
+                        "default_runtime_role": "verification",
+                        "reasoning_band": "low",
+                        "model_reasoning_effort": "low"
+                    },
+                    {
+                        "role_id": "b-role",
+                        "rate": 1,
+                        "runtime_roles": ["review"],
+                        "task_classes": [],
+                        "default_runtime_role": "review",
+                        "reasoning_band": "low",
+                        "model_reasoning_effort": "low"
+                    }
+                ],
+                "worker_strategy": {
+                    "selection_policy": {
+                        "rule": "capability_first_then_score_guard_then_cheapest_tier"
+                    },
+                    "agents": {},
+                    "store_path": ".vida/data/state/agents.json",
+                    "scorecards_path": ".vida/data/state/agent-scorecards.json"
+                },
+                "dispatch_aliases": {}
+            }
+        });
+
+        let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
+        let carrier_ids = snapshot["carriers"]
+            .as_array()
+            .expect("carriers should be an array")
+            .iter()
+            .map(|row| row["carrier_id"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(carrier_ids, vec!["a-role", "b-role", "z-role"]);
+    }
+
+    #[test]
+    fn agent_system_snapshot_carriers_with_missing_rate_sort_after_numeric_rates() {
+        let activation_bundle = serde_json::json!({
+            "agent_system": {
+                "mode": "native",
+                "state_owner": "orchestrator_only",
+                "max_parallel_agents": 4
+            },
+            "autonomous_execution": {
+                "enabled": true
+            },
+            "codex_multi_agent": {
+                "roles": [
+                    {
+                        "role_id": "no-rate",
+                        "runtime_roles": ["implementation"],
+                        "task_classes": [],
+                        "default_runtime_role": "implementation",
+                        "reasoning_band": "medium",
+                        "model_reasoning_effort": "medium"
+                    },
+                    {
+                        "role_id": "fast",
+                        "rate": 1,
+                        "runtime_roles": ["verification"],
+                        "task_classes": [],
+                        "default_runtime_role": "verification",
+                        "reasoning_band": "low",
+                        "model_reasoning_effort": "low"
+                    }
+                ],
+                "worker_strategy": {
+                    "selection_policy": {
+                        "rule": "capability_first_then_score_guard_then_cheapest_tier"
+                    },
+                    "agents": {},
+                    "store_path": ".vida/data/state/agents.json",
+                    "scorecards_path": ".vida/data/state/agent-scorecards.json"
+                },
+                "dispatch_aliases": {}
+            }
+        });
+
+        let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
+        let carrier_ids = snapshot["carriers"]
+            .as_array()
+            .expect("carriers should be an array")
+            .iter()
+            .map(|row| row["carrier_id"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(carrier_ids, vec!["fast", "no-rate"]);
+    }
+
+    #[test]
+    fn agent_system_snapshot_runtime_roles_ignore_non_string_entries() {
+        let activation_bundle = serde_json::json!({
+            "agent_system": {
+                "mode": "native",
+                "state_owner": "orchestrator_only",
+                "max_parallel_agents": 4
+            },
+            "autonomous_execution": {
+                "enabled": true
+            },
+            "codex_multi_agent": {
+                "roles": [
+                    {
+                        "role_id": "mixed",
+                        "rate": 1,
+                        "runtime_roles": ["implementation", 42, null, "review"],
+                        "task_classes": [],
+                        "default_runtime_role": "implementation",
+                        "reasoning_band": "low",
+                        "model_reasoning_effort": "low"
+                    }
+                ],
+                "worker_strategy": {
+                    "selection_policy": {
+                        "rule": "capability_first_then_score_guard_then_cheapest_tier"
+                    },
+                    "agents": {},
+                    "store_path": ".vida/data/state/agents.json",
+                    "scorecards_path": ".vida/data/state/agent-scorecards.json"
+                },
+                "dispatch_aliases": {}
+            }
+        });
+
+        let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
+        assert_eq!(
+            snapshot["runtime_roles"],
+            serde_json::json!(["implementation", "review"])
+        );
+    }
+
+    #[test]
+    fn agent_system_snapshot_defaults_selection_rule_when_selection_policy_is_missing() {
+        let activation_bundle = serde_json::json!({
+            "agent_system": {
+                "mode": "native",
+                "state_owner": "orchestrator_only",
+                "max_parallel_agents": 4
+            },
+            "autonomous_execution": {
+                "enabled": true
+            },
+            "codex_multi_agent": {
+                "roles": [],
+                "worker_strategy": {
+                    "agents": {},
+                    "store_path": ".vida/data/state/agents.json",
+                    "scorecards_path": ".vida/data/state/agent-scorecards.json"
+                },
+                "dispatch_aliases": {}
+            }
+        });
+
+        let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
+        assert_eq!(
+            snapshot["agent_model"]["selection_rule"],
+            "capability_first_then_score_guard_then_cheapest_tier"
+        );
+    }
+
+    #[test]
+    fn agent_system_snapshot_carrier_sort_handles_missing_or_non_string_carrier_id() {
+        let activation_bundle = serde_json::json!({
+            "agent_system": {
+                "mode": "native",
+                "state_owner": "orchestrator_only",
+                "max_parallel_agents": 4
+            },
+            "autonomous_execution": {
+                "enabled": true
+            },
+            "codex_multi_agent": {
+                "roles": [
+                    {
+                        "role_id": 123,
+                        "rate": 1,
+                        "runtime_roles": ["implementation"],
+                        "task_classes": [],
+                        "default_runtime_role": "implementation",
+                        "reasoning_band": "low",
+                        "model_reasoning_effort": "low"
+                    },
+                    {
+                        "role_id": "named",
+                        "rate": 1,
+                        "runtime_roles": ["verification"],
+                        "task_classes": [],
+                        "default_runtime_role": "verification",
+                        "reasoning_band": "low",
+                        "model_reasoning_effort": "low"
+                    }
+                ],
+                "worker_strategy": {
+                    "selection_policy": {
+                        "rule": "capability_first_then_score_guard_then_cheapest_tier"
+                    },
+                    "agents": {},
+                    "store_path": ".vida/data/state/agents.json",
+                    "scorecards_path": ".vida/data/state/agent-scorecards.json"
+                },
+                "dispatch_aliases": {}
+            }
+        });
+
+        let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
+        let carrier_ids = snapshot["carriers"]
+            .as_array()
+            .expect("carriers should be an array")
+            .iter()
+            .map(|row| row["carrier_id"].clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            carrier_ids,
+            vec![serde_json::json!(123), serde_json::json!("named")]
+        );
+    }
+
+    #[test]
+    fn normalize_agent_system_max_parallel_agents_falls_back_for_negative_value() {
+        let negative_value = serde_json::json!({
+            "max_parallel_agents": -3
+        });
+
+        assert_eq!(
+            normalize_agent_system_max_parallel_agents(&negative_value),
+            1
+        );
+    }
+
+    #[test]
+    fn normalize_agent_system_max_parallel_agents_falls_back_for_null_value() {
+        let null_value = serde_json::json!({
+            "max_parallel_agents": null
+        });
+
+        assert_eq!(normalize_agent_system_max_parallel_agents(&null_value), 1);
+    }
+
+    #[test]
+    fn consume_bundle_blockers_normalize_to_canonical_release1_codes() {
+        let normalized = normalize_consume_bundle_blocker_codes(&[
+            " missing_protocol_binding_receipt ".to_string(),
+            "protocol_binding_not_runtime_ready".to_string(),
+            "missing_protocol_binding_receipt".to_string(),
+        ]);
+        assert_eq!(
+            normalized,
+            vec![
+                "missing_protocol_binding_receipt".to_string(),
+                "protocol_binding_not_runtime_ready".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn consume_bundle_blockers_fail_closed_when_only_unknown_codes_are_present() {
+        let normalized = normalize_consume_bundle_blocker_codes(&[
+            "unknown_blocker".to_string(),
+            "another_unknown".to_string(),
+        ]);
+        assert_eq!(normalized, vec!["unsupported_blocker_code".to_string()]);
+    }
+
+    #[test]
+    fn consume_bundle_next_actions_fall_back_for_unsupported_blocker_code() {
+        let actions =
+            consume_bundle_check_next_actions(&["unsupported_blocker_code".to_string()]);
+        assert_eq!(
+            actions,
+            vec!["Resolve consume-bundle-check blockers before closure packaging.".to_string()]
+        );
+    }
 }
