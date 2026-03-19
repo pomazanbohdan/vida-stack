@@ -1,96 +1,13 @@
 use std::process::ExitCode;
 
 use crate::release1_contracts::{classify_compatibility_boundary, CompatibilityBoundary};
+use crate::operator_contracts::{
+    canonical_release1_operator_contract_status, release1_operator_contracts_consistency_error,
+    shared_operator_output_contract_parity_error,
+};
 
 fn migration_requires_action(migration_state: &str) -> bool {
     !matches!(migration_state, "none_required" | "no_migration_required")
-}
-
-fn has_nonempty_string(value: &serde_json::Value) -> bool {
-    value
-        .as_str()
-        .map(|entry| !entry.trim().is_empty())
-        .unwrap_or(false)
-}
-
-fn retrieval_trust_signal(
-    source: Option<&str>,
-    latest_snapshot_path: Option<&str>,
-    latest_kind: Option<&str>,
-    protocol_binding_latest_receipt_id: Option<&str>,
-) -> Option<serde_json::Value> {
-    let source = source?;
-    let citation = latest_snapshot_path?;
-    let freshness = latest_kind?;
-    let acl = protocol_binding_latest_receipt_id?;
-    Some(serde_json::json!({
-        "source": source,
-        "citation": citation,
-        "freshness": freshness,
-        "acl": acl,
-    }))
-}
-
-fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> bool {
-    let snapshot_body = match std::fs::read_to_string(snapshot_path) {
-        Ok(body) => body,
-        Err(_) => return true,
-    };
-    let snapshot_json: serde_json::Value = match serde_json::from_str(&snapshot_body) {
-        Ok(value) => value,
-        Err(_) => return true,
-    };
-    let payload = &snapshot_json["payload"];
-    if payload.is_null() {
-        return true;
-    }
-
-    let canonical_registry_ok = payload["docflow_activation"]["evidence"]["registry"]["ok"]
-        .as_bool()
-        .is_some();
-    let canonical_check_ok = payload["docflow_activation"]["evidence"]["check"]["ok"]
-        .as_bool()
-        .is_some();
-    let canonical_readiness_verdict = has_nonempty_string(
-        &payload["docflow_activation"]["evidence"]["readiness"]["verdict"],
-    );
-    let canonical_closure_status = has_nonempty_string(&payload["closure_admission"]["status"]);
-    let canonical_closure_blockers =
-        payload["closure_admission"]["blockers"].as_array().is_some();
-    let canonical_top_level_operator_contract_parity = snapshot_json["status"]
-        == snapshot_json["operator_contracts"]["status"]
-        && snapshot_json["blocker_codes"] == snapshot_json["operator_contracts"]["blocker_codes"]
-        && snapshot_json["next_actions"] == snapshot_json["operator_contracts"]["next_actions"]
-        && snapshot_json["artifact_refs"] == snapshot_json["operator_contracts"]["artifact_refs"];
-    let canonical_operator_contract = has_nonempty_string(&snapshot_json["operator_contracts"]["contract_id"])
-        && has_nonempty_string(&snapshot_json["operator_contracts"]["schema_version"])
-        && has_nonempty_string(&snapshot_json["operator_contracts"]["status"])
-        && snapshot_json["operator_contracts"]["blocker_codes"]
-            .as_array()
-            .is_some()
-        && snapshot_json["operator_contracts"]["next_actions"]
-            .as_array()
-            .is_some()
-        && snapshot_json["operator_contracts"]["artifact_refs"].is_object()
-        && has_nonempty_string(&snapshot_json["operator_contracts"]["artifact_refs"]["retrieval_trust_signal"]["source"])
-        && has_nonempty_string(&snapshot_json["operator_contracts"]["artifact_refs"]["retrieval_trust_signal"]["citation"])
-        && has_nonempty_string(&snapshot_json["operator_contracts"]["artifact_refs"]["retrieval_trust_signal"]["freshness"])
-        && has_nonempty_string(&snapshot_json["operator_contracts"]["artifact_refs"]["retrieval_trust_signal"]["acl"]);
-
-    !(canonical_registry_ok
-        && canonical_check_ok
-        && canonical_readiness_verdict
-        && canonical_closure_status
-        && canonical_closure_blockers
-        && canonical_top_level_operator_contract_parity
-        && canonical_operator_contract)
-}
-
-fn is_unsupported_architecture_reserved_workflow_boundary(value: &str) -> bool {
-    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
-    normalized.contains("architecture_reserved")
-        || normalized.contains("unsupported_boundary")
-        || normalized.contains("unsupported_workflow_boundary")
 }
 
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER: &str =
@@ -102,49 +19,66 @@ const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER: &str =
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
     "Run `vida taskflow run-graph dispatch --json` to materialize run-graph dispatch receipt evidence before operator handoff.";
 
-fn release1_operator_contracts_consistency_error(
-    status: &str,
-    blocker_codes: &[String],
-    next_actions: &[String],
-) -> Option<String> {
-    match status {
-        "ok" if !blocker_codes.is_empty() => Some(
-            "operator contract inconsistency: status=ok must not include blocker_codes"
-                .to_string(),
-        ),
-        "ok" if !next_actions.is_empty() => Some(
-            "operator contract inconsistency: status=ok must not include next_actions".to_string(),
-        ),
-        "ok" => None,
-        "blocked" if blocker_codes.is_empty() => Some(
-            "operator contract inconsistency: status=blocked requires blocker_codes".to_string(),
-        ),
-        "blocked" if next_actions.is_empty() => Some(
-            "operator contract inconsistency: status=blocked requires next_actions".to_string(),
-        ),
-        "blocked" => None,
-        other => Some(format!(
-            "operator contract inconsistency: unsupported status `{other}`"
-        )),
-    }
+fn is_unsupported_architecture_reserved_workflow_boundary(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "unsupported" | "architecture_reserved" | "unsupported_architecture_reserved"
+    )
 }
 
-fn shared_operator_output_contract_parity_error(summary_json: &serde_json::Value) -> Option<&'static str> {
-    let shared = &summary_json["shared_fields"];
-    let contracts = &summary_json["operator_contracts"];
-    if summary_json["status"] != contracts["status"]
-        || summary_json["blocker_codes"] != contracts["blocker_codes"]
-        || summary_json["next_actions"] != contracts["next_actions"]
-        || summary_json["status"] != shared["status"]
-        || summary_json["blocker_codes"] != shared["blocker_codes"]
-        || summary_json["next_actions"] != shared["next_actions"]
-    {
-        return Some(
-            "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch",
-        );
-    }
-    None
+fn retrieval_trust_signal(
+    source: Option<&str>,
+    citation: Option<&str>,
+    freshness: Option<&str>,
+    acl: Option<&str>,
+) -> Option<serde_json::Value> {
+    Some(serde_json::json!({
+        "source": source?,
+        "citation": citation?,
+        "freshness": freshness?,
+        "acl": acl?,
+    }))
 }
+
+fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> bool {
+    let payload = match std::fs::read_to_string(snapshot_path) {
+        Ok(payload) => payload,
+        Err(_) => return true,
+    };
+    let summary_json = match serde_json::from_str::<serde_json::Value>(&payload) {
+        Ok(json) => json,
+        Err(_) => return true,
+    };
+    if shared_operator_output_contract_parity_error(&summary_json).is_some() {
+        return true;
+    }
+    let operator_contracts = match summary_json.get("operator_contracts") {
+        Some(value) => value,
+        None => return true,
+    };
+    let status_ok =
+        canonical_release1_operator_contract_status(&summary_json["status"]).is_some();
+    let operator_status_ok =
+        canonical_release1_operator_contract_status(&operator_contracts["status"]).is_some();
+    if !status_ok || !operator_status_ok {
+        return true;
+    }
+    let blockers_ok = operator_contracts
+        .get("blocker_codes")
+        .and_then(|value| value.as_array())
+        .is_some();
+    let next_actions_ok = operator_contracts
+        .get("next_actions")
+        .and_then(|value| value.as_array())
+        .is_some();
+    let trust_signal_ok = operator_contracts
+        .get("artifact_refs")
+        .and_then(|refs| refs.get("retrieval_trust_signal"))
+        .is_some_and(|value| value.is_object());
+    !(blockers_ok && next_actions_ok && trust_signal_ok)
+}
+
+
 
 pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     let state_dir = args
@@ -383,11 +317,10 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     operator_blocker_codes
                         .push("missing_retrieval_trust_operator_evidence".to_string());
                 }
-                if runtime_consumption.latest_kind.as_deref() == Some("final")
-                    && runtime_consumption
-                        .latest_snapshot_path
-                        .as_deref()
-                        .is_some_and(final_snapshot_missing_release_admission_evidence)
+                if runtime_consumption
+                    .latest_snapshot_path
+                    .as_deref()
+                    .is_some_and(final_snapshot_missing_release_admission_evidence)
                 {
                     operator_blocker_codes
                         .push("incomplete_release_admission_operator_evidence".to_string());
@@ -414,7 +347,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     );
                 }
                 let operator_status = if operator_blocker_codes.is_empty() {
-                    "ok"
+                    "pass"
                 } else {
                     "blocked"
                 };
@@ -519,21 +452,15 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 }
                 if operator_blocker_codes
                     .iter()
-                    .any(|code| {
-                        code == UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER
-                    })
+                    .any(|code| code == UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER)
                 {
                     operator_next_actions.push(
-                        UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION
-                            .to_string(),
+                        UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION.to_string(),
                     );
                 }
-                if operator_blocker_codes
-                    .iter()
-                    .any(|code| {
-                        code == MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER
-                    })
-                {
+                if operator_blocker_codes.iter().any(|code| {
+                    code == MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER
+                }) {
                     operator_next_actions.push(
                         MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION
                             .to_string(),
@@ -794,5 +721,336 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             eprintln!("Failed to open authoritative state store: {error}");
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        final_snapshot_missing_release_admission_evidence,
+        release1_operator_contracts_consistency_error,
+        shared_operator_output_contract_parity_error,
+    };
+    use crate::operator_contracts::canonical_release1_operator_contract_status;
+
+    #[test]
+    fn release1_operator_contracts_consistency_accepts_blocked_with_actions() {
+        let blocker_codes = vec!["recovery_readiness_blocked".to_string()];
+        let next_actions =
+            vec!["Run `vida taskflow run-graph recover --json` before resume.".to_string()];
+        assert_eq!(
+            release1_operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
+            None
+        );
+    }
+
+    #[test]
+    fn release1_operator_contracts_consistency_rejects_blocked_without_actions() {
+        let blocker_codes = vec!["recovery_readiness_blocked".to_string()];
+        assert_eq!(
+            release1_operator_contracts_consistency_error("blocked", &blocker_codes, &[]),
+            Some(
+                "operator contract inconsistency: status=blocked requires next_actions".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn release1_operator_contracts_consistency_rejects_unknown_status() {
+        assert_eq!(
+            release1_operator_contracts_consistency_error("unknown", &[], &[]),
+            Some("operator contract inconsistency: unsupported status `unknown`".to_string())
+        );
+    }
+
+    #[test]
+    fn release1_operator_contracts_consistency_accepts_ok_compat_without_blockers() {
+        assert_eq!(
+            release1_operator_contracts_consistency_error("ok", &[], &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn release1_operator_contracts_consistency_normalizes_case_and_whitespace_status_drift() {
+        assert_eq!(
+            release1_operator_contracts_consistency_error(" PASS ", &[], &[]),
+            None
+        );
+        assert_eq!(
+            release1_operator_contracts_consistency_error(
+                " blocked ",
+                &["recovery_readiness_blocked".to_string()],
+                &["Run `vida taskflow run-graph recover --json` before resume.".to_string()],
+            ),
+            None
+        );
+        assert_eq!(
+            release1_operator_contracts_consistency_error(" Ok ", &[], &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn canonical_release1_operator_contract_status_accepts_release1_and_legacy_statuses() {
+        assert_eq!(
+            canonical_release1_operator_contract_status(&serde_json::json!("pass")),
+            Some("pass")
+        );
+        assert_eq!(
+            canonical_release1_operator_contract_status(&serde_json::json!("blocked")),
+            Some("blocked")
+        );
+        assert_eq!(
+            canonical_release1_operator_contract_status(&serde_json::json!("admit")),
+            Some("pass")
+        );
+        assert_eq!(
+            canonical_release1_operator_contract_status(&serde_json::json!("block")),
+            Some("blocked")
+        );
+        assert_eq!(
+            canonical_release1_operator_contract_status(&serde_json::json!(" admit ")),
+            Some("pass")
+        );
+        assert_eq!(
+            canonical_release1_operator_contract_status(&serde_json::json!(" block ")),
+            Some("blocked")
+        );
+        assert_eq!(
+            canonical_release1_operator_contract_status(&serde_json::json!("ok")),
+            Some("pass")
+        );
+        assert_eq!(
+            canonical_release1_operator_contract_status(&serde_json::json!("blockk")),
+            None
+        );
+    }
+
+    #[test]
+    fn final_snapshot_missing_release_admission_evidence_accepts_canonical_blocked_snapshot() {
+        let snapshot_path = std::env::temp_dir().join(format!(
+            "vida-doctor-final-snapshot-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        let snapshot_path_str = snapshot_path
+            .to_str()
+            .expect("temp snapshot path should be valid utf-8");
+        let operator_contracts = serde_json::json!({
+            "contract_id": "release-1-operator-contracts",
+            "schema_version": "release-1-v1",
+            "status": "blocked",
+            "blocker_codes": ["incomplete_release_admission_operator_evidence"],
+            "next_actions": ["Regenerate consume-final evidence so canonical risk/register, closure/readiness, and release-1 operator-contract fields are complete."],
+            "artifact_refs": {
+                "retrieval_trust_signal": {
+                    "source": "runtime_consumption_snapshot_index",
+                    "citation": "runtime-consumption/final-healthy.json",
+                    "freshness": "final",
+                    "acl": "protocol-binding-receipt-id"
+                }
+            }
+        });
+        std::fs::write(
+            &snapshot_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume final",
+                "status": "blocked",
+                "blocker_codes": ["incomplete_release_admission_operator_evidence"],
+                "next_actions": ["Regenerate consume-final evidence so canonical risk/register, closure/readiness, and release-1 operator-contract fields are complete."],
+                "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                "payload": {
+                    "docflow_activation": {
+                        "evidence": {
+                            "registry": {"ok": true},
+                            "check": {"ok": true},
+                            "readiness": {"verdict": "ready"},
+                        }
+                    },
+                    "closure_admission": {
+                        "status": "blocked",
+                        "admitted": false,
+                        "blockers": ["closure_admission_block"],
+                        "proof_surfaces": ["vida taskflow consume final"],
+                    }
+                },
+                "operator_contracts": operator_contracts,
+            })
+            .to_string(),
+        )
+        .expect("final snapshot should be writable");
+
+        assert!(
+            !final_snapshot_missing_release_admission_evidence(snapshot_path_str),
+            "canonical blocked final snapshot should satisfy release-admission evidence"
+        );
+
+        let _ = std::fs::remove_file(snapshot_path);
+    }
+
+    #[test]
+    fn shared_operator_output_contract_parity_accepts_mirrored_payload() {
+        let summary_json = serde_json::json!({
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "shared_fields": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": []
+            },
+            "operator_contracts": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": []
+            }
+        });
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            None
+        );
+    }
+
+    #[test]
+    fn shared_operator_output_contract_parity_rejects_mismatch() {
+        let summary_json = serde_json::json!({
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "shared_fields": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": []
+            },
+            "operator_contracts": {
+                "status": "blocked",
+                "blocker_codes": ["protocol_binding_blocking_issues"],
+                "next_actions": ["Run `vida taskflow protocol-binding check --json` and clear blockers."]
+            }
+        });
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+        );
+    }
+
+    #[test]
+    fn shared_operator_output_contract_parity_accepts_status_case_and_whitespace_drift() {
+        let summary_json = serde_json::json!({
+            "status": " PASS ",
+            "blocker_codes": [],
+            "next_actions": [],
+            "shared_fields": {
+                "status": " ok ",
+                "blocker_codes": [],
+                "next_actions": []
+            },
+            "operator_contracts": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": []
+            }
+        });
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            None
+        );
+    }
+
+    #[test]
+    fn shared_operator_output_contract_parity_accepts_next_actions_case_and_whitespace_drift() {
+        let summary_json = serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["recovery_readiness_blocked"],
+            "next_actions": ["  Run `vida taskflow run-graph recover --json` before resume.  "],
+            "shared_fields": {
+                "status": "blocked",
+                "blocker_codes": ["recovery_readiness_blocked"],
+                "next_actions": ["run `vida taskflow run-graph recover --json` before resume."]
+            },
+            "operator_contracts": {
+                "status": "blocked",
+                "blocker_codes": ["recovery_readiness_blocked"],
+                "next_actions": ["RUN `VIDA TASKFLOW RUN-GRAPH RECOVER --JSON` BEFORE RESUME."]
+            }
+        });
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            None
+        );
+    }
+
+    #[test]
+    fn shared_operator_output_contract_parity_rejects_noncanonical_mirrored_string_entries() {
+        let summary_json = serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": [" pending_lane_evidence "],
+            "next_actions": [" "],
+            "shared_fields": {
+                "status": "blocked",
+                "blocker_codes": [" pending_lane_evidence "],
+                "next_actions": [" "]
+            },
+            "operator_contracts": {
+                "status": "blocked",
+                "blocker_codes": [" pending_lane_evidence "],
+                "next_actions": [" "]
+            }
+        });
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+        );
+    }
+
+    #[test]
+    fn shared_operator_output_contract_parity_rejects_case_drifted_blocker_codes() {
+        let summary_json = serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["MISSING_PROTOCOL_BINDING_RECEIPT"],
+            "next_actions": ["Run `vida taskflow protocol-binding sync --json`"],
+            "shared_fields": {
+                "status": "blocked",
+                "blocker_codes": ["MISSING_PROTOCOL_BINDING_RECEIPT"],
+                "next_actions": ["Run `vida taskflow protocol-binding sync --json`"]
+            },
+            "operator_contracts": {
+                "status": "blocked",
+                "blocker_codes": ["MISSING_PROTOCOL_BINDING_RECEIPT"],
+                "next_actions": ["Run `vida taskflow protocol-binding sync --json`"]
+            }
+        });
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+        );
+    }
+
+    #[test]
+    fn shared_operator_output_contract_parity_rejects_whitespace_only_mirrored_string_entries() {
+        let summary_json = serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["   "],
+            "next_actions": ["   "],
+            "shared_fields": {
+                "status": "blocked",
+                "blocker_codes": ["   "],
+                "next_actions": ["   "]
+            },
+            "operator_contracts": {
+                "status": "blocked",
+                "blocker_codes": ["   "],
+                "next_actions": ["   "]
+            }
+        });
+
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+        );
     }
 }

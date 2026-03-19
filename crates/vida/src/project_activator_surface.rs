@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use super::*;
+use super::activation_status::canonical_activation_status;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ProjectActivationAnswers {
@@ -55,16 +56,18 @@ fn set_yaml_scalar_in_top_level_section(
 
     if let Some(section_index) = section_index {
         let mut section_end = lines.len();
-        for index in (section_index + 1)..lines.len() {
-            let trimmed = lines[index].trim();
-            if !trimmed.is_empty() && !trimmed.starts_with('#') && !lines[index].starts_with(' ') {
+        for (index, line) in lines.iter().enumerate().skip(section_index + 1) {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() && !trimmed.starts_with('#') && !line.starts_with(' ') {
                 section_end = index;
                 break;
             }
         }
-        for index in (section_index + 1)..section_end {
-            if lines[index].trim_start().starts_with(&key_prefix) && lines[index].starts_with("  ")
-            {
+        for (index, line) in lines.iter().enumerate().skip(section_index + 1) {
+            if index >= section_end {
+                break;
+            }
+            if line.trim_start().starts_with(&key_prefix) && line.starts_with("  ") {
                 lines[index] = format!("  {key}: {rendered}");
                 return format!("{}\n", lines.join("\n"));
             }
@@ -267,7 +270,7 @@ fn merge_registry_projection(
         serde_yaml::Value::String(key.to_string()),
         serde_yaml::Value::Sequence(merged_rows),
     );
-    if !merged_mapping.contains_key(&serde_yaml::Value::String("version".to_string())) {
+    if !merged_mapping.contains_key(serde_yaml::Value::String("version".to_string())) {
         merged_mapping.insert(
             serde_yaml::Value::String("version".to_string()),
             serde_yaml::Value::Number(serde_yaml::Number::from(1)),
@@ -1417,7 +1420,7 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
 
     serde_json::json!({
         "surface": "vida project-activator",
-        "status": if activation_pending { "pending_activation" } else { "ready_enough_for_normal_work" },
+        "status": if activation_pending { "pending" } else { "ready_enough_for_normal_work" },
         "activation_pending": activation_pending,
         "project_root": project_root.display().to_string(),
         "project_shape": detect_project_shape(project_root),
@@ -1570,16 +1573,7 @@ pub(crate) fn canonical_project_activation_status_truth(
 ) -> ProjectActivationStatusTruth {
     let view = build_project_activator_view(project_root);
     let activation_pending = view["activation_pending"].as_bool().unwrap_or(true);
-    let status = view["status"]
-        .as_str()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| {
-            if activation_pending {
-                "pending_activation".to_string()
-            } else {
-                "ready_enough_for_normal_work".to_string()
-            }
-        });
+    let status = canonical_activation_status(view["status"].as_str(), activation_pending).to_string();
     let next_steps = view["next_steps"]
         .as_array()
         .map(|items| {
@@ -1617,7 +1611,6 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         || args.reasoning_language.is_some()
         || args.documentation_language.is_some()
         || args.todo_protocol_language.is_some();
-    let mut activation_state_dir: Option<std::path::PathBuf> = None;
     let mut activation_store: Option<super::StateStore> = None;
     if activation_mutation_requested {
         let state_dir = args
@@ -1626,7 +1619,6 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
             .unwrap_or_else(super::state_store::default_state_dir);
         match super::StateStore::open(state_dir.clone()).await {
             Ok(store) => {
-                activation_state_dir = Some(state_dir);
                 activation_store = Some(store);
             }
             Err(error) => {
@@ -1720,13 +1712,10 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
     };
     let mut activation_truth_sync = None;
     if activation_mutation_requested {
-        let state_dir = activation_state_dir.as_ref().expect(
-            "activation state dir should be captured when activation mutation is requested",
-        );
         let store = activation_store
             .as_ref()
             .expect("activation store should be initialized before activation mutation");
-        match super::sync_launcher_activation_snapshot(&store).await {
+        match super::sync_launcher_activation_snapshot(store).await {
             Ok(snapshot) => {
                 let read_back = match store.read_launcher_activation_snapshot().await {
                     Ok(current) => current,
@@ -1962,18 +1951,18 @@ fn resolve_project_activation_answers(
     let shared_language = trimmed_non_empty(args.language.as_deref());
     let user_communication_language =
         trimmed_non_empty(args.user_communication_language.as_deref())
-            .or_else(|| shared_language.clone())
+            .or(shared_language.clone())
             .or(current_user_communication_language)?;
     let reasoning_language = trimmed_non_empty(args.reasoning_language.as_deref())
-        .or_else(|| shared_language.clone())
+        .or(shared_language.clone())
         .or(current_reasoning_language)
         .unwrap_or_else(|| user_communication_language.clone());
     let documentation_language = trimmed_non_empty(args.documentation_language.as_deref())
-        .or_else(|| shared_language.clone())
+        .or(shared_language.clone())
         .or(current_documentation_language)
         .unwrap_or_else(|| user_communication_language.clone());
     let todo_protocol_language = trimmed_non_empty(args.todo_protocol_language.as_deref())
-        .or_else(|| shared_language)
+        .or(shared_language)
         .or(current_todo_protocol_language)
         .unwrap_or_else(|| user_communication_language.clone());
     let project_title = inferred_project_title(&project_id, args.project_name.as_deref());
@@ -2286,8 +2275,11 @@ pub(crate) fn merge_project_activation_into_init_view(
     let activation_pending = project_activation_view["activation_pending"]
         .as_bool()
         .unwrap_or(true);
+    let canonical_status = canonical_activation_status(
+        project_activation_view["status"].as_str(),
+        activation_pending,
+    );
     if activation_pending {
-        init_view["status"] = serde_json::Value::String("pending_activation".to_string());
         let mut minimum_commands = vec![
             serde_json::Value::String("vida project-activator --json".to_string()),
             serde_json::Value::String("vida docflow check --profile active-canon".to_string()),
@@ -2307,6 +2299,8 @@ pub(crate) fn merge_project_activation_into_init_view(
                 serde_json::Value::String("blocked_during_pending_activation".to_string());
         }
     }
+    init_view["status"] = serde_json::Value::String(canonical_status.to_string());
+
     init_view["project_activation"] = serde_json::json!({
         "status": project_activation_view["status"],
         "activation_pending": project_activation_view["activation_pending"],
@@ -2393,4 +2387,102 @@ pub(crate) fn write_project_activation_receipt(
             .display()
             .to_string(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::activation_status::canonical_activation_status;
+    use super::merge_project_activation_into_init_view;
+    use serde_json::json;
+
+    #[test]
+    fn canonical_project_activation_status_normalizes_pending_compat_to_pending() {
+        assert_eq!(
+            canonical_activation_status(Some("pending_activation"), true),
+            "pending"
+        );
+        assert_eq!(
+            canonical_activation_status(Some("pending_activation"), false),
+            "pending"
+        );
+        assert_eq!(
+            canonical_activation_status(Some("pending"), false),
+            "pending"
+        );
+        assert_eq!(
+            canonical_activation_status(Some("ready_enough_for_normal_work"), false),
+            "ready_enough_for_normal_work"
+        );
+        assert_eq!(
+            canonical_activation_status(Some("unexpected-status"), false),
+            "ready_enough_for_normal_work"
+        );
+        assert_eq!(canonical_activation_status(None, true), "pending");
+        assert_eq!(
+            canonical_activation_status(None, false),
+            "ready_enough_for_normal_work"
+        );
+    }
+
+    #[test]
+    fn canonical_project_activation_status_fails_closed_for_case_and_whitespace_drift() {
+        assert_eq!(
+            canonical_activation_status(Some(" PENDING_ACTIVATION "), false),
+            "pending"
+        );
+        assert_eq!(
+            canonical_activation_status(Some(" READY_ENOUGH_FOR_NORMAL_WORK "), false),
+            "ready_enough_for_normal_work"
+        );
+        assert_eq!(
+            canonical_activation_status(Some(" unexpected-status "), false),
+            "ready_enough_for_normal_work"
+        );
+    }
+
+    #[test]
+    fn merge_project_activation_into_init_view_emits_canonical_status() {
+        let init_view = serde_json::json!({
+            "status": "ready_enough_for_normal_work",
+            "minimum_commands": [],
+        });
+        let project_activation_view = json!({
+            "status": "pending_activation",
+            "activation_pending": true,
+            "interview": {
+                "one_shot_example": "vida docflow check --profile active-canon",
+                "required_inputs": [],
+            },
+            "project_shape": {},
+            "triggers": {},
+            "activation_algorithm": {},
+            "normal_work_defaults": {},
+            "host_environment": {},
+            "next_steps": [],
+        });
+
+        let merged = merge_project_activation_into_init_view(init_view, &project_activation_view);
+        assert_eq!(merged["status"], "pending");
+        assert!(
+            merged["execution_gate"]["activation_pending"]
+                .as_bool()
+                .expect("execution gate activation_pending should exist")
+        );
+        assert_eq!(
+            merged["execution_gate"]["taskflow_admitted"],
+            serde_json::Value::Bool(false)
+        );
+        assert_eq!(
+            merged["minimum_commands"][0],
+            "vida docflow check --profile active-canon"
+        );
+        assert_eq!(
+            merged["project_activation"]["status"],
+            project_activation_view["status"]
+        );
+        assert_eq!(
+            merged["project_activation"]["activation_pending"],
+            project_activation_view["activation_pending"]
+        );
+    }
 }

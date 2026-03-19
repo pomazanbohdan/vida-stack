@@ -10,10 +10,7 @@ pub(crate) fn print_surface_json<T: Serialize + ?Sized>(
         return false;
     }
 
-    println!(
-        "{}",
-        serde_json::to_string_pretty(value).expect(context)
-    );
+    println!("{}", serde_json::to_string_pretty(value).expect(context));
     true
 }
 
@@ -35,10 +32,10 @@ pub(crate) fn print_surface_line(render: RenderMode, label: &str, value: &str) {
 
 pub(crate) fn print_surface_ok(render: RenderMode, label: &str, value: &str) {
     match render {
-        RenderMode::Plain => println!("{label}: ok ({value})"),
-        RenderMode::Color => println!("\x1b[1;34m{label}\x1b[0m: \x1b[1;32mok\x1b[0m ({value})"),
+        RenderMode::Plain => println!("{label}: pass ({value})"),
+        RenderMode::Color => println!("\x1b[1;34m{label}\x1b[0m: \x1b[1;32mpass\x1b[0m ({value})"),
         RenderMode::ColorEmoji => {
-            println!("✅ \x1b[1;34m{label}\x1b[0m: \x1b[1;32mok\x1b[0m ({value})")
+            println!("✅ \x1b[1;34m{label}\x1b[0m: \x1b[1;32mpass\x1b[0m ({value})")
         }
     }
 }
@@ -53,7 +50,9 @@ pub(crate) fn print_root_help() {
     println!();
     println!("Root commands:");
     println!("  init      bootstrap framework carriers into the current project");
-    println!("  boot      initialize authoritative state and instruction/framework-memory surfaces");
+    println!(
+        "  boot      initialize authoritative state and instruction/framework-memory surfaces"
+    );
     println!("  orchestrator-init  render the compiled startup view for the orchestrator lane");
     println!(
         "  agent-init         render the bounded startup view or packet activation view for a worker/agent lane"

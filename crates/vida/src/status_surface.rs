@@ -8,52 +8,28 @@ use crate::{
     StatusArgs,
 };
 
+use super::activation_status::canonical_activation_status;
+use crate::operator_contracts::{
+    release1_operator_contracts_consistency_error, shared_operator_output_contract_parity_error,
+};
 fn migration_requires_action(migration_state: &str) -> bool {
     !matches!(migration_state, "none_required" | "no_migration_required")
 }
 
-fn release1_operator_contracts_consistency_error(
-    status: &str,
-    blocker_codes: &[String],
-    next_actions: &[String],
-) -> Option<String> {
-    match status {
-        "ok" if !blocker_codes.is_empty() => Some(
-            "operator contract inconsistency: status=ok must not include blocker_codes"
-                .to_string(),
-        ),
-        "ok" if !next_actions.is_empty() => Some(
-            "operator contract inconsistency: status=ok must not include next_actions".to_string(),
-        ),
-        "ok" => None,
-        "blocked" if blocker_codes.is_empty() => Some(
-            "operator contract inconsistency: status=blocked requires blocker_codes".to_string(),
-        ),
-        "blocked" if next_actions.is_empty() => Some(
-            "operator contract inconsistency: status=blocked requires next_actions".to_string(),
-        ),
-        "blocked" => None,
-        other => Some(format!(
-            "operator contract inconsistency: unsupported status `{other}`"
-        )),
-    }
+fn run_graph_latest_snapshot_inconsistent_next_action() -> &'static str {
+    "Rebuild the latest run-graph evidence by rerunning `vida taskflow run-graph dispatch --json` and then recheck `vida status --json` once status, recovery, checkpoint, gate, and dispatch receipt share the same run_id."
 }
 
-fn shared_operator_output_contract_parity_error(summary_json: &serde_json::Value) -> Option<&'static str> {
-    let shared = &summary_json["shared_fields"];
-    let contracts = &summary_json["operator_contracts"];
-    if summary_json["status"] != contracts["status"]
-        || summary_json["blocker_codes"] != contracts["blocker_codes"]
-        || summary_json["next_actions"] != contracts["next_actions"]
-        || summary_json["status"] != shared["status"]
-        || summary_json["blocker_codes"] != shared["blocker_codes"]
-        || summary_json["next_actions"] != shared["next_actions"]
-    {
-        return Some(
-            "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch",
-        );
-    }
-    None
+fn run_graph_latest_dispatch_receipt_signal_ambiguous_next_action() -> &'static str {
+    "Rebuild the latest run-graph dispatch receipt with `vida taskflow run-graph dispatch --json` so lane_status and dispatch_status are canonical and aligned before trusting the operator signal."
+}
+
+fn run_graph_latest_dispatch_receipt_summary_inconsistent_next_action() -> &'static str {
+    "Refresh the latest run-graph dispatch receipt summary before rerunning `vida status --json` so the latest status and dispatch receipt share the same run_id."
+}
+
+fn run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action() -> &'static str {
+    "Refresh the latest checkpoint evidence for the run graph before rerunning `vida status --json` so checkpoint rows and dispatch receipt evidence share the same run_id."
 }
 
 pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
@@ -176,16 +152,72 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+                let mut latest_run_graph_dispatch_receipt_checkpoint_leakage = false;
                 let latest_run_graph_dispatch_receipt =
                     match store.latest_run_graph_dispatch_receipt_summary().await {
                         Ok(summary) => summary,
                         Err(error) => {
-                            eprintln!(
+                            if error
+                                .to_string()
+                                .contains("latest checkpoint evidence must share the same run_id")
+                            {
+                                latest_run_graph_dispatch_receipt_checkpoint_leakage = true;
+                                None
+                            } else {
+                                eprintln!(
                                 "Failed to read latest run graph dispatch receipt summary: {error}"
                             );
-                            return ExitCode::from(1);
+                                return ExitCode::from(1);
+                            }
                         }
                     };
+                let latest_run_graph_dispatch_receipt_matches_status =
+                    latest_run_graph_dispatch_receipt_checkpoint_leakage
+                        || state_store::latest_run_graph_dispatch_receipt_matches_status(
+                            latest_run_graph_status
+                                .as_ref()
+                                .map(|status| status.run_id.as_str()),
+                            latest_run_graph_dispatch_receipt
+                                .as_ref()
+                                .map(|receipt| receipt.run_id.as_str()),
+                        );
+                let latest_run_graph_dispatch_receipt_summary_inconsistent =
+                    !latest_run_graph_dispatch_receipt_checkpoint_leakage
+                        && state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
+                            latest_run_graph_status
+                                .as_ref()
+                                .map(|status| status.run_id.as_str()),
+                            latest_run_graph_dispatch_receipt
+                                .as_ref()
+                                .map(|receipt| receipt.run_id.as_str()),
+                        );
+                let latest_run_graph_snapshot_inconsistent =
+                    !latest_run_graph_dispatch_receipt_checkpoint_leakage
+                        && !state_store::latest_run_graph_evidence_snapshot_is_consistent(
+                            latest_run_graph_status
+                                .as_ref()
+                                .map(|status| status.run_id.as_str()),
+                            latest_run_graph_recovery
+                                .as_ref()
+                                .map(|summary| summary.run_id.as_str()),
+                            latest_run_graph_checkpoint
+                                .as_ref()
+                                .map(|summary| summary.run_id.as_str()),
+                            latest_run_graph_gate
+                                .as_ref()
+                                .map(|summary| summary.run_id.as_str()),
+                            latest_run_graph_dispatch_receipt
+                                .as_ref()
+                                .map(|receipt| receipt.run_id.as_str()),
+                        );
+                let latest_run_graph_dispatch_receipt_signal_ambiguous =
+                    latest_run_graph_dispatch_receipt
+                        .as_ref()
+                        .is_some_and(|receipt| {
+                            state_store::latest_run_graph_dispatch_receipt_signal_is_ambiguous(
+                                receipt,
+                            )
+                        });
                 let status_project_root = super::resolve_status_project_root(store.root());
                 let host_agents = status_project_root
                     .as_deref()
@@ -195,7 +227,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         project_root,
                     )
                 });
-
+                let project_activation_status = activation_truth.as_ref().map(|truth| {
+                    canonical_activation_status(Some(truth.status.as_str()), truth.activation_pending)
+                });
+                let project_activation_pending = project_activation_status == Some("pending");
                 if as_json {
                     let mut operator_blocker_codes: Vec<String> = Vec::new();
                     if boot_compatibility
@@ -220,13 +255,32 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         operator_blocker_codes.push("protocol_binding_blocking_issues".to_string());
                     }
                     if latest_run_graph_gate.is_some()
-                        && latest_run_graph_dispatch_receipt.is_none()
+                        && !latest_run_graph_dispatch_receipt_matches_status
                     {
+                        operator_blocker_codes.push(
+                            "missing_run_graph_dispatch_receipt_operator_evidence".to_string(),
+                        );
+                    }
+                    if latest_run_graph_snapshot_inconsistent {
                         operator_blocker_codes
-                            .push("missing_run_graph_dispatch_receipt_operator_evidence".to_string());
+                            .push("run_graph_latest_snapshot_inconsistent".to_string());
+                    }
+                    if latest_run_graph_dispatch_receipt_signal_ambiguous {
+                        operator_blocker_codes
+                            .push("run_graph_latest_dispatch_receipt_signal_ambiguous".to_string());
+                    }
+                    if latest_run_graph_dispatch_receipt_summary_inconsistent {
+                        operator_blocker_codes.push(
+                            "run_graph_latest_dispatch_receipt_summary_inconsistent".to_string(),
+                        );
+                    }
+                    if latest_run_graph_dispatch_receipt_checkpoint_leakage {
+                        operator_blocker_codes.push(
+                            "run_graph_latest_dispatch_receipt_checkpoint_leakage".to_string(),
+                        );
                     }
                     match activation_truth.as_ref() {
-                        Some(truth) if truth.activation_pending => {
+                        Some(_) if project_activation_pending => {
                             operator_blocker_codes.push("project_activation_pending".to_string());
                         }
                         None => {
@@ -235,7 +289,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         _ => {}
                     }
                     let operator_status = if operator_blocker_codes.is_empty() {
-                        "ok"
+                        "pass"
                     } else {
                         "blocked"
                     };
@@ -306,6 +360,39 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 .to_string(),
                         );
                     }
+                    if operator_blocker_codes
+                        .iter()
+                        .any(|code| code == "run_graph_latest_snapshot_inconsistent")
+                    {
+                        operator_next_actions
+                            .push(run_graph_latest_snapshot_inconsistent_next_action().to_string());
+                    }
+                    if operator_blocker_codes
+                        .iter()
+                        .any(|code| code == "run_graph_latest_dispatch_receipt_signal_ambiguous")
+                    {
+                        operator_next_actions.push(
+                            run_graph_latest_dispatch_receipt_signal_ambiguous_next_action()
+                                .to_string(),
+                        );
+                    }
+                    if operator_blocker_codes.iter().any(|code| {
+                        code == "run_graph_latest_dispatch_receipt_summary_inconsistent"
+                    }) {
+                        operator_next_actions.push(
+                            run_graph_latest_dispatch_receipt_summary_inconsistent_next_action()
+                                .to_string(),
+                        );
+                    }
+                    if operator_blocker_codes
+                        .iter()
+                        .any(|code| code == "run_graph_latest_dispatch_receipt_checkpoint_leakage")
+                    {
+                        operator_next_actions.push(
+                            run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action()
+                                .to_string(),
+                        );
+                    }
                     let operator_artifact_refs = serde_json::json!({
                         "runtime_consumption_latest_snapshot_path": runtime_consumption.latest_snapshot_path,
                         "latest_run_graph_dispatch_receipt_id": latest_run_graph_dispatch_receipt
@@ -327,18 +414,20 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     );
                     let blocker_codes = operator_contracts["blocker_codes"]
                         .as_array()
-                        .cloned()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-                        .collect::<Vec<_>>();
+                        .map(|rows| {
+                            rows.iter()
+                                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
                     let next_actions = operator_contracts["next_actions"]
                         .as_array()
-                        .cloned()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-                        .collect::<Vec<_>>();
+                        .map(|rows| {
+                            rows.iter()
+                                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
                     if let Some(error) = release1_operator_contracts_consistency_error(
                         operator_contracts["status"].as_str().unwrap_or(""),
                         &blocker_codes,
@@ -403,8 +492,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         "runtime_consumption": runtime_consumption,
                         "protocol_binding": protocol_binding,
                         "project_activation": activation_truth.as_ref().map(|truth| serde_json::json!({
-                            "status": truth.status,
-                            "activation_pending": truth.activation_pending,
+                            "status": project_activation_status.unwrap_or("pending"),
+                            "activation_pending": project_activation_pending,
                             "next_steps": truth.next_steps,
                         })).unwrap_or_else(|| serde_json::json!({
                             "status": "unknown",
@@ -413,7 +502,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 "run `vida project-activator --json` from the project root to load canonical activation state"
                             ],
                         })),
-                        "host_agents": host_agents_json_value(host_agents.clone()),
+                        "host_agents": host_agents_json_value(host_agents.as_ref()),
                         "latest_run_graph_status": latest_run_graph_status,
                         "latest_run_graph_delegation_gate": latest_run_graph_status.as_ref().map(|status| status.delegation_gate()),
                         "latest_run_graph_recovery": latest_run_graph_recovery,
@@ -427,7 +516,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                     if summary_json["artifact_refs"]
-                            != summary_json["operator_contracts"]["artifact_refs"]
+                        != summary_json["operator_contracts"]["artifact_refs"]
                         || summary_json["artifact_refs"]
                             != summary_json["shared_fields"]["artifact_refs"]
                     {
@@ -439,7 +528,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     println!(
                         "{}",
                         serde_json::to_string_pretty(&summary_json)
-                        .expect("status summary should render as json")
+                            .expect("status summary should render as json")
                     );
                     return ExitCode::SUCCESS;
                 }
@@ -556,13 +645,14 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     "protocol binding",
                     &protocol_binding.as_display(),
                 );
-                if let Some(truth) = activation_truth.as_ref() {
+                if activation_truth.is_some() {
                     super::print_surface_line(
                         render,
                         "project activation",
                         &format!(
                             "{} (activation_pending={})",
-                            truth.status, truth.activation_pending
+                            project_activation_status.unwrap_or("pending"),
+                            project_activation_pending
                         ),
                     );
                 } else {
@@ -624,6 +714,44 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     None => {
                         super::print_surface_line(render, "latest run graph gate", "none");
                     }
+                }
+                if latest_run_graph_snapshot_inconsistent {
+                    super::print_surface_line(
+                        render,
+                        "latest run graph next action",
+                        run_graph_latest_snapshot_inconsistent_next_action(),
+                    );
+                }
+                if latest_run_graph_dispatch_receipt_signal_ambiguous {
+                    super::print_surface_line(
+                        render,
+                        "latest run graph dispatch receipt next action",
+                        run_graph_latest_dispatch_receipt_signal_ambiguous_next_action(),
+                    );
+                }
+                if latest_run_graph_dispatch_receipt_summary_inconsistent {
+                    super::print_surface_line(
+                        render,
+                        "latest run graph dispatch receipt blocker",
+                        "run_graph_latest_dispatch_receipt_summary_inconsistent",
+                    );
+                    super::print_surface_line(
+                        render,
+                        "latest run graph dispatch receipt summary next action",
+                        run_graph_latest_dispatch_receipt_summary_inconsistent_next_action(),
+                    );
+                }
+                if latest_run_graph_dispatch_receipt_checkpoint_leakage {
+                    super::print_surface_line(
+                        render,
+                        "latest run graph dispatch receipt blocker",
+                        "run_graph_latest_dispatch_receipt_checkpoint_leakage",
+                    );
+                    super::print_surface_line(
+                        render,
+                        "latest run graph dispatch receipt checkpoint leakage next action",
+                        run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action(),
+                    );
                 }
                 if let Some(host_agents) = host_agents {
                     super::print_surface_line(
@@ -762,6 +890,499 @@ fn build_host_agent_status_summary(project_root: &Path) -> Option<serde_json::Va
     }
 }
 
-fn host_agents_json_value(host_agents: Option<serde_json::Value>) -> serde_json::Value {
-    host_agents.unwrap_or_else(|| serde_json::json!({}))
+fn host_agents_json_value(host_agents: Option<&serde_json::Value>) -> serde_json::Value {
+    host_agents.cloned().unwrap_or_else(|| serde_json::json!({}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        canonical_activation_status, release1_operator_contracts_consistency_error,
+        shared_operator_output_contract_parity_error,
+    };
+    use crate::state_store;
+
+    #[test]
+    fn release1_operator_contracts_consistency_accepts_pass_without_blockers() {
+        assert_eq!(
+            release1_operator_contracts_consistency_error("pass", &[], &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn release1_operator_contracts_consistency_rejects_pass_with_blockers() {
+        let blocker_codes = vec!["boot_compatibility_not_compatible".to_string()];
+        assert_eq!(
+            release1_operator_contracts_consistency_error("pass", &blocker_codes, &[]),
+            Some(
+                "operator contract inconsistency: status=pass must not include blocker_codes"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn release1_operator_contracts_consistency_rejects_unknown_status() {
+        assert_eq!(
+            release1_operator_contracts_consistency_error("unknown", &[], &[]),
+            Some("operator contract inconsistency: unsupported status `unknown`".to_string())
+        );
+    }
+
+    #[test]
+    fn release1_operator_contracts_consistency_accepts_ok_compat_without_blockers() {
+        assert_eq!(
+            release1_operator_contracts_consistency_error("ok", &[], &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn release1_operator_contracts_consistency_normalizes_case_and_whitespace_status_drift() {
+        assert_eq!(
+            release1_operator_contracts_consistency_error(" PASS ", &[], &[]),
+            None
+        );
+        assert_eq!(
+            release1_operator_contracts_consistency_error(
+                " blocked ",
+                &["migration_required".to_string()],
+                &["Complete required migration before normal operation.".to_string()]
+            ),
+            None
+        );
+        assert_eq!(
+            release1_operator_contracts_consistency_error(" Ok ", &[], &[]),
+            None
+        );
+    }
+
+    #[test]
+fn project_activation_status_normalizes_case_and_whitespace_drift() {
+    assert_eq!(
+        canonical_activation_status(Some(" PENDING_ACTIVATION "), false),
+        "pending"
+    );
+    assert_eq!(
+        canonical_activation_status(Some(" ready_enough_for_normal_work "), false),
+        "ready_enough_for_normal_work"
+    );
+    assert_eq!(
+        canonical_activation_status(Some(" unknown "), false),
+        "ready_enough_for_normal_work"
+    );
+    assert_eq!(
+        canonical_activation_status(Some(" ready_enough_for_normal_work "), true),
+        "pending"
+    );
+}
+
+    #[test]
+    fn shared_operator_output_contract_parity_accepts_mirrored_payload() {
+        let summary_json = serde_json::json!({
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "shared_fields": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": []
+            },
+            "operator_contracts": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": []
+            }
+        });
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            None
+        );
+    }
+
+    #[test]
+    fn shared_operator_output_contract_parity_accepts_status_case_and_whitespace_drift() {
+        let summary_json = serde_json::json!({
+            "status": " PASS ",
+            "blocker_codes": [],
+            "next_actions": [],
+            "shared_fields": {
+                "status": " ok ",
+                "blocker_codes": [],
+                "next_actions": []
+            },
+            "operator_contracts": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": []
+            }
+        });
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            None
+        );
+    }
+
+    #[test]
+    fn shared_operator_output_contract_parity_accepts_next_actions_case_and_whitespace_drift() {
+        let summary_json = serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["missing_protocol_binding_receipt"],
+            "next_actions": [" Run `vida taskflow protocol-binding sync --json` "],
+            "shared_fields": {
+                "status": "blocked",
+                "blocker_codes": ["missing_protocol_binding_receipt"],
+                "next_actions": ["run `vida taskflow protocol-binding sync --json`"]
+            },
+            "operator_contracts": {
+                "status": "blocked",
+                "blocker_codes": ["missing_protocol_binding_receipt"],
+                "next_actions": ["RUN `VIDA TASKFLOW PROTOCOL-BINDING SYNC --JSON`"]
+            }
+        });
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            None
+        );
+    }
+
+    #[test]
+    fn shared_operator_output_contract_parity_rejects_mismatch() {
+        let summary_json = serde_json::json!({
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "shared_fields": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": []
+            },
+            "operator_contracts": {
+                "status": "blocked",
+                "blocker_codes": ["migration_required"],
+                "next_actions": ["Complete required migration before normal operation."]
+            }
+        });
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+        );
+    }
+
+    #[test]
+    fn shared_operator_output_contract_parity_rejects_operator_ok_shared_blocked() {
+        let summary_json = serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["missing_protocol_binding_receipt"],
+            "next_actions": ["Run `vida taskflow protocol-binding sync --json`"],
+            "shared_fields": {
+                "status": "blocked",
+                "blocker_codes": ["missing_protocol_binding_receipt"],
+                "next_actions": ["Run `vida taskflow protocol-binding sync --json`"]
+            },
+            "operator_contracts": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": []
+            }
+        });
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+        );
+    }
+
+    #[test]
+    fn shared_operator_output_contract_parity_rejects_noncanonical_mirrored_string_entries() {
+        let summary_json = serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["missing_protocol_binding_receipt"],
+            "next_actions": [" Run `vida taskflow protocol-binding sync --json` "],
+            "shared_fields": {
+                "status": "blocked",
+                "blocker_codes": ["missing_protocol_binding_receipt"],
+                "next_actions": [" Run `vida taskflow protocol-binding sync --json` "]
+            },
+            "operator_contracts": {
+                "status": "blocked",
+                "blocker_codes": ["missing_protocol_binding_receipt"],
+                "next_actions": [" Run `vida taskflow protocol-binding sync --json` "]
+            }
+        });
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+        );
+    }
+
+    #[test]
+    fn shared_operator_output_contract_parity_rejects_case_drifted_blocker_codes() {
+        let summary_json = serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["MISSING_PROTOCOL_BINDING_RECEIPT"],
+            "next_actions": ["Run `vida taskflow protocol-binding sync --json`"],
+            "shared_fields": {
+                "status": "blocked",
+                "blocker_codes": ["MISSING_PROTOCOL_BINDING_RECEIPT"],
+                "next_actions": ["Run `vida taskflow protocol-binding sync --json`"]
+            },
+            "operator_contracts": {
+                "status": "blocked",
+                "blocker_codes": ["MISSING_PROTOCOL_BINDING_RECEIPT"],
+                "next_actions": ["Run `vida taskflow protocol-binding sync --json`"]
+            }
+        });
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+        );
+    }
+
+    #[test]
+    fn shared_operator_output_contract_parity_rejects_whitespace_only_mirrored_string_entries() {
+        let summary_json = serde_json::json!({
+            "status": "blocked",
+            "blocker_codes": ["   "],
+            "next_actions": ["   "],
+            "shared_fields": {
+                "status": "blocked",
+                "blocker_codes": ["   "],
+                "next_actions": ["   "]
+            },
+            "operator_contracts": {
+                "status": "blocked",
+                "blocker_codes": ["   "],
+                "next_actions": ["   "]
+            }
+        });
+
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+        );
+    }
+
+    #[test]
+    fn shared_operator_output_contract_parity_rejects_protocol_binding_surface_drift() {
+        let summary_json = serde_json::json!({
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "shared_fields": {
+                "status": "blocked",
+                "blocker_codes": ["missing_protocol_binding_receipt"],
+                "next_actions": ["Run `vida taskflow protocol-binding sync --json`"]
+            },
+            "operator_contracts": {
+                "status": "blocked",
+                "blocker_codes": ["missing_protocol_binding_receipt"],
+                "next_actions": ["Run `vida taskflow protocol-binding sync --json`"]
+            }
+        });
+
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&summary_json),
+            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+        );
+    }
+
+    #[test]
+    fn latest_run_graph_snapshot_inconsistent_has_explicit_next_action_and_contracts_remain_valid()
+    {
+        let next_action = super::run_graph_latest_snapshot_inconsistent_next_action().to_string();
+        assert!(next_action.contains("recheck `vida status --json`"));
+        assert_eq!(
+            release1_operator_contracts_consistency_error(
+                "blocked",
+                &["run_graph_latest_snapshot_inconsistent".to_string()],
+                &[next_action],
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn latest_run_graph_dispatch_receipt_checkpoint_leakage_has_explicit_next_action_and_contracts_remain_valid(
+    ) {
+        let next_action =
+            super::run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action().to_string();
+        assert!(next_action.contains("checkpoint evidence"));
+        assert!(next_action.contains("same run_id"));
+        assert_eq!(
+            release1_operator_contracts_consistency_error(
+                "blocked",
+                &["run_graph_latest_dispatch_receipt_checkpoint_leakage".to_string()],
+                &[next_action],
+            ),
+            None
+        );
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&serde_json::json!({
+                "status": "blocked",
+                "blocker_codes": ["run_graph_latest_dispatch_receipt_checkpoint_leakage"],
+                "next_actions": [super::run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action()],
+                "shared_fields": {
+                    "status": "blocked",
+                    "blocker_codes": ["run_graph_latest_dispatch_receipt_checkpoint_leakage"],
+                    "next_actions": [super::run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action()],
+                    "artifact_refs": {}
+                },
+                "operator_contracts": {
+                    "status": "blocked",
+                    "blocker_codes": ["run_graph_latest_dispatch_receipt_checkpoint_leakage"],
+                    "next_actions": [super::run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action()],
+                    "artifact_refs": {}
+                }
+            })),
+            None
+        );
+    }
+
+    #[test]
+    fn latest_run_graph_dispatch_receipt_signal_ambiguous_blocks_drifted_lane_status() {
+        let receipt = crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: "run-vida-a".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-03-18T00:00:00Z".to_string(),
+        };
+
+        assert!(state_store::latest_run_graph_dispatch_receipt_signal_is_ambiguous(&receipt));
+        assert_eq!(
+            release1_operator_contracts_consistency_error(
+                "blocked",
+                &["run_graph_latest_dispatch_receipt_signal_ambiguous".to_string()],
+                &[
+                    super::run_graph_latest_dispatch_receipt_signal_ambiguous_next_action()
+                        .to_string()
+                ],
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn latest_run_graph_dispatch_receipt_summary_inconsistent_blocks_missing_or_mismatched_run_id()
+    {
+        assert!(
+            state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
+                Some("run-vida-a"),
+                None
+            )
+        );
+        assert!(
+            state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
+                Some("run-vida-a"),
+                Some("run-vida-b")
+            )
+        );
+        assert!(
+            !state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
+                Some("run-vida-a"),
+                Some("run-vida-a")
+            )
+        );
+
+        let next_action =
+            super::run_graph_latest_dispatch_receipt_summary_inconsistent_next_action().to_string();
+        assert!(next_action.contains("run-graph dispatch receipt summary"));
+        assert_eq!(
+            release1_operator_contracts_consistency_error(
+                "blocked",
+                &["run_graph_latest_dispatch_receipt_summary_inconsistent".to_string()],
+                &[next_action],
+            ),
+            None
+        );
+        assert_eq!(
+            shared_operator_output_contract_parity_error(&serde_json::json!({
+                "status": "blocked",
+                "blocker_codes": ["run_graph_latest_dispatch_receipt_summary_inconsistent"],
+                "next_actions": [super::run_graph_latest_dispatch_receipt_summary_inconsistent_next_action()],
+                "shared_fields": {
+                    "status": "blocked",
+                    "blocker_codes": ["run_graph_latest_dispatch_receipt_summary_inconsistent"],
+                    "next_actions": [super::run_graph_latest_dispatch_receipt_summary_inconsistent_next_action()],
+                    "artifact_refs": {}
+                },
+                "operator_contracts": {
+                    "status": "blocked",
+                    "blocker_codes": ["run_graph_latest_dispatch_receipt_summary_inconsistent"],
+                    "next_actions": [super::run_graph_latest_dispatch_receipt_summary_inconsistent_next_action()],
+                    "artifact_refs": {}
+                }
+            })),
+            None
+        );
+    }
+
+    #[test]
+    fn latest_run_graph_dispatch_receipt_matches_status_accepts_matching_run_ids() {
+        assert!(
+            state_store::latest_run_graph_dispatch_receipt_matches_status(
+                Some("run-vida-a"),
+                Some("run-vida-a")
+            )
+        );
+    }
+
+    #[test]
+    fn latest_run_graph_dispatch_receipt_matches_status_rejects_missing_or_mismatched_run_ids() {
+        assert!(
+            !state_store::latest_run_graph_dispatch_receipt_matches_status(
+                Some("run-vida-a"),
+                None
+            )
+        );
+        assert!(
+            !state_store::latest_run_graph_dispatch_receipt_matches_status(
+                Some("run-vida-a"),
+                Some("run-vida-b")
+            )
+        );
+        assert!(
+            !state_store::latest_run_graph_dispatch_receipt_matches_status(
+                None,
+                Some("run-vida-a")
+            )
+        );
+    }
+
+    #[test]
+    fn latest_run_graph_evidence_snapshot_is_consistent_rejects_mismatched_gate_run_id() {
+        assert!(
+            !state_store::latest_run_graph_evidence_snapshot_is_consistent(
+                Some("run-vida-a"),
+                Some("run-vida-a"),
+                Some("run-vida-a"),
+                Some("run-vida-b"),
+                Some("run-vida-a")
+            )
+        );
+    }
 }

@@ -20,13 +20,13 @@ pub(crate) fn dispatch_contract_lane<'a>(
     }
 }
 
-pub(crate) fn dispatch_contract_lane_activation<'a>(
-    lane: &'a serde_json::Value,
-) -> &'a serde_json::Value {
+pub(crate) fn dispatch_contract_lane_activation(lane: &serde_json::Value) -> &serde_json::Value {
     lane.get("activation").unwrap_or(lane)
 }
 
-pub(crate) fn dispatch_contract_lane_sequence(dispatch_contract: &serde_json::Value) -> Vec<String> {
+pub(crate) fn dispatch_contract_lane_sequence(
+    dispatch_contract: &serde_json::Value,
+) -> Vec<String> {
     let explicit = dispatch_contract["lane_sequence"]
         .as_array()
         .into_iter()

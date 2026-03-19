@@ -2,6 +2,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use crate::operator_contracts::{
+    canonical_release1_blocker_code_entries, shared_operator_output_contract_parity_error,
+};
+use crate::release1_contracts::release1_contract_status_str;
 use super::state_store::{ProtocolBindingState, ProtocolBindingSummary, StateStore};
 
 #[derive(Clone, serde::Serialize)]
@@ -165,10 +169,8 @@ pub(crate) async fn protocol_binding_compiled_payload_import_evidence(
         if !has_non_empty_string_field(&snapshot.compiled_bundle, &["agent_system", "mode"]) {
             blockers.push("invalid_compiled_bundle_agent_system_mode".to_string());
         }
-        if !has_non_empty_string_field(
-            &snapshot.compiled_bundle,
-            &["agent_system", "state_owner"],
-        ) {
+        if !has_non_empty_string_field(&snapshot.compiled_bundle, &["agent_system", "state_owner"])
+        {
             blockers.push("invalid_compiled_bundle_agent_system_state_owner".to_string());
         }
     }
@@ -338,10 +340,231 @@ fn protocol_binding_decision_gate_status(
         runtime_ready,
     );
     let blocker_code = blocker.and_then(super::release1_contracts::blocker_code_value);
+    let canonical_blocker_code = blocker_code.as_ref().map(|code| {
+        canonical_release1_blocker_code_entries(&serde_json::json!([code]))
+            .and_then(|mut codes| codes.pop())
+            .unwrap_or_else(|| code.clone())
+    });
     ProtocolBindingDecisionGateStatus {
         policy_gate: policy_gate.to_string(),
         ready: blocker_code.is_none(),
-        blocker_code,
+        blocker_code: canonical_blocker_code,
+    }
+}
+
+fn build_protocol_binding_operator_contract_fields(
+    status: &str,
+    blocker_codes: &[String],
+    next_actions: &[String],
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+    })
+}
+
+fn ensure_protocol_binding_operator_contract_parity(
+    status: &str,
+    blocker_codes: &[String],
+    next_actions: &[String],
+) -> Result<(serde_json::Value, serde_json::Value), String> {
+    let operator_contracts =
+        build_protocol_binding_operator_contract_fields(status, blocker_codes, next_actions);
+    let shared_fields = operator_contracts.clone();
+    let parity_payload = serde_json::json!({
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "shared_fields": shared_fields.clone(),
+        "operator_contracts": operator_contracts.clone(),
+    });
+    match shared_operator_output_contract_parity_error(&parity_payload) {
+        None => Ok((operator_contracts, shared_fields)),
+        Some(error) => Err(error.to_string()),
+    }
+}
+
+struct ProtocolBindingOperatorContractPayload {
+    status: String,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    operator_contracts: serde_json::Value,
+    shared_fields: serde_json::Value,
+}
+
+fn protocol_binding_operator_contract_payload(
+    decision_gate: &ProtocolBindingDecisionGateStatus,
+    ok: bool,
+) -> Result<ProtocolBindingOperatorContractPayload, String> {
+    let status = release1_contract_status_str(ok);
+    let blocker_codes = decision_gate
+        .blocker_code
+        .as_ref()
+        .cloned()
+        .map(|code| vec![code])
+        .unwrap_or_default();
+    let next_actions = if blocker_codes.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!(
+            "Run `vida taskflow protocol-binding check --json` to resolve {} gate blockers.",
+            decision_gate.policy_gate
+        )]
+    };
+    let (operator_contracts, shared_fields) =
+        ensure_protocol_binding_operator_contract_parity(status, &blocker_codes, &next_actions)?;
+    Ok(ProtocolBindingOperatorContractPayload {
+        status: status.to_string(),
+        blocker_codes,
+        next_actions,
+        operator_contracts,
+        shared_fields,
+    })
+}
+
+struct ProtocolBindingCheckContext {
+    evidence: ProtocolBindingCompiledPayloadImportEvidence,
+    summary: ProtocolBindingSummary,
+    rows: Vec<ProtocolBindingState>,
+    decision_gate: ProtocolBindingDecisionGateStatus,
+    ok: bool,
+    payload: ProtocolBindingOperatorContractPayload,
+}
+
+async fn build_protocol_binding_check_context(
+    state_dir: &Path,
+) -> Result<ProtocolBindingCheckContext, String> {
+    let store = super::StateStore::open_existing(state_dir.to_path_buf())
+        .await
+        .map_err(|error| format!("Failed to open authoritative state store: {error}"))?;
+    let evidence = protocol_binding_compiled_payload_import_evidence(&store).await;
+    let summary = store
+        .protocol_binding_summary()
+        .await
+        .map_err(|error| format!("Failed to read protocol-binding summary: {error}"))?;
+    let rows = store
+        .latest_protocol_binding_rows()
+        .await
+        .map_err(|error| format!("Failed to read protocol-binding rows: {error}"))?;
+    let decision_gate = protocol_binding_decision_gate_status(&summary, &evidence);
+    let ok = protocol_binding_check_ok(&summary, &rows, &evidence);
+    let payload = protocol_binding_operator_contract_payload(&decision_gate, ok)
+        .map_err(|error| format!("protocol-binding contract parity guard: {error}"))?;
+    Ok(ProtocolBindingCheckContext {
+        evidence,
+        summary,
+        rows,
+        decision_gate,
+        ok,
+        payload,
+    })
+}
+
+fn render_protocol_binding_check_plain(context: &ProtocolBindingCheckContext) {
+    super::print_surface_header(
+        super::RenderMode::Plain,
+        "vida taskflow protocol-binding check",
+    );
+    super::print_surface_line(
+        super::RenderMode::Plain,
+        "status",
+        &context.payload.status,
+    );
+    super::print_surface_line(
+        super::RenderMode::Plain,
+        "summary",
+        &context.summary.as_display(),
+    );
+    super::print_surface_line(
+        super::RenderMode::Plain,
+        "compiled payload import",
+        if context.evidence.trusted {
+            "trusted"
+        } else {
+            "blocked"
+        },
+    );
+    super::print_surface_line(
+        super::RenderMode::Plain,
+        "decision gate",
+        &format!(
+            "{} ({})",
+            context.decision_gate.policy_gate,
+            context
+                .decision_gate
+                .blocker_code
+                .as_deref()
+                .unwrap_or("ready")
+        ),
+    );
+    let blocker_codes_list = serde_json::to_string(&context.payload.blocker_codes)
+        .expect("protocol-binding blocker_codes should render");
+    super::print_surface_line(
+        super::RenderMode::Plain,
+        "blocker_codes",
+        &blocker_codes_list,
+    );
+    let next_actions_list = serde_json::to_string(&context.payload.next_actions)
+        .expect("protocol-binding next_actions should render");
+    super::print_surface_line(
+        super::RenderMode::Plain,
+        "next_actions",
+        &next_actions_list,
+    );
+    let shared_fields_list = serde_json::to_string(&context.payload.shared_fields)
+        .expect("protocol-binding shared_fields should render");
+    super::print_surface_line(
+        super::RenderMode::Plain,
+        "shared_fields",
+        &shared_fields_list,
+    );
+    let operator_contracts_list = serde_json::to_string(&context.payload.operator_contracts)
+        .expect("protocol-binding operator_contracts should render");
+    super::print_surface_line(
+        super::RenderMode::Plain,
+        "operator_contracts",
+        &operator_contracts_list,
+    );
+}
+
+fn render_protocol_binding_check_json(context: &ProtocolBindingCheckContext) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "surface": "vida taskflow protocol-binding check",
+            "status": context.payload.status,
+            "decision_gate": context.decision_gate,
+            "blocker_codes": context.payload.blocker_codes,
+            "next_actions": context.payload.next_actions,
+            "compiled_payload_import_evidence": context.evidence,
+            "summary": context.summary,
+            "bindings": context.rows,
+            "shared_fields": context.payload.shared_fields.clone(),
+            "operator_contracts": context.payload.operator_contracts.clone(),
+        }))
+        .expect("protocol-binding check should render as json")
+    );
+}
+
+async fn run_protocol_binding_check(state_dir: &Path, json: bool) -> ExitCode {
+    match build_protocol_binding_check_context(state_dir).await {
+        Ok(context) => {
+            if json {
+                render_protocol_binding_check_json(&context);
+            } else {
+                render_protocol_binding_check_plain(&context);
+            }
+            if context.ok {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            }
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(1)
+        }
     }
 }
 
@@ -579,118 +802,13 @@ pub(crate) async fn run_taskflow_protocol_binding(args: &[String]) -> ExitCode {
         }
         [head, subcommand] if head == "protocol-binding" && subcommand == "check" => {
             let state_dir = super::taskflow_task_bridge::proxy_state_dir();
-            match super::StateStore::open_existing(state_dir).await {
-                Ok(store) => {
-                    let evidence = protocol_binding_compiled_payload_import_evidence(&store).await;
-                    let summary = match store.protocol_binding_summary().await {
-                        Ok(summary) => summary,
-                        Err(error) => {
-                            eprintln!("Failed to read protocol-binding summary: {error}");
-                            return ExitCode::from(1);
-                        }
-                    };
-                    let rows = match store.latest_protocol_binding_rows().await {
-                        Ok(rows) => rows,
-                        Err(error) => {
-                            eprintln!("Failed to read protocol-binding rows: {error}");
-                            return ExitCode::from(1);
-                        }
-                    };
-                    let decision_gate = protocol_binding_decision_gate_status(&summary, &evidence);
-                    let ok = protocol_binding_check_ok(&summary, &rows, &evidence);
-                    super::print_surface_header(
-                        super::RenderMode::Plain,
-                        "vida taskflow protocol-binding check",
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "ok",
-                        if ok { "true" } else { "false" },
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "summary",
-                        &summary.as_display(),
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "compiled payload import",
-                        if evidence.trusted {
-                            "trusted"
-                        } else {
-                            "blocked"
-                        },
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "decision gate",
-                        &format!(
-                            "{} ({})",
-                            decision_gate.policy_gate,
-                            decision_gate
-                                .blocker_code
-                                .as_deref()
-                                .unwrap_or("ready")
-                        ),
-                    );
-                    if ok {
-                        ExitCode::SUCCESS
-                    } else {
-                        ExitCode::from(1)
-                    }
-                }
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
-            }
+            run_protocol_binding_check(&state_dir, false).await
         }
         [head, subcommand, flag]
             if head == "protocol-binding" && subcommand == "check" && flag == "--json" =>
         {
             let state_dir = super::taskflow_task_bridge::proxy_state_dir();
-            match super::StateStore::open_existing(state_dir).await {
-                Ok(store) => {
-                    let evidence = protocol_binding_compiled_payload_import_evidence(&store).await;
-                    let summary = match store.protocol_binding_summary().await {
-                        Ok(summary) => summary,
-                        Err(error) => {
-                            eprintln!("Failed to read protocol-binding summary: {error}");
-                            return ExitCode::from(1);
-                        }
-                    };
-                    let rows = match store.latest_protocol_binding_rows().await {
-                        Ok(rows) => rows,
-                        Err(error) => {
-                            eprintln!("Failed to read protocol-binding rows: {error}");
-                            return ExitCode::from(1);
-                        }
-                    };
-                    let decision_gate = protocol_binding_decision_gate_status(&summary, &evidence);
-                    let ok = protocol_binding_check_ok(&summary, &rows, &evidence);
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&serde_json::json!({
-                            "surface": "vida taskflow protocol-binding check",
-                            "ok": ok,
-                            "decision_gate": decision_gate,
-                            "compiled_payload_import_evidence": evidence,
-                            "summary": summary,
-                            "bindings": rows,
-                        }))
-                        .expect("protocol-binding check should render as json")
-                    );
-                    if ok {
-                        ExitCode::SUCCESS
-                    } else {
-                        ExitCode::from(1)
-                    }
-                }
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
-            }
+            run_protocol_binding_check(&state_dir, true).await
         }
         [head, subcommand, ..] if head == "protocol-binding" && subcommand == "sync" => {
             eprintln!("Usage: vida taskflow protocol-binding sync [--json]");
@@ -722,4 +840,97 @@ pub(crate) async fn sync_taskflow_protocol_binding_snapshot(
         .await
         .map_err(|error| format!("Failed to record protocol-binding snapshot: {error}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{protocol_binding_check_ok, ProtocolBindingCompiledPayloadImportEvidence};
+    use crate::release1_contracts::release1_contract_status_str;
+    use crate::state_store::{ProtocolBindingState, ProtocolBindingSummary};
+
+    fn sample_evidence(
+        imported: bool,
+        trusted: bool,
+    ) -> ProtocolBindingCompiledPayloadImportEvidence {
+        ProtocolBindingCompiledPayloadImportEvidence {
+            imported,
+            trusted,
+            source: "state_store".to_string(),
+            source_config_path: "/tmp/project/vida.config.yaml".to_string(),
+            source_config_digest: "digest-1".to_string(),
+            captured_at: "2026-03-17T00:00:00Z".to_string(),
+            effective_bundle_receipt_id: "receipt-1".to_string(),
+            effective_bundle_root_artifact_id: "root-1".to_string(),
+            effective_bundle_artifact_count: 1,
+            compiled_payload_summary: serde_json::json!({}),
+            blockers: vec![],
+        }
+    }
+
+    fn sample_summary() -> ProtocolBindingSummary {
+        let seed_count = super::taskflow_protocol_binding_seeds().len();
+        ProtocolBindingSummary {
+            total_receipts: 1,
+            total_bindings: seed_count,
+            active_bindings: seed_count,
+            script_bound_count: 0,
+            rust_bound_count: 0,
+            fully_runtime_bound_count: seed_count,
+            unbound_count: 0,
+            blocking_issue_count: 0,
+            latest_receipt_id: Some("receipt-1".to_string()),
+            latest_scenario: Some(super::super::TASKFLOW_PROTOCOL_BINDING_SCENARIO.to_string()),
+            latest_recorded_at: Some("2026-03-17T00:00:00Z".to_string()),
+            primary_state_authority: Some(
+                super::super::TASKFLOW_PROTOCOL_BINDING_AUTHORITY.to_string(),
+            ),
+        }
+    }
+
+    fn sample_rows() -> Vec<ProtocolBindingState> {
+        super::taskflow_protocol_binding_seeds()
+            .iter()
+            .map(|seed| ProtocolBindingState {
+                protocol_id: seed.protocol_id.to_string(),
+                source_path: seed.source_path.to_string(),
+                activation_class: seed.activation_class.to_string(),
+                runtime_owner: seed.runtime_owner.to_string(),
+                enforcement_type: seed.enforcement_type.to_string(),
+                proof_surface: seed.proof_surface.to_string(),
+                primary_state_authority: super::super::TASKFLOW_PROTOCOL_BINDING_AUTHORITY
+                    .to_string(),
+                binding_status: "fully-runtime-bound".to_string(),
+                active: true,
+                blockers: vec![],
+                scenario: super::super::TASKFLOW_PROTOCOL_BINDING_SCENARIO.to_string(),
+                synced_at: "2026-03-17T00:00:00Z".to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn protocol_binding_check_ok_accepts_ready_release1_payload() {
+        let summary = sample_summary();
+        let rows = sample_rows();
+        let evidence = sample_evidence(true, true);
+
+        assert!(protocol_binding_check_ok(&summary, &rows, &evidence));
+        assert_eq!(
+            release1_contract_status_str(protocol_binding_check_ok(&summary, &rows, &evidence)),
+            "pass"
+        );
+    }
+
+    #[test]
+    fn protocol_binding_check_ok_blocks_untrusted_evidence() {
+        let summary = sample_summary();
+        let rows = sample_rows();
+        let evidence = sample_evidence(true, false);
+
+        assert!(!protocol_binding_check_ok(&summary, &rows, &evidence));
+        assert_eq!(
+            release1_contract_status_str(protocol_binding_check_ok(&summary, &rows, &evidence)),
+            "blocked"
+        );
+    }
 }

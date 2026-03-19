@@ -245,7 +245,7 @@ fn resolve_protocol_view_source_root() -> Result<PathBuf, String> {
     }
     candidates.push(super::repo_runtime_root());
     if let Ok(root) = super::resolve_repo_root() {
-        if !candidates.iter().any(|candidate| candidate == &root) {
+        if !candidates.contains(&root) {
             candidates.push(root);
         }
     }
@@ -293,7 +293,7 @@ pub(crate) fn resolve_protocol_view_target(
     if let Some(target) = protocol_view_targets().iter().find(|target| {
         target.canonical_id == normalized
             || target.source_path == normalized
-            || target.aliases.iter().any(|alias| *alias == normalized)
+            || target.aliases.contains(&normalized)
     }) {
         let source_root = resolve_protocol_view_source_root()?;
         let resolved = ResolvedProtocolViewTarget {

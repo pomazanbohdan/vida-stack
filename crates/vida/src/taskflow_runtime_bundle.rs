@@ -9,6 +9,8 @@ use crate::{
     TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
 };
 
+use super::activation_status::{activation_status_is_pending, canonical_activation_status};
+
 const PROJECT_STARTUP_PROTOCOL_SURFACES: [(&str, &str, &str, &str); 4] = [
     (
         "project_orchestrator_startup_bundle",
@@ -321,6 +323,17 @@ pub(crate) fn taskflow_consume_bundle_check(
         .and_then(serde_json::Value::as_array)
         .map(|rows| rows.len())
         .unwrap_or(0);
+    if !payload
+        .control_core
+        .as_object()
+        .is_some_and(|control_core| {
+            control_core
+                .keys()
+                .all(|key| is_canonical_release1_control_core_key(key))
+        })
+    {
+        blockers.push("invalid_control_core_keys".to_string());
+    }
     let metadata = &payload.metadata;
 
     if root_artifact_id.is_empty() {
@@ -383,32 +396,19 @@ pub(crate) fn taskflow_consume_bundle_check(
     if protocol_rows.map(|rows| rows.is_empty()).unwrap_or(true) {
         blockers.push("missing_protocol_binding_rows".to_string());
     }
-    if payload
+    blockers.extend(protocol_binding_registry_contract_blockers(
+        &payload.protocol_binding_registry,
+    ));
+    if !payload
         .protocol_binding_registry
-        .get("receipt_id")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .is_empty()
+        .as_object()
+        .is_some_and(|protocol_binding_registry| {
+            protocol_binding_registry
+                .keys()
+                .all(|key| is_canonical_release1_protocol_binding_registry_key(key))
+        })
     {
-        blockers.push("missing_protocol_binding_receipt".to_string());
-    }
-    if payload
-        .protocol_binding_registry
-        .get("primary_state_authority")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        != TASKFLOW_PROTOCOL_BINDING_AUTHORITY
-    {
-        blockers.push("non_authoritative_protocol_binding_authority".to_string());
-    }
-    if payload
-        .protocol_binding_registry
-        .get("binding_status")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("blocked")
-        != "bound"
-    {
-        blockers.push("protocol_binding_not_runtime_ready".to_string());
+        blockers.push("invalid_protocol_binding_registry_keys".to_string());
     }
     let compiled_payload_import_evidence =
         &payload.protocol_binding_registry["compiled_payload_import_evidence"];
@@ -462,17 +462,10 @@ pub(crate) fn taskflow_consume_bundle_check(
     blockers.extend(retrieval_trust_evidence_blockers(
         &payload.cache_delivery_contract,
     ));
-    if payload
-        .orchestrator_init_view
-        .get("status")
-        .and_then(serde_json::Value::as_str)
-        == Some("pending_activation")
-        || payload
-            .agent_init_view
-            .get("status")
-            .and_then(serde_json::Value::as_str)
-            == Some("pending_activation")
-    {
+    let orchestrator_activation_pending =
+        init_view_activation_is_pending(&payload.orchestrator_init_view);
+    let agent_activation_pending = init_view_activation_is_pending(&payload.agent_init_view);
+    if orchestrator_activation_pending || agent_activation_pending {
         blockers.push("activation_pending".to_string());
     }
     if payload
@@ -484,21 +477,11 @@ pub(crate) fn taskflow_consume_bundle_check(
     {
         blockers.push("taskflow_blocked_during_pending_activation".to_string());
     }
-    let activation_status = if payload
-        .orchestrator_init_view
-        .get("status")
-        .and_then(serde_json::Value::as_str)
-        == Some("pending_activation")
-        || payload
-            .agent_init_view
-            .get("status")
-            .and_then(serde_json::Value::as_str)
-            == Some("pending_activation")
-    {
-        "pending_activation".to_string()
-    } else {
-        "activation_ready".to_string()
-    };
+    let activation_pending = orchestrator_activation_pending
+        || agent_activation_pending
+        || project_activation_truth_is_pending(payload).unwrap_or(false);
+    let activation_status =
+        canonical_activation_status(None, activation_pending).to_string();
 
     TaskflowConsumeBundleCheck {
         ok: blockers.is_empty(),
@@ -509,6 +492,18 @@ pub(crate) fn taskflow_consume_bundle_check(
         migration_state,
         activation_status,
     }
+}
+
+fn project_activation_truth_is_pending(payload: &TaskflowConsumeBundlePayload) -> Option<bool> {
+    let project_root = std::env::var("VIDA_ROOT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| payload.launcher_runtime_paths.project_root.clone());
+    let truth =
+        crate::project_activator_surface::canonical_project_activation_status_truth(Path::new(
+            &project_root,
+        ));
+    Some(truth.activation_pending || truth.status == "pending")
 }
 
 fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -> Vec<String> {
@@ -528,6 +523,19 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
     let Some(invalidation_tuple) = invalidation_tuple else {
         return blockers;
     };
+
+    if !cache_key_inputs
+        .keys()
+        .all(|key| is_canonical_release1_cache_key_input_key(key))
+    {
+        blockers.push("invalid_cache_key_inputs_keys".to_string());
+    }
+    if !invalidation_tuple
+        .keys()
+        .all(|key| is_canonical_release1_invalidation_tuple_key(key))
+    {
+        blockers.push("invalid_invalidation_tuple_keys".to_string());
+    }
 
     let cache_required = [
         "source_version_tuple",
@@ -558,7 +566,7 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
     if cache_key_inputs
         .get("source_version_tuple")
         .and_then(serde_json::Value::as_array)
-        .map(|rows| rows.is_empty())
+        .map(|rows| rows.is_empty() || !rows.iter().all(is_canonical_release1_tuple_entry))
         .unwrap_or(true)
     {
         blockers.push("invalid_cache_key_input:source_version_tuple".to_string());
@@ -569,11 +577,9 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
         "protocol_binding_cache_token",
         "startup_bundle_revision",
     ] {
-        if cache_key_inputs
+        if !cache_key_inputs
             .get(key)
-            .and_then(serde_json::Value::as_str)
-            .map(str::is_empty)
-            .unwrap_or(true)
+            .is_some_and(is_canonical_nonempty_string)
         {
             blockers.push(format!("invalid_cache_key_input:{key}"));
         }
@@ -585,11 +591,9 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
         "protocol_binding_cache_token",
         "startup_bundle_revision",
     ] {
-        if invalidation_tuple
+        if !invalidation_tuple
             .get(key)
-            .and_then(serde_json::Value::as_str)
-            .map(str::is_empty)
-            .unwrap_or(true)
+            .is_some_and(is_canonical_nonempty_string)
         {
             blockers.push(format!("invalid_invalidation_tuple_key:{key}"));
         }
@@ -597,6 +601,12 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
 
     let metadata = payload.metadata.as_object();
     if let Some(metadata) = metadata {
+        if !metadata
+            .keys()
+            .all(|key| is_canonical_release1_metadata_key(key))
+        {
+            blockers.push("invalid_metadata_tuple_keys".to_string());
+        }
         for key in [
             "framework_revision",
             "project_activation_revision",
@@ -606,12 +616,7 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
             if !metadata.contains_key(key) {
                 blockers.push(format!("missing_metadata_tuple_key:{key}"));
             }
-            if metadata
-                .get(key)
-                .and_then(serde_json::Value::as_str)
-                .map(str::is_empty)
-                .unwrap_or(true)
-            {
+            if !metadata.get(key).is_some_and(is_canonical_nonempty_string) {
                 blockers.push(format!("invalid_metadata_tuple_key:{key}"));
             }
         }
@@ -750,17 +755,167 @@ fn retrieval_trust_evidence_blockers(cache_delivery_contract: &serde_json::Value
 
     let mut blockers = Vec::new();
     for key in ["source", "citation", "freshness", "acl"] {
-        if evidence
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .map(str::is_empty)
-            .unwrap_or(true)
-        {
+        if !evidence.get(key).is_some_and(is_canonical_nonempty_string) {
             blockers.push(format!("missing_retrieval_trust_evidence_field:{key}"));
         }
     }
     blockers.sort();
     blockers
+}
+
+fn canonical_project_protocol_projection_status(status: Option<&str>) -> &'static str {
+    match status.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(value) if value == "compiled" => "compiled",
+        Some(value) if value == "blocked" => "blocked",
+        Some(value) if value == "validated" => "validated",
+        Some(value) if value == "executable" => "executable",
+        Some(value) if value == "present" => "present",
+        Some(value) if value == "missing" => "missing",
+        _ => "blocked",
+    }
+}
+
+fn is_canonical_nonempty_string(value: &serde_json::Value) -> bool {
+    value
+        .as_str()
+        .map(|entry| {
+            let trimmed = entry.trim();
+            !trimmed.is_empty() && trimmed == entry
+        })
+        .unwrap_or(false)
+}
+
+enum Release1StringFieldRule {
+    CanonicalNonempty,
+    ExactTrimmed(&'static str),
+    CanonicalEnum(&'static [&'static str]),
+}
+
+fn release1_string_field_matches(value: Option<&str>, rule: Release1StringFieldRule) -> bool {
+    let Some(value) = value.map(str::trim) else {
+        return false;
+    };
+    match rule {
+        Release1StringFieldRule::CanonicalNonempty => !value.is_empty(),
+        Release1StringFieldRule::ExactTrimmed(expected) => value == expected,
+        Release1StringFieldRule::CanonicalEnum(allowed) => {
+            let normalized = value.to_ascii_lowercase();
+            !normalized.is_empty() && allowed.contains(&normalized.as_str())
+        }
+    }
+}
+
+fn protocol_binding_registry_contract_blockers(
+    protocol_binding_registry: &serde_json::Value,
+) -> Vec<String> {
+    let Some(protocol_binding_registry) = protocol_binding_registry.as_object() else {
+        return Vec::new();
+    };
+    let mut blockers = Vec::new();
+    if !release1_string_field_matches(
+        protocol_binding_registry
+            .get("receipt_id")
+            .and_then(serde_json::Value::as_str),
+        Release1StringFieldRule::CanonicalNonempty,
+    ) {
+        blockers.push("missing_protocol_binding_receipt".to_string());
+    }
+    if !release1_string_field_matches(
+        protocol_binding_registry
+            .get("primary_state_authority")
+            .and_then(serde_json::Value::as_str),
+        Release1StringFieldRule::ExactTrimmed(TASKFLOW_PROTOCOL_BINDING_AUTHORITY),
+    ) {
+        blockers.push("non_authoritative_protocol_binding_authority".to_string());
+    }
+    if !release1_string_field_matches(
+        protocol_binding_registry
+            .get("binding_status")
+            .and_then(serde_json::Value::as_str),
+        Release1StringFieldRule::CanonicalEnum(&["bound"]),
+    ) {
+        blockers.push("protocol_binding_not_runtime_ready".to_string());
+    }
+    blockers
+}
+
+fn is_canonical_release1_cache_key_input_key(key: &str) -> bool {
+    matches!(
+        key,
+        "source_version_tuple"
+            | "project_activation_revision"
+            | "protocol_binding_revision"
+            | "protocol_binding_cache_token"
+            | "startup_bundle_revision"
+    )
+}
+
+fn is_canonical_release1_invalidation_tuple_key(key: &str) -> bool {
+    matches!(
+        key,
+        "framework_revision"
+            | "project_activation_revision"
+            | "protocol_binding_revision"
+            | "protocol_binding_cache_token"
+            | "startup_bundle_revision"
+    )
+}
+
+fn is_canonical_release1_metadata_key(key: &str) -> bool {
+    matches!(
+        key,
+        "bundle_id"
+            | "bundle_schema_version"
+            | "framework_revision"
+            | "project_activation_revision"
+            | "protocol_binding_revision"
+            | "protocol_binding_cache_token"
+            | "compiled_at"
+            | "binding_status"
+            | "error"
+    )
+}
+
+fn is_canonical_release1_control_core_key(key: &str) -> bool {
+    matches!(
+        key,
+        "root_artifact_id"
+            | "mandatory_chain_order"
+            | "source_version_tuple"
+            | "receipt_id"
+            | "artifact_count"
+            | "error"
+    )
+}
+
+fn is_canonical_release1_protocol_binding_registry_key(key: &str) -> bool {
+    matches!(
+        key,
+        "primary_state_authority"
+            | "receipt_id"
+            | "binding_status"
+            | "compiled_payload_import_evidence"
+            | "protocols"
+            | "error"
+    )
+}
+
+fn is_canonical_release1_tuple_entry(value: &serde_json::Value) -> bool {
+    value
+        .as_str()
+        .map(|entry| {
+            let trimmed = entry.trim();
+            !trimmed.is_empty() && trimmed == entry && trimmed == trimmed.to_ascii_lowercase()
+        })
+        .unwrap_or(false)
+}
+
+fn init_view_activation_is_pending(init_view: &serde_json::Value) -> bool {
+    init_view
+        .get("activation_pending")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+        || activation_status_is_pending(init_view.get("status").and_then(serde_json::Value::as_str))
 }
 
 pub(crate) fn blocking_runtime_bundle(error: &str) -> TaskflowConsumeBundlePayload {
@@ -939,7 +1094,9 @@ fn read_project_protocol_projection(
         "artifact_path": metadata.get("artifact_path").cloned().unwrap_or_default(),
         "artifact_type": metadata.get("artifact_type").cloned().unwrap_or_default(),
         "artifact_revision": metadata.get("artifact_revision").cloned().unwrap_or_default(),
-        "status": metadata.get("status").cloned().unwrap_or_else(|| if raw.is_some() { "present".to_string() } else { "missing".to_string() }),
+        "status": canonical_project_protocol_projection_status(
+            metadata.get("status").map(String::as_str).or_else(|| if raw.is_some() { Some("present") } else { Some("missing") })
+        ),
         "cache_partition": cache_partition,
         "runtime_use_point": runtime_use_point,
         "promotion_state": {
@@ -953,143 +1110,6 @@ fn read_project_protocol_projection(
         }
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        cache_contract_consistency_blockers, retrieval_optional_context_boundary_blockers,
-        retrieval_trust_evidence_blockers,
-        TaskflowConsumeBundlePayload,
-    };
-
-    #[test]
-    fn retrieval_optional_boundary_requires_all_canonical_entries() {
-        let contract = serde_json::json!({
-            "retrieval_only_optional_context_boundary": ["full_project_owner_protocols"]
-        });
-        let blockers = retrieval_optional_context_boundary_blockers(&contract);
-        assert!(blockers.iter().any(
-            |row| row == "missing_retrieval_optional_boundary_entry:non_promoted_project_docs"
-        ));
-        assert!(blockers
-            .iter()
-            .any(|row| row == "missing_retrieval_optional_boundary_entry:broad_repo_manual_scan"));
-    }
-
-    #[test]
-    fn retrieval_optional_boundary_passes_with_canonical_entries() {
-        let contract = serde_json::json!({
-            "retrieval_only_optional_context_boundary": [
-                "non_promoted_project_docs",
-                "full_project_owner_protocols",
-                "broad_repo_manual_scan"
-            ]
-        });
-        let blockers = retrieval_optional_context_boundary_blockers(&contract);
-        assert!(blockers.is_empty());
-    }
-
-    #[test]
-    fn cache_contract_consistency_blocks_missing_required_keys() {
-        let mut payload = minimal_payload_for_cache_checks();
-        payload.cache_delivery_contract = serde_json::json!({
-            "cache_key_inputs": {
-                "source_version_tuple": ["release-1"],
-                "project_activation_revision": "pa-1"
-            },
-            "invalidation_tuple": {
-                "framework_revision": "release-1",
-                "project_activation_revision": "pa-1"
-            }
-        });
-
-        let blockers = cache_contract_consistency_blockers(&payload);
-        assert!(blockers
-            .iter()
-            .any(|row| row == "missing_cache_key_input:protocol_binding_revision"));
-        assert!(blockers
-            .iter()
-            .any(|row| row == "missing_invalidation_tuple_key:startup_bundle_revision"));
-    }
-
-    #[test]
-    fn cache_contract_consistency_blocks_mismatched_revisions() {
-        let mut payload = minimal_payload_for_cache_checks();
-        payload.metadata = serde_json::json!({
-            "framework_revision": "release-1",
-            "project_activation_revision": "pa-1",
-            "protocol_binding_revision": "pb-1",
-        });
-        payload.cache_delivery_contract = serde_json::json!({
-            "cache_key_inputs": {
-                "source_version_tuple": ["release-1"],
-                "project_activation_revision": "pa-1",
-                "protocol_binding_revision": "pb-2",
-                "startup_bundle_revision": "sb-1"
-            },
-            "invalidation_tuple": {
-                "framework_revision": "release-2",
-                "project_activation_revision": "pa-1",
-                "protocol_binding_revision": "pb-2",
-                "startup_bundle_revision": "sb-2"
-            }
-        });
-
-        let blockers = cache_contract_consistency_blockers(&payload);
-        assert!(blockers
-            .iter()
-            .any(|row| row == "cache_key_mismatch:protocol_binding_revision"));
-        assert!(blockers
-            .iter()
-            .any(|row| row == "invalidation_tuple_mismatch:framework_revision"));
-        assert!(blockers
-            .iter()
-            .any(|row| row == "invalidation_tuple_mismatch:startup_bundle_revision"));
-    }
-
-    #[test]
-    fn retrieval_trust_evidence_requires_all_fields() {
-        let contract = serde_json::json!({
-            "retrieval_trust_evidence": {
-                "source": "taskflow_runtime_bundle",
-                "citation": "/tmp/project/vida.config.yaml",
-                "freshness": "2026-03-17T00:00:00Z"
-            }
-        });
-        let blockers = retrieval_trust_evidence_blockers(&contract);
-        assert!(blockers
-            .iter()
-            .any(|row| row == "missing_retrieval_trust_evidence_field:acl"));
-    }
-
-    fn minimal_payload_for_cache_checks() -> TaskflowConsumeBundlePayload {
-        TaskflowConsumeBundlePayload {
-            artifact_name: "taskflow_runtime_bundle".to_string(),
-            artifact_type: "runtime_bundle".to_string(),
-            generated_at: "2026-03-17T00:00:00Z".to_string(),
-            vida_root: "/tmp/project".to_string(),
-            config_path: "/tmp/project/vida.config.yaml".to_string(),
-            activation_source: "state_store".to_string(),
-            launcher_runtime_paths: crate::DoctorLauncherSummary {
-                vida: "vida".to_string(),
-                project_root: "/tmp/project".to_string(),
-                taskflow_surface: "vida taskflow".to_string(),
-            },
-            metadata: serde_json::json!({}),
-            control_core: serde_json::json!({}),
-            activation_bundle: serde_json::json!({}),
-            protocol_binding_registry: serde_json::json!({}),
-            cache_delivery_contract: serde_json::json!({}),
-            orchestrator_init_view: serde_json::json!({}),
-            agent_init_view: serde_json::json!({}),
-            boot_compatibility: serde_json::json!({}),
-            migration_preflight: serde_json::json!({}),
-            task_store: serde_json::json!({}),
-            run_graph: serde_json::json!({}),
-        }
-    }
-}
-
 fn parse_markdown_artifact_metadata(raw: &str) -> std::collections::HashMap<String, String> {
     let mut map = std::collections::HashMap::new();
     let Some((_, metadata)) = raw.split_once("\n-----\n") else {
@@ -1287,4 +1307,481 @@ fn non_orchestrator_roles(activation_bundle: &serde_json::Value) -> Vec<String> 
     roles.sort();
     roles.dedup();
     roles
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        activation_status_is_pending, cache_contract_consistency_blockers,
+        canonical_project_protocol_projection_status, init_view_activation_is_pending,
+        retrieval_optional_context_boundary_blockers, retrieval_trust_evidence_blockers,
+        taskflow_consume_bundle_check, TaskflowConsumeBundlePayload,
+    };
+    use crate::TASKFLOW_PROTOCOL_BINDING_AUTHORITY;
+
+    #[test]
+    fn retrieval_optional_boundary_requires_all_canonical_entries() {
+        let contract = serde_json::json!({
+            "retrieval_only_optional_context_boundary": ["full_project_owner_protocols"]
+        });
+        let blockers = retrieval_optional_context_boundary_blockers(&contract);
+        assert!(blockers.iter().any(
+            |row| row == "missing_retrieval_optional_boundary_entry:non_promoted_project_docs"
+        ));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_retrieval_optional_boundary_entry:broad_repo_manual_scan"));
+    }
+
+    #[test]
+    fn retrieval_optional_boundary_passes_with_canonical_entries() {
+        let contract = serde_json::json!({
+            "retrieval_only_optional_context_boundary": [
+                "non_promoted_project_docs",
+                "full_project_owner_protocols",
+                "broad_repo_manual_scan"
+            ]
+        });
+        let blockers = retrieval_optional_context_boundary_blockers(&contract);
+        assert!(blockers.is_empty());
+    }
+
+    #[test]
+    fn cache_contract_consistency_blocks_missing_required_keys() {
+        let mut payload = minimal_payload_for_cache_checks();
+        payload.cache_delivery_contract = serde_json::json!({
+            "cache_key_inputs": {
+                "source_version_tuple": ["release-1"],
+                "project_activation_revision": "pa-1"
+            },
+            "invalidation_tuple": {
+                "framework_revision": "release-1",
+                "project_activation_revision": "pa-1"
+            }
+        });
+
+        let blockers = cache_contract_consistency_blockers(&payload);
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_cache_key_input:protocol_binding_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_invalidation_tuple_key:startup_bundle_revision"));
+    }
+
+    #[test]
+    fn cache_contract_consistency_blocks_mismatched_revisions() {
+        let mut payload = minimal_payload_for_cache_checks();
+        payload.metadata = serde_json::json!({
+            "framework_revision": "release-1",
+            "project_activation_revision": "pa-1",
+            "protocol_binding_revision": "pb-1",
+        });
+        payload.cache_delivery_contract = serde_json::json!({
+            "cache_key_inputs": {
+                "source_version_tuple": ["release-1"],
+                "project_activation_revision": "pa-1",
+                "protocol_binding_revision": "pb-2",
+                "startup_bundle_revision": "sb-1"
+            },
+            "invalidation_tuple": {
+                "framework_revision": "release-2",
+                "project_activation_revision": "pa-1",
+                "protocol_binding_revision": "pb-2",
+                "startup_bundle_revision": "sb-2"
+            }
+        });
+
+        let blockers = cache_contract_consistency_blockers(&payload);
+        assert!(blockers
+            .iter()
+            .any(|row| row == "cache_key_mismatch:protocol_binding_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalidation_tuple_mismatch:framework_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalidation_tuple_mismatch:startup_bundle_revision"));
+    }
+
+    #[test]
+    fn cache_contract_consistency_blocks_whitespace_padded_shared_tuple_entries() {
+        let mut payload = minimal_payload_for_cache_checks();
+        payload.metadata = serde_json::json!({
+            "framework_revision": " release-1 ",
+            "project_activation_revision": " pa-1 ",
+            "protocol_binding_revision": " pb-1 ",
+            "protocol_binding_cache_token": " token-pb-1 ",
+        });
+        payload.cache_delivery_contract = serde_json::json!({
+            "cache_key_inputs": {
+                "source_version_tuple": ["release-1"],
+                "project_activation_revision": " pa-1 ",
+                "protocol_binding_revision": " pb-1 ",
+                "protocol_binding_cache_token": " token-pb-1 ",
+                "startup_bundle_revision": " sb-1 "
+            },
+            "invalidation_tuple": {
+                "framework_revision": " release-1 ",
+                "project_activation_revision": " pa-1 ",
+                "protocol_binding_revision": " pb-1 ",
+                "protocol_binding_cache_token": " token-pb-1 ",
+                "startup_bundle_revision": " sb-1 "
+            }
+        });
+
+        let blockers = cache_contract_consistency_blockers(&payload);
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_metadata_tuple_key:protocol_binding_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_cache_key_input:protocol_binding_revision"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_invalidation_tuple_key:protocol_binding_revision"));
+    }
+
+    #[test]
+    fn cache_contract_consistency_blocks_mixed_case_source_version_tuple_entries() {
+        let mut payload = minimal_payload_for_cache_checks();
+        payload.cache_delivery_contract = serde_json::json!({
+            "cache_key_inputs": {
+                "source_version_tuple": ["Release-1"],
+                "project_activation_revision": "pa-1",
+                "protocol_binding_revision": "pb-1",
+                "protocol_binding_cache_token": "token-pb-1",
+                "startup_bundle_revision": "sb-1"
+            },
+            "invalidation_tuple": {
+                "framework_revision": "release-1",
+                "project_activation_revision": "pa-1",
+                "protocol_binding_revision": "pb-1",
+                "protocol_binding_cache_token": "token-pb-1",
+                "startup_bundle_revision": "sb-1"
+            }
+        });
+
+        let blockers = cache_contract_consistency_blockers(&payload);
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_cache_key_input:source_version_tuple"));
+    }
+
+    #[test]
+    fn cache_contract_consistency_blocks_unknown_and_mixed_case_tuple_keys() {
+        let mut payload = minimal_payload_for_cache_checks();
+        payload.cache_delivery_contract = serde_json::json!({
+            "cache_key_inputs": {
+                "source_version_tuple": ["release-1"],
+                "project_activation_revision": "pa-1",
+                "protocol_binding_revision": "pb-1",
+                "protocol_binding_cache_token": "token-pb-1",
+                "startup_bundle_revision": "sb-1",
+                "Protocol_Binding_Revision": "pb-1"
+            },
+            "invalidation_tuple": {
+                "framework_revision": "release-1",
+                "project_activation_revision": "pa-1",
+                "protocol_binding_revision": "pb-1",
+                "protocol_binding_cache_token": "token-pb-1",
+                "startup_bundle_revision": "sb-1",
+                "Framework_Revision": "release-1"
+            }
+        });
+
+        let blockers = cache_contract_consistency_blockers(&payload);
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_cache_key_inputs_keys"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_invalidation_tuple_keys"));
+    }
+
+    #[test]
+    fn cache_contract_consistency_blocks_unknown_and_mixed_case_metadata_keys() {
+        let mut payload = minimal_payload_for_cache_checks();
+        payload.metadata = serde_json::json!({
+            "bundle_id": "taskflow-runtime-bundle-1",
+            "bundle_schema_version": "release-1-v1",
+            "framework_revision": "release-1",
+            "project_activation_revision": "pa-1",
+            "protocol_binding_revision": "pb-1",
+            "protocol_binding_cache_token": "token-pb-1",
+            "compiled_at": "2026-03-17T00:00:00Z",
+            "binding_status": "blocked",
+            "error": "blocked",
+            "Bundle_Id": "taskflow-runtime-bundle-1"
+        });
+        payload.cache_delivery_contract = serde_json::json!({
+            "cache_key_inputs": {
+                "source_version_tuple": ["release-1"],
+                "project_activation_revision": "pa-1",
+                "protocol_binding_revision": "pb-1",
+                "protocol_binding_cache_token": "token-pb-1",
+                "startup_bundle_revision": "sb-1"
+            },
+            "invalidation_tuple": {
+                "framework_revision": "release-1",
+                "project_activation_revision": "pa-1",
+                "protocol_binding_revision": "pb-1",
+                "protocol_binding_cache_token": "token-pb-1",
+                "startup_bundle_revision": "sb-1"
+            }
+        });
+
+        let blockers = cache_contract_consistency_blockers(&payload);
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_metadata_tuple_keys"));
+    }
+
+    #[test]
+    fn cache_contract_consistency_blocks_unknown_and_mixed_case_control_core_keys() {
+        let mut payload = minimal_payload_for_cache_checks();
+        payload.control_core = serde_json::json!({
+            "root_artifact_id": "root-1",
+            "mandatory_chain_order": ["core"],
+            "source_version_tuple": ["release-1"],
+            "receipt_id": "receipt-1",
+            "artifact_count": 1,
+            "Error": "boom"
+        });
+
+        let blockers = taskflow_consume_bundle_check(&payload).blockers;
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_control_core_keys"));
+    }
+
+    #[test]
+    fn cache_contract_consistency_blocks_unknown_and_mixed_case_protocol_binding_registry_keys() {
+        let mut payload = minimal_payload_for_cache_checks();
+        payload.protocol_binding_registry = serde_json::json!({
+            "primary_state_authority": TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
+            "receipt_id": "receipt-1",
+            "binding_status": "bound",
+            "compiled_payload_import_evidence": {
+                "imported": true,
+                "trusted": true,
+                "source": "state_store",
+                "source_config_path": "/tmp/project/vida.config.yaml",
+                "source_config_digest": "digest-1",
+                "captured_at": "2026-03-17T00:00:00Z",
+                "effective_bundle_receipt_id": "receipt-1",
+                "effective_bundle_root_artifact_id": "root-1",
+                "effective_bundle_artifact_count": 1,
+                "compiled_payload_summary": {},
+                "blockers": []
+            },
+            "protocols": [
+                {
+                    "protocol_id": "instruction-contracts/bridge.instruction-activation-protocol",
+                    "activation_class": "always_on",
+                    "runtime_owner": "vida::taskflow::protocol_binding::activation_bridge",
+                    "enforcement_type": "activation-resolution",
+                    "proof_surface": "vida docflow activation-check --profile active-canon",
+                    "binding_status": "fully-runtime-bound",
+                    "blockers": []
+                }
+            ],
+            "Protocols": []
+        });
+
+        let blockers = taskflow_consume_bundle_check(&payload).blockers;
+        assert!(blockers
+            .iter()
+            .any(|row| row == "invalid_protocol_binding_registry_keys"));
+    }
+
+    #[test]
+    fn protocol_binding_registry_whitespace_only_receipt_id_fails_closed() {
+        let mut payload = minimal_payload_for_cache_checks();
+        payload.protocol_binding_registry = serde_json::json!({
+            "primary_state_authority": TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
+            "receipt_id": "   ",
+            "binding_status": "bound",
+            "compiled_payload_import_evidence": {
+                "imported": true,
+                "trusted": true,
+                "source": "state_store",
+                "source_config_path": "/tmp/project/vida.config.yaml",
+                "source_config_digest": "digest-1",
+                "captured_at": "2026-03-17T00:00:00Z",
+                "effective_bundle_receipt_id": "receipt-1",
+                "effective_bundle_root_artifact_id": "root-1",
+                "effective_bundle_artifact_count": 1,
+                "compiled_payload_summary": {},
+                "blockers": []
+            },
+            "protocols": [
+                {
+                    "protocol_id": "instruction-contracts/bridge.instruction-activation-protocol",
+                    "activation_class": "always_on",
+                    "runtime_owner": "vida::taskflow::protocol_binding::activation_bridge",
+                    "enforcement_type": "activation-resolution",
+                    "proof_surface": "vida docflow activation-check --profile active-canon",
+                    "binding_status": "fully-runtime-bound",
+                    "blockers": []
+                }
+            ]
+        });
+
+        let blockers = taskflow_consume_bundle_check(&payload).blockers;
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_protocol_binding_receipt"));
+    }
+
+    #[test]
+    fn retrieval_trust_evidence_requires_all_fields() {
+        let contract = serde_json::json!({
+            "retrieval_trust_evidence": {
+                "source": "taskflow_runtime_bundle",
+                "citation": "/tmp/project/vida.config.yaml",
+                "freshness": "2026-03-17T00:00:00Z"
+            }
+        });
+        let blockers = retrieval_trust_evidence_blockers(&contract);
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_retrieval_trust_evidence_field:acl"));
+    }
+
+    #[test]
+    fn retrieval_trust_evidence_blocks_whitespace_only_fields() {
+        let contract = serde_json::json!({
+            "retrieval_trust_evidence": {
+                "source": " taskflow_runtime_bundle ",
+                "citation": "   ",
+                "freshness": "2026-03-17T00:00:00Z",
+                "acl": "\t"
+            }
+        });
+        let blockers = retrieval_trust_evidence_blockers(&contract);
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_retrieval_trust_evidence_field:citation"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_retrieval_trust_evidence_field:acl"));
+        assert!(blockers
+            .iter()
+            .any(|row| row == "missing_retrieval_trust_evidence_field:source"));
+    }
+
+    #[test]
+    fn activation_status_pending_compat_accepts_pending_and_pending_activation() {
+        assert!(activation_status_is_pending(Some("pending")));
+        assert!(activation_status_is_pending(Some("pending_activation")));
+        assert!(!activation_status_is_pending(Some(
+            "ready_enough_for_normal_work"
+        )));
+        assert!(!activation_status_is_pending(None));
+    }
+
+    #[test]
+    fn bundle_check_activation_status_fails_closed_for_case_and_whitespace_drift_in_view_status() {
+        let mut payload = minimal_payload_for_cache_checks();
+        payload.orchestrator_init_view = serde_json::json!({
+            "status": " PENDING_ACTIVATION ",
+            "activation_pending": false,
+        });
+        payload.agent_init_view = serde_json::json!({
+            "status": "ready_enough_for_normal_work",
+            "activation_pending": false,
+        });
+
+        let check = taskflow_consume_bundle_check(&payload);
+        assert_eq!(check.activation_status, "pending");
+    }
+
+    #[test]
+    fn bundle_check_canonicalizes_legacy_pending_activation_inputs() {
+        let mut payload = minimal_payload_for_cache_checks();
+        payload.orchestrator_init_view = serde_json::json!({
+            "status": "pending_activation",
+            "activation_pending": true,
+        });
+        payload.agent_init_view = serde_json::json!({
+            "status": "pending_activation",
+            "activation_pending": true,
+        });
+
+        let check = taskflow_consume_bundle_check(&payload);
+        assert_eq!(check.activation_status, "pending");
+    }
+
+    #[test]
+    fn init_view_activation_pending_is_fail_closed_for_status_and_boolean_drift() {
+        let pending_by_boolean = serde_json::json!({
+            "status": "ready_enough_for_normal_work",
+            "activation_pending": true
+        });
+        assert!(init_view_activation_is_pending(&pending_by_boolean));
+
+        let pending_by_status = serde_json::json!({
+            "status": "pending_activation",
+            "activation_pending": false
+        });
+        assert!(init_view_activation_is_pending(&pending_by_status));
+
+        let ready_view = serde_json::json!({
+            "status": "ready_enough_for_normal_work",
+            "activation_pending": false
+        });
+        assert!(!init_view_activation_is_pending(&ready_view));
+    }
+
+    #[test]
+    fn project_protocol_projection_status_normalizes_case_and_whitespace_drift() {
+        assert_eq!(
+            canonical_project_protocol_projection_status(Some(" COMPILED ")),
+            "compiled"
+        );
+        assert_eq!(
+            canonical_project_protocol_projection_status(Some(" validated ")),
+            "validated"
+        );
+        assert_eq!(
+            canonical_project_protocol_projection_status(Some(" present ")),
+            "present"
+        );
+        assert_eq!(
+            canonical_project_protocol_projection_status(Some(" missing ")),
+            "missing"
+        );
+        assert_eq!(
+            canonical_project_protocol_projection_status(Some("unknown")),
+            "blocked"
+        );
+    }
+
+    fn minimal_payload_for_cache_checks() -> TaskflowConsumeBundlePayload {
+        TaskflowConsumeBundlePayload {
+            artifact_name: "taskflow_runtime_bundle".to_string(),
+            artifact_type: "runtime_bundle".to_string(),
+            generated_at: "2026-03-17T00:00:00Z".to_string(),
+            vida_root: "/tmp/project".to_string(),
+            config_path: "/tmp/project/vida.config.yaml".to_string(),
+            activation_source: "state_store".to_string(),
+            launcher_runtime_paths: crate::DoctorLauncherSummary {
+                vida: "vida".to_string(),
+                project_root: "/tmp/project".to_string(),
+                taskflow_surface: "vida taskflow".to_string(),
+            },
+            metadata: serde_json::json!({}),
+            control_core: serde_json::json!({}),
+            activation_bundle: serde_json::json!({}),
+            protocol_binding_registry: serde_json::json!({}),
+            cache_delivery_contract: serde_json::json!({}),
+            orchestrator_init_view: serde_json::json!({}),
+            agent_init_view: serde_json::json!({}),
+            boot_compatibility: serde_json::json!({}),
+            migration_preflight: serde_json::json!({}),
+            task_store: serde_json::json!({}),
+            run_graph: serde_json::json!({}),
+        }
+    }
 }

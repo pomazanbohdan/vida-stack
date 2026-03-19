@@ -155,10 +155,24 @@ impl Release1ContractStatus {
         }
     }
 
+    pub(crate) const fn from_bool(ok: bool) -> Self {
+        if ok {
+            Self::Pass
+        } else {
+            Self::Blocked
+        }
+    }
+
     pub(crate) fn from_str(value: &str) -> Option<Self> {
         match value.trim() {
-            "pass" => Some(Self::Pass),
-            "blocked" => Some(Self::Blocked),
+            value if value.eq_ignore_ascii_case("pass") || value.eq_ignore_ascii_case("ok") => {
+                Some(Self::Pass)
+            }
+            value
+                if value.eq_ignore_ascii_case("blocked") || value.eq_ignore_ascii_case("block") =>
+            {
+                Some(Self::Blocked)
+            }
             _ => None,
         }
     }
@@ -166,6 +180,10 @@ impl Release1ContractStatus {
 
 pub(crate) fn canonical_release1_contract_status_str(value: &str) -> Option<&'static str> {
     Release1ContractStatus::from_str(value).map(Release1ContractStatus::as_str)
+}
+
+pub(crate) fn release1_contract_status_str(ok: bool) -> &'static str {
+    Release1ContractStatus::from_bool(ok).as_str()
 }
 
 pub(crate) fn has_evidence_id(value: Option<&str>) -> bool {
@@ -203,7 +221,7 @@ pub(crate) enum BlockerCode {
     ExceptionPathMissing,
     MissingProtocolBindingReceipt,
     ProtocolBindingNotRuntimeReady,
-    UnsupportedBlockerCode,
+    Unsupported,
 }
 
 impl BlockerCode {
@@ -215,7 +233,7 @@ impl BlockerCode {
             Self::ExceptionPathMissing => "exception_path_missing",
             Self::MissingProtocolBindingReceipt => "missing_protocol_binding_receipt",
             Self::ProtocolBindingNotRuntimeReady => "protocol_binding_not_runtime_ready",
-            Self::UnsupportedBlockerCode => "unsupported_blocker_code",
+            Self::Unsupported => "unsupported_blocker_code",
         }
     }
 
@@ -227,7 +245,7 @@ impl BlockerCode {
             "exception_path_missing" => Some(Self::ExceptionPathMissing),
             "missing_protocol_binding_receipt" => Some(Self::MissingProtocolBindingReceipt),
             "protocol_binding_not_runtime_ready" => Some(Self::ProtocolBindingNotRuntimeReady),
-            "unsupported_blocker_code" => Some(Self::UnsupportedBlockerCode),
+            "unsupported_blocker_code" => Some(Self::Unsupported),
             _ => None,
         }
     }
@@ -282,7 +300,7 @@ pub(crate) fn evaluate_policy_gate_protocol_binding(
         .iter()
         .find(|rule| rule.gate_id == gate_id.trim())
     else {
-        return Some(BlockerCode::UnsupportedBlockerCode);
+        return Some(BlockerCode::Unsupported);
     };
 
     if !has_evidence_id(protocol_binding_receipt_id) {
@@ -320,12 +338,12 @@ pub(crate) fn missing_downstream_lane_evidence_blocker(
 mod tests {
     use super::{
         blocker_code_str, blocker_code_value, canonical_blocker_code_list,
-        canonical_compatibility_class_str, canonical_release1_contract_type_str,
-        canonical_release1_contract_status_str, canonical_release1_schema_version_str,
+        canonical_compatibility_class_str, canonical_release1_contract_status_str,
+        canonical_release1_contract_type_str, canonical_release1_schema_version_str,
         classify_compatibility_boundary, evaluate_policy_gate_protocol_binding,
-        missing_downstream_lane_evidence_blocker, BlockerCode, CompatibilityBoundary,
-        CompatibilityClass, LaneStatus, Release1ContractStatus, Release1ContractType,
-        Release1SchemaVersion,
+        missing_downstream_lane_evidence_blocker, release1_contract_status_str, BlockerCode,
+        CompatibilityBoundary, CompatibilityClass, LaneStatus, Release1ContractStatus,
+        Release1ContractType, Release1SchemaVersion,
     };
 
     #[test]
@@ -506,12 +524,26 @@ mod tests {
     fn release1_contract_status_round_trips_to_canonical_values() {
         assert_eq!(Release1ContractStatus::Pass.as_str(), "pass");
         assert_eq!(Release1ContractStatus::Blocked.as_str(), "blocked");
-        assert_eq!(canonical_release1_contract_status_str(" pass "), Some("pass"));
+        assert_eq!(
+            canonical_release1_contract_status_str(" pass "),
+            Some("pass")
+        );
         assert_eq!(
             canonical_release1_contract_status_str(" blocked "),
             Some("blocked")
         );
+        assert_eq!(canonical_release1_contract_status_str(" ok "), Some("pass"));
+        assert_eq!(
+            canonical_release1_contract_status_str(" BLOCK "),
+            Some("blocked")
+        );
         assert_eq!(canonical_release1_contract_status_str("unknown"), None);
+    }
+
+    #[test]
+    fn release1_contract_status_emission_maps_bool_to_canonical_values() {
+        assert_eq!(release1_contract_status_str(true), "pass");
+        assert_eq!(release1_contract_status_str(false), "blocked");
     }
 
     #[test]
@@ -534,7 +566,7 @@ mod tests {
     fn decision_gate_fails_closed_for_unknown_gate_id() {
         assert_eq!(
             evaluate_policy_gate_protocol_binding("unknown_gate", Some("pb-1"), true),
-            Some(BlockerCode::UnsupportedBlockerCode)
+            Some(BlockerCode::Unsupported)
         );
     }
 }

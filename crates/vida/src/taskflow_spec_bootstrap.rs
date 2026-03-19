@@ -6,20 +6,36 @@ use clap::Parser;
 use docflow_cli::Cli as DocflowCli;
 use time::format_description::well_known::Rfc3339;
 
-use crate::state_store::StateStore;
+use crate::state_store::{CreateTaskRequest, StateStore};
 use crate::taskflow_task_bridge::task_record_json;
 
+struct TaskCreationArgs<'a> {
+    store: &'a StateStore,
+    project_root: &'a Path,
+    task_id: &'a str,
+    title: &'a str,
+    issue_type: &'a str,
+    status: &'a str,
+    parent_id: Option<&'a str>,
+    labels: &'a [&'a str],
+    description: Option<&'a str>,
+}
+
 fn create_task_if_missing_with_store(
-    store: &StateStore,
-    project_root: &Path,
-    task_id: &str,
-    title: &str,
-    issue_type: &str,
-    status: &str,
-    parent_id: Option<&str>,
-    labels: &[&str],
-    description: Option<&str>,
+    args: TaskCreationArgs<'_>,
 ) -> Result<(serde_json::Value, bool), String> {
+    let TaskCreationArgs {
+        store,
+        project_root,
+        task_id,
+        title,
+        issue_type,
+        status,
+        parent_id,
+        labels,
+        description,
+    } = args;
+
     if let Ok(existing) = crate::block_on_state_store(store.show_task(task_id)) {
         return Ok((task_record_json(&existing), false));
     }
@@ -27,18 +43,20 @@ fn create_task_if_missing_with_store(
         .iter()
         .map(|value| (*value).to_string())
         .collect::<Vec<_>>();
-    match crate::block_on_state_store(store.create_task(
+    let description_value = description.unwrap_or_default();
+    let source_repo = project_root.display().to_string();
+    match crate::block_on_state_store(store.create_task(CreateTaskRequest {
         task_id,
         title,
-        description.unwrap_or_default(),
+        description: description_value,
         issue_type,
         status,
-        2,
+        priority: 2,
         parent_id,
-        &label_rows,
-        "vida taskflow",
-        &project_root.display().to_string(),
-    )) {
+        labels: &label_rows,
+        created_by: "vida taskflow",
+        source_repo: &source_repo,
+    })) {
         Ok(task) => Ok((task_record_json(&task), true)),
         Err(error) if error.contains("task already exists") => {
             let existing = crate::block_on_state_store(store.show_task(task_id))?;
@@ -199,7 +217,6 @@ fn docflow_output_is_ok(output: &str) -> bool {
         && !output.contains("error:")
         && !output.contains("❌ BLOCKING:")
 }
-
 fn register_design_doc_in_spec_readme(
     project_root: &Path,
     design_doc_rel: &str,
@@ -263,15 +280,18 @@ fn ensure_project_docs_sidecar_pointers(project_root: &Path) -> Result<bool, Str
     Ok(changed)
 }
 
-fn write_spec_bootstrap_receipt(
-    project_root: &Path,
-    request: &str,
-    feature_slug: &str,
-    epic_task_id: &str,
-    spec_task_id: &str,
-    design_doc_path: &str,
-    changed_files: &[String],
-) -> Result<String, String> {
+struct SpecBootstrapReceiptArgs<'a> {
+    project_root: &'a Path,
+    request: &'a str,
+    feature_slug: &'a str,
+    epic_task_id: &'a str,
+    spec_task_id: &'a str,
+    design_doc_path: &'a str,
+    changed_files: &'a [String],
+}
+
+fn write_spec_bootstrap_receipt(args: SpecBootstrapReceiptArgs<'_>) -> Result<String, String> {
+    let project_root = args.project_root;
     let receipts_dir = project_root.join(".vida/receipts");
     fs::create_dir_all(&receipts_dir)
         .map_err(|error| format!("Failed to create {}: {error}", receipts_dir.display()))?;
@@ -285,12 +305,12 @@ fn write_spec_bootstrap_receipt(
         "recorded_at": recorded_at,
         "surface": "vida taskflow bootstrap-spec",
         "project_root": project_root.display().to_string(),
-        "request": request,
-        "feature_slug": feature_slug,
-        "epic_task_id": epic_task_id,
-        "spec_task_id": spec_task_id,
-        "design_doc_path": design_doc_path,
-        "changed_files": changed_files,
+        "request": args.request,
+        "feature_slug": args.feature_slug,
+        "epic_task_id": args.epic_task_id,
+        "spec_task_id": args.spec_task_id,
+        "design_doc_path": args.design_doc_path,
+        "changed_files": args.changed_files,
         "next_step": "finalize the design document through vida docflow, then close the spec task and continue through the next TaskFlow packet",
     });
     let body =
@@ -415,32 +435,32 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
     )?;
 
     let mut changed_files = Vec::new();
-    let (_, epic_created) = create_task_if_missing_with_store(
+    let (_, epic_created) = create_task_if_missing_with_store(TaskCreationArgs {
         store,
         project_root,
-        epic_task_id,
-        epic_title,
-        "epic",
-        "open",
-        None,
-        &["feature-request", "spec-first"],
-        Some(request_text),
-    )?;
+        task_id: epic_task_id,
+        title: epic_title,
+        issue_type: "epic",
+        status: "open",
+        parent_id: None,
+        labels: &["feature-request", "spec-first"],
+        description: Some(request_text),
+    })?;
     if epic_created {
         changed_files.push(format!("taskflow:{epic_task_id}"));
     }
 
-    let (_, spec_created) = create_task_if_missing_with_store(
+    let (_, spec_created) = create_task_if_missing_with_store(TaskCreationArgs {
         store,
         project_root,
-        spec_task_id,
-        spec_title,
-        "task",
-        "open",
-        Some(epic_task_id),
-        &["spec-pack", "documentation"],
-        Some("bounded design/spec packet for the feature request"),
-    )?;
+        task_id: spec_task_id,
+        title: spec_title,
+        issue_type: "task",
+        status: "open",
+        parent_id: Some(epic_task_id),
+        labels: &["spec-pack", "documentation"],
+        description: Some("bounded design/spec packet for the feature request"),
+    })?;
     if spec_created {
         changed_files.push(format!("taskflow:{spec_task_id}"));
     }
@@ -490,19 +510,19 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
         return Err(check_output);
     }
 
-    let receipt_path = write_spec_bootstrap_receipt(
+    let receipt_path = write_spec_bootstrap_receipt(SpecBootstrapReceiptArgs {
         project_root,
-        request_text,
+        request: request_text,
         feature_slug,
         epic_task_id,
         spec_task_id,
         design_doc_path,
-        &changed_files,
-    )?;
+        changed_files: &changed_files,
+    })?;
 
     Ok(serde_json::json!({
         "surface": "vida taskflow bootstrap-spec",
-        "status": "ok",
+        "status": "pass",
         "admission": {
             "status": "admitted",
             "admitted": true,
@@ -585,39 +605,39 @@ pub(crate) fn execute_work_packet_create_with_store(
     };
     let mut changed_files = Vec::new();
 
-    let (_, epic_created) = create_task_if_missing_with_store(
+    let (_, epic_created) = create_task_if_missing_with_store(TaskCreationArgs {
         store,
         project_root,
-        epic_task_id,
-        epic_title,
-        "epic",
-        "open",
-        None,
-        &["feature-request"],
-        Some("tracked feature epic for runtime-consumption dispatch"),
-    )?;
+        task_id: epic_task_id,
+        title: epic_title,
+        issue_type: "epic",
+        status: "open",
+        parent_id: None,
+        labels: &["feature-request"],
+        description: Some("tracked feature epic for runtime-consumption dispatch"),
+    })?;
     if epic_created {
         changed_files.push(format!("taskflow:{epic_task_id}"));
     }
 
-    let (_, packet_created) = create_task_if_missing_with_store(
+    let (_, packet_created) = create_task_if_missing_with_store(TaskCreationArgs {
         store,
         project_root,
         task_id,
         title,
-        "task",
-        "open",
-        Some(epic_task_id),
-        &[packet_label],
-        Some(packet_description),
-    )?;
+        issue_type: "task",
+        status: "open",
+        parent_id: Some(epic_task_id),
+        labels: &[packet_label],
+        description: Some(packet_description),
+    })?;
     if packet_created {
         changed_files.push(format!("taskflow:{task_id}"));
     }
 
     Ok(serde_json::json!({
         "surface": "vida taskflow task create",
-        "status": "ok",
+        "status": "pass",
         "packet_key": packet_key,
         "epic": {
             "task_id": epic_task_id,
@@ -630,4 +650,46 @@ pub(crate) fn execute_work_packet_create_with_store(
         },
         "changed_files": changed_files,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn spec_bootstrap_receipt_writes_files_to_temp_root() {
+        let unique_root = std::env::temp_dir().join(format!(
+            "vida-spec-bootstrap-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time should flow")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&unique_root).expect("temporary project root should be creatable");
+        let changed_files = vec!["taskflow:test-epic".to_string()];
+        let args = SpecBootstrapReceiptArgs {
+            project_root: &unique_root,
+            request: "test-request",
+            feature_slug: "test-feature",
+            epic_task_id: "EPIC-001",
+            spec_task_id: "SPEC-001",
+            design_doc_path: "docs/product/spec/preview.md",
+            changed_files: &changed_files,
+        };
+        let receipt_path =
+            write_spec_bootstrap_receipt(args).expect("receipt writer should succeed");
+        let absolute_receipt = unique_root.join(&receipt_path);
+        assert!(
+            absolute_receipt.exists(),
+            "expected receipt at {}",
+            absolute_receipt.display()
+        );
+        assert!(
+            unique_root.join(crate::SPEC_BOOTSTRAP_RECEIPT_LATEST).exists(),
+            ".vida receipt latest pointer should exist"
+        );
+        fs::remove_dir_all(&unique_root).expect("cleanup should succeed");
+    }
 }

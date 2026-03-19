@@ -1,5 +1,44 @@
 use super::*;
 
+fn canonical_release1_task_status(status: &str) -> &'static str {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "pass" | "ok" => "pass",
+        "blocked" => "blocked",
+        _ => "blocked",
+    }
+}
+
+fn canonical_json_string_array_entries(value: &serde_json::Value) -> Option<Vec<String>> {
+    let rows = value.as_array()?;
+    let mut entries = Vec::with_capacity(rows.len());
+    for row in rows {
+        let entry = row.as_str()?;
+        let trimmed = entry.trim();
+        if trimmed.is_empty() || trimmed != entry {
+            return None;
+        }
+        entries.push(trimmed.to_string());
+    }
+    Some(entries)
+}
+
+fn normalize_task_json_contract_arrays(summary_json: &mut serde_json::Value) -> Result<(), String> {
+    let Some(summary) = summary_json.as_object_mut() else {
+        return Ok(());
+    };
+    for key in ["blocker_codes", "next_actions"] {
+        if let Some(value) = summary.get(key) {
+            let entries = canonical_json_string_array_entries(value).ok_or_else(|| {
+                format!(
+                    "task json contract inconsistency: `{key}` must contain canonical nonempty string entries"
+                )
+            })?;
+            summary.insert(key.to_string(), serde_json::json!(entries));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
     match args.command {
         TaskCommand::ImportJsonl(command) => {
@@ -10,16 +49,23 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 Ok(store) => match store.import_tasks_from_jsonl(&command.path).await {
                     Ok(summary) => {
                         if command.json {
+                            let mut summary_json = serde_json::json!({
+                                "status": canonical_release1_task_status("ok"),
+                                "source_path": summary.source_path,
+                                "imported_count": summary.imported_count,
+                                "unchanged_count": summary.unchanged_count,
+                                "updated_count": summary.updated_count,
+                            });
+                            if let Err(error) =
+                                normalize_task_json_contract_arrays(&mut summary_json)
+                            {
+                                eprintln!("Failed to render task import-jsonl json: {error}");
+                                return ExitCode::from(1);
+                            }
                             println!(
                                 "{}",
-                                serde_json::to_string_pretty(&serde_json::json!({
-                                    "status": "ok",
-                                    "source_path": summary.source_path,
-                                    "imported_count": summary.imported_count,
-                                    "unchanged_count": summary.unchanged_count,
-                                    "updated_count": summary.updated_count,
-                                }))
-                                .expect("json import summary should render")
+                                serde_json::to_string_pretty(&summary_json)
+                                    .expect("json import summary should render")
                             );
                         } else {
                             print_surface_header(command.render, "vida task import-jsonl");
@@ -317,5 +363,53 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        canonical_json_string_array_entries, canonical_release1_task_status,
+        normalize_task_json_contract_arrays,
+    };
+
+    #[test]
+    fn canonical_release1_task_status_preserves_release1_vocabulary() {
+        assert_eq!(canonical_release1_task_status("pass"), "pass");
+        assert_eq!(canonical_release1_task_status("ok"), "pass");
+        assert_eq!(canonical_release1_task_status("blocked"), "blocked");
+    }
+
+    #[test]
+    fn canonical_release1_task_status_fails_closed_for_unknown_or_drifted_values() {
+        assert_eq!(canonical_release1_task_status("block"), "blocked");
+        assert_eq!(canonical_release1_task_status("unknown"), "blocked");
+        assert_eq!(canonical_release1_task_status(" ok "), "pass");
+    }
+
+    #[test]
+    fn canonical_release1_task_status_normalizes_case_and_whitespace_drift() {
+        assert_eq!(canonical_release1_task_status(" PASS "), "pass");
+        assert_eq!(canonical_release1_task_status(" BLOCKED "), "blocked");
+        assert_eq!(canonical_release1_task_status(" Ok "), "pass");
+    }
+
+    #[test]
+    fn normalize_task_json_contract_arrays_fail_closed_for_whitespace_only_entries() {
+        let mut summary_json = serde_json::json!({
+            "status": "pass",
+            "blocker_codes": ["   "],
+            "next_actions": ["Run `vida task import-jsonl --json`"],
+        });
+
+        assert!(normalize_task_json_contract_arrays(&mut summary_json).is_err());
+        assert_eq!(
+            canonical_json_string_array_entries(&serde_json::json!(["pending"])),
+            Some(vec!["pending".to_string()])
+        );
+        assert_eq!(
+            canonical_json_string_array_entries(&serde_json::json!(["   "])),
+            None
+        );
     }
 }

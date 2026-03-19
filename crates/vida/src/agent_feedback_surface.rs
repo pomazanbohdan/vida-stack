@@ -115,7 +115,7 @@ pub(crate) async fn run_agent_feedback(args: super::AgentFeedbackArgs) -> ExitCo
 
 fn infer_feedback_outcome_from_close_reason(reason: &str) -> &'static str {
     let normalized = reason.to_ascii_lowercase();
-    let inferred = if super::contains_keywords(
+    let inferred = if !super::contains_keywords(
         &normalized,
         &[
             "fail".to_string(),
@@ -127,11 +127,10 @@ fn infer_feedback_outcome_from_close_reason(reason: &str) -> &'static str {
             "rollback".to_string(),
         ],
     )
-    .len()
-        >= 1
+    .is_empty()
     {
         "failure"
-    } else if super::contains_keywords(
+    } else if !super::contains_keywords(
         &normalized,
         &[
             "neutral".to_string(),
@@ -140,8 +139,7 @@ fn infer_feedback_outcome_from_close_reason(reason: &str) -> &'static str {
             "handoff pending".to_string(),
         ],
     )
-    .len()
-        >= 1
+    .is_empty()
     {
         "neutral"
     } else {
@@ -253,7 +251,9 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
             "runtime_role": runtime_role,
         });
     }
-    if let Some((canonical_status, canonical_gate)) = canonical_close_status_from_reason(close_reason) {
+    if let Some((canonical_status, canonical_gate)) =
+        canonical_close_status_from_reason(close_reason)
+    {
         return serde_json::json!({
             "status": "skipped",
             "reason": "feedback_deferred_for_canonical_close_status",

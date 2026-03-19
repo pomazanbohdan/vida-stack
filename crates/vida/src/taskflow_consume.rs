@@ -48,13 +48,13 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         return ExitCode::from(2);
                     }
                 };
-            return super::taskflow_consume_resume::run_taskflow_consume_advance_command(
+            super::taskflow_consume_resume::run_taskflow_consume_advance_command(
                 super::taskflow_task_bridge::proxy_state_dir(),
                 as_json,
                 requested_run_id,
                 max_rounds,
             )
-            .await;
+            .await
         }
         [head, subcommand, request @ ..] if head == "consume" && subcommand == "final" => {
             let as_json = request.iter().any(|arg| arg == "--json");
@@ -78,7 +78,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         let bundle_check = super::taskflow_consume_bundle_check(&runtime_bundle);
                         let (registry, check, readiness, proof, overview) =
                             super::build_docflow_runtime_evidence();
-                        let docflow_verdict = super::build_docflow_runtime_verdict(
+                        let mut docflow_verdict = super::build_docflow_runtime_verdict(
                             &registry, &check, &readiness, &proof,
                         );
                         let role_selection = match super::build_runtime_lane_selection_with_store(
@@ -94,6 +94,19 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                         "unresolved_lane_selection",
                                         &bundle_check,
                                         &runtime_bundle,
+                                    );
+                                    let mut closure_admission =
+                                        super::RuntimeConsumptionClosureAdmission {
+                                            status: "blocked".to_string(),
+                                            admitted: false,
+                                            blockers: vec!["unresolved_lane_selection".to_string()],
+                                            proof_surfaces: vec![
+                                                "vida taskflow consume bundle check".to_string(),
+                                            ],
+                                        };
+                                    normalize_release1_runtime_consumption_statuses(
+                                        &mut docflow_verdict,
+                                        &mut closure_admission,
                                     );
                                     let payload = super::TaskflowDirectConsumptionPayload {
                                         artifact_name: "taskflow_direct_runtime_consumption"
@@ -125,18 +138,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                                 }),
                                             },
                                         docflow_verdict,
-                                        closure_admission:
-                                            super::RuntimeConsumptionClosureAdmission {
-                                                status: "block".to_string(),
-                                                admitted: false,
-                                                blockers: vec![
-                                                    "unresolved_lane_selection".to_string()
-                                                ],
-                                                proof_surfaces: vec![
-                                                    "vida taskflow consume bundle check"
-                                                        .to_string(),
-                                                ],
-                                            },
+                                        closure_admission,
                                         taskflow_handoff_plan: serde_json::json!({
                                             "status": "blocked",
                                             "handoff_ready": false,
@@ -173,12 +175,15 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             &docflow_verdict,
                             &role_selection,
                         );
-                        let execution_preparation_gate =
-                            build_execution_preparation_evidence_gate(
-                                &role_selection,
-                                &taskflow_handoff_plan,
-                                &run_graph_bootstrap,
-                            );
+                        normalize_release1_runtime_consumption_statuses(
+                            &mut docflow_verdict,
+                            &mut closure_admission,
+                        );
+                        let execution_preparation_gate = build_execution_preparation_evidence_gate(
+                            &role_selection,
+                            &taskflow_handoff_plan,
+                            &run_graph_bootstrap,
+                        );
                         let retrieval_policy_gate =
                             build_retrieval_policy_decision_gate(&bundle_check);
                         let approval_delegation_gate = build_approval_delegation_evidence_gate(
@@ -195,7 +200,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 closure_admission.blockers.sort();
                                 closure_admission.blockers.dedup();
                             }
-                            closure_admission.status = "block".to_string();
+                            closure_admission.status = "blocked".to_string();
                             closure_admission.admitted = false;
                         }
                         if let Some(blocker_code) = retrieval_policy_gate.blocker_code() {
@@ -208,7 +213,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 closure_admission.blockers.sort();
                                 closure_admission.blockers.dedup();
                             }
-                            closure_admission.status = "block".to_string();
+                            closure_admission.status = "blocked".to_string();
                             closure_admission.admitted = false;
                         }
                         if let Some(blocker_code) = approval_delegation_gate.blocker_code() {
@@ -221,7 +226,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 closure_admission.blockers.sort();
                                 closure_admission.blockers.dedup();
                             }
-                            closure_admission.status = "block".to_string();
+                            closure_admission.status = "blocked".to_string();
                             closure_admission.admitted = false;
                         }
                         let mut dispatch_receipt = build_runtime_consumption_dispatch_receipt(
@@ -286,13 +291,14 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             );
                             return ExitCode::from(1);
                         }
-                        let dispatch_packet_path = match super::write_runtime_dispatch_packet(
+                        let ctx = crate::RuntimeDispatchPacketContext::new(
                             store.root(),
                             &role_selection,
                             &dispatch_receipt,
                             &taskflow_handoff_plan,
                             &run_graph_bootstrap,
-                        ) {
+                        );
+                        let dispatch_packet_path = match super::write_runtime_dispatch_packet(&ctx) {
                             Ok(path) => path,
                             Err(error) => {
                                 eprintln!("Failed to write runtime dispatch packet: {error}");
@@ -345,13 +351,10 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         }
                         let direct_consumption_ready = bundle_check.ok
                             && docflow_verdict.ready
-                            && !closure_admission
-                                .blockers
-                                .iter()
-                                .any(|row| {
-                                    row == "pending_design_packet"
-                                        || row == "pending_execution_preparation_evidence"
-                                });
+                            && !closure_admission.blockers.iter().any(|row| {
+                                row == "pending_design_packet"
+                                    || row == "pending_execution_preparation_evidence"
+                            });
                         let payload = super::TaskflowDirectConsumptionPayload {
                             artifact_name: "taskflow_direct_runtime_consumption".to_string(),
                             artifact_type: "runtime_consumption".to_string(),
@@ -542,8 +545,8 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             let runtime_bundle = super::blocking_runtime_bundle(&error);
                             let bundle_check =
                                 super::taskflow_consume_bundle_check(&runtime_bundle);
-                            let docflow_verdict = super::RuntimeConsumptionDocflowVerdict {
-                                status: "block".to_string(),
+                            let mut docflow_verdict = super::RuntimeConsumptionDocflowVerdict {
+                                status: "blocked".to_string(),
                                 ready: false,
                                 blockers: vec![
                                     "missing_docflow_activation".to_string(),
@@ -554,10 +557,14 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             };
                             let role_selection =
                                 super::blocking_lane_selection(&request_text, &error);
-                            let closure_admission = super::build_runtime_closure_admission(
+                            let mut closure_admission = super::build_runtime_closure_admission(
                                 &bundle_check,
                                 &docflow_verdict,
                                 &role_selection,
+                            );
+                            normalize_release1_runtime_consumption_statuses(
+                                &mut docflow_verdict,
+                                &mut closure_admission,
                             );
                             let dispatch_receipt = blocked_dispatch_receipt(
                                 "docflow_activation_failed",
@@ -697,10 +704,12 @@ fn build_execution_preparation_evidence_gate(
     let evidence_ready = super::json_bool(
         run_graph_bootstrap.get("execution_preparation_evidence_ready"),
         false,
-    ) || run_graph_bootstrap["evidence"]["execution_preparation"]["status"].as_str()
+    ) || run_graph_bootstrap["evidence"]["execution_preparation"]["status"]
+        .as_str()
         == Some("ready")
-        || run_graph_bootstrap["evidence"]["execution_preparation"]["ready"].as_bool()
-            == Some(true);
+        || run_graph_bootstrap["evidence"]["execution_preparation"]["ready"]
+            .as_bool()
+            .unwrap_or(false);
 
     ExecutionPreparationEvidenceGate {
         missing_evidence_or_handoff_packet: !(handoff_ready && packet_ready && evidence_ready),
@@ -723,15 +732,16 @@ fn build_approval_delegation_evidence_gate(
     let latest_status = &run_graph_bootstrap["latest_status"];
     let handoff_state = latest_status["handoff_state"].as_str().unwrap_or_default();
     let policy_gate = latest_status["policy_gate"].as_str().unwrap_or_default();
-    let lifecycle_stage = latest_status["lifecycle_stage"].as_str().unwrap_or_default();
+    let lifecycle_stage = latest_status["lifecycle_stage"]
+        .as_str()
+        .unwrap_or_default();
     let combined = format!(
         "{} {} {}",
         handoff_state.to_ascii_lowercase(),
         policy_gate.to_ascii_lowercase(),
         lifecycle_stage.to_ascii_lowercase()
     );
-    let approval_or_delegation_wait =
-        combined.contains("approval") || combined.contains("delegat");
+    let approval_or_delegation_wait = combined.contains("approval") || combined.contains("delegat");
     if !approval_or_delegation_wait {
         return ApprovalDelegationEvidenceGate {
             missing_approval_or_delegation_evidence: false,
@@ -741,10 +751,15 @@ fn build_approval_delegation_evidence_gate(
     let evidence_ready = super::json_bool(
         run_graph_bootstrap.get("approval_delegation_evidence_ready"),
         false,
-    ) || super::json_bool(latest_status.get("approval_delegation_evidence_ready"), false)
-        || run_graph_bootstrap["evidence"]["approval_delegation"]["status"].as_str()
-            == Some("ready")
-        || run_graph_bootstrap["evidence"]["approval_delegation"]["ready"].as_bool() == Some(true);
+    ) || super::json_bool(
+        latest_status.get("approval_delegation_evidence_ready"),
+        false,
+    ) || run_graph_bootstrap["evidence"]["approval_delegation"]["status"]
+        .as_str()
+        == Some("ready")
+        || run_graph_bootstrap["evidence"]["approval_delegation"]["ready"]
+            .as_bool()
+            .unwrap_or(false);
 
     ApprovalDelegationEvidenceGate {
         missing_approval_or_delegation_evidence: !evidence_ready,
@@ -804,6 +819,22 @@ fn blocked_dispatch_receipt(
             },
         },
     })
+}
+
+fn normalize_release1_runtime_consumption_statuses(
+    docflow_verdict: &mut super::RuntimeConsumptionDocflowVerdict,
+    closure_admission: &mut super::RuntimeConsumptionClosureAdmission,
+) {
+    docflow_verdict.status = if docflow_verdict.ready {
+        "pass".to_string()
+    } else {
+        "blocked".to_string()
+    };
+    closure_admission.status = if closure_admission.admitted {
+        "pass".to_string()
+    } else {
+        "blocked".to_string()
+    };
 }
 
 fn build_runtime_consumption_dispatch_receipt(
@@ -934,8 +965,9 @@ fn build_runtime_consumption_dispatch_receipt(
 mod tests {
     use super::{
         build_approval_delegation_evidence_gate, build_execution_preparation_evidence_gate,
-        build_retrieval_policy_decision_gate, ApprovalDelegationEvidenceGate,
-        ExecutionPreparationEvidenceGate, RetrievalPolicyDecisionGate,
+        build_retrieval_policy_decision_gate, normalize_release1_runtime_consumption_statuses,
+        ApprovalDelegationEvidenceGate, ExecutionPreparationEvidenceGate,
+        RetrievalPolicyDecisionGate,
     };
 
     #[test]
@@ -1044,9 +1076,12 @@ mod tests {
             &run_graph_bootstrap,
         );
 
-        assert_eq!(gate, ExecutionPreparationEvidenceGate {
-            missing_evidence_or_handoff_packet: false
-        });
+        assert_eq!(
+            gate,
+            ExecutionPreparationEvidenceGate {
+                missing_evidence_or_handoff_packet: false
+            }
+        );
     }
 
     #[test]
@@ -1120,9 +1155,44 @@ mod tests {
         });
 
         let gate = build_approval_delegation_evidence_gate(&role_selection, &run_graph_bootstrap);
-        assert_eq!(gate, ApprovalDelegationEvidenceGate {
-            missing_approval_or_delegation_evidence: false
-        });
+        assert_eq!(
+            gate,
+            ApprovalDelegationEvidenceGate {
+                missing_approval_or_delegation_evidence: false
+            }
+        );
+    }
+
+    #[test]
+    fn release1_runtime_consumption_statuses_are_emitted_as_pass_or_blocked() {
+        let mut docflow_verdict = crate::RuntimeConsumptionDocflowVerdict {
+            status: "blocked".to_string(),
+            ready: false,
+            blockers: vec!["missing_proof_verdict".to_string()],
+            proof_surfaces: vec![],
+        };
+        let mut closure_admission = crate::RuntimeConsumptionClosureAdmission {
+            status: "blocked".to_string(),
+            admitted: false,
+            blockers: vec!["missing_closure_proof".to_string()],
+            proof_surfaces: vec![],
+        };
+
+        normalize_release1_runtime_consumption_statuses(
+            &mut docflow_verdict,
+            &mut closure_admission,
+        );
+        assert_eq!(docflow_verdict.status, "blocked");
+        assert_eq!(closure_admission.status, "blocked");
+
+        docflow_verdict.ready = true;
+        closure_admission.admitted = true;
+        normalize_release1_runtime_consumption_statuses(
+            &mut docflow_verdict,
+            &mut closure_admission,
+        );
+        assert_eq!(docflow_verdict.status, "pass");
+        assert_eq!(closure_admission.status, "pass");
     }
 
     #[test]

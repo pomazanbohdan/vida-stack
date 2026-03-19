@@ -1,5 +1,9 @@
 use std::collections::HashSet;
+use std::future::Future;
 use std::process::ExitCode;
+use std::time::Duration;
+
+const CONSUME_BUNDLE_CHECK_LOCK_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(crate) async fn run_taskflow_consume_bundle(args: &[String]) -> Option<ExitCode> {
     match args {
@@ -229,70 +233,117 @@ async fn run_consume_bundle(as_json: bool) -> ExitCode {
 
 async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
     let state_dir = super::taskflow_task_bridge::proxy_state_dir();
-    match super::StateStore::open_existing(state_dir).await {
-        Ok(store) => match super::build_taskflow_consume_bundle_payload(&store).await {
-            Ok(payload) => {
-                let check = super::taskflow_consume_bundle_check(&payload);
-                let mut effective_blockers = check.blockers.clone();
-                let seam_closure_admission_receipt_check =
-                    taskflow_docflow_seam_receipt_backed_check(&payload);
-                if !seam_closure_admission_receipt_check["receipt_backed"]
-                    .as_bool()
-                    .unwrap_or(false)
-                {
-                    effective_blockers.push("missing_protocol_binding_receipt".to_string());
-                }
-                let db_first_activation_truth =
-                    match super::read_or_sync_launcher_activation_snapshot(&store).await {
-                        Ok(snapshot) => {
-                            if let Some(error) =
-                                db_first_activation_snapshot_validation_error(&snapshot)
-                            {
-                                effective_blockers
-                                    .push("missing_launcher_activation_snapshot".to_string());
-                                serde_json::json!({
-                                    "ok": false,
-                                    "error": error,
-                                    "source": snapshot.source,
-                                    "source_config_path": snapshot.source_config_path,
-                                    "source_config_digest": snapshot.source_config_digest,
-                                })
-                            } else {
-                                serde_json::json!({
-                                    "ok": true,
-                                    "source": snapshot.source,
-                                    "source_config_path": snapshot.source_config_path,
-                                    "source_config_digest": snapshot.source_config_digest,
-                                })
-                            }
-                        }
-                        Err(error) => {
-                            effective_blockers.push("missing_launcher_activation_snapshot".to_string());
+    let store = match fail_fast_with_timeout(
+        "opening authoritative state store",
+        super::StateStore::open_existing(state_dir),
+    )
+    .await
+    {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    match fail_fast_with_timeout(
+        "building consume bundle payload",
+        super::build_taskflow_consume_bundle_payload(&store),
+    )
+    .await
+    {
+        Ok(payload) => {
+            let check = super::taskflow_consume_bundle_check(&payload);
+            let mut effective_blockers = check.blockers.clone();
+            let seam_closure_admission_receipt_check =
+                taskflow_docflow_seam_receipt_backed_check(&payload);
+            if !seam_closure_admission_receipt_check["receipt_backed"]
+                .as_bool()
+                .unwrap_or(false)
+            {
+                effective_blockers.push("missing_protocol_binding_receipt".to_string());
+            }
+            let db_first_activation_truth =
+                match super::read_or_sync_launcher_activation_snapshot(&store).await {
+                    Ok(snapshot) => {
+                        if let Some(error) =
+                            db_first_activation_snapshot_validation_error(&snapshot)
+                        {
+                            effective_blockers
+                                .push("missing_launcher_activation_snapshot".to_string());
                             serde_json::json!({
                                 "ok": false,
                                 "error": error,
+                                "source": snapshot.source,
+                                "source_config_path": snapshot.source_config_path,
+                                "source_config_digest": snapshot.source_config_digest,
+                            })
+                        } else {
+                            serde_json::json!({
+                                "ok": true,
+                                "source": snapshot.source,
+                                "source_config_path": snapshot.source_config_path,
+                                "source_config_digest": snapshot.source_config_digest,
                             })
                         }
-                    };
-                let blocker_codes = normalize_consume_bundle_blocker_codes(&effective_blockers);
-                let next_actions = consume_bundle_check_next_actions(&blocker_codes);
-                let artifact_refs = serde_json::json!({
-                    "root_artifact_id": check.root_artifact_id,
-                    "bundle_artifact_name": payload.artifact_name,
-                    "surface": "vida taskflow consume bundle check"
-                });
-                let operator_contracts = serde_json::json!({
-                    "contract_id": "release-1-operator-contracts",
-                    "schema_version": "release-1-v1",
-                    "status": if blocker_codes.is_empty() { "pass" } else { "blocked" },
-                    "blocker_codes": blocker_codes,
-                    "next_actions": next_actions,
-                    "artifact_refs": artifact_refs,
-                });
-                let snapshot_path = match super::write_runtime_consumption_snapshot(
-                    store.root(),
-                    "bundle-check",
-                    &serde_json::json!({
+                    }
+                    Err(error) => {
+                        effective_blockers.push("missing_launcher_activation_snapshot".to_string());
+                        serde_json::json!({
+                            "ok": false,
+                            "error": error,
+                        })
+                    }
+                };
+            let blocker_codes = normalize_consume_bundle_blocker_codes(&effective_blockers);
+            let next_actions = consume_bundle_check_next_actions(&blocker_codes);
+            let artifact_refs = serde_json::json!({
+                "root_artifact_id": check.root_artifact_id,
+                "bundle_artifact_name": payload.artifact_name,
+                "surface": "vida taskflow consume bundle check"
+            });
+            let operator_status = consume_bundle_operator_contract_status(&blocker_codes);
+            if let Some(error) = bundle_check_operator_contracts_consistency_error(
+                operator_status,
+                &blocker_codes,
+                &next_actions,
+            ) {
+                eprintln!("consume bundle check: failed ({error})");
+                return ExitCode::from(1);
+            }
+            let operator_contracts = serde_json::json!({
+                "contract_id": "release-1-operator-contracts",
+                "schema_version": "release-1-v1",
+                "status": operator_status,
+                "blocker_codes": blocker_codes,
+                "next_actions": next_actions,
+                "artifact_refs": artifact_refs,
+            });
+            let snapshot_path = match super::write_runtime_consumption_snapshot(
+                store.root(),
+                "bundle-check",
+                &serde_json::json!({
+                    "surface": "vida taskflow consume bundle check",
+                    "check": &check,
+                    "seam_closure_admission_receipt_check": &seam_closure_admission_receipt_check,
+                    "db_first_activation_truth": &db_first_activation_truth,
+                    "effective_blockers": &effective_blockers,
+                    "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                    "next_actions": operator_contracts["next_actions"].clone(),
+                    "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                    "operator_contracts": &operator_contracts,
+                    "bundle": &payload,
+                }),
+            ) {
+                Ok(path) => path,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(1);
+                }
+            };
+            if as_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
                         "surface": "vida taskflow consume bundle check",
                         "check": &check,
                         "seam_closure_admission_receipt_check": &seam_closure_admission_receipt_check,
@@ -302,102 +353,89 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                         "next_actions": operator_contracts["next_actions"].clone(),
                         "artifact_refs": operator_contracts["artifact_refs"].clone(),
                         "operator_contracts": &operator_contracts,
-                        "bundle": &payload,
-                    }),
-                ) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        return ExitCode::from(1);
-                    }
-                };
-                if as_json {
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&serde_json::json!({
-                            "surface": "vida taskflow consume bundle check",
-                            "check": &check,
-                            "seam_closure_admission_receipt_check": &seam_closure_admission_receipt_check,
-                            "db_first_activation_truth": &db_first_activation_truth,
-                            "effective_blockers": &effective_blockers,
-                            "blocker_codes": operator_contracts["blocker_codes"].clone(),
-                            "next_actions": operator_contracts["next_actions"].clone(),
-                            "artifact_refs": operator_contracts["artifact_refs"].clone(),
-                            "operator_contracts": &operator_contracts,
-                            "snapshot_path": snapshot_path,
-                        }))
-                        .expect("consume bundle check should render as json")
-                    );
-                } else {
-                    super::print_surface_header(
-                        super::RenderMode::Plain,
-                        "vida taskflow consume bundle check",
-                    );
+                        "snapshot_path": snapshot_path,
+                    }))
+                    .expect("consume bundle check should render as json")
+                );
+            } else {
+                super::print_surface_header(
+                    super::RenderMode::Plain,
+                    "vida taskflow consume bundle check",
+                );
+                super::print_surface_line(
+                    super::RenderMode::Plain,
+                    "ok",
+                    if blocker_codes.is_empty() {
+                        "true"
+                    } else {
+                        "false"
+                    },
+                );
+                super::print_surface_line(
+                    super::RenderMode::Plain,
+                    "root artifact",
+                    &check.root_artifact_id,
+                );
+                super::print_surface_line(
+                    super::RenderMode::Plain,
+                    "artifact count",
+                    &check.artifact_count.to_string(),
+                );
+                if !effective_blockers.is_empty() {
                     super::print_surface_line(
                         super::RenderMode::Plain,
-                        "ok",
-                        if blocker_codes.is_empty() {
-                            "true"
-                        } else {
-                            "false"
-                        },
+                        "blockers",
+                        &effective_blockers.join(", "),
                     );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "root artifact",
-                        &check.root_artifact_id,
-                    );
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "artifact count",
-                        &check.artifact_count.to_string(),
-                    );
-                    if !effective_blockers.is_empty() {
+                    let actions = operator_contracts["next_actions"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    if !actions.is_empty() {
                         super::print_surface_line(
                             super::RenderMode::Plain,
-                            "blockers",
-                            &effective_blockers.join(", "),
+                            "next actions",
+                            &actions,
                         );
-                        let actions = operator_contracts["next_actions"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(serde_json::Value::as_str)
-                            .collect::<Vec<_>>()
-                            .join(" | ");
-                        if !actions.is_empty() {
-                            super::print_surface_line(
-                                super::RenderMode::Plain,
-                                "next actions",
-                                &actions,
-                            );
-                        }
                     }
-                    super::print_surface_line(
-                        super::RenderMode::Plain,
-                        "snapshot path",
-                        &snapshot_path,
-                    );
                 }
-                if blocker_codes.is_empty() {
-                    ExitCode::SUCCESS
-                } else {
-                    ExitCode::from(1)
-                }
+                super::print_surface_line(
+                    super::RenderMode::Plain,
+                    "snapshot path",
+                    &snapshot_path,
+                );
             }
-            Err(error) => {
-                eprintln!("{error}");
+            if blocker_codes.is_empty() {
+                ExitCode::SUCCESS
+            } else {
                 ExitCode::from(1)
             }
-        },
+        }
         Err(error) => {
-            eprintln!("Failed to open authoritative state store: {error}");
+            eprintln!("{error}");
             ExitCode::from(1)
         }
     }
 }
 
+async fn fail_fast_with_timeout<T, E, F>(label: &str, future: F) -> Result<T, String>
+where
+    F: Future<Output = Result<T, E>>,
+    E: std::fmt::Display,
+{
+    match tokio::time::timeout(CONSUME_BUNDLE_CHECK_LOCK_TIMEOUT, future).await {
+        Ok(result) => result.map_err(|error| error.to_string()),
+        Err(_) => Err(format!(
+            "consume bundle check failed fast: {label} timed out while waiting for authoritative datastore lock"
+        )),
+    }
+}
+
 fn consume_bundle_check_next_actions(blockers: &[String]) -> Vec<String> {
+    let blockers = normalize_consume_bundle_blocker_codes(blockers);
     if blockers.is_empty() {
         return vec![];
     }
@@ -441,12 +479,64 @@ fn normalize_consume_bundle_blocker_codes(blockers: &[String]) -> Vec<String> {
         crate::release1_contracts::canonical_blocker_code_list(blockers.iter().map(String::as_str));
     if canonical.is_empty() && !blockers.is_empty() {
         return crate::release1_contracts::blocker_code_value(
-            crate::release1_contracts::BlockerCode::UnsupportedBlockerCode,
+            crate::release1_contracts::BlockerCode::Unsupported,
         )
         .into_iter()
         .collect();
     }
     canonical
+}
+
+fn consume_bundle_operator_contract_status(blockers: &[String]) -> &'static str {
+    crate::release1_contracts::release1_contract_status_str(blockers.is_empty())
+}
+
+fn bundle_check_operator_contracts_consistency_error(
+    status: &str,
+    blocker_codes: &[String],
+    next_actions: &[String],
+) -> Option<String> {
+    let Some(canonical_status) =
+        crate::release1_contracts::canonical_release1_contract_status_str(status)
+    else {
+        return Some(
+            "operator contract inconsistency: status must be canonical release-1 pass/blocked"
+                .to_string(),
+        );
+    };
+    let string_is_canonical_nonempty = |value: &String| {
+        let trimmed = value.trim();
+        !trimmed.is_empty() && trimmed == value
+    };
+
+    if !blocker_codes.iter().all(string_is_canonical_nonempty)
+        || !next_actions.iter().all(string_is_canonical_nonempty)
+    {
+        return Some(
+            "operator contract inconsistency: shared string arrays must contain only canonical nonempty entries"
+                .to_string(),
+        );
+    }
+
+    match canonical_status {
+        "pass" if !blocker_codes.is_empty() => Some(
+            "operator contract inconsistency: status=pass must not include blocker_codes"
+                .to_string(),
+        ),
+        "pass" if !next_actions.is_empty() => Some(
+            "operator contract inconsistency: status=pass must not include next_actions"
+                .to_string(),
+        ),
+        "pass" => None,
+        "blocked" if blocker_codes.is_empty() => Some(
+            "operator contract inconsistency: status=blocked requires blocker_codes".to_string(),
+        ),
+        "blocked" if next_actions.is_empty() => Some(
+            "operator contract inconsistency: status=blocked requires next_actions".to_string(),
+        ),
+        "blocked" => None,
+        _ => unreachable!("canonical release-1 contract status should be pass or blocked"),
+    }
 }
 
 fn db_first_activation_snapshot_validation_error(
@@ -470,11 +560,25 @@ fn db_first_activation_snapshot_validation_error(
 fn taskflow_docflow_seam_receipt_backed_check(
     payload: &super::TaskflowConsumeBundlePayload,
 ) -> serde_json::Value {
-    let total_receipts = payload.protocol_binding_registry["summary"]["total_receipts"]
-        .as_u64()
+    let receipt_id = payload.protocol_binding_registry["receipt_id"]
+        .as_str()
+        .unwrap_or_default()
+        .trim();
+    let binding_status = payload.protocol_binding_registry["binding_status"]
+        .as_str()
+        .unwrap_or("blocked");
+    let protocol_rows = payload.protocol_binding_registry["protocols"]
+        .as_array()
+        .map(|rows| rows.len())
         .unwrap_or(0);
+    let total_receipts = if !receipt_id.is_empty() && binding_status == "bound" && protocol_rows > 0
+    {
+        1
+    } else {
+        0
+    };
     serde_json::json!({
-        "status": if total_receipts > 0 { "pass" } else { "block" },
+        "status": crate::release1_contracts::release1_contract_status_str(total_receipts > 0),
         "receipt_backed": total_receipts > 0,
         "total_receipts": total_receipts,
         "surface": "vida taskflow protocol-binding status --json",
@@ -579,9 +683,42 @@ fn normalize_agent_system_max_parallel_agents(agent_system: &serde_json::Value) 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_taskflow_agent_system_snapshot, consume_bundle_check_next_actions,
-        normalize_agent_system_max_parallel_agents, normalize_consume_bundle_blocker_codes,
+        build_taskflow_agent_system_snapshot, bundle_check_operator_contracts_consistency_error,
+        consume_bundle_check_next_actions, consume_bundle_operator_contract_status,
+        fail_fast_with_timeout, normalize_agent_system_max_parallel_agents,
+        normalize_consume_bundle_blocker_codes, taskflow_docflow_seam_receipt_backed_check,
     };
+    use crate::{
+        release1_contracts::release1_contract_status_str, DoctorLauncherSummary,
+        TaskflowConsumeBundlePayload,
+    };
+
+    fn minimal_payload_for_operator_contract_status_checks() -> TaskflowConsumeBundlePayload {
+        TaskflowConsumeBundlePayload {
+            artifact_name: "taskflow_runtime_bundle".to_string(),
+            artifact_type: "runtime_bundle".to_string(),
+            generated_at: "2026-03-17T00:00:00Z".to_string(),
+            vida_root: "/tmp/project".to_string(),
+            config_path: "/tmp/project/vida.config.yaml".to_string(),
+            activation_source: "state_store".to_string(),
+            launcher_runtime_paths: DoctorLauncherSummary {
+                vida: "vida".to_string(),
+                project_root: "/tmp/project".to_string(),
+                taskflow_surface: "vida taskflow".to_string(),
+            },
+            metadata: serde_json::json!({}),
+            control_core: serde_json::json!({}),
+            activation_bundle: serde_json::json!({}),
+            protocol_binding_registry: serde_json::json!({}),
+            cache_delivery_contract: serde_json::json!({}),
+            orchestrator_init_view: serde_json::json!({}),
+            agent_init_view: serde_json::json!({}),
+            boot_compatibility: serde_json::json!({}),
+            migration_preflight: serde_json::json!({}),
+            task_store: serde_json::json!({}),
+            run_graph: serde_json::json!({}),
+        }
+    }
 
     #[test]
     fn normalize_agent_system_max_parallel_agents_uses_positive_numeric_value() {
@@ -1011,12 +1148,99 @@ mod tests {
     }
 
     #[test]
-    fn consume_bundle_next_actions_fall_back_for_unsupported_blocker_code() {
-        let actions =
-            consume_bundle_check_next_actions(&["unsupported_blocker_code".to_string()]);
+    fn consume_bundle_next_actions_fail_closed_for_whitespace_only_blocker_strings() {
+        let normalized = normalize_consume_bundle_blocker_codes(&["   ".to_string()]);
+        assert_eq!(normalized, vec!["unsupported_blocker_code".to_string()]);
+
+        let actions = consume_bundle_check_next_actions(&["   ".to_string()]);
         assert_eq!(
             actions,
             vec!["Resolve consume-bundle-check blockers before closure packaging.".to_string()]
         );
+    }
+
+    #[test]
+    fn consume_bundle_next_actions_fall_back_for_unsupported_blocker_code() {
+        let actions = consume_bundle_check_next_actions(&["unsupported_blocker_code".to_string()]);
+        assert_eq!(
+            actions,
+            vec!["Resolve consume-bundle-check blockers before closure packaging.".to_string()]
+        );
+    }
+
+    #[test]
+    fn consume_bundle_operator_contract_status_uses_canonical_release1_vocabulary() {
+        assert_eq!(
+            consume_bundle_operator_contract_status(&[]),
+            release1_contract_status_str(true)
+        );
+        assert_eq!(
+            consume_bundle_operator_contract_status(&[
+                "missing_protocol_binding_receipt".to_string()
+            ]),
+            release1_contract_status_str(false)
+        );
+    }
+
+    #[test]
+    fn bundle_check_operator_contracts_consistency_rejects_noncanonical_status_drift() {
+        let blocker_codes = vec!["missing_protocol_binding_receipt".to_string()];
+        let next_actions = vec!["Run `vida taskflow protocol-binding sync --json`".to_string()];
+        assert_eq!(
+            bundle_check_operator_contracts_consistency_error(
+                "pass!",
+                &blocker_codes,
+                &next_actions,
+            ),
+            Some(
+                "operator contract inconsistency: status must be canonical release-1 pass/blocked"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn bundle_check_operator_contracts_consistency_rejects_noncanonical_mirrored_string_entries() {
+        let blocker_codes = vec!["missing_protocol_binding_receipt".to_string()];
+        let next_actions = vec![" Run `vida taskflow protocol-binding sync --json` ".to_string()];
+        assert_eq!(
+            bundle_check_operator_contracts_consistency_error(
+                "blocked",
+                &blocker_codes,
+                &next_actions,
+            ),
+            Some(
+                "operator contract inconsistency: shared string arrays must contain only canonical nonempty entries"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn taskflow_docflow_seam_receipt_backed_check_uses_canonical_blocked_status() {
+        let payload = minimal_payload_for_operator_contract_status_checks();
+        let seam = taskflow_docflow_seam_receipt_backed_check(&payload);
+
+        assert_eq!(seam["status"], "blocked");
+        assert_eq!(seam["receipt_backed"], false);
+    }
+
+    #[test]
+    fn fail_fast_with_timeout_returns_deterministic_timeout_error() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("test runtime should build");
+        let result = runtime.block_on(async {
+            fail_fast_with_timeout("opening authoritative state store", async {
+                std::future::pending::<Result<(), String>>().await
+            })
+            .await
+        });
+
+        let error = result.expect_err("pending future should time out");
+        assert!(error.contains("consume bundle check failed fast"));
+        assert!(error.contains("opening authoritative state store"));
+        assert!(error.contains("authoritative datastore lock"));
     }
 }

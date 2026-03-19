@@ -1,9 +1,9 @@
 use crate::{
     build_runtime_execution_plan_from_snapshot, build_runtime_lane_selection_with_store,
-    print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
+    operator_contracts::canonical_release1_blocker_code_entries, print_surface_header,
+    print_surface_line, read_or_sync_launcher_activation_snapshot,
     state_store::{RunGraphStatus, StateStore, StateStoreError},
-    taskflow_layer4::print_taskflow_proxy_help,
-    taskflow_task_bridge::proxy_state_dir,
+    taskflow_layer4::print_taskflow_proxy_help, taskflow_task_bridge::proxy_state_dir,
     RenderMode, RuntimeConsumptionLaneSelection,
 };
 use std::process::ExitCode;
@@ -667,42 +667,67 @@ fn run_graph_blocker_code(status: &str) -> Option<&'static str> {
     }
 }
 
+struct RunGraphBlockerEvidenceArgs<'a> {
+    run_id: &'a str,
+    active_node: &'a str,
+    status: &'a str,
+    route_task_class: &'a str,
+    policy_gate: &'a str,
+    resume_target: &'a str,
+    next_node: Option<&'a str>,
+    error: &'a str,
+}
+
 fn run_graph_blocker_evidence(
-    run_id: &str,
-    active_node: &str,
-    status: &str,
-    route_task_class: &str,
-    policy_gate: &str,
-    resume_target: &str,
-    next_node: Option<&str>,
-    error: &str,
+    args: RunGraphBlockerEvidenceArgs<'_>,
 ) -> Result<Option<serde_json::Value>, String> {
-    let is_blocked_advance = error.starts_with("run-graph advance blocked:");
+    let is_blocked_advance = args.error.starts_with("run-graph advance blocked:");
     if !is_blocked_advance {
         return Ok(None);
     }
-    let blocker_code = run_graph_blocker_code(status).ok_or_else(|| {
+    let blocker_code = run_graph_blocker_code(args.status).ok_or_else(|| {
         format!(
             "run-graph advance blocked without explicit blocker evidence for `{}` status `{}`; refusing to continue (fail-closed)",
-            run_id, status
+            args.run_id, args.status
         )
     })?;
+    let canonical_blocker_codes = canonical_release1_blocker_code_entries(&serde_json::json!([blocker_code]))
+        .ok_or_else(|| {
+            format!(
+                "run-graph blocker code `{blocker_code}` is not canonical (must be lowercase/digits/_)"
+            )
+        })?;
+    let canonical_blocker_code = canonical_blocker_codes
+        .first()
+        .expect("canonical block list always non-empty")
+        .clone();
     Ok(Some(serde_json::json!({
         "incident": {
             "code": "run_graph_advance_blocked",
-            "run_id": run_id,
-            "active_node": active_node,
-            "status": status,
-            "route_task_class": route_task_class,
+            "run_id": args.run_id,
+            "active_node": args.active_node,
+            "status": args.status,
+            "route_task_class": args.route_task_class,
         },
         "blockers": [{
-            "code": blocker_code,
-            "policy_gate": policy_gate,
-            "resume_target": resume_target,
-            "next_node": next_node,
+            "code": canonical_blocker_code,
+            "policy_gate": args.policy_gate,
+            "resume_target": args.resume_target,
+            "next_node": args.next_node,
             "source": "run_graph_state",
         }]
     })))
+}
+
+pub(crate) fn is_dispatch_resume_handoff_complete(status: &RunGraphStatus) -> bool {
+    if !status.resume_target.starts_with("dispatch.") {
+        return true;
+    }
+    status.next_node.is_some()
+        && !status.policy_gate.trim().is_empty()
+        && status.policy_gate != "none"
+        && !status.handoff_state.trim().is_empty()
+        && status.handoff_state != "none"
 }
 
 pub(crate) fn validate_run_graph_resume_gate(status: &RunGraphStatus) -> Result<(), String> {
@@ -718,6 +743,22 @@ pub(crate) fn validate_run_graph_resume_gate(status: &RunGraphStatus) -> Result<
             status.run_id, status.resume_target
         ));
     }
+    ensure_resume_target_handoff_consistency(status).map_err(|error| {
+        format!(
+            "Run-graph resume gate denied for `{}`: {error}",
+            status.run_id
+        )
+    })?;
+    if !is_dispatch_resume_handoff_complete(status) {
+        return Err(format!(
+            "Run-graph resume gate denied for `{}`: dispatch resume target `{}` requires complete handoff metadata (next_node={}, policy_gate=`{}`, handoff=`{}`)",
+            status.run_id,
+            status.resume_target,
+            status.next_node.as_deref().unwrap_or("none"),
+            status.policy_gate,
+            status.handoff_state
+        ));
+    }
     if !status.delegation_gate().delegated_cycle_open {
         return Err(format!(
             "Run-graph resume gate denied for `{}`: delegated cycle is not open",
@@ -726,14 +767,59 @@ pub(crate) fn validate_run_graph_resume_gate(status: &RunGraphStatus) -> Result<
     }
     Ok(())
 }
+fn resume_dispatch_node(resume_target: &str) -> Option<&str> {
+    let resume_target = resume_target.trim();
+    let stripped = resume_target.strip_prefix("dispatch.")?;
+    let node = stripped.strip_suffix("_lane").unwrap_or(stripped);
+    if node.is_empty() {
+        return None;
+    }
+    Some(node)
+}
+
+fn ensure_resume_target_handoff_consistency(status: &RunGraphStatus) -> Result<(), String> {
+    if let Some(node) = resume_dispatch_node(&status.resume_target) {
+        let expected_handoff = format!("awaiting_{node}");
+        if status.handoff_state != expected_handoff {
+            return Err(format!(
+                "run-graph resume metadata inconsistent for `{}`: resume_target `{}` requires handoff_state `{}`, not `{}`",
+                status.run_id, status.resume_target, expected_handoff, status.handoff_state
+            ));
+        }
+        if status.next_node.as_deref() != Some(node) {
+            return Err(format!(
+                "run-graph resume metadata inconsistent for `{}`: resume_target `{}` requires next_node `{}`",
+                status.run_id, status.resume_target, node
+            ));
+        }
+    } else if status.handoff_state.starts_with("awaiting_") {
+        return Err(format!(
+            "run-graph resume metadata inconsistent for `{}`: handoff_state `{}` requires a dispatch.* resume_target",
+            status.run_id, status.handoff_state
+        ));
+    }
+    Ok(())
+}
+
+fn canonicalize_resume_meta(status: &mut RunGraphStatus) {
+    if let Some(node) = resume_dispatch_node(&status.resume_target) {
+        status.next_node = Some(node.to_string());
+        status.handoff_state = format!("awaiting_{node}");
+    } else {
+        status.next_node = None;
+        status.handoff_state = "none".to_string();
+    }
+}
+
+fn meta_string_field(meta: &serde_json::Value, key: &str) -> Option<Option<String>> {
+    meta.get(key)?;
+    Some(meta.get(key).and_then(|value| value.as_str()).map(ToOwned::to_owned))
+}
 
 pub(crate) fn merge_run_graph_meta(
     mut status: RunGraphStatus,
     meta: &serde_json::Value,
 ) -> RunGraphStatus {
-    if let Some(next_node) = meta.get("next_node") {
-        status.next_node = next_node.as_str().map(ToOwned::to_owned);
-    }
     if let Some(selected_backend) = meta
         .get("selected_backend")
         .and_then(|value| value.as_str())
@@ -749,23 +835,23 @@ pub(crate) fn merge_run_graph_meta(
     if let Some(policy_gate) = meta.get("policy_gate").and_then(|value| value.as_str()) {
         status.policy_gate = policy_gate.to_string();
     }
-    if let Some(handoff_state) = meta.get("handoff_state") {
-        status.handoff_state = handoff_state
-            .as_str()
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| "none".to_string());
-    }
+    let resume_meta = meta_string_field(meta, "resume_target");
     if let Some(context_state) = meta.get("context_state").and_then(|value| value.as_str()) {
         status.context_state = context_state.to_string();
     }
     if let Some(checkpoint_kind) = meta.get("checkpoint_kind").and_then(|value| value.as_str()) {
         status.checkpoint_kind = checkpoint_kind.to_string();
     }
-    if let Some(resume_target) = meta.get("resume_target") {
-        status.resume_target = resume_target
-            .as_str()
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| "none".to_string());
+    if let Some(resume_field) = resume_meta {
+        status.resume_target = resume_field.unwrap_or_else(|| "none".to_string());
+        canonicalize_resume_meta(&mut status);
+    } else {
+        if let Some(next_node_field) = meta_string_field(meta, "next_node") {
+            status.next_node = next_node_field;
+        }
+        if let Some(handoff_field) = meta_string_field(meta, "handoff_state") {
+            status.handoff_state = handoff_field.unwrap_or_else(|| "none".to_string());
+        }
     }
     status.recovery_ready =
         json_bool_field(meta, "recovery_ready").unwrap_or(status.recovery_ready);
@@ -794,36 +880,38 @@ fn governance_handoff(
     (handoff_state, resume_target)
 }
 
-fn run_graph_transition(
-    existing: &RunGraphStatus,
+struct RunGraphTransitionArgs {
     active_node: String,
     next_node: Option<String>,
     lane_id: String,
     lifecycle_stage: String,
     policy_gate: String,
-    checkpoint_kind: &str,
+    checkpoint_kind: String,
     target_format: DispatchTargetFormat,
     recovery_ready: bool,
-) -> RunGraphStatus {
-    let (handoff_state, resume_target) = governance_handoff(next_node.as_deref(), target_format);
+}
+
+fn run_graph_transition(existing: &RunGraphStatus, args: RunGraphTransitionArgs) -> RunGraphStatus {
+    let (handoff_state, resume_target) =
+        governance_handoff(args.next_node.as_deref(), args.target_format);
 
     RunGraphStatus {
         run_id: existing.run_id.clone(),
         task_id: existing.task_id.clone(),
         task_class: existing.task_class.clone(),
-        active_node,
-        next_node,
+        active_node: args.active_node,
+        next_node: args.next_node,
         status: "ready".to_string(),
         route_task_class: existing.route_task_class.clone(),
         selected_backend: existing.selected_backend.clone(),
-        lane_id,
-        lifecycle_stage,
-        policy_gate,
+        lane_id: args.lane_id,
+        lifecycle_stage: args.lifecycle_stage,
+        policy_gate: args.policy_gate,
         handoff_state,
         context_state: "sealed".to_string(),
-        checkpoint_kind: checkpoint_kind.to_string(),
+        checkpoint_kind: args.checkpoint_kind,
         resume_target,
-        recovery_ready,
+        recovery_ready: args.recovery_ready,
     }
 }
 
@@ -1040,14 +1128,16 @@ pub(crate) async fn derive_seeded_run_graph_status(
     };
     let mut status = run_graph_transition(
         &seed_base,
-        "planning".to_string(),
-        next_node,
-        lane_id,
-        lifecycle_stage,
-        policy_gate,
-        &checkpoint_kind,
-        DispatchTargetFormat::Lane,
-        recovery_ready,
+        RunGraphTransitionArgs {
+            active_node: "planning".to_string(),
+            next_node,
+            lane_id,
+            lifecycle_stage,
+            policy_gate,
+            checkpoint_kind,
+            target_format: DispatchTargetFormat::Lane,
+            recovery_ready,
+        },
     );
     status.task_class = seed_base.task_class;
     status.route_task_class = seed_base.route_task_class;
@@ -1095,14 +1185,16 @@ pub(crate) async fn derive_advanced_run_graph_status(
         return Ok(TaskflowRunGraphAdvancePayload {
             status: run_graph_transition(
                 &existing,
-                analysis_node.clone(),
-                next_node,
-                format!("{analysis_node}_lane"),
-                "analysis_active".to_string(),
-                policy_gate,
-                "execution_cursor",
-                DispatchTargetFormat::Lane,
-                recovery_ready,
+                RunGraphTransitionArgs {
+                    active_node: analysis_node.clone(),
+                    next_node,
+                    lane_id: format!("{analysis_node}_lane"),
+                    lifecycle_stage: "analysis_active".to_string(),
+                    policy_gate,
+                    checkpoint_kind: "execution_cursor".to_string(),
+                    target_format: DispatchTargetFormat::Lane,
+                    recovery_ready,
+                },
             ),
         });
     }
@@ -1133,20 +1225,22 @@ pub(crate) async fn derive_advanced_run_graph_status(
         return Ok(TaskflowRunGraphAdvancePayload {
             status: run_graph_transition(
                 &existing,
-                writer_node.clone(),
-                if coach_required {
-                    json_string_field(&implementation, "coach_route_task_class")
-                        .filter(|value| !value.is_empty())
-                        .or(next_node)
-                } else {
-                    next_node
+                RunGraphTransitionArgs {
+                    active_node: writer_node.clone(),
+                    next_node: if coach_required {
+                        json_string_field(&implementation, "coach_route_task_class")
+                            .filter(|value| !value.is_empty())
+                            .or(next_node)
+                    } else {
+                        next_node
+                    },
+                    lane_id: format!("{writer_node}_lane"),
+                    lifecycle_stage: "writer_active".to_string(),
+                    policy_gate,
+                    checkpoint_kind: "execution_cursor".to_string(),
+                    target_format: DispatchTargetFormat::Lane,
+                    recovery_ready: true,
                 },
-                format!("{writer_node}_lane"),
-                "writer_active".to_string(),
-                policy_gate,
-                "execution_cursor",
-                DispatchTargetFormat::Lane,
-                true,
             ),
         });
     }
@@ -1166,7 +1260,7 @@ pub(crate) async fn derive_advanced_run_graph_status(
         let (active_node, next_node, policy_gate, target_format, recovery_ready) =
             implementation_writer_handoff(&implementation, &verification);
         if existing.next_node.as_deref() != Some(active_node.as_str())
-            && !existing.next_node.is_none()
+        && existing.next_node.is_some()
         {
             return Err(format!(
                 "run-graph advance expected next node `{active_node}` for the implementation writer handoff, got `{}`",
@@ -1177,14 +1271,16 @@ pub(crate) async fn derive_advanced_run_graph_status(
         if active_node == existing.active_node && next_node.is_none() {
             let mut status = run_graph_transition(
                 &existing,
-                existing.active_node.clone(),
-                None,
-                existing.lane_id.clone(),
-                "implementation_complete".to_string(),
-                "not_required".to_string(),
-                &existing.checkpoint_kind,
-                DispatchTargetFormat::Lane,
-                false,
+                RunGraphTransitionArgs {
+                    active_node: existing.active_node.clone(),
+                    next_node: None,
+                    lane_id: existing.lane_id.clone(),
+                    lifecycle_stage: "implementation_complete".to_string(),
+                    policy_gate: "not_required".to_string(),
+                    checkpoint_kind: existing.checkpoint_kind.clone(),
+                    target_format: DispatchTargetFormat::Lane,
+                    recovery_ready: false,
+                },
             );
             status.status = "completed".to_string();
             status.context_state = existing.context_state;
@@ -1194,14 +1290,16 @@ pub(crate) async fn derive_advanced_run_graph_status(
         return Ok(TaskflowRunGraphAdvancePayload {
             status: run_graph_transition(
                 &existing,
-                active_node.clone(),
-                next_node,
-                format!("{active_node}_lane"),
-                format!("{active_node}_active"),
-                policy_gate,
-                "execution_cursor",
-                target_format,
-                recovery_ready,
+                RunGraphTransitionArgs {
+                    active_node: active_node.clone(),
+                    next_node,
+                    lane_id: format!("{active_node}_lane"),
+                    lifecycle_stage: format!("{active_node}_active"),
+                    policy_gate,
+                    checkpoint_kind: "execution_cursor".to_string(),
+                    target_format,
+                    recovery_ready,
+                },
             ),
         });
     }
@@ -1232,16 +1330,18 @@ pub(crate) async fn derive_advanced_run_graph_status(
         return Ok(TaskflowRunGraphAdvancePayload {
             status: run_graph_transition(
                 &existing,
-                verification_node.clone(),
-                None,
-                format!("{verification_node}_lane"),
-                format!("{verification_node}_active"),
-                json_string_field(&verification, "verification_gate")
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| existing.policy_gate.clone()),
-                "execution_cursor",
-                DispatchTargetFormat::Lane,
-                false,
+                RunGraphTransitionArgs {
+                    active_node: verification_node.clone(),
+                    next_node: None,
+                    lane_id: format!("{verification_node}_lane"),
+                    lifecycle_stage: format!("{verification_node}_active"),
+                    policy_gate: json_string_field(&verification, "verification_gate")
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or_else(|| existing.policy_gate.clone()),
+                    checkpoint_kind: "execution_cursor".to_string(),
+                    target_format: DispatchTargetFormat::Lane,
+                    recovery_ready: false,
+                },
             ),
         });
     }
@@ -1272,28 +1372,32 @@ pub(crate) async fn derive_advanced_run_graph_status(
                     return Ok(TaskflowRunGraphAdvancePayload {
                         status: run_graph_transition(
                             &existing,
-                            analysis_node.clone(),
-                            next_node,
-                            format!("{analysis_node}_lane"),
-                            "analysis_active".to_string(),
-                            policy_gate,
-                            "execution_cursor",
-                            DispatchTargetFormat::Lane,
-                            recovery_ready,
+                            RunGraphTransitionArgs {
+                                active_node: analysis_node.clone(),
+                                next_node,
+                                lane_id: format!("{analysis_node}_lane"),
+                                lifecycle_stage: "analysis_active".to_string(),
+                                policy_gate,
+                                checkpoint_kind: "execution_cursor".to_string(),
+                                target_format: DispatchTargetFormat::Lane,
+                                recovery_ready,
+                            },
                         ),
                     });
                 }
                 ImplementationVerificationOutcome::Clean => {
                     let mut status = run_graph_transition(
                         &existing,
-                        existing.active_node.clone(),
-                        Some("approval".to_string()),
-                        existing.lane_id.clone(),
-                        "approval_wait".to_string(),
-                        "approval_required".to_string(),
-                        &existing.checkpoint_kind,
-                        DispatchTargetFormat::Direct,
-                        true,
+                        RunGraphTransitionArgs {
+                            active_node: existing.active_node.clone(),
+                            next_node: Some("approval".to_string()),
+                            lane_id: existing.lane_id.clone(),
+                            lifecycle_stage: "approval_wait".to_string(),
+                            policy_gate: "approval_required".to_string(),
+                            checkpoint_kind: existing.checkpoint_kind.clone(),
+                            target_format: DispatchTargetFormat::Direct,
+                            recovery_ready: true,
+                        },
                     );
                     status.status = "awaiting_approval".to_string();
                     status.context_state = existing.context_state;
@@ -1302,14 +1406,16 @@ pub(crate) async fn derive_advanced_run_graph_status(
                 ImplementationVerificationOutcome::Approved => {
                     let mut status = run_graph_transition(
                         &existing,
-                        existing.active_node.clone(),
-                        None,
-                        existing.lane_id.clone(),
-                        "implementation_complete".to_string(),
-                        "not_required".to_string(),
-                        &existing.checkpoint_kind,
-                        DispatchTargetFormat::Lane,
-                        false,
+                        RunGraphTransitionArgs {
+                            active_node: existing.active_node.clone(),
+                            next_node: None,
+                            lane_id: existing.lane_id.clone(),
+                            lifecycle_stage: "implementation_complete".to_string(),
+                            policy_gate: "not_required".to_string(),
+                            checkpoint_kind: existing.checkpoint_kind.clone(),
+                            target_format: DispatchTargetFormat::Lane,
+                            recovery_ready: false,
+                        },
                     );
                     status.status = "completed".to_string();
                     status.context_state = existing.context_state;
@@ -1358,14 +1464,16 @@ pub(crate) async fn derive_advanced_run_graph_status(
             status: {
                 let mut status = run_graph_transition(
                     &existing,
-                    analyst_node.clone(),
-                    next_node.clone(),
-                    format!("{analyst_node}_lane"),
-                    "conversation_active".to_string(),
-                    existing.policy_gate.clone(),
-                    "conversation_cursor",
-                    DispatchTargetFormat::Lane,
-                    true,
+                    RunGraphTransitionArgs {
+                        active_node: analyst_node.clone(),
+                        next_node: next_node.clone(),
+                        lane_id: format!("{analyst_node}_lane"),
+                        lifecycle_stage: "conversation_active".to_string(),
+                        policy_gate: existing.policy_gate.clone(),
+                        checkpoint_kind: "conversation_cursor".to_string(),
+                        target_format: DispatchTargetFormat::Lane,
+                        recovery_ready: true,
+                    },
                 );
                 status.handoff_state = format!("awaiting_{route_target}");
                 status.resume_target = format!("dispatch.{route_target}");
@@ -1378,197 +1486,6 @@ pub(crate) async fn derive_advanced_run_graph_status(
         "run-graph advance currently supports only seeded implementation, scope-discussion, or pbi-discussion runs; got class={} route={} node={}",
         existing.task_class, existing.route_task_class, existing.active_node
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn governance_handoff_uses_lane_targets_for_execution() {
-        let (handoff_state, resume_target) =
-            governance_handoff(Some("coach"), DispatchTargetFormat::Lane);
-        assert_eq!(handoff_state, "awaiting_coach");
-        assert_eq!(resume_target, "dispatch.coach_lane");
-    }
-
-    #[test]
-    fn governance_handoff_uses_direct_targets_for_conversation() {
-        let (handoff_state, resume_target) =
-            governance_handoff(Some("spec-pack"), DispatchTargetFormat::Direct);
-        assert_eq!(handoff_state, "awaiting_spec-pack");
-        assert_eq!(resume_target, "dispatch.spec-pack");
-    }
-
-    #[test]
-    fn implementation_analysis_gate_tracks_coach_and_verification_requirements() {
-        let implementation = serde_json::json!({
-            "coach_required": true,
-            "coach_route_task_class": "coach",
-            "verification_gate": "targeted_verification",
-            "independent_verification_required": true
-        });
-
-        let (next_node, policy_gate, recovery_ready) =
-            implementation_analysis_gate(&implementation);
-        assert_eq!(next_node, Some("writer".to_string()));
-        assert_eq!(policy_gate, "targeted_verification");
-        assert!(recovery_ready);
-    }
-
-    #[test]
-    fn implementation_analysis_gate_keeps_writer_step_when_coach_is_disabled() {
-        let implementation = serde_json::json!({
-            "coach_required": false,
-            "independent_verification_required": false
-        });
-
-        let (next_node, policy_gate, recovery_ready) =
-            implementation_analysis_gate(&implementation);
-        assert_eq!(next_node, Some("writer".to_string()));
-        assert_eq!(policy_gate, "not_required");
-        assert!(recovery_ready);
-    }
-
-    #[test]
-    fn implementation_verification_gate_falls_back_when_independent_review_is_disabled() {
-        let implementation = serde_json::json!({
-            "verification_route_task_class": "review_ensemble",
-            "independent_verification_required": false
-        });
-        let verification = serde_json::json!({
-            "verification_gate": "review_findings"
-        });
-
-        let (next_node, policy_gate) =
-            implementation_verification_gate(&implementation, &verification);
-        assert_eq!(next_node, None);
-        assert_eq!(policy_gate, "not_required");
-    }
-
-    #[test]
-    fn implementation_verification_outcome_uses_expected_table_mappings() {
-        assert_eq!(
-            implementation_verification_outcome("rework_ready"),
-            ImplementationVerificationOutcome::ReworkReady
-        );
-        assert_eq!(
-            implementation_verification_outcome("clean"),
-            ImplementationVerificationOutcome::Clean
-        );
-        assert_eq!(
-            implementation_verification_outcome("approved"),
-            ImplementationVerificationOutcome::Approved
-        );
-        assert_eq!(
-            implementation_verification_outcome("denied"),
-            ImplementationVerificationOutcome::FindingsBlocked
-        );
-        assert_eq!(
-            implementation_verification_outcome("expired"),
-            ImplementationVerificationOutcome::FindingsBlocked
-        );
-        assert_eq!(
-            implementation_verification_outcome("review_findings"),
-            ImplementationVerificationOutcome::FindingsBlocked
-        );
-        assert_eq!(
-            implementation_verification_outcome("changed_scope"),
-            ImplementationVerificationOutcome::FindingsBlocked
-        );
-    }
-
-    #[test]
-    fn implementation_verification_outcome_defaults_for_unexpected_status() {
-        assert_eq!(
-            implementation_verification_outcome("paused"),
-            ImplementationVerificationOutcome::UnexpectedStatus
-        );
-    }
-
-    #[test]
-    fn merge_run_graph_meta_allows_explicit_null_to_clear_handoff_fields() {
-        let merged = merge_run_graph_meta(
-            RunGraphStatus {
-                run_id: "run-1".to_string(),
-                task_id: "run-1".to_string(),
-                task_class: "implementation".to_string(),
-                active_node: "writer".to_string(),
-                next_node: Some("coach".to_string()),
-                status: "ready".to_string(),
-                route_task_class: "implementation".to_string(),
-                selected_backend: "codex".to_string(),
-                lane_id: "writer_lane".to_string(),
-                lifecycle_stage: "writer_active".to_string(),
-                policy_gate: "targeted_verification".to_string(),
-                handoff_state: "awaiting_coach".to_string(),
-                context_state: "sealed".to_string(),
-                checkpoint_kind: "execution_cursor".to_string(),
-                resume_target: "dispatch.writer_lane".to_string(),
-                recovery_ready: true,
-            },
-            &serde_json::json!({
-                "next_node": null,
-                "handoff_state": null,
-                "resume_target": null,
-                "recovery_ready": false
-            }),
-        );
-
-        assert_eq!(merged.next_node, None);
-        assert_eq!(merged.handoff_state, "none");
-        assert_eq!(merged.resume_target, "none");
-        assert!(!merged.recovery_ready);
-    }
-
-    #[test]
-    fn validate_run_graph_resume_gate_requires_dispatch_resume_target() {
-        let status = RunGraphStatus {
-            run_id: "run-1".to_string(),
-            task_id: "run-1".to_string(),
-            task_class: "implementation".to_string(),
-            active_node: "writer".to_string(),
-            next_node: None,
-            status: "ready".to_string(),
-            route_task_class: "implementation".to_string(),
-            selected_backend: "codex".to_string(),
-            lane_id: "writer_lane".to_string(),
-            lifecycle_stage: "writer_active".to_string(),
-            policy_gate: "targeted_verification".to_string(),
-            handoff_state: "none".to_string(),
-            context_state: "sealed".to_string(),
-            checkpoint_kind: "execution_cursor".to_string(),
-            resume_target: "none".to_string(),
-            recovery_ready: true,
-        };
-
-        let error = validate_run_graph_resume_gate(&status).expect_err("should fail");
-        assert!(error.contains("resume_target"));
-    }
-
-    #[test]
-    fn validate_run_graph_resume_gate_accepts_open_delegation_cycle() {
-        let status = RunGraphStatus {
-            run_id: "run-1".to_string(),
-            task_id: "run-1".to_string(),
-            task_class: "implementation".to_string(),
-            active_node: "writer".to_string(),
-            next_node: Some("coach".to_string()),
-            status: "ready".to_string(),
-            route_task_class: "implementation".to_string(),
-            selected_backend: "codex".to_string(),
-            lane_id: "writer_lane".to_string(),
-            lifecycle_stage: "writer_active".to_string(),
-            policy_gate: "targeted_verification".to_string(),
-            handoff_state: "awaiting_coach".to_string(),
-            context_state: "sealed".to_string(),
-            checkpoint_kind: "execution_cursor".to_string(),
-            resume_target: "dispatch.coach".to_string(),
-            recovery_ready: true,
-        };
-
-        validate_run_graph_resume_gate(&status).expect("should pass");
-    }
 }
 
 pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode {
@@ -1641,28 +1558,26 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                     return ExitCode::from(1);
                 }
             };
-            let blocker_context = (
-                existing.run_id.clone(),
-                existing.active_node.clone(),
-                existing.status.to_string(),
-                existing.route_task_class.clone(),
-                existing.policy_gate.clone(),
-                existing.resume_target.clone(),
-                existing.next_node.clone(),
-            );
+            let blocker_run_id = existing.run_id.clone();
+            let blocker_active_node = existing.active_node.clone();
+            let blocker_status = existing.status.clone();
+            let blocker_route_task_class = existing.route_task_class.clone();
+            let blocker_policy_gate = existing.policy_gate.clone();
+            let blocker_resume_target = existing.resume_target.clone();
+            let blocker_next_node = existing.next_node.clone();
             let payload = match derive_advanced_run_graph_status(&store, existing).await {
                 Ok(payload) => payload,
                 Err(error) => {
-                    let evidence = match run_graph_blocker_evidence(
-                        &blocker_context.0,
-                        &blocker_context.1,
-                        &blocker_context.2,
-                        &blocker_context.3,
-                        &blocker_context.4,
-                        &blocker_context.5,
-                        blocker_context.6.as_deref(),
-                        &error,
-                    ) {
+                    let evidence = match run_graph_blocker_evidence(RunGraphBlockerEvidenceArgs {
+                        run_id: &blocker_run_id,
+                        active_node: &blocker_active_node,
+                        status: &blocker_status,
+                        route_task_class: &blocker_route_task_class,
+                        policy_gate: &blocker_policy_gate,
+                        resume_target: &blocker_resume_target,
+                        next_node: blocker_next_node.as_deref(),
+                        error: &error,
+                    }) {
                         Ok(evidence) => evidence,
                         Err(guard_error) => {
                             eprintln!("{guard_error}");
@@ -2005,5 +1920,312 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
             ExitCode::from(2)
         }
         _ => ExitCode::from(2),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn governance_handoff_uses_lane_targets_for_execution() {
+        let (handoff_state, resume_target) =
+            governance_handoff(Some("coach"), DispatchTargetFormat::Lane);
+        assert_eq!(handoff_state, "awaiting_coach");
+        assert_eq!(resume_target, "dispatch.coach_lane");
+    }
+
+    #[test]
+    fn governance_handoff_uses_direct_targets_for_conversation() {
+        let (handoff_state, resume_target) =
+            governance_handoff(Some("spec-pack"), DispatchTargetFormat::Direct);
+        assert_eq!(handoff_state, "awaiting_spec-pack");
+        assert_eq!(resume_target, "dispatch.spec-pack");
+    }
+
+    #[test]
+    fn implementation_analysis_gate_tracks_coach_and_verification_requirements() {
+        let implementation = serde_json::json!({
+            "coach_required": true,
+            "coach_route_task_class": "coach",
+            "verification_gate": "targeted_verification",
+            "independent_verification_required": true
+        });
+
+        let (next_node, policy_gate, recovery_ready) =
+            implementation_analysis_gate(&implementation);
+        assert_eq!(next_node, Some("writer".to_string()));
+        assert_eq!(policy_gate, "targeted_verification");
+        assert!(recovery_ready);
+    }
+
+    #[test]
+    fn implementation_analysis_gate_keeps_writer_step_when_coach_is_disabled() {
+        let implementation = serde_json::json!({
+            "coach_required": false,
+            "independent_verification_required": false
+        });
+
+        let (next_node, policy_gate, recovery_ready) =
+            implementation_analysis_gate(&implementation);
+        assert_eq!(next_node, Some("writer".to_string()));
+        assert_eq!(policy_gate, "not_required");
+        assert!(recovery_ready);
+    }
+
+    #[test]
+    fn implementation_verification_gate_falls_back_when_independent_review_is_disabled() {
+        let implementation = serde_json::json!({
+            "verification_route_task_class": "review_ensemble",
+            "independent_verification_required": false
+        });
+        let verification = serde_json::json!({
+            "verification_gate": "review_findings"
+        });
+
+        let (next_node, policy_gate) =
+            implementation_verification_gate(&implementation, &verification);
+        assert_eq!(next_node, None);
+        assert_eq!(policy_gate, "not_required");
+    }
+
+    #[test]
+    fn implementation_verification_outcome_uses_expected_table_mappings() {
+        assert_eq!(
+            implementation_verification_outcome("rework_ready"),
+            ImplementationVerificationOutcome::ReworkReady
+        );
+        assert_eq!(
+            implementation_verification_outcome("clean"),
+            ImplementationVerificationOutcome::Clean
+        );
+        assert_eq!(
+            implementation_verification_outcome("approved"),
+            ImplementationVerificationOutcome::Approved
+        );
+        assert_eq!(
+            implementation_verification_outcome("denied"),
+            ImplementationVerificationOutcome::FindingsBlocked
+        );
+        assert_eq!(
+            implementation_verification_outcome("expired"),
+            ImplementationVerificationOutcome::FindingsBlocked
+        );
+        assert_eq!(
+            implementation_verification_outcome("review_findings"),
+            ImplementationVerificationOutcome::FindingsBlocked
+        );
+        assert_eq!(
+            implementation_verification_outcome("changed_scope"),
+            ImplementationVerificationOutcome::FindingsBlocked
+        );
+    }
+
+    #[test]
+    fn implementation_verification_outcome_defaults_for_unexpected_status() {
+        assert_eq!(
+            implementation_verification_outcome("paused"),
+            ImplementationVerificationOutcome::UnexpectedStatus
+        );
+    }
+
+    #[test]
+    fn merge_run_graph_meta_allows_explicit_null_to_clear_handoff_fields() {
+        let merged = merge_run_graph_meta(
+            RunGraphStatus {
+                run_id: "run-1".to_string(),
+                task_id: "run-1".to_string(),
+                task_class: "implementation".to_string(),
+                active_node: "writer".to_string(),
+                next_node: Some("coach".to_string()),
+                status: "ready".to_string(),
+                route_task_class: "implementation".to_string(),
+                selected_backend: "codex".to_string(),
+                lane_id: "writer_lane".to_string(),
+                lifecycle_stage: "writer_active".to_string(),
+                policy_gate: "targeted_verification".to_string(),
+                handoff_state: "awaiting_coach".to_string(),
+                context_state: "sealed".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.writer_lane".to_string(),
+                recovery_ready: true,
+            },
+            &serde_json::json!({
+                "next_node": null,
+                "handoff_state": null,
+                "resume_target": null,
+                "recovery_ready": false
+            }),
+        );
+
+        assert_eq!(merged.next_node, None);
+        assert_eq!(merged.handoff_state, "none");
+        assert_eq!(merged.resume_target, "none");
+        assert!(!merged.recovery_ready);
+    }
+
+    #[test]
+    fn merge_run_graph_meta_canonicalizes_resume_target_drifts() {
+        let status = RunGraphStatus {
+            run_id: "run-1".to_string(),
+            task_id: "run-1".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "writer".to_string(),
+            next_node: None,
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "codex".to_string(),
+            lane_id: "writer_lane".to_string(),
+            lifecycle_stage: "writer_active".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: true,
+        };
+
+        let merged = merge_run_graph_meta(
+            status,
+            &serde_json::json!({
+                "resume_target": "dispatch.coach",
+                "next_node": "writer",
+                "handoff_state": "awaiting_writer"
+            }),
+        );
+
+        assert_eq!(merged.resume_target, "dispatch.coach");
+        assert_eq!(merged.next_node.as_deref(), Some("coach"));
+        assert_eq!(merged.handoff_state, "awaiting_coach");
+    }
+
+    #[test]
+    fn merge_run_graph_meta_resets_resume_fields_when_target_none() {
+        let status = RunGraphStatus {
+            run_id: "run-1".to_string(),
+            task_id: "run-1".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "writer".to_string(),
+            next_node: Some("coach".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "codex".to_string(),
+            lane_id: "writer_lane".to_string(),
+            lifecycle_stage: "writer_active".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "awaiting_coach".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.coach".to_string(),
+            recovery_ready: true,
+        };
+
+        let merged =
+            merge_run_graph_meta(status, &serde_json::json!({ "resume_target": null }));
+
+        assert_eq!(merged.resume_target, "none");
+        assert_eq!(merged.next_node, None);
+        assert_eq!(merged.handoff_state, "none");
+    }
+
+    #[test]
+    fn validate_run_graph_resume_gate_requires_dispatch_resume_target() {
+        let status = RunGraphStatus {
+            run_id: "run-1".to_string(),
+            task_id: "run-1".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "writer".to_string(),
+            next_node: None,
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "codex".to_string(),
+            lane_id: "writer_lane".to_string(),
+            lifecycle_stage: "writer_active".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: true,
+        };
+
+        let error = validate_run_graph_resume_gate(&status).expect_err("should fail");
+        assert!(error.contains("resume_target"));
+    }
+
+    #[test]
+    fn validate_run_graph_resume_gate_accepts_open_delegation_cycle() {
+        let status = RunGraphStatus {
+            run_id: "run-1".to_string(),
+            task_id: "run-1".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "writer".to_string(),
+            next_node: Some("coach".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "codex".to_string(),
+            lane_id: "writer_lane".to_string(),
+            lifecycle_stage: "writer_active".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "awaiting_coach".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.coach".to_string(),
+            recovery_ready: true,
+        };
+
+        validate_run_graph_resume_gate(&status).expect("should pass");
+    }
+
+    #[test]
+    fn validate_run_graph_resume_gate_rejects_incomplete_dispatch_handoff_metadata() {
+        let status = RunGraphStatus {
+            run_id: "run-1".to_string(),
+            task_id: "run-1".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "writer".to_string(),
+            next_node: Some("coach".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "codex".to_string(),
+            lane_id: "writer_lane".to_string(),
+            lifecycle_stage: "writer_active".to_string(),
+            policy_gate: String::new(),
+            handoff_state: "awaiting_coach".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.coach".to_string(),
+            recovery_ready: true,
+        };
+
+        let error = validate_run_graph_resume_gate(&status).expect_err("should fail");
+        assert!(error.contains("policy_gate"));
+        assert!(error.contains("handoff metadata"));
+    }
+
+    #[test]
+    fn validate_run_graph_resume_gate_rejects_resume_target_handoff_mismatch() {
+        let status = RunGraphStatus {
+            run_id: "run-1".to_string(),
+            task_id: "run-1".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "writer".to_string(),
+            next_node: Some("coach".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "codex".to_string(),
+            lane_id: "writer_lane".to_string(),
+            lifecycle_stage: "writer_active".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "awaiting_writer".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.coach".to_string(),
+            recovery_ready: true,
+        };
+
+        let error = validate_run_graph_resume_gate(&status).expect_err("should fail");
+        assert!(error.contains("resume_target"));
+        assert!(error.contains("handoff_state"));
     }
 }

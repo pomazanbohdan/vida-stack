@@ -10,6 +10,7 @@ use crate::release1_contracts::{
     derive_lane_status, BlockerCode, CompatibilityClass, LaneStatus, Release1ContractType,
     Release1SchemaVersion,
 };
+use crate::taskflow_run_graph::is_dispatch_resume_handoff_complete;
 use serde_json::Deserializer;
 use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::types::SurrealValue;
@@ -761,17 +762,21 @@ impl StateStore {
 
     pub async fn create_task(
         &self,
-        task_id: &str,
-        title: &str,
-        description: &str,
-        issue_type: &str,
-        status: &str,
-        priority: u32,
-        parent_id: Option<&str>,
-        labels: &[String],
-        created_by: &str,
-        source_repo: &str,
+        request: CreateTaskRequest<'_>,
     ) -> Result<TaskRecord, StateStoreError> {
+        let CreateTaskRequest {
+            task_id,
+            title,
+            description,
+            issue_type,
+            status,
+            priority,
+            parent_id,
+            labels,
+            created_by,
+            source_repo,
+        } = request;
+
         let task_id = task_id.trim();
         let title = title.trim();
         if task_id.is_empty() {
@@ -789,7 +794,15 @@ impl StateStore {
                 reason: format!("task already exists: {task_id}"),
             });
         }
-        if let Some(parent_id) = parent_id.filter(|value| !value.trim().is_empty()) {
+        let normalized_parent_id = parent_id.and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+        if let Some(parent_id) = normalized_parent_id.as_deref() {
             if self.show_task(parent_id).await.is_err() {
                 return Err(StateStoreError::MissingTask {
                     task_id: parent_id.to_string(),
@@ -807,7 +820,7 @@ impl StateStore {
         normalized_labels.dedup();
 
         let mut dependencies = Vec::new();
-        if let Some(parent_id) = parent_id.filter(|value| !value.trim().is_empty()) {
+        if let Some(parent_id) = normalized_parent_id.clone() {
             dependencies.push(TaskDependencyRecord {
                 issue_id: task_id.to_string(),
                 depends_on_id: parent_id.to_string(),
@@ -860,14 +873,17 @@ impl StateStore {
 
     pub async fn update_task(
         &self,
-        task_id: &str,
-        status: Option<&str>,
-        notes: Option<&str>,
-        description: Option<&str>,
-        add_labels: &[String],
-        remove_labels: &[String],
-        set_labels: Option<&[String]>,
+        request: UpdateTaskRequest<'_>,
     ) -> Result<TaskRecord, StateStoreError> {
+        let UpdateTaskRequest {
+            task_id,
+            status,
+            notes,
+            description,
+            add_labels,
+            remove_labels,
+            set_labels,
+        } = request;
         let mut task = self.show_task(task_id).await?;
         if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
             task.status = status.to_string();
@@ -996,6 +1012,12 @@ impl StateStore {
             length: nodes.len(),
             root_task_id: nodes.first().map(|node| node.id.clone()),
             terminal_task_id: nodes.last().map(|node| node.id.clone()),
+            release_1_contract_steps: vec![TaskRelease1ContractStep {
+                id: "doctor_run_graph_negative_control".to_string(),
+                mode: "fail_closed".to_string(),
+                blocker_code: "missing_run_graph_dispatch_receipt_operator_evidence".to_string(),
+                next_action: "Run `vida taskflow run-graph dispatch --json` to materialize run-graph dispatch receipt evidence before operator handoff.".to_string(),
+            }],
             nodes,
         })
     }
@@ -1785,10 +1807,12 @@ impl StateStore {
         &self,
         receipt: &RunGraphDispatchReceipt,
     ) -> Result<(), StateStoreError> {
-        let _: Option<RunGraphDispatchReceipt> = self
+        let receipt: RunGraphDispatchReceiptStored = receipt.clone().into();
+        Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&receipt)?;
+        let _: Option<RunGraphDispatchReceiptStored> = self
             .db
             .upsert(("run_graph_dispatch_receipt", receipt.run_id.as_str()))
-            .content(receipt.clone())
+            .content(receipt)
             .await?;
         Ok(())
     }
@@ -1816,7 +1840,7 @@ impl StateStore {
             task_id: format!("run_graph_resumability:{run_id}"),
         })?;
 
-        Ok(RunGraphStatus {
+        let status = RunGraphStatus {
             run_id: execution.run_id,
             task_id: execution.task_id,
             task_class: execution.task_class,
@@ -1833,21 +1857,94 @@ impl StateStore {
             checkpoint_kind: resumability.checkpoint_kind,
             resume_target: resumability.resume_target,
             recovery_ready: resumability.recovery_ready,
-        })
+        };
+        status.validate_memory_governance()?;
+        Ok(status)
     }
 
     pub async fn latest_run_graph_status(&self) -> Result<Option<RunGraphStatus>, StateStoreError> {
+        let Some(run_id) = self.latest_run_graph_run_id().await? else {
+            return Ok(None);
+        };
+        Ok(Some(self.run_graph_status(&run_id).await?))
+    }
+
+    async fn latest_run_graph_run_id(&self) -> Result<Option<String>, StateStoreError> {
         let mut query = self
             .db
             .query(
-                "SELECT run_id, updated_at FROM execution_plan_state ORDER BY updated_at DESC LIMIT 1;",
+                "SELECT run_id, updated_at FROM execution_plan_state ORDER BY updated_at DESC, run_id DESC LIMIT 1;",
             )
             .await?;
         let rows: Vec<RunGraphLatestRow> = query.take(0)?;
-        let Some(latest) = rows.into_iter().next() else {
-            return Ok(None);
-        };
-        Ok(Some(self.run_graph_status(&latest.run_id).await?))
+        Ok(rows.into_iter().next().map(|latest| latest.run_id))
+    }
+
+    async fn ensure_run_graph_recovery_surface_rows_present(
+        &self,
+        run_id: &str,
+    ) -> Result<(), StateStoreError> {
+        let governance: Option<GovernanceStateRow> =
+            self.db.select(("governance_state", run_id)).await?;
+        let resumability: Option<ResumabilityCapsuleRow> =
+            self.db.select(("resumability_capsule", run_id)).await?;
+        if governance.is_none() || resumability.is_none() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph recovery/checkpoint summary is inconsistent for `{run_id}`: latest status requires both governance and resumability rows (governance_present={}, resumability_present={})",
+                    governance.is_some(),
+                    resumability.is_some()
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    async fn latest_run_graph_checkpoint_run_id(&self) -> Result<Option<String>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT run_id, updated_at FROM resumability_capsule ORDER BY updated_at DESC, run_id DESC LIMIT 1;",
+            )
+            .await?;
+        let rows: Vec<RunGraphLatestRow> = query.take(0)?;
+        Ok(rows.into_iter().next().map(|latest| latest.run_id))
+    }
+
+    async fn ensure_run_graph_recovery_surface_latest_checkpoint_matches_run_id(
+        &self,
+        run_id: &str,
+    ) -> Result<(), StateStoreError> {
+        let latest_checkpoint_run_id = self.latest_run_graph_checkpoint_run_id().await?;
+        if latest_checkpoint_run_id.as_deref() != Some(run_id) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph recovery/checkpoint summary is inconsistent for `{run_id}`: latest checkpoint evidence must share the same run_id (latest_checkpoint_run_id={})",
+                    latest_checkpoint_run_id.as_deref().unwrap_or("none")
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn ensure_run_graph_recovery_surface_consistency(
+        status: &RunGraphStatus,
+    ) -> Result<(), StateStoreError> {
+        if status.resume_target.starts_with("dispatch.")
+            && !is_dispatch_resume_handoff_complete(status)
+        {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph recovery/gate summary is inconsistent for `{}`: dispatch resume target `{}` requires complete handoff metadata (next_node={}, policy_gate=`{}`, handoff=`{}`)",
+                    status.run_id,
+                    status.resume_target,
+                    status.next_node.as_deref().unwrap_or("none"),
+                    status.policy_gate,
+                    status.handoff_state
+                ),
+            });
+        }
+        Ok(())
     }
 
     pub async fn ensure_memory_governance_guard(&self) -> Result<(), StateStoreError> {
@@ -1860,16 +1957,28 @@ impl StateStore {
     pub async fn latest_run_graph_dispatch_receipt_summary(
         &self,
     ) -> Result<Option<RunGraphDispatchReceiptSummary>, StateStoreError> {
-        let mut query = self
-            .db
-            .query("SELECT * FROM run_graph_dispatch_receipt ORDER BY recorded_at DESC LIMIT 1;")
-            .await?;
-        let rows: Vec<RunGraphDispatchReceiptStored> = query.take(0)?;
-        let Some(latest) = rows.into_iter().next() else {
+        let Some(status) = self.latest_run_graph_status().await? else {
             return Ok(None);
         };
+        let latest_checkpoint_run_id = self.latest_run_graph_checkpoint_run_id().await?;
+        if latest_checkpoint_run_id.as_deref() != Some(status.run_id.as_str()) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: latest checkpoint evidence must share the same run_id (latest_checkpoint_run_id={})",
+                    status.run_id,
+                    latest_checkpoint_run_id.as_deref().unwrap_or("none")
+                ),
+            });
+        }
+        let Some(receipt) = self
+            .run_graph_dispatch_receipt_stored(&status.run_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
         Ok(Some(RunGraphDispatchReceiptSummary::from_receipt(
-            latest.into(),
+            receipt.into(),
         )))
     }
 
@@ -1878,7 +1987,9 @@ impl StateStore {
     ) -> Result<Option<RunGraphDispatchReceipt>, StateStoreError> {
         let mut query = self
             .db
-            .query("SELECT * FROM run_graph_dispatch_receipt ORDER BY recorded_at DESC LIMIT 1;")
+            .query(
+                "SELECT * FROM run_graph_dispatch_receipt ORDER BY recorded_at DESC, run_id DESC LIMIT 1;",
+            )
             .await?;
         let rows: Vec<RunGraphDispatchReceiptStored> = query.take(0)?;
         Ok(rows.into_iter().next().map(Into::into))
@@ -1888,37 +1999,48 @@ impl StateStore {
         &self,
         run_id: &str,
     ) -> Result<Option<RunGraphDispatchReceipt>, StateStoreError> {
+        self.run_graph_dispatch_receipt_stored(run_id)
+            .await
+            .map(|row| row.map(Into::into))
+    }
+
+    async fn run_graph_dispatch_receipt_stored(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<RunGraphDispatchReceiptStored>, StateStoreError> {
         self.db
             .select(("run_graph_dispatch_receipt", run_id))
             .await
-            .map(|row: Option<RunGraphDispatchReceiptStored>| row.map(Into::into))
             .map_err(Into::into)
     }
 
     pub async fn latest_run_graph_recovery_summary(
         &self,
     ) -> Result<Option<RunGraphRecoverySummary>, StateStoreError> {
-        let Some(status) = self.latest_run_graph_status().await? else {
+        let Some(run_id) = self.latest_run_graph_run_id().await? else {
             return Ok(None);
         };
+        let status = self.load_consistent_run_graph_status(&run_id).await?;
         Ok(Some(RunGraphRecoverySummary::from_status(status)))
     }
 
     pub async fn latest_run_graph_checkpoint_summary(
         &self,
     ) -> Result<Option<RunGraphCheckpointSummary>, StateStoreError> {
-        let Some(status) = self.latest_run_graph_status().await? else {
+        let Some(run_id) = self.latest_run_graph_run_id().await? else {
             return Ok(None);
         };
+        let status = self.load_consistent_run_graph_status(&run_id).await?;
         Ok(Some(RunGraphCheckpointSummary::from_status(status)))
     }
 
     pub async fn latest_run_graph_gate_summary(
         &self,
     ) -> Result<Option<RunGraphGateSummary>, StateStoreError> {
-        let Some(status) = self.latest_run_graph_status().await? else {
+        let Some(run_id) = self.latest_run_graph_run_id().await? else {
             return Ok(None);
         };
+        let status = self.load_consistent_run_graph_status(&run_id).await?;
         Ok(Some(RunGraphGateSummary::from_status(status)))
     }
 
@@ -1926,15 +2048,35 @@ impl StateStore {
         &self,
         run_id: &str,
     ) -> Result<RunGraphRecoverySummary, StateStoreError> {
-        let status = self.run_graph_status(run_id).await?;
+        let status = self
+            .load_consistent_run_graph_status(run_id)
+            .await?;
         Ok(RunGraphRecoverySummary::from_status(status))
+    }
+
+    async fn load_consistent_run_graph_status(
+        &self,
+        run_id: &str,
+    ) -> Result<RunGraphStatus, StateStoreError> {
+        self.ensure_run_graph_recovery_surface_latest_checkpoint_matches_run_id(run_id)
+            .await?;
+        self.ensure_run_graph_recovery_surface_rows_present(run_id)
+            .await?;
+        let status = self.run_graph_status(run_id).await?;
+        Self::ensure_run_graph_recovery_surface_consistency(&status)?;
+        Ok(status)
     }
 
     pub async fn run_graph_checkpoint_summary(
         &self,
         run_id: &str,
     ) -> Result<RunGraphCheckpointSummary, StateStoreError> {
+        self.ensure_run_graph_recovery_surface_latest_checkpoint_matches_run_id(run_id)
+            .await?;
+        self.ensure_run_graph_recovery_surface_rows_present(run_id)
+            .await?;
         let status = self.run_graph_status(run_id).await?;
+        Self::ensure_run_graph_recovery_surface_consistency(&status)?;
         Ok(RunGraphCheckpointSummary::from_status(status))
     }
 
@@ -1942,8 +2084,123 @@ impl StateStore {
         &self,
         run_id: &str,
     ) -> Result<RunGraphGateSummary, StateStoreError> {
+        self.ensure_run_graph_recovery_surface_latest_checkpoint_matches_run_id(run_id)
+            .await?;
+        self.ensure_run_graph_recovery_surface_rows_present(run_id)
+            .await?;
         let status = self.run_graph_status(run_id).await?;
+        Self::ensure_run_graph_recovery_surface_consistency(&status)?;
         Ok(RunGraphGateSummary::from_status(status))
+    }
+
+    fn ensure_run_graph_dispatch_receipt_summary_consistency(
+        receipt: &RunGraphDispatchReceiptStored,
+    ) -> Result<(), StateStoreError> {
+        if receipt.dispatch_status.trim().is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: dispatch_status must be non-empty",
+                    receipt.run_id
+                ),
+            });
+        }
+        let Some(raw_lane_status) = receipt.lane_status.as_deref() else {
+            return Ok(());
+        };
+        if raw_lane_status.trim().is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: lane_status must be non-empty when present",
+                    receipt.run_id
+                ),
+            });
+        }
+        let raw_lane_status = raw_lane_status.trim();
+        let derived_lane_status = derive_lane_status(
+            &receipt.dispatch_status,
+            receipt.supersedes_receipt_id.as_deref(),
+            receipt.exception_path_receipt_id.as_deref(),
+        )
+        .as_str();
+        let canonical_lane_status =
+            canonical_lane_status_str(raw_lane_status).unwrap_or(raw_lane_status);
+        if receipt.downstream_dispatch_status.is_some()
+            && canonical_lane_status != derived_lane_status
+        {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: downstream_dispatch_status `{}` with lane_status `{}` conflicts with derived lane_status `{}` from dispatch_status `{}`",
+                    receipt.run_id,
+                    receipt.downstream_dispatch_status.as_deref().unwrap_or("none"),
+                    canonical_lane_status,
+                    derived_lane_status,
+                    receipt.dispatch_status
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(
+        receipt: &RunGraphDispatchReceiptStored,
+    ) -> Result<(), StateStoreError> {
+        let Some(downstream_status) = receipt.downstream_dispatch_status.as_deref() else {
+            return Ok(());
+        };
+        let downstream_status = downstream_status.trim().to_ascii_lowercase();
+        let requires_blockers = downstream_status == "blocked";
+        if requires_blockers && receipt.downstream_dispatch_blockers.is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: downstream_dispatch_blockers must be present and non-empty when downstream_dispatch_status `{}` is present",
+                    receipt.run_id,
+                    receipt.downstream_dispatch_status.as_deref().unwrap_or("none")
+                ),
+            });
+        }
+        if receipt.downstream_dispatch_blockers.is_empty() {
+            return Ok(());
+        }
+        let mut canonical_blockers = std::collections::HashSet::new();
+        if receipt.downstream_dispatch_blockers.iter().any(|blocker| {
+            let raw_blocker = blocker.as_str();
+            let blocker = blocker.trim();
+            let collapsed = blocker.split_whitespace().collect::<Vec<_>>().join(" ");
+            raw_blocker != blocker
+                || blocker.is_empty()
+                || !blocker.is_ascii()
+                || blocker.to_ascii_lowercase() != blocker
+                || collapsed != blocker
+        }) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: downstream_dispatch_blockers must contain only non-empty ASCII lowercase canonical entries without whitespace, case, internal spacing, or unicode drift when downstream_dispatch_status `{}` is present",
+                    receipt.run_id,
+                    receipt.downstream_dispatch_status.as_deref().unwrap_or("none")
+                ),
+            });
+        }
+        if receipt.downstream_dispatch_blockers.iter().any(|blocker| {
+            let canonical_blocker = blocker.trim().to_ascii_lowercase();
+            !canonical_blockers.insert(canonical_blocker)
+        }) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: downstream_dispatch_blockers must not contain duplicate canonical entries after lowercase canonicalization when downstream_dispatch_status `{}` is present",
+                    receipt.run_id,
+                    receipt.downstream_dispatch_status.as_deref().unwrap_or("none")
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_run_graph_dispatch_receipt_contract(
+        receipt: RunGraphDispatchReceiptStored,
+    ) -> Result<RunGraphDispatchReceiptStored, StateStoreError> {
+        Self::ensure_run_graph_dispatch_receipt_summary_consistency(&receipt)?;
+        Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&receipt)?;
+        Ok(receipt)
     }
 
     pub async fn latest_task_reconciliation_summary(
@@ -3127,6 +3384,31 @@ pub struct TaskRecord {
     pub dependencies: Vec<TaskDependencyRecord>,
 }
 
+#[derive(Debug)]
+pub struct CreateTaskRequest<'a> {
+    pub task_id: &'a str,
+    pub title: &'a str,
+    pub description: &'a str,
+    pub issue_type: &'a str,
+    pub status: &'a str,
+    pub priority: u32,
+    pub parent_id: Option<&'a str>,
+    pub labels: &'a [String],
+    pub created_by: &'a str,
+    pub source_repo: &'a str,
+}
+
+#[derive(Debug)]
+pub struct UpdateTaskRequest<'a> {
+    pub task_id: &'a str,
+    pub status: Option<&'a str>,
+    pub notes: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub add_labels: &'a [String],
+    pub remove_labels: &'a [String],
+    pub set_labels: Option<&'a [String]>,
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
 pub struct TaskDependencyStatus {
     pub issue_id: String,
@@ -3174,7 +3456,16 @@ pub struct TaskCriticalPath {
     pub length: usize,
     pub root_task_id: Option<String>,
     pub terminal_task_id: Option<String>,
+    pub release_1_contract_steps: Vec<TaskRelease1ContractStep>,
     pub nodes: Vec<TaskCriticalPathNode>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskRelease1ContractStep {
+    pub id: String,
+    pub mode: String,
+    pub blocker_code: String,
+    pub next_action: String,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
@@ -3857,6 +4148,46 @@ impl From<RunGraphDispatchReceiptStored> for RunGraphDispatchReceipt {
     }
 }
 
+impl From<RunGraphDispatchReceipt> for RunGraphDispatchReceiptStored {
+    fn from(receipt: RunGraphDispatchReceipt) -> Self {
+        let lane_status = if receipt.lane_status.is_empty() {
+            None
+        } else {
+            Some(receipt.lane_status)
+        };
+        Self {
+            run_id: receipt.run_id,
+            dispatch_target: receipt.dispatch_target,
+            dispatch_status: receipt.dispatch_status,
+            lane_status,
+            supersedes_receipt_id: receipt.supersedes_receipt_id,
+            exception_path_receipt_id: receipt.exception_path_receipt_id,
+            dispatch_kind: receipt.dispatch_kind,
+            dispatch_surface: receipt.dispatch_surface,
+            dispatch_command: receipt.dispatch_command,
+            dispatch_packet_path: receipt.dispatch_packet_path,
+            dispatch_result_path: receipt.dispatch_result_path,
+            blocker_code: receipt.blocker_code,
+            downstream_dispatch_target: receipt.downstream_dispatch_target,
+            downstream_dispatch_command: receipt.downstream_dispatch_command,
+            downstream_dispatch_note: receipt.downstream_dispatch_note,
+            downstream_dispatch_ready: receipt.downstream_dispatch_ready,
+            downstream_dispatch_blockers: receipt.downstream_dispatch_blockers,
+            downstream_dispatch_packet_path: receipt.downstream_dispatch_packet_path,
+            downstream_dispatch_status: receipt.downstream_dispatch_status,
+            downstream_dispatch_result_path: receipt.downstream_dispatch_result_path,
+            downstream_dispatch_trace_path: receipt.downstream_dispatch_trace_path,
+            downstream_dispatch_executed_count: receipt.downstream_dispatch_executed_count,
+            downstream_dispatch_active_target: receipt.downstream_dispatch_active_target,
+            downstream_dispatch_last_target: receipt.downstream_dispatch_last_target,
+            activation_agent_type: receipt.activation_agent_type,
+            activation_runtime_role: receipt.activation_runtime_role,
+            selected_backend: receipt.selected_backend,
+            recorded_at: receipt.recorded_at,
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, serde::Serialize)]
 pub struct RunGraphStatus {
@@ -3953,6 +4284,7 @@ pub struct RunGraphDelegationGateSummary {
     pub local_exception_takeover_gate: String,
     pub blocker_code: Option<String>,
     pub reporting_pause_gate: String,
+    pub continuation_signal: String,
 }
 
 impl RunGraphDelegationGateSummary {
@@ -3992,6 +4324,13 @@ impl RunGraphDelegationGateSummary {
         } else {
             "continuation_check_required".to_string()
         };
+        let continuation_signal = if delegated_cycle_open {
+            "continue_routing_non_blocking".to_string()
+        } else if status.status == "completed" {
+            "continue_after_reports".to_string()
+        } else {
+            "continuation_check_required".to_string()
+        };
 
         Self {
             active_node: status.active_node.clone(),
@@ -4001,19 +4340,21 @@ impl RunGraphDelegationGateSummary {
             local_exception_takeover_gate,
             blocker_code,
             reporting_pause_gate,
+            continuation_signal,
         }
     }
 
     pub fn as_display(&self) -> String {
         format!(
-            "node={} lifecycle={} delegated_cycle_open={} delegated_cycle_state={} local_exception_takeover_gate={} blocker_code={} reporting_pause_gate={}",
+            "node={} lifecycle={} delegated_cycle_open={} delegated_cycle_state={} local_exception_takeover_gate={} blocker_code={} reporting_pause_gate={} continuation_signal={}",
             self.active_node,
             self.lifecycle_stage,
             self.delegated_cycle_open,
             self.delegated_cycle_state,
             self.local_exception_takeover_gate,
             self.blocker_code.as_deref().unwrap_or("none"),
-            self.reporting_pause_gate
+            self.reporting_pause_gate,
+            self.continuation_signal
         )
     }
 }
@@ -4055,7 +4396,7 @@ impl RunGraphRecoverySummary {
 
     pub fn as_display(&self) -> String {
         format!(
-            "run={} task={} active_node={} lifecycle={} resume_node={} resume_status={} checkpoint={} resume_target={} gate={} handoff={} recovery_ready={} takeover_gate={} report_pause_gate={}",
+            "run={} task={} active_node={} lifecycle={} resume_node={} resume_status={} checkpoint={} resume_target={} gate={} handoff={} recovery_ready={} takeover_gate={} report_pause_gate={} continuation_signal={}",
             self.run_id,
             self.task_id,
             self.active_node,
@@ -4068,7 +4409,8 @@ impl RunGraphRecoverySummary {
             self.handoff_state,
             self.recovery_ready,
             self.delegation_gate.local_exception_takeover_gate,
-            self.delegation_gate.reporting_pause_gate
+            self.delegation_gate.reporting_pause_gate,
+            self.delegation_gate.continuation_signal
         )
     }
 }
@@ -4159,6 +4501,8 @@ impl RunGraphDispatchReceiptSummary {
             .and_then(canonical_blocker_code_str)
             .map(str::to_string)
             .or(receipt.blocker_code.clone());
+        let mut downstream_dispatch_blockers = receipt.downstream_dispatch_blockers;
+        downstream_dispatch_blockers.sort_unstable();
         Self {
             run_id: receipt.run_id,
             dispatch_target: receipt.dispatch_target,
@@ -4176,7 +4520,7 @@ impl RunGraphDispatchReceiptSummary {
             downstream_dispatch_command: receipt.downstream_dispatch_command,
             downstream_dispatch_note: receipt.downstream_dispatch_note,
             downstream_dispatch_ready: receipt.downstream_dispatch_ready,
-            downstream_dispatch_blockers: receipt.downstream_dispatch_blockers,
+            downstream_dispatch_blockers,
             downstream_dispatch_packet_path: receipt.downstream_dispatch_packet_path,
             downstream_dispatch_status: receipt.downstream_dispatch_status,
             downstream_dispatch_result_path: receipt.downstream_dispatch_result_path,
@@ -4229,6 +4573,73 @@ impl RunGraphDispatchReceiptSummary {
     }
 }
 
+pub(crate) fn latest_run_graph_dispatch_receipt_matches_status(
+    latest_run_graph_status_run_id: Option<&str>,
+    latest_run_graph_dispatch_receipt_run_id: Option<&str>,
+) -> bool {
+    matches!(
+        (
+            latest_run_graph_status_run_id,
+            latest_run_graph_dispatch_receipt_run_id
+        ),
+        (Some(status_run_id), Some(receipt_run_id)) if status_run_id == receipt_run_id
+    )
+}
+
+pub(crate) fn latest_run_graph_dispatch_receipt_summary_is_inconsistent(
+    latest_run_graph_status_run_id: Option<&str>,
+    latest_run_graph_dispatch_receipt_run_id: Option<&str>,
+) -> bool {
+    latest_run_graph_status_run_id.is_some()
+        && !latest_run_graph_dispatch_receipt_matches_status(
+            latest_run_graph_status_run_id,
+            latest_run_graph_dispatch_receipt_run_id,
+        )
+}
+
+pub(crate) fn latest_run_graph_dispatch_receipt_signal_is_ambiguous(
+    receipt: &RunGraphDispatchReceiptSummary,
+) -> bool {
+    matches!(
+        receipt.dispatch_status.as_str(),
+        "packet_ready" | "routed" | "executed" | "blocked"
+    ) && receipt.lane_status.as_str()
+        != derive_lane_status(
+            &receipt.dispatch_status,
+            receipt.supersedes_receipt_id.as_deref(),
+            receipt.exception_path_receipt_id.as_deref(),
+        )
+        .as_str()
+        || !matches!(
+            receipt.dispatch_status.as_str(),
+            "packet_ready" | "routed" | "executed" | "blocked"
+        )
+}
+
+pub(crate) fn latest_run_graph_evidence_snapshot_is_consistent(
+    latest_run_graph_status_run_id: Option<&str>,
+    latest_run_graph_recovery_run_id: Option<&str>,
+    latest_run_graph_checkpoint_run_id: Option<&str>,
+    latest_run_graph_gate_run_id: Option<&str>,
+    latest_run_graph_dispatch_receipt_run_id: Option<&str>,
+) -> bool {
+    let Some(latest_run_graph_status_run_id) = latest_run_graph_status_run_id else {
+        return latest_run_graph_recovery_run_id.is_none()
+            && latest_run_graph_checkpoint_run_id.is_none()
+            && latest_run_graph_gate_run_id.is_none()
+            && latest_run_graph_dispatch_receipt_run_id.is_none();
+    };
+    [
+        latest_run_graph_recovery_run_id,
+        latest_run_graph_checkpoint_run_id,
+        latest_run_graph_gate_run_id,
+        latest_run_graph_dispatch_receipt_run_id,
+    ]
+    .into_iter()
+    .flatten()
+    .all(|run_id| run_id == latest_run_graph_status_run_id)
+}
+
 fn default_run_graph_lane_status() -> String {
     LaneStatus::LaneOpen.as_str().to_string()
 }
@@ -4239,17 +4650,23 @@ fn normalize_run_graph_lane_status(
     supersedes_receipt_id: Option<&str>,
     exception_path_receipt_id: Option<&str>,
 ) -> String {
+    let derived_lane_status = derive_lane_status(
+        dispatch_status,
+        supersedes_receipt_id,
+        exception_path_receipt_id,
+    )
+    .as_str()
+    .to_string();
     match value {
         Some(raw) if !raw.trim().is_empty() => {
-            canonical_lane_status_str(raw).unwrap_or(raw).to_string()
+            let canonical_lane_status = canonical_lane_status_str(raw).unwrap_or(raw);
+            if canonical_lane_status == derived_lane_status {
+                canonical_lane_status.to_string()
+            } else {
+                derived_lane_status
+            }
         }
-        _ => derive_lane_status(
-            dispatch_status,
-            supersedes_receipt_id,
-            exception_path_receipt_id,
-        )
-        .as_str()
-        .to_string(),
+        _ => derived_lane_status,
     }
 }
 
@@ -4295,7 +4712,7 @@ impl RunGraphGateSummary {
 
     pub fn as_display(&self) -> String {
         format!(
-            "run={} task={} active_node={} lifecycle={} gate={} handoff={} context={} takeover_gate={} report_pause_gate={}",
+            "run={} task={} active_node={} lifecycle={} gate={} handoff={} context={} takeover_gate={} report_pause_gate={} continuation_signal={}",
             self.run_id,
             self.task_id,
             self.active_node,
@@ -4304,7 +4721,8 @@ impl RunGraphGateSummary {
             self.handoff_state,
             self.context_state,
             self.delegation_gate.local_exception_takeover_gate,
-            self.delegation_gate.reporting_pause_gate
+            self.delegation_gate.reporting_pause_gate,
+            self.delegation_gate.continuation_signal
         )
     }
 }
@@ -5512,6 +5930,48 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
+    async fn critical_path_includes_release1_contract_steps_surface() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-critical-path-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let source = root.join("issues.jsonl");
+        fs::create_dir_all(&root).expect("create temp dir");
+        fs::write(&source, sample_tasks_jsonl()).expect("write sample jsonl");
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("import tasks");
+
+        let path = store.critical_path().await.expect("critical path");
+        assert_eq!(path.length, 2);
+        assert_eq!(path.root_task_id.as_deref(), Some("vida-a"));
+        assert_eq!(path.terminal_task_id.as_deref(), Some("vida-b"));
+
+        assert_eq!(path.release_1_contract_steps.len(), 1);
+        let step = &path.release_1_contract_steps[0];
+        assert_eq!(step.id, "doctor_run_graph_negative_control");
+        assert_eq!(step.mode, "fail_closed");
+        assert_eq!(
+            step.blocker_code,
+            "missing_run_graph_dispatch_receipt_operator_evidence"
+        );
+        assert_eq!(
+            step.next_action,
+            "Run `vida taskflow run-graph dispatch --json` to materialize run-graph dispatch receipt evidence before operator handoff."
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn close_task_fails_closed_when_open_child_tasks_exist() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -5526,33 +5986,33 @@ hierarchy: framework,contracts
         let labels: Vec<String> = Vec::new();
 
         store
-            .create_task(
-                "vida-root",
-                "Root",
-                "root",
-                "epic",
-                "open",
-                1,
-                None,
-                &labels,
-                "tester",
-                ".",
-            )
+            .create_task(CreateTaskRequest {
+                task_id: "vida-root",
+                title: "Root",
+                description: "root",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                created_by: "tester",
+                source_repo: ".",
+            })
             .await
             .expect("create root task");
         store
-            .create_task(
-                "vida-child",
-                "Child",
-                "child",
-                "task",
-                "open",
-                2,
-                Some("vida-root"),
-                &labels,
-                "tester",
-                ".",
-            )
+            .create_task(CreateTaskRequest {
+                task_id: "vida-child",
+                title: "Child",
+                description: "child",
+                issue_type: "task",
+                status: "open",
+                priority: 2,
+                parent_id: Some("vida-root"),
+                labels: &labels,
+                created_by: "tester",
+                source_repo: ".",
+            })
             .await
             .expect("create child task");
 
@@ -5579,6 +6039,83 @@ hierarchy: framework,contracts
         assert_eq!(closed_parent.status, "closed");
 
         drop(store);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn update_task_applies_set_and_delta_labels() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-update-task-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = vec!["framework".to_string()];
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "vida-root",
+                title: "Root",
+                description: "root",
+                issue_type: "epic",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &labels,
+                created_by: "tester",
+                source_repo: ".",
+            })
+            .await
+            .expect("create root task");
+
+        let set_labels_vec = vec!["alpha".to_string(), "beta ".to_string()];
+        let updated = store
+            .update_task(UpdateTaskRequest {
+                task_id: "vida-root",
+                status: Some("in_progress"),
+                notes: Some("steady"),
+                description: Some("adjusted"),
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: Some(&set_labels_vec),
+            })
+            .await
+            .expect("apply set labels");
+
+        assert_eq!(updated.status, "in_progress");
+        assert_eq!(updated.notes.as_deref(), Some("steady"));
+        assert_eq!(updated.description, "adjusted");
+        assert_eq!(
+            updated.labels,
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+
+        let add_labels = vec!["gamma".to_string(), "alpha".to_string()];
+        let remove_labels = vec!["beta".to_string()];
+        let updated_again = store
+            .update_task(UpdateTaskRequest {
+                task_id: "vida-root",
+                status: Some("open"),
+                notes: None,
+                description: None,
+                add_labels: &add_labels,
+                remove_labels: &remove_labels,
+                set_labels: None,
+            })
+            .await
+            .expect("apply delta labels");
+
+        assert_eq!(updated_again.status, "open");
+        assert_eq!(
+            updated_again.labels,
+            vec!["alpha".to_string(), "gamma".to_string()]
+        );
+        assert!(updated_again.closed_at.is_none());
+
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -6354,6 +6891,305 @@ hierarchy: framework,contracts
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[tokio::test]
+    async fn run_graph_status_fails_closed_when_persisted_governance_state_breaks_validation() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-governance-read-fail-closed-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let status = sample_run_graph_status();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("seed valid run graph status");
+        let _: Option<GovernanceStateRow> = store
+            .db
+            .upsert(("governance_state", "run-vida-a"))
+            .content(GovernanceStateRow {
+                run_id: "run-vida-a".to_string(),
+                policy_gate: "memory_correction_required".to_string(),
+                handoff_state: "awaiting_coach".to_string(),
+                context_state: "open".to_string(),
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("corrupt governance state in place");
+
+        let error = store
+            .run_graph_status("run-vida-a")
+            .await
+            .expect_err("persisted invalid governance state should fail closed on read");
+        assert!(error
+            .to_string()
+            .contains("memory governance evidence shaping required"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_status_prefers_highest_run_id_when_updated_at_ties() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-latest-tie-break-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut first = sample_run_graph_status();
+        first.run_id = "run-aaa".to_string();
+        first.task_id = "task-aaa".to_string();
+        first.lane_id = "lane-aaa".to_string();
+        first.resume_target = "dispatch.aaa".to_string();
+        store
+            .record_run_graph_status(&first)
+            .await
+            .expect("seed first run graph status");
+
+        let mut second = sample_run_graph_status();
+        second.run_id = "run-bbb".to_string();
+        second.task_id = "task-bbb".to_string();
+        second.lane_id = "lane-bbb".to_string();
+        second.resume_target = "dispatch.bbb".to_string();
+        store
+            .record_run_graph_status(&second)
+            .await
+            .expect("seed second run graph status");
+
+        store
+            .db
+            .query("UPDATE execution_plan_state SET updated_at = '0000000000000000000';")
+            .await
+            .expect("normalize updated_at tie");
+
+        let latest = store
+            .latest_run_graph_status()
+            .await
+            .expect("load latest run graph status")
+            .expect("latest run graph status should exist");
+        assert_eq!(latest.run_id, "run-bbb");
+
+        let recovery = store
+            .latest_run_graph_recovery_summary()
+            .await
+            .expect("load latest recovery summary")
+            .expect("latest recovery summary should exist");
+        assert_eq!(recovery.run_id, "run-bbb");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_recovery_checkpoint_and_gate_summaries_fail_closed_when_latest_checkpoint_row_is_reordered_by_timestamp_drift(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-latest-checkpoint-drift-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-current".to_string();
+        status.task_id = "task-current".to_string();
+        status.lane_id = "lane-current".to_string();
+        status.resume_target = "dispatch.current".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("seed latest run graph status");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert(("resumability_capsule", "run-older"))
+            .content(ResumabilityCapsuleRow {
+                run_id: "run-older".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.older".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("seed reordered checkpoint row");
+
+        let recovery_error = store
+            .latest_run_graph_recovery_summary()
+            .await
+            .expect_err("timestamp drifted checkpoint row should fail closed for recovery summary");
+        assert!(recovery_error
+            .to_string()
+            .contains("latest checkpoint evidence must share the same run_id"));
+
+        let checkpoint_error = store
+            .latest_run_graph_checkpoint_summary()
+            .await
+            .expect_err(
+                "timestamp drifted checkpoint row should fail closed for checkpoint summary",
+            );
+        assert!(checkpoint_error
+            .to_string()
+            .contains("latest checkpoint evidence must share the same run_id"));
+
+        let gate_error = store
+            .latest_run_graph_gate_summary()
+            .await
+            .expect_err("timestamp drifted checkpoint row should fail closed for gate summary");
+        assert!(gate_error
+            .to_string()
+            .contains("latest checkpoint evidence must share the same run_id"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_recovery_and_gate_summary_fail_closed_on_partial_governance_corruption(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-summary-inconsistent-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let status = sample_run_graph_status();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("seed valid run graph status");
+        let _: Option<GovernanceStateRow> = store
+            .db
+            .upsert(("governance_state", "run-vida-a"))
+            .content(GovernanceStateRow {
+                run_id: "run-vida-a".to_string(),
+                policy_gate: String::new(),
+                handoff_state: "none".to_string(),
+                context_state: "sealed".to_string(),
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("corrupt governance state in place");
+
+        let latest_status = store
+            .latest_run_graph_status()
+            .await
+            .expect("load latest run graph status")
+            .expect("latest run graph status should exist");
+        assert_eq!(latest_status.run_id, "run-vida-a");
+        assert_eq!(latest_status.resume_target, "dispatch.writer_lane");
+        assert_eq!(latest_status.policy_gate, "");
+        assert_eq!(latest_status.handoff_state, "none");
+
+        let recovery_error = store
+            .latest_run_graph_recovery_summary()
+            .await
+            .expect_err("partial governance corruption should fail closed for recovery summary");
+        assert!(recovery_error
+            .to_string()
+            .contains("run-graph recovery/gate summary is inconsistent"));
+
+        let gate_error = store
+            .latest_run_graph_gate_summary()
+            .await
+            .expect_err("partial governance corruption should fail closed for gate summary");
+        assert!(gate_error
+            .to_string()
+            .contains("run-graph recovery/gate summary is inconsistent"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_recovery_checkpoint_and_gate_summaries_fail_closed_when_one_surface_row_is_missing_and_an_older_row_exists(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-partial-summary-row-drift-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let status = sample_run_graph_status();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("seed valid run graph status");
+
+        let _old_governance: Option<GovernanceStateRow> = store
+            .db
+            .upsert(("governance_state", "run-older"))
+            .content(GovernanceStateRow {
+                run_id: "run-older".to_string(),
+                policy_gate: "policy_gate_required".to_string(),
+                handoff_state: "awaiting_coach".to_string(),
+                context_state: "sealed".to_string(),
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("seed older governance row");
+        let _: Option<GovernanceStateRow> = store
+            .db
+            .delete(("governance_state", "run-vida-a"))
+            .await
+            .expect("remove latest governance row");
+
+        let latest_run_id = store
+            .latest_run_graph_run_id()
+            .await
+            .expect("load latest run id")
+            .expect("latest run id should exist");
+        assert_eq!(latest_run_id, "run-vida-a");
+
+        let recovery_error = store
+            .latest_run_graph_recovery_summary()
+            .await
+            .expect_err("missing latest governance row should fail closed for recovery summary");
+        assert!(recovery_error
+            .to_string()
+            .contains("recovery/checkpoint summary is inconsistent"));
+
+        let checkpoint_error = store
+            .latest_run_graph_checkpoint_summary()
+            .await
+            .expect_err("missing latest governance row should fail closed for checkpoint summary");
+        assert!(checkpoint_error
+            .to_string()
+            .contains("recovery/checkpoint summary is inconsistent"));
+
+        let gate_error = store
+            .latest_run_graph_gate_summary()
+            .await
+            .expect_err("missing latest governance row should fail closed for gate summary");
+        assert!(gate_error
+            .to_string()
+            .contains("recovery/checkpoint summary is inconsistent"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn delegation_gate_marks_handoff_pending_when_resume_target_is_open() {
         let status = sample_run_graph_status();
@@ -6368,6 +7204,7 @@ hierarchy: framework,contracts
         );
         assert_eq!(gate.blocker_code.as_deref(), Some("open_delegated_cycle"));
         assert_eq!(gate.reporting_pause_gate, "non_blocking_only");
+        assert_eq!(gate.continuation_signal, "continue_routing_non_blocking");
     }
 
     #[test]
@@ -6393,6 +7230,7 @@ hierarchy: framework,contracts
         );
         assert_eq!(gate.blocker_code.as_deref(), Some("open_delegated_cycle"));
         assert_eq!(gate.reporting_pause_gate, "non_blocking_only");
+        assert_eq!(gate.continuation_signal, "continue_routing_non_blocking");
     }
 
     #[test]
@@ -6415,6 +7253,7 @@ hierarchy: framework,contracts
         assert_eq!(gate.local_exception_takeover_gate, "delegated_cycle_clear");
         assert_eq!(gate.blocker_code, None);
         assert_eq!(gate.reporting_pause_gate, "closure_candidate");
+        assert_eq!(gate.continuation_signal, "continue_after_reports");
     }
 
     #[test]
@@ -6428,6 +7267,10 @@ hierarchy: framework,contracts
         assert_eq!(
             summary.delegation_gate.blocker_code.as_deref(),
             Some("open_delegated_cycle")
+        );
+        assert_eq!(
+            summary.delegation_gate.continuation_signal,
+            "continue_routing_non_blocking"
         );
     }
 
@@ -6450,6 +7293,10 @@ hierarchy: framework,contracts
             "delegated_cycle_clear"
         );
         assert_eq!(summary.delegation_gate.blocker_code, None);
+        assert_eq!(
+            summary.delegation_gate.continuation_signal,
+            "continue_after_reports"
+        );
     }
 
     fn sample_dispatch_receipt_with_status(dispatch_status: &str) -> RunGraphDispatchReceipt {
@@ -6531,6 +7378,28 @@ hierarchy: framework,contracts
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
 
+        let mut status = sample_run_graph_status();
+        status.run_id = "runnulllanestatus".to_string();
+        status.task_id = "task-nulllanestatus".to_string();
+        status.resume_target = "dispatch.null.lane.status".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert(("resumability_capsule", "runnulllanestatus"))
+            .content(ResumabilityCapsuleRow {
+                run_id: "runnulllanestatus".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.null.lane.status".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("persist matching checkpoint row");
+
         let mut receipt = sample_dispatch_receipt_with_status("executed");
         receipt.run_id = "runnulllanestatus".to_string();
         receipt.recorded_at = "2026-03-16T00:00:00Z".to_string();
@@ -6557,6 +7426,1594 @@ hierarchy: framework,contracts
             .expect("load receipt")
             .expect("receipt exists");
         assert_eq!(receipt.lane_status, "lane_running");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_uses_shared_contract_validation_flow() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-shared-contract-flow-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-shared-contract-flow".to_string();
+        status.task_id = "task-shared-contract-flow".to_string();
+        status.resume_target = "dispatch.shared.contract.flow".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let mut receipt = sample_dispatch_receipt_with_status("executed");
+        receipt.run_id = "run-shared-contract-flow".to_string();
+        receipt.lane_status = "lane_running".to_string();
+        receipt.downstream_dispatch_target = Some("docflow".to_string());
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_blockers = vec![
+            "pending_execution_preparation_evidence".to_string(),
+            "pending_review_findings".to_string(),
+        ];
+        receipt.downstream_dispatch_status = Some("executed".to_string());
+        receipt.downstream_dispatch_active_target = Some("docflow".to_string());
+        receipt.downstream_dispatch_last_target = Some("closure".to_string());
+        receipt.recorded_at = "2026-03-18T00:00:00Z".to_string();
+
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist canonical dispatch receipt");
+
+        let summary = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect("load latest dispatch receipt summary")
+            .expect("summary exists");
+        assert_eq!(summary.run_id, "run-shared-contract-flow");
+        assert_eq!(summary.dispatch_status, "executed");
+        assert_eq!(
+            summary.downstream_dispatch_status,
+            Some("executed".to_string())
+        );
+        assert_eq!(
+            summary.downstream_dispatch_blockers,
+            vec![
+                "pending_execution_preparation_evidence".to_string(),
+                "pending_review_findings".to_string(),
+            ]
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn record_run_graph_dispatch_receipt_rejects_noncanonical_downstream_blockers_before_persist(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-contract-write-guard-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-contract-write-guard".to_string();
+        status.task_id = "task-contract-write-guard".to_string();
+        status.resume_target = "dispatch.contract.write.guard".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let mut receipt = sample_dispatch_receipt_with_status("executed");
+        receipt.run_id = "run-contract-write-guard".to_string();
+        receipt.lane_status = "lane_running".to_string();
+        receipt.downstream_dispatch_target = Some("docflow".to_string());
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_blockers = vec![
+            "pending_execution_preparation_evidence".to_string(),
+            "".to_string(),
+        ];
+        receipt.downstream_dispatch_status = Some("executed".to_string());
+        receipt.downstream_dispatch_active_target = Some("docflow".to_string());
+        receipt.downstream_dispatch_last_target = Some("closure".to_string());
+        receipt.recorded_at = "2026-03-18T00:00:00Z".to_string();
+
+        let error = store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect_err("noncanonical downstream blockers should be rejected before persist");
+        assert!(error.to_string().contains(
+            "downstream_dispatch_blockers must contain only non-empty ASCII lowercase canonical entries without whitespace, case, internal spacing, or unicode drift when downstream_dispatch_status `executed` is present"
+        ));
+
+        let summary = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect("load latest dispatch receipt summary after rejected write");
+        assert!(summary.is_none());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_tracks_latest_status_and_derives_stale_lane_status(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-latest-status-consistency-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut older_status = sample_run_graph_status();
+        older_status.run_id = "run-aaa".to_string();
+        older_status.task_id = "task-aaa".to_string();
+        older_status.lane_id = "lane-aaa".to_string();
+        older_status.resume_target = "dispatch.aaa".to_string();
+        store
+            .record_run_graph_status(&older_status)
+            .await
+            .expect("persist older run graph status");
+
+        let mut latest_status = sample_run_graph_status();
+        latest_status.run_id = "run-bbb".to_string();
+        latest_status.task_id = "task-bbb".to_string();
+        latest_status.lane_id = "lane-bbb".to_string();
+        latest_status.resume_target = "dispatch.bbb".to_string();
+        store
+            .record_run_graph_status(&latest_status)
+            .await
+            .expect("persist latest run graph status");
+
+        store
+            .db
+            .query("UPDATE execution_plan_state SET updated_at = '0000000000000000000';")
+            .await
+            .expect("normalize execution_plan_state tie");
+
+        let mut latest_status_receipt = sample_dispatch_receipt_with_status("executed");
+        latest_status_receipt.run_id = "run-bbb".to_string();
+        latest_status_receipt.lane_status = "lane_open".to_string();
+        latest_status_receipt.exception_path_receipt_id = Some("receipt-exception-bbb".to_string());
+        latest_status_receipt.recorded_at = "2026-03-16T00:00:00Z".to_string();
+        store
+            .record_run_graph_dispatch_receipt(&latest_status_receipt)
+            .await
+            .expect("persist latest-status dispatch receipt");
+
+        let mut newer_foreign_receipt = sample_dispatch_receipt_with_status("executed");
+        newer_foreign_receipt.run_id = "run-aaa".to_string();
+        newer_foreign_receipt.recorded_at = "2026-03-17T00:00:00Z".to_string();
+        store
+            .record_run_graph_dispatch_receipt(&newer_foreign_receipt)
+            .await
+            .expect("persist newer foreign dispatch receipt");
+
+        let latest_status = store
+            .latest_run_graph_status()
+            .await
+            .expect("load latest run graph status")
+            .expect("latest run graph status should exist");
+        assert_eq!(latest_status.run_id, "run-bbb");
+
+        let summary = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect("load latest dispatch receipt summary")
+            .expect("latest dispatch receipt summary should exist");
+        assert_eq!(summary.run_id, "run-bbb");
+        assert_eq!(summary.lane_status, "lane_exception_takeover");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_downstream_lane_drift() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-downstream-lane-drift-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-drift".to_string();
+        status.task_id = "task-drift".to_string();
+        status.resume_target = "dispatch.drift".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let mut receipt = sample_dispatch_receipt_with_status("executed");
+        receipt.run_id = "run-drift".to_string();
+        receipt.dispatch_status = "executed".to_string();
+        receipt.lane_status = "lane_open".to_string();
+        receipt.downstream_dispatch_target = Some("docflow".to_string());
+        receipt.downstream_dispatch_ready = true;
+        receipt.downstream_dispatch_blockers =
+            vec!["pending_execution_preparation_evidence".to_string()];
+        receipt.downstream_dispatch_status = Some("executed".to_string());
+        receipt.downstream_dispatch_active_target = Some("docflow".to_string());
+        receipt.downstream_dispatch_last_target = Some("closure".to_string());
+        receipt.recorded_at = "2026-03-18T00:00:00Z".to_string();
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist drifted dispatch receipt");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err("drifted downstream lane signal should fail closed");
+        assert!(error
+            .to_string()
+            .contains("run-graph dispatch receipt summary is inconsistent"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_whitespace_only_downstream_blockers(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-whitespace-downstream-blockers-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-downstream-blockers".to_string();
+        status.task_id = "task-downstream-blockers".to_string();
+        status.resume_target = "dispatch.downstream".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert(("resumability_capsule", "run-downstream-blockers"))
+            .content(ResumabilityCapsuleRow {
+                run_id: "run-downstream-blockers".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.downstream".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("persist matching checkpoint row");
+
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert(("run_graph_dispatch_receipt", "run-downstream-blockers"))
+            .content(RunGraphDispatchReceiptStored {
+                run_id: "run-downstream-blockers".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_running".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("docflow".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: vec!["   ".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("executed".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("docflow".to_string()),
+                downstream_dispatch_last_target: Some("closure".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist whitespace downstream blockers receipt");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err("whitespace-only downstream blockers should fail closed");
+        assert!(error
+            .to_string()
+            .contains("downstream_dispatch_blockers must contain only non-empty ASCII lowercase canonical entries without whitespace, case, internal spacing, or unicode drift when downstream_dispatch_status `executed` is present"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_mixed_canonical_and_whitespace_downstream_blockers(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-mixed-downstream-blockers-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-mixed-downstream-blockers".to_string();
+        status.task_id = "task-mixed-downstream-blockers".to_string();
+        status.resume_target = "dispatch.mixed".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert(("resumability_capsule", "run-mixed-downstream-blockers"))
+            .content(ResumabilityCapsuleRow {
+                run_id: "run-mixed-downstream-blockers".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.mixed".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("persist matching checkpoint row");
+
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert((
+                "run_graph_dispatch_receipt",
+                "run-mixed-downstream-blockers",
+            ))
+            .content(RunGraphDispatchReceiptStored {
+                run_id: "run-mixed-downstream-blockers".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_running".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("docflow".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: vec![
+                    "pending_execution_preparation_evidence".to_string(),
+                    " pending_execution_preparation_evidence ".to_string(),
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("executed".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("docflow".to_string()),
+                downstream_dispatch_last_target: Some("closure".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist mixed downstream blockers receipt");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err("mixed canonical and whitespace downstream blockers should fail closed");
+        assert!(error
+            .to_string()
+            .contains("without whitespace, case, internal spacing, or unicode drift"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_empty_string_and_canonical_downstream_blockers(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-empty-string-downstream-blockers-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-empty-string-downstream-blockers".to_string();
+        status.task_id = "task-empty-string-downstream-blockers".to_string();
+        status.resume_target = "dispatch.empty.string".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert((
+                "resumability_capsule",
+                "run-empty-string-downstream-blockers",
+            ))
+            .content(ResumabilityCapsuleRow {
+                run_id: "run-empty-string-downstream-blockers".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.empty.string".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("persist matching checkpoint row");
+
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert((
+                "run_graph_dispatch_receipt",
+                "run-empty-string-downstream-blockers",
+            ))
+            .content(RunGraphDispatchReceiptStored {
+                run_id: "run-empty-string-downstream-blockers".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_running".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("docflow".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: vec![
+                    "".to_string(),
+                    "pending_execution_preparation_evidence".to_string(),
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("executed".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("docflow".to_string()),
+                downstream_dispatch_last_target: Some("closure".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist empty-string downstream blockers receipt");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err("empty-string downstream blockers should fail closed");
+        assert!(error
+            .to_string()
+            .contains("non-empty ASCII lowercase canonical entries"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_tab_and_newline_downstream_blockers(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-tab-newline-downstream-blockers-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-tab-newline-downstream-blockers".to_string();
+        status.task_id = "task-tab-newline-downstream-blockers".to_string();
+        status.resume_target = "dispatch.tab.newline".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert((
+                "resumability_capsule",
+                "run-tab-newline-downstream-blockers",
+            ))
+            .content(ResumabilityCapsuleRow {
+                run_id: "run-tab-newline-downstream-blockers".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.tab.newline".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("persist matching checkpoint row");
+
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert((
+                "run_graph_dispatch_receipt",
+                "run-tab-newline-downstream-blockers",
+            ))
+            .content(RunGraphDispatchReceiptStored {
+                run_id: "run-tab-newline-downstream-blockers".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_running".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("docflow".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: vec![
+                    "\tpending_execution_preparation_evidence\n".to_string(),
+                    "pending_review_findings".to_string(),
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("executed".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("docflow".to_string()),
+                downstream_dispatch_last_target: Some("closure".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist tab/newline downstream blockers receipt");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err("tab/newline downstream blockers should fail closed");
+        assert!(error
+            .to_string()
+            .contains("non-empty ASCII lowercase canonical entries"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_trailing_empty_downstream_blockers(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-trailing-empty-downstream-blockers-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-trailing-empty-downstream-blockers".to_string();
+        status.task_id = "task-trailing-empty-downstream-blockers".to_string();
+        status.resume_target = "dispatch.trailing.empty".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert((
+                "resumability_capsule",
+                "run-trailing-empty-downstream-blockers",
+            ))
+            .content(ResumabilityCapsuleRow {
+                run_id: "run-trailing-empty-downstream-blockers".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.trailing.empty".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("persist matching checkpoint row");
+
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert((
+                "run_graph_dispatch_receipt",
+                "run-trailing-empty-downstream-blockers",
+            ))
+            .content(RunGraphDispatchReceiptStored {
+                run_id: "run-trailing-empty-downstream-blockers".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_running".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("docflow".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: vec![
+                    "pending_execution_preparation_evidence".to_string(),
+                    "".to_string(),
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("executed".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("docflow".to_string()),
+                downstream_dispatch_last_target: Some("closure".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist trailing empty downstream blockers receipt");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err("trailing empty downstream blockers should fail closed");
+        let expected_fragment = "downstream_dispatch_blockers must contain only non-empty ASCII lowercase canonical entries without whitespace, case, internal spacing, or unicode drift when downstream_dispatch_status `executed` is present";
+        assert!(error.to_string().contains(expected_fragment));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_duplicate_canonical_and_whitespace_downstream_blockers(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-duplicate-downstream-blockers-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-duplicate-downstream-blockers".to_string();
+        status.task_id = "task-duplicate-downstream-blockers".to_string();
+        status.resume_target = "dispatch.duplicate".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert(("resumability_capsule", "run-duplicate-downstream-blockers"))
+            .content(ResumabilityCapsuleRow {
+                run_id: "run-duplicate-downstream-blockers".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.duplicate".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("persist matching checkpoint row");
+
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert((
+                "run_graph_dispatch_receipt",
+                "run-duplicate-downstream-blockers",
+            ))
+            .content(RunGraphDispatchReceiptStored {
+                run_id: "run-duplicate-downstream-blockers".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_running".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("docflow".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: vec![
+                    "pending_execution_preparation_evidence".to_string(),
+                    "pending_execution_preparation_evidence".to_string(),
+                    " pending_execution_preparation_evidence ".to_string(),
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("executed".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("docflow".to_string()),
+                downstream_dispatch_last_target: Some("closure".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist duplicate canonical downstream blockers receipt");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err(
+                "duplicate canonical and whitespace downstream blockers should fail closed",
+            );
+        assert!(error
+            .to_string()
+            .contains("without whitespace, case, internal spacing, or unicode drift"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_repeated_canonical_downstream_blockers(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-repeated-canonical-downstream-blockers-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-repeated-canonical-downstream-blockers".to_string();
+        status.task_id = "task-repeated-canonical-downstream-blockers".to_string();
+        status.resume_target = "dispatch.repeated.canonical".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert((
+                "resumability_capsule",
+                "run-repeated-canonical-downstream-blockers",
+            ))
+            .content(ResumabilityCapsuleRow {
+                run_id: "run-repeated-canonical-downstream-blockers".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.repeated.canonical".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("persist matching checkpoint row");
+
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert((
+                "run_graph_dispatch_receipt",
+                "run-repeated-canonical-downstream-blockers",
+            ))
+            .content(RunGraphDispatchReceiptStored {
+                run_id: "run-repeated-canonical-downstream-blockers".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_running".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("docflow".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: vec![
+                    "pending_execution_preparation_evidence".to_string(),
+                    "pending_execution_preparation_evidence".to_string(),
+                    "pending_execution_preparation_evidence".to_string(),
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("executed".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("docflow".to_string()),
+                downstream_dispatch_last_target: Some("closure".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist repeated canonical downstream blockers receipt");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err("repeated canonical downstream blockers should fail closed");
+        assert!(error
+            .to_string()
+            .contains("duplicate canonical entries after lowercase canonicalization"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_large_repeated_canonical_downstream_blockers(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-large-repeated-canonical-downstream-blockers-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-large-repeated-canonical-downstream-blockers".to_string();
+        status.task_id = "task-large-repeated-canonical-downstream-blockers".to_string();
+        status.resume_target = "dispatch.large.repeated.canonical".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert((
+                "resumability_capsule",
+                "run-large-repeated-canonical-downstream-blockers",
+            ))
+            .content(ResumabilityCapsuleRow {
+                run_id: "run-large-repeated-canonical-downstream-blockers".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.large.repeated.canonical".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("persist matching checkpoint row");
+
+        let repeated_blocker = "pending_execution_preparation_evidence".to_string();
+        let large_repeated_blockers = vec![repeated_blocker; 2048];
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert((
+                "run_graph_dispatch_receipt",
+                "run-large-repeated-canonical-downstream-blockers",
+            ))
+            .content(RunGraphDispatchReceiptStored {
+                run_id: "run-large-repeated-canonical-downstream-blockers".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_running".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("docflow".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: large_repeated_blockers,
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("executed".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("docflow".to_string()),
+                downstream_dispatch_last_target: Some("closure".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist large repeated canonical downstream blockers receipt");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err("large repeated canonical downstream blockers should fail closed");
+        assert!(error
+            .to_string()
+            .contains("duplicate canonical entries after lowercase canonicalization"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_mixed_case_duplicate_downstream_blockers(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-mixed-case-duplicate-downstream-blockers-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-mixed-case-downstream-blockers".to_string();
+        status.task_id = "task-mixed-case-downstream-blockers".to_string();
+        status.resume_target = "dispatch.mixed.case".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert(("resumability_capsule", "run-mixed-case-downstream-blockers"))
+            .content(ResumabilityCapsuleRow {
+                run_id: "run-mixed-case-downstream-blockers".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.mixed.case".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("persist matching checkpoint row");
+
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert((
+                "run_graph_dispatch_receipt",
+                "run-mixed-case-downstream-blockers",
+            ))
+            .content(RunGraphDispatchReceiptStored {
+                run_id: "run-mixed-case-downstream-blockers".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_running".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("docflow".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: vec![
+                    "pending_execution_preparation_evidence".to_string(),
+                    "PENDING_EXECUTION_PREPARATION_EVIDENCE".to_string(),
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("executed".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("docflow".to_string()),
+                downstream_dispatch_last_target: Some("closure".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist mixed-case duplicate downstream blockers receipt");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err("mixed-case duplicate downstream blockers should fail closed");
+        assert!(error
+            .to_string()
+            .contains("without whitespace, case, internal spacing, or unicode drift"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_internal_repeated_space_downstream_blockers(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-internal-space-downstream-blockers-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-internal-space-downstream-blockers".to_string();
+        status.task_id = "task-internal-space-downstream-blockers".to_string();
+        status.resume_target = "dispatch.internal.space".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert((
+                "resumability_capsule",
+                "run-internal-space-downstream-blockers",
+            ))
+            .content(ResumabilityCapsuleRow {
+                run_id: "run-internal-space-downstream-blockers".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.internal.space".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("persist matching checkpoint row");
+
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert((
+                "run_graph_dispatch_receipt",
+                "run-internal-space-downstream-blockers",
+            ))
+            .content(RunGraphDispatchReceiptStored {
+                run_id: "run-internal-space-downstream-blockers".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_running".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("docflow".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: vec![
+                    "pending review findings".to_string(),
+                    "pending  review findings".to_string(),
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("executed".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("docflow".to_string()),
+                downstream_dispatch_last_target: Some("closure".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist internal-space downstream blockers receipt");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err("internal repeated spaces in downstream blockers should fail closed");
+        assert!(error
+            .to_string()
+            .contains("without whitespace, case, internal spacing, or unicode drift"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_unicode_zero_width_downstream_blockers(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-unicode-zero-width-downstream-blockers-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-unicode-zero-width-downstream-blockers".to_string();
+        status.task_id = "task-unicode-zero-width-downstream-blockers".to_string();
+        status.resume_target = "dispatch.unicode.zero.width".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert((
+                "resumability_capsule",
+                "run-unicode-zero-width-downstream-blockers",
+            ))
+            .content(ResumabilityCapsuleRow {
+                run_id: "run-unicode-zero-width-downstream-blockers".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.unicode.zero.width".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("persist matching checkpoint row");
+
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert((
+                "run_graph_dispatch_receipt",
+                "run-unicode-zero-width-downstream-blockers",
+            ))
+            .content(RunGraphDispatchReceiptStored {
+                run_id: "run-unicode-zero-width-downstream-blockers".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_running".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("docflow".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: vec![
+                    "pending_execution_preparation_evidence".to_string(),
+                    "pending_execution_preparation_evidence\u{200B}".to_string(),
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("executed".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("docflow".to_string()),
+                downstream_dispatch_last_target: Some("closure".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist unicode zero-width downstream blockers receipt");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err("unicode zero-width downstream blockers should fail closed");
+        assert!(error.to_string().contains("unicode drift"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_missing_downstream_blockers_fallback(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-missing-downstream-blockers-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-missing-downstream-blockers".to_string();
+        status.task_id = "task-missing-downstream-blockers".to_string();
+        status.resume_target = "dispatch.missing.blockers".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert(("resumability_capsule", "run-missing-downstream-blockers"))
+            .content(ResumabilityCapsuleRow {
+                run_id: "run-missing-downstream-blockers".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.missing.blockers".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("persist matching checkpoint row");
+
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert((
+                "run_graph_dispatch_receipt",
+                "run-missing-downstream-blockers",
+            ))
+            .content(RunGraphDispatchReceiptStored {
+                run_id: "run-missing-downstream-blockers".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_running".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("docflow".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("blocked".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("docflow".to_string()),
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist downstream blockers fallback receipt");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err("missing downstream blockers fallback should fail closed");
+        assert!(error
+            .to_string()
+            .contains("downstream_dispatch_blockers must be present and non-empty"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_normalizes_canonical_downstream_blocker_order(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-sorted-downstream-blockers-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-sorted-downstream-blockers".to_string();
+        status.task_id = "task-sorted-downstream-blockers".to_string();
+        status.resume_target = "dispatch.sorted".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert(("resumability_capsule", "run-sorted-downstream-blockers"))
+            .content(ResumabilityCapsuleRow {
+                run_id: "run-sorted-downstream-blockers".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.sorted".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("persist matching checkpoint row");
+
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert((
+                "run_graph_dispatch_receipt",
+                "run-sorted-downstream-blockers",
+            ))
+            .content(RunGraphDispatchReceiptStored {
+                run_id: "run-sorted-downstream-blockers".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("lane_running".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: Some("docflow".to_string()),
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: vec![
+                    "pending_review_findings".to_string(),
+                    "pending_execution_preparation_evidence".to_string(),
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("executed".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("docflow".to_string()),
+                downstream_dispatch_last_target: Some("closure".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist unsorted canonical downstream blockers receipt");
+
+        let summary = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect("load latest dispatch receipt summary")
+            .expect("latest dispatch receipt summary should exist");
+        assert_eq!(
+            summary.downstream_dispatch_blockers,
+            vec![
+                "pending_execution_preparation_evidence".to_string(),
+                "pending_review_findings".to_string(),
+            ]
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_when_latest_checkpoint_row_leaks_from_older_run(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-checkpoint-leak-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-current".to_string();
+        status.task_id = "task-current".to_string();
+        status.lane_id = "lane-current".to_string();
+        status.resume_target = "dispatch.current".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist current run graph status");
+
+        let mut receipt = sample_dispatch_receipt_with_status("executed");
+        receipt.run_id = "run-current".to_string();
+        receipt.recorded_at = "2026-03-18T00:00:00Z".to_string();
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist current dispatch receipt");
+
+        let _: Option<ResumabilityCapsuleRow> = store
+            .db
+            .upsert(("resumability_capsule", "run-older"))
+            .content(ResumabilityCapsuleRow {
+                run_id: "run-older".to_string(),
+                checkpoint_kind: "execution_cursor".to_string(),
+                resume_target: "dispatch.older".to_string(),
+                recovery_ready: true,
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await
+            .expect("seed leaked older checkpoint row");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err(
+                "checkpoint leakage should fail closed for latest dispatch receipt summary",
+            );
+        assert!(error
+            .to_string()
+            .contains("latest checkpoint evidence must share the same run_id"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_whitespace_only_critical_fields(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-whitespace-critical-fields-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-whitespace".to_string();
+        status.task_id = "task-whitespace".to_string();
+        status.lane_id = "lane-whitespace".to_string();
+        status.resume_target = "dispatch.whitespace".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert(("run_graph_dispatch_receipt", "run-whitespace"))
+            .content(RunGraphDispatchReceiptStored {
+                run_id: "run-whitespace".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "   ".to_string(),
+                lane_status: Some("lane_open".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist whitespace dispatch_status receipt");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err("whitespace-only dispatch_status should fail closed");
+        assert!(error
+            .to_string()
+            .contains("dispatch_status must be non-empty"));
+
+        let _: Option<RunGraphDispatchReceiptStored> = store
+            .db
+            .upsert(("run_graph_dispatch_receipt", "run-whitespace"))
+            .content(RunGraphDispatchReceiptStored {
+                run_id: "run-whitespace".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: Some("   ".to_string()),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: None,
+                dispatch_packet_path: None,
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist whitespace lane_status receipt");
+
+        let error = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect_err("whitespace-only lane_status should fail closed");
+        assert!(error.to_string().contains("lane_status must be non-empty"));
 
         let _ = fs::remove_dir_all(&root);
     }

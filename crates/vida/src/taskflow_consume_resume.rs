@@ -15,6 +15,38 @@ fn missing_dispatch_receipt_error(run_id: &str) -> String {
     format!("No persisted run-graph dispatch receipt exists for run_id `{run_id}`")
 }
 
+fn lane_status_pair_is_resume_compatible(
+    packet_lane_status: super::LaneStatus,
+    derived_lane_status: super::LaneStatus,
+) -> bool {
+    if packet_lane_status == derived_lane_status {
+        return true;
+    }
+    matches!(
+        (packet_lane_status, derived_lane_status),
+        (super::LaneStatus::LaneRunning, super::LaneStatus::LaneOpen)
+            | (super::LaneStatus::LaneOpen, super::LaneStatus::LaneRunning)
+            | (
+                super::LaneStatus::LaneRunning,
+                super::LaneStatus::PacketReady
+            )
+            | (
+                super::LaneStatus::PacketReady,
+                super::LaneStatus::LaneRunning
+            )
+            | (super::LaneStatus::LaneOpen, super::LaneStatus::PacketReady)
+            | (super::LaneStatus::PacketReady, super::LaneStatus::LaneOpen)
+            | (
+                super::LaneStatus::LaneRunning,
+                super::LaneStatus::LaneBlocked
+            )
+            | (
+                super::LaneStatus::LaneBlocked,
+                super::LaneStatus::LaneRunning
+            )
+    )
+}
+
 fn validate_receipt_packet_pair(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     packet: &serde_json::Value,
@@ -34,21 +66,25 @@ fn validate_receipt_packet_pair(
     }
     if let Some(expected_dispatch_packet_path) = receipt.dispatch_packet_path.as_deref() {
         if expected_dispatch_packet_path != packet_path {
-            return Err(format!(
-                "Persisted dispatch receipt expects dispatch_packet_path `{expected_dispatch_packet_path}` but resolved `{packet_path}`"
-            ));
+            let expected_downstream_packet_path =
+                receipt.downstream_dispatch_packet_path.as_deref();
+            if expected_downstream_packet_path != Some(packet_path) {
+                return Err(format!(
+                    "Persisted dispatch receipt expects dispatch_packet_path `{expected_dispatch_packet_path}` but resolved `{packet_path}`"
+                ));
+            }
         }
     }
     if let Some(packet_lane_status) = packet
         .get("lane_status")
         .and_then(serde_json::Value::as_str)
-        .and_then(super::canonical_lane_status_str)
-        .and_then(super::LaneStatus::from_str)
+        .and_then(canonical_resume_lane_status)
     {
-        let packet_dispatch_status = packet
-            .get("dispatch_status")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("routed");
+        let packet_dispatch_status = canonical_resume_dispatch_status(
+            packet
+                .get("dispatch_status")
+                .and_then(serde_json::Value::as_str),
+        );
         let mut derived_lane_status = super::derive_lane_status(
             packet_dispatch_status,
             packet
@@ -63,7 +99,7 @@ fn validate_receipt_packet_pair(
         {
             derived_lane_status = super::LaneStatus::LaneCompleted;
         }
-        if packet_lane_status != derived_lane_status {
+        if !lane_status_pair_is_resume_compatible(packet_lane_status, derived_lane_status) {
             return Err(format!(
                 "Persisted {packet_label} lane_status `{}` conflicts with derived lane_status `{}` from lane evidence",
                 packet_lane_status.as_str(),
@@ -87,6 +123,31 @@ async fn validate_run_graph_resume_state(
             status.run_id
         ));
     }
+    match validate_run_graph_resume_gate(&status) {
+        Ok(()) => Ok(()),
+        Err(_error) if resume_from_persisted_final_snapshot(store)? => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn resume_from_persisted_final_snapshot(store: &super::StateStore) -> Result<bool, String> {
+    let summary = super::runtime_consumption_summary(store.root())?;
+    Ok(summary.latest_kind.as_deref() == Some("final") && summary.latest_snapshot_path.is_some())
+}
+
+async fn validate_run_graph_resume_state_for_downstream_packet(
+    store: &super::StateStore,
+    run_id: &str,
+) -> Result<(), String> {
+    let status = store.run_graph_status(run_id).await.map_err(|error| {
+        format!("Failed to read persisted run-graph state for `{run_id}`: {error}")
+    })?;
+    if status.run_id != run_id {
+        return Err(format!(
+            "Persisted run-graph state mismatch: requested run_id `{run_id}` resolved to `{}`",
+            status.run_id
+        ));
+    }
     validate_run_graph_resume_gate(&status)
 }
 
@@ -97,19 +158,49 @@ pub(crate) fn read_dispatch_packet(path: &str) -> Result<serde_json::Value, Stri
         .map_err(|error| format!("Failed to parse persisted dispatch packet: {error}"))
 }
 
+struct ResumeInputs {
+    dispatch_receipt: crate::state_store::RunGraphDispatchReceipt,
+    dispatch_packet_path: String,
+    role_selection: super::RuntimeConsumptionLaneSelection,
+    run_graph_bootstrap: serde_json::Value,
+}
+
+fn build_resume_inputs(
+    dispatch_receipt: crate::state_store::RunGraphDispatchReceipt,
+    dispatch_packet_path: String,
+    packet: serde_json::Value,
+    role_selection: super::RuntimeConsumptionLaneSelection,
+) -> ResumeInputs {
+    let run_graph_bootstrap = packet
+        .get("run_graph_bootstrap")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    ResumeInputs {
+        dispatch_receipt,
+        dispatch_packet_path,
+        role_selection,
+        run_graph_bootstrap,
+    }
+}
+
+fn decode_role_selection_from_packet(
+    packet: &serde_json::Value,
+    packet_kind: &str,
+) -> Result<super::RuntimeConsumptionLaneSelection, String> {
+    serde_json::from_value(
+        packet
+            .get("role_selection_full")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
+    .map_err(|error| format!("Failed to decode role_selection from {packet_kind}: {error}"))
+}
+
 async fn resume_inputs_from_downstream_packet(
     store: &super::StateStore,
     requested_run_id: Option<&str>,
     packet_path: &str,
-) -> Result<
-    (
-        crate::state_store::RunGraphDispatchReceipt,
-        String,
-        super::RuntimeConsumptionLaneSelection,
-        serde_json::Value,
-    ),
-    String,
-> {
+) -> Result<ResumeInputs, String> {
     let packet = read_dispatch_packet(packet_path)?;
     let run_id = packet
         .get("run_id")
@@ -138,16 +229,9 @@ async fn resume_inputs_from_downstream_packet(
         packet_path,
         "downstream dispatch packet",
     )?;
-    validate_run_graph_resume_state(store, run_id).await?;
-    let role_selection: super::RuntimeConsumptionLaneSelection = serde_json::from_value(
-        packet
-            .get("role_selection_full")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null),
-    )
-    .map_err(|error| {
-        format!("Failed to decode role_selection from downstream dispatch packet: {error}")
-    })?;
+    validate_run_graph_resume_state_for_downstream_packet(store, run_id).await?;
+    let role_selection =
+        decode_role_selection_from_packet(&packet, "downstream dispatch packet")?;
     let dispatch_target = packet
         .get("downstream_dispatch_target")
         .and_then(serde_json::Value::as_str)
@@ -161,14 +245,10 @@ async fn resume_inputs_from_downstream_packet(
         .clone()
         .or_else(|| root_receipt.selected_backend.clone())
         .filter(|value| !value.is_empty());
-    let dispatch_ready = packet
+    let downstream_dispatch_ready = packet
         .get("downstream_dispatch_ready")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    let downstream_dispatch_status = packet
-        .get("downstream_dispatch_status")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
     let dispatch_command = packet
         .get("downstream_dispatch_command")
         .and_then(serde_json::Value::as_str)
@@ -179,14 +259,36 @@ async fn resume_inputs_from_downstream_packet(
         .map(str::to_string);
     let downstream_dispatch_blockers = packet
         .get("downstream_dispatch_blockers")
-        .and_then(serde_json::Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::to_string)
-                .collect::<Vec<_>>()
+        .map(|value| {
+            canonical_resume_string_array_entries(value).ok_or_else(|| {
+                "Persisted downstream dispatch packet has noncanonical downstream_dispatch_blockers"
+                    .to_string()
+            })
         })
+        .transpose()?
         .unwrap_or_default();
+    if let Some(error) = super::downstream_dispatch_ready_blocker_parity_error(
+        downstream_dispatch_ready,
+        &downstream_dispatch_blockers,
+    ) {
+        return Err(error);
+    }
+    let downstream_dispatch_status =
+        if downstream_dispatch_ready && downstream_dispatch_blockers.is_empty() {
+            Some("packet_ready".to_string())
+        } else {
+            packet
+                .get("downstream_dispatch_status")
+                .and_then(serde_json::Value::as_str)
+                .map(|status| canonical_resume_dispatch_status(Some(status)))
+                .map(str::to_string)
+        };
+    if let Some(error) = resume_packet_ready_blocker_parity_error(
+        downstream_dispatch_status.as_deref(),
+        &downstream_dispatch_blockers,
+    ) {
+        return Err(error);
+    }
     let recorded_at = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .expect("rfc3339 timestamp should render");
@@ -201,8 +303,7 @@ async fn resume_inputs_from_downstream_packet(
     let parsed_downstream_lane_status = packet
         .get("downstream_lane_status")
         .and_then(serde_json::Value::as_str)
-        .and_then(super::canonical_lane_status_str)
-        .and_then(super::LaneStatus::from_str);
+        .and_then(canonical_resume_lane_status);
     let missing_lane_evidence_blocker = super::missing_downstream_lane_evidence_blocker(
         parsed_downstream_lane_status,
         supersedes_receipt_id.as_deref(),
@@ -229,18 +330,11 @@ async fn resume_inputs_from_downstream_packet(
     ) && downstream_dispatch_status.as_deref() == Some("executed");
     let dispatch_status = if closure_completed {
         "executed".to_string()
-    } else if matches!(
-        downstream_dispatch_status.as_deref(),
-        Some("executed" | "blocked" | "routed" | "packet_ready")
-    ) {
+    } else {
         downstream_dispatch_status
             .as_deref()
-            .expect("status checked as Some")
+            .unwrap_or("blocked")
             .to_string()
-    } else if dispatch_ready {
-        "routed".to_string()
-    } else {
-        "blocked".to_string()
     };
     let mut derived_lane_status = super::derive_lane_status(
         &dispatch_status,
@@ -251,7 +345,7 @@ async fn resume_inputs_from_downstream_packet(
         derived_lane_status = super::LaneStatus::LaneCompleted;
     }
     if let Some(packet_lane_status) = parsed_downstream_lane_status {
-        if packet_lane_status != derived_lane_status {
+        if !lane_status_pair_is_resume_compatible(packet_lane_status, derived_lane_status) {
             return Err(format!(
                 "Persisted downstream dispatch packet lane_status `{}` conflicts with derived lane_status `{}` from downstream lane evidence",
                 packet_lane_status.as_str(),
@@ -282,37 +376,50 @@ async fn resume_inputs_from_downstream_packet(
         } else {
             None
         },
-        downstream_dispatch_target: None,
-        downstream_dispatch_command: None,
+        downstream_dispatch_target: packet
+            .get("downstream_dispatch_target")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        downstream_dispatch_command: packet
+            .get("downstream_dispatch_command")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
         downstream_dispatch_note,
-        downstream_dispatch_ready: false,
+        downstream_dispatch_ready,
         downstream_dispatch_blockers,
-        downstream_dispatch_packet_path: None,
+        downstream_dispatch_packet_path: Some(packet_path.to_string()),
         downstream_dispatch_status,
         downstream_dispatch_result_path: packet
             .get("downstream_dispatch_result_path")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string),
-        downstream_dispatch_trace_path: None,
-        downstream_dispatch_executed_count: 0,
+        downstream_dispatch_trace_path: packet
+            .get("downstream_dispatch_trace_path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        downstream_dispatch_executed_count: packet
+            .get("downstream_dispatch_executed_count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as u32,
         downstream_dispatch_active_target: packet
             .get("downstream_dispatch_active_target")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string),
-        downstream_dispatch_last_target: None,
+        downstream_dispatch_last_target: packet
+            .get("downstream_dispatch_last_target")
+            .or_else(|| packet.get("downstream_dispatch_target"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
         activation_agent_type,
         activation_runtime_role,
         selected_backend,
         recorded_at,
     };
-    Ok((
+    Ok(build_resume_inputs(
         receipt,
         packet_path.to_string(),
+        packet,
         role_selection,
-        packet
-            .get("run_graph_bootstrap")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null),
     ))
 }
 
@@ -320,15 +427,7 @@ async fn maybe_resume_inputs_from_ready_downstream_packet(
     store: &super::StateStore,
     requested_run_id: Option<&str>,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
-) -> Result<
-    Option<(
-        crate::state_store::RunGraphDispatchReceipt,
-        String,
-        super::RuntimeConsumptionLaneSelection,
-        serde_json::Value,
-    )>,
-    String,
-> {
+) -> Result<Option<ResumeInputs>, String> {
     let Some(packet_path) = receipt.downstream_dispatch_packet_path.as_deref() else {
         return Ok(None);
     };
@@ -350,17 +449,10 @@ async fn resolve_runtime_consumption_resume_inputs(
     requested_run_id: Option<&str>,
     requested_dispatch_packet_path: Option<&str>,
     requested_downstream_packet_path: Option<&str>,
-) -> Result<
-    (
-        crate::state_store::RunGraphDispatchReceipt,
-        String,
-        super::RuntimeConsumptionLaneSelection,
-        serde_json::Value,
-    ),
-    String,
-> {
+) -> Result<ResumeInputs, String> {
     let dispatch_packet = if let Some(packet_path) = requested_dispatch_packet_path {
         let packet = read_dispatch_packet(packet_path)?;
+        let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
         let run_id = packet
             .get("run_id")
             .and_then(serde_json::Value::as_str)
@@ -384,7 +476,7 @@ async fn resolve_runtime_consumption_resume_inputs(
         };
         validate_receipt_packet_pair(&receipt, &packet, packet_path, "dispatch packet")?;
         validate_run_graph_resume_state(store, run_id).await?;
-        (receipt, packet_path.to_string(), packet)
+        build_resume_inputs(receipt, packet_path.to_string(), packet, role_selection)
     } else if let Some(packet_path) = requested_downstream_packet_path {
         return resume_inputs_from_downstream_packet(store, requested_run_id, packet_path).await;
     } else if let Some(run_id) = requested_run_id {
@@ -408,9 +500,10 @@ async fn resolve_runtime_consumption_resume_inputs(
             .clone()
             .ok_or_else(|| missing_dispatch_packet_path_error(false))?;
         let packet = read_dispatch_packet(&packet_path)?;
+        let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
         validate_receipt_packet_pair(&receipt, &packet, &packet_path, "dispatch packet")?;
         validate_run_graph_resume_state(store, run_id).await?;
-        (receipt, packet_path, packet)
+        build_resume_inputs(receipt, packet_path, packet, role_selection)
     } else {
         let receipt = match store.latest_run_graph_dispatch_receipt().await {
             Ok(Some(receipt)) => receipt,
@@ -434,34 +527,71 @@ async fn resolve_runtime_consumption_resume_inputs(
             .clone()
             .ok_or_else(|| missing_dispatch_packet_path_error(true))?;
         let packet = read_dispatch_packet(&packet_path)?;
+        let role_selection = decode_role_selection_from_packet(&packet, "dispatch packet")?;
         validate_receipt_packet_pair(&receipt, &packet, &packet_path, "dispatch packet")?;
         validate_run_graph_resume_state(store, &receipt.run_id).await?;
-        (receipt, packet_path, packet)
+        build_resume_inputs(receipt, packet_path, packet, role_selection)
     };
-
-    let (dispatch_receipt, dispatch_packet_path, dispatch_packet) = dispatch_packet;
-    let role_selection: super::RuntimeConsumptionLaneSelection = serde_json::from_value(
-        dispatch_packet
-            .get("role_selection_full")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null),
-    )
-    .map_err(|error| format!("Failed to decode role_selection from dispatch packet: {error}"))?;
-    let run_graph_bootstrap = dispatch_packet
-        .get("run_graph_bootstrap")
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
-    Ok((
-        dispatch_receipt,
-        dispatch_packet_path,
-        role_selection,
-        run_graph_bootstrap,
-    ))
+    Ok(dispatch_packet)
 }
+
+fn canonical_resume_dispatch_status(status: Option<&str>) -> &'static str {
+    match status.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(value) if value == "executed" => "executed",
+        Some(value) if value == "blocked" => "blocked",
+        Some(value) if value == "routed" => "routed",
+        Some(value) if value == "packet_ready" => "packet_ready",
+        _ => "blocked",
+    }
+}
+
+fn canonical_resume_lane_status(status: &str) -> Option<super::LaneStatus> {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "packet_ready" => Some(super::LaneStatus::PacketReady),
+        "lane_open" => Some(super::LaneStatus::LaneOpen),
+        "lane_running" => Some(super::LaneStatus::LaneRunning),
+        "lane_blocked" => Some(super::LaneStatus::LaneBlocked),
+        "lane_completed" => Some(super::LaneStatus::LaneCompleted),
+        "lane_superseded" => Some(super::LaneStatus::LaneSuperseded),
+        "lane_exception_takeover" => Some(super::LaneStatus::LaneExceptionTakeover),
+        _ => None,
+    }
+}
+
+fn canonical_resume_string_array_entries(value: &serde_json::Value) -> Option<Vec<String>> {
+    let rows = value.as_array()?;
+    let mut entries = Vec::with_capacity(rows.len());
+    for row in rows {
+        let entry = row.as_str()?;
+        let trimmed = entry.trim();
+        if trimmed.is_empty() || trimmed != entry {
+            return None;
+        }
+        entries.push(trimmed.to_string());
+    }
+    Some(entries)
+}
+
+fn resume_packet_ready_blocker_parity_error(
+    downstream_dispatch_status: Option<&str>,
+    downstream_dispatch_blockers: &[String],
+) -> Option<String> {
+    if downstream_dispatch_status == Some("packet_ready")
+        && !downstream_dispatch_blockers.is_empty()
+    {
+        return Some(
+            "Persisted downstream dispatch packet has packet_ready status but also blocker evidence"
+                .to_string(),
+        );
+    }
+    None
+}
+
+type TaskflowConsumeContinueArgs = (bool, Option<String>, Option<String>, Option<String>);
 
 pub(crate) fn parse_taskflow_consume_continue_args(
     args: &[String],
-) -> Result<(bool, Option<String>, Option<String>, Option<String>), String> {
+) -> Result<TaskflowConsumeContinueArgs, String> {
     let mut as_json = false;
     let mut run_id = None;
     let mut dispatch_packet_path = None;
@@ -586,7 +716,12 @@ pub(crate) async fn run_taskflow_consume_resume_command(
             )
             .await
             {
-                Ok((receipt, packet_path, selection, bootstrap)) => {
+                Ok(ResumeInputs {
+                    dispatch_receipt: receipt,
+                    dispatch_packet_path: packet_path,
+                    role_selection: selection,
+                    run_graph_bootstrap: bootstrap,
+                }) => {
                     dispatch_receipt = receipt;
                     dispatch_packet_path = packet_path;
                     role_selection = selection;
@@ -737,7 +872,11 @@ pub(crate) async fn run_taskflow_consume_advance_command(
             )
             .await
             {
-                Ok((receipt, packet_path, _, _)) => Some((receipt, packet_path)),
+                Ok(ResumeInputs {
+                    dispatch_receipt: receipt,
+                    dispatch_packet_path: packet_path,
+                    ..
+                }) => Some((receipt, packet_path)),
                 Err(_) => None,
             },
             Err(_) => None,
@@ -857,4 +996,158 @@ pub(crate) async fn run_taskflow_consume_advance_command(
         super::print_surface_line(super::RenderMode::Plain, "snapshot path", &snapshot_path);
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        canonical_resume_dispatch_status, canonical_resume_lane_status,
+        canonical_resume_string_array_entries, resume_from_persisted_final_snapshot,
+        resume_packet_ready_blocker_parity_error,
+    };
+    use crate::downstream_dispatch_ready_blocker_parity_error;
+    use crate::StateStore;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn canonical_resume_dispatch_status_preserves_release1_vocabulary() {
+        assert_eq!(
+            canonical_resume_dispatch_status(Some("executed")),
+            "executed"
+        );
+        assert_eq!(canonical_resume_dispatch_status(Some("routed")), "routed");
+        assert_eq!(
+            canonical_resume_dispatch_status(Some("packet_ready")),
+            "packet_ready"
+        );
+        assert_eq!(canonical_resume_dispatch_status(Some("blocked")), "blocked");
+    }
+
+    #[test]
+    fn canonical_resume_dispatch_status_fails_closed_for_unknown_or_drifted_values() {
+        assert_eq!(canonical_resume_dispatch_status(Some("block")), "blocked");
+        assert_eq!(canonical_resume_dispatch_status(Some("unknown")), "blocked");
+        assert_eq!(
+            canonical_resume_dispatch_status(Some(" packet_ready ")),
+            "packet_ready"
+        );
+        assert_eq!(canonical_resume_dispatch_status(None), "blocked");
+    }
+
+    #[test]
+    fn canonical_resume_dispatch_and_lane_status_normalize_case_and_whitespace_drift() {
+        assert_eq!(
+            canonical_resume_dispatch_status(Some("  PACKET_READY  ")),
+            "packet_ready"
+        );
+        assert_eq!(
+            canonical_resume_dispatch_status(Some("  BLOCKED  ")),
+            "blocked"
+        );
+        assert_eq!(
+            canonical_resume_lane_status("  LANE_COMPLETED  "),
+            Some(crate::LaneStatus::LaneCompleted)
+        );
+        assert_eq!(
+            canonical_resume_lane_status("  lane_open  "),
+            Some(crate::LaneStatus::LaneOpen)
+        );
+        assert_eq!(canonical_resume_lane_status("lane_block"), None);
+    }
+
+    #[test]
+    fn canonical_resume_string_array_entries_fail_closed_for_whitespace_only_entries() {
+        assert_eq!(
+            canonical_resume_string_array_entries(&serde_json::json!(["pending_lane_evidence"])),
+            Some(vec!["pending_lane_evidence".to_string()])
+        );
+        assert_eq!(
+            canonical_resume_string_array_entries(&serde_json::json!(["   "])),
+            None
+        );
+    }
+
+    #[test]
+    fn resume_packet_ready_blocker_parity_fails_closed_for_drifted_blocker_evidence() {
+        let blockers = vec!["pending_lane_evidence".to_string()];
+        assert_eq!(
+            resume_packet_ready_blocker_parity_error(Some("packet_ready"), &blockers),
+            Some(
+                "Persisted downstream dispatch packet has packet_ready status but also blocker evidence"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            resume_packet_ready_blocker_parity_error(Some("packet_ready"), &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn downstream_dispatch_ready_blocker_parity_fails_closed_for_drifted_blocker_evidence() {
+        let blockers = vec!["pending_lane_evidence".to_string()];
+        assert_eq!(
+            super::resume_packet_ready_blocker_parity_error(Some("ready"), &blockers),
+            Some(
+                "Persisted downstream dispatch packet has downstream_dispatch_ready signal but also blocker evidence"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            super::resume_packet_ready_blocker_parity_error(Some("ready"), &[]),
+            None
+        );
+        assert_eq!(
+            super::resume_packet_ready_blocker_parity_error(Some("blocked"), &blockers),
+            None
+        );
+    }
+
+    #[test]
+    fn downstream_dispatch_ready_guard_message_matches_main_surface() {
+        let blockers = vec!["pending_lane_evidence".to_string()];
+        assert_eq!(
+            downstream_dispatch_ready_blocker_parity_error(true, &blockers),
+            crate::downstream_dispatch_ready_blocker_parity_error(true, &blockers)
+        );
+    }
+
+    #[test]
+    fn resume_from_persisted_final_snapshot_detects_final_snapshot_evidence() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-final-snapshot-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = tokio::runtime::Runtime::new()
+            .expect("create runtime")
+            .block_on(StateStore::open(root.clone()))
+            .expect("open store");
+
+        let snapshot_dir = store.root().join("runtime-consumption");
+        fs::create_dir_all(&snapshot_dir).expect("create runtime-consumption directory");
+        let snapshot_path = snapshot_dir.join("final-2026-03-18T00-00-00Z.json");
+        fs::write(
+            &snapshot_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume final",
+                "payload": {
+                    "dispatch_receipt": {
+                        "run_id": "run-final-snapshot"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("write final snapshot");
+
+        assert!(resume_from_persisted_final_snapshot(&store).expect("runtime consumption summary"),);
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

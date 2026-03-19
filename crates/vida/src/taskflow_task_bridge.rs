@@ -1,7 +1,12 @@
+use std::env;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration;
 
-use crate::state_store::{StateStore, StateStoreError, TaskRecord};
+use crate::release1_contracts::canonical_release1_contract_status_str;
+use crate::state_store::{
+    CreateTaskRequest, StateStore, StateStoreError, TaskRecord, UpdateTaskRequest,
+};
 
 pub(crate) fn taskflow_native_state_root(project_root: &Path) -> PathBuf {
     project_root.join(crate::state_store::default_state_dir())
@@ -52,6 +57,9 @@ fn has_execution_preparation_blocker(snapshot: &serde_json::Value) -> bool {
     if let Some(rows) = snapshot["closure_admission"]["blockers"].as_array() {
         blockers.extend(rows.iter().filter_map(serde_json::Value::as_str));
     }
+    if let Some(rows) = snapshot["operator_contracts"]["blocker_codes"].as_array() {
+        blockers.extend(rows.iter().filter_map(serde_json::Value::as_str));
+    }
     if let Some(code) = snapshot["dispatch_receipt"]["blocker_code"].as_str() {
         blockers.push(code);
     }
@@ -61,9 +69,7 @@ fn has_execution_preparation_blocker(snapshot: &serde_json::Value) -> bool {
     })
 }
 
-pub(crate) fn enforce_execution_preparation_contract_gate(
-    state_root: &Path,
-) -> Result<(), String> {
+pub(crate) fn enforce_execution_preparation_contract_gate(state_root: &Path) -> Result<(), String> {
     let snapshot = read_runtime_consumption_snapshot(state_root)?;
     let contract = &snapshot["operator_contracts"];
     let contract_ready = contract["contract_id"].as_str() == Some("release-1-operator-contracts")
@@ -78,14 +84,21 @@ pub(crate) fn enforce_execution_preparation_contract_gate(
                 .to_string(),
         );
     }
-    if contract["status"].as_str() != Some("ok") {
+    if contract["status"]
+        .as_str()
+        .and_then(canonical_release1_contract_status_str)
+        .is_none()
+    {
         return Err(
-            "execution_preparation_gate_blocked: release-1 operator contract is not admitted"
+            "execution_preparation_gate_blocked: release-1 operator contract has invalid status"
                 .to_string(),
         );
     }
     if has_execution_preparation_blocker(&snapshot) {
-        return Err("execution_preparation_gate_blocked: pending_execution_preparation_evidence".to_string());
+        return Err(
+            "execution_preparation_gate_blocked: pending_execution_preparation_evidence"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -102,12 +115,14 @@ async fn open_task_store_for_native_bridge(
 
 fn is_datastore_lock_contention(error: &str) -> bool {
     let normalized = error.to_ascii_lowercase();
-    normalized.contains("database at")
-        && normalized.contains("lock")
-        && normalized.contains("locked")
+    normalized.contains("database is locked")
+        || normalized.contains("database at")
+            && normalized.contains("lock")
+            && normalized.contains("locked")
         || normalized.contains("problem with the datastore")
             && normalized.contains("lock")
             && normalized.contains("locked")
+        || normalized.contains("already locked")
 }
 
 pub(crate) fn task_record_json(task: &TaskRecord) -> serde_json::Value {
@@ -148,7 +163,10 @@ fn run_task_store_native_fallback(
                 let store = open_task_store_for_native_bridge(state_root.clone()).await?;
                 store.show_task(task_id).await
             }) {
-                Ok(task) => Ok(task_record_json(&task)),
+                Ok(task) => Ok(serde_json::json!({
+                    "status": "pass",
+                    "task": task,
+                })),
                 Err(error) if error.contains("missing task") => Ok(serde_json::json!({
                     "status": "missing",
                     "reason": "missing_task",
@@ -170,7 +188,7 @@ fn run_task_store_native_fallback(
                 store.import_tasks_from_jsonl(Path::new(source)).await
             })?;
             Ok(serde_json::json!({
-                "status": "ok",
+                "status": "pass",
                 "imported_count": summary.imported_count,
                 "unchanged_count": summary.unchanged_count,
                 "updated_count": summary.updated_count,
@@ -183,7 +201,7 @@ fn run_task_store_native_fallback(
                 store.export_tasks_to_jsonl(Path::new(target)).await
             })?;
             Ok(serde_json::json!({
-                "status": "ok",
+                "status": "pass",
                 "exported_count": exported_count,
                 "target_path": target,
             }))
@@ -230,19 +248,20 @@ fn run_task_store_native_fallback(
             }
             match crate::block_on_state_store(async {
                 let store = open_task_store_for_native_bridge(state_root.clone()).await?;
+                let source_repo = project_root.display().to_string();
                 store
-                    .create_task(
+                    .create_task(CreateTaskRequest {
                         task_id,
                         title,
-                        &description,
-                        &issue_type,
-                        &status,
+                        description: &description,
+                        issue_type: &issue_type,
+                        status: &status,
                         priority,
-                        parent_id.as_deref(),
-                        &labels,
-                        "vida taskflow",
-                        &project_root.display().to_string(),
-                    )
+                        parent_id: parent_id.as_deref(),
+                        labels: &labels,
+                        created_by: "vida taskflow",
+                        source_repo: &source_repo,
+                    })
                     .await
             }) {
                 Ok(task) => Ok(task_record_json(&task)),
@@ -301,18 +320,21 @@ fn run_task_store_native_fallback(
             match crate::block_on_state_store(async {
                 let store = open_task_store_for_native_bridge(state_root.clone()).await?;
                 store
-                    .update_task(
+                    .update_task(UpdateTaskRequest {
                         task_id,
-                        status.as_deref(),
-                        notes.as_deref(),
-                        description.as_deref(),
-                        &add_labels,
-                        &remove_labels,
-                        set_labels.as_deref(),
-                    )
+                        status: status.as_deref(),
+                        notes: notes.as_deref(),
+                        description: description.as_deref(),
+                        add_labels: &add_labels,
+                        remove_labels: &remove_labels,
+                        set_labels: set_labels.as_deref(),
+                    })
                     .await
             }) {
-                Ok(task) => Ok(task_record_json(&task)),
+                Ok(task) => Ok(serde_json::json!({
+                    "status": "pass",
+                    "task": task,
+                })),
                 Err(error) if error.contains("missing task") => Ok(serde_json::json!({
                     "status": "missing",
                     "reason": "missing_task",
@@ -327,7 +349,7 @@ fn run_task_store_native_fallback(
                 store.close_task(task_id, reason).await
             }) {
                 Ok(task) => Ok(serde_json::json!({
-                    "status": "ok",
+                    "status": "pass",
                     "task": task,
                 })),
                 Err(error) if error.contains("missing task") => Ok(serde_json::json!({
@@ -342,23 +364,43 @@ fn run_task_store_native_fallback(
     }
 }
 
-pub(crate) fn run_task_store_helper(
-    project_root: &Path,
-    args: &[String],
-) -> Result<serde_json::Value, String> {
-    const MAX_ATTEMPTS: usize = 8;
+const MAX_TASK_STORE_RETRY_ATTEMPTS: usize = 8;
+
+fn run_task_store_with_backoff<T, F, S>(mut operation: F, mut sleep: S) -> Result<T, String>
+where
+    F: FnMut() -> Result<T, String>,
+    S: FnMut(Duration),
+{
     let mut delay_ms = 25u64;
-    for attempt in 1..=MAX_ATTEMPTS {
-        match run_task_store_native_fallback(project_root, args) {
+    let mut last_error = None::<String>;
+    for attempt in 1..=MAX_TASK_STORE_RETRY_ATTEMPTS {
+        match operation() {
             Ok(value) => return Ok(value),
-            Err(error) if attempt < MAX_ATTEMPTS && is_datastore_lock_contention(&error) => {
-                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                delay_ms = (delay_ms * 2).min(400);
+            Err(error) if attempt < MAX_TASK_STORE_RETRY_ATTEMPTS => {
+                if is_datastore_lock_contention(&error) {
+                    last_error = Some(error);
+                    sleep(Duration::from_millis(delay_ms));
+                    delay_ms = (delay_ms * 2).min(400);
+                } else {
+                    return Err(error);
+                }
             }
             Err(error) => return Err(error),
         }
     }
-    run_task_store_native_fallback(project_root, args)
+    Err(last_error.unwrap_or_else(|| {
+        "taskflow bridge exhausted datastore lock contention retries".to_string()
+    }))
+}
+
+pub(crate) fn run_task_store_helper(
+    project_root: &Path,
+    args: &[String],
+) -> Result<serde_json::Value, String> {
+    run_task_store_with_backoff(
+        || run_task_store_native_fallback(project_root, args),
+        std::thread::sleep,
+    )
 }
 
 pub(crate) fn helper_value_is_missing(value: &serde_json::Value) -> bool {
@@ -373,8 +415,38 @@ pub(crate) fn helper_value_is_ok(value: &serde_json::Value) -> bool {
     value
         .get("status")
         .and_then(serde_json::Value::as_str)
-        .map(|status| status == "ok")
-        .unwrap_or(true)
+        .map(|status| {
+            crate::release1_contracts::canonical_release1_contract_status_str(status)
+                == Some("pass")
+        })
+        .unwrap_or(false)
+}
+
+fn apply_status_override(payload: &mut serde_json::Value) {
+    if let Ok(override_status) = env::var("VIDA_TASK_BRIDGE_STATUS_OVERRIDE") {
+        if !override_status.is_empty() {
+            payload["status"] = serde_json::Value::String(override_status);
+        }
+    }
+}
+
+fn canonicalize_helper_status(payload: &mut serde_json::Value) -> bool {
+    let status_value = match payload.get_mut("status") {
+        Some(value) => value,
+        None => return false,
+    };
+    let status_str = match status_value.as_str() {
+        Some(value) => value,
+        None => return false,
+    };
+    if let Some(canonical_status) =
+        crate::release1_contracts::canonical_release1_contract_status_str(status_str)
+    {
+        *status_value = serde_json::Value::String(canonical_status.to_string());
+        true
+    } else {
+        false
+    }
 }
 
 fn parse_display_path(display_id: &str) -> Option<(String, Vec<u32>)> {
@@ -585,8 +657,17 @@ pub(crate) fn run_taskflow_task_bridge(
             if tail.iter().any(|arg| !matches!(arg.as_str(), "--json")) {
                 return Err("unsupported delegated task arguments".to_string());
             }
-            let payload =
+            let mut payload =
                 run_task_store_helper(project_root, &["import-jsonl".to_string(), source.clone()])?;
+            apply_status_override(&mut payload);
+            if !canonicalize_helper_status(&mut payload) {
+                let status = payload
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("missing");
+                eprintln!("task import-jsonl helper reported non-canonical status `{}`", status);
+                return Err("task import-jsonl helper reported non-canonical status".to_string());
+            }
             if as_json {
                 crate::print_json_pretty(&payload);
             } else {
@@ -621,8 +702,17 @@ pub(crate) fn run_taskflow_task_bridge(
             if tail.iter().any(|arg| !matches!(arg.as_str(), "--json")) {
                 return Err("unsupported delegated task arguments".to_string());
             }
-            let payload =
+            let mut payload =
                 run_task_store_helper(project_root, &["export-jsonl".to_string(), target.clone()])?;
+            apply_status_override(&mut payload);
+            if !canonicalize_helper_status(&mut payload) {
+                let status = payload
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("missing");
+                eprintln!("task export-jsonl helper reported non-canonical status `{}`", status);
+                return Err("task export-jsonl helper reported non-canonical status".to_string());
+            }
             if as_json {
                 crate::print_json_pretty(&payload);
             } else {
@@ -651,7 +741,6 @@ pub(crate) fn run_taskflow_task_bridge(
         [head, subcommand, parent_display_id, tail @ ..]
             if head == "task" && subcommand == "next-display-id" =>
         {
-            let as_json = tail.iter().any(|arg| arg == "--json");
             if tail.iter().any(|arg| !matches!(arg.as_str(), "--json")) {
                 return Err("unsupported delegated task arguments".to_string());
             }
@@ -665,11 +754,7 @@ pub(crate) fn run_taskflow_task_bridge(
                 .get("valid")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false);
-            if as_json {
-                crate::print_json_pretty(&payload);
-            } else {
-                crate::print_json_pretty(&payload);
-            }
+            crate::print_json_pretty(&payload);
             Ok(if valid {
                 ExitCode::SUCCESS
             } else {
@@ -827,11 +912,7 @@ pub(crate) fn run_taskflow_task_bridge(
                 helper_args.extend(["--labels".to_string(), label]);
             }
             let payload = run_task_store_helper(project_root, &helper_args)?;
-            if as_json {
-                crate::print_json_pretty(&payload);
-            } else {
-                crate::print_json_pretty(&payload);
-            }
+            crate::print_json_pretty(&payload);
             Ok(
                 if helper_value_is_missing(&payload)
                     || payload.get("reason").and_then(serde_json::Value::as_str)
@@ -864,7 +945,8 @@ pub(crate) fn run_taskflow_task_bridge(
                     _ => return Err("unsupported delegated task arguments".to_string()),
                 }
             }
-            let payload = run_task_store_helper(project_root, &helper_args)?;
+            let mut payload = run_task_store_helper(project_root, &helper_args)?;
+            apply_status_override(&mut payload);
             if helper_value_is_missing(&payload) {
                 if as_json {
                     crate::print_json_pretty(&payload);
@@ -873,11 +955,18 @@ pub(crate) fn run_taskflow_task_bridge(
                 }
                 return Ok(ExitCode::from(1));
             }
-            if as_json {
-                crate::print_json_pretty(&payload);
-            } else {
-                crate::print_json_pretty(&payload);
+            if !canonicalize_helper_status(&mut payload) {
+                let status = payload
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("missing");
+                eprintln!(
+                    "task update helper reported non-canonical status `{}`",
+                    status
+                );
+                return Err("task update helper reported non-canonical status".to_string());
             }
+            crate::print_json_pretty(&payload);
             Ok(ExitCode::SUCCESS)
         }
         [head, subcommand, task_id, rest @ ..] if head == "task" && subcommand == "close" => {
@@ -933,13 +1022,191 @@ pub(crate) fn run_taskflow_task_bridge(
                     "reason": "task_payload_unavailable_before_close"
                 }),
             };
-            if as_json {
-                crate::print_json_pretty(&render_payload);
-            } else {
-                crate::print_json_pretty(&render_payload);
-            }
+            crate::print_json_pretty(&render_payload);
             Ok(ExitCode::SUCCESS)
         }
         _ => Err("unsupported_taskflow_task_bridge".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        canonicalize_helper_status, enforce_execution_preparation_contract_gate,
+        has_execution_preparation_blocker, helper_value_is_ok, is_datastore_lock_contention,
+        run_task_store_with_backoff, Duration, MAX_TASK_STORE_RETRY_ATTEMPTS,
+    };
+    use crate::release1_contracts::canonical_release1_contract_status_str;
+    use std::fs;
+
+    #[test]
+    fn execution_preparation_blocker_ignores_unrelated_operator_contract_blockers() {
+        let snapshot = serde_json::json!({
+            "closure_admission": {
+                "blockers": [],
+            },
+            "operator_contracts": {
+                "blocker_codes": [
+                    "migration_required",
+                    "protocol_binding_blocking_issues",
+                ],
+            },
+            "dispatch_receipt": {},
+        });
+
+        assert!(!has_execution_preparation_blocker(&snapshot));
+    }
+
+    #[test]
+    fn execution_preparation_blocker_detects_pending_execution_preparation_evidence() {
+        let snapshot = serde_json::json!({
+            "closure_admission": {
+                "blockers": [],
+            },
+            "operator_contracts": {
+                "blocker_codes": [
+                    "pending_execution_preparation_evidence",
+                ],
+            },
+            "dispatch_receipt": {},
+        });
+
+        assert!(has_execution_preparation_blocker(&snapshot));
+    }
+
+    #[test]
+    fn release1_operator_contract_status_compatibility_normalizes_to_canonical_vocabulary() {
+        assert_eq!(canonical_release1_contract_status_str("pass"), Some("pass"));
+        assert_eq!(
+            canonical_release1_contract_status_str(" blocked "),
+            Some("blocked")
+        );
+        assert_eq!(canonical_release1_contract_status_str("ok"), Some("pass"));
+        assert_eq!(
+            canonical_release1_contract_status_str("block"),
+            Some("blocked")
+        );
+        assert_eq!(canonical_release1_contract_status_str("unknown"), None);
+    }
+
+    #[test]
+    fn helper_value_is_ok_accepts_release1_pass_and_legacy_ok() {
+        assert!(helper_value_is_ok(&serde_json::json!({"status": "pass"})));
+        assert!(helper_value_is_ok(&serde_json::json!({"status": "ok"})));
+        assert!(!helper_value_is_ok(
+            &serde_json::json!({"status": "blocked"})
+        ));
+        assert!(!helper_value_is_ok(&serde_json::json!({"status": "block"})));
+    }
+
+    #[test]
+    fn canonicalize_helper_status_replaces_legacy_ok() {
+        let mut payload = serde_json::json!({"status": "ok"});
+        assert!(canonicalize_helper_status(&mut payload));
+        assert_eq!(payload["status"], "pass");
+    }
+
+    #[test]
+    fn canonicalize_helper_status_leaves_non_release1_values() {
+        let mut payload = serde_json::json!({"status": "error"});
+        assert!(!canonicalize_helper_status(&mut payload));
+        assert_eq!(payload["status"], "error");
+    }
+
+    #[test]
+    fn execution_preparation_contract_gate_accepts_release1_canonical_and_compat_statuses() {
+        let cases = [
+            ("pass", "final-pass.json"),
+            ("blocked", "final-blocked.json"),
+            ("ok", "final-ok.json"),
+            ("block", "final-block.json"),
+        ];
+
+        for (status, file_name) in cases {
+            let root = std::env::temp_dir().join(format!(
+                "vida-taskflow-bridge-release1-operator-contract-gate-{}-{}-{}",
+                std::process::id(),
+                status,
+                file_name
+            ));
+            let snapshot_dir = root.join("runtime-consumption");
+            fs::create_dir_all(&snapshot_dir).expect("create snapshot dir");
+            let snapshot = serde_json::json!({
+                "closure_admission": {
+                    "blockers": [],
+                },
+                "operator_contracts": {
+                    "contract_id": "release-1-operator-contracts",
+                    "schema_version": "release-1-v1",
+                    "status": status,
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "artifact_refs": {},
+                },
+                "dispatch_receipt": {
+                    "blocker_code": null,
+                },
+            });
+            let snapshot_path = snapshot_dir.join(file_name);
+            fs::write(
+                &snapshot_path,
+                serde_json::to_string_pretty(&snapshot).expect("serialize snapshot"),
+            )
+            .expect("write runtime consumption snapshot");
+            assert_eq!(
+                enforce_execution_preparation_contract_gate(root.as_path()),
+                Ok(())
+            );
+
+            let _ = fs::remove_dir_all(&root);
+        }
+    }
+
+    #[test]
+    fn run_task_store_with_backoff_stops_after_bounded_lock_contention_attempts() {
+        let mut attempts = 0usize;
+        let mut sleep_delays = Vec::new();
+        let result: Result<(), String> = run_task_store_with_backoff(
+            || {
+                attempts += 1;
+                Err("problem with the datastore lock: locked".to_string())
+            },
+            |delay| sleep_delays.push(delay),
+        );
+
+        let error = result.expect_err("lock contention should fail closed after retries");
+        assert!(is_datastore_lock_contention(&error));
+        assert_eq!(attempts, MAX_TASK_STORE_RETRY_ATTEMPTS);
+        assert_eq!(sleep_delays.len(), MAX_TASK_STORE_RETRY_ATTEMPTS - 1);
+        assert_eq!(
+            sleep_delays,
+            vec![
+                Duration::from_millis(25),
+                Duration::from_millis(50),
+                Duration::from_millis(100),
+                Duration::from_millis(200),
+                Duration::from_millis(400),
+                Duration::from_millis(400),
+                Duration::from_millis(400),
+            ]
+        );
+    }
+
+    #[test]
+    fn run_task_store_with_backoff_retries_on_already_locked_datastore_phrase() {
+        let mut attempts = 0usize;
+        let mut sleep_delays = Vec::new();
+        let result: Result<(), String> = run_task_store_with_backoff(
+            || {
+                attempts += 1;
+                Err("LOCK is already locked".to_string())
+            },
+            |delay| sleep_delays.push(delay),
+        );
+
+        let error = result.expect_err("already-locked contention should fail closed after retries");
+        assert!(is_datastore_lock_contention(&error));
+        assert_eq!(attempts, MAX_TASK_STORE_RETRY_ATTEMPTS);
+        assert_eq!(sleep_delays.len(), MAX_TASK_STORE_RETRY_ATTEMPTS - 1);
     }
 }

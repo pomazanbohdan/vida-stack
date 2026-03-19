@@ -16,6 +16,10 @@ fn unique_state_dir() -> String {
     )
 }
 
+fn is_canonical_operator_status(value: &str) -> bool {
+    matches!(value, "pass" | "blocked")
+}
+
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER: &str =
     "unsupported_architecture_reserved_workflow_boundary";
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION: &str =
@@ -42,8 +46,11 @@ fn write_final_snapshot(state_dir: &str, file_name: &str, snapshot: serde_json::
     let runtime_consumption_dir = format!("{state_dir}/runtime-consumption");
     std::fs::create_dir_all(&runtime_consumption_dir)
         .expect("runtime-consumption directory should be created");
-    std::fs::write(format!("{runtime_consumption_dir}/{file_name}"), snapshot.to_string())
-        .expect("final runtime-consumption snapshot should be written");
+    std::fs::write(
+        format!("{runtime_consumption_dir}/{file_name}"),
+        snapshot.to_string(),
+    )
+    .expect("final runtime-consumption snapshot should be written");
 }
 
 fn init_run_graph_with_architecture_reserved_gate(state_dir: &str) {
@@ -127,7 +134,7 @@ fn doctor_json_emits_operator_contract_fields() {
 
     assert_eq!(parsed["surface"], "vida doctor");
     assert!(parsed["status"].is_string());
-    assert!(parsed["status"] == "ok" || parsed["status"] == "blocked");
+    assert!(parsed["status"] == "pass" || parsed["status"] == "blocked");
     assert!(parsed["blocker_codes"].is_array());
     assert!(parsed["next_actions"].is_array());
     assert!(parsed["artifact_refs"].is_object());
@@ -154,20 +161,26 @@ fn doctor_json_emits_operator_contract_fields() {
     );
     assert!(parsed["shared_fields"].is_object());
     assert_eq!(parsed["status"], parsed["shared_fields"]["status"]);
-    assert_eq!(parsed["blocker_codes"], parsed["shared_fields"]["blocker_codes"]);
-    assert_eq!(parsed["next_actions"], parsed["shared_fields"]["next_actions"]);
+    assert_eq!(
+        parsed["blocker_codes"],
+        parsed["shared_fields"]["blocker_codes"]
+    );
+    assert_eq!(
+        parsed["next_actions"],
+        parsed["shared_fields"]["next_actions"]
+    );
     let blocker_codes = parsed["blocker_codes"]
         .as_array()
         .expect("blocker_codes should be array");
     let next_actions = parsed["next_actions"]
         .as_array()
         .expect("next_actions should be array");
-    let has_retrieval_trust_blocker = blocker_codes.iter().any(|code| {
-        code.as_str() == Some("missing_retrieval_trust_operator_evidence")
-    });
-    let has_retrieval_trust_signal_blocker = blocker_codes.iter().any(|code| {
-        code.as_str() == Some("missing_retrieval_trust_signal_operator_evidence")
-    });
+    let has_retrieval_trust_blocker = blocker_codes
+        .iter()
+        .any(|code| code.as_str() == Some("missing_retrieval_trust_operator_evidence"));
+    let has_retrieval_trust_signal_blocker = blocker_codes
+        .iter()
+        .any(|code| code.as_str() == Some("missing_retrieval_trust_signal_operator_evidence"));
     let has_retrieval_trust_next_action = next_actions.iter().any(|action| {
         action.as_str()
             == Some(
@@ -180,9 +193,9 @@ fn doctor_json_emits_operator_contract_fields() {
                 "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle-check --json` to materialize retrieval-trust citation/freshness/ACL signal.",
             )
     });
-    let has_retrieval_trust_source_blocker = blocker_codes.iter().any(|code| {
-        code.as_str() == Some("missing_retrieval_trust_source_operator_evidence")
-    });
+    let has_retrieval_trust_source_blocker = blocker_codes
+        .iter()
+        .any(|code| code.as_str() == Some("missing_retrieval_trust_source_operator_evidence"));
     let has_retrieval_trust_source_next_action = next_actions.iter().any(|action| {
         action.as_str()
             == Some(
@@ -203,15 +216,13 @@ fn doctor_json_emits_operator_contract_fields() {
     });
     let has_unsupported_architecture_reserved_boundary_next_action =
         next_actions.iter().any(|action| {
-            action.as_str()
-                == Some(UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION)
+            action.as_str() == Some(UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION)
         });
     let has_missing_dispatch_receipt_blocker = blocker_codes.iter().any(|code| {
         code.as_str() == Some(MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER)
     });
     let has_missing_dispatch_receipt_next_action = next_actions.iter().any(|action| {
-        action.as_str()
-            == Some(MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION)
+        action.as_str() == Some(MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION)
     });
     assert_eq!(
         has_retrieval_trust_blocker, has_retrieval_trust_next_action,
@@ -303,7 +314,7 @@ fn taskflow_consume_continue_fails_closed_when_operator_contract_status_is_block
                 "contract_id": "release-1-operator-contracts",
                 "schema_version": "release-1-v1",
                 "status": "blocked",
-                "blocker_codes": [],
+                "blocker_codes": ["pending_execution_preparation_evidence"],
                 "next_actions": [],
                 "artifact_refs": {},
             },
@@ -328,8 +339,68 @@ fn taskflow_consume_continue_fails_closed_when_operator_contract_status_is_block
     );
     let stderr = String::from_utf8_lossy(&continue_cmd.stderr);
     assert!(
-        stderr.contains("execution_preparation_gate_blocked: release-1 operator contract is not admitted"),
+        stderr.contains("execution_preparation_gate_blocked"),
         "stderr should mention operator-contract status gate blocker, got: {stderr}"
+    );
+}
+
+#[test]
+fn doctor_and_protocol_binding_share_canonical_status() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let pb = vida()
+        .args(["taskflow", "protocol-binding", "check", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("protocol-binding check should run");
+    assert!(!pb.status.success());
+    let pb_json: serde_json::Value =
+        serde_json::from_slice(&pb.stdout).expect("protocol-binding json should parse");
+    let pb_status = pb_json["status"]
+        .as_str()
+        .expect("protocol-binding status should be string");
+    assert!(pb_status == "pass" || pb_status == "blocked");
+
+    let doctor = vida()
+        .args(["doctor", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("doctor should run");
+    assert!(doctor.status.success());
+    let doctor_json: serde_json::Value =
+        serde_json::from_slice(&doctor.stdout).expect("doctor json should parse");
+    let doctor_protocol_binding = &doctor_json["protocol_binding"];
+    assert_eq!(doctor_json["operator_contracts"]["status"], pb_status);
+    assert_eq!(
+        doctor_json["operator_contracts"]["status"],
+        pb_json["operator_contracts"]["status"]
+    );
+    let doctor_blockers = doctor_json["operator_contracts"]["blocker_codes"]
+        .as_array()
+        .expect("doctor blocker codes should be array");
+    let pb_blockers = pb_json["blocker_codes"]
+        .as_array()
+        .expect("protocol-binding blocker codes should be array");
+    if pb_status == "blocked" {
+        assert!(
+            !doctor_blockers.is_empty(),
+            "doctor blocked status should include blocker evidence"
+        );
+        assert!(
+            !pb_blockers.is_empty(),
+            "protocol-binding blocked status should include blocker evidence"
+        );
+    }
+    assert!(
+        doctor_protocol_binding["blocking_issue_count"].is_number(),
+        "doctor protocol_binding rollup should still be present"
     );
 }
 
@@ -397,10 +468,19 @@ fn doctor_json_blocks_on_unsupported_architecture_reserved_boundary_contract() {
         parsed["blocker_codes"],
         parsed["operator_contracts"]["blocker_codes"]
     );
-    assert_eq!(parsed["next_actions"], parsed["operator_contracts"]["next_actions"]);
+    assert_eq!(
+        parsed["next_actions"],
+        parsed["operator_contracts"]["next_actions"]
+    );
     assert_eq!(parsed["status"], parsed["shared_fields"]["status"]);
-    assert_eq!(parsed["blocker_codes"], parsed["shared_fields"]["blocker_codes"]);
-    assert_eq!(parsed["next_actions"], parsed["shared_fields"]["next_actions"]);
+    assert_eq!(
+        parsed["blocker_codes"],
+        parsed["shared_fields"]["blocker_codes"]
+    );
+    assert_eq!(
+        parsed["next_actions"],
+        parsed["shared_fields"]["next_actions"]
+    );
 }
 
 #[test]
@@ -416,14 +496,15 @@ fn doctor_json_blocks_when_final_snapshot_top_level_operator_contract_parity_is_
 
     sync_protocol_binding(&state_dir);
 
-    let incompatible_snapshot_path = format!("{state_dir}/runtime-consumption/final-incomplete.json");
+    let incompatible_snapshot_path =
+        format!("{state_dir}/runtime-consumption/final-incomplete.json");
     std::fs::create_dir_all(format!("{state_dir}/runtime-consumption"))
         .expect("runtime-consumption directory should be created");
     std::fs::write(
         &incompatible_snapshot_path,
         serde_json::json!({
             "surface": "vida taskflow consume final",
-            "status": "ok",
+            "status": "pass",
             "blocker_codes": [],
             "next_actions": [],
             "artifact_refs": {
@@ -493,4 +574,64 @@ fn doctor_json_blocks_when_final_snapshot_top_level_operator_contract_parity_is_
         }),
         "doctor must publish remediation action when final snapshot release-admission evidence is incomplete"
     );
+    let shared_blocker_codes = parsed["shared_fields"]["blocker_codes"]
+        .as_array()
+        .expect("shared_fields blocker_codes should be array");
+    assert!(
+    shared_blocker_codes.iter().any(|code| {
+        code.as_str() == Some("incomplete_release_admission_operator_evidence")
+    }),
+    "shared_fields mirror must surface the same parity blocker"
+);
+}
+
+#[test]
+fn canonical_operator_contract_status_is_shared_across_surfaces() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let pb = vida()
+        .args(["taskflow", "protocol-binding", "check", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("protocol-binding check should run");
+    assert!(!pb.status.success());
+    let pb_json: serde_json::Value =
+        serde_json::from_slice(&pb.stdout).expect("protocol-binding check json should parse");
+    let pb_operator_status = pb_json["operator_contracts"]["status"]
+        .as_str()
+        .expect("protocol-binding operator_contracts.status should exist");
+    assert!(is_canonical_operator_status(pb_operator_status));
+
+    let doctor = vida()
+        .args(["doctor", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("doctor should run");
+    assert!(doctor.status.success());
+    let doctor_json: serde_json::Value =
+        serde_json::from_slice(&doctor.stdout).expect("doctor json should parse");
+    let doctor_operator_status = doctor_json["operator_contracts"]["status"]
+        .as_str()
+        .expect("doctor operator_contracts.status should exist");
+    assert!(is_canonical_operator_status(doctor_operator_status));
+
+    let status = vida()
+        .args(["status", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("status should run");
+    assert!(status.status.success());
+    let status_json: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("status json should parse");
+    let status_operator_status = status_json["operator_contracts"]["status"]
+        .as_str()
+        .expect("status operator_contracts.status should exist");
+    assert!(is_canonical_operator_status(status_operator_status));
 }
