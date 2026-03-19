@@ -8,10 +8,60 @@ use crate::{
     StatusArgs,
 };
 
+use serde_yaml;
+
 use super::activation_status::canonical_activation_status;
 use crate::operator_contracts::{
     release1_operator_contracts_consistency_error, shared_operator_output_contract_parity_error,
 };
+
+fn host_environment_system_entry(
+    overlay: &serde_yaml::Value,
+    system: &str,
+) -> Option<serde_yaml::Value> {
+    let systems = super::yaml_lookup(overlay, &["host_environment", "systems"]);
+    if let Some(serde_yaml::Value::Mapping(mapping)) = systems {
+        for (key, value) in mapping {
+            if let Some(name) = key.as_str().map(|s| s.trim().to_ascii_lowercase()) {
+                if name == system {
+                    return Some(value.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn selected_host_cli_system_entry(
+    overlay: &serde_yaml::Value,
+) -> (String, Option<serde_yaml::Value>) {
+    let candidate = super::yaml_lookup(overlay, &["host_environment", "cli_system"])
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "__HOST_CLI_SYSTEM__")
+        .and_then(super::project_activator_surface::normalize_host_cli_system);
+    let normalized = candidate.unwrap_or_else(|| "codex".to_string());
+    let entry = host_environment_system_entry(overlay, &normalized)
+        .or_else(|| host_environment_system_entry(overlay, "codex"));
+    (normalized, entry)
+}
+
+fn runtime_surface_for_selected_system(system: &str, entry: Option<&serde_yaml::Value>) -> String {
+    entry
+        .and_then(|value| super::yaml_string(super::yaml_lookup(value, &["runtime_root"])))
+        .unwrap_or_else(|| format!(".{system}"))
+}
+
+fn runtime_root_for_selected_system(
+    project_root: &Path,
+    system: &str,
+    entry: Option<&serde_yaml::Value>,
+) -> String {
+    let configured =
+        entry.and_then(|value| super::yaml_string(super::yaml_lookup(value, &["runtime_root"])));
+    let relative = configured.unwrap_or_else(|| format!(".{system}"));
+    project_root.join(relative).display().to_string()
+}
 fn migration_requires_action(migration_state: &str) -> bool {
     !matches!(migration_state, "none_required" | "no_migration_required")
 }
@@ -30,6 +80,91 @@ fn run_graph_latest_dispatch_receipt_summary_inconsistent_next_action() -> &'sta
 
 fn run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action() -> &'static str {
     "Refresh the latest checkpoint evidence for the run graph before rerunning `vida status --json` so checkpoint rows and dispatch receipt evidence share the same run_id."
+}
+
+fn is_sandbox_active_from_env() -> bool {
+    let candidates = [
+        std::env::var("CODEX_SANDBOX_MODE").ok(),
+        std::env::var("SANDBOX_MODE").ok(),
+        std::env::var("VIDA_SANDBOX_MODE").ok(),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .find(|value| !value.is_empty())
+        .map(|value| {
+            !matches!(
+                value.as_str(),
+                "danger-full-access" | "none" | "off" | "disabled" | "false"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn can_resolve_public_network() -> bool {
+    use std::net::ToSocketAddrs;
+    if let Ok(override_value) = std::env::var("VIDA_NETWORK_PROBE_OVERRIDE") {
+        let normalized = override_value.trim().to_ascii_lowercase();
+        if matches!(normalized.as_str(), "reachable" | "online" | "true" | "1") {
+            return true;
+        }
+        if matches!(normalized.as_str(), "unreachable" | "offline" | "false" | "0") {
+            return false;
+        }
+    }
+    ("example.com", 443)
+        .to_socket_addrs()
+        .map(|mut rows| rows.next().is_some())
+        .unwrap_or(false)
+}
+
+fn external_cli_preflight_summary(
+    overlay: &serde_yaml::Value,
+    selected_cli_system: &str,
+) -> serde_json::Value {
+    let selected_is_external = selected_cli_system != "codex";
+    let has_enabled_external_subagents = super::yaml_lookup(overlay, &["agent_system", "subagents"])
+        .and_then(serde_yaml::Value::as_mapping)
+        .map(|mapping| {
+            mapping.values().any(|entry| {
+                let enabled = super::yaml_bool(super::yaml_lookup(entry, &["enabled"]), false);
+                let backend = super::yaml_lookup(entry, &["subagent_backend_class"])
+                    .and_then(serde_yaml::Value::as_str)
+                    .map(str::trim)
+                    .map(str::to_ascii_lowercase)
+                    .unwrap_or_default();
+                enabled && backend == "external_cli"
+            })
+        })
+        .unwrap_or(false);
+    let requires_external_cli = selected_is_external || has_enabled_external_subagents;
+    let sandbox_active = is_sandbox_active_from_env();
+    let network_reachable = can_resolve_public_network();
+
+    if requires_external_cli && sandbox_active && !network_reachable {
+        return serde_json::json!({
+            "status": "blocked",
+            "requires_external_cli": true,
+            "sandbox_active": true,
+            "network_reachable": false,
+            "blocker_code": "external_cli_network_access_unavailable_under_sandbox",
+            "next_actions": [
+                "Allow network access for this session or rerun outside sandbox before using external CLI agents.",
+                "If sandbox must stay enabled, switch host and routing to an internal backend in `vida.config.yaml`.",
+                "Rerun `vida status --json` and then retry the external CLI command."
+            ]
+        });
+    }
+
+    serde_json::json!({
+        "status": "pass",
+        "requires_external_cli": requires_external_cli,
+        "sandbox_active": sandbox_active,
+        "network_reachable": network_reachable,
+        "blocker_code": serde_json::Value::Null,
+        "next_actions": []
+    })
 }
 
 pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
@@ -228,7 +363,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     )
                 });
                 let project_activation_status = activation_truth.as_ref().map(|truth| {
-                    canonical_activation_status(Some(truth.status.as_str()), truth.activation_pending)
+                    canonical_activation_status(
+                        Some(truth.status.as_str()),
+                        truth.activation_pending,
+                    )
                 });
                 let project_activation_pending = project_activation_status == Some("pending");
                 if as_json {
@@ -775,6 +913,32 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             .unwrap_or_default()
                             .to_string(),
                     );
+                    if host_agents["external_cli_preflight"]["status"]
+                        .as_str()
+                        .is_some_and(|value| value == "blocked")
+                    {
+                        super::print_surface_line(
+                            render,
+                            "external cli preflight",
+                            host_agents["external_cli_preflight"]["blocker_code"]
+                                .as_str()
+                                .unwrap_or("blocked"),
+                        );
+                        if let Some(next_actions) = host_agents["external_cli_preflight"]
+                            ["next_actions"]
+                            .as_array()
+                        {
+                            for action in next_actions {
+                                if let Some(text) = action.as_str() {
+                                    super::print_surface_line(
+                                        render,
+                                        "external cli next action",
+                                        text,
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
                 ExitCode::SUCCESS
             }
@@ -790,15 +954,61 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     }
 }
 
+
 fn build_host_agent_status_summary(project_root: &Path) -> Option<serde_json::Value> {
     let overlay = super::project_activator_surface::read_yaml_file_checked(
         &project_root.join("vida.config.yaml"),
     )
     .ok()?;
-    let selected_cli_system = super::yaml_lookup(&overlay, &["host_environment", "cli_system"])
-        .and_then(serde_yaml::Value::as_str)
-        .and_then(super::project_activator_surface::normalize_host_cli_system)?;
-    match selected_cli_system {
+    let (selected_cli_system, host_cli_entry) = selected_host_cli_system_entry(&overlay);
+    let runtime_surface =
+        runtime_surface_for_selected_system(&selected_cli_system, host_cli_entry.as_ref());
+    let observability =
+        super::read_json_file_if_present(&super::host_agent_observability_state_path(project_root))
+            .unwrap_or_else(|| super::load_or_initialize_host_agent_observability_state(project_root));
+    let latest_events = observability["events"]
+        .as_array()
+        .map(|events| events.iter().rev().take(5).cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let recent_events_value = serde_json::Value::Array(latest_events);
+    let budget_value = observability["budget"].clone();
+    let runtime_root = runtime_root_for_selected_system(
+        project_root,
+        &selected_cli_system,
+        host_cli_entry.as_ref(),
+    );
+
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "host_cli_system".to_string(),
+        serde_json::Value::String(selected_cli_system.clone()),
+    );
+    payload.insert(
+        "runtime_surface".to_string(),
+        serde_json::Value::String(runtime_surface),
+    );
+    payload.insert(
+        "runtime_root".to_string(),
+        serde_json::Value::String(runtime_root),
+    );
+    payload.insert(
+        "external_cli_preflight".to_string(),
+        external_cli_preflight_summary(&overlay, &selected_cli_system),
+    );
+    payload.insert("budget".to_string(), budget_value);
+    payload.insert("recent_events".to_string(), recent_events_value);
+    payload.insert("selection_policy".to_string(), serde_json::Value::Null);
+    payload.insert("agents".to_string(), serde_json::json!({}));
+    payload.insert(
+        "internal_dispatch_alias_count".to_string(),
+        serde_json::Value::Null,
+    );
+    payload.insert(
+        "internal_dispatch_alias_load_error".to_string(),
+        serde_json::Value::Null,
+    );
+
+    match selected_cli_system.as_str() {
         "codex" => {
             let overlay_roles =
                 super::project_activator_surface::overlay_codex_agent_catalog(&overlay);
@@ -817,16 +1027,6 @@ fn build_host_agent_status_summary(project_root: &Path) -> Option<serde_json::Va
                 &super::codex_worker_scorecards_state_path(project_root),
             )
             .unwrap_or(serde_json::Value::Null);
-            let observability = super::read_json_file_if_present(
-                &super::host_agent_observability_state_path(project_root),
-            )
-            .unwrap_or_else(|| {
-                super::load_or_initialize_host_agent_observability_state(project_root)
-            });
-            let latest_events = observability["events"]
-                .as_array()
-                .map(|events| events.iter().rev().take(5).cloned().collect::<Vec<_>>())
-                .unwrap_or_default();
 
             let mut agents = serde_json::Map::new();
             for role in &codex_roles {
@@ -870,28 +1070,100 @@ fn build_host_agent_status_summary(project_root: &Path) -> Option<serde_json::Va
                 .map(std::string::ToString::to_string);
             let overlay_dispatch_aliases = overlay_dispatch_aliases_result.unwrap_or_default();
 
-            Some(serde_json::json!({
-                "host_cli_system": "codex",
-                "runtime_surface": ".codex/**",
-                "stores": {
+            payload.insert(
+                "selection_policy".to_string(),
+                strategy["selection_policy"].clone(),
+            );
+            payload.insert(
+                "agents".to_string(),
+                serde_json::Value::Object(agents),
+            );
+            payload.insert(
+                "internal_dispatch_alias_count".to_string(),
+                serde_json::json!(overlay_dispatch_aliases.len()),
+            );
+            payload.insert(
+                "internal_dispatch_alias_load_error".to_string(),
+                internal_dispatch_alias_load_error
+                    .map(serde_json::Value::String)
+                    .unwrap_or(serde_json::Value::Null),
+            );
+            payload.insert(
+                "stores".to_string(),
+                serde_json::json!({
                     "scorecards": super::CODEX_WORKER_SCORECARDS_STATE,
                     "strategy": super::CODEX_WORKER_STRATEGY_STATE,
                     "observability": super::HOST_AGENT_OBSERVABILITY_STATE,
-                },
-                "selection_policy": strategy["selection_policy"],
-                "budget": observability["budget"],
-                "agents": agents,
-                "internal_dispatch_alias_count": overlay_dispatch_aliases.len(),
-                "internal_dispatch_alias_load_error": internal_dispatch_alias_load_error,
-                "recent_events": latest_events,
-            }))
+                }),
+            );
+            Some(serde_json::Value::Object(payload))
         }
-        _ => None,
+        _ => {
+            payload.insert(
+                "stores".to_string(),
+                serde_json::json!({
+                    "scorecards": serde_json::Value::Null,
+                    "strategy": serde_json::Value::Null,
+                    "observability": super::HOST_AGENT_OBSERVABILITY_STATE,
+                }),
+            );
+            payload.insert(
+                "system_entry".to_string(),
+                host_cli_system_entry_summary(host_cli_entry.as_ref(), &selected_cli_system),
+            );
+            Some(serde_json::Value::Object(payload))
+        }
+    }
+}
+
+fn host_cli_system_entry_summary(
+    entry: Option<&serde_yaml::Value>,
+    system: &str,
+) -> serde_json::Value {
+    let enabled = entry
+        .map(|value| super::yaml_bool(super::yaml_lookup(value, &["enabled"]), true))
+        .unwrap_or(true);
+    let template_root = entry
+        .and_then(|value| {
+            super::yaml_string(super::yaml_lookup(value, &["template_root"]))
+        })
+        .unwrap_or_else(|| format!(".{system}"));
+    let runtime_root = entry
+        .and_then(|value| super::yaml_string(super::yaml_lookup(value, &["runtime_root"])))
+        .unwrap_or_else(|| format!(".{system}"));
+    let materialization_mode = entry
+        .and_then(|value| super::yaml_lookup(value, &["materialization_mode"]))
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_else(|| default_host_cli_materialization_mode(system));
+    let carriers = entry
+        .and_then(|value| super::yaml_lookup(value, &["carriers"]))
+        .map(|value| serde_json::to_value(value).unwrap_or_else(|_| serde_json::json!({})))
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    serde_json::json!({
+        "enabled": enabled,
+        "materialization_mode": materialization_mode,
+        "template_root": template_root,
+        "runtime_root": runtime_root,
+        "carriers": carriers,
+    })
+}
+
+fn default_host_cli_materialization_mode(system: &str) -> String {
+    if system == "codex" {
+        "codex_toml_catalog_render".to_string()
+    } else {
+        "copy_tree_only".to_string()
     }
 }
 
 fn host_agents_json_value(host_agents: Option<&serde_json::Value>) -> serde_json::Value {
-    host_agents.cloned().unwrap_or_else(|| serde_json::json!({}))
+    host_agents
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}))
 }
 
 #[cfg(test)]
@@ -959,24 +1231,24 @@ mod tests {
     }
 
     #[test]
-fn project_activation_status_normalizes_case_and_whitespace_drift() {
-    assert_eq!(
-        canonical_activation_status(Some(" PENDING_ACTIVATION "), false),
-        "pending"
-    );
-    assert_eq!(
-        canonical_activation_status(Some(" ready_enough_for_normal_work "), false),
-        "ready_enough_for_normal_work"
-    );
-    assert_eq!(
-        canonical_activation_status(Some(" unknown "), false),
-        "ready_enough_for_normal_work"
-    );
-    assert_eq!(
-        canonical_activation_status(Some(" ready_enough_for_normal_work "), true),
-        "pending"
-    );
-}
+    fn project_activation_status_normalizes_case_and_whitespace_drift() {
+        assert_eq!(
+            canonical_activation_status(Some(" PENDING_ACTIVATION "), false),
+            "pending"
+        );
+        assert_eq!(
+            canonical_activation_status(Some(" ready_enough_for_normal_work "), false),
+            "ready_enough_for_normal_work"
+        );
+        assert_eq!(
+            canonical_activation_status(Some(" unknown "), false),
+            "ready_enough_for_normal_work"
+        );
+        assert_eq!(
+            canonical_activation_status(Some(" ready_enough_for_normal_work "), true),
+            "pending"
+        );
+    }
 
     #[test]
     fn shared_operator_output_contract_parity_accepts_mirrored_payload() {

@@ -23,9 +23,9 @@ language_policy:
   todo_protocol: english
 
 host_environment:
-  cli_system: codex
+  cli_system: qwen
   codex:
-    agents:
+    agents: &codex_agent_catalog
       junior:
         tier: junior
         description: Level 1 Codex lane for cheap bounded implementation packets that own one explicit write scope and return concrete delivery evidence without self-approving closure.
@@ -93,6 +93,63 @@ host_environment:
           - execution_preparation
           - hard_escalation
           - meta_analysis
+  systems:
+    codex:
+      enabled: false
+      materialization_mode: codex_toml_catalog_render
+      template_root: .codex
+      runtime_root: .codex
+      carriers: *codex_agent_catalog
+    qwen:
+      enabled: true
+      materialization_mode: copy_tree_only
+      template_root: .qwen
+      runtime_root: .qwen
+      carriers:
+        qwen-primary:
+          tier: qwen
+          description: Placeholder carrier for future Qwen-powered lanes.
+          rate: 4
+          reasoning_band: medium
+          default_runtime_role: worker
+          runtime_roles:
+            - worker
+          task_classes:
+            - implementation
+            - research
+    kilo:
+      enabled: true
+      materialization_mode: copy_tree_only
+      template_root: .kilo
+      runtime_root: .kilo
+      carriers:
+        kilo-primary:
+          tier: kilo
+          description: Placeholder carrier for the Kilo toolchain.
+          rate: 4
+          reasoning_band: medium
+          default_runtime_role: worker
+          runtime_roles:
+            - worker
+          task_classes:
+            - specification
+            - planning
+    opencode:
+      enabled: true
+      materialization_mode: copy_tree_only
+      template_root: .opencode
+      runtime_root: .opencode
+      carriers:
+        opencode-primary:
+          tier: opencode
+          description: Placeholder carrier for the OpenCode CLI.
+          rate: 4
+          reasoning_band: medium
+          default_runtime_role: worker
+          runtime_roles:
+            - worker
+          task_classes:
+            - implementation
 
 protocol_activation:
   agent_system: true
@@ -319,7 +376,7 @@ agent_system:
 
   subagents:
     internal_subagents:
-      enabled: true
+      enabled: false
       subagent_backend_class: internal
       role: senior_internal
       orchestration_tier: senior
@@ -333,9 +390,103 @@ agent_system:
       speed_tier: medium
       quality_tier: high
       specialties: implementation,architecture,integration,review,verification
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      detect_command: qwen
+      role: free_primary
+      orchestration_tier: external_free
+      cost_priority: highest
+      budget_cost_units: 0
+      capability_band: read_only,review_safe,web_search
+      write_scope: none
+      max_runtime_seconds: 180
+      min_output_bytes: 260
+      billing_tier: free
+      speed_tier: medium
+      quality_tier: high
+      specialties: long_context,agentic_coding,review
+      dispatch:
+        command: qwen
+        static_args:
+          - -y
+          - -o
+          - text
+        env:
+          HOME: /home/unnamed/project/vida-stack/.vida/data/qwen-home
+        web_search_mode: provider_configured
+        output_mode: stdout
+        prompt_mode: positional
+        startup_timeout_seconds: 90
+        no_output_timeout_seconds: 240
+        progress_idle_timeout_seconds: 120
+        max_runtime_extension_seconds: 90
+    kilo_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      detect_command: kilo
+      role: free_primary
+      orchestration_tier: external_free
+      cost_priority: highest
+      budget_cost_units: 0
+      models_hint: kilo/minimax/minimax-m2.5:free
+      default_model: kilo/minimax/minimax-m2.5:free
+      capability_band: read_only,review_safe
+      write_scope: none
+      max_runtime_seconds: 180
+      min_output_bytes: 260
+      billing_tier: free
+      speed_tier: medium
+      quality_tier: medium
+      specialties: planning,spec,review
+      dispatch:
+        command: kilo
+        static_args:
+          - run
+          - --auto
+        env:
+          OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS: "600000"
+        workdir_flag: --dir
+        output_mode: stdout
+        prompt_mode: positional
+        startup_timeout_seconds: 60
+        no_output_timeout_seconds: 180
+        progress_idle_timeout_seconds: 105
+        max_runtime_extension_seconds: 75
+    opencode_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      detect_command: opencode
+      role: free_primary
+      orchestration_tier: external_free
+      cost_priority: highest
+      budget_cost_units: 0
+      models_hint: opencode/minimax-m2.5-free,opencode/gpt-5.1-codex-mini
+      default_model: opencode/minimax-m2.5-free
+      capability_band: read_only,review_safe
+      write_scope: none
+      max_runtime_seconds: 180
+      min_output_bytes: 260
+      billing_tier: free
+      speed_tier: fast
+      quality_tier: medium
+      specialties: planning,spec,review
+      dispatch:
+        command: opencode
+        static_args:
+          - run
+        env:
+          OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS: "600000"
+        workdir_flag: --dir
+        output_mode: stdout
+        prompt_mode: positional
+        startup_timeout_seconds: 60
+        no_output_timeout_seconds: 180
+        progress_idle_timeout_seconds: 105
+        max_runtime_extension_seconds: 75
   routing:
     default:
-      subagents: internal_subagents
+      subagents: qwen_cli
       write_scope: none
       graph_strategy: deterministic_then_escalate
       deterministic_first: yes
@@ -352,12 +503,12 @@ agent_system:
       local_execution_preferred: no
       cli_dispatch_required_if_delegating: yes
       direct_internal_bypass_forbidden: yes
-      bridge_fallback_subagent: internal_subagents
+      bridge_fallback_subagent: qwen_cli
       internal_escalation_trigger: write_scope_or_tie_break
       independent_verification_required: no
     status_diagnostic:
-      subagents: internal_subagents
-      fanout_subagents: internal_subagents
+      subagents: qwen_cli
+      fanout_subagents: qwen_cli,kilo_cli,opencode_cli
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -383,10 +534,10 @@ agent_system:
       allowed_internal_reasons: provider_exhausted,quality_gap,semantic_conflict_without_majority,provider_exhausted_or_decision_conflict
       independent_verification_required: no
     research:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_fast
-      fanout_subagents: internal_subagents
+      fanout_subagents: qwen_cli
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -409,10 +560,10 @@ agent_system:
       verification_route_task_class: verification_ensemble
       independent_verification_required: yes
     research_fast:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_fast
-      fanout_subagents: internal_subagents
+      fanout_subagents: qwen_cli
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -428,10 +579,10 @@ agent_system:
       verification_route_task_class: verification
       independent_verification_required: yes
     ui_research:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_fast
-      fanout_subagents: internal_subagents
+      fanout_subagents: qwen_cli
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -447,10 +598,10 @@ agent_system:
       verification_route_task_class: verification
       independent_verification_required: yes
     research_deep:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_arch
-      fanout_subagents: internal_subagents
+      fanout_subagents: qwen_cli
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -473,10 +624,10 @@ agent_system:
       verification_route_task_class: verification_ensemble
       independent_verification_required: yes
     analysis:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_fast
-      fanout_subagents: internal_subagents
+      fanout_subagents: qwen_cli
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -491,10 +642,10 @@ agent_system:
       verification_route_task_class: verification_ensemble
       independent_verification_required: no
     read_only_prep:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_fast
-      fanout_subagents: internal_subagents
+      fanout_subagents: qwen_cli
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -519,10 +670,10 @@ agent_system:
       internal_escalation_trigger: subagent_exhausted_or_quality_gap
       independent_verification_required: no
     meta_analysis:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_review
-      fanout_subagents: internal_subagents
+      fanout_subagents: qwen_cli
       fanout_min_results: 3
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -537,7 +688,7 @@ agent_system:
       verification_route_task_class: verification_ensemble
       independent_verification_required: yes
     review:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_review
       write_scope: none
@@ -551,7 +702,7 @@ agent_system:
       internal_escalation_trigger: unresolved_high_risk_findings
       independent_verification_required: no
     review_first_pass:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_review
       write_scope: none
@@ -565,7 +716,7 @@ agent_system:
       internal_escalation_trigger: unresolved_high_risk_findings
       independent_verification_required: no
     ui_review:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_review
       write_scope: none
@@ -579,7 +730,7 @@ agent_system:
       internal_escalation_trigger: unresolved_high_risk_findings
       independent_verification_required: no
     review_critical:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_review
       write_scope: none
@@ -593,8 +744,8 @@ agent_system:
       internal_escalation_trigger: architecture_or_security_conflict
       independent_verification_required: no
     review_ensemble:
-      subagents: internal_subagents
-      fanout_subagents: internal_subagents
+      subagents: qwen_cli
+      fanout_subagents: qwen_cli
       fanout_min_results: 2
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -608,8 +759,8 @@ agent_system:
       internal_escalation_trigger: unresolved_high_risk_findings
       independent_verification_required: no
     coach:
-      subagents: internal_subagents
-      fanout_subagents: internal_subagents
+      subagents: qwen_cli
+      fanout_subagents: qwen_cli
       fanout_min_results: 1
       merge_policy: unanimous_approve_rework_bias
       write_scope: none
@@ -623,12 +774,12 @@ agent_system:
       internal_escalation_trigger: unresolved_coach_conflict
       independent_verification_required: no
     small_patch:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_fast
       analysis_required: yes
       analysis_route_task_class: analysis
-      analysis_fanout_subagents: internal_subagents
+      analysis_fanout_subagents: qwen_cli
       analysis_fanout_min_results: 1
       analysis_merge_policy: consensus_with_conflict_flag
       analysis_external_first_required: yes
@@ -655,12 +806,12 @@ agent_system:
       verification_route_task_class: review_ensemble
       independent_verification_required: yes
     small_patch_write:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_fast
       analysis_required: yes
       analysis_route_task_class: analysis
-      analysis_fanout_subagents: internal_subagents
+      analysis_fanout_subagents: qwen_cli
       analysis_fanout_min_results: 1
       analysis_merge_policy: consensus_with_conflict_flag
       analysis_external_first_required: yes
@@ -680,12 +831,12 @@ agent_system:
       verification_route_task_class: review_ensemble
       independent_verification_required: yes
     ui_patch:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_fast
       analysis_required: yes
       analysis_route_task_class: ui_review
-      analysis_fanout_subagents: internal_subagents
+      analysis_fanout_subagents: qwen_cli
       analysis_fanout_min_results: 2
       analysis_merge_policy: consensus_with_conflict_flag
       analysis_external_first_required: yes
@@ -705,13 +856,13 @@ agent_system:
       verification_route_task_class: review_ensemble
       independent_verification_required: yes
     implementation:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_fast
       max_runtime_seconds: 420
       analysis_required: yes
       analysis_route_task_class: analysis
-      analysis_fanout_subagents: internal_subagents
+      analysis_fanout_subagents: qwen_cli
       analysis_fanout_min_results: 1
       analysis_merge_policy: consensus_with_conflict_flag
       analysis_external_first_required: yes
@@ -738,7 +889,7 @@ agent_system:
       verification_route_task_class: review_ensemble
       independent_verification_required: yes
     architecture:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_arch
       write_scope: none
@@ -751,7 +902,7 @@ agent_system:
       verification_route_task_class: review_ensemble
       independent_verification_required: yes
     verification:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_review
       write_scope: none
@@ -765,10 +916,10 @@ agent_system:
       internal_escalation_trigger: unresolved_verification_conflict
       independent_verification_required: no
     verification_ensemble:
-      subagents: internal_subagents
+      subagents: qwen_cli
       profiles:
         internal_subagents: internal_review
-      fanout_subagents: internal_subagents
+      fanout_subagents: qwen_cli
       fanout_min_results: 3
       merge_policy: consensus_with_conflict_flag
       write_scope: none

@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use super::*;
 use super::activation_status::canonical_activation_status;
+use super::*;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ProjectActivationAnswers {
@@ -22,7 +23,6 @@ pub(crate) struct ProjectActivationStatusTruth {
     pub(crate) next_steps: Vec<String>,
 }
 
-const SUPPORTED_HOST_CLI_SYSTEMS: &[&str] = &["codex"];
 const HOST_CLI_PLACEHOLDER: &str = "__HOST_CLI_SYSTEM__";
 
 fn yaml_scalar(value: &str) -> String {
@@ -173,12 +173,94 @@ fn detect_project_shape(project_root: &Path) -> &'static str {
     }
 }
 
-pub(crate) fn normalize_host_cli_system(value: &str) -> Option<&'static str> {
-    let normalized = value.trim().to_ascii_lowercase();
-    SUPPORTED_HOST_CLI_SYSTEMS
-        .iter()
-        .copied()
-        .find(|candidate| *candidate == normalized)
+pub(crate) fn normalize_host_cli_system(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_ascii_lowercase())
+}
+
+fn host_cli_display_name(system: &str) -> String {
+    if system.eq_ignore_ascii_case("codex") {
+        "Codex".to_string()
+    } else {
+        system.to_string()
+    }
+}
+
+fn host_cli_system_registry(config: &serde_yaml::Value) -> HashMap<String, serde_yaml::Value> {
+    let mut registry = HashMap::new();
+    let systems = yaml_lookup(config, &["host_environment", "systems"]);
+    if let Some(serde_yaml::Value::Mapping(mapping)) = systems {
+        for (key, value) in mapping {
+            if let serde_yaml::Value::String(text) = key {
+                let normalized = text.trim().to_ascii_lowercase();
+                if !normalized.is_empty() {
+                    registry.insert(normalized, value.clone());
+                }
+            }
+        }
+    }
+    registry
+}
+
+fn default_codex_host_cli_entry() -> serde_yaml::Value {
+    serde_yaml::from_str(
+        r#"
+enabled: true
+template_root: .codex
+runtime_root: .codex
+materialization_mode: codex_toml_catalog_render
+"#,
+    )
+    .unwrap_or(serde_yaml::Value::Null)
+}
+
+fn host_cli_system_registry_with_fallback(
+    config: Option<&serde_yaml::Value>,
+) -> HashMap<String, serde_yaml::Value> {
+    let mut registry = config.map(host_cli_system_registry).unwrap_or_default();
+    if registry.is_empty() {
+        registry.insert("codex".to_string(), default_codex_host_cli_entry());
+    }
+    registry
+}
+
+fn load_host_cli_system_registry_from_root(root: &Path) -> HashMap<String, serde_yaml::Value> {
+    let config_path = root.join("vida.config.yaml");
+    read_yaml_file_checked(&config_path)
+        .ok()
+        .as_ref()
+        .map(|config| host_cli_system_registry_with_fallback(Some(config)))
+        .unwrap_or_else(|| host_cli_system_registry_with_fallback(None))
+}
+
+fn host_cli_system_enabled(entry: &serde_yaml::Value) -> bool {
+    yaml_bool(yaml_lookup(entry, &["enabled"]), true)
+}
+
+fn host_cli_system_template_root(entry: &serde_yaml::Value) -> Option<String> {
+    yaml_string(yaml_lookup(entry, &["template_root"]))
+}
+
+fn host_cli_system_runtime_root(entry: &serde_yaml::Value, system: &str, root: &Path) -> PathBuf {
+    resolve_overlay_path(
+        root,
+        &yaml_string(yaml_lookup(entry, &["runtime_root"])).unwrap_or_else(|| format!(".{system}")),
+    )
+}
+
+fn host_cli_system_materialization_mode(entry: &serde_yaml::Value, system: &str) -> String {
+    yaml_string(yaml_lookup(entry, &["materialization_mode"]))
+        .unwrap_or_else(|| {
+            if system == "codex" {
+                "codex_toml_catalog_render".to_string()
+            } else {
+                "copy_tree_only".to_string()
+            }
+        })
+        .to_ascii_lowercase()
 }
 
 pub(crate) fn inferred_project_id_candidate(project_root: &Path) -> String {
@@ -326,21 +408,27 @@ pub(crate) fn read_yaml_file_checked(path: &Path) -> Result<serde_yaml::Value, S
         .map_err(|error| format!("failed to parse {}: {error}", path.display()))
 }
 
-pub(crate) fn resolve_host_cli_template_source(cli_system: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_host_cli_template_source(
+    cli_system: &str,
+    registry_entry: Option<&serde_yaml::Value>,
+) -> Result<PathBuf, String> {
     let source_root = resolve_init_bootstrap_source_root();
-    match cli_system {
-        "codex" => {
-            let template_root = source_root.join(".codex");
-            if template_root.is_dir() {
-                Ok(template_root)
-            } else {
-                Err(format!(
-                    "Missing framework host CLI template for `{cli_system}`: {}",
-                    template_root.display()
-                ))
-            }
+    let template_root = match registry_entry.and_then(host_cli_system_template_root) {
+        Some(relative) => source_root.join(relative),
+        None if cli_system == "codex" => source_root.join(".codex"),
+        None => {
+            return Err(format!(
+                "No template_root configured for host CLI `{cli_system}`"
+            ));
         }
-        other => Err(format!("Unsupported host CLI system `{other}`")),
+    };
+    if template_root.is_dir() {
+        Ok(template_root)
+    } else {
+        Err(format!(
+            "Missing framework host CLI template for `{cli_system}`: {}",
+            template_root.display()
+        ))
     }
 }
 
@@ -411,42 +499,64 @@ pub(crate) fn apply_agent_only_development_defaults(contents: &str) -> String {
 pub(crate) fn materialize_host_cli_template(
     project_root: &Path,
     cli_system: &str,
-) -> Result<(), String> {
-    match cli_system {
-        "codex" => {
-            let source = resolve_host_cli_template_source(cli_system)?;
-            copy_tree_if_missing(&source, &project_root.join(".codex"))?;
-            let overlay = read_yaml_file_checked(&project_root.join("vida.config.yaml"))
-                .unwrap_or(serde_yaml::Value::Null);
-            let scoring_policy = serde_json::to_value(
-                yaml_lookup(&overlay, &["agent_system", "scoring"])
-                    .cloned()
-                    .unwrap_or(serde_yaml::Value::Null),
-            )
-            .unwrap_or(serde_json::Value::Null);
-            let codex_root = project_root.join(".codex");
-            let codex_roles = {
-                let overlay_roles = overlay_codex_agent_catalog(&overlay);
-                if overlay_roles.is_empty() {
-                    read_codex_agent_catalog(&codex_root)
-                } else {
-                    overlay_roles
-                }
-            };
-            let codex_dispatch_aliases =
-                codex_dispatch_alias_catalog_for_root(&overlay, project_root, &codex_roles)?;
-            if !codex_roles.is_empty() {
-                render_codex_template_from_catalog(
-                    project_root,
-                    &source,
-                    &codex_roles,
-                    &codex_dispatch_aliases,
-                )?;
-            }
-            refresh_codex_worker_strategy(project_root, &codex_roles, &scoring_policy);
-            Ok(())
+    registry_entry: Option<&serde_yaml::Value>,
+) -> Result<PathBuf, String> {
+    let entry_value = match registry_entry.cloned() {
+        Some(entry) => entry,
+        None if cli_system == "codex" => default_codex_host_cli_entry(),
+        None => {
+            return Err(format!(
+                "Registry entry required for host CLI `{cli_system}`"
+            ));
         }
-        other => Err(format!("Unsupported host CLI system `{other}`")),
+    };
+    let entry_ref = entry_value;
+    let source = resolve_host_cli_template_source(cli_system, Some(&entry_ref))?;
+    let runtime_root = host_cli_system_runtime_root(&entry_ref, cli_system, project_root);
+    let mode = host_cli_system_materialization_mode(&entry_ref, cli_system);
+    let copy_tree_target = project_root.join(&runtime_root);
+    match mode.as_str() {
+        "codex_toml_catalog_render" => {
+            copy_tree_if_missing(&source, &copy_tree_target)?;
+            if cli_system == "codex" {
+                let overlay = read_yaml_file_checked(&project_root.join("vida.config.yaml"))
+                    .unwrap_or(serde_yaml::Value::Null);
+                let scoring_policy = serde_json::to_value(
+                    yaml_lookup(&overlay, &["agent_system", "scoring"])
+                        .cloned()
+                        .unwrap_or(serde_yaml::Value::Null),
+                )
+                .unwrap_or(serde_json::Value::Null);
+                let codex_root = project_root.join(".codex");
+                let codex_roles = {
+                    let overlay_roles = overlay_codex_agent_catalog(&overlay);
+                    if overlay_roles.is_empty() {
+                        read_codex_agent_catalog(&codex_root)
+                    } else {
+                        overlay_roles
+                    }
+                };
+                let codex_dispatch_aliases =
+                    codex_dispatch_alias_catalog_for_root(&overlay, project_root, &codex_roles)?;
+                if !codex_roles.is_empty() {
+                    render_codex_template_from_catalog(
+                        project_root,
+                        &source,
+                        &codex_roles,
+                        &codex_dispatch_aliases,
+                    )?;
+                }
+                refresh_codex_worker_strategy(project_root, &codex_roles, &scoring_policy);
+            }
+            Ok(runtime_root)
+        }
+        "copy_tree_only" => {
+            copy_tree_if_missing(&source, &copy_tree_target)?;
+            Ok(runtime_root)
+        }
+        other => Err(format!(
+            "Unsupported materialization_mode `{other}` for host CLI `{cli_system}`"
+        )),
     }
 }
 
@@ -1050,8 +1160,7 @@ pub(crate) fn file_contains_placeholder(path: &Path) -> bool {
     std::fs::read_to_string(path)
         .map(|contents| {
             let lowercase = contents.to_ascii_lowercase();
-            lowercase.contains("placeholder")
-                || lowercase.contains("project documentation: docs/")
+            lowercase.contains("project documentation: docs/")
                 || contents.contains(PROJECT_ID_PLACEHOLDER)
                 || contents.contains(DOCS_ROOT_PLACEHOLDER)
                 || contents.contains(PROCESS_ROOT_PLACEHOLDER)
@@ -1101,8 +1210,6 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     let agents_md = project_root.join("AGENTS.md");
     let agents_sidecar = project_root.join("AGENTS.sidecar.md");
     let codex_tree = project_root.join(".codex");
-    let codex_config = codex_tree.join("config.toml");
-    let codex_agents = codex_tree.join("agents");
     let vida_config = project_root.join("vida.config.yaml");
     let vida_home = project_root.join(".vida");
     let vida_config_dir = project_root.join(".vida/config");
@@ -1167,6 +1274,22 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     } else {
         None
     };
+    let host_cli_system_registry = host_cli_system_registry_with_fallback(project_overlay.as_ref());
+    let mut supported_host_cli_systems = host_cli_system_registry
+        .iter()
+        .filter(|(_, entry)| host_cli_system_enabled(entry))
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    supported_host_cli_systems.sort();
+    let host_cli_suggested_system = supported_host_cli_systems
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "codex".to_string());
+    let host_cli_supported_list = if supported_host_cli_systems.is_empty() {
+        "codex".to_string()
+    } else {
+        supported_host_cli_systems.join(", ")
+    };
     let current_project_id = project_overlay
         .as_ref()
         .and_then(|config| yaml_string(yaml_lookup(config, &["project", "id"])));
@@ -1191,26 +1314,41 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
         .and_then(serde_yaml::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty() && *value != HOST_CLI_PLACEHOLDER)
-        .map(|value| value.to_ascii_lowercase());
-    let host_cli_supported = selected_host_cli_system
+        .and_then(|value| normalize_host_cli_system(value));
+    let host_cli_system_entry = selected_host_cli_system
         .as_deref()
-        .and_then(normalize_host_cli_system)
-        .is_some();
-    let host_cli_selection_required = selected_host_cli_system.is_none() || !host_cli_supported;
-    let host_cli_template_materialized = matches!(
-        selected_host_cli_system
-            .as_deref()
-            .and_then(normalize_host_cli_system),
-        Some("codex")
-    ) && codex_config.is_file()
-        && codex_agents.is_dir();
+        .and_then(|system| host_cli_system_registry.get(system));
+    let host_cli_selection_required = selected_host_cli_system.is_none()
+        || host_cli_system_entry.is_none()
+        || !host_cli_system_entry
+            .map(|entry| host_cli_system_enabled(entry))
+            .unwrap_or(false);
+    let host_cli_runtime_root = selected_host_cli_system.as_deref().and_then(|system| {
+        host_cli_system_entry.map(|entry| host_cli_system_runtime_root(entry, system, project_root))
+    });
+    let host_cli_materialization_mode = selected_host_cli_system.as_deref().and_then(|system| {
+        host_cli_system_entry.map(|entry| host_cli_system_materialization_mode(entry, system))
+    });
+    let host_cli_template_materialized = match (
+        host_cli_runtime_root.as_deref(),
+        host_cli_materialization_mode.as_deref(),
+    ) {
+        (Some(root), Some("codex_toml_catalog_render")) => {
+            root.join("config.toml").is_file() && root.join("agents").is_dir()
+        }
+        (Some(root), Some("copy_tree_only")) => root.exists(),
+        _ => false,
+    };
     let host_cli_materialization_required =
         !host_cli_selection_required && !host_cli_template_materialized;
     let host_cli_template_source_root = selected_host_cli_system
         .as_deref()
-        .and_then(normalize_host_cli_system)
-        .and_then(|system| resolve_host_cli_template_source(system).ok())
-        .or_else(|| resolve_host_cli_template_source("codex").ok());
+        .and_then(|system| resolve_host_cli_template_source(system, host_cli_system_entry).ok())
+        .or_else(|| {
+            host_cli_system_registry
+                .get("codex")
+                .and_then(|entry| resolve_host_cli_template_source("codex", Some(entry)).ok())
+        });
     let default_host_agent_templates = host_cli_template_source_root
         .as_deref()
         .map(list_host_cli_agent_templates)
@@ -1344,8 +1482,8 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
             "id": "host_cli_system",
             "prompt": "Which supported host CLI system should VIDA activate for agents in this project?",
             "flag": "--host-cli-system",
-            "suggested_value": "codex",
-            "supported_values": SUPPORTED_HOST_CLI_SYSTEMS,
+            "suggested_value": host_cli_suggested_system,
+            "supported_values": supported_host_cli_systems.clone(),
             "required": true
         }));
     }
@@ -1361,7 +1499,7 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
         one_shot_example_parts.push("--language <language>".to_string());
     }
     if host_cli_selection_required {
-        one_shot_example_parts.push("--host-cli-system codex".to_string());
+        one_shot_example_parts.push(format!("--host-cli-system {host_cli_suggested_system}"));
     }
     one_shot_example_parts.push("--json".to_string());
     let one_shot_example = one_shot_example_parts.join(" ");
@@ -1379,15 +1517,22 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
         );
     }
     if host_cli_selection_required {
-        next_steps.push(
-            "choose the host CLI system from the supported framework list (`codex`) and run the one-shot `vida project-activator` activation command; project activation is not complete until the host agent template is selected"
-                .to_string(),
-        );
+        next_steps.push(format!(
+            "choose the host CLI system from the supported host CLI list ({}) and run the one-shot `vida project-activator` activation command; project activation is not complete until the host agent template is selected",
+            host_cli_supported_list
+        ));
     } else if host_cli_materialization_required {
-        next_steps.push(
-            "materialize the selected host CLI template with `vida project-activator --host-cli-system codex`, then close and restart Codex so agent configuration becomes visible to the runtime environment"
-                .to_string(),
-        );
+        if let Some(selected_system) = selected_host_cli_system.as_deref() {
+            let display_name = host_cli_display_name(selected_system);
+            next_steps.push(format!(
+                "materialize the selected host CLI template with `vida project-activator --host-cli-system {selected_system}`, then close and restart {display_name} so agent configuration becomes visible to the runtime environment",
+            ));
+        } else {
+            next_steps.push(
+                "materialize the selected host CLI template with `vida project-activator --host-cli-system <host>` and restart the host CLI so the activated agent template becomes visible to the runtime environment"
+                    .to_string(),
+            );
+        }
     }
     if sidecar_has_placeholders {
         next_steps.push(
@@ -1475,7 +1620,7 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
             "validation_error": agent_extension_validation_error,
         },
         "host_environment": {
-            "supported_cli_systems": SUPPORTED_HOST_CLI_SYSTEMS,
+            "supported_cli_systems": supported_host_cli_systems,
             "selected_cli_system": selected_host_cli_system,
             "selection_required": host_cli_selection_required,
             "template_materialized": host_cli_template_materialized,
@@ -1573,7 +1718,8 @@ pub(crate) fn canonical_project_activation_status_truth(
 ) -> ProjectActivationStatusTruth {
     let view = build_project_activator_view(project_root);
     let activation_pending = view["activation_pending"].as_bool().unwrap_or(true);
-    let status = canonical_activation_status(view["status"].as_str(), activation_pending).to_string();
+    let status =
+        canonical_activation_status(view["status"].as_str(), activation_pending).to_string();
     let next_steps = view["next_steps"]
         .as_array()
         .map(|items| {
@@ -1665,23 +1811,66 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
     let activation_answers = resolve_project_activation_answers(&project_root, &args);
 
     if let Some(requested_host_cli_system) = args.host_cli_system.as_deref() {
-        let Some(normalized_host_cli_system) = normalize_host_cli_system(requested_host_cli_system)
-        else {
-            eprintln!(
-                "Unsupported host CLI system `{requested_host_cli_system}`. Supported values: {}",
-                SUPPORTED_HOST_CLI_SYSTEMS.join(", ")
-            );
-            return ExitCode::from(2);
-        };
-        if let Err(error) = apply_host_cli_selection(&project_root, normalized_host_cli_system)
-            .and_then(|()| materialize_host_cli_template(&project_root, normalized_host_cli_system))
+        let registry = load_host_cli_system_registry_from_root(&project_root);
+        let supported_values = registry
+            .iter()
+            .filter(|(_, entry)| host_cli_system_enabled(entry))
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        let normalized_host_cli_system = match normalize_host_cli_system(requested_host_cli_system)
         {
-            eprintln!("{error}");
-            return ExitCode::from(1);
-        }
+            Some(value) => value,
+            None => {
+                eprintln!(
+                        "Unsupported host CLI system `{requested_host_cli_system}`. Supported values: {}",
+                        supported_values.join(", ")
+                    );
+                return ExitCode::from(2);
+            }
+        };
+        let host_cli_entry = match registry.get(&normalized_host_cli_system) {
+            Some(entry) if host_cli_system_enabled(entry) => entry,
+            Some(_) => {
+                eprintln!("Host CLI system `{normalized_host_cli_system}` is currently disabled.");
+                return ExitCode::from(2);
+            }
+            None => {
+                let supported_values = registry
+                    .iter()
+                    .filter(|(_, entry)| host_cli_system_enabled(entry))
+                    .map(|(id, _)| id.clone())
+                    .collect::<Vec<_>>();
+                eprintln!(
+                    "Unsupported host CLI system `{normalized_host_cli_system}`. Supported values: {}",
+                    supported_values.join(", ")
+                );
+                return ExitCode::from(2);
+            }
+        };
+        let runtime_root =
+            match apply_host_cli_selection(&project_root, &normalized_host_cli_system).and_then(
+                |()| {
+                    materialize_host_cli_template(
+                        &project_root,
+                        &normalized_host_cli_system,
+                        Some(host_cli_entry),
+                    )
+                },
+            ) {
+                Ok(root) => root,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(1);
+                }
+            };
         host_cli_activated = Some(normalized_host_cli_system.to_string());
         changed_files.push("vida.config.yaml".to_string());
-        changed_files.push(".codex/**".to_string());
+        let relative_runtime_root = runtime_root
+            .strip_prefix(&project_root)
+            .unwrap_or_else(|_| runtime_root.as_path())
+            .to_string_lossy()
+            .to_string();
+        changed_files.push(format!("{relative_runtime_root}/**"));
     }
 
     if let Some(answers) = activation_answers.as_ref() {
@@ -1776,14 +1965,17 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
         }
         view["activation_log"] = activation_log;
     }
+    let host_cli_restart_target = host_cli_activated.as_deref().map(host_cli_display_name);
     if args.json {
-        let payload = if let Some(host_cli_activated) = host_cli_activated.as_deref() {
+        let payload = if host_cli_activated.is_some() {
             serde_json::json!({
                 "surface": "vida project-activator",
                 "post_init_restart_required": true,
                 "post_init_restart_note": format!(
                     "close and restart {} so the newly activated agent template becomes visible to the runtime execution environment",
-                    if host_cli_activated == "codex" { "Codex" } else { host_cli_activated }
+                    host_cli_restart_target
+                        .as_deref()
+                        .unwrap_or("the host CLI system")
                 ),
                 "activation_log": view["activation_log"],
                 "view": view,
@@ -1881,7 +2073,10 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
     }
     if host_cli_activated.is_some() {
         println!(
-            "  - close and restart Codex so the newly activated agent template becomes visible to the runtime environment"
+            "  - close and restart {} so the newly activated agent template becomes visible to the runtime environment",
+            host_cli_restart_target
+                .as_deref()
+                .unwrap_or("the host CLI system")
         );
     }
     ExitCode::SUCCESS
@@ -2334,9 +2529,14 @@ pub(crate) fn write_project_activation_receipt(
         .expect("rfc3339 timestamp should render");
     let receipt_name = format!("project-activation-{}.json", now.unix_timestamp());
     let receipt_path = receipts_dir.join(receipt_name);
-    let host_template_root = host_cli_system
-        .and_then(normalize_host_cli_system)
-        .and_then(|system| resolve_host_cli_template_source(system).ok())
+    let normalized_host_cli_system = host_cli_system.and_then(normalize_host_cli_system);
+    let registry = load_host_cli_system_registry_from_root(project_root);
+    let host_cli_entry = normalized_host_cli_system
+        .as_deref()
+        .and_then(|system| registry.get(system));
+    let host_template_root = normalized_host_cli_system
+        .as_deref()
+        .and_then(|system| resolve_host_cli_template_source(system, host_cli_entry).ok())
         .map(|path| path.display().to_string());
     let default_agent_templates = host_template_root
         .as_deref()
@@ -2463,11 +2663,9 @@ mod tests {
 
         let merged = merge_project_activation_into_init_view(init_view, &project_activation_view);
         assert_eq!(merged["status"], "pending");
-        assert!(
-            merged["execution_gate"]["activation_pending"]
-                .as_bool()
-                .expect("execution gate activation_pending should exist")
-        );
+        assert!(merged["execution_gate"]["activation_pending"]
+            .as_bool()
+            .expect("execution gate activation_pending should exist"));
         assert_eq!(
             merged["execution_gate"]["taskflow_admitted"],
             serde_json::Value::Bool(false)

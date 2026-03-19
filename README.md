@@ -117,7 +117,7 @@ vida init
 - 🔐 verifies release checksums
 - 🗂️ installs versioned sources under `~/.local/share/vida-stack/releases/<tag>`
 - 🔁 updates `~/.local/share/vida-stack/current`
-- 🧩 ships the project-local `.codex/` runtime configuration surface
+- 🧩 ships host CLI runtime templates (`.codex/`, `.qwen/`, `.kilo/`, `.opencode/`) and materializes the selected one through `vida project-activator`
 - 📍 deploys a clean `AGENTS.sidecar.md` scaffold for the external project owner
 - 🧱 scaffolds `vida.config.yaml` from the packaged template when the installed release root does not already have one
 - 🧰 writes launchers into `~/.local/bin`:
@@ -170,6 +170,13 @@ This surfaces the bounded project-activation view for the current directory:
 - activation posture (`pending|partial|ready_enough_for_normal_work`)
 - explicit blockers and next steps
 - whether later restart or host-template initialization is still required
+
+Host CLI selection and external agents:
+
+- select host system with `vida project-activator --host-cli-system <codex|qwen|kilo|opencode> ...`
+- external CLI routing and command templates are owned by `vida.config.yaml -> agent_system.subagents.*`
+- when external CLI is configured, `vida status --json` exposes `host_agents.external_cli_preflight`
+- if sandbox is active and network is unavailable, preflight returns `blocked` with explicit `next_actions`
 
 ### Upgrade / doctor
 

@@ -8,7 +8,6 @@ use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::Surreal;
 use tokio::runtime::Runtime;
 
-
 fn vida() -> Command {
     Command::new(env!("CARGO_BIN_EXE_vida"))
 }
@@ -123,7 +122,9 @@ where
     let mut last = None;
     for attempt in 0..STATE_LOCK_RETRY_LIMIT {
         match builder().output() {
-            Ok(output) if output.status.success() || !is_state_lock_error(&output) => return output,
+            Ok(output) if output.status.success() || !is_state_lock_error(&output) => {
+                return output
+            }
             Ok(output) => {
                 last = Some(output);
             }
@@ -215,38 +216,26 @@ fn require_string_array(value: &serde_json::Value, label: &str) -> Vec<String> {
         .collect()
 }
 
-fn assert_release1_contract_mirror(
-    surface: &serde_json::Value,
-    mirror_key: &str,
-    label: &str,
-) {
+fn assert_release1_contract_mirror(surface: &serde_json::Value, mirror_key: &str, label: &str) {
     assert_eq!(
-        surface["status"],
-        surface[mirror_key]["status"],
+        surface["status"], surface[mirror_key]["status"],
         "{} top-level status should mirror {}.status",
-        label,
-        mirror_key
+        label, mirror_key
     );
     assert_eq!(
-        surface["blocker_codes"],
-        surface[mirror_key]["blocker_codes"],
+        surface["blocker_codes"], surface[mirror_key]["blocker_codes"],
         "{} blocker_codes should mirror {}.blocker_codes",
-        label,
-        mirror_key
+        label, mirror_key
     );
     assert_eq!(
-        surface["next_actions"],
-        surface[mirror_key]["next_actions"],
+        surface["next_actions"], surface[mirror_key]["next_actions"],
         "{} next_actions should mirror {}.next_actions",
-        label,
-        mirror_key
+        label, mirror_key
     );
     assert_eq!(
-        surface["artifact_refs"],
-        surface[mirror_key]["artifact_refs"],
+        surface["artifact_refs"], surface[mirror_key]["artifact_refs"],
         "{} artifact_refs should mirror {}.artifact_refs",
-        label,
-        mirror_key
+        label, mirror_key
     );
 }
 
@@ -933,6 +922,248 @@ agent_system:
 }
 
 #[test]
+fn status_json_reports_non_codex_host_agents_summary() {
+    let project_root = unique_state_dir();
+    fs::create_dir_all(&project_root).expect("project root should exist");
+    let state_dir = format!("{project_root}/.vida/data/state");
+
+    let init = vida()
+        .arg("init")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .output()
+        .expect("init should run");
+    assert!(init.status.success());
+
+    let config_path = format!("{project_root}/vida.config.yaml");
+    let mut config: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&config_path).expect("config exists"))
+            .expect("config yaml should parse");
+    let root = config
+        .as_mapping_mut()
+        .expect("config root should be a mapping");
+    let host_env = root
+        .get_mut(serde_yaml::Value::String("host_environment".to_string()))
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .expect("host_environment should exist");
+    host_env.insert(
+        serde_yaml::Value::String("cli_system".to_string()),
+        serde_yaml::Value::String("qwen".to_string()),
+    );
+    let systems = host_env
+        .get_mut(serde_yaml::Value::String("systems".to_string()))
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .expect("host_environment.systems should exist");
+    let qwen = systems
+        .get_mut(serde_yaml::Value::String("qwen".to_string()))
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .expect("host_environment.systems.qwen should exist");
+    qwen.insert(
+        serde_yaml::Value::String("enabled".to_string()),
+        serde_yaml::Value::Bool(true),
+    );
+    fs::write(
+        &config_path,
+        serde_yaml::to_string(&config).expect("patched yaml should render"),
+    )
+    .expect("patch config");
+
+    let activator = vida()
+        .args([
+            "project-activator",
+            "--project-id",
+            "status-qwen",
+            "--host-cli-system",
+            "qwen",
+            "--language",
+            "english",
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("activator should run");
+    assert!(
+        activator.status.success(),
+        "{}",
+        String::from_utf8_lossy(&activator.stderr)
+    );
+
+    let boot = vida()
+        .arg("boot")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "{}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+
+    let status = vida()
+        .args(["status", "--json"])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("status should run");
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("status should render json");
+    let host_agents = &parsed["host_agents"];
+    assert_eq!(host_agents["host_cli_system"], "qwen");
+    assert_eq!(host_agents["runtime_surface"], ".qwen");
+    let runtime_root = host_agents["runtime_root"]
+        .as_str()
+        .expect("runtime_root present");
+    assert!(runtime_root.contains(".qwen"));
+    let system_entry = &host_agents["system_entry"];
+    assert!(system_entry.is_object());
+    assert_eq!(
+        system_entry["template_root"].as_str().expect("template_root"),
+        ".qwen"
+    );
+    assert_eq!(
+        system_entry["runtime_root"].as_str().expect("runtime_root"),
+        ".qwen"
+    );
+    assert_eq!(
+        system_entry["materialization_mode"].as_str().expect("materialization_mode"),
+        "copy_tree_only"
+    );
+    assert_eq!(system_entry["enabled"].as_bool(), Some(true));
+    assert_eq!(
+        system_entry["carriers"]["qwen-primary"]["tier"]
+            .as_str()
+            .expect("tier"),
+        "qwen"
+    );
+    assert_eq!(host_agents["external_cli_preflight"]["status"], "pass");
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn status_json_blocks_external_cli_when_sandbox_active_and_network_unreachable() {
+    let project_root = unique_state_dir();
+    fs::create_dir_all(&project_root).expect("project root should exist");
+    let state_dir = format!("{project_root}/.vida/data/state");
+
+    let init = vida()
+        .arg("init")
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .output()
+        .expect("init should run");
+    assert!(init.status.success());
+
+    let config_path = format!("{project_root}/vida.config.yaml");
+    let mut config: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&config_path).expect("config exists"))
+            .expect("config yaml should parse");
+    let root = config
+        .as_mapping_mut()
+        .expect("config root should be a mapping");
+    let host_env = root
+        .get_mut(serde_yaml::Value::String("host_environment".to_string()))
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .expect("host_environment should exist");
+    host_env.insert(
+        serde_yaml::Value::String("cli_system".to_string()),
+        serde_yaml::Value::String("qwen".to_string()),
+    );
+    let systems = host_env
+        .get_mut(serde_yaml::Value::String("systems".to_string()))
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .expect("host_environment.systems should exist");
+    let qwen = systems
+        .get_mut(serde_yaml::Value::String("qwen".to_string()))
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .expect("host_environment.systems.qwen should exist");
+    qwen.insert(
+        serde_yaml::Value::String("enabled".to_string()),
+        serde_yaml::Value::Bool(true),
+    );
+    fs::write(
+        &config_path,
+        serde_yaml::to_string(&config).expect("patched yaml should render"),
+    )
+    .expect("patch config");
+
+    let activator = vida()
+        .args([
+            "project-activator",
+            "--project-id",
+            "status-qwen-offline",
+            "--host-cli-system",
+            "qwen",
+            "--language",
+            "english",
+            "--json",
+        ])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("activator should run");
+    assert!(
+        activator.status.success(),
+        "{}",
+        String::from_utf8_lossy(&activator.stderr)
+    );
+
+    let status = vida()
+        .args(["status", "--json"])
+        .current_dir(&project_root)
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .env("CODEX_SANDBOX_MODE", "workspace-write")
+        .env("VIDA_NETWORK_PROBE_OVERRIDE", "unreachable")
+        .output()
+        .expect("status should run");
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("status should render json");
+    let preflight = &parsed["host_agents"]["external_cli_preflight"];
+    assert_eq!(preflight["status"], "blocked");
+    assert_eq!(
+        preflight["blocker_code"],
+        "external_cli_network_access_unavailable_under_sandbox"
+    );
+    assert!(
+        preflight["next_actions"]
+            .as_array()
+            .expect("next actions should be array")
+            .iter()
+            .any(|row| row
+                .as_str()
+                .unwrap_or_default()
+                .contains("Allow network access"))
+    );
+
+    fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
 fn consume_bundle_check_exposes_shared_operator_contract_fields() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
@@ -1130,13 +1361,7 @@ fn taskflow_task_update_rejects_noncanonical_helper_status() {
 
     let output = vida()
         .args([
-            "taskflow",
-            "task",
-            "update",
-            "vida-a",
-            "--status",
-            "pass",
-            "--json",
+            "taskflow", "task", "update", "vida-a", "--status", "pass", "--json",
         ])
         .env("VIDA_STATE_DIR", &state_dir)
         .env("VIDA_TASK_BRIDGE_STATUS_OVERRIDE", "bananas")
@@ -1523,7 +1748,8 @@ fn protocol_binding_check_lock_retry_preserves_blocker_codes() {
         let attempt = PROTOCOL_BINDING_LOCK_SIMULATION_COUNTER.fetch_add(1, Ordering::SeqCst);
         if attempt == 0 {
             let mut simul = Command::new("sh");
-            simul.arg("-c")
+            simul
+                .arg("-c")
                 .arg("printf 'LOCK is already locked\\n' >&2; exit 1");
             simul
         } else {
@@ -1577,64 +1803,62 @@ fn protocol_binding_check_plain_json_parity() {
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("boot should run");
-    assert!(boot.status.success(), "{}", String::from_utf8_lossy(&boot.stderr));
+    assert!(
+        boot.status.success(),
+        "{}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
 
     let plain_output = run_command_capture(&["taskflow", "protocol-binding", "check"], &state_dir);
     assert!(!plain_output.status.success());
     let plain_stdout = String::from_utf8_lossy(&plain_output.stdout);
     let plain_status = extract_plain_surface_line(&plain_stdout, "status");
-    let plain_blockers: Vec<String> = serde_json::from_str(
-        &extract_plain_surface_line(&plain_stdout, "blocker_codes"),
-    )
-    .expect("blocker_codes should render as json array for plain output");
-    let plain_next_actions: Vec<String> = serde_json::from_str(
-        &extract_plain_surface_line(&plain_stdout, "next_actions"),
-    )
-    .expect("next_actions should render as json array for plain output");
-    let plain_shared_fields: serde_json::Value = serde_json::from_str(
-        &extract_plain_surface_line(&plain_stdout, "shared_fields"),
-    )
-    .expect("shared_fields should render as json object for plain output");
+    let plain_blockers: Vec<String> =
+        serde_json::from_str(&extract_plain_surface_line(&plain_stdout, "blocker_codes"))
+            .expect("blocker_codes should render as json array for plain output");
+    let plain_next_actions: Vec<String> =
+        serde_json::from_str(&extract_plain_surface_line(&plain_stdout, "next_actions"))
+            .expect("next_actions should render as json array for plain output");
+    let plain_shared_fields: serde_json::Value =
+        serde_json::from_str(&extract_plain_surface_line(&plain_stdout, "shared_fields"))
+            .expect("shared_fields should render as json object for plain output");
     let plain_operator_contracts: serde_json::Value = serde_json::from_str(
         &extract_plain_surface_line(&plain_stdout, "operator_contracts"),
     )
     .expect("operator_contracts should render as json object for plain output");
 
     let json_output = run_command_capture(
-        &[
-            "taskflow",
-            "protocol-binding",
-            "check",
-            "--json",
-        ],
+        &["taskflow", "protocol-binding", "check", "--json"],
         &state_dir,
     );
     let parsed_json: serde_json::Value = serde_json::from_slice(&json_output.stdout)
         .expect("protocol-binding check json should parse");
-    let json_status = parsed_json["status"].as_str().expect("status should be string");
+    let json_status = parsed_json["status"]
+        .as_str()
+        .expect("status should be string");
     assert_eq!(plain_status, json_status);
     let json_blockers = parsed_json["blocker_codes"]
         .as_array()
         .expect("json blocker_codes should be array")
         .iter()
-        .map(|value|
+        .map(|value| {
             value
                 .as_str()
                 .expect("blocker code should be string")
                 .to_string()
-        )
+        })
         .collect::<Vec<_>>();
     assert_eq!(plain_blockers, json_blockers);
     let json_next_actions = parsed_json["next_actions"]
         .as_array()
         .expect("json next_actions should be array")
         .iter()
-        .map(|value|
+        .map(|value| {
             value
                 .as_str()
                 .expect("next action should be string")
                 .to_string()
-        )
+        })
         .collect::<Vec<_>>();
     assert_eq!(plain_next_actions, json_next_actions);
     assert_eq!(plain_shared_fields, parsed_json["shared_fields"]);
@@ -1881,7 +2105,9 @@ fn cross_surface_protocol_binding_blocker_parity() {
         "consume final should keep protocol-binding blockers in closure admission"
     );
     assert!(
-        consume_blockers.iter().any(|code| code.contains("protocol_binding")),
+        consume_blockers
+            .iter()
+            .any(|code| code.contains("protocol_binding")),
         "consume closure blockers should preserve protocol-binding-family evidence"
     );
 
@@ -1910,13 +2136,14 @@ fn protocol_binding_operator_contract_parity() {
         "operator_contracts.status must stay canonical with protocol-binding blocker count before sync"
     );
     assert_eq!(
-        initial_status_json["status"],
-        initial_status_json["operator_contracts"]["status"],
+        initial_status_json["status"], initial_status_json["operator_contracts"]["status"],
         "top-level status must mirror the operator contract status before sync"
     );
 
-    let initial_pb_status_json =
-        run_command_json(&["taskflow", "protocol-binding", "status", "--json"], &state_dir);
+    let initial_pb_status_json = run_command_json(
+        &["taskflow", "protocol-binding", "status", "--json"],
+        &state_dir,
+    );
     let pb_summary = &initial_pb_status_json["summary"];
     let pb_blocking = pb_summary["blocking_issue_count"]
         .as_u64()
@@ -1946,18 +2173,18 @@ fn protocol_binding_operator_contract_parity() {
         "canonical protocol-binding parity requires zero blockers after sync"
     );
     assert_eq!(
-        post_sync_status_json["operator_contracts"]["status"],
-        "pass",
+        post_sync_status_json["operator_contracts"]["status"], "pass",
         "operator_contracts.status must be pass once protocol-binding blockers clear"
     );
     assert_eq!(
-        post_sync_status_json["status"],
-        post_sync_status_json["operator_contracts"]["status"],
+        post_sync_status_json["status"], post_sync_status_json["operator_contracts"]["status"],
         "top-level status must mirror the operator contract once blockers clear"
     );
 
-    let post_sync_pb_status_json =
-        run_command_json(&["taskflow", "protocol-binding", "status", "--json"], &state_dir);
+    let post_sync_pb_status_json = run_command_json(
+        &["taskflow", "protocol-binding", "status", "--json"],
+        &state_dir,
+    );
     assert_eq!(
         post_sync_pb_status_json["summary"]["blocking_issue_count"],
         post_sync_status_json["protocol_binding"]["blocking_issue_count"],
