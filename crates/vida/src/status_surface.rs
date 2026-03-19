@@ -354,9 +354,21 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             )
                         });
                 let status_project_root = super::resolve_status_project_root(store.root());
-                let host_agents = status_project_root
+                let mut host_agents = status_project_root
                     .as_deref()
                     .and_then(build_host_agent_status_summary);
+                let root_session_write_guard =
+                    root_session_write_guard_summary_from_snapshot_path(
+                        runtime_consumption.latest_snapshot_path.as_deref(),
+                    );
+                if let Some(host_agents_value) = host_agents.as_mut() {
+                    if let Some(object) = host_agents_value.as_object_mut() {
+                        object.insert(
+                            "root_session_write_guard".to_string(),
+                            root_session_write_guard.clone(),
+                        );
+                    }
+                }
                 let activation_truth = status_project_root.as_deref().map(|project_root| {
                     super::project_activator_surface::canonical_project_activation_status_truth(
                         project_root,
@@ -371,6 +383,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let project_activation_pending = project_activation_status == Some("pending");
                 if as_json {
                     let mut operator_blocker_codes: Vec<String> = Vec::new();
+                    if root_session_write_guard["status"].as_str() != Some("blocked_by_default") {
+                        operator_blocker_codes
+                            .push("missing_root_session_write_guard".to_string());
+                    }
                     if boot_compatibility
                         .as_ref()
                         .is_some_and(|compatibility| compatibility.classification != "compatible")
@@ -531,6 +547,15 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 .to_string(),
                         );
                     }
+                    if operator_blocker_codes
+                        .iter()
+                        .any(|code| code == "missing_root_session_write_guard")
+                    {
+                        operator_next_actions.push(
+                            "Run `vida taskflow consume final <request> --json` again and confirm runtime artifacts expose the canonical root-session pre-write guard."
+                                .to_string(),
+                        );
+                    }
                     let operator_artifact_refs = serde_json::json!({
                         "runtime_consumption_latest_snapshot_path": runtime_consumption.latest_snapshot_path,
                         "latest_run_graph_dispatch_receipt_id": latest_run_graph_dispatch_receipt
@@ -543,6 +568,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         "effective_instruction_bundle_receipt_id": effective_bundle_receipt
                             .as_ref()
                             .map(|receipt| receipt.receipt_id.clone()),
+                        "root_session_write_guard_status": root_session_write_guard["status"].clone(),
                     });
                     let operator_contracts = super::build_release1_operator_contracts_envelope(
                         operator_status,
@@ -641,6 +667,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             ],
                         })),
                         "host_agents": host_agents_json_value(host_agents.as_ref()),
+                        "root_session_write_guard": root_session_write_guard,
                         "latest_run_graph_status": latest_run_graph_status,
                         "latest_run_graph_delegation_gate": latest_run_graph_status.as_ref().map(|status| status.delegation_gate()),
                         "latest_run_graph_recovery": latest_run_graph_recovery,
@@ -913,6 +940,13 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             .unwrap_or_default()
                             .to_string(),
                     );
+                    super::print_surface_line(
+                        render,
+                        "root session write guard",
+                        host_agents["root_session_write_guard"]["status"]
+                            .as_str()
+                            .unwrap_or("missing"),
+                    );
                     if host_agents["external_cli_preflight"]["status"]
                         .as_str()
                         .is_some_and(|value| value == "blocked")
@@ -1114,6 +1148,100 @@ fn build_host_agent_status_summary(project_root: &Path) -> Option<serde_json::Va
             Some(serde_json::Value::Object(payload))
         }
     }
+}
+
+pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
+    snapshot_path: Option<&str>,
+) -> serde_json::Value {
+    let Some(path) = snapshot_path else {
+        return serde_json::json!({
+            "status": "missing",
+            "reason": "runtime_consumption_snapshot_missing",
+            "local_write_requires_exception_path": serde_json::Value::Null,
+            "required_exception_evidence": serde_json::Value::Null,
+        });
+    };
+    let snapshot = super::read_json_file_if_present(Path::new(path));
+    let Some(snapshot) = snapshot else {
+        return serde_json::json!({
+            "status": "missing",
+            "reason": "runtime_consumption_snapshot_unreadable",
+            "local_write_requires_exception_path": serde_json::Value::Null,
+            "required_exception_evidence": serde_json::Value::Null,
+        });
+    };
+    let mut guard = runtime_root_session_write_guard_from_snapshot(&snapshot);
+    if guard.is_none() {
+        if let Some(path) = latest_final_runtime_snapshot_path(Path::new(path)) {
+            if let Some(fallback_snapshot) = super::read_json_file_if_present(&path) {
+                guard = runtime_root_session_write_guard_from_snapshot(&fallback_snapshot);
+            }
+        }
+    }
+    let guard = guard.unwrap_or(serde_json::Value::Null);
+    let guard_ok = super::has_runtime_root_session_write_guard(&guard);
+    serde_json::json!({
+        "status": if guard_ok { "blocked_by_default" } else { "missing" },
+        "reason": if guard_ok { serde_json::Value::Null } else { serde_json::Value::String("missing_root_session_write_guard".to_string()) },
+        "root_session_role": guard["root_session_role"].clone(),
+        "local_write_requires_exception_path": guard["local_write_requires_exception_path"].clone(),
+        "required_exception_evidence": guard["required_exception_evidence"].clone(),
+        "pre_write_checkpoint_required": guard["pre_write_checkpoint_required"].clone(),
+    })
+}
+
+fn runtime_root_session_write_guard_from_snapshot(snapshot: &serde_json::Value) -> Option<serde_json::Value> {
+    let direct_guard = &snapshot["payload"]["role_selection"]["execution_plan"]["root_session_write_guard"];
+    if super::has_runtime_root_session_write_guard(direct_guard) {
+        return Some(direct_guard.clone());
+    }
+    let execution_plan_contract_guard = &snapshot["payload"]["role_selection"]["execution_plan"]
+        ["orchestration_contract"]["root_session_write_guard"];
+    if super::has_runtime_root_session_write_guard(execution_plan_contract_guard) {
+        return Some(execution_plan_contract_guard.clone());
+    }
+
+    let dispatch_packet_path = snapshot["source_dispatch_packet_path"]
+        .as_str()
+        .or_else(|| snapshot["dispatch_receipt"]["dispatch_packet_path"].as_str())?;
+    let packet = super::read_json_file_if_present(Path::new(dispatch_packet_path))?;
+    let packet_guard = &packet["root_session_write_guard"];
+    if super::has_runtime_root_session_write_guard(packet_guard) {
+        return Some(packet_guard.clone());
+    }
+    let packet_contract_guard = &packet["orchestration_contract"]["root_session_write_guard"];
+    if super::has_runtime_root_session_write_guard(packet_contract_guard) {
+        return Some(packet_contract_guard.clone());
+    }
+
+    None
+}
+
+fn latest_final_runtime_snapshot_path(latest_snapshot_path: &Path) -> Option<std::path::PathBuf> {
+    let snapshot_dir = latest_snapshot_path.parent()?;
+    let mut latest_final: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    for entry in std::fs::read_dir(snapshot_dir).ok()?.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !file_name.starts_with("final-") {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        match &latest_final {
+            Some((latest_modified, _)) if modified <= *latest_modified => {}
+            _ => latest_final = Some((modified, path)),
+        }
+    }
+    latest_final.map(|(_, path)| path)
 }
 
 fn host_cli_system_entry_summary(

@@ -480,8 +480,7 @@ pub(crate) fn taskflow_consume_bundle_check(
     let activation_pending = orchestrator_activation_pending
         || agent_activation_pending
         || project_activation_truth_is_pending(payload).unwrap_or(false);
-    let activation_status =
-        canonical_activation_status(None, activation_pending).to_string();
+    let activation_status = canonical_activation_status(None, activation_pending).to_string();
 
     TaskflowConsumeBundleCheck {
         ok: blockers.is_empty(),
@@ -495,15 +494,50 @@ pub(crate) fn taskflow_consume_bundle_check(
 }
 
 fn project_activation_truth_is_pending(payload: &TaskflowConsumeBundlePayload) -> Option<bool> {
-    let project_root = std::env::var("VIDA_ROOT")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| payload.launcher_runtime_paths.project_root.clone());
-    let truth =
-        crate::project_activator_surface::canonical_project_activation_status_truth(Path::new(
-            &project_root,
-        ));
+    let project_root = activation_truth_project_root(payload, std::env::var("VIDA_ROOT").ok());
+    let truth = crate::project_activator_surface::canonical_project_activation_status_truth(
+        Path::new(&project_root),
+    );
     Some(truth.activation_pending || truth.status == "pending")
+}
+
+fn activation_truth_project_root(
+    payload: &TaskflowConsumeBundlePayload,
+    vida_root_override: Option<String>,
+) -> String {
+    let launcher_root = payload.launcher_runtime_paths.project_root.trim();
+    let payload_root = payload.vida_root.trim();
+    let fallback_root = if launcher_root.is_empty() {
+        payload_root
+    } else {
+        launcher_root
+    };
+
+    let Some(override_root) = vida_root_override
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return fallback_root.to_string();
+    };
+
+    if runtime_roots_equivalent(fallback_root, &override_root) {
+        return override_root;
+    }
+
+    fallback_root.to_string()
+}
+
+fn runtime_roots_equivalent(left: &str, right: &str) -> bool {
+    if left == right {
+        return true;
+    }
+    match (
+        std::fs::canonicalize(Path::new(left)),
+        std::fs::canonicalize(Path::new(right)),
+    ) {
+        (Ok(left_canonical), Ok(right_canonical)) => left_canonical == right_canonical,
+        _ => false,
+    }
 }
 
 fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -> Vec<String> {
@@ -1312,10 +1346,11 @@ fn non_orchestrator_roles(activation_bundle: &serde_json::Value) -> Vec<String> 
 #[cfg(test)]
 mod tests {
     use super::{
-        activation_status_is_pending, cache_contract_consistency_blockers,
-        canonical_project_protocol_projection_status, init_view_activation_is_pending,
-        retrieval_optional_context_boundary_blockers, retrieval_trust_evidence_blockers,
-        taskflow_consume_bundle_check, TaskflowConsumeBundlePayload,
+        activation_status_is_pending, activation_truth_project_root,
+        cache_contract_consistency_blockers, canonical_project_protocol_projection_status,
+        init_view_activation_is_pending, retrieval_optional_context_boundary_blockers,
+        retrieval_trust_evidence_blockers, taskflow_consume_bundle_check,
+        TaskflowConsumeBundlePayload,
     };
     use crate::TASKFLOW_PROTOCOL_BINDING_AUTHORITY;
 
@@ -1783,5 +1818,23 @@ mod tests {
             task_store: serde_json::json!({}),
             run_graph: serde_json::json!({}),
         }
+    }
+
+    #[test]
+    fn activation_truth_project_root_ignores_foreign_vida_root_override() {
+        let payload = minimal_payload_for_cache_checks();
+        let selected = activation_truth_project_root(
+            &payload,
+            Some("/tmp/foreign-runtime-root".to_string()),
+        );
+        assert_eq!(selected, "/tmp/project");
+    }
+
+    #[test]
+    fn activation_truth_project_root_accepts_equivalent_vida_root_override() {
+        let payload = minimal_payload_for_cache_checks();
+        let selected =
+            activation_truth_project_root(&payload, Some("/tmp/project".to_string()));
+        assert_eq!(selected, "/tmp/project");
     }
 }

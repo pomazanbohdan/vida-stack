@@ -1025,6 +1025,11 @@ fn status_json_reports_non_codex_host_agents_summary() {
     let host_agents = &parsed["host_agents"];
     assert_eq!(host_agents["host_cli_system"], "qwen");
     assert_eq!(host_agents["runtime_surface"], ".qwen");
+    assert_eq!(
+        host_agents["root_session_write_guard"]["status"],
+        "missing"
+    );
+    assert_eq!(parsed["root_session_write_guard"]["status"], "missing");
     let runtime_root = host_agents["runtime_root"]
         .as_str()
         .expect("runtime_root present");
@@ -1053,6 +1058,119 @@ fn status_json_reports_non_codex_host_agents_summary() {
     assert_eq!(host_agents["external_cli_preflight"]["status"], "pass");
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
+}
+
+#[test]
+fn status_json_restores_root_session_guard_after_consume_continue_snapshot() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida().arg("boot").env("VIDA_STATE_DIR", &state_dir).output();
+    let boot = boot.expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "{}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+
+    let runtime_consumption_dir = format!("{state_dir}/runtime-consumption");
+    let dispatch_packets_dir = format!("{runtime_consumption_dir}/dispatch-packets");
+    fs::create_dir_all(&dispatch_packets_dir).expect("dispatch packet dir should exist");
+
+    let dispatch_packet_path = format!("{dispatch_packets_dir}/resume-packet.json");
+    fs::write(
+        &dispatch_packet_path,
+        serde_json::json!({
+            "root_session_write_guard": {
+                "status": "blocked_by_default",
+                "root_session_role": "orchestrator",
+                "local_write_requires_exception_path": true,
+                "required_exception_evidence": "exception_path_receipt_id",
+                "pre_write_checkpoint_required": true
+            }
+        })
+        .to_string(),
+    )
+    .expect("dispatch packet should write");
+    fs::write(
+        format!("{runtime_consumption_dir}/final-2026-03-19T00-00-00Z.json"),
+        serde_json::json!({
+            "surface": "vida taskflow consume continue",
+            "source_dispatch_packet_path": dispatch_packet_path
+        })
+        .to_string(),
+    )
+    .expect("final snapshot should write");
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    assert_eq!(status["root_session_write_guard"]["status"], "blocked_by_default");
+    assert_eq!(
+        status["host_agents"]["root_session_write_guard"]["status"],
+        "blocked_by_default"
+    );
+
+    fs::remove_dir_all(state_dir).expect("state dir should be removed");
+}
+
+#[test]
+fn status_json_prefers_latest_final_snapshot_guard_when_latest_snapshot_is_bundle_check() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida().arg("boot").env("VIDA_STATE_DIR", &state_dir).output();
+    let boot = boot.expect("boot should run");
+    assert!(
+        boot.status.success(),
+        "{}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+
+    let runtime_consumption_dir = format!("{state_dir}/runtime-consumption");
+    let dispatch_packets_dir = format!("{runtime_consumption_dir}/dispatch-packets");
+    fs::create_dir_all(&dispatch_packets_dir).expect("dispatch packet dir should exist");
+
+    let dispatch_packet_path = format!("{dispatch_packets_dir}/guard-packet.json");
+    fs::write(
+        &dispatch_packet_path,
+        serde_json::json!({
+            "root_session_write_guard": {
+                "status": "blocked_by_default",
+                "root_session_role": "orchestrator",
+                "local_write_requires_exception_path": true,
+                "required_exception_evidence": "exception_path_receipt_id",
+                "pre_write_checkpoint_required": true
+            }
+        })
+        .to_string(),
+    )
+    .expect("dispatch packet should write");
+    fs::write(
+        format!("{runtime_consumption_dir}/final-2026-03-19T00-00-01Z.json"),
+        serde_json::json!({
+            "surface": "vida taskflow consume continue",
+            "source_dispatch_packet_path": dispatch_packet_path
+        })
+        .to_string(),
+    )
+    .expect("final snapshot should write");
+
+    thread::sleep(Duration::from_millis(15));
+    fs::write(
+        format!("{runtime_consumption_dir}/bundle-check-2026-03-19T00-00-02Z.json"),
+        serde_json::json!({
+            "surface": "vida taskflow consume bundle check",
+            "check": { "ok": true }
+        })
+        .to_string(),
+    )
+    .expect("bundle-check snapshot should write");
+
+    let status = run_command_json(&["status", "--json"], &state_dir);
+    assert_eq!(status["root_session_write_guard"]["status"], "blocked_by_default");
+    assert_eq!(
+        status["host_agents"]["root_session_write_guard"]["status"],
+        "blocked_by_default"
+    );
+
+    fs::remove_dir_all(state_dir).expect("state dir should be removed");
 }
 
 #[test]
