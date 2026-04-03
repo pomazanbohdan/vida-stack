@@ -1,6 +1,6 @@
 # Release 1 Current State
 
-Status: active product execution report (runtime checkpoint refreshed `2026-03-15`)
+Status: active product execution report (runtime checkpoint refreshed `2026-04-03`)
 
 Purpose: record the bounded implementation-reality checkpoint for `Release 1` across `TaskFlow`, `DocFlow`, and the current `vida` launcher shell so execution planning can be based on actual code and proven runtime surfaces rather than architectural intent alone.
 
@@ -57,6 +57,22 @@ Interpretation:
 1. Release 1 is no longer accurately described as runtime-refactor-only work.
 2. Release 1 must now be judged against production trust/control readiness as well as architectural cleanup.
 
+## 1.3 Local Audit Delta Checkpoint (`2026-04-03`)
+
+A fresh code/spec pass for the current workspace sharpens the checkpoint in these bounded ways:
+
+1. root CLI still exposes `status`, `doctor`, `project-activator`, `orchestrator-init`, and `agent-init`, but Release-1 operator surfaces `consume`, `lane`, `approval`, and `recovery` are still routed under `vida taskflow ...` rather than promoted as stable top-level root surfaces.
+2. `crates/vida/src/release1_contracts.rs` currently canonicalizes `lane_status`, `compatibility_class`, and a narrow blocker subset only; the canonically required `workflow_class`, `risk_tier`, `approval_status`, and `gate_level` contract layer is still absent from shared Rust code.
+3. `crates/taskflow-state/src/lib.rs` and `crates/taskflow-contracts/src/lib.rs` remain intentionally thin while most persisted runtime truth, checkpoint, recovery, and projection logic still lives in `crates/vida/src/state_store.rs`; this confirms the shell-carve-out finding rather than weakening it.
+4. activation materialization and filesystem projection are real in `project_activator_surface.rs` and `init_surfaces.rs`, but they still bridge through `vida.config.yaml` and `.vida/project/agent-extensions/**` rather than closing on one clearly family-owned activation/configurator service.
+5. no SierraDB/event-spine adapter or `domain_event` / `projection_checkpoint_record` contract exists in the workspace today; if event-state is introduced it must remain adapter-backed, feature-gated, and subordinate to the current `SurrealDB`-first activation/projection posture.
+6. local proof execution through `cargo run --bin vida -- orchestrator-init` is currently blocked in this environment because the system linker `cc` is missing, so this audit relies on static code/spec inspection plus the checked-in smoke evidence.
+7. the active `vida.config.yaml` already models `host_environment.systems.*` and `agent_system.subagents.*`, but runtime execution still centers on `codex_multi_agent`, `codex_runtime_assignment`, and `vida agent-init`; configured external/internal backends remain mostly declarative.
+8. scaffold/template/init/activator surfaces still drift from the multi-system carrier law: `vida.config.yaml.template`, fallback materialization, generated docs, and readiness checks remain codex-first even when another host system is selected.
+9. activation truth is DB-persisted and read-back verified, but the stored truth is still a launcher-captured snapshot of `vida.config.yaml`, compiled bundle, and pack-router keywords rather than one DB-native configurator authority.
+10. the `TaskFlow -> DocFlow` seam is still assembled in the launcher by in-process `docflow_cli` calls and shell-derived verdict shaping; the current “receipt-backed seam” check proves protocol-binding receipt presence only.
+11. recovery/checkpoint surfaces are meaningful resumability projections, but replay/fork lineage, projection-checkpoint artifacts, and append-only transition history are not implemented; the test suite still encodes codex-era bundle names, backend literals, and exact legacy surfaces.
+
 ## 2. Workspace Reality Snapshot
 
 Current Rust workspace members:
@@ -88,10 +104,13 @@ Current Rust workspace members:
 
 Concentration findings:
 
-1. `crates/vida/src/main.rs` is `15079` lines
-2. `crates/vida/src/state_store.rs` is `8869` lines
-3. the `DocFlow` family is already decomposed into many bounded crates,
-4. the `TaskFlow` family has strong kernel/state foundations, but much runtime behavior still lives in the launcher shell.
+1. `crates/vida/src/state_store.rs` is `11912` lines
+2. `crates/vida/src/main.rs` is `8490` lines
+3. `crates/vida/src/project_activator_surface.rs` is `2686` lines
+4. `crates/vida/src/taskflow_run_graph.rs` is `2231` lines
+5. the `DocFlow` family is already decomposed into many bounded crates,
+6. the `TaskFlow` family has strong kernel/state foundations, but much runtime behavior still lives in the launcher shell,
+7. `taskflow-state` and `taskflow-contracts` are still too thin to be considered the primary owners of the runtime truth currently implemented in the launcher.
 
 ## 3. Readiness Scale
 
@@ -189,11 +208,11 @@ DocFlow summary:
 
 | Release-1 slice | Estimated readiness | Main current reality | Main current gap | Execution priority |
 |---|---:|---|---|---|
-| Slice 1: Operational Spine | 68% | real shell, state, doctor/status, protocol-binding and many taskflow/docflow commands already exist | native ownership is still split across launcher and donors | highest |
-| Slice 2: Project Activation Surface | 54% | law is clear and some shell/config path exists | DB-first activation/configurator closure is not yet stable enough as the sole path | high |
-| Slice 3: Compiled Runtime Bundles | 49% | bundle law and binding law are clear; some runtime surfaces exist | strict compiled bundle runtime closure still trails the law | high |
-| Slice 4: Planning / Execution / Artifact / Approval | 36% | components exist separately | end-to-end durable loop is not yet closed as one slice | medium |
-| Slice 5: Closure And Hardening | 31% | seam and closure rules are now explicit; some runtime proof already exists | restore/reconcile + final seam hardening remains open | highest |
+| Slice 1: Operational Spine | 66% | real shell, state, doctor/status, protocol-binding and many taskflow/docflow commands already exist | native ownership is still split across launcher and donors, and root operator-surface completion is still open | highest |
+| Slice 2: Project Activation Surface | 47% | law is clear and some shell/config path exists | DB-first activation/configurator closure still persists a launcher-captured snapshot and host-system materialization remains codex-first | highest |
+| Slice 3: Compiled Runtime Bundles | 41% | bundle law and binding law are clear; some runtime surfaces exist | compiled runtime identity is still codex-centric and generic dispatch/execution contracts are not closed | highest |
+| Slice 4: Planning / Execution / Artifact / Approval | 30% | components exist separately | end-to-end durable loop is not yet closed as one slice because generic dispatch, shared workflow/risk contracts, and stable `lane` / `approval` surfaces remain incomplete | high |
+| Slice 5: Closure And Hardening | 23% | seam and closure rules are explicit; some runtime proof already exists | seam receipts, replay lineage, append-evidence transition history, and final closure admission remain open | highest |
 
 Release-1 summary:
 
@@ -206,9 +225,9 @@ Release-1 summary:
 
 | Seam segment | Estimated readiness | Current reality | Main gap | Recommended action |
 |---|---:|---|---|---|
-| Segment 1: TaskFlow -> DocFlow activation | 58% | explicit activation exists in `consume final` path | seam is real but still shell-heavy and bridge-shaped | extend and carve out |
-| Segment 2: DocFlow proof return -> TaskFlow closure path | 52% | readiness/proof outputs already exist in `DocFlow` | final native contract for TaskFlow consumption still needs hardening | extend with seam-specific contract tests |
-| Segment 3: Release-1 closure admission | 34% | closure rules are explicit and some proofs exist | final hardening, restore/reconcile, and final admission proof remain open | keep narrow, do not widen scope |
+| Segment 1: TaskFlow -> DocFlow activation | 44% | explicit activation exists in `consume final` path | seam is real but still shell-heavy, bridge-shaped, and lacks an explicit bounded handoff payload into `DocFlow` | extend and carve out |
+| Segment 2: DocFlow proof return -> TaskFlow closure path | 38% | readiness/proof outputs already exist in `DocFlow` | current consume path recomputes DocFlow verdicts from ambient repo state instead of consuming receipt-backed readiness/proof artifacts | extend with seam-specific contract tests and receipt wiring |
+| Segment 3: Release-1 closure admission | 24% | closure rules are explicit and some proofs exist | final closure remains launcher-assembled; replay lineage, restore/reconcile, and closure-admission receipts remain open | keep narrow, do not widen scope |
 
 Seam summary:
 
@@ -254,9 +273,13 @@ The right execution posture is:
 Best immediate next moves:
 
 1. build the first reality-backed execution queue from this report,
-2. isolate launcher concentration tasks for `TaskFlow`,
-3. isolate seam-hardening tasks for Slice 5,
-4. keep `DocFlow` progressing mostly through extension rather than redesign.
+2. freeze one carrier-neutral runtime contract pack before any more agent-backend expansion,
+3. isolate launcher concentration tasks for `TaskFlow`,
+4. isolate seam-hardening and replay-lineage tasks for Slice 5,
+5. keep `DocFlow` progressing mostly through extension rather than redesign,
+6. open one bounded design/spec pack for event-state, projector checkpoints, operator-surface completion, and carrier/runtime neutrality before any backend swap or SierraDB experiment,
+7. rewrite codex-era smoke/golden proofs into carrier-neutral fixtures before changing runtime contracts in code,
+8. restore the local build/proof toolchain (`cc`/linker) so `vida` bootstrap and `docflow` validation can be rerun natively.
 
 ## 11. Confidence Note
 
@@ -276,10 +299,10 @@ Reason:
 artifact_path: product/spec/release-1-current-state
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-15'
+artifact_revision: '2026-04-03'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-current-state.md
 created_at: '2026-03-13T14:12:00+02:00'
-updated_at: 2026-03-16T11:12:01.233256745Z
+updated_at: 2026-04-03T18:40:00+03:00
 changelog_ref: release-1-current-state.changelog.jsonl

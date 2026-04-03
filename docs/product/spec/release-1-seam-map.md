@@ -47,9 +47,9 @@ Status markers:
 
 | Seam segment | Upstream owner | Downstream owner | Trigger | Required inputs | Required outputs | Law status | Implementation status | Proof status | Current blocker |
 |---|---|---|---|---|---|---|---|---|---|
-| Segment 1: Runtime trust handoff | `TaskFlow` Layer 9 | `DocFlow` Layers 7-8 | `TaskFlow` enters direct runtime consumption or final closure path | runtime state, compiled control/bundle state, active canonical inventory, explicit readiness branch activation | readiness verdict, blocking reasons, proof-ready documentation branch | ✅ | 🟡 | 🟡 | native Rust seam still converges while both runtime families are under active modernization |
-| Segment 2: Readiness/proof return | `DocFlow` Layers 7-8 | `TaskFlow` Layer 9 closure path | `DocFlow` finishes bounded readiness/proof evaluation for the requested closure scope | canonical inventory, validation state, relation/readiness artifacts, projection parity where declared | explicit pass/block verdict consumable by `TaskFlow`; no hidden shared state | ✅ | 🟡 | 🟡 | final `docflow-rs` Layer-8-ready seam is not yet closure-proven end-to-end |
-| Segment 3: Product closure admission | `TaskFlow` final closure authority | `Release 1` closure proof | `TaskFlow` receives green downstream readiness/proof and bounded restore/reconcile state | executable runtime state, downstream proof receipts, restore/reconcile discipline, operator closure evidence | Release-1 closure admission or fail-closed blocker | ✅ | ⚪ | ⚪ | final hardening and closure-proof surfaces remain open |
+| Segment 1: Runtime trust handoff | `TaskFlow` Layer 9 | `DocFlow` Layers 7-8 | `TaskFlow` enters direct runtime consumption or final closure path | runtime state, compiled control/bundle state, active canonical inventory, explicit readiness branch activation, bounded seam handoff packet, restore/reconcile context when trust is being re-established | readiness verdict, blocking reasons, proof-ready documentation branch, seam receipt refs | ✅ | 🟡 | 🟡 | native Rust seam still converges while both runtime families are under active modernization |
+| Segment 2: Readiness/proof return | `DocFlow` Layers 7-8 | `TaskFlow` Layer 9 closure path | `DocFlow` finishes bounded readiness/proof evaluation for the requested closure scope | canonical inventory, validation state, relation/readiness artifacts, projection parity where declared, explicit seam request packet | explicit pass/block verdict consumable by `TaskFlow`; readiness/proof receipts; no hidden shared state | ✅ | 🟡 | 🟡 | final `docflow-rs` Layer-8-ready seam is not yet closure-proven end-to-end |
+| Segment 3: Product closure admission | `TaskFlow` final closure authority | `Release 1` closure proof | `TaskFlow` receives green downstream readiness/proof and bounded restore/reconcile state | executable runtime state, downstream proof receipts, restore/reconcile discipline, replay/checkpoint lineage artifacts, operator closure evidence | Release-1 closure admission or fail-closed blocker | ✅ | ⚪ | ⚪ | final hardening and closure-proof surfaces remain open |
 
 Matrix reading rule:
 
@@ -107,13 +107,15 @@ When the seam activates, `TaskFlow` must hand off all of:
 3. compiled control/bundle identity where relevant,
 4. canonical inventory and readiness scope selectors,
 5. explicit request for readiness/proof evaluation,
-6. any restore/reconcile context that changes trust posture.
+6. any restore/reconcile context that changes trust posture,
+7. one bounded seam handoff packet or equivalent machine-readable request artifact.
 
 Input rule:
 
 1. the seam must consume explicit inputs,
 2. it must not rely on hidden transcript inheritance,
-3. it must not infer closure scope from operator intent alone.
+3. it must not infer closure scope from operator intent alone,
+4. ambient repo state alone is insufficient seam input when closure scope or trust posture is being evaluated.
 
 ## 7. Seam Output Contract
 
@@ -122,14 +124,16 @@ Input rule:
 1. explicit readiness/proof verdict,
 2. explicit blocker classes when not green,
 3. bounded proof artifacts or references,
-4. enough machine-readable outcome for `TaskFlow` to continue or fail closed,
-5. no transfer of execution ownership.
+4. readiness/proof receipt refs or equivalent machine-readable receipt artifacts,
+5. enough machine-readable outcome for `TaskFlow` to continue or fail closed,
+6. no transfer of execution ownership.
 
 Output rule:
 
 1. `DocFlow` may resolve readiness and proof,
 2. but it must not claim top-level closure authority,
-3. `TaskFlow` must consume the result explicitly rather than treating documentation state as ambient truth.
+3. `TaskFlow` must consume the result explicitly rather than treating documentation state as ambient truth,
+4. protocol-binding receipt alone is insufficient seam proof.
 
 ## 8. Forbidden Ownership Transfer
 
@@ -156,13 +160,15 @@ Minimum blocker families:
 1. `missing_docflow_activation`
 2. `missing_readiness_verdict`
 3. `missing_inventory_or_projection_evidence`
-4. `restore_reconcile_not_green`
-5. `missing_closure_proof`
-6. `missing_trace_or_audit_evidence`
-7. `missing_tool_policy_or_approval_enforcement`
-8. `missing_retrieval_freshness_or_citation_contract`
-9. `missing_slo_failure_or_rollback_control`
-10. `missing_prompt_or_evaluation_release_gate`
+4. `missing_docflow_receipt`
+5. `restore_reconcile_not_green`
+6. `missing_closure_proof`
+7. `missing_trace_or_audit_evidence`
+8. `missing_tool_policy_or_approval_enforcement`
+9. `missing_retrieval_freshness_or_citation_contract`
+10. `missing_slo_failure_or_rollback_control`
+11. `missing_replay_lineage_or_checkpoint_artifact`
+12. `missing_prompt_or_evaluation_release_gate`
 
 ## 10. Proof Surface
 
@@ -176,7 +182,8 @@ The seam is considered closure-ready only when bounded proof exists across all o
 6. trace/evidence proof for side-effecting or risky workflow classes,
 7. approval/policy proof for sensitive actions,
 8. citation/freshness proof for retrieval-grounded answer classes,
-9. rollback/failure-handling proof for production workflow classes.
+9. rollback/failure-handling proof for production workflow classes,
+10. replay/checkpoint lineage proof when recovery posture is part of the closure claim.
 
 Current proof anchors:
 
@@ -199,18 +206,19 @@ Release 1 is not closure-ready unless all are true:
 3. `TaskFlow` can activate `DocFlow` at the trust/closure boundary,
 4. `DocFlow` can return explicit readiness/proof outputs,
 5. `TaskFlow` remains the final closure authority,
-6. final hardening proofs are green enough to trust the full chain,
-7. mandatory P0 production-baseline tracks are green enough for the workflow classes that Release 1 claims to support,
-8. any still-open P1 control track is explicitly bounded in scope and not silently assumed complete.
+6. seam outputs include explicit receipt/proof artifacts rather than protocol-binding evidence alone,
+7. final hardening proofs are green enough to trust the full chain,
+8. mandatory P0 production-baseline tracks are green enough for the workflow classes that Release 1 claims to support,
+9. any still-open P1 control track is explicitly bounded in scope and not silently assumed complete.
 
 -----
 artifact_path: product/spec/release-1-seam-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-13'
+artifact_revision: '2026-04-03'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-seam-map.md
 created_at: '2026-03-13T13:42:00+02:00'
-updated_at: 2026-03-16T11:28:28.675452672Z
+updated_at: 2026-04-03T19:05:00+03:00
 changelog_ref: release-1-seam-map.changelog.jsonl

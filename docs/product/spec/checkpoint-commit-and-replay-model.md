@@ -1,10 +1,10 @@
 # VIDA Checkpoint Commit And Replay Model
 
-Status: draft `v1` bounded runtime artifact
+Status: active Release-1 implementation law
 
-Revision: `2026-03-09`
+Revision: `2026-04-03`
 
-Purpose: define the future lawful shape for checkpoint commit progression, delayed checkpoint writes, replay, and fork lineage without confusing those runtime concerns with canonical state or receipt history.
+Purpose: define the lawful shape for checkpoint commit progression, resumability capsules, delayed checkpoint writes, replay, and fork lineage without confusing those runtime concerns with canonical state or receipt history.
 
 ## 1. Scope
 
@@ -13,9 +13,10 @@ This artifact defines:
 1. checkpoint hint vs checkpoint commit,
 2. grouped projection checkpoint advancement,
 3. delayed checkpoint write handling,
-4. replay and fork lineage boundaries,
-5. idempotency expectations when reprocessing occurs,
-6. bounded continuation packet expectations for resumable execution.
+4. resumability capsule boundaries,
+5. replay and fork lineage boundaries,
+6. idempotency expectations when reprocessing occurs,
+7. bounded continuation packet expectations for resumable execution.
 
 It does not define:
 
@@ -40,7 +41,17 @@ Rule:
 2. checkpoint commit may be receipt-backed when decision-relevant,
 3. checkpoint commit does not itself mutate canonical machine state.
 
-### 2.3 Replay
+### 2.3 Resumability Capsule
+
+A resumability capsule is the smallest bounded continuation summary needed to resume one active runtime path.
+
+Rule:
+
+1. a resumability capsule is not a substitute for checkpoint-commit lineage,
+2. latest resumability state is a derived runtime surface, not the full replay history,
+3. recovery summaries may read from resumability state, but they must not claim checkpoint/replay closure without persisted checkpoint lineage.
+
+### 2.4 Replay
 
 Replay is a runtime action that reprocesses historical events, receipts, or proof-linked snapshots in order to rebuild projections or reproduce evidence.
 
@@ -50,7 +61,7 @@ Rule:
 2. replay must not rewrite canonical history,
 3. replay must have explicit lineage distinct from the original live pass.
 
-### 2.4 Fork
+### 2.5 Fork
 
 Fork is a replay-derived alternate runtime branch used for debugging, proving, or controlled recovery.
 
@@ -60,9 +71,9 @@ Rule:
 2. forks do not replace the original live lineage,
 3. fork output must be clearly marked as derived/debug unless explicitly promoted by future law.
 
-## 3. Future Direction
+## 3. Release-1 Required Shape
 
-The kernel accepts as future direction:
+Release 1 requires all of:
 
 1. gap-less checkpoint commit progression,
 2. grouped projection checkpoint advancement,
@@ -71,16 +82,36 @@ The kernel accepts as future direction:
 5. replay from checkpoint for projection rebuild,
 6. fork-from-checkpoint for doctor/debug/proof reproduction.
 7. durable execution semantics that distinguish replay-safe from non-replay-safe side effects.
+8. explicit distinction between checkpoint-commit artifacts and latest resumability summaries.
 
-## 4. Candidate Laws
+## 4. Required Laws
 
 ### 4.1 Gap-Less Commit
 
-When events are processed out of order or grouped across handlers, the committed checkpoint should advance only to the last gap-less known safe position.
+When events are processed out of order or grouped across handlers, the committed checkpoint must advance only to the last gap-less known safe position.
 
 ### 4.2 Grouped Projection Advancement
 
-If multiple projections must remain consistent, their shared checkpoint group should advance together or remain uncommitted.
+If multiple projections must remain consistent, their shared checkpoint group must advance together or remain uncommitted.
+
+Minimum persisted checkpoint-commit fields:
+
+1. `projector_id`
+2. `checkpoint_group`
+3. `last_gapless_position`
+4. `updated_at`
+
+Replay-required lineage fields:
+
+1. `lineage_kind`
+2. `origin_checkpoint_ref`
+3. `replay_scope`
+4. `fork_parent` when applicable
+
+Artifact rule:
+
+1. the checkpoint-commit artifact must be distinct from the resumability capsule,
+2. projection/read-model summaries must be derived from persisted checkpoint records rather than replacing them.
 
 ### 4.3 Delayed Write Safety
 
@@ -92,7 +123,7 @@ If handler execution succeeds but checkpoint persistence is delayed or partially
 
 ### 4.4 Replay Lineage
 
-Replay runs should carry:
+Replay runs must carry:
 
 1. `lineage_kind`
 2. `origin_checkpoint_ref`
@@ -116,6 +147,13 @@ Rule:
 1. recovery should resume from the smallest lawful bounded node,
 2. exhausted control limits should force replan/escalation rather than blind resume,
 3. replay/fork may reuse the continuation packet, but must preserve derived lineage.
+4. a resumability capsule without checkpoint lineage is insufficient proof for replay closure.
+
+### 4.6 Append-Evidence Transition Rule
+
+1. latest status summaries must not replace append-evidence transition history,
+2. checkpoint/recovery law must be able to point to persisted receipt or transition records for the active run,
+3. upserted latest-row summaries are allowed as query surfaces, but not as the only durable lineage.
 
 ## 5. Mapping To Existing VIDA Surfaces
 
@@ -126,6 +164,12 @@ Rule:
 5. `run_graph` -> practical runtime resume cursor source in the active TaskFlow runtime family
 6. `task_state_telemetry` -> checkpoint-visible continuation packet and compact hydration contract
 
+Mapping rule:
+
+1. `resumability_capsule` is one runtime continuation surface and must not be treated as the checkpoint-commit record itself,
+2. latest `run_graph` recovery/checkpoint summaries are query surfaces and must not be treated as full replay lineage,
+3. proof closure requires distinct checkpoint/replay artifacts when replay lineage is part of the release claim.
+
 ## 6. Invariants
 
 1. root `vida/config` remains product law
@@ -134,6 +178,8 @@ Rule:
 4. grouped projection consistency must not collapse entity ownership
 5. duplicate delivery safety is mandatory once delayed checkpoint commits are introduced
 6. resumability must not require re-deriving bounded execution intent from chat history.
+7. replay/fork lineage must remain visible and queryable,
+8. checkpoint closure must not be claimed from latest resumability summaries alone.
 
 LangGraph alignment note:
 
@@ -144,10 +190,10 @@ LangGraph alignment note:
 artifact_path: product/spec/checkpoint-commit-and-replay-model
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-10'
+artifact_revision: '2026-04-03'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/checkpoint-commit-and-replay-model.md
 created_at: '2026-03-09T12:00:46+02:00'
-updated_at: '2026-03-13T07:44:24+02:00'
+updated_at: '2026-04-03T19:00:00+03:00'
 changelog_ref: checkpoint-commit-and-replay-model.changelog.jsonl

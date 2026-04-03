@@ -228,12 +228,16 @@ Minimum output classes:
 8. required interview inputs still missing for lawful activation.
 9. whether TaskFlow is forbidden while activation remains pending.
 10. which documentation/runtime surface is preferred during activation.
+11. selected host CLI system.
+12. host template materialization mode and runtime root.
+13. current carrier catalog owner and routing posture.
 
 JSON rule:
 
 1. the command should expose a machine-readable `--json` view with the same bounded activation summary,
 2. plain-text and JSON views must agree on status, blockers, and next steps.
 3. the machine-readable view should expose a one-shot example command whenever the remaining activation inputs are small enough to complete in one bounded call.
+4. the machine-readable view must identify whether the selected host/carrier system is fully executable, projection-only, or still blocked on later runtime support.
 
 ## 9. Project Activator Pipeline
 
@@ -244,6 +248,7 @@ The canonical activator pipeline is:
    - project identity,
    - language policy,
    - supported host CLI system,
+   - when applicable, the intended carrier/routing posture for the selected host system,
 3. record the current project structure into the sidecar/project-doc layer,
 4. build or refresh the minimum project documentation map and docs roots using safe defaults where the framework owns the default,
 5. inspect the current environment and runtime posture,
@@ -251,6 +256,12 @@ The canonical activator pipeline is:
 7. log the activation mutation under `.vida/receipts/`,
 8. tell the user to restart the tool after agent-environment initialization when required,
 9. continue later into richer project/task/roles/skills/profiles/flows slices as those capabilities become available.
+
+Host-carrier rule:
+
+1. the selected host CLI system must come from the configured supported host-system set,
+2. host-system identity and carrier metadata must remain config-driven rather than launcher-hardcoded,
+3. bootstrap/materialization must not treat one host system as the canonical default owner for all projects once the configured host-system registry is present.
 
 Pipeline staging rule:
 
@@ -331,25 +342,49 @@ Rule:
 
 The activator must support initialization of the current host LLM-tool environment from available templates.
 
+Canonical host-system registry:
+
+1. supported host systems are owned by `vida.config.yaml -> host_environment.systems`,
+2. per-system carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers`,
+3. per-system runtime roots and materialization modes are owned by the same host-system registry entry,
+4. compatibility carrier sources may exist for one host system, but they must not remain the sole canonical runtime-carrier schema.
+
 Operator step:
 
 1. ask which host environment/template is in use from the currently available supported list,
 2. initialize that host template in system/runtime state,
 3. record which host environment is active.
 
-Current known template:
+Current built-in template families:
 
 1. `Codex`
+2. `Qwen`
+3. `Kilo`
+4. `OpenCode`
 
 Framework ownership rule:
 
 1. host CLI selection/materialization is framework-owned and must route through `runtime-instructions/work.host-cli-agent-setup-protocol`,
-2. project-local guides such as `docs/process/codex-agent-configuration-guide.md` may tune the selected tool, but they are not the framework owner for choosing or materializing the template.
+2. project-local guides such as `docs/process/agent-system.md` or a selected-host tuning guide may tune the selected tool, but they are not the framework owner for choosing or materializing the template.
+3. generated docs, readiness checks, and activation reports must be host-neutral or selected-host-specific; they must not require a Codex-branded guide when another host system is selected.
+
+Materialization rule:
+
+1. the activator must materialize the selected host system generically from the configured host-system registry,
+2. non-selected host systems must not be treated as missing activation blockers,
+3. `copy_tree_only`, rendered-catalog, and future materialization modes are implementation details of the selected host system, not proof that one vendor owns the bootstrap law.
+
+Carrier-routing rule:
+
+1. activation must surface the selected host system together with the configured carrier/routing posture,
+2. `agent_system.subagents` and routing posture are part of activation truth and must be visible to the operator,
+3. activation must fail closed if the selected host system is materialized but the configured carrier/runtime posture cannot be interpreted lawfully.
 
 Post-init rule:
 
 1. when full host-agent initialization requires a fresh session, the activator must tell the user to exit and re-run the tool.
-2. for `Codex`, the activator must explicitly say to close and restart Codex after `.codex/**` is materialized so agents become visible in the runtime execution environment.
+2. the restart note must be tied to the selected host system rather than treated as Codex-only owner law.
+3. for `Codex`, the activator should explicitly say to close and restart Codex after `.codex/**` is materialized so agents become visible in the runtime execution environment.
 
 ## 15. Future Activation Interview
 
@@ -400,10 +435,10 @@ This model is closed enough when:
 artifact_path: product/spec/bootstrap-carriers-and-project-activator-model
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-14'
+artifact_revision: '2026-04-03'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/bootstrap-carriers-and-project-activator-model.md
 created_at: '2026-03-12T22:20:00+02:00'
-updated_at: 2026-03-14T12:05:10.552348476Z
+updated_at: 2026-04-03T19:00:00+03:00
 changelog_ref: bootstrap-carriers-and-project-activator-model.changelog.jsonl

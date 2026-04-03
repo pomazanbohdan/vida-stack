@@ -31,7 +31,9 @@ Release 1 closes only when all of the following are true:
 4. mandatory P0 production-baseline tracks are green enough for each supported risky workflow class,
 5. any still-open P1 control-maturity track is explicitly bounded and explicitly risk-accepted or explicitly out of the supported workflow surface,
 6. no required proof depends on hidden transcript state or operator memory,
-7. all closure evidence exists as canonical artifacts or receipts.
+7. all closure evidence exists as canonical artifacts or receipts,
+8. seam proof includes explicit `DocFlow` readiness/proof receipts and not only protocol-binding evidence,
+9. any claimed recovery or rollback posture is backed by replay/checkpoint lineage artifacts rather than latest resumability summaries alone.
 
 Compact rule:
 
@@ -69,7 +71,8 @@ A bounded Release-1 slice is `implemented` only when all are true:
 2. code/runtime surfaces exist in the bounded owner files,
 3. required operator surfaces are present,
 4. required receipts/artifacts can be materialized,
-5. no hidden manual step is required to make the slice appear complete.
+5. no hidden manual step is required to make the slice appear complete,
+6. compatibility-only nested surfaces are not being passed off as the canonical root operator contract.
 
 ### 4.2 Proven
 
@@ -79,7 +82,8 @@ A bounded Release-1 slice is `proven` only when all are true:
 2. required runtime/operator proofs exist,
 3. seam-facing behavior is exercised where the slice claims seam relevance,
 4. trace/evidence artifacts exist for risky or side-effecting paths in scope,
-5. current-state and capability/seam surfaces can explain the actual posture without contradiction.
+5. current-state and capability/seam surfaces can explain the actual posture without contradiction,
+6. closure-facing seams and recovery claims are receipt-backed and lineage-backed where the owner docs require them.
 
 ### 4.3 Risk Accepted
 
@@ -100,7 +104,8 @@ Release 1 is `closed` only when:
 2. all non-waivable blockers are absent,
 3. all required P0 tracks are proven for supported risky workflows,
 4. all open P1 tracks are either proven or explicitly risk-accepted,
-5. final closure admission is explicit and receipt-backed.
+5. final closure admission is explicit and receipt-backed,
+6. carrier/runtime contracts, root operator surfaces, seam receipts, and replay/checkpoint lineage are closed enough for the supported workflow surface.
 
 ## 5. Non-Waivable Blockers
 
@@ -114,7 +119,9 @@ The following may not be silently waived for Release-1 closure:
 6. missing citation/freshness contract for supported retrieval-grounded workflows,
 7. missing tool contract normalization for supported tool-using workflows,
 8. hidden exception paths that bypass receipt-governed ownership,
-9. owner-doc contradiction between plan, matrix, seam map, and current-state checkpoint.
+9. owner-doc contradiction between plan, matrix, seam map, and current-state checkpoint,
+10. seam proof that relies only on protocol-binding evidence without `DocFlow` readiness/proof receipts,
+11. recovery/rollback closure that relies only on latest resumability summaries without replay/checkpoint lineage artifacts.
 
 ## 6. Risk Acceptance Law
 
@@ -151,7 +158,8 @@ The Release-1 closure bundle must contain or reference all of:
 7. canonical artifact-schema contract
 8. runtime readiness and proof receipts
 9. trace/evidence exports for supported risky workflow classes
-10. explicit closure admission verdict
+10. replay/checkpoint lineage artifacts where recovery posture is part of the supported workflow surface
+11. explicit closure admission verdict
 
 Evidence rule:
 
@@ -167,7 +175,9 @@ Release 1 must not close by:
 3. “the metrics are implied” without explicit gate definitions,
 4. “risk is acceptable” without explicit bounded acceptance,
 5. “the orchestrator can compensate manually” for missing runtime governance,
-6. “the docs say it should” when current-state evidence says otherwise.
+6. “the docs say it should” when current-state evidence says otherwise,
+7. “protocol-binding is green” when seam-facing `DocFlow` readiness/proof receipts are still missing,
+8. “recovery exists” when only latest resumability summaries exist without replay/checkpoint lineage.
 
 ## 9. Owner Links
 
@@ -198,10 +208,10 @@ This contract binds directly to:
 artifact_path: product/spec/release-1-closure-contract
 artifact_type: product_spec
 artifact_version: 1
-artifact_revision: 2026-03-16
+artifact_revision: 2026-04-03
 schema_version: 1
 status: canonical
 source_path: docs/product/spec/release-1-closure-contract.md
 created_at: 2026-03-16T11:16:55.780492225Z
-updated_at: 2026-03-16T11:28:28.647878266Z
+updated_at: 2026-04-03T19:05:00+03:00
 changelog_ref: release-1-closure-contract.changelog.jsonl

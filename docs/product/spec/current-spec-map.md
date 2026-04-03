@@ -2,7 +2,7 @@
 
 Status: active canonical map
 
-Revision: `2026-03-16`
+Revision: `2026-04-03`
 
 Purpose: define the current product-spec home, provide a short active registry of product-law artifacts, and route detailed source lineage to the provenance companion map.
 
@@ -129,61 +129,64 @@ Companion rule:
 1. [release-1-plan.md](release-1-plan.md)
    Config families: Release-1 execution ownership, mandatory capability closure, V1 target architecture, crate/file decomposition, stateful agent-lane governance, phase ordering, and platform-shape preservation
    Registered path: `docs/product/spec/release-1-plan.md`
-2. [release-1-capability-matrix.md](release-1-capability-matrix.md)
+2. [release-1-event-state-and-projection-topology-design.md](release-1-event-state-and-projection-topology-design.md)
+   Config families: bounded event-state topology, projection-checkpoint contracts, replay/resumability alignment, optional feature-gated event backend posture, and SurrealDB-first projection authority for Release 1
+   Registered path: `docs/product/spec/release-1-event-state-and-projection-topology-design.md`
+3. [release-1-capability-matrix.md](release-1-capability-matrix.md)
    Config families: Release-1 capability ladder, cross-track closure, slice mapping, proof surfaces, and fail-closed seam ownership
    Registered path: `docs/product/spec/release-1-capability-matrix.md`
-3. [release-1-seam-map.md](release-1-seam-map.md)
+4. [release-1-seam-map.md](release-1-seam-map.md)
    Config families: Release-1 closure seam, TaskFlow-to-DocFlow activation/proof return, blocker classes, and final hardening admission
    Registered path: `docs/product/spec/release-1-seam-map.md`
-4. [release-1-current-state.md](release-1-current-state.md)
+5. [release-1-current-state.md](release-1-current-state.md)
    Config families: Release-1 readiness by slice/layer/seam, keep-versus-refactor posture, launcher concentration risk, and current state inputs
    Registered path: `docs/product/spec/release-1-current-state.md`
-5. [release-1-closure-contract.md](release-1-closure-contract.md)
+6. [release-1-closure-contract.md](release-1-closure-contract.md)
    Config families: Release-1 definition of done, non-waivable blockers, risk-acceptance law, and closure evidence bundle
    Registered path: `docs/product/spec/release-1-closure-contract.md`
-6. [release-1-workflow-classification-and-risk-matrix.md](release-1-workflow-classification-and-risk-matrix.md)
+7. [release-1-workflow-classification-and-risk-matrix.md](release-1-workflow-classification-and-risk-matrix.md)
    Config families: Release-1 workflow classes, risk tiers, approval posture, lifecycle variants, and supported workflow surface
    Registered path: `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
-7. [release-1-control-metrics-and-gates.md](release-1-control-metrics-and-gates.md)
+8. [release-1-control-metrics-and-gates.md](release-1-control-metrics-and-gates.md)
    Config families: Release-1 control metrics, gate thresholds, release-candidate evidence windows, and workflow-tier gate binding
    Registered path: `docs/product/spec/release-1-control-metrics-and-gates.md`
-8. [release-1-canonical-artifact-schemas.md](release-1-canonical-artifact-schemas.md)
+9. [release-1-canonical-artifact-schemas.md](release-1-canonical-artifact-schemas.md)
    Config families: Release-1 minimum machine-readable contracts for traces, approvals, tool contracts, evaluation runs, incidents, memory records, and closure admission
    Registered path: `docs/product/spec/release-1-canonical-artifact-schemas.md`
-9. [release-1-decision-tables.md](release-1-decision-tables.md)
+10. [release-1-decision-tables.md](release-1-decision-tables.md)
    Config families: Release-1 executable control rules for approval, delegation, tool use, retrieval trust, memory writes, and rollback gates
    Registered path: `docs/product/spec/release-1-decision-tables.md`
-10. [release-1-state-machine-specs.md](release-1-state-machine-specs.md)
+11. [release-1-state-machine-specs.md](release-1-state-machine-specs.md)
    Config families: Release-1 canonical FSMs for lanes, approvals, tools, incidents, and prompt rollout
    Registered path: `docs/product/spec/release-1-state-machine-specs.md`
-11. [release-1-error-and-exception-taxonomy.md](release-1-error-and-exception-taxonomy.md)
+12. [release-1-error-and-exception-taxonomy.md](release-1-error-and-exception-taxonomy.md)
    Config families: Release-1 blocker codes, failure vocabulary, and exception-path taxonomy
    Registered path: `docs/product/spec/release-1-error-and-exception-taxonomy.md`
-12. [release-1-ownership-to-code-map.md](release-1-ownership-to-code-map.md)
+13. [release-1-ownership-to-code-map.md](release-1-ownership-to-code-map.md)
    Config families: Release-1 owner-doc to crate/module placement, shell boundary discipline, and anti-drift ownership mapping
    Registered path: `docs/product/spec/release-1-ownership-to-code-map.md`
-13. [release-1-proof-scenario-catalog.md](release-1-proof-scenario-catalog.md)
+14. [release-1-proof-scenario-catalog.md](release-1-proof-scenario-catalog.md)
    Config families: Release-1 minimum proof scenarios, negative-control scenarios, and scenario evidence requirements
    Registered path: `docs/product/spec/release-1-proof-scenario-catalog.md`
-14. [release-1-schema-versioning-and-compatibility-law.md](release-1-schema-versioning-and-compatibility-law.md)
+15. [release-1-schema-versioning-and-compatibility-law.md](release-1-schema-versioning-and-compatibility-law.md)
    Config families: Release-1 artifact schema evolution, compatibility classes, mixed-version rules, and migration law
    Registered path: `docs/product/spec/release-1-schema-versioning-and-compatibility-law.md`
-15. [release-1-runtime-enum-and-code-contracts.md](release-1-runtime-enum-and-code-contracts.md)
+16. [release-1-runtime-enum-and-code-contracts.md](release-1-runtime-enum-and-code-contracts.md)
    Config families: Release-1 canonical enum/value contracts for workflow classes, risk tiers, statuses, gate levels, blocker codes, and compatibility classes
    Registered path: `docs/product/spec/release-1-runtime-enum-and-code-contracts.md`
-16. [release-1-conformance-matrix.md](release-1-conformance-matrix.md)
+17. [release-1-conformance-matrix.md](release-1-conformance-matrix.md)
    Config families: Release-1 doc-to-code-to-proof mapping, conformance posture, and bounded implementation targets
    Registered path: `docs/product/spec/release-1-conformance-matrix.md`
-17. [release-1-operator-surface-contract.md](release-1-operator-surface-contract.md)
+18. [release-1-operator-surface-contract.md](release-1-operator-surface-contract.md)
    Config families: Release-1 stable operator output contracts for status, doctor, consume, lane, approval, and recovery surfaces
    Registered path: `docs/product/spec/release-1-operator-surface-contract.md`
-18. [release-1-unsupported-surface-contract.md](release-1-unsupported-surface-contract.md)
+19. [release-1-unsupported-surface-contract.md](release-1-unsupported-surface-contract.md)
    Config families: Release-1 unsupported and architecture-reserved surface boundaries and denial posture
    Registered path: `docs/product/spec/release-1-unsupported-surface-contract.md`
-19. [release-1-fixture-and-golden-data-contract.md](release-1-fixture-and-golden-data-contract.md)
+20. [release-1-fixture-and-golden-data-contract.md](release-1-fixture-and-golden-data-contract.md)
    Config families: Release-1 canonical fixtures, golden scenarios, and compatibility-proof sample contracts
    Registered path: `docs/product/spec/release-1-fixture-and-golden-data-contract.md`
-20. [release-1-risk-acceptance-register.md](release-1-risk-acceptance-register.md)
+21. [release-1-risk-acceptance-register.md](release-1-risk-acceptance-register.md)
    Config families: Release-1 explicit open-risk tracking, bounded acceptances, and closure-governance visibility
    Registered path: `docs/product/spec/release-1-risk-acceptance-register.md`
 
@@ -236,10 +239,10 @@ Activation rule:
 artifact_path: product/spec/current-spec-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-16'
+artifact_revision: '2026-04-03'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-03-16T11:34:41.626135419Z
+updated_at: 2026-04-03T09:54:07+03:00
 changelog_ref: current-spec-map.changelog.jsonl

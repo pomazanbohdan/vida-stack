@@ -17,7 +17,7 @@ Structured-template rule:
 - Status: `approved`
 - Release-1 control rule:
   - this document is the active Release-1 execution owner
-  - `release-1-current-state.md`, `release-1-capability-matrix.md`, `release-1-seam-map.md`, `release-1-closure-contract.md`, `release-1-workflow-classification-and-risk-matrix.md`, `release-1-control-metrics-and-gates.md`, `release-1-canonical-artifact-schemas.md`, `release-1-decision-tables.md`, `release-1-state-machine-specs.md`, `release-1-error-and-exception-taxonomy.md`, `release-1-ownership-to-code-map.md`, `release-1-proof-scenario-catalog.md`, `release-1-schema-versioning-and-compatibility-law.md`, `release-1-runtime-enum-and-code-contracts.md`, `release-1-conformance-matrix.md`, `release-1-operator-surface-contract.md`, `release-1-unsupported-surface-contract.md`, `release-1-fixture-and-golden-data-contract.md`, `release-1-risk-acceptance-register.md`, `taskflow-v1-runtime-modernization-plan.md`, and `docflow-v1-runtime-modernization-plan.md` remain active companion surfaces
+  - `release-1-current-state.md`, `release-1-event-state-and-projection-topology-design.md`, `release-1-capability-matrix.md`, `release-1-seam-map.md`, `release-1-closure-contract.md`, `release-1-workflow-classification-and-risk-matrix.md`, `release-1-control-metrics-and-gates.md`, `release-1-canonical-artifact-schemas.md`, `release-1-decision-tables.md`, `release-1-state-machine-specs.md`, `release-1-error-and-exception-taxonomy.md`, `release-1-ownership-to-code-map.md`, `release-1-proof-scenario-catalog.md`, `release-1-schema-versioning-and-compatibility-law.md`, `release-1-runtime-enum-and-code-contracts.md`, `release-1-conformance-matrix.md`, `release-1-operator-surface-contract.md`, `release-1-unsupported-surface-contract.md`, `release-1-fixture-and-golden-data-contract.md`, `release-1-risk-acceptance-register.md`, `taskflow-v1-runtime-modernization-plan.md`, and `docflow-v1-runtime-modernization-plan.md` remain active companion surfaces
 
 ## Current Context
 - Existing system overview: `vida-stack` already has substantial native Rust implementation value across the `TaskFlow` family, the `DocFlow` family, and the `vida` launcher shell, but execution ownership is split across too many plan documents and too much runtime behavior remains concentrated in `crates/vida/**`.
@@ -27,7 +27,12 @@ Structured-template rule:
   - explicit execution-preparation enforcement for code-shaped work
   - broader platform-level contracts and registries beyond shell-local runtime behavior
   - launcher concentration in `crates/vida/src/main.rs` and `crates/vida/src/state_store.rs`
+  - config-driven multi-system carrier law is documented in `vida.config.yaml`, but runtime execution and bundle truth remain codex-centric through `codex_multi_agent`, `codex_runtime_assignment`, and `vida agent-init`
+  - DB-first activation truth is persisted as a launcher-captured snapshot rather than owned by one DB-native configurator service
+  - top-level `consume` / `lane` / `approval` / `recovery` contracts and the full shared enum/value layer remain incomplete
   - final `TaskFlow -> DocFlow -> Release 1 closure` seam hardening
+  - current seam proof is shell-assembled and replay/checkpoint law is resumability-heavy rather than lineage-complete
+  - codex-era fixtures and smoke proofs still pin runtime contracts that must become carrier-neutral
   - first-class evaluation, governance, and registry surfaces aligned with the broader product vision recorded in the Airtable `Vida` base `Spec` table on `2026-03-16`
 
 ## Goal
@@ -52,6 +57,7 @@ Structured-template rule:
   - routing into the capability matrix, seam map, runtime-track plans, and current-state checkpoint
 - Read next by concern:
   - top-level architecture direction: `compiled-autonomous-delivery-runtime-architecture.md`
+  - bounded event-state and projection topology: `release-1-event-state-and-projection-topology-design.md`
   - TaskFlow implementation: `taskflow-v1-runtime-modernization-plan.md`
   - DocFlow implementation: `docflow-v1-runtime-modernization-plan.md`
   - cross-track closure: `release-1-capability-matrix.md`
@@ -99,6 +105,30 @@ Structured-template rule:
     - approval decision
     - evaluation run
     - policy decision
+  - Host carrier selection and dispatch must be config-driven across internal and external backends:
+    - one carrier-neutral runtime contract set
+    - no codex-specific canonical field names in closure-facing runtime artifacts
+    - configured backend execution must not stop at preflight or metadata-only routing
+  - DB-first activation truth must be authoritative:
+    - launcher-captured snapshots are evidence and projection material, not the final owner model
+    - filesystem and YAML remain import/export surfaces, not equal operational truth
+  - Release 1 must expose stable top-level operator contracts for:
+    - `status`
+    - `doctor`
+    - `consume`
+    - `lane`
+    - `approval`
+    - `recovery`
+  - The shared enum/value layer must close for:
+    - `workflow_class`
+    - `risk_tier`
+    - `approval_status`
+    - `gate_level`
+    - `compatibility_class`
+    - canonical blocker registry
+  - The `TaskFlow -> DocFlow` seam must use explicit handoff and receipt/proof artifacts rather than shell-assembled in-process verdicts.
+  - Checkpoint/recovery law must support append-evidence receipts and replay lineage rather than only latest resumability summaries.
+  - Proof fixtures and smoke tests must validate carrier-neutral contracts and operator capabilities rather than codex-era bundle names, backend literals, or exact legacy surfaces.
   - The codebase must converge to a crate/module shape where launcher shell concerns are thin and runtime-family concerns are family-owned.
   - The architecture must leave explicit room for first-class:
     - agent registry
@@ -812,10 +842,10 @@ Will implement / choose:
 artifact_path: product/spec/release-1-plan
 artifact_type: product_spec
 artifact_version: 1
-artifact_revision: 2026-03-16
+artifact_revision: 2026-04-03
 schema_version: 1
 status: canonical
 source_path: docs/product/spec/release-1-plan.md
 created_at: 2026-03-16T07:39:24.117630799Z
-updated_at: 2026-03-16T11:34:41.601646906Z
+updated_at: 2026-04-03T18:40:00+03:00
 changelog_ref: release-1-plan.changelog.jsonl
