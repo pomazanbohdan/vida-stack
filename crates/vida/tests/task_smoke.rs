@@ -1037,6 +1037,9 @@ fn status_json_reports_non_codex_host_agents_summary() {
         "copy_tree_only"
     );
     assert_eq!(system_entry["enabled"].as_bool(), Some(true));
+    assert_eq!(system_entry["carriers"], serde_json::json!({}));
+    assert_eq!(host_agents["agents"], serde_json::json!({}));
+    assert!(host_agents["selection_policy"].is_null());
     assert_eq!(host_agents["external_cli_preflight"]["status"], "pass");
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
