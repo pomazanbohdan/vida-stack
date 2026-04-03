@@ -6452,6 +6452,10 @@ mod tests {
 
         let view = project_activator_surface::build_project_activator_view(harness.path());
         assert_eq!(view["host_environment"]["selected_cli_system"], "codex");
+        assert_eq!(
+            view["host_environment"]["selected_cli_execution_class"],
+            "internal"
+        );
         assert_eq!(view["host_environment"]["template_materialized"], true);
         assert_eq!(view["host_environment"]["runtime_template_root"], ".codex");
         assert_eq!(
@@ -6495,8 +6499,24 @@ mod tests {
 
         let view = project_activator_surface::build_project_activator_view(harness.path());
         assert_eq!(view["host_environment"]["selected_cli_system"], "qwen");
+        assert_eq!(
+            view["host_environment"]["selected_cli_execution_class"],
+            "external"
+        );
         assert_eq!(view["host_environment"]["template_materialized"], true);
         assert_eq!(view["host_environment"]["runtime_template_root"], ".qwen");
+        assert_eq!(
+            view["normal_work_defaults"]["default_agent_topology"],
+            serde_json::json!(["qwen-primary"])
+        );
+        assert_eq!(
+            view["normal_work_defaults"]["carrier_tier_rates"]["qwen"],
+            4
+        );
+        assert_eq!(
+            view["normal_work_defaults"]["carrier_tier_rates"],
+            view["normal_work_defaults"]["codex_tier_rates"]
+        );
         assert!(view["host_environment"]["supported_cli_systems"]
             .as_array()
             .expect("supported cli systems should render")

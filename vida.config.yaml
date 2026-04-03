@@ -96,12 +96,14 @@ host_environment:
   systems:
     codex:
       enabled: false
+      execution_class: internal
       materialization_mode: codex_toml_catalog_render
       template_root: .codex
       runtime_root: .codex
       carriers: *codex_agent_catalog
     qwen:
       enabled: true
+      execution_class: external
       materialization_mode: copy_tree_only
       template_root: .qwen
       runtime_root: .qwen
@@ -119,6 +121,7 @@ host_environment:
             - research
     kilo:
       enabled: true
+      execution_class: external
       materialization_mode: copy_tree_only
       template_root: .kilo
       runtime_root: .kilo
@@ -136,6 +139,7 @@ host_environment:
             - planning
     opencode:
       enabled: true
+      execution_class: external
       materialization_mode: copy_tree_only
       template_root: .opencode
       runtime_root: .opencode

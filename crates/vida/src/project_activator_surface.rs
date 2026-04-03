@@ -209,6 +209,7 @@ fn default_codex_host_cli_entry() -> serde_yaml::Value {
     serde_yaml::from_str(
         r#"
 enabled: true
+execution_class: internal
 template_root: .codex
 runtime_root: .codex
 materialization_mode: codex_toml_catalog_render
@@ -219,7 +220,7 @@ materialization_mode: codex_toml_catalog_render
 
 fn default_copy_tree_host_cli_entry(system: &str) -> serde_yaml::Value {
     serde_yaml::from_str(&format!(
-        "enabled: true\ntemplate_root: .{system}\nruntime_root: .{system}\nmaterialization_mode: copy_tree_only\n"
+        "enabled: true\nexecution_class: external\ntemplate_root: .{system}\nruntime_root: .{system}\nmaterialization_mode: copy_tree_only\n"
     ))
     .unwrap_or(serde_yaml::Value::Null)
 }
@@ -281,6 +282,19 @@ fn host_cli_system_materialization_mode(entry: &serde_yaml::Value, system: &str)
             }
         })
         .to_ascii_lowercase()
+}
+
+pub(crate) fn host_cli_system_execution_class(entry: &serde_yaml::Value, system: &str) -> String {
+    yaml_string(yaml_lookup(entry, &["execution_class"]))
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            if system == "codex" {
+                "internal".to_string()
+            } else {
+                "external".to_string()
+            }
+        })
 }
 
 pub(crate) fn inferred_project_id_candidate(project_root: &Path) -> String {
@@ -1028,6 +1042,72 @@ pub(crate) fn overlay_codex_agent_catalog(config: &serde_yaml::Value) -> Vec<ser
     rows
 }
 
+fn host_cli_entry_carrier_catalog(entry: Option<&serde_yaml::Value>) -> Vec<serde_json::Value> {
+    let Some(serde_yaml::Value::Mapping(carriers)) =
+        entry.and_then(|value| yaml_lookup(value, &["carriers"]))
+    else {
+        return Vec::new();
+    };
+    let mut rows = carriers
+        .iter()
+        .filter_map(|(carrier_id, value)| {
+            let role_id = match carrier_id {
+                serde_yaml::Value::String(text) if !text.trim().is_empty() => text.trim(),
+                _ => return None,
+            };
+            Some(serde_json::json!({
+                "role_id": role_id,
+                "description": yaml_string(yaml_lookup(value, &["description"])).unwrap_or_default(),
+                "config_file": "",
+                "model": yaml_string(yaml_lookup(value, &["model"])).unwrap_or_default(),
+                "model_reasoning_effort": yaml_string(yaml_lookup(value, &["model_reasoning_effort"])).unwrap_or_default(),
+                "sandbox_mode": yaml_string(yaml_lookup(value, &["sandbox_mode"])).unwrap_or_default(),
+                "tier": yaml_string(yaml_lookup(value, &["tier"])).unwrap_or_else(|| role_id.to_string()),
+                "rate": yaml_string(yaml_lookup(value, &["rate"]))
+                    .and_then(|raw| raw.parse::<u64>().ok())
+                    .unwrap_or(0),
+                "reasoning_band": yaml_string(yaml_lookup(value, &["reasoning_band"])).unwrap_or_default(),
+                "default_runtime_role": yaml_string(yaml_lookup(value, &["default_runtime_role"])).unwrap_or_default(),
+                "runtime_roles": yaml_string_list(yaml_lookup(value, &["runtime_roles"])),
+                "task_classes": yaml_string_list(yaml_lookup(value, &["task_classes"])),
+            }))
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        left["rate"]
+            .as_u64()
+            .unwrap_or(u64::MAX)
+            .cmp(&right["rate"].as_u64().unwrap_or(u64::MAX))
+            .then_with(|| {
+                left["role_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .cmp(right["role_id"].as_str().unwrap_or_default())
+            })
+    });
+    rows
+}
+
+fn synthesized_host_cli_carrier_catalog(system: &str) -> Vec<serde_json::Value> {
+    if system.trim().is_empty() || system.eq_ignore_ascii_case("codex") {
+        return Vec::new();
+    }
+    vec![serde_json::json!({
+        "role_id": format!("{system}-primary"),
+        "description": format!("Placeholder carrier for the {system} host system."),
+        "config_file": "",
+        "model": "",
+        "model_reasoning_effort": "",
+        "sandbox_mode": "",
+        "tier": system,
+        "rate": 4,
+        "reasoning_band": "medium",
+        "default_runtime_role": "worker",
+        "runtime_roles": ["worker"],
+        "task_classes": ["implementation", "research"],
+    })]
+}
+
 pub(crate) fn materialize_codex_dispatch_alias_catalog(
     configured_aliases: &[serde_json::Value],
     agent_catalog: &[serde_json::Value],
@@ -1374,6 +1454,9 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     let host_cli_materialization_mode = selected_host_cli_system.as_deref().and_then(|system| {
         host_cli_system_entry.map(|entry| host_cli_system_materialization_mode(entry, system))
     });
+    let host_cli_execution_class = selected_host_cli_system.as_deref().and_then(|system| {
+        host_cli_system_entry.map(|entry| host_cli_system_execution_class(entry, system))
+    });
     let host_cli_template_materialized = match (
         host_cli_runtime_root.as_deref(),
         host_cli_materialization_mode.as_deref(),
@@ -1396,21 +1479,37 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
                     .and_then(|entry| resolve_host_cli_template_source(system, Some(entry)).ok())
             })
         });
+    let catalog_system = selected_host_cli_system
+        .clone()
+        .unwrap_or_else(|| host_cli_suggested_system.clone());
+    let catalog_entry = selected_host_cli_system
+        .as_deref()
+        .and_then(|system| host_cli_system_registry.get(system))
+        .or_else(|| host_cli_system_registry.get(&catalog_system));
     let default_host_agent_templates = host_cli_template_source_root
         .as_deref()
         .map(list_host_cli_agent_templates)
         .unwrap_or_default();
-    let host_cli_agent_catalog = project_overlay
-        .as_ref()
-        .map(overlay_codex_agent_catalog)
-        .filter(|rows| !rows.is_empty())
-        .or_else(|| {
-            host_cli_template_source_root
-                .as_deref()
-                .map(read_codex_agent_catalog)
-                .filter(|rows| !rows.is_empty())
-        })
-        .unwrap_or_default();
+    let host_cli_agent_catalog = host_cli_entry_carrier_catalog(catalog_entry)
+        .into_iter()
+        .collect::<Vec<_>>();
+    let host_cli_agent_catalog = if host_cli_agent_catalog.is_empty() && catalog_system == "codex" {
+        project_overlay
+            .as_ref()
+            .map(overlay_codex_agent_catalog)
+            .filter(|rows| !rows.is_empty())
+            .or_else(|| {
+                host_cli_template_source_root
+                    .as_deref()
+                    .map(read_codex_agent_catalog)
+                    .filter(|rows| !rows.is_empty())
+            })
+            .unwrap_or_default()
+    } else if host_cli_agent_catalog.is_empty() {
+        synthesized_host_cli_carrier_catalog(&catalog_system)
+    } else {
+        host_cli_agent_catalog
+    };
     let default_agent_topology = host_cli_agent_catalog
         .iter()
         .filter_map(|row| row["role_id"].as_str().map(ToString::to_string))
@@ -1669,6 +1768,7 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
         "host_environment": {
             "supported_cli_systems": supported_host_cli_systems,
             "selected_cli_system": selected_host_cli_system,
+            "selected_cli_execution_class": host_cli_execution_class,
             "selection_required": host_cli_selection_required,
             "template_materialized": host_cli_template_materialized,
             "materialization_required": host_cli_materialization_required,

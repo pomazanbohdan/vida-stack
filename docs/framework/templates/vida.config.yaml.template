@@ -25,7 +25,7 @@ language_policy:
 host_environment:
   cli_system: __HOST_CLI_SYSTEM__
   codex:
-    agents:
+    agents: &codex_agent_catalog
       junior:
         tier: junior
         rate: 1
@@ -89,6 +89,64 @@ host_environment:
           - execution_preparation
           - hard_escalation
           - meta_analysis
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      materialization_mode: codex_toml_catalog_render
+      template_root: .codex
+      runtime_root: .codex
+      carriers: *codex_agent_catalog
+    qwen:
+      enabled: true
+      execution_class: external
+      materialization_mode: copy_tree_only
+      template_root: .qwen
+      runtime_root: .qwen
+      carriers:
+        qwen-primary:
+          tier: qwen
+          rate: 4
+          reasoning_band: medium
+          default_runtime_role: worker
+          runtime_roles:
+            - worker
+          task_classes:
+            - implementation
+            - research
+    kilo:
+      enabled: true
+      execution_class: external
+      materialization_mode: copy_tree_only
+      template_root: .kilo
+      runtime_root: .kilo
+      carriers:
+        kilo-primary:
+          tier: kilo
+          rate: 4
+          reasoning_band: medium
+          default_runtime_role: worker
+          runtime_roles:
+            - worker
+          task_classes:
+            - specification
+            - planning
+    opencode:
+      enabled: true
+      execution_class: external
+      materialization_mode: copy_tree_only
+      template_root: .opencode
+      runtime_root: .opencode
+      carriers:
+        opencode-primary:
+          tier: opencode
+          rate: 4
+          reasoning_band: medium
+          default_runtime_role: worker
+          runtime_roles:
+            - worker
+          task_classes:
+            - implementation
 
 protocol_activation:
   agent_system: true

@@ -35,7 +35,12 @@ fn selected_host_cli_system_entry(
         supported
             .into_iter()
             .next()
-            .unwrap_or_else(|| "codex".to_string())
+            .or_else(|| {
+                let mut fallback = registry.keys().cloned().collect::<Vec<_>>();
+                fallback.sort();
+                fallback.into_iter().next()
+            })
+            .unwrap_or_default()
     });
     let entry = registry.get(&normalized).cloned();
     (normalized, entry)
@@ -133,8 +138,23 @@ fn can_resolve_public_network() -> bool {
 fn external_cli_preflight_summary(
     overlay: &serde_yaml::Value,
     selected_cli_system: &str,
+    selected_cli_entry: Option<&serde_yaml::Value>,
 ) -> serde_json::Value {
-    let selected_is_external = selected_cli_system != "codex";
+    let selected_execution_class = selected_cli_entry
+        .map(|entry| {
+            super::project_activator_surface::host_cli_system_execution_class(
+                entry,
+                selected_cli_system,
+            )
+        })
+        .unwrap_or_else(|| {
+            if selected_cli_system == "codex" {
+                "internal".to_string()
+            } else {
+                "external".to_string()
+            }
+        });
+    let selected_is_external = selected_execution_class == "external";
     let has_enabled_external_subagents =
         super::yaml_lookup(overlay, &["agent_system", "subagents"])
             .and_then(serde_yaml::Value::as_mapping)
@@ -158,6 +178,7 @@ fn external_cli_preflight_summary(
         return serde_json::json!({
             "status": "blocked",
             "requires_external_cli": true,
+            "selected_execution_class": selected_execution_class,
             "sandbox_active": true,
             "network_reachable": false,
             "blocker_code": "external_cli_network_access_unavailable_under_sandbox",
@@ -172,6 +193,7 @@ fn external_cli_preflight_summary(
     serde_json::json!({
         "status": "pass",
         "requires_external_cli": requires_external_cli,
+        "selected_execution_class": selected_execution_class,
         "sandbox_active": sandbox_active,
         "network_reachable": network_reachable,
         "blocker_code": serde_json::Value::Null,
@@ -1037,7 +1059,7 @@ fn build_host_agent_status_summary(project_root: &Path) -> Option<serde_json::Va
     );
     payload.insert(
         "external_cli_preflight".to_string(),
-        external_cli_preflight_summary(&overlay, &selected_cli_system),
+        external_cli_preflight_summary(&overlay, &selected_cli_system, host_cli_entry.as_ref()),
     );
     payload.insert("budget".to_string(), budget_value);
     payload.insert("recent_events".to_string(), recent_events_value);
@@ -1293,6 +1315,17 @@ fn host_cli_system_entry_summary(
         .filter(|text| !text.is_empty())
         .map(str::to_ascii_lowercase)
         .unwrap_or_else(|| default_host_cli_materialization_mode(system));
+    let execution_class = entry
+        .map(|value| {
+            super::project_activator_surface::host_cli_system_execution_class(value, system)
+        })
+        .unwrap_or_else(|| {
+            if system == "codex" {
+                "internal".to_string()
+            } else {
+                "external".to_string()
+            }
+        });
     let carriers = entry
         .and_then(|value| super::yaml_lookup(value, &["carriers"]))
         .filter(|value| !value.is_null())
@@ -1301,6 +1334,7 @@ fn host_cli_system_entry_summary(
 
     serde_json::json!({
         "enabled": enabled,
+        "execution_class": execution_class,
         "materialization_mode": materialization_mode,
         "template_root": template_root,
         "runtime_root": runtime_root,
@@ -1415,7 +1449,7 @@ fn host_agents_json_value(host_agents: Option<&serde_json::Value>) -> serde_json
 mod tests {
     use super::{
         canonical_activation_status, release1_operator_contracts_consistency_error,
-        shared_operator_output_contract_parity_error,
+        selected_host_cli_system_entry, shared_operator_output_contract_parity_error,
     };
     use crate::state_store;
 
@@ -1493,6 +1527,87 @@ mod tests {
             canonical_activation_status(Some(" ready_enough_for_normal_work "), true),
             "pending"
         );
+    }
+
+    #[test]
+    fn selected_host_cli_system_entry_prefers_enabled_configured_system_without_codex_fallback() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: "__HOST_CLI_SYSTEM__"
+  systems:
+    codex:
+      enabled: false
+    qwen:
+      enabled: false
+    acme:
+      enabled: true
+      runtime_root: .acme
+"#,
+        )
+        .expect("overlay yaml should parse");
+
+        let (selected, entry) = selected_host_cli_system_entry(&overlay);
+        assert_eq!(selected, "acme");
+        assert_eq!(
+            crate::yaml_string(crate::yaml_lookup(
+                entry.as_ref().expect("entry should exist"),
+                &["runtime_root"]
+            ))
+            .as_deref(),
+            Some(".acme")
+        );
+    }
+
+    #[test]
+    fn selected_host_cli_system_entry_falls_back_to_sorted_registry_when_all_systems_disabled() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: ""
+  systems:
+    codex:
+      enabled: false
+    qwen:
+      enabled: false
+    acme:
+      enabled: false
+      runtime_root: .acme
+"#,
+        )
+        .expect("overlay yaml should parse");
+
+        let (selected, entry) = selected_host_cli_system_entry(&overlay);
+        assert_eq!(selected, "acme");
+        assert_eq!(
+            crate::yaml_string(crate::yaml_lookup(
+                entry.as_ref().expect("entry should exist"),
+                &["runtime_root"]
+            ))
+            .as_deref(),
+            Some(".acme")
+        );
+    }
+
+    #[test]
+    fn external_cli_preflight_respects_configured_execution_class() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: acme
+  systems:
+    acme:
+      enabled: true
+      execution_class: internal
+      runtime_root: .acme
+"#,
+        )
+        .expect("overlay yaml should parse");
+
+        let (selected, entry) = selected_host_cli_system_entry(&overlay);
+        let summary = super::external_cli_preflight_summary(&overlay, &selected, entry.as_ref());
+        assert_eq!(summary["requires_external_cli"], false);
+        assert_eq!(summary["selected_execution_class"], "internal");
     }
 
     #[test]

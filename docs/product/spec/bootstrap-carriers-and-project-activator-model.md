@@ -346,7 +346,7 @@ Canonical host-system registry:
 
 1. supported host systems are owned by `vida.config.yaml -> host_environment.systems`,
 2. per-system carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers`,
-3. per-system runtime roots and materialization modes are owned by the same host-system registry entry,
+3. per-system runtime roots, materialization modes, and execution class are owned by the same host-system registry entry,
 4. compatibility carrier sources may exist for one host system, but they must not remain the sole canonical runtime-carrier schema.
 
 Operator step:

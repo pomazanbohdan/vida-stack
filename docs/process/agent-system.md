@@ -6,6 +6,7 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - the current supported host CLI systems are config-driven under `vida.config.yaml -> host_environment.systems`
 - current built-in templates include `codex`, `qwen`, `kilo`, and `opencode`
 - carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers` (Codex additionally keeps `host_environment.codex.agents` as tier catalog source)
+- host CLI execution posture is owned by `vida.config.yaml -> host_environment.systems.<system>.execution_class` so internal vs external runtime handling does not depend on vendor id heuristics
 - dispatch aliases are owned by the configured registry path under `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` and are not the primary project-visible agent model
 - selected host runtime surface (for example `.codex/**`, `.qwen/**`, `.kilo/**`, `.opencode/**`) is rendered/runtime materialized output, not the owner of tier/rate/task-class policy
 - project activation materializes host templates using the configured `materialization_mode` per system
