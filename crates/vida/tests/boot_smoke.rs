@@ -8248,7 +8248,7 @@ fn taskflow_task_create_routes_through_local_db_bridge_with_display_id_allocatio
         serde_json::from_str(&stdout).expect("taskflow task create json should parse");
     assert_eq!(parsed["id"], "vida-child");
     assert_eq!(parsed["status"], "open");
-    assert!(parsed["display_id"].is_null());
+    assert_eq!(parsed["display_id"], child_display_id);
     assert_eq!(parsed["description"], "bridge-task");
     assert_eq!(parsed["dependencies"][0]["depends_on_id"], "vida-root");
     assert!(!stderr.contains("delegated-taskflow-binary-ran"));
@@ -8419,8 +8419,9 @@ fn task_root_mutation_commands_use_authoritative_db_store_without_taskflow_binar
     let close_stdout = String::from_utf8_lossy(&close.stdout);
     let close_json: serde_json::Value =
         serde_json::from_str(&close_stdout).expect("task close json should parse");
-    assert_eq!(close_json["status"], "closed");
-    assert_eq!(close_json["reason"], "done");
+    assert_eq!(close_json["status"], "pass");
+    assert_eq!(close_json["task"]["status"], "closed");
+    assert_eq!(close_json["task"]["close_reason"], "done");
     assert!(!String::from_utf8_lossy(&close.stderr).contains("delegated-taskflow-binary-ran"));
 
     let export = vida()
@@ -8435,8 +8436,8 @@ fn task_root_mutation_commands_use_authoritative_db_store_without_taskflow_binar
     let export_stdout = String::from_utf8_lossy(&export.stdout);
     let export_json: serde_json::Value =
         serde_json::from_str(&export_stdout).expect("task export json should parse");
-    assert_eq!(export_json["status"], "exported");
-    assert_eq!(export_json["path"], export_path);
+    assert_eq!(export_json["status"], "pass");
+    assert_eq!(export_json["target_path"], export_path);
     assert!(fs::metadata(&export_path).is_ok(), "export file should exist");
     assert!(!String::from_utf8_lossy(&export.stderr).contains("delegated-taskflow-binary-ran"));
 }
@@ -8846,7 +8847,7 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
         serde_json::from_str(&project_show_stdout).expect("project show json should parse");
     let project_show_task = project_show_json.get("task").unwrap_or(&project_show_json);
     assert_eq!(project_show_task["id"], "vida-child");
-    assert!(project_show_task["display_id"].is_null());
+    assert_eq!(project_show_task["display_id"], project_child_display_id);
     assert_eq!(project_show_task["description"], "bridge-task");
     assert!(!project_show_stderr.contains("delegated-taskflow-binary-ran"));
 
@@ -9012,7 +9013,10 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
         .expect("installed ready payload should be an array");
     assert_eq!(installed_ready_rows.len(), 1);
     assert_eq!(installed_ready_rows[0]["id"], "vida-child");
-    assert!(installed_ready_rows[0]["display_id"].is_null());
+    assert_eq!(
+        installed_ready_rows[0]["display_id"],
+        installed_child_display_id
+    );
     assert!(!installed_ready_stderr.contains("delegated-taskflow-binary-ran"));
 
     let installed_list = installed_mode(&["taskflow", "task", "list", "--all", "--json"]);
@@ -9039,7 +9043,7 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
         .get("task")
         .unwrap_or(&installed_show_json);
     assert_eq!(installed_show_task["id"], "vida-child");
-    assert!(installed_show_task["display_id"].is_null());
+    assert_eq!(installed_show_task["display_id"], installed_child_display_id);
     assert_eq!(installed_show_task["description"], "bridge-task");
     assert!(!installed_show_stderr.contains("delegated-taskflow-binary-ran"));
 

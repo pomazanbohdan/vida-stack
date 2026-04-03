@@ -385,12 +385,12 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                             }
                         }
                     }
-                    let _ = display_id;
                     let source_repo = project_root.display().to_string();
                     match store
                         .create_task(state_store::CreateTaskRequest {
                             task_id: &command.task_id,
                             title: &command.title,
+                            display_id: (!display_id.is_empty()).then_some(display_id.as_str()),
                             description: &command.description,
                             issue_type: &command.issue_type,
                             status: &command.status,

@@ -7,6 +7,11 @@ use crate::{print_surface_header, print_surface_line, RenderMode};
 fn print_task_record(render: RenderMode, title: &str, task: &TaskRecord) {
     print_surface_header(render, title);
     print_surface_line(render, "id", &task.id);
+    if let Some(display_id) = task.display_id.as_deref() {
+        if !display_id.is_empty() {
+            print_surface_line(render, "display id", display_id);
+        }
+    }
     print_surface_line(render, "status", &task.status);
     print_surface_line(render, "title", &task.title);
     print_surface_line(render, "priority", &task.priority.to_string());

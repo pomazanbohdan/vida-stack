@@ -211,6 +211,7 @@ fn run_task_store_native_fallback(
             let mut status = "open".to_string();
             let mut priority = 2u32;
             let mut parent_id = None::<String>;
+            let mut display_id = String::new();
             let mut description = String::new();
             let mut labels = Vec::new();
             let mut i = 0usize;
@@ -241,6 +242,7 @@ fn run_task_store_native_fallback(
                         i += 2;
                     }
                     "--display-id" if i + 1 < rest.len() => {
+                        display_id = rest[i + 1].clone();
                         i += 2;
                     }
                     _ => return Err("unsupported delegated task arguments".to_string()),
@@ -253,6 +255,7 @@ fn run_task_store_native_fallback(
                     .create_task(CreateTaskRequest {
                         task_id,
                         title,
+                        display_id: (!display_id.is_empty()).then_some(display_id.as_str()),
                         description: &description,
                         issue_type: &issue_type,
                         status: &status,

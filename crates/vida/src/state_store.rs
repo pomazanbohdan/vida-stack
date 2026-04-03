@@ -767,6 +767,7 @@ impl StateStore {
         let CreateTaskRequest {
             task_id,
             title,
+            display_id,
             description,
             issue_type,
             status,
@@ -795,6 +796,14 @@ impl StateStore {
             });
         }
         let normalized_parent_id = parent_id.and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+        let normalized_display_id = display_id.and_then(|value| {
             let trimmed = value.trim();
             if trimmed.is_empty() {
                 None
@@ -834,6 +843,7 @@ impl StateStore {
 
         let mut task = TaskRecord {
             id: task_id.to_string(),
+            display_id: normalized_display_id,
             title: title.to_string(),
             description: description.to_string(),
             status: status.to_string(),
@@ -3263,6 +3273,8 @@ struct TaskJsonlRecord {
     id: String,
     title: String,
     #[serde(default)]
+    display_id: Option<String>,
+    #[serde(default)]
     description: String,
     #[serde(default)]
     status: String,
@@ -3324,6 +3336,7 @@ pub struct TaskDependencyRecord {
 #[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, Clone)]
 struct TaskContent {
     task_id: String,
+    display_id: Option<String>,
     title: String,
     description: String,
     status: String,
@@ -3345,6 +3358,8 @@ struct TaskContent {
 #[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, Clone, PartialEq, Eq)]
 struct TaskStorageRow {
     task_id: String,
+    #[serde(default)]
+    display_id: Option<String>,
     title: String,
     description: String,
     status: String,
@@ -3366,6 +3381,8 @@ struct TaskStorageRow {
 #[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, Clone, PartialEq, Eq)]
 pub struct TaskRecord {
     pub id: String,
+    #[serde(default)]
+    pub display_id: Option<String>,
     pub title: String,
     pub description: String,
     pub status: String,
@@ -3388,6 +3405,7 @@ pub struct TaskRecord {
 pub struct CreateTaskRequest<'a> {
     pub task_id: &'a str,
     pub title: &'a str,
+    pub display_id: Option<&'a str>,
     pub description: &'a str,
     pub issue_type: &'a str,
     pub status: &'a str,
@@ -3498,6 +3516,7 @@ impl From<TaskJsonlRecord> for TaskContent {
     fn from(value: TaskJsonlRecord) -> Self {
         Self {
             task_id: value.id,
+            display_id: value.display_id,
             title: value.title,
             description: value.description,
             status: value.status,
@@ -3526,6 +3545,7 @@ impl From<TaskContent> for TaskStorageRow {
     fn from(value: TaskContent) -> Self {
         Self {
             task_id: value.task_id,
+            display_id: value.display_id,
             title: value.title,
             description: value.description,
             status: value.status,
@@ -3550,6 +3570,7 @@ impl From<TaskStorageRow> for TaskRecord {
     fn from(value: TaskStorageRow) -> Self {
         Self {
             id: value.task_id,
+            display_id: value.display_id,
             title: value.title,
             description: value.description,
             status: value.status,
@@ -3574,6 +3595,7 @@ impl From<TaskRecord> for TaskStorageRow {
     fn from(value: TaskRecord) -> Self {
         Self {
             task_id: value.id,
+            display_id: value.display_id,
             title: value.title,
             description: value.description,
             status: value.status,
@@ -5426,6 +5448,7 @@ fn canonical_snapshot_row_to_task_record(
     };
     Ok(TaskRecord {
         id: task_id,
+        display_id: None,
         title: task.title.clone(),
         description: String::new(),
         status,
@@ -5989,6 +6012,7 @@ hierarchy: framework,contracts
             .create_task(CreateTaskRequest {
                 task_id: "vida-root",
                 title: "Root",
+                display_id: None,
                 description: "root",
                 issue_type: "epic",
                 status: "open",
@@ -6004,6 +6028,7 @@ hierarchy: framework,contracts
             .create_task(CreateTaskRequest {
                 task_id: "vida-child",
                 title: "Child",
+                display_id: None,
                 description: "child",
                 issue_type: "task",
                 status: "open",
@@ -6060,6 +6085,7 @@ hierarchy: framework,contracts
             .create_task(CreateTaskRequest {
                 task_id: "vida-root",
                 title: "Root",
+                display_id: None,
                 description: "root",
                 issue_type: "epic",
                 status: "open",
@@ -10032,6 +10058,7 @@ hierarchy: framework,contracts
             .upsert(("task", "vida-weird"))
             .content(TaskStorageRow {
                 task_id: "vida-weird".to_string(),
+                display_id: None,
                 title: "Weird".to_string(),
                 description: "unsupported issue type".to_string(),
                 status: "open".to_string(),

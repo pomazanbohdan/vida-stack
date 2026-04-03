@@ -48,6 +48,7 @@ fn create_task_if_missing_with_store(
     match crate::block_on_state_store(store.create_task(CreateTaskRequest {
         task_id,
         title,
+        display_id: None,
         description: description_value,
         issue_type,
         status,
