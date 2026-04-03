@@ -2387,13 +2387,13 @@ fn build_runtime_assignment_from_resolved_constraints(
     let Some(roles) = carrier_runtime["roles"].as_array() else {
         return serde_json::json!({
             "enabled": false,
-            "reason": "codex_multi_agent_roles_missing"
+            "reason": "carrier_runtime_roles_missing"
         });
     };
     if roles.is_empty() {
         return serde_json::json!({
             "enabled": false,
-            "reason": "codex_multi_agent_roles_missing"
+            "reason": "carrier_runtime_roles_missing"
         });
     }
 
@@ -2438,7 +2438,7 @@ fn build_runtime_assignment_from_resolved_constraints(
     if !has_exact_match {
         return serde_json::json!({
             "enabled": false,
-            "reason": "no_codex_agent_declares_runtime_role_and_task_class",
+            "reason": "no_carrier_declares_runtime_role_and_task_class",
             "task_class": task_class,
             "runtime_role": execution_runtime_role,
             "conversation_role": conversation_role
@@ -2456,7 +2456,7 @@ fn build_runtime_assignment_from_resolved_constraints(
     let Some((_, _, _, _, _, selected_role, strategy)) = candidates.first() else {
         return serde_json::json!({
             "enabled": false,
-            "reason": "no_codex_agent_satisfies_runtime_role_or_task_class",
+            "reason": "no_carrier_satisfies_runtime_role_or_task_class",
             "task_class": task_class,
             "runtime_role": execution_runtime_role,
             "conversation_role": conversation_role
