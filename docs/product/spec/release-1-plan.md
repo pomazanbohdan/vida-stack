@@ -733,6 +733,89 @@ Will implement / choose:
   - Release 1 can close as one coherent, compiled, DB-first, state-disciplined autonomous delivery runtime
   - `release-1-capability-matrix.md` and `release-1-seam-map.md` can be read as proof dashboards rather than planning owners
 
+## TaskFlow Execution Program
+
+### Root Epic
+- `r1-root`
+  - title: `Release 1 Program`
+  - role: single TaskFlow entrypoint for Release 1 execution ownership, ordering, and closure tracking
+
+### Workstream Epics
+| Epic ID | Title | Purpose | Blocks on | Parallel window |
+| --- | --- | --- | --- | --- |
+| `r1-01-commands` | TaskFlow Operator Ergonomics | make TaskFlow planning and execution surfaces usable during Release 1 delivery | none | wave 0 |
+| `r1-02-contracts` | Shared Contracts And Surface Canon | freeze shared enums, blocker registry, operator envelopes, and carrier-neutral runtime artifacts | none | wave 0 |
+| `r1-03-carveout` | Shell Carve-Out And Owner Extraction | shrink `crates/vida` into composition/routing/render only | `r1-02-contracts` | wave 1 |
+| `r1-04-activation` | DB-First Activation And Compiled Bundles | close configurator, protocol binding, bundle, and projection authority | `r1-02-contracts` | wave 1 |
+| `r1-05-carriers` | Carrier-Neutral Host Runtime | remove codex-centric carrier truth and materialization assumptions | `r1-02-contracts`, `r1-04-activation` | wave 1 |
+| `r1-06-taskflow` | TaskFlow Execution And Recovery | close lane lifecycle, execution-preparation, checkpoint, replay, and closure authority | `r1-02-contracts`, `r1-03-carveout`, `r1-04-activation` | wave 2 |
+| `r1-07-docflow` | DocFlow Seam And Closure Verdicts | harden `TaskFlow -> DocFlow -> closure` handoff and verdict ingestion | `r1-02-contracts`, `r1-06-taskflow` | wave 3 |
+| `r1-08-proof` | Fixture And Proof Neutralization | make fixtures, smoke tests, and end-to-end proofs carrier-neutral and seam-complete | `r1-01-commands`, `r1-02-contracts`, `r1-05-carriers`, `r1-07-docflow` | wave 3 |
+| `r1-09-controls` | Production Control Tracks | close trace/tool/retrieval/identity/SLO control tracks required for Release 1 trust | `r1-02-contracts`, `r1-04-activation`, `r1-06-taskflow` | wave 2-3 |
+| `r1-10-admission` | Release Admission And Cutover | converge matrices, proofs, release candidate build, and closure admission | `r1-07-docflow`, `r1-08-proof`, `r1-09-controls` | wave 4 |
+
+### Delivery Tasks
+| Task ID | Parent Epic | Task | Blocks on | Notes |
+| --- | --- | --- | --- | --- |
+| `r1-01-a` | `r1-01-commands` | command parity for `vida task` and `vida taskflow task` | none | enabling stream |
+| `r1-01-b` | `r1-01-commands` | batch plan import/apply for backlog graphs | `r1-01-a` | needed for large execution programs |
+| `r1-01-c` | `r1-01-commands` | graph-first views for ready/blocked/critical-path/waves | `r1-01-a` | operator throughput |
+| `r1-01-d` | `r1-01-commands` | help/proxy contract parity and fail-closed UX cleanup | `r1-01-a` | removes hidden command drift |
+| `r1-02-a` | `r1-02-contracts` | shared enum layer and blocker registry closure | none | foundational |
+| `r1-02-b` | `r1-02-contracts` | root operator surfaces `consume/lane/approval/recovery` | `r1-02-a` | operator contract closure |
+| `r1-02-c` | `r1-02-contracts` | carrier-neutral runtime artifact pack | `r1-02-a` | removes codex-facing field law |
+| `r1-03-a` | `r1-03-carveout` | extract shell command/render boundaries | `r1-02-a` | thin-shell start |
+| `r1-03-b` | `r1-03-carveout` | extract state access by domain | `r1-03-a` | state ownership cleanup |
+| `r1-03-c` | `r1-03-carveout` | move runtime-consumption/run-graph/closure out of shell | `r1-03-b`, `r1-02-b` | critical-path |
+| `r1-04-a` | `r1-04-activation` | DB-first activation/configurator lifecycle closure | `r1-02-a` | activation authority |
+| `r1-04-b` | `r1-04-activation` | compiled bundle/protocol-binding/projection sync | `r1-04-a`, `r1-02-b` | activation proof surface |
+| `r1-05-a` | `r1-05-carriers` | host template/materializer abstraction across systems | `r1-04-a` | external/internal carrier enablement |
+| `r1-05-b` | `r1-05-carriers` | carrier selection/runtime assignment neutralization | `r1-05-a`, `r1-02-c` | removes codex-centric routing |
+| `r1-05-c` | `r1-05-carriers` | configured backend execution beyond preflight/metadata | `r1-05-b` | runtime behavior closure |
+| `r1-06-a` | `r1-06-taskflow` | lane lifecycle and exception-path receipts | `r1-03-c`, `r1-02-a` | critical-path |
+| `r1-06-b` | `r1-06-taskflow` | `execution_preparation` enforcement for code-shaped work | `r1-06-a` | critical-path |
+| `r1-06-c` | `r1-06-taskflow` | checkpoint/replay/recovery lineage hardening | `r1-06-a`, `r1-04-b` | critical-path |
+| `r1-07-a` | `r1-07-docflow` | seam verdict contract for readiness/proof handoff | `r1-02-b`, `r1-06-b` | critical-path |
+| `r1-07-b` | `r1-07-docflow` | DocFlow verdict ingestion and closure admission wiring | `r1-07-a`, `r1-06-c` | critical-path |
+| `r1-08-a` | `r1-08-proof` | fixture and golden-data neutralization | `r1-02-c`, `r1-05-b` | proof baseline |
+| `r1-08-b` | `r1-08-proof` | end-to-end operator/seam proof coverage | `r1-07-b`, `r1-08-a` | critical-path |
+| `r1-08-c` | `r1-08-proof` | TaskFlow command proof for planning ergonomics | `r1-01-d`, `r1-08-a` | ergonomics proof |
+| `r1-09-a` | `r1-09-controls` | trace/telemetry/evidence foundation | `r1-02-a` | control baseline |
+| `r1-09-b` | `r1-09-controls` | tool contract and side-effect control | `r1-02-a`, `r1-06-a` | production trust |
+| `r1-09-c` | `r1-09-controls` | retrieval/citation/freshness reliability | `r1-02-a`, `r1-04-b` | production trust |
+| `r1-09-d` | `r1-09-controls` | identity/delegation/approval enforcement | `r1-02-b`, `r1-06-a` | production trust |
+| `r1-09-e` | `r1-09-controls` | runtime SLO/failure recovery/rollback posture | `r1-06-c`, `r1-09-a` | production trust |
+| `r1-10-a` | `r1-10-admission` | conformance and capability gate refresh | `r1-08-b`, `r1-09-b`, `r1-09-c`, `r1-09-d`, `r1-09-e` | pre-closure gate |
+| `r1-10-b` | `r1-10-admission` | release candidate build and closure admission | `r1-10-a` | terminal gate |
+
+### Critical Path
+- `r1-02-a -> r1-03-a -> r1-03-b -> r1-03-c -> r1-06-a -> r1-06-b -> r1-07-a -> r1-07-b -> r1-08-b -> r1-10-a -> r1-10-b`
+- `r1-04-a -> r1-04-b -> r1-06-c -> r1-07-b` is the second converging path that must stay green for closure.
+- `r1-05-b -> r1-08-a -> r1-08-b` is the carrier-neutral proof path that prevents false closure on codex-era fixtures.
+
+### Parallel Waves
+- Wave 0:
+  - `r1-01-commands`
+  - `r1-02-contracts`
+- Wave 1:
+  - `r1-03-carveout`
+  - `r1-04-activation`
+  - `r1-05-carriers`
+- Wave 2:
+  - `r1-06-taskflow`
+  - `r1-09-controls` (`r1-09-a` may start as soon as `r1-02-a` closes)
+- Wave 3:
+  - `r1-07-docflow`
+  - `r1-08-proof`
+  - remaining `r1-09-controls`
+- Wave 4:
+  - `r1-10-admission`
+
+### Planning Rule
+- Keep the backlog launch-ready at `delivery_task` depth.
+- Use `execution_block` only as just-in-time refinement for the next active `delivery_task`.
+- Do not pre-split the full Release 1 graph into lower leaves before the next active wave is ready to dispatch.
+
 ## Validation / Proof
 - Unit tests:
   - new contract tests for lane lifecycle, exception paths, and closure admission
@@ -847,5 +930,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/spec/release-1-plan.md
 created_at: 2026-03-16T07:39:24.117630799Z
-updated_at: 2026-04-03T18:40:00+03:00
+updated_at: 2026-04-03T12:53:27+03:00
 changelog_ref: release-1-plan.changelog.jsonl

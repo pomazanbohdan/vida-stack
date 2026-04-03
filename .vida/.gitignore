@@ -1,3 +1,6 @@
 # vida-v0 runtime workspace
 *
 !.gitignore
+!data/
+!data/**
+data/state/LOCK
