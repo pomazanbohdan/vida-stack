@@ -880,6 +880,22 @@ fn build_codex_pricing_policy(
     })
 }
 
+fn carrier_runtime_section<'a>(compiled_bundle: &'a serde_json::Value) -> &'a serde_json::Value {
+    compiled_bundle
+        .get("carrier_runtime")
+        .or_else(|| compiled_bundle.get("codex_multi_agent"))
+        .unwrap_or(&serde_json::Value::Null)
+}
+
+fn runtime_assignment_from_execution_plan<'a>(
+    execution_plan: &'a serde_json::Value,
+) -> &'a serde_json::Value {
+    execution_plan
+        .get("runtime_assignment")
+        .or_else(|| execution_plan.get("codex_runtime_assignment"))
+        .unwrap_or(&serde_json::Value::Null)
+}
+
 fn repo_runtime_root() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir
@@ -1619,7 +1635,7 @@ fn summarize_agent_route_from_snapshot(
         "architecture" => ("solution_architect", "architecture"),
         _ => ("", ""),
     };
-    let codex_runtime_assignment = if runtime_role.is_empty() || task_class.is_empty() {
+    let runtime_assignment = if runtime_role.is_empty() || task_class.is_empty() {
         serde_json::Value::Null
     } else {
         build_codex_runtime_assignment_from_resolved_constraints(
@@ -1633,10 +1649,11 @@ fn summarize_agent_route_from_snapshot(
         "route_id": route_id,
         "subagents": json_string(json_lookup(route, &["subagents"])).unwrap_or_default(),
         "fanout_subagents": json_string(json_lookup(route, &["fanout_subagents"])).unwrap_or_default(),
-        "preferred_agent_type": codex_runtime_assignment["selected_agent_id"],
-        "preferred_agent_tier": codex_runtime_assignment["selected_tier"],
-        "preferred_runtime_role": codex_runtime_assignment["runtime_role"],
-        "codex_runtime_assignment": codex_runtime_assignment,
+        "preferred_agent_type": runtime_assignment["selected_agent_id"],
+        "preferred_agent_tier": runtime_assignment["selected_tier"],
+        "preferred_runtime_role": runtime_assignment["runtime_role"],
+        "runtime_assignment": runtime_assignment.clone(),
+        "codex_runtime_assignment": runtime_assignment,
         "profiles": json_lookup(route, &["profiles"]).cloned().unwrap_or(serde_json::Value::Null),
         "write_scope": json_string(json_lookup(route, &["write_scope"])).unwrap_or_default(),
         "dispatch_required": json_string(json_lookup(route, &["dispatch_required"])).unwrap_or_default(),
@@ -1926,7 +1943,7 @@ fn codex_dispatch_alias_row<'a>(
     compiled_bundle: &'a serde_json::Value,
     alias_id: &str,
 ) -> Option<&'a serde_json::Value> {
-    compiled_bundle["codex_multi_agent"]["dispatch_aliases"]
+    carrier_runtime_section(compiled_bundle)["dispatch_aliases"]
         .as_array()
         .into_iter()
         .flatten()
@@ -2038,7 +2055,8 @@ fn request_requires_execution_preparation(
             .flatten()
             .filter_map(serde_json::Value::as_str)
             .collect::<Vec<_>>();
-        let task_class = selection.execution_plan["codex_runtime_assignment"]["task_class"]
+        let task_class = runtime_assignment_from_execution_plan(&selection.execution_plan)
+            ["task_class"]
             .as_str()
             .unwrap_or("implementation");
         let validation_gate = if json_bool(policy.get("honor_validation_gate"), false) {
@@ -2096,7 +2114,9 @@ fn request_requires_execution_preparation(
     let task_class = json_string(
         compiled_bundle["role_selection"]
             .get("selected_task_class")
-            .or_else(|| selection.execution_plan["codex_runtime_assignment"].get("task_class")),
+            .or_else(|| {
+                runtime_assignment_from_execution_plan(&selection.execution_plan).get("task_class")
+            }),
     )
     .unwrap_or_default();
     let validation_gate = json_bool(
@@ -2363,7 +2383,8 @@ fn build_codex_runtime_assignment_from_resolved_constraints(
     task_class: &str,
     execution_runtime_role: &str,
 ) -> serde_json::Value {
-    let Some(roles) = compiled_bundle["codex_multi_agent"]["roles"].as_array() else {
+    let carrier_runtime = carrier_runtime_section(compiled_bundle);
+    let Some(roles) = carrier_runtime["roles"].as_array() else {
         return serde_json::json!({
             "enabled": false,
             "reason": "codex_multi_agent_roles_missing"
@@ -2377,7 +2398,7 @@ fn build_codex_runtime_assignment_from_resolved_constraints(
     }
 
     let demotion_score = json_u64(json_lookup(
-        &compiled_bundle["codex_multi_agent"]["worker_strategy"],
+        &carrier_runtime["worker_strategy"],
         &["selection_policy", "demotion_score"],
     ))
     .unwrap_or(45);
@@ -2390,8 +2411,7 @@ fn build_codex_runtime_assignment_from_resolved_constraints(
             if rate == 0 {
                 return None;
             }
-            let strategy =
-                &compiled_bundle["codex_multi_agent"]["worker_strategy"]["agents"][role_id];
+            let strategy = &carrier_runtime["worker_strategy"]["agents"][role_id];
             let effective_score =
                 json_u64(json_lookup(strategy, &["effective_score"])).unwrap_or(70);
             let lifecycle_state = strategy["lifecycle_state"].as_str().unwrap_or("probation");
@@ -2479,8 +2499,8 @@ fn build_codex_runtime_assignment_from_resolved_constraints(
         "complexity_multiplier": complexity_multiplier,
         "effective_score": effective_score,
         "lifecycle_state": lifecycle_state,
-        "strategy_store": compiled_bundle["codex_multi_agent"]["worker_strategy"]["store_path"],
-        "scorecards_store": compiled_bundle["codex_multi_agent"]["worker_strategy"]["scorecards_path"],
+        "strategy_store": carrier_runtime["worker_strategy"]["store_path"],
+        "scorecards_store": carrier_runtime["worker_strategy"]["scorecards_path"],
         "rationale": rationale
     })
 }
@@ -2638,7 +2658,7 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
         agent_only_development,
         &dispatch_contract,
     );
-    let codex_runtime_assignment =
+    let runtime_assignment =
         build_codex_runtime_assignment(compiled_bundle, selection, requires_design_gate);
     let lane_sequence = dispatch_contract["lane_sequence"]
         .as_array()
@@ -2763,7 +2783,8 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
             }
         },
         "tracked_flow_bootstrap": tracked_flow_bootstrap,
-        "codex_runtime_assignment": codex_runtime_assignment,
+        "runtime_assignment": runtime_assignment.clone(),
+        "codex_runtime_assignment": runtime_assignment,
         "development_flow": {
             "activation_status": if requires_design_gate {
                 "blocked_pending_design_packet"
@@ -3276,6 +3297,28 @@ fn build_compiled_agent_extension_bundle_for_root(
         }
     }
 
+    let carrier_runtime = serde_json::json!({
+        "enabled": codex_config
+            .get("features")
+            .and_then(|section| section.get("multi_agent"))
+            .map(|value| value == "true")
+            .unwrap_or(false),
+        "max_threads": codex_config
+            .get("agents")
+            .and_then(|section| section.get("max_threads"))
+            .cloned()
+            .unwrap_or_default(),
+        "max_depth": codex_config
+            .get("agents")
+            .and_then(|section| section.get("max_depth"))
+            .cloned()
+            .unwrap_or_default(),
+        "roles": codex_roles,
+        "dispatch_aliases": codex_dispatch_aliases,
+        "worker_strategy": worker_strategy,
+        "pricing_policy": pricing_policy,
+    });
+
     let bundle = serde_json::json!({
         "ok": true,
         "enabled": yaml_bool(yaml_lookup(config, &["agent_extensions", "enabled"]), false),
@@ -3297,27 +3340,8 @@ fn build_compiled_agent_extension_bundle_for_root(
             .unwrap_or(serde_json::Value::Null),
         "autonomous_execution": serde_json::to_value(yaml_lookup(config, &["autonomous_execution"]).cloned().unwrap_or(serde_yaml::Value::Null))
             .unwrap_or(serde_json::Value::Null),
-        "codex_multi_agent": serde_json::json!({
-            "enabled": codex_config
-                .get("features")
-                .and_then(|section| section.get("multi_agent"))
-                .map(|value| value == "true")
-                .unwrap_or(false),
-            "max_threads": codex_config
-                .get("agents")
-                .and_then(|section| section.get("max_threads"))
-                .cloned()
-                .unwrap_or_default(),
-            "max_depth": codex_config
-                .get("agents")
-                .and_then(|section| section.get("max_depth"))
-                .cloned()
-                .unwrap_or_default(),
-            "roles": codex_roles,
-            "dispatch_aliases": codex_dispatch_aliases,
-            "worker_strategy": worker_strategy,
-            "pricing_policy": pricing_policy,
-        }),
+        "carrier_runtime": carrier_runtime.clone(),
+        "codex_multi_agent": carrier_runtime,
         "role_selection": serde_json::to_value(yaml_lookup(config, &["agent_extensions", "role_selection"]).cloned().unwrap_or(serde_yaml::Value::Null))
             .unwrap_or(serde_json::Value::Null),
     });
@@ -3695,7 +3719,7 @@ fn build_taskflow_handoff_plan(
             "status": "spec_first_handoff_required",
             "orchestration_contract": execution_plan["orchestration_contract"],
             "tracked_flow_bootstrap": execution_plan["tracked_flow_bootstrap"],
-            "design_packet_activation": execution_plan["codex_runtime_assignment"],
+            "design_packet_activation": runtime_assignment_from_execution_plan(execution_plan),
             "post_design_activation_chain": activation_chain,
             "post_design_lane_contract": lane_catalog,
             "handoff_ready": true,
@@ -3707,7 +3731,7 @@ fn build_taskflow_handoff_plan(
         "orchestration_contract": execution_plan["orchestration_contract"],
         "activation_chain": activation_chain,
         "lane_contract": lane_catalog,
-        "runtime_assignment": execution_plan["codex_runtime_assignment"],
+        "runtime_assignment": runtime_assignment_from_execution_plan(execution_plan),
         "lane_sequence": development_flow["lane_sequence"],
         "handoff_ready": true,
     })
@@ -5164,8 +5188,9 @@ fn fallback_runtime_consumption_run_graph_status(
     let selected_route = if conversational_mode.is_some() {
         &role_selection.execution_plan["default_route"]
     } else {
-        dispatch_contract_lane(&role_selection.execution_plan, &route_target)
-            .unwrap_or(&role_selection.execution_plan["codex_runtime_assignment"])
+        dispatch_contract_lane(&role_selection.execution_plan, &route_target).unwrap_or(
+            runtime_assignment_from_execution_plan(&role_selection.execution_plan),
+        )
     };
     let route_backend =
         selected_backend_from_execution_plan_route(&role_selection.execution_plan, selected_route)
@@ -6601,7 +6626,7 @@ mod tests {
                 ["selection_preview"]
                 .as_str()
                 .unwrap_or_default()
-                .contains("codex_runtime_assignment")
+                .contains("runtime_assignment")
         );
 
         let config = fs::read_to_string(harness.path().join(".codex/config.toml"))
@@ -6705,9 +6730,9 @@ mod tests {
                 request,
             )
             .expect("selection should build");
-            build_runtime_execution_plan_from_snapshot(&bundle, &selection)
-                ["codex_runtime_assignment"]
-                .clone()
+            let plan = build_runtime_execution_plan_from_snapshot(&bundle, &selection);
+            assert_eq!(plan["runtime_assignment"], plan["codex_runtime_assignment"]);
+            plan["runtime_assignment"].clone()
         };
         let implementation = assignment_for("write one bounded implementation patch");
         assert_eq!(implementation["enabled"], true);
@@ -6780,7 +6805,7 @@ mod tests {
     #[test]
     fn selected_backend_prefers_carrier_tier_over_internal_subagents() {
         let execution_plan = serde_json::json!({
-            "codex_runtime_assignment": {
+            "runtime_assignment": {
                 "selected_tier": "middle",
                 "activation_agent_type": "middle",
             },
@@ -6789,7 +6814,7 @@ mod tests {
                     "preferred_agent_tier": "junior",
                     "preferred_agent_type": "junior",
                     "subagents": "internal_subagents",
-                    "codex_runtime_assignment": {
+                    "runtime_assignment": {
                         "selected_tier": "junior",
                         "activation_agent_type": "junior",
                     }
@@ -7365,7 +7390,8 @@ mod tests {
         .expect("selection should build");
         let plan = build_runtime_execution_plan_from_snapshot(&bundle, &selection);
 
-        assert!(plan["codex_runtime_assignment"]
+        assert_eq!(plan["runtime_assignment"], plan["codex_runtime_assignment"]);
+        assert!(plan["runtime_assignment"]
             .get("internal_named_lane_id")
             .is_none());
         assert_eq!(
@@ -7401,7 +7427,8 @@ mod tests {
         .expect("config");
         let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
             .expect("bundle should compile");
-        let dispatch_aliases = bundle["codex_multi_agent"]["dispatch_aliases"]
+        assert_eq!(bundle["carrier_runtime"], bundle["codex_multi_agent"]);
+        let dispatch_aliases = bundle["carrier_runtime"]["dispatch_aliases"]
             .as_array()
             .expect("dispatch aliases should still be an array");
 

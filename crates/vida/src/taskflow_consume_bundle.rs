@@ -590,7 +590,11 @@ fn build_taskflow_agent_system_snapshot(
     config_path: &str,
     activation_bundle: &serde_json::Value,
 ) -> serde_json::Value {
-    let mut carriers = activation_bundle["codex_multi_agent"]["roles"]
+    let carrier_runtime = activation_bundle
+        .get("carrier_runtime")
+        .or_else(|| activation_bundle.get("codex_multi_agent"))
+        .unwrap_or(&serde_json::Value::Null);
+    let mut carriers = carrier_runtime["roles"]
         .as_array()
         .into_iter()
         .flatten()
@@ -636,8 +640,7 @@ fn build_taskflow_agent_system_snapshot(
         .collect::<Vec<_>>();
     runtime_roles.sort();
 
-    let selection_rule = activation_bundle["codex_multi_agent"]["worker_strategy"]
-        ["selection_policy"]["rule"]
+    let selection_rule = carrier_runtime["worker_strategy"]["selection_policy"]["rule"]
         .as_str()
         .unwrap_or("capability_first_then_score_guard_then_cheapest_tier");
     let max_parallel_agents =
@@ -646,7 +649,7 @@ fn build_taskflow_agent_system_snapshot(
     serde_json::json!({
         "materialization_mode": "config_materialized_runtime_projection",
         "source_of_truth": {
-            "carrier_catalog_owner": "vida.config.yaml -> host_environment.codex.agents",
+            "carrier_catalog_owner": "vida.config.yaml -> configured host-system carrier surfaces",
             "dispatch_alias_owner": "vida.config.yaml -> agent_extensions.registries.dispatch_aliases",
             "runtime_config_path": config_path,
         },
@@ -664,12 +667,12 @@ fn build_taskflow_agent_system_snapshot(
         "carriers": carriers,
         "runtime_roles": runtime_roles,
         "worker_strategy": {
-            "selection_policy": activation_bundle["codex_multi_agent"]["worker_strategy"]["selection_policy"],
-            "agents": activation_bundle["codex_multi_agent"]["worker_strategy"]["agents"],
-            "store_path": activation_bundle["codex_multi_agent"]["worker_strategy"]["store_path"],
-            "scorecards_path": activation_bundle["codex_multi_agent"]["worker_strategy"]["scorecards_path"],
+            "selection_policy": carrier_runtime["worker_strategy"]["selection_policy"],
+            "agents": carrier_runtime["worker_strategy"]["agents"],
+            "store_path": carrier_runtime["worker_strategy"]["store_path"],
+            "scorecards_path": carrier_runtime["worker_strategy"]["scorecards_path"],
         },
-        "dispatch_aliases": activation_bundle["codex_multi_agent"]["dispatch_aliases"],
+        "dispatch_aliases": carrier_runtime["dispatch_aliases"],
     })
 }
 
@@ -804,6 +807,63 @@ mod tests {
             snapshot["agent_model"]["selection_rule"],
             "capability_first_then_score_guard_then_cheapest_tier"
         );
+    }
+
+    #[test]
+    fn agent_system_snapshot_accepts_carrier_runtime_section() {
+        let activation_bundle = serde_json::json!({
+            "agent_system": {
+                "mode": "native",
+                "state_owner": "orchestrator_only",
+                "max_parallel_agents": 2
+            },
+            "autonomous_execution": {
+                "enabled": true
+            },
+            "carrier_runtime": {
+                "roles": [
+                    {
+                        "role_id": "middle",
+                        "tier": "middle",
+                        "rate": 4,
+                        "runtime_roles": ["business_analyst", "coach"],
+                        "task_classes": ["specification"],
+                        "default_runtime_role": "business_analyst",
+                        "reasoning_band": "medium",
+                        "model_reasoning_effort": "medium"
+                    }
+                ],
+                "worker_strategy": {
+                    "selection_policy": {
+                        "rule": "capability_first_then_score_guard_then_cheapest_tier"
+                    },
+                    "agents": {
+                        "middle": {
+                            "effective_score": 80
+                        }
+                    },
+                    "store_path": ".vida/data/state/agents.json",
+                    "scorecards_path": ".vida/data/state/agent-scorecards.json"
+                },
+                "dispatch_aliases": [
+                    {
+                        "role_id": "specification",
+                        "default_runtime_role": "business_analyst"
+                    }
+                ]
+            }
+        });
+
+        let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
+        assert_eq!(
+            snapshot["carriers"]
+                .as_array()
+                .expect("carriers should be array")
+                .len(),
+            1
+        );
+        assert_eq!(snapshot["carriers"][0]["carrier_id"], "middle");
+        assert_eq!(snapshot["dispatch_aliases"][0]["role_id"], "specification");
     }
 
     #[test]
