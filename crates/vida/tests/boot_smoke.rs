@@ -2010,17 +2010,34 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
         true
     );
     assert_eq!(
+        parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"]["enabled"],
+        true
+    );
+    assert_eq!(
         parsed["payload"]["role_selection"]["compiled_bundle"]["codex_multi_agent"]["max_threads"],
+        "4"
+    );
+    assert_eq!(
+        parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"]["max_threads"],
         "4"
     );
     assert_eq!(
         parsed["payload"]["role_selection"]["compiled_bundle"]["codex_multi_agent"]["max_depth"],
         "2"
     );
+    assert_eq!(
+        parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"]["max_depth"],
+        "2"
+    );
     let codex_roles = parsed["payload"]["role_selection"]["compiled_bundle"]["codex_multi_agent"]
         ["roles"]
         .as_array()
         .expect("codex roles should be an array");
+    let carrier_roles = parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"]
+        ["roles"]
+        .as_array()
+        .expect("carrier roles should be an array");
+    assert_eq!(carrier_roles, codex_roles);
     assert!(codex_roles.iter().any(|row| {
         row["role_id"] == "junior"
             && row["model"] == "gpt-5.4"
@@ -2074,6 +2091,10 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
     assert_eq!(
         parsed["payload"]["role_selection"]["reason"],
         "auto_no_keyword_match"
+    );
+    assert_eq!(
+        parsed["payload"]["execution_plan"]["runtime_assignment"],
+        parsed["payload"]["execution_plan"]["codex_runtime_assignment"]
     );
     assert!(parsed["payload"]["bundle_check"]["ok"].is_boolean());
     assert!(parsed["payload"]["direct_consumption_ready"].is_boolean());
@@ -8321,7 +8342,9 @@ fn task_root_mutation_commands_use_authoritative_db_store_without_taskflow_binar
         .expect("next display id should be present")
         .to_string();
     assert_eq!(child_display_id, "vida-rf1.1.1");
-    assert!(!String::from_utf8_lossy(&next_display.stderr).contains("delegated-taskflow-binary-ran"));
+    assert!(
+        !String::from_utf8_lossy(&next_display.stderr).contains("delegated-taskflow-binary-ran")
+    );
 
     let create_child = run_with_state_lock_retry(|| {
         vida()
@@ -8352,7 +8375,9 @@ fn task_root_mutation_commands_use_authoritative_db_store_without_taskflow_binar
     assert_eq!(create_child_json["id"], "vida-child");
     assert_eq!(create_child_json["status"], "open");
     assert_eq!(create_child_json["description"], "root-task");
-    assert!(!String::from_utf8_lossy(&create_child.stderr).contains("delegated-taskflow-binary-ran"));
+    assert!(
+        !String::from_utf8_lossy(&create_child.stderr).contains("delegated-taskflow-binary-ran")
+    );
 
     let update = run_with_state_lock_retry(|| {
         vida()
@@ -8400,14 +8425,7 @@ fn task_root_mutation_commands_use_authoritative_db_store_without_taskflow_binar
 
     let close = run_with_state_lock_retry(|| {
         vida()
-            .args([
-                "task",
-                "close",
-                "vida-child",
-                "--reason",
-                "done",
-                "--json",
-            ])
+            .args(["task", "close", "vida-child", "--reason", "done", "--json"])
             .current_dir(&root)
             .env("VIDA_ROOT", &root)
             .env("VIDA_STATE_DIR", &state_dir)
@@ -8438,7 +8456,10 @@ fn task_root_mutation_commands_use_authoritative_db_store_without_taskflow_binar
         serde_json::from_str(&export_stdout).expect("task export json should parse");
     assert_eq!(export_json["status"], "pass");
     assert_eq!(export_json["target_path"], export_path);
-    assert!(fs::metadata(&export_path).is_ok(), "export file should exist");
+    assert!(
+        fs::metadata(&export_path).is_ok(),
+        "export file should exist"
+    );
     assert!(!String::from_utf8_lossy(&export.stderr).contains("delegated-taskflow-binary-ran"));
 }
 
@@ -9043,7 +9064,10 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
         .get("task")
         .unwrap_or(&installed_show_json);
     assert_eq!(installed_show_task["id"], "vida-child");
-    assert_eq!(installed_show_task["display_id"], installed_child_display_id);
+    assert_eq!(
+        installed_show_task["display_id"],
+        installed_child_display_id
+    );
     assert_eq!(installed_show_task["description"], "bridge-task");
     assert!(!installed_show_stderr.contains("delegated-taskflow-binary-ran"));
 

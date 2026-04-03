@@ -1680,7 +1680,7 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
                 "agent_identity": "execution_carrier",
                 "runtime_role_identity": "activation_state",
                 "selection_rule": "capability_first_then_score_guard_then_cheapest_tier",
-                "carrier_catalog_owner": "vida.config.yaml -> host_environment.codex.agents",
+                "carrier_catalog_owner": "vida.config.yaml -> configured host-system carrier surfaces",
                 "strategy_store": CODEX_WORKER_STRATEGY_STATE,
                 "scorecards_store": CODEX_WORKER_SCORECARDS_STATE,
                 "inspect_commands": {
@@ -1688,7 +1688,7 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
                     "carrier_catalog": "vida taskflow consume agent-system --json | jq '.snapshot.carriers'",
                     "runtime_roles": "vida taskflow consume agent-system --json | jq '.snapshot.runtime_roles'",
                     "scores": "vida taskflow consume agent-system --json | jq '.snapshot.worker_strategy.agents'",
-                    "selection_preview": "vida taskflow consume final \"<request>\" --json | jq '.payload.role_selection.execution_plan.codex_runtime_assignment'"
+                    "selection_preview": "vida taskflow consume final \"<request>\" --json | jq '.payload.role_selection.execution_plan.runtime_assignment'"
                 }
             },
             "recommended_flow": [

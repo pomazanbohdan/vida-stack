@@ -1,9 +1,10 @@
 use crate::{
     build_runtime_execution_plan_from_snapshot, build_runtime_lane_selection_with_store,
-    operator_contracts::canonical_release1_blocker_code_entries, print_surface_header,
-    print_surface_line, read_or_sync_launcher_activation_snapshot,
+    operator_contracts::canonical_release1_blocker_code_entries,
+    print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
     state_store::{RunGraphStatus, StateStore, StateStoreError},
-    taskflow_layer4::print_taskflow_proxy_help, taskflow_task_bridge::proxy_state_dir,
+    taskflow_layer4::print_taskflow_proxy_help,
+    taskflow_task_bridge::proxy_state_dir,
     RenderMode, RuntimeConsumptionLaneSelection,
 };
 use std::process::ExitCode;
@@ -96,12 +97,18 @@ fn selected_backend_from_route(
         })
         .or_else(|| {
             route
+                .get("runtime_assignment")
+                .and_then(codex_carrier_backend_from_assignment)
+        })
+        .or_else(|| {
+            route
                 .get("codex_runtime_assignment")
                 .and_then(codex_carrier_backend_from_assignment)
         })
         .or_else(|| {
             execution_plan
-                .get("codex_runtime_assignment")
+                .get("runtime_assignment")
+                .or_else(|| execution_plan.get("codex_runtime_assignment"))
                 .and_then(codex_carrier_backend_from_assignment)
         })
         .or_else(|| json_string_field(route, "subagents"))
@@ -691,12 +698,14 @@ fn run_graph_blocker_evidence(
             args.run_id, args.status
         )
     })?;
-    let canonical_blocker_codes = canonical_release1_blocker_code_entries(&serde_json::json!([blocker_code]))
-        .ok_or_else(|| {
-            format!(
-                "run-graph blocker code `{blocker_code}` is not canonical (must be lowercase/digits/_)"
-            )
-        })?;
+    let canonical_blocker_codes =
+        canonical_release1_blocker_code_entries(&serde_json::json!([blocker_code])).ok_or_else(
+            || {
+                format!(
+            "run-graph blocker code `{blocker_code}` is not canonical (must be lowercase/digits/_)"
+        )
+            },
+        )?;
     let canonical_blocker_code = canonical_blocker_codes
         .first()
         .expect("canonical block list always non-empty")
@@ -813,7 +822,11 @@ fn canonicalize_resume_meta(status: &mut RunGraphStatus) {
 
 fn meta_string_field(meta: &serde_json::Value, key: &str) -> Option<Option<String>> {
     meta.get(key)?;
-    Some(meta.get(key).and_then(|value| value.as_str()).map(ToOwned::to_owned))
+    Some(
+        meta.get(key)
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned),
+    )
 }
 
 pub(crate) fn merge_run_graph_meta(
@@ -1260,7 +1273,7 @@ pub(crate) async fn derive_advanced_run_graph_status(
         let (active_node, next_node, policy_gate, target_format, recovery_ready) =
             implementation_writer_handoff(&implementation, &verification);
         if existing.next_node.as_deref() != Some(active_node.as_str())
-        && existing.next_node.is_some()
+            && existing.next_node.is_some()
         {
             return Err(format!(
                 "run-graph advance expected next node `{active_node}` for the implementation writer handoff, got `{}`",
@@ -2120,8 +2133,7 @@ mod tests {
             recovery_ready: true,
         };
 
-        let merged =
-            merge_run_graph_meta(status, &serde_json::json!({ "resume_target": null }));
+        let merged = merge_run_graph_meta(status, &serde_json::json!({ "resume_target": null }));
 
         assert_eq!(merged.resume_target, "none");
         assert_eq!(merged.next_node, None);

@@ -298,7 +298,8 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             &taskflow_handoff_plan,
                             &run_graph_bootstrap,
                         );
-                        let dispatch_packet_path = match super::write_runtime_dispatch_packet(&ctx) {
+                        let dispatch_packet_path = match super::write_runtime_dispatch_packet(&ctx)
+                        {
                             Ok(path) => path,
                             Err(error) => {
                                 eprintln!("Failed to write runtime dispatch packet: {error}");
@@ -866,7 +867,7 @@ fn build_runtime_consumption_dispatch_receipt(
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
                 .or_else(|| {
-                    role_selection.execution_plan["codex_runtime_assignment"]
+                    super::runtime_assignment_from_execution_plan(&role_selection.execution_plan)
                         ["activation_agent_type"]
                         .as_str()
                         .map(str::to_string)
@@ -884,7 +885,7 @@ fn build_runtime_consumption_dispatch_receipt(
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
                 .or_else(|| {
-                    role_selection.execution_plan["codex_runtime_assignment"]
+                    super::runtime_assignment_from_execution_plan(&role_selection.execution_plan)
                         ["activation_runtime_role"]
                         .as_str()
                         .map(str::to_string)
@@ -904,8 +905,9 @@ fn build_runtime_consumption_dispatch_receipt(
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string)
                     .or_else(|| {
-                        role_selection.execution_plan["codex_runtime_assignment"]
-                            ["selected_agent_id"]
+                        super::runtime_assignment_from_execution_plan(
+                            &role_selection.execution_plan,
+                        )["selected_agent_id"]
                             .as_str()
                             .map(str::to_string)
                     })
