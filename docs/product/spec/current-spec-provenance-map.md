@@ -169,6 +169,8 @@ Companion rule:
    Sources: `docs/product/spec/release-1-closure-contract.md`, `docs/product/spec/release-1-control-metrics-and-gates.md`, and the current governance need to keep all open acceptances explicit rather than implicit
 21. [taskflow-task-command-parity-and-proxy-alignment-design.md](taskflow-task-command-parity-and-proxy-alignment-design.md)
    Sources: `docs/product/spec/release-1-plan.md`, `docs/product/spec/status-families-and-query-surface-model.md`, `docs/product/spec/release-1-operator-surface-contract.md`, current launcher task surface code in `crates/vida/src/{cli,task_surface,taskflow_task_bridge,taskflow_layer4,taskflow_proxy}.rs`, and the active DB-backed Release-1 TaskFlow program tasks `r1-01-a` and `r1-01-d`
+22. [release-1-carrier-neutral-runtime-and-host-materialization-design.md](release-1-carrier-neutral-runtime-and-host-materialization-design.md)
+   Sources: `docs/product/spec/release-1-plan.md`, `docs/product/spec/release-1-current-state.md`, `docs/product/spec/release-1-conformance-matrix.md`, `docs/product/spec/compiled-runtime-bundle-contract.md`, `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`, `docs/product/spec/host-agent-layer-status-matrix.md`, current launcher/runtime code in `crates/vida/src/{main,project_activator_surface,status_surface,taskflow_consume_bundle,taskflow_routing}.rs`, and the active Release-1 TaskFlow program tasks `r1-05-a`, `r1-05-b`, and `r1-08-a`
 
 ## Routing Pointers
 

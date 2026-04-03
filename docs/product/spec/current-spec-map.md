@@ -192,6 +192,9 @@ Companion rule:
 22. [taskflow-task-command-parity-and-proxy-alignment-design.md](taskflow-task-command-parity-and-proxy-alignment-design.md)
    Config families: bounded Release-1 command parity for root `vida task`, compatibility routing for `vida taskflow task`, shared task-store mutation law, and help/proxy alignment
    Registered path: `docs/product/spec/taskflow-task-command-parity-and-proxy-alignment-design.md`
+23. [release-1-carrier-neutral-runtime-and-host-materialization-design.md](release-1-carrier-neutral-runtime-and-host-materialization-design.md)
+   Config families: bounded Release-1 carrier-neutral runtime contracts, host-system materialization abstraction, runtime-assignment neutralization, and proof migration away from codex-era canonical names
+   Registered path: `docs/product/spec/release-1-carrier-neutral-runtime-and-host-materialization-design.md`
 
 ### Support
 
