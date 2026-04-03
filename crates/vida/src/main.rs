@@ -932,7 +932,7 @@ fn print_json_pretty(value: &serde_json::Value) {
     );
 }
 
-fn infer_codex_task_class_from_task_payload(task: &serde_json::Value) -> String {
+fn infer_task_class_from_task_payload(task: &serde_json::Value) -> String {
     let labels = task["labels"]
         .as_array()
         .into_iter()
@@ -1638,7 +1638,7 @@ fn summarize_agent_route_from_snapshot(
     let runtime_assignment = if runtime_role.is_empty() || task_class.is_empty() {
         serde_json::Value::Null
     } else {
-        build_codex_runtime_assignment_from_resolved_constraints(
+        build_runtime_assignment_from_resolved_constraints(
             compiled_bundle,
             route_id,
             task_class,
@@ -1824,7 +1824,7 @@ fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_json::Value
     })
 }
 
-fn infer_codex_task_class(
+fn infer_runtime_task_class(
     selection: &RuntimeConsumptionLaneSelection,
     requires_design_gate: bool,
 ) -> String {
@@ -1880,7 +1880,7 @@ fn infer_codex_task_class(
     "implementation".to_string()
 }
 
-fn infer_codex_execution_runtime_role(
+fn infer_execution_runtime_role(
     selection: &RuntimeConsumptionLaneSelection,
     task_class: &str,
     requires_design_gate: bool,
@@ -1897,10 +1897,10 @@ fn infer_codex_execution_runtime_role(
     if selection.selected_role == "worker" {
         return "worker".to_string();
     }
-    codex_runtime_role_for_task_class(task_class).to_string()
+    runtime_role_for_task_class(task_class).to_string()
 }
 
-fn codex_runtime_role_for_task_class(task_class: &str) -> &'static str {
+fn runtime_role_for_task_class(task_class: &str) -> &'static str {
     match task_class {
         "architecture" => "solution_architect",
         "verification" => "verifier",
@@ -1910,7 +1910,7 @@ fn codex_runtime_role_for_task_class(task_class: &str) -> &'static str {
     }
 }
 
-fn codex_task_complexity_multiplier(task_class: &str) -> u64 {
+fn task_complexity_multiplier(task_class: &str) -> u64 {
     match task_class {
         "architecture" | "execution_preparation" | "hard_escalation" | "meta_analysis" => 4,
         "verification" | "review" | "quality_gate" | "release_readiness" => 2,
@@ -1929,7 +1929,7 @@ fn role_supports_runtime_role(role: &serde_json::Value, runtime_role: &str) -> b
     runtime_roles.is_empty() || runtime_roles.contains(&runtime_role)
 }
 
-fn role_supports_codex_task_class(role: &serde_json::Value, task_class: &str) -> bool {
+fn role_supports_task_class(role: &serde_json::Value, task_class: &str) -> bool {
     let task_classes = role["task_classes"]
         .as_array()
         .into_iter()
@@ -1939,7 +1939,7 @@ fn role_supports_codex_task_class(role: &serde_json::Value, task_class: &str) ->
     task_classes.is_empty() || task_classes.contains(&task_class)
 }
 
-fn codex_dispatch_alias_row<'a>(
+fn dispatch_alias_row<'a>(
     compiled_bundle: &'a serde_json::Value,
     alias_id: &str,
 ) -> Option<&'a serde_json::Value> {
@@ -1950,12 +1950,12 @@ fn codex_dispatch_alias_row<'a>(
         .find(|row| row["role_id"].as_str() == Some(alias_id))
 }
 
-fn build_codex_runtime_assignment_from_dispatch_alias(
+fn build_runtime_assignment_from_dispatch_alias(
     compiled_bundle: &serde_json::Value,
     alias_id: &str,
     fallback_task_class: &str,
 ) -> serde_json::Value {
-    let Some(alias) = codex_dispatch_alias_row(compiled_bundle, alias_id) else {
+    let Some(alias) = dispatch_alias_row(compiled_bundle, alias_id) else {
         return serde_json::json!({
             "enabled": false,
             "reason": "dispatch_alias_missing",
@@ -1965,7 +1965,7 @@ fn build_codex_runtime_assignment_from_dispatch_alias(
     };
     let runtime_role = json_string(alias.get("default_runtime_role"))
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| codex_runtime_role_for_task_class(fallback_task_class).to_string());
+        .unwrap_or_else(|| runtime_role_for_task_class(fallback_task_class).to_string());
     let task_class = alias["task_classes"]
         .as_array()
         .into_iter()
@@ -1974,7 +1974,7 @@ fn build_codex_runtime_assignment_from_dispatch_alias(
         .find(|value| !value.is_empty())
         .unwrap_or(fallback_task_class)
         .to_string();
-    let mut assignment = build_codex_runtime_assignment_from_resolved_constraints(
+    let mut assignment = build_runtime_assignment_from_resolved_constraints(
         compiled_bundle,
         alias_id,
         &task_class,
@@ -2024,18 +2024,18 @@ fn resolve_dispatch_alias_id(
     task_class: &str,
 ) -> Option<String> {
     if !preferred_alias_id.is_empty()
-        && codex_dispatch_alias_row(compiled_bundle, preferred_alias_id).is_some()
+        && dispatch_alias_row(compiled_bundle, preferred_alias_id).is_some()
     {
         return Some(preferred_alias_id.to_string());
     }
-    let runtime_role = codex_runtime_role_for_task_class(task_class);
-    compiled_bundle["codex_multi_agent"]["dispatch_aliases"]
+    let runtime_role = runtime_role_for_task_class(task_class);
+    carrier_runtime_section(compiled_bundle)["dispatch_aliases"]
         .as_array()
         .into_iter()
         .flatten()
         .find(|alias| {
             role_supports_runtime_role(alias, runtime_role)
-                && role_supports_codex_task_class(alias, task_class)
+                && role_supports_task_class(alias, task_class)
         })
         .and_then(|alias| alias["role_id"].as_str().map(str::to_string))
 }
@@ -2258,7 +2258,7 @@ fn build_resolved_development_dispatch_contract(
                     "reason": "dispatch_alias_missing_from_lane_template",
                 })
             } else {
-                build_codex_runtime_assignment_from_dispatch_alias(
+                build_runtime_assignment_from_dispatch_alias(
                     compiled_bundle,
                     &dispatch_alias,
                     task_class,
@@ -2377,7 +2377,7 @@ fn display_lane_label(dispatch_target: &str) -> String {
     }
 }
 
-fn build_codex_runtime_assignment_from_resolved_constraints(
+fn build_runtime_assignment_from_resolved_constraints(
     compiled_bundle: &serde_json::Value,
     conversation_role: &str,
     task_class: &str,
@@ -2416,7 +2416,7 @@ fn build_codex_runtime_assignment_from_resolved_constraints(
                 json_u64(json_lookup(strategy, &["effective_score"])).unwrap_or(70);
             let lifecycle_state = strategy["lifecycle_state"].as_str().unwrap_or("probation");
             let supports_runtime_role = role_supports_runtime_role(role, execution_runtime_role);
-            let supports_task_class = role_supports_codex_task_class(role, task_class);
+            let supports_task_class = role_supports_task_class(role, task_class);
             Some((
                 !supports_runtime_role,
                 !supports_task_class,
@@ -2465,7 +2465,7 @@ fn build_codex_runtime_assignment_from_resolved_constraints(
 
     let tier = selected_role["tier"].as_str().unwrap_or_default();
     let rate = selected_role["rate"].as_u64().unwrap_or(0);
-    let complexity_multiplier = codex_task_complexity_multiplier(task_class);
+    let complexity_multiplier = task_complexity_multiplier(task_class);
     let effective_score = json_u64(json_lookup(strategy, &["effective_score"])).unwrap_or(70);
     let lifecycle_state = strategy["lifecycle_state"].as_str().unwrap_or("probation");
     let rationale = vec![
@@ -2505,15 +2505,15 @@ fn build_codex_runtime_assignment_from_resolved_constraints(
     })
 }
 
-fn build_codex_runtime_assignment(
+fn build_runtime_assignment(
     compiled_bundle: &serde_json::Value,
     selection: &RuntimeConsumptionLaneSelection,
     requires_design_gate: bool,
 ) -> serde_json::Value {
-    let task_class = infer_codex_task_class(selection, requires_design_gate);
+    let task_class = infer_runtime_task_class(selection, requires_design_gate);
     let execution_runtime_role =
-        infer_codex_execution_runtime_role(selection, &task_class, requires_design_gate);
-    build_codex_runtime_assignment_from_resolved_constraints(
+        infer_execution_runtime_role(selection, &task_class, requires_design_gate);
+    build_runtime_assignment_from_resolved_constraints(
         compiled_bundle,
         &selection.selected_role,
         &task_class,
@@ -2659,7 +2659,7 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
         &dispatch_contract,
     );
     let runtime_assignment =
-        build_codex_runtime_assignment(compiled_bundle, selection, requires_design_gate);
+        build_runtime_assignment(compiled_bundle, selection, requires_design_gate);
     let lane_sequence = dispatch_contract["lane_sequence"]
         .as_array()
         .cloned()

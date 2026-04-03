@@ -223,9 +223,9 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
                 });
             }
         };
-    let task_class = super::infer_codex_task_class_from_task_payload(task);
-    let runtime_role = super::codex_runtime_role_for_task_class(&task_class);
-    let assignment = super::build_codex_runtime_assignment_from_resolved_constraints(
+    let task_class = super::infer_task_class_from_task_payload(task);
+    let runtime_role = super::runtime_role_for_task_class(&task_class);
+    let assignment = super::build_runtime_assignment_from_resolved_constraints(
         &compiled_bundle,
         "orchestrator",
         &task_class,
@@ -234,7 +234,7 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
     if !assignment["enabled"].as_bool().unwrap_or(false) {
         return serde_json::json!({
             "status": "skipped",
-            "reason": assignment["reason"].as_str().unwrap_or("codex_runtime_assignment_disabled"),
+            "reason": assignment["reason"].as_str().unwrap_or("runtime_assignment_disabled"),
             "task_class": task_class,
             "runtime_role": runtime_role,
         });
