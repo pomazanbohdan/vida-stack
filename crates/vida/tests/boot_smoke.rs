@@ -2006,66 +2006,53 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
         "external_first_when_eligible"
     );
     assert_eq!(
-        parsed["payload"]["role_selection"]["compiled_bundle"]["codex_multi_agent"]["enabled"],
-        true
-    );
-    assert_eq!(
         parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"]["enabled"],
         true
-    );
-    assert_eq!(
-        parsed["payload"]["role_selection"]["compiled_bundle"]["codex_multi_agent"]["max_threads"],
-        "4"
     );
     assert_eq!(
         parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"]["max_threads"],
         "4"
     );
     assert_eq!(
-        parsed["payload"]["role_selection"]["compiled_bundle"]["codex_multi_agent"]["max_depth"],
-        "2"
-    );
-    assert_eq!(
         parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"]["max_depth"],
         "2"
     );
-    let codex_roles = parsed["payload"]["role_selection"]["compiled_bundle"]["codex_multi_agent"]
-        ["roles"]
-        .as_array()
-        .expect("codex roles should be an array");
+    assert_eq!(
+        parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"],
+        parsed["payload"]["role_selection"]["compiled_bundle"]["codex_multi_agent"]
+    );
     let carrier_roles = parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"]
         ["roles"]
         .as_array()
         .expect("carrier roles should be an array");
-    assert_eq!(carrier_roles, codex_roles);
-    assert!(codex_roles.iter().any(|row| {
+    assert!(carrier_roles.iter().any(|row| {
         row["role_id"] == "junior"
             && row["model"] == "gpt-5.4"
             && row["model_reasoning_effort"] == "low"
             && row["sandbox_mode"] == "workspace-write"
             && row["rate"] == 1
     }));
-    assert!(codex_roles.iter().any(|row| {
+    assert!(carrier_roles.iter().any(|row| {
         row["role_id"] == "middle"
             && row["model_reasoning_effort"] == "medium"
             && row["sandbox_mode"] == "workspace-write"
             && row["rate"] == 4
     }));
-    assert!(codex_roles.iter().any(|row| {
+    assert!(carrier_roles.iter().any(|row| {
         row["role_id"] == "senior"
             && row["model_reasoning_effort"] == "high"
             && row["sandbox_mode"] == "read-only"
             && row["rate"] == 16
     }));
-    assert!(codex_roles.iter().any(|row| {
+    assert!(carrier_roles.iter().any(|row| {
         row["role_id"] == "architect"
             && row["model_reasoning_effort"] == "high"
             && row["sandbox_mode"] == "read-only"
             && row["rate"] == 32
     }));
     assert_eq!(
-        parsed["payload"]["role_selection"]["compiled_bundle"]["codex_multi_agent"]
-            ["worker_strategy"]["store_path"],
+        parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"]["worker_strategy"]
+            ["store_path"],
         ".vida/state/worker-strategy.json"
     );
     assert_eq!(

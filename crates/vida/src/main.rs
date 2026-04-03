@@ -6783,7 +6783,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_runtime_assignment_uses_overlay_ladder_for_all_four_tiers() {
+    fn runtime_assignment_uses_overlay_ladder_for_all_four_tiers() {
         let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
