@@ -267,6 +267,10 @@ fn host_cli_system_runtime_root(entry: &serde_yaml::Value, system: &str, root: &
     )
 }
 
+fn host_cli_system_runtime_surface(entry: &serde_yaml::Value, system: &str) -> String {
+    yaml_string(yaml_lookup(entry, &["runtime_root"])).unwrap_or_else(|| format!(".{system}"))
+}
+
 fn host_cli_system_materialization_mode(entry: &serde_yaml::Value, system: &str) -> String {
     yaml_string(yaml_lookup(entry, &["materialization_mode"]))
         .unwrap_or_else(|| {
@@ -1354,16 +1358,19 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     });
     let host_cli_runtime_template_root = host_cli_runtime_root
         .as_ref()
-        .map(|path| path.display().to_string())
+        .and_then(|_| {
+            selected_host_cli_system.as_deref().and_then(|system| {
+                host_cli_system_entry.map(|entry| host_cli_system_runtime_surface(entry, system))
+            })
+        })
         .or_else(|| {
             supported_host_cli_systems.first().and_then(|system| {
                 host_cli_system_registry
                     .get(system)
-                    .map(|entry| host_cli_system_runtime_root(entry, system, project_root))
-                    .map(|path| path.display().to_string())
+                    .map(|entry| host_cli_system_runtime_surface(entry, system))
             })
         })
-        .unwrap_or_else(|| project_root.join(".codex").display().to_string());
+        .unwrap_or_else(|| ".codex".to_string());
     let host_cli_materialization_mode = selected_host_cli_system.as_deref().and_then(|system| {
         host_cli_system_entry.map(|entry| host_cli_system_materialization_mode(entry, system))
     });
