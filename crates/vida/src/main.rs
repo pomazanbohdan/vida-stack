@@ -6454,6 +6454,14 @@ mod tests {
         assert_eq!(view["host_environment"]["selected_cli_system"], "codex");
         assert_eq!(view["host_environment"]["template_materialized"], true);
         assert_eq!(view["host_environment"]["runtime_template_root"], ".codex");
+        assert_eq!(
+            view["normal_work_defaults"]["carrier_tier_rates"],
+            view["normal_work_defaults"]["codex_tier_rates"]
+        );
+        assert_eq!(
+            view["normal_work_defaults"]["local_host_agent_guide"],
+            DEFAULT_PROJECT_CODEX_GUIDE_DOC
+        );
     }
 
     #[test]
@@ -7575,9 +7583,8 @@ mod tests {
             ExitCode::SUCCESS
         );
 
-        let scorecards =
-            read_json_file_if_present(&harness.path().join(WORKER_SCORECARDS_STATE))
-                .expect("scorecards should exist");
+        let scorecards = read_json_file_if_present(&harness.path().join(WORKER_SCORECARDS_STATE))
+            .expect("scorecards should exist");
         let rows = scorecards["agents"]["junior"]["feedback"]
             .as_array()
             .expect("feedback rows should render");

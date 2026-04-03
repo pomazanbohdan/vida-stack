@@ -1415,10 +1415,10 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
         .iter()
         .filter_map(|row| row["role_id"].as_str().map(ToString::to_string))
         .collect::<Vec<_>>();
-    let mut codex_tier_rates = serde_json::Map::new();
+    let mut carrier_tier_rates = serde_json::Map::new();
     for row in &host_cli_agent_catalog {
         if let (Some(tier), Some(rate)) = (row["tier"].as_str(), row["rate"].as_u64()) {
-            codex_tier_rates.insert(tier.to_string(), serde_json::Value::Number(rate.into()));
+            carrier_tier_rates.insert(tier.to_string(), serde_json::Value::Number(rate.into()));
         }
     }
     let agent_extensions_enabled = project_overlay
@@ -1702,9 +1702,11 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
             "local_feature_design_template": DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE,
             "local_product_spec_guide": DEFAULT_PROJECT_PRODUCT_SPEC_README,
             "local_documentation_tooling_map": DEFAULT_PROJECT_DOC_TOOLING_DOC,
+            "local_host_agent_guide": DEFAULT_PROJECT_CODEX_GUIDE_DOC,
             "local_codex_guide": DEFAULT_PROJECT_CODEX_GUIDE_DOC,
             "default_agent_topology": default_agent_topology,
-            "codex_tier_rates": codex_tier_rates,
+            "carrier_tier_rates": carrier_tier_rates,
+            "codex_tier_rates": carrier_tier_rates,
             "local_agent_score_state": {
                 "strategy_store": WORKER_STRATEGY_STATE,
                 "scorecards_store": WORKER_SCORECARDS_STATE
@@ -1729,7 +1731,7 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
                 "open one feature epic and one spec-pack task in vida taskflow before delegated implementation begins",
                 "use vida docflow to initialize, finalize, and validate the design document",
                 "close the spec-pack task and shape the execution packet from the bounded file set and proof targets recorded in the design document",
-                "delegate normal write-producing work through the default Codex tier ladder and let runtime pick the cheapest capable tier with a healthy local score instead of collapsing directly into root-session coding"
+                "delegate normal write-producing work through the default carrier tier ladder and let runtime pick the cheapest capable tier with a healthy local score instead of collapsing directly into root-session coding"
             ]
         },
         "interview": {
