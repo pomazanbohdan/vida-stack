@@ -217,12 +217,28 @@ materialization_mode: codex_toml_catalog_render
     .unwrap_or(serde_yaml::Value::Null)
 }
 
-fn host_cli_system_registry_with_fallback(
+fn default_copy_tree_host_cli_entry(system: &str) -> serde_yaml::Value {
+    serde_yaml::from_str(&format!(
+        "enabled: true\ntemplate_root: .{system}\nruntime_root: .{system}\nmaterialization_mode: copy_tree_only\n"
+    ))
+    .unwrap_or(serde_yaml::Value::Null)
+}
+
+fn builtin_host_cli_system_registry() -> HashMap<String, serde_yaml::Value> {
+    let mut registry = HashMap::new();
+    registry.insert("codex".to_string(), default_codex_host_cli_entry());
+    registry.insert("qwen".to_string(), default_copy_tree_host_cli_entry("qwen"));
+    registry
+}
+
+pub(crate) fn host_cli_system_registry_with_fallback(
     config: Option<&serde_yaml::Value>,
 ) -> HashMap<String, serde_yaml::Value> {
-    let mut registry = config.map(host_cli_system_registry).unwrap_or_default();
-    if registry.is_empty() {
-        registry.insert("codex".to_string(), default_codex_host_cli_entry());
+    let mut registry = builtin_host_cli_system_registry();
+    if let Some(configured) = config.map(host_cli_system_registry) {
+        for (key, value) in configured {
+            registry.insert(key, value);
+        }
     }
     registry
 }
@@ -412,15 +428,15 @@ pub(crate) fn resolve_host_cli_template_source(
     cli_system: &str,
     registry_entry: Option<&serde_yaml::Value>,
 ) -> Result<PathBuf, String> {
-    let template_relative = match registry_entry.and_then(host_cli_system_template_root) {
-        Some(relative) => relative,
-        None if cli_system == "codex" => ".codex".to_string(),
-        None => {
-            return Err(format!(
-                "No template_root configured for host CLI `{cli_system}`"
-            ));
-        }
-    };
+    let default_entry = builtin_host_cli_system_registry().remove(cli_system);
+    let template_relative = registry_entry
+        .and_then(host_cli_system_template_root)
+        .or_else(|| {
+            default_entry
+                .as_ref()
+                .and_then(host_cli_system_template_root)
+        })
+        .ok_or_else(|| format!("No template_root configured for host CLI `{cli_system}`"))?;
     let primary_root = resolve_init_bootstrap_source_root();
     let fallback_root = super::repo_runtime_root();
     let candidates = if fallback_root == primary_root {
@@ -517,12 +533,9 @@ pub(crate) fn materialize_host_cli_template(
 ) -> Result<PathBuf, String> {
     let entry_value = match registry_entry.cloned() {
         Some(entry) => entry,
-        None if cli_system == "codex" => default_codex_host_cli_entry(),
-        None => {
-            return Err(format!(
-                "Registry entry required for host CLI `{cli_system}`"
-            ));
-        }
+        None => builtin_host_cli_system_registry()
+            .remove(cli_system)
+            .ok_or_else(|| format!("Registry entry required for host CLI `{cli_system}`"))?,
     };
     let entry_ref = entry_value;
     let source = resolve_host_cli_template_source(cli_system, Some(&entry_ref))?;
@@ -1223,7 +1236,6 @@ pub(crate) fn list_host_cli_agent_templates(root: &Path) -> Vec<String> {
 pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::Value {
     let agents_md = project_root.join("AGENTS.md");
     let agents_sidecar = project_root.join("AGENTS.sidecar.md");
-    let codex_tree = project_root.join(".codex");
     let vida_config = project_root.join("vida.config.yaml");
     let vida_home = project_root.join(".vida");
     let vida_config_dir = project_root.join(".vida/config");
@@ -1340,6 +1352,18 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     let host_cli_runtime_root = selected_host_cli_system.as_deref().and_then(|system| {
         host_cli_system_entry.map(|entry| host_cli_system_runtime_root(entry, system, project_root))
     });
+    let host_cli_runtime_template_root = host_cli_runtime_root
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .or_else(|| {
+            supported_host_cli_systems.first().and_then(|system| {
+                host_cli_system_registry
+                    .get(system)
+                    .map(|entry| host_cli_system_runtime_root(entry, system, project_root))
+                    .map(|path| path.display().to_string())
+            })
+        })
+        .unwrap_or_else(|| project_root.join(".codex").display().to_string());
     let host_cli_materialization_mode = selected_host_cli_system.as_deref().and_then(|system| {
         host_cli_system_entry.map(|entry| host_cli_system_materialization_mode(entry, system))
     });
@@ -1359,9 +1383,11 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
         .as_deref()
         .and_then(|system| resolve_host_cli_template_source(system, host_cli_system_entry).ok())
         .or_else(|| {
-            host_cli_system_registry
-                .get("codex")
-                .and_then(|entry| resolve_host_cli_template_source("codex", Some(entry)).ok())
+            supported_host_cli_systems.first().and_then(|system| {
+                host_cli_system_registry
+                    .get(system)
+                    .and_then(|entry| resolve_host_cli_template_source(system, Some(entry)).ok())
+            })
         });
     let default_host_agent_templates = host_cli_template_source_root
         .as_deref()
@@ -1639,7 +1665,7 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
             "selection_required": host_cli_selection_required,
             "template_materialized": host_cli_template_materialized,
             "materialization_required": host_cli_materialization_required,
-            "runtime_template_root": codex_tree.display().to_string(),
+            "runtime_template_root": host_cli_runtime_template_root,
             "template_source_root": host_cli_template_source_root.map(|path| path.display().to_string()),
             "default_host_agent_templates": default_host_agent_templates,
             "configuration_protocols": [

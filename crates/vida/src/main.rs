@@ -6487,7 +6487,15 @@ mod tests {
         let view = project_activator_surface::build_project_activator_view(harness.path());
         assert_eq!(view["host_environment"]["selected_cli_system"], "qwen");
         assert_eq!(view["host_environment"]["template_materialized"], true);
-        assert_eq!(view["host_environment"]["runtime_template_root"], ".qwen");
+        assert!(view["host_environment"]["runtime_template_root"]
+            .as_str()
+            .expect("runtime template root should render")
+            .ends_with("/.qwen"));
+        assert!(view["host_environment"]["supported_cli_systems"]
+            .as_array()
+            .expect("supported cli systems should render")
+            .iter()
+            .any(|value| value.as_str() == Some("qwen")));
     }
 
     #[test]

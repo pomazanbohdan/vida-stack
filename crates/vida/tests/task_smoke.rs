@@ -951,18 +951,6 @@ fn status_json_reports_non_codex_host_agents_summary() {
         serde_yaml::Value::String("cli_system".to_string()),
         serde_yaml::Value::String("qwen".to_string()),
     );
-    let systems = host_env
-        .get_mut(serde_yaml::Value::String("systems".to_string()))
-        .and_then(serde_yaml::Value::as_mapping_mut)
-        .expect("host_environment.systems should exist");
-    let qwen = systems
-        .get_mut(serde_yaml::Value::String("qwen".to_string()))
-        .and_then(serde_yaml::Value::as_mapping_mut)
-        .expect("host_environment.systems.qwen should exist");
-    qwen.insert(
-        serde_yaml::Value::String("enabled".to_string()),
-        serde_yaml::Value::Bool(true),
-    );
     fs::write(
         &config_path,
         serde_yaml::to_string(&config).expect("patched yaml should render"),
@@ -1049,12 +1037,6 @@ fn status_json_reports_non_codex_host_agents_summary() {
         "copy_tree_only"
     );
     assert_eq!(system_entry["enabled"].as_bool(), Some(true));
-    assert_eq!(
-        system_entry["carriers"]["qwen-primary"]["tier"]
-            .as_str()
-            .expect("tier"),
-        "qwen"
-    );
     assert_eq!(host_agents["external_cli_preflight"]["status"], "pass");
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
@@ -1202,18 +1184,6 @@ fn status_json_blocks_external_cli_when_sandbox_active_and_network_unreachable()
     host_env.insert(
         serde_yaml::Value::String("cli_system".to_string()),
         serde_yaml::Value::String("qwen".to_string()),
-    );
-    let systems = host_env
-        .get_mut(serde_yaml::Value::String("systems".to_string()))
-        .and_then(serde_yaml::Value::as_mapping_mut)
-        .expect("host_environment.systems should exist");
-    let qwen = systems
-        .get_mut(serde_yaml::Value::String("qwen".to_string()))
-        .and_then(serde_yaml::Value::as_mapping_mut)
-        .expect("host_environment.systems.qwen should exist");
-    qwen.insert(
-        serde_yaml::Value::String("enabled".to_string()),
-        serde_yaml::Value::Bool(true),
     );
     fs::write(
         &config_path,

@@ -15,34 +15,29 @@ use crate::operator_contracts::{
     release1_operator_contracts_consistency_error, shared_operator_output_contract_parity_error,
 };
 
-fn host_environment_system_entry(
-    overlay: &serde_yaml::Value,
-    system: &str,
-) -> Option<serde_yaml::Value> {
-    let systems = super::yaml_lookup(overlay, &["host_environment", "systems"]);
-    if let Some(serde_yaml::Value::Mapping(mapping)) = systems {
-        for (key, value) in mapping {
-            if let Some(name) = key.as_str().map(|s| s.trim().to_ascii_lowercase()) {
-                if name == system {
-                    return Some(value.clone());
-                }
-            }
-        }
-    }
-    None
-}
-
 fn selected_host_cli_system_entry(
     overlay: &serde_yaml::Value,
 ) -> (String, Option<serde_yaml::Value>) {
+    let registry =
+        super::project_activator_surface::host_cli_system_registry_with_fallback(Some(overlay));
     let candidate = super::yaml_lookup(overlay, &["host_environment", "cli_system"])
         .and_then(serde_yaml::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty() && *value != "__HOST_CLI_SYSTEM__")
         .and_then(super::project_activator_surface::normalize_host_cli_system);
-    let normalized = candidate.unwrap_or_else(|| "codex".to_string());
-    let entry = host_environment_system_entry(overlay, &normalized)
-        .or_else(|| host_environment_system_entry(overlay, "codex"));
+    let normalized = candidate.unwrap_or_else(|| {
+        let mut supported = registry
+            .iter()
+            .filter(|(_, entry)| super::yaml_bool(super::yaml_lookup(entry, &["enabled"]), true))
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        supported.sort();
+        supported
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "codex".to_string())
+    });
+    let entry = registry.get(&normalized).cloned();
     (normalized, entry)
 }
 
@@ -122,7 +117,10 @@ fn can_resolve_public_network() -> bool {
         if matches!(normalized.as_str(), "reachable" | "online" | "true" | "1") {
             return true;
         }
-        if matches!(normalized.as_str(), "unreachable" | "offline" | "false" | "0") {
+        if matches!(
+            normalized.as_str(),
+            "unreachable" | "offline" | "false" | "0"
+        ) {
             return false;
         }
     }
@@ -137,20 +135,21 @@ fn external_cli_preflight_summary(
     selected_cli_system: &str,
 ) -> serde_json::Value {
     let selected_is_external = selected_cli_system != "codex";
-    let has_enabled_external_subagents = super::yaml_lookup(overlay, &["agent_system", "subagents"])
-        .and_then(serde_yaml::Value::as_mapping)
-        .map(|mapping| {
-            mapping.values().any(|entry| {
-                let enabled = super::yaml_bool(super::yaml_lookup(entry, &["enabled"]), false);
-                let backend = super::yaml_lookup(entry, &["subagent_backend_class"])
-                    .and_then(serde_yaml::Value::as_str)
-                    .map(str::trim)
-                    .map(str::to_ascii_lowercase)
-                    .unwrap_or_default();
-                enabled && backend == "external_cli"
+    let has_enabled_external_subagents =
+        super::yaml_lookup(overlay, &["agent_system", "subagents"])
+            .and_then(serde_yaml::Value::as_mapping)
+            .map(|mapping| {
+                mapping.values().any(|entry| {
+                    let enabled = super::yaml_bool(super::yaml_lookup(entry, &["enabled"]), false);
+                    let backend = super::yaml_lookup(entry, &["subagent_backend_class"])
+                        .and_then(serde_yaml::Value::as_str)
+                        .map(str::trim)
+                        .map(str::to_ascii_lowercase)
+                        .unwrap_or_default();
+                    enabled && backend == "external_cli"
+                })
             })
-        })
-        .unwrap_or(false);
+            .unwrap_or(false);
     let requires_external_cli = selected_is_external || has_enabled_external_subagents;
     let sandbox_active = is_sandbox_active_from_env();
     let network_reachable = can_resolve_public_network();
@@ -370,10 +369,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let mut host_agents = status_project_root
                     .as_deref()
                     .and_then(build_host_agent_status_summary);
-                let root_session_write_guard =
-                    root_session_write_guard_summary_from_snapshot_path(
-                        runtime_consumption.latest_snapshot_path.as_deref(),
-                    );
+                let root_session_write_guard = root_session_write_guard_summary_from_snapshot_path(
+                    runtime_consumption.latest_snapshot_path.as_deref(),
+                );
                 if let Some(host_agents_value) = host_agents.as_mut() {
                     if let Some(object) = host_agents_value.as_object_mut() {
                         object.insert(
@@ -397,8 +395,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 if as_json {
                     let mut operator_blocker_codes: Vec<String> = Vec::new();
                     if root_session_write_guard["status"].as_str() != Some("blocked_by_default") {
-                        operator_blocker_codes
-                            .push("missing_root_session_write_guard".to_string());
+                        operator_blocker_codes.push("missing_root_session_write_guard".to_string());
                     }
                     if boot_compatibility
                         .as_ref()
@@ -971,9 +968,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 .as_str()
                                 .unwrap_or("blocked"),
                         );
-                        if let Some(next_actions) = host_agents["external_cli_preflight"]
-                            ["next_actions"]
-                            .as_array()
+                        if let Some(next_actions) =
+                            host_agents["external_cli_preflight"]["next_actions"].as_array()
                         {
                             for action in next_actions {
                                 if let Some(text) = action.as_str() {
@@ -1001,7 +997,6 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
     }
 }
 
-
 fn build_host_agent_status_summary(project_root: &Path) -> Option<serde_json::Value> {
     let overlay = super::project_activator_surface::read_yaml_file_checked(
         &project_root.join("vida.config.yaml"),
@@ -1012,7 +1007,9 @@ fn build_host_agent_status_summary(project_root: &Path) -> Option<serde_json::Va
         runtime_surface_for_selected_system(&selected_cli_system, host_cli_entry.as_ref());
     let observability =
         super::read_json_file_if_present(&super::host_agent_observability_state_path(project_root))
-            .unwrap_or_else(|| super::load_or_initialize_host_agent_observability_state(project_root));
+            .unwrap_or_else(|| {
+                super::load_or_initialize_host_agent_observability_state(project_root)
+            });
     let latest_events = observability["events"]
         .as_array()
         .map(|events| events.iter().rev().take(5).cloned().collect::<Vec<_>>())
@@ -1121,10 +1118,7 @@ fn build_host_agent_status_summary(project_root: &Path) -> Option<serde_json::Va
                 "selection_policy".to_string(),
                 strategy["selection_policy"].clone(),
             );
-            payload.insert(
-                "agents".to_string(),
-                serde_json::Value::Object(agents),
-            );
+            payload.insert("agents".to_string(), serde_json::Value::Object(agents));
             payload.insert(
                 "internal_dispatch_alias_count".to_string(),
                 serde_json::json!(overlay_dispatch_aliases.len()),
@@ -1203,8 +1197,11 @@ pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
     })
 }
 
-fn runtime_root_session_write_guard_from_snapshot(snapshot: &serde_json::Value) -> Option<serde_json::Value> {
-    let direct_guard = &snapshot["payload"]["role_selection"]["execution_plan"]["root_session_write_guard"];
+fn runtime_root_session_write_guard_from_snapshot(
+    snapshot: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let direct_guard =
+        &snapshot["payload"]["role_selection"]["execution_plan"]["root_session_write_guard"];
     if has_runtime_root_session_write_guard(direct_guard) {
         return Some(direct_guard.clone());
     }
@@ -1265,9 +1262,7 @@ fn host_cli_system_entry_summary(
         .map(|value| super::yaml_bool(super::yaml_lookup(value, &["enabled"]), true))
         .unwrap_or(true);
     let template_root = entry
-        .and_then(|value| {
-            super::yaml_string(super::yaml_lookup(value, &["template_root"]))
-        })
+        .and_then(|value| super::yaml_string(super::yaml_lookup(value, &["template_root"])))
         .unwrap_or_else(|| format!(".{system}"));
     let runtime_root = entry
         .and_then(|value| super::yaml_string(super::yaml_lookup(value, &["runtime_root"])))
