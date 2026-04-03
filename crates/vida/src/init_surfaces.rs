@@ -71,7 +71,9 @@ pub(crate) fn looks_like_init_bootstrap_source_root(root: &Path) -> bool {
     resolve_init_agents_source(root).is_ok()
         && resolve_init_sidecar_source(root).is_ok()
         && resolve_init_config_template_source(root).is_ok()
-        && root.join(".codex").is_dir()
+        && [".codex", ".qwen", ".kilo", ".opencode"]
+            .into_iter()
+            .any(|relative| root.join(relative).is_dir())
 }
 
 pub(crate) fn first_existing_path(paths: &[PathBuf]) -> Option<PathBuf> {
@@ -521,7 +523,7 @@ Default feature-delivery flow:\n\n\
 }
 
 pub(crate) fn render_project_agent_system_doc() -> String {
-    "# Agent System\n\nProject activation owns host CLI agent-template selection and runtime admission.\n\n- default framework agent templates become available only after the selected host CLI template is materialized\n- the current supported host CLI system list is framework-owned; the current supported value is `codex`\n- Codex carrier-tier metadata is owned by `vida.config.yaml -> host_environment.codex.agents`\n- dispatch aliases are owned by the configured registry path under `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` and are not the primary project-visible agent model\n- `.codex/**` is the rendered host executor surface, not the owner of tier/rate/task-class policy\n- project activation materializes the carrier tiers into `.codex/config.toml` and `.codex/agents/*.toml`\n- runtime chooses the cheapest capable configured carrier tier that still satisfies the local score guard from `.vida/state/worker-strategy.json`\n- project-local agent extensions remain under `.vida/project/agent-extensions/`\n- research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists\n".to_string()
+    "# Agent System\n\nProject activation owns host CLI agent-template selection and runtime admission.\n\n- default framework host templates become available only after the selected host CLI template is materialized\n- supported host CLI systems are config-driven under `vida.config.yaml -> host_environment.systems`\n- built-in template roots currently include `.codex/**`, `.qwen/**`, `.kilo/**`, and `.opencode/**`\n- carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers` (Codex additionally keeps `vida.config.yaml -> host_environment.codex.agents` as the rendered tier-catalog source)\n- dispatch aliases are owned by the configured registry path under `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` and are not the primary project-visible agent model\n- the selected runtime surface is rendered under the configured runtime root and is not the owner of tier/rate/task-class policy\n- project activation materializes the selected host template using the configured `materialization_mode`; Codex renders `.codex/config.toml` and `.codex/agents/*.toml`, while external CLI systems use their own runtime root\n- runtime chooses the cheapest capable configured carrier tier that still satisfies the local score guard from `.vida/state/worker-strategy.json`\n- project-local agent extensions remain under `.vida/project/agent-extensions/`\n- research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists\n".to_string()
 }
 
 pub(crate) fn render_project_doc_tooling_map() -> String {

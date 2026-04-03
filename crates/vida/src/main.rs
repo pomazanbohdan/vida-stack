@@ -6414,6 +6414,41 @@ mod tests {
     }
 
     #[test]
+    fn project_activator_accepts_host_cli_selection_and_materializes_copy_tree_template() {
+        let _lock = current_dir_lock().lock().expect("lock should succeed");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = CurrentDirGuard::change_to(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "qwen",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        assert!(harness.path().join(".qwen").is_dir());
+        let config = fs::read_to_string(harness.path().join("vida.config.yaml"))
+            .expect("config should exist");
+        assert!(config.contains("cli_system: qwen"));
+
+        let view = project_activator_surface::build_project_activator_view(harness.path());
+        assert_eq!(view["host_environment"]["selected_cli_system"], "qwen");
+        assert_eq!(view["host_environment"]["template_materialized"], true);
+        assert_eq!(view["host_environment"]["runtime_template_root"], ".qwen");
+    }
+
+    #[test]
     fn project_activator_can_complete_bounded_activation_in_one_command() {
         let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");

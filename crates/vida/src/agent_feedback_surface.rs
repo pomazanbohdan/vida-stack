@@ -205,7 +205,7 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
     let selected_cli_system = super::yaml_lookup(&overlay, &["host_environment", "cli_system"])
         .and_then(serde_yaml::Value::as_str)
         .and_then(super::project_activator_surface::normalize_host_cli_system);
-    if selected_cli_system != Some("codex") {
+    if selected_cli_system.as_deref() != Some("codex") {
         return serde_json::json!({
             "status": "skipped",
             "reason": "host_cli_not_selected_or_unsupported"
@@ -327,7 +327,7 @@ fn append_host_agent_feedback(
         .ok_or_else(|| {
             "Host CLI system is missing or unsupported in vida.config.yaml.".to_string()
         })?;
-    match selected_cli_system {
+    match selected_cli_system.as_str() {
         "codex" => {
             let codex_roles = {
                 let overlay_roles =

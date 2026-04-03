@@ -72,6 +72,11 @@ awk '
   { print }
 ' "$ROOT_DIR/AGENTS.sidecar.md" > "$STAGE_DIR/AGENTS.sidecar.md"
 cp -R "$ROOT_DIR/.codex" "$STAGE_DIR/.codex"
+for host_template in .qwen .kilo .opencode; do
+  if [[ -d "$ROOT_DIR/$host_template" ]]; then
+    cp -R "$ROOT_DIR/$host_template" "$STAGE_DIR/$host_template"
+  fi
+done
 cp -R "$ROOT_DIR/vida" "$STAGE_DIR/vida"
 
 find "$STAGE_DIR" -type d -name '__pycache__' -prune -exec rm -rf {} +
@@ -110,6 +115,9 @@ manifest = {
         "AGENTS.md",
         "AGENTS.sidecar.md",
         ".codex/",
+        ".qwen/",
+        ".kilo/",
+        ".opencode/",
         "bin/vida",
         "install/assets/",
         "vida/",

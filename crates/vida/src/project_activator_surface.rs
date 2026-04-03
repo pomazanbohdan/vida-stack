@@ -412,24 +412,38 @@ pub(crate) fn resolve_host_cli_template_source(
     cli_system: &str,
     registry_entry: Option<&serde_yaml::Value>,
 ) -> Result<PathBuf, String> {
-    let source_root = resolve_init_bootstrap_source_root();
-    let template_root = match registry_entry.and_then(host_cli_system_template_root) {
-        Some(relative) => source_root.join(relative),
-        None if cli_system == "codex" => source_root.join(".codex"),
+    let template_relative = match registry_entry.and_then(host_cli_system_template_root) {
+        Some(relative) => relative,
+        None if cli_system == "codex" => ".codex".to_string(),
         None => {
             return Err(format!(
                 "No template_root configured for host CLI `{cli_system}`"
             ));
         }
     };
-    if template_root.is_dir() {
-        Ok(template_root)
+    let primary_root = resolve_init_bootstrap_source_root();
+    let fallback_root = super::repo_runtime_root();
+    let candidates = if fallback_root == primary_root {
+        vec![primary_root.join(&template_relative)]
     } else {
-        Err(format!(
-            "Missing framework host CLI template for `{cli_system}`: {}",
-            template_root.display()
-        ))
+        vec![
+            primary_root.join(&template_relative),
+            fallback_root.join(&template_relative),
+        ]
+    };
+    for candidate in &candidates {
+        if candidate.is_dir() {
+            return Ok(candidate.clone());
+        }
     }
+    Err(format!(
+        "Missing framework host CLI template for `{cli_system}`. Checked: {}",
+        candidates
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
 }
 
 pub(crate) fn apply_host_cli_selection(

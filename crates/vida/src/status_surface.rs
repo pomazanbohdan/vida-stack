@@ -62,6 +62,19 @@ fn runtime_root_for_selected_system(
     let relative = configured.unwrap_or_else(|| format!(".{system}"));
     project_root.join(relative).display().to_string()
 }
+
+fn has_runtime_root_session_write_guard(value: &serde_json::Value) -> bool {
+    value["status"].as_str() == Some("blocked_by_default")
+        && value["root_session_role"]
+            .as_str()
+            .is_some_and(|role| !role.trim().is_empty())
+        && value["local_write_requires_exception_path"].is_boolean()
+        && value["required_exception_evidence"]
+            .as_str()
+            .is_some_and(|evidence| !evidence.trim().is_empty())
+        && value["pre_write_checkpoint_required"].is_boolean()
+}
+
 fn migration_requires_action(migration_state: &str) -> bool {
     !matches!(migration_state, "none_required" | "no_migration_required")
 }
@@ -1179,7 +1192,7 @@ pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
         }
     }
     let guard = guard.unwrap_or(serde_json::Value::Null);
-    let guard_ok = super::has_runtime_root_session_write_guard(&guard);
+    let guard_ok = has_runtime_root_session_write_guard(&guard);
     serde_json::json!({
         "status": if guard_ok { "blocked_by_default" } else { "missing" },
         "reason": if guard_ok { serde_json::Value::Null } else { serde_json::Value::String("missing_root_session_write_guard".to_string()) },
@@ -1192,12 +1205,12 @@ pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
 
 fn runtime_root_session_write_guard_from_snapshot(snapshot: &serde_json::Value) -> Option<serde_json::Value> {
     let direct_guard = &snapshot["payload"]["role_selection"]["execution_plan"]["root_session_write_guard"];
-    if super::has_runtime_root_session_write_guard(direct_guard) {
+    if has_runtime_root_session_write_guard(direct_guard) {
         return Some(direct_guard.clone());
     }
     let execution_plan_contract_guard = &snapshot["payload"]["role_selection"]["execution_plan"]
         ["orchestration_contract"]["root_session_write_guard"];
-    if super::has_runtime_root_session_write_guard(execution_plan_contract_guard) {
+    if has_runtime_root_session_write_guard(execution_plan_contract_guard) {
         return Some(execution_plan_contract_guard.clone());
     }
 
@@ -1206,11 +1219,11 @@ fn runtime_root_session_write_guard_from_snapshot(snapshot: &serde_json::Value) 
         .or_else(|| snapshot["dispatch_receipt"]["dispatch_packet_path"].as_str())?;
     let packet = super::read_json_file_if_present(Path::new(dispatch_packet_path))?;
     let packet_guard = &packet["root_session_write_guard"];
-    if super::has_runtime_root_session_write_guard(packet_guard) {
+    if has_runtime_root_session_write_guard(packet_guard) {
         return Some(packet_guard.clone());
     }
     let packet_contract_guard = &packet["orchestration_contract"]["root_session_write_guard"];
-    if super::has_runtime_root_session_write_guard(packet_contract_guard) {
+    if has_runtime_root_session_write_guard(packet_contract_guard) {
         return Some(packet_contract_guard.clone());
     }
 
