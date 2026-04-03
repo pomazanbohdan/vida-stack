@@ -71,7 +71,7 @@ A fresh code/spec pass for the current workspace sharpens the checkpoint in thes
 8. scaffold/template/init/activator surfaces still drift from the multi-system carrier law: `vida.config.yaml.template`, fallback materialization, generated docs, and readiness checks remain codex-first even when another host system is selected.
 9. activation truth is DB-persisted and read-back verified, but the stored truth is still a launcher-captured snapshot of `vida.config.yaml`, compiled bundle, and pack-router keywords rather than one DB-native configurator authority.
 10. the `TaskFlow -> DocFlow` seam is still assembled in the launcher by in-process `docflow_cli` calls and shell-derived verdict shaping; the current “receipt-backed seam” check proves protocol-binding receipt presence only.
-11. recovery/checkpoint surfaces are meaningful resumability projections, but replay/fork lineage, projection-checkpoint artifacts, and append-only transition history are not implemented; the test suite still encodes codex-era bundle names, backend literals, and exact legacy surfaces.
+11. recovery/checkpoint surfaces are meaningful resumability projections, but replay/fork lineage, projection-checkpoint artifacts, and append-only transition history are not implemented; boot, bundle, and recovery-oriented proofs still encode codex-era bundle names, backend literals, and exact legacy surfaces even though status parity now has a bounded neutral path.
 
 ## 2. Workspace Reality Snapshot
 
