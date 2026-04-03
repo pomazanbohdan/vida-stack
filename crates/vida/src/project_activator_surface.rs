@@ -577,7 +577,7 @@ pub(crate) fn materialize_host_cli_template(
                         &codex_dispatch_aliases,
                     )?;
                 }
-                refresh_codex_worker_strategy(project_root, &codex_roles, &scoring_policy);
+                refresh_worker_strategy(project_root, &codex_roles, &scoring_policy);
             }
             Ok(runtime_root)
         }
@@ -1706,16 +1706,16 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
             "default_agent_topology": default_agent_topology,
             "codex_tier_rates": codex_tier_rates,
             "local_agent_score_state": {
-                "strategy_store": CODEX_WORKER_STRATEGY_STATE,
-                "scorecards_store": CODEX_WORKER_SCORECARDS_STATE
+                "strategy_store": WORKER_STRATEGY_STATE,
+                "scorecards_store": WORKER_SCORECARDS_STATE
             },
             "execution_carrier_model": {
                 "agent_identity": "execution_carrier",
                 "runtime_role_identity": "activation_state",
                 "selection_rule": "capability_first_then_score_guard_then_cheapest_tier",
                 "carrier_catalog_owner": "vida.config.yaml -> configured host-system carrier surfaces",
-                "strategy_store": CODEX_WORKER_STRATEGY_STATE,
-                "scorecards_store": CODEX_WORKER_SCORECARDS_STATE,
+                "strategy_store": WORKER_STRATEGY_STATE,
+                "scorecards_store": WORKER_SCORECARDS_STATE,
                 "inspect_commands": {
                     "snapshot": "vida taskflow consume agent-system --json",
                     "carrier_catalog": "vida taskflow consume agent-system --json | jq '.snapshot.carriers'",

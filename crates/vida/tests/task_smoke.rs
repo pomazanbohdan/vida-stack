@@ -1013,10 +1013,7 @@ fn status_json_reports_non_codex_host_agents_summary() {
     let host_agents = &parsed["host_agents"];
     assert_eq!(host_agents["host_cli_system"], "qwen");
     assert_eq!(host_agents["runtime_surface"], ".qwen");
-    assert_eq!(
-        host_agents["root_session_write_guard"]["status"],
-        "missing"
-    );
+    assert_eq!(host_agents["root_session_write_guard"]["status"], "missing");
     assert_eq!(parsed["root_session_write_guard"]["status"], "missing");
     let runtime_root = host_agents["runtime_root"]
         .as_str()
@@ -1025,7 +1022,9 @@ fn status_json_reports_non_codex_host_agents_summary() {
     let system_entry = &host_agents["system_entry"];
     assert!(system_entry.is_object());
     assert_eq!(
-        system_entry["template_root"].as_str().expect("template_root"),
+        system_entry["template_root"]
+            .as_str()
+            .expect("template_root"),
         ".qwen"
     );
     assert_eq!(
@@ -1033,12 +1032,39 @@ fn status_json_reports_non_codex_host_agents_summary() {
         ".qwen"
     );
     assert_eq!(
-        system_entry["materialization_mode"].as_str().expect("materialization_mode"),
+        system_entry["materialization_mode"]
+            .as_str()
+            .expect("materialization_mode"),
         "copy_tree_only"
     );
     assert_eq!(system_entry["enabled"].as_bool(), Some(true));
-    assert_eq!(system_entry["carriers"], serde_json::json!({}));
-    assert_eq!(host_agents["agents"], serde_json::json!({}));
+    assert_eq!(
+        system_entry["carriers"]["qwen-primary"]["tier"]
+            .as_str()
+            .expect("carrier tier"),
+        "qwen"
+    );
+    assert_eq!(
+        system_entry["carriers"]["qwen-primary"]["rate"].as_i64(),
+        Some(4)
+    );
+    let agents = host_agents["agents"]
+        .as_object()
+        .expect("agents summary should render");
+    let qwen_primary = agents
+        .get("qwen-primary")
+        .expect("qwen carrier summary should render");
+    assert_eq!(qwen_primary["tier"].as_str().expect("tier"), "qwen");
+    assert_eq!(qwen_primary["rate"].as_i64(), Some(4));
+    assert_eq!(
+        qwen_primary["default_runtime_role"]
+            .as_str()
+            .expect("default runtime role"),
+        "worker"
+    );
+    assert_eq!(qwen_primary["feedback_count"].as_u64(), Some(0));
+    assert!(qwen_primary["effective_score"].is_null());
+    assert!(qwen_primary["lifecycle_state"].is_null());
     assert!(host_agents["selection_policy"].is_null());
     assert_eq!(host_agents["external_cli_preflight"]["status"], "pass");
 
@@ -1049,7 +1075,10 @@ fn status_json_reports_non_codex_host_agents_summary() {
 fn status_json_restores_root_session_guard_after_consume_continue_snapshot() {
     let state_dir = unique_state_dir();
 
-    let boot = vida().arg("boot").env("VIDA_STATE_DIR", &state_dir).output();
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output();
     let boot = boot.expect("boot should run");
     assert!(
         boot.status.success(),
@@ -1087,7 +1116,10 @@ fn status_json_restores_root_session_guard_after_consume_continue_snapshot() {
     .expect("final snapshot should write");
 
     let status = run_command_json(&["status", "--json"], &state_dir);
-    assert_eq!(status["root_session_write_guard"]["status"], "blocked_by_default");
+    assert_eq!(
+        status["root_session_write_guard"]["status"],
+        "blocked_by_default"
+    );
     assert_eq!(
         status["host_agents"]["root_session_write_guard"]["status"],
         "blocked_by_default"
@@ -1100,7 +1132,10 @@ fn status_json_restores_root_session_guard_after_consume_continue_snapshot() {
 fn status_json_prefers_latest_final_snapshot_guard_when_latest_snapshot_is_bundle_check() {
     let state_dir = unique_state_dir();
 
-    let boot = vida().arg("boot").env("VIDA_STATE_DIR", &state_dir).output();
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output();
     let boot = boot.expect("boot should run");
     assert!(
         boot.status.success(),
@@ -1149,7 +1184,10 @@ fn status_json_prefers_latest_final_snapshot_guard_when_latest_snapshot_is_bundl
     .expect("bundle-check snapshot should write");
 
     let status = run_command_json(&["status", "--json"], &state_dir);
-    assert_eq!(status["root_session_write_guard"]["status"], "blocked_by_default");
+    assert_eq!(
+        status["root_session_write_guard"]["status"],
+        "blocked_by_default"
+    );
     assert_eq!(
         status["host_agents"]["root_session_write_guard"]["status"],
         "blocked_by_default"
@@ -1240,16 +1278,14 @@ fn status_json_blocks_external_cli_when_sandbox_active_and_network_unreachable()
         preflight["blocker_code"],
         "external_cli_network_access_unavailable_under_sandbox"
     );
-    assert!(
-        preflight["next_actions"]
-            .as_array()
-            .expect("next actions should be array")
-            .iter()
-            .any(|row| row
-                .as_str()
-                .unwrap_or_default()
-                .contains("Allow network access"))
-    );
+    assert!(preflight["next_actions"]
+        .as_array()
+        .expect("next actions should be array")
+        .iter()
+        .any(|row| row
+            .as_str()
+            .unwrap_or_default()
+            .contains("Allow network access")));
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }

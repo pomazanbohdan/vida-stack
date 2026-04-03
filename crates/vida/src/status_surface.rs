@@ -1067,12 +1067,11 @@ fn build_host_agent_status_summary(project_root: &Path) -> Option<serde_json::Va
             } else {
                 overlay_roles
             };
-            let strategy = super::read_json_file_if_present(
-                &super::codex_worker_strategy_state_path(project_root),
-            )
-            .unwrap_or(serde_json::Value::Null);
+            let strategy =
+                super::read_json_file_if_present(&super::worker_strategy_state_path(project_root))
+                    .unwrap_or(serde_json::Value::Null);
             let scorecards = super::read_json_file_if_present(
-                &super::codex_worker_scorecards_state_path(project_root),
+                &super::worker_scorecards_state_path(project_root),
             )
             .unwrap_or(serde_json::Value::Null);
 
@@ -1136,18 +1135,34 @@ fn build_host_agent_status_summary(project_root: &Path) -> Option<serde_json::Va
             payload.insert(
                 "stores".to_string(),
                 serde_json::json!({
-                    "scorecards": super::CODEX_WORKER_SCORECARDS_STATE,
-                    "strategy": super::CODEX_WORKER_STRATEGY_STATE,
+                    "scorecards": super::WORKER_SCORECARDS_STATE,
+                    "strategy": super::WORKER_STRATEGY_STATE,
                     "observability": super::HOST_AGENT_OBSERVABILITY_STATE,
                 }),
             );
             Some(serde_json::Value::Object(payload))
         }
         _ => {
+            let carrier_summary =
+                host_cli_system_carrier_summary(host_cli_entry.as_ref(), &selected_cli_system);
             payload.insert(
                 "agents".to_string(),
-                serde_json::Value::Object(host_cli_system_carrier_summary(host_cli_entry.as_ref())),
+                serde_json::Value::Object(carrier_summary.clone()),
             );
+            if let Some(system_entry) = payload
+                .get_mut("system_entry")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                let carriers_empty = system_entry
+                    .get("carriers")
+                    .is_none_or(|value| value.is_null() || value == &serde_json::json!({}));
+                if carriers_empty {
+                    system_entry.insert(
+                        "carriers".to_string(),
+                        synthesized_host_cli_carrier_contract(&carrier_summary),
+                    );
+                }
+            }
             payload.insert(
                 "stores".to_string(),
                 serde_json::json!({
@@ -1295,12 +1310,13 @@ fn host_cli_system_entry_summary(
 
 fn host_cli_system_carrier_summary(
     entry: Option<&serde_yaml::Value>,
+    system: &str,
 ) -> serde_json::Map<String, serde_json::Value> {
     let mut agents = serde_json::Map::new();
     let Some(serde_yaml::Value::Mapping(carriers)) =
         entry.and_then(|value| super::yaml_lookup(value, &["carriers"]))
     else {
-        return agents;
+        return synthesized_host_cli_carrier_summary(system);
     };
     for (carrier_id, carrier_value) in carriers {
         let Some(carrier_id) = carrier_id
@@ -1328,7 +1344,57 @@ fn host_cli_system_carrier_summary(
             }),
         );
     }
+    if agents.is_empty() {
+        synthesized_host_cli_carrier_summary(system)
+    } else {
+        agents
+    }
+}
+
+fn synthesized_host_cli_carrier_summary(
+    system: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut agents = serde_json::Map::new();
+    if system.trim().is_empty() || system.eq_ignore_ascii_case("codex") {
+        return agents;
+    }
+    agents.insert(
+        format!("{system}-primary"),
+        serde_json::json!({
+            "tier": system,
+            "rate": 4,
+            "reasoning_band": "medium",
+            "default_runtime_role": "worker",
+            "runtime_roles": ["worker"],
+            "task_classes": ["implementation", "research"],
+            "feedback_count": 0,
+            "last_feedback_at": serde_json::Value::Null,
+            "last_feedback_outcome": serde_json::Value::Null,
+            "effective_score": serde_json::Value::Null,
+            "lifecycle_state": serde_json::Value::Null,
+        }),
+    );
     agents
+}
+
+fn synthesized_host_cli_carrier_contract(
+    agents: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Value {
+    let mut carriers = serde_json::Map::new();
+    for (carrier_id, summary) in agents {
+        carriers.insert(
+            carrier_id.clone(),
+            serde_json::json!({
+                "tier": summary["tier"].clone(),
+                "rate": summary["rate"].clone(),
+                "reasoning_band": summary["reasoning_band"].clone(),
+                "default_runtime_role": summary["default_runtime_role"].clone(),
+                "runtime_roles": summary["runtime_roles"].clone(),
+                "task_classes": summary["task_classes"].clone(),
+            }),
+        );
+    }
+    serde_json::Value::Object(carriers)
 }
 
 fn default_host_cli_materialization_mode(system: &str) -> String {

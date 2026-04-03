@@ -142,8 +142,8 @@ const DEFAULT_PROJECT_DOC_TOOLING_DOC: &str = "docs/process/documentation-toolin
 const DEFAULT_PROJECT_RESEARCH_README: &str = "docs/research/README.md";
 const PROJECT_ACTIVATION_RECEIPT_LATEST: &str = ".vida/receipts/project-activation.latest.json";
 const SPEC_BOOTSTRAP_RECEIPT_LATEST: &str = ".vida/receipts/spec-bootstrap.latest.json";
-const CODEX_WORKER_SCORECARDS_STATE: &str = ".vida/state/worker-scorecards.json";
-const CODEX_WORKER_STRATEGY_STATE: &str = ".vida/state/worker-strategy.json";
+const WORKER_SCORECARDS_STATE: &str = ".vida/state/worker-scorecards.json";
+const WORKER_STRATEGY_STATE: &str = ".vida/state/worker-strategy.json";
 const HOST_AGENT_OBSERVABILITY_STATE: &str = ".vida/state/host-agent-observability.json";
 const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER: &str =
     "run_graph_latest_dispatch_receipt_summary_inconsistent";
@@ -468,12 +468,12 @@ fn is_missing_or_placeholder(value: Option<&str>, placeholder: &str) -> bool {
     }
 }
 
-fn codex_worker_scorecards_state_path(project_root: &Path) -> PathBuf {
-    project_root.join(CODEX_WORKER_SCORECARDS_STATE)
+fn worker_scorecards_state_path(project_root: &Path) -> PathBuf {
+    project_root.join(WORKER_SCORECARDS_STATE)
 }
 
-fn codex_worker_strategy_state_path(project_root: &Path) -> PathBuf {
-    project_root.join(CODEX_WORKER_STRATEGY_STATE)
+fn worker_strategy_state_path(project_root: &Path) -> PathBuf {
+    project_root.join(WORKER_STRATEGY_STATE)
 }
 
 fn host_agent_observability_state_path(project_root: &Path) -> PathBuf {
@@ -663,7 +663,7 @@ fn clamp_score(value: f64) -> u64 {
     value.round().clamp(0.0, 100.0) as u64
 }
 
-fn codex_scorecard_feedback_rows(
+fn worker_scorecard_feedback_rows(
     scorecards: &serde_json::Value,
     role_id: &str,
 ) -> Vec<serde_json::Value> {
@@ -673,11 +673,11 @@ fn codex_scorecard_feedback_rows(
         .unwrap_or_default()
 }
 
-fn load_or_initialize_codex_worker_scorecards(
+fn load_or_initialize_worker_scorecards(
     project_root: &Path,
-    codex_roles: &[serde_json::Value],
+    carrier_roles: &[serde_json::Value],
 ) -> serde_json::Value {
-    let path = codex_worker_scorecards_state_path(project_root);
+    let path = worker_scorecards_state_path(project_root);
     let mut scorecards = read_json_file_if_present(&path).unwrap_or_else(|| {
         serde_json::json!({
             "schema_version": 1,
@@ -693,7 +693,7 @@ fn load_or_initialize_codex_worker_scorecards(
         let agents = scorecards["agents"]
             .as_object_mut()
             .expect("agents object should exist");
-        for row in codex_roles {
+        for row in carrier_roles {
             if let Some(role_id) = row["role_id"].as_str() {
                 agents.insert(role_id.to_string(), serde_json::json!({"feedback": []}));
             }
@@ -708,7 +708,7 @@ fn load_or_initialize_codex_worker_scorecards(
     };
 
     let mut changed = false;
-    for row in codex_roles {
+    for row in carrier_roles {
         let Some(role_id) = row["role_id"].as_str() else {
             continue;
         };
@@ -733,12 +733,12 @@ fn load_or_initialize_codex_worker_scorecards(
     scorecards
 }
 
-fn refresh_codex_worker_strategy(
+fn refresh_worker_strategy(
     project_root: &Path,
-    codex_roles: &[serde_json::Value],
+    carrier_roles: &[serde_json::Value],
     scoring_policy: &serde_json::Value,
 ) -> serde_json::Value {
-    let scorecards = load_or_initialize_codex_worker_scorecards(project_root, codex_roles);
+    let scorecards = load_or_initialize_worker_scorecards(project_root, carrier_roles);
     let promotion_score = json_u64(json_lookup(scoring_policy, &["promotion_score"])).unwrap_or(75);
     let demotion_score = json_u64(json_lookup(scoring_policy, &["demotion_score"])).unwrap_or(45);
     let consecutive_failure_limit =
@@ -749,13 +749,13 @@ fn refresh_codex_worker_strategy(
         json_u64(json_lookup(scoring_policy, &["retirement_failure_limit"])).unwrap_or(8);
 
     let mut agents = serde_json::Map::new();
-    for row in codex_roles {
+    for row in carrier_roles {
         let Some(role_id) = row["role_id"].as_str() else {
             continue;
         };
         let tier = row["tier"].as_str().unwrap_or(role_id);
         let rate = row["rate"].as_u64().unwrap_or(0);
-        let feedback_rows = codex_scorecard_feedback_rows(&scorecards, role_id);
+        let feedback_rows = worker_scorecard_feedback_rows(&scorecards, role_id);
         let feedback_count = feedback_rows.len() as u64;
         let mut success_runs = 0u64;
         let mut failure_runs = 0u64;
@@ -829,8 +829,8 @@ fn refresh_codex_worker_strategy(
         "updated_at": time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .expect("rfc3339 timestamp should render"),
-        "store_path": CODEX_WORKER_STRATEGY_STATE,
-        "scorecards_path": CODEX_WORKER_SCORECARDS_STATE,
+        "store_path": WORKER_STRATEGY_STATE,
+        "scorecards_path": WORKER_SCORECARDS_STATE,
         "selection_policy": {
             "rule": "capability_first_then_score_guard_then_cheapest_tier",
             "promotion_score": promotion_score,
@@ -840,7 +840,7 @@ fn refresh_codex_worker_strategy(
         },
         "agents": agents
     });
-    let path = codex_worker_strategy_state_path(project_root);
+    let path = worker_strategy_state_path(project_root);
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -849,11 +849,11 @@ fn refresh_codex_worker_strategy(
     strategy
 }
 
-fn build_codex_pricing_policy(
-    codex_roles: &[serde_json::Value],
+fn build_carrier_pricing_policy(
+    carrier_roles: &[serde_json::Value],
     worker_strategy: &serde_json::Value,
 ) -> serde_json::Value {
-    let mut tiers = codex_roles.to_vec();
+    let mut tiers = carrier_roles.to_vec();
     tiers.sort_by(|left, right| {
         left["rate"]
             .as_u64()
@@ -3189,14 +3189,14 @@ fn build_compiled_agent_extension_bundle_for_root(
     let worker_strategy = if codex_roles.is_empty() {
         serde_json::json!({
             "schema_version": 1,
-            "store_path": CODEX_WORKER_STRATEGY_STATE,
-            "scorecards_path": CODEX_WORKER_SCORECARDS_STATE,
+            "store_path": WORKER_STRATEGY_STATE,
+            "scorecards_path": WORKER_SCORECARDS_STATE,
             "agents": {}
         })
     } else {
-        refresh_codex_worker_strategy(root, &codex_roles, &scoring_policy)
+        refresh_worker_strategy(root, &codex_roles, &scoring_policy)
     };
-    let pricing_policy = build_codex_pricing_policy(&codex_roles, &worker_strategy);
+    let pricing_policy = build_carrier_pricing_policy(&codex_roles, &worker_strategy);
     let project_roles =
         registry_rows_by_key(&roles_registry, "roles", "role_id", &enabled_project_roles);
     let project_skills = registry_rows_by_key(
@@ -6437,8 +6437,8 @@ mod tests {
 
         assert!(harness.path().join(".codex/config.toml").is_file());
         assert!(harness.path().join(".codex/agents").is_dir());
-        assert!(harness.path().join(CODEX_WORKER_SCORECARDS_STATE).is_file());
-        assert!(harness.path().join(CODEX_WORKER_STRATEGY_STATE).is_file());
+        assert!(harness.path().join(WORKER_SCORECARDS_STATE).is_file());
+        assert!(harness.path().join(WORKER_STRATEGY_STATE).is_file());
         let config = fs::read_to_string(harness.path().join("vida.config.yaml"))
             .expect("config should exist");
         assert!(config.contains("cli_system: codex"));
@@ -6599,8 +6599,8 @@ mod tests {
             .join("docs/process/codex-agent-configuration-guide.md")
             .is_file());
         assert!(harness.path().join(".codex/config.toml").is_file());
-        assert!(harness.path().join(CODEX_WORKER_SCORECARDS_STATE).is_file());
-        assert!(harness.path().join(CODEX_WORKER_STRATEGY_STATE).is_file());
+        assert!(harness.path().join(WORKER_SCORECARDS_STATE).is_file());
+        assert!(harness.path().join(WORKER_STRATEGY_STATE).is_file());
         assert!(
             harness
                 .path()
@@ -7576,7 +7576,7 @@ mod tests {
         );
 
         let scorecards =
-            read_json_file_if_present(&harness.path().join(CODEX_WORKER_SCORECARDS_STATE))
+            read_json_file_if_present(&harness.path().join(WORKER_SCORECARDS_STATE))
                 .expect("scorecards should exist");
         let rows = scorecards["agents"]["junior"]["feedback"]
             .as_array()
@@ -7586,7 +7586,7 @@ mod tests {
         assert_eq!(rows[0]["outcome"], "success");
         assert_eq!(rows[0]["task_class"], "implementation");
 
-        let strategy = read_json_file_if_present(&harness.path().join(CODEX_WORKER_STRATEGY_STATE))
+        let strategy = read_json_file_if_present(&harness.path().join(WORKER_STRATEGY_STATE))
             .expect("strategy should exist");
         assert!(
             strategy["agents"]["junior"]["effective_score"]

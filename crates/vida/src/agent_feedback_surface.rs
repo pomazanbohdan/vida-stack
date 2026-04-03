@@ -350,9 +350,9 @@ fn append_host_agent_feedback(
                     input.agent_id
                 ));
             }
-            let scorecards_path = super::codex_worker_scorecards_state_path(project_root);
+            let scorecards_path = super::worker_scorecards_state_path(project_root);
             let mut scorecards =
-                super::load_or_initialize_codex_worker_scorecards(project_root, &codex_roles);
+                super::load_or_initialize_worker_scorecards(project_root, &codex_roles);
             if !scorecards["agents"][input.agent_id]["feedback"].is_array() {
                 scorecards["agents"][input.agent_id]["feedback"] = serde_json::json!([]);
             }
@@ -392,7 +392,7 @@ fn append_host_agent_feedback(
             )
             .unwrap_or(serde_json::Value::Null);
             let strategy =
-                super::refresh_codex_worker_strategy(project_root, &codex_roles, &scoring_policy);
+                super::refresh_worker_strategy(project_root, &codex_roles, &scoring_policy);
             let observability_event =
                 super::append_host_agent_observability_event(project_root, input)?;
             Ok(serde_json::json!({
@@ -403,8 +403,8 @@ fn append_host_agent_feedback(
                 "recorded_outcome": input.outcome,
                 "recorded_task_class": input.task_class,
                 "recorded_notes": input.notes.unwrap_or(""),
-                "scorecards_store": super::CODEX_WORKER_SCORECARDS_STATE,
-                "strategy_store": super::CODEX_WORKER_STRATEGY_STATE,
+                "scorecards_store": super::WORKER_SCORECARDS_STATE,
+                "strategy_store": super::WORKER_STRATEGY_STATE,
                 "observability_store": super::HOST_AGENT_OBSERVABILITY_STATE,
                 "strategy_row": strategy["agents"][input.agent_id],
                 "observability_event": observability_event
