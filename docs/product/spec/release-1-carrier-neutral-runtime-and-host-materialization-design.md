@@ -19,17 +19,17 @@ Structured-template rule:
 ## Current Context
 - Existing system overview:
   - `vida.config.yaml` already models `host_environment.systems.*`, configured carriers, and agent-system posture.
-  - runtime execution and bundle identity still center on `codex_multi_agent`, `codex_runtime_assignment`, `.codex`, and codex-shaped fallback behavior, although status parity now has a bounded neutral proof path.
+  - runtime execution and bundle identity still center on `codex_multi_agent`, `codex_runtime_assignment`, and `.codex`, although host-system execution posture and status parity now have bounded config-driven neutral paths.
 - Key components and relationships:
-  - [`crates/vida/src/project_activator_surface.rs`](/home/unnamed/project/vida-stack/crates/vida/src/project_activator_surface.rs) owns host-system registry, materialization, and template rendering, but still special-cases `codex`.
-  - [`crates/vida/src/status_surface.rs`](/home/unnamed/project/vida-stack/crates/vida/src/status_surface.rs) defaults to `codex`, loads `.codex`, and mixes carrier status with launcher-local fallbacks.
+  - [`crates/vida/src/project_activator_surface.rs`](/home/unnamed/project/vida-stack/crates/vida/src/project_activator_surface.rs) owns host-system registry, materialization, and template rendering; execution class is now config-driven there, but codex-specific adapter branches still remain.
+  - [`crates/vida/src/status_surface.rs`](/home/unnamed/project/vida-stack/crates/vida/src/status_surface.rs) now resolves selected systems without codex-only fallback and reads external/internal posture from config, but still loads `.codex` and keeps compat-heavy launcher fallbacks.
   - [`crates/vida/src/main.rs`](/home/unnamed/project/vida-stack/crates/vida/src/main.rs) still owns `codex_*` runtime-assignment logic, pricing policy, and bundle field names, although local worker score/state stores are already neutralized.
   - [`crates/vida/src/taskflow_consume_bundle.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_consume_bundle.rs) publishes bundle snapshots from `activation_bundle["codex_multi_agent"]`.
   - [`crates/vida/src/taskflow_routing.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_routing.rs) derives routing from codex-shaped assignment payloads.
   - [`crates/vida/tests/boot_smoke.rs`](/home/unnamed/project/vida-stack/crates/vida/tests/boot_smoke.rs) and bundle-oriented proof paths still prove codex-era names, while [`crates/vida/tests/task_smoke.rs`](/home/unnamed/project/vida-stack/crates/vida/tests/task_smoke.rs) now includes bounded non-codex status parity coverage.
 - Current pain point or gap:
   - launcher still owns carrier truth instead of activation + compiled bundle + routing contracts
-  - host-system fallback/materialization remains codex-first even when another system is selected
+  - bundle truth and adapter materialization remain codex-heavy even though host-system execution posture is now config-driven
   - bundle, boot, and protocol-facing proof fixtures still pin codex-era names, which blocks safe contract neutralization
   - Release-1 plan already has `r1-05-a`, `r1-05-b`, and `r1-08-*`, but this bounded implementation pack is not yet written down as one canonical design
 
