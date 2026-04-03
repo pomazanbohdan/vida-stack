@@ -665,7 +665,10 @@ pub(crate) fn run_taskflow_task_bridge(
                     .get("status")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("missing");
-                eprintln!("task import-jsonl helper reported non-canonical status `{}`", status);
+                eprintln!(
+                    "task import-jsonl helper reported non-canonical status `{}`",
+                    status
+                );
                 return Err("task import-jsonl helper reported non-canonical status".to_string());
             }
             if as_json {
@@ -710,7 +713,10 @@ pub(crate) fn run_taskflow_task_bridge(
                     .get("status")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("missing");
-                eprintln!("task export-jsonl helper reported non-canonical status `{}`", status);
+                eprintln!(
+                    "task export-jsonl helper reported non-canonical status `{}`",
+                    status
+                );
                 return Err("task export-jsonl helper reported non-canonical status".to_string());
             }
             if as_json {
@@ -1015,6 +1021,7 @@ pub(crate) fn run_taskflow_task_bridge(
                         project_root,
                         task,
                         &close_reason,
+                        "vida taskflow task close",
                     )
                 }
                 None => serde_json::json!({

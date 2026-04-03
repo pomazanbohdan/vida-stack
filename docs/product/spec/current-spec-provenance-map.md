@@ -167,6 +167,8 @@ Companion rule:
    Sources: `docs/product/spec/release-1-proof-scenario-catalog.md`, `docs/product/spec/release-1-schema-versioning-and-compatibility-law.md`, and the current requirement for canonical examples and regression fixtures
 20. [release-1-risk-acceptance-register.md](release-1-risk-acceptance-register.md)
    Sources: `docs/product/spec/release-1-closure-contract.md`, `docs/product/spec/release-1-control-metrics-and-gates.md`, and the current governance need to keep all open acceptances explicit rather than implicit
+21. [taskflow-task-command-parity-and-proxy-alignment-design.md](taskflow-task-command-parity-and-proxy-alignment-design.md)
+   Sources: `docs/product/spec/release-1-plan.md`, `docs/product/spec/status-families-and-query-surface-model.md`, `docs/product/spec/release-1-operator-surface-contract.md`, current launcher task surface code in `crates/vida/src/{cli,task_surface,taskflow_task_bridge,taskflow_layer4,taskflow_proxy}.rs`, and the active DB-backed Release-1 TaskFlow program tasks `r1-01-a` and `r1-01-d`
 
 ## Routing Pointers
 
@@ -217,5 +219,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-provenance-map.md
 created_at: '2026-03-16T09:05:00+02:00'
-updated_at: 2026-03-16T11:34:41.64790715Z
+updated_at: 2026-04-03T09:58:30+00:00
 changelog_ref: current-spec-provenance-map.changelog.jsonl

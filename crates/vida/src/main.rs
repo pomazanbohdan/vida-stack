@@ -1,12 +1,12 @@
 mod activation_status;
 mod agent_feedback_surface;
 mod cli;
-mod operator_contracts;
 mod config_value_utils;
 mod docflow_proxy;
 mod doctor_surface;
 mod init_surfaces;
 mod memory_surface;
+mod operator_contracts;
 mod project_activator_surface;
 mod protocol_surface;
 mod release1_contracts;
@@ -61,8 +61,9 @@ pub(crate) use surface_render::{
 };
 use task_cli_render::{
     print_blocked_tasks, print_task_critical_path, print_task_dependencies,
-    print_task_dependency_mutation, print_task_dependency_tree, print_task_graph_issues,
-    print_task_list, print_task_show,
+    print_task_dependency_mutation, print_task_dependency_tree, print_task_export_summary,
+    print_task_graph_issues, print_task_list, print_task_mutation, print_task_next_display_id,
+    print_task_show,
 };
 use taskflow_layer4::print_taskflow_proxy_help;
 use taskflow_proxy::run_taskflow_proxy;
@@ -354,7 +355,7 @@ fn build_task_create_command(
     description_quoted: Option<&str>,
 ) -> String {
     let mut command = format!(
-        "vida taskflow task create {} {} --type {} --status open",
+        "vida task create {} {} --type {} --status open",
         task_id,
         shell_quote(title),
         task_type
@@ -374,7 +375,7 @@ fn build_task_create_command(
 
 fn build_task_close_command(task_id: &str, reason: &str) -> String {
     format!(
-        "vida taskflow task close {} --reason {} --json",
+        "vida task close {} --reason {} --json",
         task_id,
         shell_quote(reason)
     )
@@ -3749,8 +3750,8 @@ fn downstream_activation_fields(
             "taskflow_pack".to_string(),
             match dispatch_target {
                 "spec-pack" => Some("vida taskflow bootstrap-spec".to_string()),
-                "work-pool-pack" => Some("vida taskflow task create".to_string()),
-                "dev-pack" => Some("vida taskflow task create".to_string()),
+                "work-pool-pack" => Some("vida task create".to_string()),
+                "dev-pack" => Some("vida task create".to_string()),
                 _ => None,
             },
             None,
@@ -4511,9 +4512,7 @@ mod runtime_dispatch_packet_context_tests {
     }
 }
 
-fn write_runtime_dispatch_packet(
-    ctx: &RuntimeDispatchPacketContext<'_>,
-) -> Result<String, String> {
+fn write_runtime_dispatch_packet(ctx: &RuntimeDispatchPacketContext<'_>) -> Result<String, String> {
     let packet_dir = ctx
         .state_root
         .join("runtime-consumption")
@@ -5522,8 +5521,7 @@ fn release1_status_is_blocked(value: &serde_json::Value) -> bool {
 
 fn consume_final_operator_blocker_codes(payload: &serde_json::Value) -> Vec<String> {
     let mut blocker_codes = Vec::new();
-    if payload["bundle_check"]["activation_status"].as_str()
-        != Some("ready_enough_for_normal_work")
+    if payload["bundle_check"]["activation_status"].as_str() != Some("ready_enough_for_normal_work")
     {
         blocker_codes.push("bundle_activation_not_ready".to_string());
     }
@@ -5538,8 +5536,7 @@ fn consume_final_operator_blocker_codes(payload: &serde_json::Value) -> Vec<Stri
 
 fn consume_final_operator_next_actions(payload: &serde_json::Value) -> Vec<String> {
     let mut next_actions = Vec::new();
-    if payload["bundle_check"]["activation_status"].as_str()
-        != Some("ready_enough_for_normal_work")
+    if payload["bundle_check"]["activation_status"].as_str() != Some("ready_enough_for_normal_work")
     {
         next_actions.push("Resolve activation blockers before consume-final handoff.".to_string());
     }
@@ -6004,6 +6001,26 @@ mod tests {
         assert!(
             help.contains("protocol"),
             "protocol should be present in help"
+        );
+    }
+
+    #[test]
+    fn task_help_lists_mutation_commands() {
+        let mut command = Cli::command();
+        let task = command
+            .find_subcommand_mut("task")
+            .expect("task subcommand should exist");
+        let help = task.render_long_help().to_string();
+        assert!(help.contains("create"), "task help should list create");
+        assert!(help.contains("update"), "task help should list update");
+        assert!(help.contains("close"), "task help should list close");
+        assert!(
+            help.contains("next-display-id"),
+            "task help should list next-display-id"
+        );
+        assert!(
+            help.contains("export-jsonl"),
+            "task help should list export-jsonl"
         );
     }
 
@@ -6938,7 +6955,7 @@ mod tests {
             supersedes_receipt_id: None,
             exception_path_receipt_id: None,
             dispatch_kind: "taskflow_pack".to_string(),
-            dispatch_surface: Some("vida taskflow task create".to_string()),
+            dispatch_surface: Some("vida task create".to_string()),
             dispatch_command: None,
             dispatch_packet_path: None,
             dispatch_result_path: None,
@@ -6989,7 +7006,7 @@ mod tests {
                 },
                 "tracked_flow_bootstrap": {
                     "work_pool_task": {
-                        "create_command": "vida taskflow task create feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
+                        "create_command": "vida task create feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
                     }
                 },
                 "development_flow": {
@@ -7081,7 +7098,7 @@ mod tests {
             execution_plan: serde_json::json!({
                 "tracked_flow_bootstrap": {
                     "work_pool_task": {
-                        "create_command": "vida taskflow task create feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
+                        "create_command": "vida task create feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
                     }
                 },
                 "development_flow": {
@@ -7136,7 +7153,7 @@ mod tests {
         assert_eq!(
             command.as_deref(),
             Some(
-                "vida taskflow task create feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
+                "vida task create feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
             )
         );
         assert!(!ready);

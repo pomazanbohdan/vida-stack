@@ -1222,7 +1222,7 @@ pub(crate) fn build_orchestrator_init_view(
             "vida protocol view bootstrap/router",
             "vida protocol view agent-definitions/entry.orchestrator-entry",
             "vida protocol view instruction-contracts/overlay.step-thinking-runtime-capsule",
-            "vida taskflow task ready --json",
+            "vida task ready --json",
             "vida taskflow consume bundle check --json",
             "vida docflow protocol-coverage-check --profile active-canon"
         ],
@@ -1293,7 +1293,7 @@ pub(crate) fn build_agent_init_view(
             "vida agent-init --role worker --json",
             "vida protocol view agent-definitions/entry.worker-entry",
             "vida protocol view instruction-contracts/role.worker-thinking",
-            "vida taskflow task show <task-id> --json",
+            "vida task show <task-id> --json",
             "vida taskflow consume bundle check --json"
         ],
         "allowed_non_orchestrator_roles": non_orchestrator_roles(activation_bundle),
@@ -1823,18 +1823,15 @@ mod tests {
     #[test]
     fn activation_truth_project_root_ignores_foreign_vida_root_override() {
         let payload = minimal_payload_for_cache_checks();
-        let selected = activation_truth_project_root(
-            &payload,
-            Some("/tmp/foreign-runtime-root".to_string()),
-        );
+        let selected =
+            activation_truth_project_root(&payload, Some("/tmp/foreign-runtime-root".to_string()));
         assert_eq!(selected, "/tmp/project");
     }
 
     #[test]
     fn activation_truth_project_root_accepts_equivalent_vida_root_override() {
         let payload = minimal_payload_for_cache_checks();
-        let selected =
-            activation_truth_project_root(&payload, Some("/tmp/project".to_string()));
+        let selected = activation_truth_project_root(&payload, Some("/tmp/project".to_string()));
         assert_eq!(selected, "/tmp/project");
     }
 }

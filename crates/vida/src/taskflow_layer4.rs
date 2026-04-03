@@ -7,14 +7,16 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Purpose:");
             println!(
-                "  Inspect and mutate the primary backlog through the TaskFlow runtime store."
+                "  Inspect and mutate the primary backlog through the authoritative runtime store."
             );
             println!(
-                "  JSONL is import/export compatibility only; it is not the live source of truth."
+                "  `vida task` is the root parity surface; `vida taskflow task` remains the family-scoped entrypoint."
             );
             println!();
             println!("Source of truth:");
-            println!("  Runtime store: vida taskflow task over the authoritative state store.");
+            println!(
+                "  Runtime store: vida task and vida taskflow task over the authoritative state store."
+            );
             println!("  Snapshot export only: .vida/exports/tasks.snapshot.jsonl");
             println!();
             println!("Dependency semantics:");
@@ -25,16 +27,14 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Canonical commands:");
-            println!("  vida taskflow task list --all --json");
-            println!("  vida taskflow task ready --json");
-            println!("  vida taskflow task show <task-id> --json");
-            println!("  vida taskflow task next-display-id <parent-display-id> --json");
-            println!("  vida taskflow task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json");
-            println!(
-                "  vida taskflow task update <task-id> --status in_progress --notes \"...\" --json"
-            );
-            println!("  vida taskflow task close <task-id> --reason \"...\" --json");
-            println!("  vida taskflow task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
+            println!("  vida task list --all --json");
+            println!("  vida task ready --json");
+            println!("  vida task show <task-id> --json");
+            println!("  vida task next-display-id <parent-display-id> --json");
+            println!("  vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json");
+            println!("  vida task update <task-id> --status in_progress --notes \"...\" --json");
+            println!("  vida task close <task-id> --reason \"...\" --json");
+            println!("  vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             println!();
             println!("Failure modes:");
             println!("  Missing or ambiguous runtime root fails closed.");
@@ -44,14 +44,12 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Operator recipes:");
-            println!("  Check the next lawful slice: vida taskflow task ready --json");
-            println!(
-                "  Inspect one task before mutation: vida taskflow task show <task-id> --json"
-            );
-            println!("  Reserve the next child display id: vida taskflow task next-display-id <parent-display-id> --json");
-            println!("  Create one bounded child task: vida taskflow task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json");
-            println!("  Record real progress after a proven step: vida taskflow task update <task-id> --status <status> --notes \"...\" --json");
-            println!("  Export the current runtime snapshot when needed: vida taskflow task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
+            println!("  Check the next lawful slice: vida task ready --json");
+            println!("  Inspect one task before mutation: vida task show <task-id> --json");
+            println!("  Reserve the next child display id: vida task next-display-id <parent-display-id> --json");
+            println!("  Create one bounded child task: vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json");
+            println!("  Record real progress after a proven step: vida task update <task-id> --status <status> --notes \"...\" --json");
+            println!("  Export the current runtime snapshot when needed: vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             return;
         }
         Some("consume") => {
@@ -196,7 +194,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!();
     println!("Source of truth notes:");
     println!("  TaskFlow is the execution/runtime authority.");
-    println!("  `vida taskflow task` is the primary backlog store during the active runtime path.");
+    println!(
+        "  `vida task` and `vida taskflow task` address the same authoritative backlog store."
+    );
     println!("  `.vida/exports/tasks.snapshot.jsonl` is export-only, not the live runtime store.");
     println!();
     println!("Runtime routing:");
@@ -215,8 +215,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  protocol-binding  bounded protocol/runtime bridge receipts");
     println!();
     println!("Canonical examples:");
-    println!("  vida taskflow task ready --json");
-    println!("  vida taskflow task show <task-id> --json");
+    println!("  vida task ready --json");
+    println!("  vida task show <task-id> --json");
     println!("  vida taskflow run-graph status <task-id>");
     println!("  vida taskflow consume final \"proof path\" --json");
     println!("  vida taskflow consume continue --json");
@@ -224,8 +224,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida taskflow bootstrap-spec \"feature request\" --json");
     println!();
     println!("Operator recipes:");
-    println!("  Find the next lawful slice: vida taskflow task ready --json");
-    println!("  Inspect one tracked item: vida taskflow help task");
+    println!("  Find the next lawful slice: vida task ready --json");
+    println!("  Inspect the canonical backlog contract: vida task --help");
     println!("  Inspect resumability state: vida taskflow help run-graph");
     println!("  Review runtime diagnostics: vida taskflow help doctor");
     println!();
@@ -262,7 +262,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "next-display-id",
             why: "Display-id reservation should come from the live backlog runtime before creating a new child task under an epic.",
-            command: "vida taskflow task next-display-id <parent-display-id> --json",
+            command: "vida task next-display-id <parent-display-id> --json",
             failure_modes: "Unknown parent display ids fail closed in the delegated runtime, and the returned slot should be treated as runtime-state dependent until the child task is actually created.",
         };
     }
@@ -275,7 +275,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "next-ready-slice",
             why: "TaskFlow readiness is the canonical way to pick the next unblocked execution slice.",
-            command: "vida taskflow task ready --json",
+            command: "vida task ready --json",
             failure_modes: "Ready output depends on current runtime state; blocked or stale exported artifacts must be checked through the runtime store.",
         };
     }
@@ -334,7 +334,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "inspect-task",
             why: "Task inspection should read one canonical record from the runtime store before mutation.",
-            command: "vida taskflow task show <task-id> --json",
+            command: "vida task show <task-id> --json",
             failure_modes: "Unknown task ids fail closed in the delegated runtime.",
         };
     }
@@ -348,7 +348,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "create-task",
             why: "New tracked work should be created directly in the primary backlog runtime with an explicit parent and display-id allocation path.",
-            command: "vida taskflow task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json",
+            command: "vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json",
             failure_modes: "Task ids must remain stable, parent/display references must resolve in the delegated runtime, and creation should be recorded only after the target epic or parent task has been confirmed.",
         };
     }
@@ -360,7 +360,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "record-progress",
             why: "Progress should be recorded against the primary backlog store after a proven runtime or documentation step.",
-            command: "vida taskflow task update <task-id> --status in_progress --notes \"...\" --json",
+            command: "vida task update <task-id> --status in_progress --notes \"...\" --json",
             failure_modes: "Illegal status transitions or missing task ids fail closed in the delegated runtime.",
         };
     }
@@ -372,7 +372,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "close-task",
             why: "Closure should happen only after proof/doc sync confirms the slice is complete.",
-            command: "vida taskflow task close <task-id> --reason \"...\" --json",
+            command: "vida task close <task-id> --reason \"...\" --json",
             failure_modes: "Closing the wrong task mutates the primary backlog; inspect the task first if the identifier is uncertain.",
         };
     }
@@ -381,7 +381,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "export-runtime-store",
             why: "JSONL export is the bounded compatibility snapshot for the current backlog/runtime state, not the live source of truth.",
-            command: "vida taskflow task export-jsonl .vida/exports/tasks.snapshot.jsonl --json",
+            command: "vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json",
             failure_modes: "Export artifacts can drift immediately after they are written, so verify live state through the runtime store when operator decisions depend on freshness.",
         };
     }

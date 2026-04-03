@@ -52,7 +52,7 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
                 Ok(code) => code,
                 Err(error) if error == "unsupported_taskflow_task_bridge" => {
                     eprintln!(
-                        "Unsupported `vida taskflow task` subcommand. This launcher-owned task surface fails closed instead of delegating to the external TaskFlow runtime."
+                        "Unsupported `vida taskflow task` subcommand. This compatibility alias fails closed and must match the canonical `vida task` contract."
                     );
                     ExitCode::from(2)
                 }

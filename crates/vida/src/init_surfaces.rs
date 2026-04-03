@@ -539,7 +539,7 @@ Design-document rule:\n\n\
    - edit the document using the local template shape\n\
    - `vida docflow finalize-edit docs/product/spec/<feature>-design.md \"record bounded feature design\"`\n\
    - `vida docflow check --root . docs/product/spec/<feature>-design.md`\n\
-   - `vida taskflow task close <spec-task-id> --reason \"design packet finalized and handed off\" --json`\n\
+   - `vida task close <spec-task-id> --reason \"design packet finalized and handed off\" --json`\n\
 \n\
 Activation rule:\n\n\
 1. During project activation, `vida project-activator` owns bounded config/doc materialization.\n\

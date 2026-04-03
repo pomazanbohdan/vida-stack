@@ -190,6 +190,7 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
     project_root: &std::path::Path,
     task: &serde_json::Value,
     close_reason: &str,
+    source: &str,
 ) -> serde_json::Value {
     let overlay = match super::project_activator_surface::read_yaml_file_checked(
         &project_root.join("vida.config.yaml"),
@@ -272,7 +273,7 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
         outcome,
         task_class: &task_class,
         notes: Some("automatic task-close feedback"),
-        source: "vida taskflow task close",
+        source,
         task_id: task["id"].as_str(),
         task_display_id: task["display_id"].as_str(),
         task_title: task["title"].as_str(),

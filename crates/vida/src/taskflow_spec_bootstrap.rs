@@ -636,7 +636,7 @@ pub(crate) fn execute_work_packet_create_with_store(
     }
 
     Ok(serde_json::json!({
-        "surface": "vida taskflow task create",
+        "surface": "vida task create",
         "status": "pass",
         "packet_key": packet_key,
         "epic": {
@@ -687,7 +687,9 @@ mod tests {
             absolute_receipt.display()
         );
         assert!(
-            unique_root.join(crate::SPEC_BOOTSTRAP_RECEIPT_LATEST).exists(),
+            unique_root
+                .join(crate::SPEC_BOOTSTRAP_RECEIPT_LATEST)
+                .exists(),
             ".vida receipt latest pointer should exist"
         );
         fs::remove_dir_all(&unique_root).expect("cleanup should succeed");

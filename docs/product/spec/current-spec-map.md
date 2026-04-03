@@ -189,6 +189,9 @@ Companion rule:
 21. [release-1-risk-acceptance-register.md](release-1-risk-acceptance-register.md)
    Config families: Release-1 explicit open-risk tracking, bounded acceptances, and closure-governance visibility
    Registered path: `docs/product/spec/release-1-risk-acceptance-register.md`
+22. [taskflow-task-command-parity-and-proxy-alignment-design.md](taskflow-task-command-parity-and-proxy-alignment-design.md)
+   Config families: bounded Release-1 command parity for root `vida task`, compatibility routing for `vida taskflow task`, shared task-store mutation law, and help/proxy alignment
+   Registered path: `docs/product/spec/taskflow-task-command-parity-and-proxy-alignment-design.md`
 
 ### Support
 
@@ -244,5 +247,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-04-03T09:54:07+03:00
+updated_at: 2026-04-03T12:58:30+03:00
 changelog_ref: current-spec-map.changelog.jsonl

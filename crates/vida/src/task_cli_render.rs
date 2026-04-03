@@ -4,6 +4,27 @@ use crate::state_store::{
 };
 use crate::{print_surface_header, print_surface_line, RenderMode};
 
+fn print_task_record(render: RenderMode, title: &str, task: &TaskRecord) {
+    print_surface_header(render, title);
+    print_surface_line(render, "id", &task.id);
+    print_surface_line(render, "status", &task.status);
+    print_surface_line(render, "title", &task.title);
+    print_surface_line(render, "priority", &task.priority.to_string());
+    print_surface_line(render, "issue type", &task.issue_type);
+    if !task.labels.is_empty() {
+        print_surface_line(render, "labels", &task.labels.join(", "));
+    }
+    if !task.dependencies.is_empty() {
+        let summary = task
+            .dependencies
+            .iter()
+            .map(|dependency| format!("{}:{}", dependency.edge_type, dependency.depends_on_id))
+            .collect::<Vec<_>>()
+            .join(", ");
+        print_surface_line(render, "dependencies", &summary);
+    }
+}
+
 pub(crate) fn print_task_list(render: RenderMode, tasks: &[TaskRecord], as_json: bool) {
     if crate::surface_render::print_surface_json(tasks, as_json, "task list should render as json")
     {
@@ -21,23 +42,100 @@ pub(crate) fn print_task_show(render: RenderMode, task: &TaskRecord, as_json: bo
         return;
     }
 
-    print_surface_header(render, "vida task show");
-    print_surface_line(render, "id", &task.id);
-    print_surface_line(render, "status", &task.status);
-    print_surface_line(render, "title", &task.title);
-    print_surface_line(render, "priority", &task.priority.to_string());
-    print_surface_line(render, "issue type", &task.issue_type);
-    if !task.labels.is_empty() {
-        print_surface_line(render, "labels", &task.labels.join(", "));
+    print_task_record(render, "vida task show", task);
+}
+
+pub(crate) fn print_task_mutation(
+    render: RenderMode,
+    title: &str,
+    task: &TaskRecord,
+    as_json: bool,
+) {
+    if crate::surface_render::print_surface_json(task, as_json, "task should render as json") {
+        return;
     }
-    if !task.dependencies.is_empty() {
-        let summary = task
-            .dependencies
-            .iter()
-            .map(|dependency| format!("{}:{}", dependency.edge_type, dependency.depends_on_id))
-            .collect::<Vec<_>>()
-            .join(", ");
-        print_surface_line(render, "dependencies", &summary);
+
+    print_task_record(render, title, task);
+}
+
+pub(crate) fn print_task_export_summary(
+    render: RenderMode,
+    exported_count: u64,
+    target_path: &str,
+    as_json: bool,
+) {
+    let payload = serde_json::json!({
+        "status": "pass",
+        "exported_count": exported_count,
+        "target_path": target_path,
+    });
+    if crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task export summary should render as json",
+    ) {
+        return;
+    }
+
+    print_surface_header(render, "vida task export-jsonl");
+    print_surface_line(render, "status", "pass");
+    print_surface_line(render, "exported", &exported_count.to_string());
+    print_surface_line(render, "target", target_path);
+}
+
+pub(crate) fn print_task_next_display_id(
+    render: RenderMode,
+    payload: &serde_json::Value,
+    as_json: bool,
+) {
+    if crate::surface_render::print_surface_json(
+        payload,
+        as_json,
+        "next display id payload should render as json",
+    ) {
+        return;
+    }
+
+    print_surface_header(render, "vida task next-display-id");
+    if payload
+        .get("valid")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        print_surface_line(
+            render,
+            "parent_display_id",
+            payload
+                .get("parent_display_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(""),
+        );
+        print_surface_line(
+            render,
+            "next_display_id",
+            payload
+                .get("next_display_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(""),
+        );
+        print_surface_line(
+            render,
+            "next_index",
+            &payload
+                .get("next_index")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+                .to_string(),
+        );
+    } else {
+        print_surface_line(
+            render,
+            "reason",
+            payload
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("invalid_parent_display_id"),
+        );
     }
 }
 

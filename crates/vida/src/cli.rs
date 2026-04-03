@@ -42,7 +42,9 @@ pub(crate) enum Command {
     ProjectActivator(ProjectActivatorArgs),
     #[command(about = "record host-agent feedback and refresh local strategy state")]
     AgentFeedback(AgentFeedbackArgs),
-    #[command(about = "task import/list/show/ready over the authoritative state store")]
+    #[command(
+        about = "task inspection, mutation, and graph routing over the authoritative state store"
+    )]
     Task(TaskArgs),
     #[command(about = "inspect the effective instruction bundle")]
     Memory(MemoryArgs),
@@ -65,6 +67,7 @@ pub(crate) struct ProxyArgs {
 }
 
 #[derive(Args, Debug, Clone)]
+#[command(disable_help_subcommand = true)]
 pub(crate) struct TaskArgs {
     #[command(subcommand)]
     pub(crate) command: TaskCommand,
@@ -72,10 +75,16 @@ pub(crate) struct TaskArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub(crate) enum TaskCommand {
+    Help(TaskHelpArgs),
     ImportJsonl(TaskImportJsonlArgs),
+    ExportJsonl(TaskExportJsonlArgs),
     List(TaskListArgs),
     Show(TaskShowArgs),
     Ready(TaskReadyArgs),
+    NextDisplayId(TaskNextDisplayIdArgs),
+    Create(TaskCreateArgs),
+    Update(TaskUpdateArgs),
+    Close(TaskCloseArgs),
     Deps(TaskDepsArgs),
     ReverseDeps(TaskDepsArgs),
     Blocked(TaskBlockedArgs),
@@ -95,6 +104,11 @@ pub(crate) struct TaskDepArgs {
 pub(crate) enum TaskDependencyCommand {
     Add(TaskDependencyMutationCommandArgs),
     Remove(TaskDependencyTargetCommandArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskHelpArgs {
+    pub(crate) topic: Option<String>,
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -147,6 +161,20 @@ pub(crate) struct TaskImportJsonlArgs {
 }
 
 #[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskExportJsonlArgs {
+    pub(crate) path: PathBuf,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskListArgs {
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
@@ -167,6 +195,111 @@ pub(crate) struct TaskListArgs {
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskShowArgs {
     pub(crate) task_id: String,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskNextDisplayIdArgs {
+    pub(crate) parent_display_id: String,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskCreateArgs {
+    pub(crate) task_id: String,
+    pub(crate) title: String,
+
+    #[arg(long = "type", default_value = "task")]
+    pub(crate) issue_type: String,
+
+    #[arg(long = "status", default_value = "open")]
+    pub(crate) status: String,
+
+    #[arg(long = "priority", default_value_t = 2)]
+    pub(crate) priority: u32,
+
+    #[arg(long = "display-id")]
+    pub(crate) display_id: Option<String>,
+
+    #[arg(long = "parent-id")]
+    pub(crate) parent_id: Option<String>,
+
+    #[arg(long = "parent-display-id")]
+    pub(crate) parent_display_id: Option<String>,
+
+    #[arg(long = "auto-display-from")]
+    pub(crate) auto_display_from: Option<String>,
+
+    #[arg(long = "description", default_value = "")]
+    pub(crate) description: String,
+
+    #[arg(long = "labels")]
+    pub(crate) labels: Vec<String>,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskUpdateArgs {
+    pub(crate) task_id: String,
+
+    #[arg(long = "status")]
+    pub(crate) status: Option<String>,
+
+    #[arg(long = "notes")]
+    pub(crate) notes: Option<String>,
+
+    #[arg(long = "description")]
+    pub(crate) description: Option<String>,
+
+    #[arg(long = "add-label")]
+    pub(crate) add_labels: Vec<String>,
+
+    #[arg(long = "remove-label")]
+    pub(crate) remove_labels: Vec<String>,
+
+    #[arg(long = "set-labels")]
+    pub(crate) set_labels: Option<String>,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct TaskCloseArgs {
+    pub(crate) task_id: String,
+
+    #[arg(long = "reason")]
+    pub(crate) reason: String,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,

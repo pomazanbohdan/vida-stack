@@ -716,6 +716,9 @@ fn root_help_succeeds() {
     assert!(stdout.contains("Usage: vida [COMMAND]"));
     assert!(stdout.contains("boot"));
     assert!(stdout.contains("task"));
+    assert!(stdout.contains(
+        "task inspection, mutation, and graph routing over the authoritative state store"
+    ));
     assert!(stdout.contains("memory"));
     assert!(stdout.contains("status"));
     assert!(stdout.contains("doctor"));
@@ -893,9 +896,9 @@ fn taskflow_proxy_help_is_runtime_specific() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow runtime family"));
     assert!(stdout.contains(
-        "`vida taskflow task` is the primary backlog store during the active runtime path."
+        "`vida task` and `vida taskflow task` address the same authoritative backlog store."
     ));
-    assert!(stdout.contains("vida taskflow task ready --json"));
+    assert!(stdout.contains("vida task ready --json"));
     assert!(stdout
         .contains("vida taskflow help [task|consume|run-graph|recovery|doctor|protocol-binding]"));
 }
@@ -910,14 +913,13 @@ fn taskflow_proxy_help_supports_task_topic() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: task"));
-    assert!(stdout.contains("JSONL is import/export compatibility only"));
-    assert!(stdout.contains("vida taskflow task next-display-id <parent-display-id> --json"));
+    assert!(stdout.contains("`vida task` is the root parity surface"));
+    assert!(stdout.contains("vida task next-display-id <parent-display-id> --json"));
     assert!(stdout.contains(
-        "vida taskflow task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description"
+        "vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description"
     ));
-    assert!(stdout.contains("vida taskflow task update <task-id> --status in_progress --notes"));
-    assert!(stdout
-        .contains("vida taskflow task export-jsonl .vida/exports/tasks.snapshot.jsonl --json"));
+    assert!(stdout.contains("vida task update <task-id> --status in_progress --notes"));
+    assert!(stdout.contains("vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json"));
     assert!(stdout.contains("Parent-child edges preserve epic/task structure"));
 }
 
@@ -1279,8 +1281,8 @@ fn protocol_binding_check_lock_retry_preserves_boot_blocker_codes() {
     });
 
     assert!(!check_output.status.success());
-    let check_json: serde_json::Value =
-        serde_json::from_slice(&check_output.stdout).expect("protocol-binding check json should parse");
+    let check_json: serde_json::Value = serde_json::from_slice(&check_output.stdout)
+        .expect("protocol-binding check json should parse");
     let decision_blocker = check_json["decision_gate"]["blocker_code"]
         .as_str()
         .expect("decision gate blocker code should be present");
@@ -1313,16 +1315,14 @@ fn protocol_binding_check_lock_retry_preserves_boot_blocker_codes() {
         .as_array()
         .expect("doctor blocker codes should be array");
     assert!(
-        doctor_blockers
-            .iter()
-            .any(|code| {
-                matches!(
-                    code.as_str(),
-                    Some("missing_retrieval_trust_operator_evidence")
-                        | Some("missing_retrieval_trust_source_operator_evidence")
-                        | Some("missing_retrieval_trust_signal_operator_evidence")
-                )
-            }),
+        doctor_blockers.iter().any(|code| {
+            matches!(
+                code.as_str(),
+                Some("missing_retrieval_trust_operator_evidence")
+                    | Some("missing_retrieval_trust_source_operator_evidence")
+                    | Some("missing_retrieval_trust_signal_operator_evidence")
+            )
+        }),
         "doctor blocker codes should still report retrieval-trust evidence issues after lock retry"
     );
 }
@@ -1750,20 +1750,14 @@ fn taskflow_consume_bundle_check_fails_closed_without_protocol_binding_receipt()
 
 fn canonical_activation_status(status: &str, activation_pending: bool) -> &'static str {
     let normalized = status.trim().to_ascii_lowercase();
-    if activation_pending
-        || normalized == "pending"
-        || normalized == "pending_activation"
-    {
+    if activation_pending || normalized == "pending" || normalized == "pending_activation" {
         "pending"
     } else {
         "ready_enough_for_normal_work"
     }
 }
 
-fn assert_project_activation_status_is_canonical(
-    status_json: &serde_json::Value,
-    label: &str,
-) {
+fn assert_project_activation_status_is_canonical(status_json: &serde_json::Value, label: &str) {
     let activation_pending = status_json["project_activation"]["activation_pending"]
         .as_bool()
         .unwrap_or(false);
@@ -1863,7 +1857,8 @@ fn status_and_consume_bundle_check_handle_legacy_pending_activation() {
 }
 
 #[test]
-fn explicit_root_and_state_dirs_keep_activation_status_canonical_through_status_and_consume_check() {
+fn explicit_root_and_state_dirs_keep_activation_status_canonical_through_status_and_consume_check()
+{
     let root_dir = unique_state_dir();
     let state_dir = unique_state_dir();
     fs::create_dir_all(&root_dir).expect("create root dir");
@@ -4228,7 +4223,7 @@ fn taskflow_consume_final_routes_mixed_feature_delivery_requests_to_spec_first()
     assert!(tracked_bootstrap["epic"]["create_command"]
         .as_str()
         .expect("epic create command should be a string")
-        .contains("vida taskflow task create feature-"));
+        .contains("vida task create feature-"));
     assert!(tracked_bootstrap["bootstrap_command"]
         .as_str()
         .expect("bootstrap command should be a string")
@@ -4478,9 +4473,9 @@ fn taskflow_bootstrap_spec_plain_reports_orchestrated_follow_up_commands() {
     assert!(stdout.contains("first step: publish a concise execution plan before mutating the design document or dispatching write-producing work"));
     assert!(stdout.contains("finalize design: vida docflow finalize-edit "));
     assert!(stdout.contains("check design: vida docflow check --root . "));
-    assert!(stdout.contains("close spec task: vida taskflow task close "));
-    assert!(stdout.contains("next work-pool command: vida taskflow task create "));
-    assert!(stdout.contains("next dev command: vida taskflow task create "));
+    assert!(stdout.contains("close spec task: vida task close "));
+    assert!(stdout.contains("next work-pool command: vida task create "));
+    assert!(stdout.contains("next dev command: vida task create "));
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
@@ -5165,7 +5160,7 @@ fn taskflow_consume_final_selects_pbi_discussion_role_for_backlog_queries() {
     );
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["dispatch_surface"],
-        "vida taskflow task create"
+        "vida task create"
     );
     let dispatch_packet_path = parsed["payload"]["dispatch_receipt"]["dispatch_packet_path"]
         .as_str()
@@ -7916,7 +7911,7 @@ fn taskflow_query_recommends_ready_surface_for_next_step_questions() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow query answer"));
     assert!(stdout.contains("next-ready-slice"));
-    assert!(stdout.contains("vida taskflow task ready --json"));
+    assert!(stdout.contains("vida task ready --json"));
 }
 
 #[test]
@@ -7948,7 +7943,7 @@ fn taskflow_query_recommends_create_surface_for_new_task_questions() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("create-task"));
     assert!(stdout.contains(
-        "vida taskflow task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json"
+        "vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json"
     ));
 }
 
@@ -7965,7 +7960,7 @@ fn taskflow_query_recommends_next_display_id_surface_for_child_slot_questions() 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("next-display-id"));
-    assert!(stdout.contains("vida taskflow task next-display-id <parent-display-id> --json"));
+    assert!(stdout.contains("vida task next-display-id <parent-display-id> --json"));
 }
 
 #[test]
@@ -7980,8 +7975,7 @@ fn taskflow_query_recommends_export_surface_for_jsonl_questions() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("export-runtime-store"));
-    assert!(stdout
-        .contains("vida taskflow task export-jsonl .vida/exports/tasks.snapshot.jsonl --json"));
+    assert!(stdout.contains("vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json"));
 }
 
 #[test]
@@ -8258,6 +8252,193 @@ fn taskflow_task_create_routes_through_local_db_bridge_with_display_id_allocatio
     assert_eq!(parsed["description"], "bridge-task");
     assert_eq!(parsed["dependencies"][0]["depends_on_id"], "vida-root");
     assert!(!stderr.contains("delegated-taskflow-binary-ran"));
+}
+
+#[test]
+fn task_root_mutation_commands_use_authoritative_db_store_without_taskflow_binary() {
+    let root = unique_state_dir();
+    let state_dir = format!("{root}/.vida/data/state");
+    let export_path = format!("{root}/tasks.snapshot.jsonl");
+    let script_path = format!("{root}/delegated-taskflow-runtime");
+    let seed_path = format!("{root}/seed.jsonl");
+    fs::create_dir_all(&root).expect("temp root should exist");
+    fs::write(&seed_path, "").expect("seed jsonl should be written");
+    scaffold_runtime_project_root(&root, "# framework\n");
+    write_executable_script(
+        &script_path,
+        "#!/bin/sh\necho delegated-taskflow-binary-ran >&2\nexit 23\n",
+    );
+
+    let seed = vida()
+        .args(["task", "import-jsonl", &seed_path, "--json"])
+        .current_dir(&root)
+        .env("VIDA_ROOT", &root)
+        .env("VIDA_STATE_DIR", &state_dir)
+        .env("VIDA_TASKFLOW_BIN", &script_path)
+        .output()
+        .expect("task seed import should run");
+    assert!(seed.status.success());
+    assert!(!String::from_utf8_lossy(&seed.stderr).contains("delegated-taskflow-binary-ran"));
+
+    let create_epic = vida()
+        .args([
+            "task",
+            "create",
+            "vida-root",
+            "Root",
+            "--type",
+            "epic",
+            "--display-id",
+            "vida-rf1.1",
+            "--description",
+            "root-epic",
+            "--json",
+        ])
+        .current_dir(&root)
+        .env("VIDA_ROOT", &root)
+        .env("VIDA_STATE_DIR", &state_dir)
+        .env("VIDA_TASKFLOW_BIN", &script_path)
+        .output()
+        .expect("task epic create should run");
+    assert!(create_epic.status.success());
+    assert!(!String::from_utf8_lossy(&create_epic.stderr).contains("delegated-taskflow-binary-ran"));
+
+    let next_display = vida()
+        .args(["task", "next-display-id", "vida-rf1.1", "--json"])
+        .current_dir(&root)
+        .env("VIDA_ROOT", &root)
+        .env("VIDA_STATE_DIR", &state_dir)
+        .env("VIDA_TASKFLOW_BIN", &script_path)
+        .output()
+        .expect("task next display id should run");
+    assert!(next_display.status.success());
+    let next_display_stdout = String::from_utf8_lossy(&next_display.stdout);
+    let next_display_json: serde_json::Value =
+        serde_json::from_str(&next_display_stdout).expect("next display id json should parse");
+    assert_eq!(next_display_json["valid"], true);
+    let child_display_id = next_display_json["next_display_id"]
+        .as_str()
+        .expect("next display id should be present")
+        .to_string();
+    assert_eq!(child_display_id, "vida-rf1.1.1");
+    assert!(!String::from_utf8_lossy(&next_display.stderr).contains("delegated-taskflow-binary-ran"));
+
+    let create_child = run_with_state_lock_retry(|| {
+        vida()
+            .args([
+                "task",
+                "create",
+                "vida-child",
+                "Child",
+                "--parent-id",
+                "vida-root",
+                "--display-id",
+                &child_display_id,
+                "--description",
+                "root-task",
+                "--json",
+            ])
+            .current_dir(&root)
+            .env("VIDA_ROOT", &root)
+            .env("VIDA_STATE_DIR", &state_dir)
+            .env("VIDA_TASKFLOW_BIN", &script_path)
+            .output()
+            .expect("task create should run")
+    });
+    assert!(create_child.status.success());
+    let create_child_stdout = String::from_utf8_lossy(&create_child.stdout);
+    let create_child_json: serde_json::Value =
+        serde_json::from_str(&create_child_stdout).expect("task create json should parse");
+    assert_eq!(create_child_json["id"], "vida-child");
+    assert_eq!(create_child_json["status"], "open");
+    assert_eq!(create_child_json["description"], "root-task");
+    assert!(!String::from_utf8_lossy(&create_child.stderr).contains("delegated-taskflow-binary-ran"));
+
+    let update = run_with_state_lock_retry(|| {
+        vida()
+            .args([
+                "task",
+                "update",
+                "vida-child",
+                "--status",
+                "in_progress",
+                "--notes",
+                "root-surface-update",
+                "--json",
+            ])
+            .current_dir(&root)
+            .env("VIDA_ROOT", &root)
+            .env("VIDA_STATE_DIR", &state_dir)
+            .env("VIDA_TASKFLOW_BIN", &script_path)
+            .output()
+            .expect("task update should run")
+    });
+    assert!(update.status.success());
+    let update_stdout = String::from_utf8_lossy(&update.stdout);
+    let update_json: serde_json::Value =
+        serde_json::from_str(&update_stdout).expect("task update json should parse");
+    assert_eq!(update_json["status"], "in_progress");
+    assert_eq!(update_json["notes"], "root-surface-update");
+    assert!(!String::from_utf8_lossy(&update.stderr).contains("delegated-taskflow-binary-ran"));
+
+    let show = vida()
+        .args(["task", "show", &child_display_id, "--json"])
+        .current_dir(&root)
+        .env("VIDA_ROOT", &root)
+        .env("VIDA_STATE_DIR", &state_dir)
+        .env("VIDA_TASKFLOW_BIN", &script_path)
+        .output()
+        .expect("task show should run");
+    assert!(show.status.success());
+    let show_stdout = String::from_utf8_lossy(&show.stdout);
+    let show_json: serde_json::Value =
+        serde_json::from_str(&show_stdout).expect("task show json should parse");
+    assert_eq!(show_json["id"], "vida-child");
+    assert_eq!(show_json["display_id"], child_display_id);
+    assert_eq!(show_json["status"], "in_progress");
+    assert!(!String::from_utf8_lossy(&show.stderr).contains("delegated-taskflow-binary-ran"));
+
+    let close = run_with_state_lock_retry(|| {
+        vida()
+            .args([
+                "task",
+                "close",
+                "vida-child",
+                "--reason",
+                "done",
+                "--json",
+            ])
+            .current_dir(&root)
+            .env("VIDA_ROOT", &root)
+            .env("VIDA_STATE_DIR", &state_dir)
+            .env("VIDA_TASKFLOW_BIN", &script_path)
+            .output()
+            .expect("task close should run")
+    });
+    assert!(close.status.success());
+    let close_stdout = String::from_utf8_lossy(&close.stdout);
+    let close_json: serde_json::Value =
+        serde_json::from_str(&close_stdout).expect("task close json should parse");
+    assert_eq!(close_json["status"], "closed");
+    assert_eq!(close_json["reason"], "done");
+    assert!(!String::from_utf8_lossy(&close.stderr).contains("delegated-taskflow-binary-ran"));
+
+    let export = vida()
+        .args(["task", "export-jsonl", &export_path, "--json"])
+        .current_dir(&root)
+        .env("VIDA_ROOT", &root)
+        .env("VIDA_STATE_DIR", &state_dir)
+        .env("VIDA_TASKFLOW_BIN", &script_path)
+        .output()
+        .expect("task export should run");
+    assert!(export.status.success());
+    let export_stdout = String::from_utf8_lossy(&export.stdout);
+    let export_json: serde_json::Value =
+        serde_json::from_str(&export_stdout).expect("task export json should parse");
+    assert_eq!(export_json["status"], "exported");
+    assert_eq!(export_json["path"], export_path);
+    assert!(fs::metadata(&export_path).is_ok(), "export file should exist");
+    assert!(!String::from_utf8_lossy(&export.stderr).contains("delegated-taskflow-binary-ran"));
 }
 
 #[test]
@@ -8682,11 +8863,7 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
     ]);
     let project_update_stdout = String::from_utf8_lossy(&project_update.stdout);
     let project_update_stderr = String::from_utf8_lossy(&project_update.stderr);
-    assert!(
-        project_update.status.success(),
-        "{}",
-        project_update_stderr
-    );
+    assert!(project_update.status.success(), "{}", project_update_stderr);
     let project_update_json: serde_json::Value =
         serde_json::from_str(&project_update_stdout).expect("project update json should parse");
     let project_update_task = project_update_json
@@ -8858,7 +9035,9 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
     let installed_show_stderr = String::from_utf8_lossy(&installed_show.stderr);
     let installed_show_json: serde_json::Value =
         serde_json::from_str(&installed_show_stdout).expect("installed show json should parse");
-    let installed_show_task = installed_show_json.get("task").unwrap_or(&installed_show_json);
+    let installed_show_task = installed_show_json
+        .get("task")
+        .unwrap_or(&installed_show_json);
     assert_eq!(installed_show_task["id"], "vida-child");
     assert!(installed_show_task["display_id"].is_null());
     assert_eq!(installed_show_task["description"], "bridge-task");
