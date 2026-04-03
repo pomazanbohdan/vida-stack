@@ -6498,7 +6498,60 @@ mod tests {
             .as_array()
             .expect("supported cli systems should render")
             .iter()
+            .any(|value| value.as_str() == Some("codex")));
+    }
+
+    #[test]
+    fn project_activator_view_uses_builtin_host_registry_without_overlay_systems() {
+        let _lock = current_dir_lock().lock().expect("lock should succeed");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = CurrentDirGuard::change_to(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+
+        let view = project_activator_surface::build_project_activator_view(harness.path());
+        assert_eq!(
+            view["host_environment"]["selected_cli_system"],
+            serde_json::Value::Null
+        );
+        assert_eq!(view["host_environment"]["selection_required"], true);
+        assert_eq!(view["host_environment"]["template_materialized"], false);
+        assert_eq!(view["host_environment"]["runtime_template_root"], ".codex");
+        assert!(view["host_environment"]["supported_cli_systems"]
+            .as_array()
+            .expect("supported cli systems should render")
+            .iter()
+            .any(|value| value.as_str() == Some("codex")));
+        assert!(view["host_environment"]["supported_cli_systems"]
+            .as_array()
+            .expect("supported cli systems should render")
+            .iter()
             .any(|value| value.as_str() == Some("qwen")));
+        assert!(view["host_environment"]["template_source_root"]
+            .as_str()
+            .expect("template source root should render")
+            .ends_with("/.codex"));
+    }
+
+    #[test]
+    fn project_activator_materializes_builtin_copy_tree_template_without_overlay_entry() {
+        let _lock = current_dir_lock().lock().expect("lock should succeed");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = CurrentDirGuard::change_to(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+
+        let source = project_activator_surface::resolve_host_cli_template_source("qwen", None)
+            .expect("builtin qwen template source should resolve");
+        assert!(source.ends_with(".qwen"));
+
+        let runtime_root =
+            project_activator_surface::materialize_host_cli_template(harness.path(), "qwen", None)
+                .expect("builtin qwen template should materialize");
+        assert!(runtime_root.ends_with(".qwen"));
+        assert!(harness.path().join(".qwen").is_dir());
     }
 
     #[test]
