@@ -595,10 +595,7 @@ fn build_taskflow_agent_system_snapshot(
     config_path: &str,
     activation_bundle: &serde_json::Value,
 ) -> serde_json::Value {
-    let carrier_runtime = activation_bundle
-        .get("carrier_runtime")
-        .or_else(|| activation_bundle.get("codex_multi_agent"))
-        .unwrap_or(&serde_json::Value::Null);
+    let carrier_runtime = crate::carrier_runtime_section(activation_bundle);
     let mut carriers = carrier_runtime["roles"]
         .as_array()
         .into_iter()

@@ -4,6 +4,7 @@ use crate::{
     print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
     state_store::{RunGraphStatus, StateStore, StateStoreError},
     taskflow_layer4::print_taskflow_proxy_help,
+    taskflow_routing::{runtime_assignment_from_execution_plan, runtime_assignment_from_route},
     taskflow_task_bridge::proxy_state_dir,
     RenderMode, RuntimeConsumptionLaneSelection,
 };
@@ -81,22 +82,6 @@ fn carrier_backend_from_assignment(assignment: &serde_json::Value) -> Option<Str
         .filter(|value| !value.is_empty())
 }
 
-fn runtime_assignment_from_route<'a>(
-    route: &'a serde_json::Value,
-) -> Option<&'a serde_json::Value> {
-    route
-        .get("runtime_assignment")
-        .or_else(|| route.get("codex_runtime_assignment"))
-}
-
-fn runtime_assignment_from_execution_plan<'a>(
-    execution_plan: &'a serde_json::Value,
-) -> Option<&'a serde_json::Value> {
-    execution_plan
-        .get("runtime_assignment")
-        .or_else(|| execution_plan.get("codex_runtime_assignment"))
-}
-
 fn selected_backend_from_route(
     execution_plan: &serde_json::Value,
     route: &serde_json::Value,
@@ -111,10 +96,9 @@ fn selected_backend_from_route(
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
         })
-        .or_else(|| runtime_assignment_from_route(route).and_then(carrier_backend_from_assignment))
+        .or_else(|| carrier_backend_from_assignment(runtime_assignment_from_route(route)))
         .or_else(|| {
-            runtime_assignment_from_execution_plan(execution_plan)
-                .and_then(carrier_backend_from_assignment)
+            carrier_backend_from_assignment(runtime_assignment_from_execution_plan(execution_plan))
         })
         .or_else(|| json_string_field(route, "subagents"))
         .filter(|value| !value.is_empty())

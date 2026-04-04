@@ -261,6 +261,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 proxy_args.push("--scope".to_string());
                 proxy_args.push(scope.to_string());
             }
+            if let Some(state_dir) = command.state_dir.as_ref().and_then(|path| path.to_str()) {
+                proxy_args.push("--state-dir".to_string());
+                proxy_args.push(state_dir.to_string());
+            }
             if command.json {
                 proxy_args.push("--json".to_string());
             }

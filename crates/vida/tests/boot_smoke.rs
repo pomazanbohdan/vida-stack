@@ -809,8 +809,9 @@ fn boot_succeeds() {
         "instruction ingest: 3 imported, 0 unchanged, 0 updated from vida/config/instructions/bundles/framework-source"
     ));
     assert!(stdout.contains("boot compatibility: backward_compatible (normal_boot_allowed)"));
-    assert!(stdout
-        .contains("migration preflight: compatible / no_migration_required (normal_boot_allowed)"));
+    assert!(stdout.contains(
+        "migration preflight: backward_compatible / no_migration_required (normal_boot_allowed)"
+    ));
     assert!(stdout.contains(
         "migration receipts: compatibility=1, application=0, verification=0, cutover=0, rollback=0"
     ));
@@ -866,8 +867,9 @@ fn boot_is_idempotent_for_unchanged_source_trees() {
         "framework memory ingest: 0 imported, 1 unchanged, 0 updated from vida/config/instructions/bundles/framework-memory-source"
     ));
     assert!(stdout.contains("boot compatibility: backward_compatible (normal_boot_allowed)"));
-    assert!(stdout
-        .contains("migration preflight: compatible / no_migration_required (normal_boot_allowed)"));
+    assert!(stdout.contains(
+        "migration preflight: backward_compatible / no_migration_required (normal_boot_allowed)"
+    ));
     assert!(stdout.contains(
         "migration receipts: compatibility=1, application=0, verification=0, cutover=0, rollback=0"
     ));
@@ -916,7 +918,7 @@ fn taskflow_proxy_help_supports_task_topic() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: task"));
     assert!(stdout.contains("`vida task` is the root parity surface"));
-    assert!(stdout.contains("vida task next [--scope <task-id>] [--json]"));
+    assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>] [--json]"));
     assert!(stdout.contains("vida task ready --scope <task-id> --json"));
     assert!(stdout.contains("vida task next-display-id <parent-display-id> --json"));
     assert!(stdout.contains(
@@ -937,7 +939,7 @@ fn taskflow_task_help_alias_routes_to_canonical_task_help() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: task"));
-    assert!(stdout.contains("vida task next [--scope <task-id>] [--json]"));
+    assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>] [--json]"));
     assert!(stdout.contains("vida task ready --scope <task-id> --json"));
     assert!(stdout.contains("vida task next-display-id <parent-display-id> --json"));
     assert!(stdout.contains("vida task update <task-id> --status in_progress --notes"));
@@ -980,6 +982,27 @@ fn taskflow_next_accepts_scope_for_subtree_planning() {
 }
 
 #[test]
+fn taskflow_next_accepts_explicit_state_dir_override() {
+    let state_dir = unique_state_dir();
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+
+    let output = vida()
+        .args(["taskflow", "next", "--state-dir"])
+        .arg(&state_dir)
+        .args(["--json"])
+        .output()
+        .expect("taskflow next with state-dir should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("taskflow next with state-dir json should parse");
+    assert_eq!(parsed["surface"], "vida taskflow next");
+    assert!(parsed["status"].is_string());
+    assert!(parsed["ready_count"].is_number());
+}
+
+#[test]
 fn task_root_next_alias_routes_to_taskflow_next_surface() {
     let output = vida()
         .args(["task", "next", "--scope", "r1-01-commands", "--json"])
@@ -991,6 +1014,27 @@ fn task_root_next_alias_routes_to_taskflow_next_surface() {
         serde_json::from_str(&stdout).expect("root task next json should parse");
     assert_eq!(parsed["surface"], "vida taskflow next");
     assert_eq!(parsed["scope_task_id"], "r1-01-commands");
+    assert!(parsed["status"].is_string());
+    assert!(parsed["recommended_command"].is_string());
+}
+
+#[test]
+fn task_root_next_alias_accepts_explicit_state_dir_override() {
+    let state_dir = unique_state_dir();
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+
+    let output = vida()
+        .args(["task", "next", "--state-dir"])
+        .arg(&state_dir)
+        .args(["--json"])
+        .output()
+        .expect("root task next with state-dir should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("root task next with state-dir json should parse");
+    assert_eq!(parsed["surface"], "vida taskflow next");
     assert!(parsed["status"].is_string());
     assert!(parsed["recommended_command"].is_string());
 }
@@ -1041,7 +1085,9 @@ fn taskflow_proxy_help_supports_next_scope_contract() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("vida taskflow next [--scope <task-id>] [--json]"));
+    assert!(stdout.contains(
+        "vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]"
+    ));
     assert!(stdout.contains("scope_task_id"));
     assert!(stdout.contains("Unknown scoped task ids fail closed"));
 }
@@ -10860,9 +10906,11 @@ fn doctor_surface_reports_integrity_checks() {
     assert!(stdout.contains("project_root="));
     assert!(stdout.contains("taskflow_surface=vida taskflow"));
     assert!(stdout.contains("dependency graph: pass (0 issues)"));
-    assert!(stdout.contains("boot compatibility: pass (compatible (normal_boot_allowed))"));
     assert!(stdout.contains(
-        "migration preflight: pass (compatible / no_migration_required (normal_boot_allowed))"
+        "boot compatibility: pass (backward_compatible (normal_boot_allowed))"
+    ));
+    assert!(stdout.contains(
+        "migration preflight: pass (backward_compatible / no_migration_required (normal_boot_allowed))"
     ));
     assert!(stdout.contains(
         "migration receipts: pass (compatibility=1, application=0, verification=0, cutover=0, rollback=0)"

@@ -81,7 +81,7 @@ pub(crate) enum TaskCommand {
     List(TaskListArgs),
     Show(TaskShowArgs),
     Ready(TaskReadyArgs),
-    Next(TaskReadyArgs),
+    Next(TaskNextArgs),
     NextDisplayId(TaskNextDisplayIdArgs),
     Create(TaskCreateArgs),
     Update(TaskUpdateArgs),
@@ -322,6 +322,18 @@ pub(crate) struct TaskReadyArgs {
 
     #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
     pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskNextArgs {
+    #[arg(long = "scope")]
+    pub(crate) scope: Option<String>,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
 
     #[arg(long = "json")]
     pub(crate) json: bool,

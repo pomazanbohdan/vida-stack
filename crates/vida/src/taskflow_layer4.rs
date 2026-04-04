@@ -29,7 +29,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("Canonical commands:");
             println!("  vida task list --all --json");
             println!("  vida task ready --json");
-            println!("  vida task next [--scope <task-id>] [--json]");
+            println!("  vida task next [--scope <task-id>] [--state-dir <path>] [--json]");
             println!("  vida task ready --scope <task-id> --json");
             println!("  vida task show <task-id> --json");
             println!("  vida task deps <task-id> --json");
@@ -52,7 +52,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Operator recipes:");
             println!("  Check the next lawful slice: vida task ready --json");
-            println!("  Read the aggregate next operator step: vida task next [--scope <task-id>] [--json]");
+            println!("  Read the aggregate next operator step: vida task next [--scope <task-id>] [--state-dir <path>] [--json]");
             println!("  Check the next lawful slice within one subtree: vida task ready --scope <task-id> --json");
             println!("  Inspect one task before mutation: vida task show <task-id> --json");
             println!("  Inspect direct dependencies before resequencing: vida task deps <task-id> --json");
@@ -74,7 +74,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  This is a read-only launcher-owned planning surface over the authoritative TaskFlow state store.");
             println!();
             println!("Canonical command:");
-            println!("  vida taskflow next [--scope <task-id>] [--json]");
+            println!("  vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]");
             println!();
             println!("Returned semantics:");
             println!("  status, blocker_codes, next_actions, recommended_command, scope_task_id, ready_count, primary_ready_task, latest_run_graph, recovery, gate, dispatch");

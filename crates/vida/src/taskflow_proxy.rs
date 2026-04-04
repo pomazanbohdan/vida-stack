@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use crate::taskflow_layer4::{print_taskflow_proxy_help, run_taskflow_query, taskflow_help_topic};
@@ -5,17 +6,22 @@ use crate::taskflow_run_graph::{
     run_taskflow_recovery, run_taskflow_run_graph, run_taskflow_run_graph_mutation,
 };
 use crate::taskflow_spec_bootstrap::run_taskflow_bootstrap_spec;
-use crate::taskflow_task_bridge::{enforce_execution_preparation_contract_gate, proxy_state_dir};
+use crate::taskflow_task_bridge::{
+    enforce_execution_preparation_contract_gate, proxy_state_dir, proxy_state_dir_with_override,
+};
 use crate::{taskflow_consume, taskflow_protocol_binding, Command, ProxyArgs, RenderMode};
 use clap::Parser;
 
-fn parse_taskflow_next_args(args: &[String]) -> Result<(bool, Option<&str>), &'static str> {
+fn parse_taskflow_next_args(
+    args: &[String],
+) -> Result<(bool, Option<&str>, Option<PathBuf>), &'static str> {
     if !matches!(args.first().map(String::as_str), Some("next")) {
-        return Err("Usage: vida taskflow next [--scope <task-id>] [--json]");
+        return Err("Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]");
     }
 
     let mut as_json = false;
     let mut scope_task_id = None;
+    let mut state_dir = None;
     let mut index = 1;
     while index < args.len() {
         match args[index].as_str() {
@@ -25,21 +31,28 @@ fn parse_taskflow_next_args(args: &[String]) -> Result<(bool, Option<&str>), &'s
             }
             "--scope" => {
                 let Some(task_id) = args.get(index + 1) else {
-                    return Err("Usage: vida taskflow next [--scope <task-id>] [--json]");
+                    return Err("Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]");
                 };
                 scope_task_id = Some(task_id.as_str());
                 index += 2;
             }
+            "--state-dir" => {
+                let Some(path) = args.get(index + 1) else {
+                    return Err("Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]");
+                };
+                state_dir = Some(PathBuf::from(path));
+                index += 2;
+            }
             "--help" | "-h" if index == 1 && args.len() == 2 => {
-                return Ok((false, Some("__help__")));
+                return Ok((false, Some("__help__"), None));
             }
             _ => {
-                return Err("Usage: vida taskflow next [--scope <task-id>] [--json]");
+                return Err("Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]");
             }
         }
     }
 
-    Ok((as_json, scope_task_id))
+    Ok((as_json, scope_task_id, state_dir))
 }
 
 async fn route_taskflow_doctor(args: &[String]) -> ExitCode {
@@ -86,8 +99,8 @@ async fn route_taskflow_task(args: &[String]) -> ExitCode {
 }
 
 pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
-    let (as_json, scope_task_id) = match parse_taskflow_next_args(args) {
-        Ok((_, Some("__help__"))) => {
+    let (as_json, scope_task_id, state_dir) = match parse_taskflow_next_args(args) {
+        Ok((_, Some("__help__"), _)) => {
             print_taskflow_proxy_help(Some("next"));
             return ExitCode::SUCCESS;
         }
@@ -98,7 +111,7 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         }
     };
 
-    let state_dir = proxy_state_dir();
+    let state_dir = proxy_state_dir_with_override(state_dir.as_deref());
     let runtime_consumption = match crate::runtime_consumption_summary(&state_dir) {
         Ok(summary) => summary,
         Err(error) => {

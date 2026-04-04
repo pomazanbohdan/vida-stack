@@ -372,7 +372,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     .any(|code| code == "boot_compatibility_unsupported_boundary")
                 {
                     operator_next_actions.push(
-                        "Normalize boot compatibility classification to release-1 values: compatible|incompatible|degraded|blocking.".to_string(),
+                        "Normalize boot compatibility classification to release-1 values: backward_compatible|reader_upgrade_required.".to_string(),
                     );
                 }
                 if operator_blocker_codes
@@ -386,7 +386,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     .any(|code| code == "migration_preflight_unsupported_boundary")
                 {
                     operator_next_actions.push(
-                        "Normalize migration preflight compatibility classification to release-1 values: compatible|incompatible|degraded|blocking.".to_string(),
+                        "Normalize migration preflight compatibility classification to release-1 values: backward_compatible|reader_upgrade_required.".to_string(),
                     );
                 }
                 if operator_blocker_codes

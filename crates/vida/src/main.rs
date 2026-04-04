@@ -881,7 +881,9 @@ fn build_carrier_pricing_policy(
     })
 }
 
-fn carrier_runtime_section<'a>(compiled_bundle: &'a serde_json::Value) -> &'a serde_json::Value {
+pub(crate) fn carrier_runtime_section<'a>(
+    compiled_bundle: &'a serde_json::Value,
+) -> &'a serde_json::Value {
     compiled_bundle
         .get("carrier_runtime")
         .or_else(|| compiled_bundle.get("codex_multi_agent"))

@@ -81,7 +81,9 @@ fn carrier_backend_from_assignment(assignment: &serde_json::Value) -> Option<Str
         .filter(|value| !value.is_empty())
 }
 
-fn runtime_assignment_from_route<'a>(route: &'a serde_json::Value) -> &'a serde_json::Value {
+pub(crate) fn runtime_assignment_from_route<'a>(
+    route: &'a serde_json::Value,
+) -> &'a serde_json::Value {
     route
         .get("activation")
         .or_else(|| route.get("runtime_assignment"))
@@ -89,7 +91,7 @@ fn runtime_assignment_from_route<'a>(route: &'a serde_json::Value) -> &'a serde_
         .unwrap_or(&serde_json::Value::Null)
 }
 
-fn runtime_assignment_from_execution_plan<'a>(
+pub(crate) fn runtime_assignment_from_execution_plan<'a>(
     execution_plan: &'a serde_json::Value,
 ) -> &'a serde_json::Value {
     execution_plan

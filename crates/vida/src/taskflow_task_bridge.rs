@@ -17,6 +17,12 @@ pub(crate) fn proxy_state_dir() -> PathBuf {
         })
 }
 
+pub(crate) fn proxy_state_dir_with_override(state_dir: Option<&Path>) -> PathBuf {
+    state_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(proxy_state_dir)
+}
+
 pub(crate) fn infer_project_root_from_state_root(state_root: &Path) -> Option<PathBuf> {
     state_root
         .ancestors()

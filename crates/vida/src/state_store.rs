@@ -9079,7 +9079,7 @@ hierarchy: framework,contracts
             .expect("migration preflight should succeed");
         assert_eq!(summary.contract_type, "release-1-operator-contracts");
         assert_eq!(summary.schema_version, "release-1-v1");
-        assert_eq!(summary.compatibility_classification, "compatible");
+        assert_eq!(summary.compatibility_classification, "backward_compatible");
         assert_eq!(summary.migration_state, "no_migration_required");
         assert!(summary.blockers.is_empty());
         assert_eq!(
@@ -9134,7 +9134,10 @@ hierarchy: framework,contracts
             .evaluate_migration_preflight()
             .await
             .expect("migration preflight should succeed");
-        assert_eq!(summary.compatibility_classification, "incompatible");
+        assert_eq!(
+            summary.compatibility_classification,
+            "reader_upgrade_required"
+        );
         assert_eq!(summary.migration_state, "migration_blocked");
         assert!(summary
             .blockers
@@ -9186,7 +9189,10 @@ hierarchy: framework,contracts
             .evaluate_migration_preflight()
             .await
             .expect("migration preflight should succeed");
-        assert_eq!(summary.compatibility_classification, "incompatible");
+        assert_eq!(
+            summary.compatibility_classification,
+            "reader_upgrade_required"
+        );
         assert_eq!(summary.migration_state, "migration_blocked");
         assert!(summary
             .blockers
@@ -9228,7 +9234,7 @@ hierarchy: framework,contracts
             .expect("migration preflight should succeed");
         assert_eq!(summary.contract_type, "release-1-operator-contracts");
         assert_eq!(summary.schema_version, "release-1-v1");
-        assert_eq!(summary.compatibility_classification, "compatible");
+        assert_eq!(summary.compatibility_classification, "backward_compatible");
         assert_eq!(summary.migration_state, "no_migration_required");
 
         drop(store);
@@ -9255,7 +9261,10 @@ hierarchy: framework,contracts
             .expect("persisted migration preflight should exist");
         assert_eq!(persisted.contract_type, "release-1-operator-contracts");
         assert_eq!(persisted.schema_version, "release-1-v1");
-        assert_eq!(persisted.compatibility_classification, "compatible");
+        assert_eq!(
+            persisted.compatibility_classification,
+            "backward_compatible"
+        );
         assert_eq!(persisted.migration_state, "no_migration_required");
         assert!(persisted.blockers.is_empty());
         assert_eq!(
