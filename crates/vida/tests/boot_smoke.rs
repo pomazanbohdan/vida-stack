@@ -2273,9 +2273,12 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
         parsed["payload"]["role_selection"]["reason"],
         "auto_no_keyword_match"
     );
+    let carrier_runtime_assignment =
+        &parsed["payload"]["execution_plan"]["carrier_runtime_assignment"];
     let runtime_assignment = &parsed["payload"]["execution_plan"]["runtime_assignment"];
     let legacy_runtime_assignment =
         &parsed["payload"]["execution_plan"]["codex_runtime_assignment"];
+    assert_eq!(carrier_runtime_assignment, runtime_assignment);
     assert_eq!(runtime_assignment, legacy_runtime_assignment);
     assert!(parsed["payload"]["bundle_check"]["ok"].is_boolean());
     assert!(parsed["payload"]["direct_consumption_ready"].is_boolean());
