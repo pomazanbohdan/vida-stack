@@ -3,7 +3,7 @@
 Initial activation decisions:
 
 - project id: `vida-test`
-- host CLI system: selected through `vida project-activator` (current: `qwen`, external CLI mode)
+- host CLI system: selected through `vida project-activator` (current: `codex`, internal agent-first mode)
 - language policy:
   - user communication: `english`
   - reasoning: `english`

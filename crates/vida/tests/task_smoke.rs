@@ -1082,22 +1082,33 @@ fn status_json_reports_non_codex_host_agents_summary() {
     let agents = host_agents["agents"]
         .as_object()
         .expect("agents summary should render");
-    let qwen_primary = agents
+    let qwen = agents
         .get("qwen-primary")
         .expect("qwen carrier summary should render");
-    assert_eq!(qwen_primary["tier"].as_str().expect("tier"), "qwen");
-    assert_eq!(qwen_primary["rate"].as_i64(), Some(4));
+    assert_eq!(qwen["tier"].as_str().expect("tier"), "qwen");
+    assert_eq!(qwen["rate"].as_i64(), Some(4));
     assert_eq!(
-        qwen_primary["default_runtime_role"]
+        qwen["default_runtime_role"]
             .as_str()
             .expect("default runtime role"),
         "worker"
     );
-    assert_eq!(qwen_primary["feedback_count"].as_u64(), Some(0));
-    assert!(qwen_primary["effective_score"].is_null());
-    assert!(qwen_primary["lifecycle_state"].is_null());
-    assert!(host_agents["selection_policy"].is_null());
+    assert_eq!(qwen["feedback_count"].as_u64(), Some(0));
+    assert!(qwen["effective_score"].is_null());
+    assert!(qwen["lifecycle_state"].is_null());
+    assert_eq!(
+        host_agents["selection_policy"]["rule"],
+        "capability_first_then_score_guard_then_cheapest_tier"
+    );
     assert_eq!(host_agents["external_cli_preflight"]["status"], "pass");
+    assert_eq!(
+        host_agents["external_cli_preflight"]["requires_external_cli"],
+        true
+    );
+    assert_eq!(
+        host_agents["external_cli_preflight"]["external_cli_subagents_present"],
+        false
+    );
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
@@ -1480,7 +1491,7 @@ fn taskflow_task_import_export_statuses_are_canonical() {
 }
 
 #[test]
-fn taskflow_task_import_rejects_noncanonical_helper_status() {
+fn taskflow_task_import_ignores_legacy_helper_status_override_env() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
     let import_path = format!("{state_dir}/tasks.jsonl");
@@ -1492,21 +1503,16 @@ fn taskflow_task_import_rejects_noncanonical_helper_status() {
         .env("VIDA_TASK_BRIDGE_STATUS_OVERRIDE", "bananas")
         .output()
         .expect("task import should run");
-    assert!(
-        !output.status.success(),
-        "non-canonical helper status should fail import"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("non-canonical status"),
-        "failure output should mention non-canonical status, got {stderr}"
-    );
+    assert!(output.status.success());
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("import json should parse");
+    assert_eq!(parsed["status"], "pass");
 
     fs::remove_dir_all(&state_dir).expect("cleanup state dir");
 }
 
 #[test]
-fn taskflow_task_update_rejects_noncanonical_helper_status() {
+fn taskflow_task_update_ignores_legacy_helper_status_override_env() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");
     let import_path = format!("{state_dir}/tasks.jsonl");
@@ -1525,15 +1531,10 @@ fn taskflow_task_update_rejects_noncanonical_helper_status() {
         .env("VIDA_TASK_BRIDGE_STATUS_OVERRIDE", "bananas")
         .output()
         .expect("task update should run");
-    assert!(
-        !output.status.success(),
-        "non-canonical helper status should fail update"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("non-canonical status"),
-        "failure output should mention non-canonical status, got {stderr}"
-    );
+    assert!(output.status.success());
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("update json should parse");
+    assert_eq!(parsed["status"], "pass");
 
     fs::remove_dir_all(&state_dir).expect("cleanup state dir");
 }

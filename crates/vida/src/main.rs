@@ -4545,6 +4545,44 @@ fn runtime_escalation_packet(run_id: &str, dispatch_target: &str) -> serde_json:
     })
 }
 
+fn runtime_tracked_flow_packet(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    run_id: &str,
+    dispatch_target: &str,
+) -> serde_json::Value {
+    let tracked_packet_key = match dispatch_target {
+        "spec-pack" => "spec_task",
+        "work-pool-pack" => "work_pool_task",
+        "dev-pack" => "dev_task",
+        _ => "",
+    };
+    let tracked_flow_bootstrap = if role_selection.execution_plan["tracked_flow_bootstrap"]
+        [tracked_packet_key]["task_id"]
+        .as_str()
+        .is_some()
+    {
+        role_selection.execution_plan["tracked_flow_bootstrap"].clone()
+    } else {
+        build_design_first_tracked_flow_bootstrap(&role_selection.request)
+    };
+    let tracked = tracked_flow_bootstrap
+        .get(tracked_packet_key)
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    serde_json::json!({
+        "packet_id": format!("{run_id}::{dispatch_target}::tracked-flow"),
+        "dispatch_target": dispatch_target,
+        "tracked_packet_key": tracked_packet_key,
+        "task_id": tracked["task_id"],
+        "title": tracked["title"],
+        "runtime": tracked["runtime"],
+        "create_command": tracked["create_command"],
+        "close_command": tracked["close_command"],
+        "required": tracked["required"],
+        "request": role_selection.request,
+    })
+}
+
 fn runtime_packet_prompt(
     run_id: &str,
     dispatch_target: &str,
@@ -4565,7 +4603,8 @@ fn runtime_packet_prompt(
 }
 
 fn packet_nonempty_string(value: Option<&serde_json::Value>) -> bool {
-    value.and_then(serde_json::Value::as_str)
+    value
+        .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .is_some_and(|value| !value.is_empty())
 }
@@ -4598,13 +4637,9 @@ fn active_runtime_packet<'a>(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "Persisted dispatch packet is missing packet_template_kind".to_string())?;
-    let packet_value = packet
-        .get(packet_template_kind)
-        .ok_or_else(|| {
-            format!(
-                "Persisted dispatch packet is missing active packet body `{packet_template_kind}`"
-            )
-        })?;
+    let packet_value = packet.get(packet_template_kind).ok_or_else(|| {
+        format!("Persisted dispatch packet is missing active packet body `{packet_template_kind}`")
+    })?;
     if packet_value.is_null() {
         return Err(format!(
             "Persisted dispatch packet has null active packet body `{packet_template_kind}`"
@@ -4698,6 +4733,28 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
             }
             if !packet_nonempty_string(active_packet.get("blocking_question")) {
                 missing.push("blocking_question");
+            }
+            missing
+        }
+        "tracked_flow_packet" => {
+            let mut missing = Vec::new();
+            if !packet_nonempty_string(active_packet.get("dispatch_target")) {
+                missing.push("dispatch_target");
+            }
+            if !packet_nonempty_string(active_packet.get("tracked_packet_key")) {
+                missing.push("tracked_packet_key");
+            }
+            if !packet_nonempty_string(active_packet.get("task_id")) {
+                missing.push("task_id");
+            }
+            if !packet_nonempty_string(active_packet.get("title")) {
+                missing.push("title");
+            }
+            if !packet_nonempty_string(active_packet.get("runtime")) {
+                missing.push("runtime");
+            }
+            if !packet_nonempty_string(active_packet.get("create_command")) {
+                missing.push("create_command");
             }
             missing
         }
@@ -4909,6 +4966,15 @@ fn write_runtime_dispatch_packet(ctx: &RuntimeDispatchPacketContext<'_>) -> Resu
         },
         "escalation_packet": if packet_template_kind == "escalation_packet" {
             runtime_escalation_packet(&ctx.receipt.run_id, &ctx.receipt.dispatch_target)
+        } else {
+            serde_json::Value::Null
+        },
+        "tracked_flow_packet": if packet_template_kind == "tracked_flow_packet" {
+            runtime_tracked_flow_packet(
+                ctx.role_selection,
+                &ctx.receipt.run_id,
+                &ctx.receipt.dispatch_target,
+            )
         } else {
             serde_json::Value::Null
         },
@@ -5301,6 +5367,11 @@ fn downstream_dispatch_packet_body(
         },
         "escalation_packet": if packet_template_kind == "escalation_packet" {
             runtime_escalation_packet(&receipt.run_id, downstream_target)
+        } else {
+            serde_json::Value::Null
+        },
+        "tracked_flow_packet": if packet_template_kind == "tracked_flow_packet" {
+            runtime_tracked_flow_packet(role_selection, &receipt.run_id, downstream_target)
         } else {
             serde_json::Value::Null
         },

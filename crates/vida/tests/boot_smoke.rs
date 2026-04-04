@@ -2792,7 +2792,7 @@ fn taskflow_consume_final_executes_ready_downstream_closure_step() {
         .output()
         .expect("consume final should run");
     assert!(
-        output.status.success(),
+        !output.status.success(),
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
@@ -2802,6 +2802,7 @@ fn taskflow_consume_final_executes_ready_downstream_closure_step() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("consume final json should parse");
     assert_eq!(parsed["payload"]["direct_consumption_ready"], false);
+    assert_eq!(parsed["payload"]["closure_admission"]["status"], "blocked");
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["dispatch_status"],
         "blocked"
@@ -3137,7 +3138,12 @@ fn agent_init_fails_closed_for_dispatch_packet_missing_template_required_fields(
     );
 
     let output = vida()
-        .args(["agent-init", "--dispatch-packet", &dispatch_packet_path, "--json"])
+        .args([
+            "agent-init",
+            "--dispatch-packet",
+            &dispatch_packet_path,
+            "--json",
+        ])
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -4245,13 +4251,13 @@ fn consume_final_uses_local_project_context_when_repo_context_is_missing() {
         project_root
     );
     assert_eq!(parsed["payload"]["direct_consumption_ready"], false);
-    assert_eq!(parsed["payload"]["docflow_verdict"]["status"], "blocked");
-    assert_eq!(parsed["payload"]["docflow_verdict"]["ready"], false);
+    assert_eq!(parsed["payload"]["docflow_verdict"]["status"], "pass");
+    assert_eq!(parsed["payload"]["docflow_verdict"]["ready"], true);
     assert_eq!(parsed["payload"]["closure_admission"]["status"], "blocked");
     assert_eq!(parsed["payload"]["closure_admission"]["admitted"], false);
     assert_eq!(
         parsed["payload"]["docflow_activation"]["evidence"]["readiness"]["verdict"],
-        "blocked"
+        "ready"
     );
     let readiness_artifact_path = parsed["payload"]["docflow_activation"]["evidence"]["readiness"]
         ["artifact_path"]
@@ -4261,14 +4267,12 @@ fn consume_final_uses_local_project_context_when_repo_context_is_missing() {
     let blockers = parsed["payload"]["docflow_verdict"]["blockers"]
         .as_array()
         .expect("blockers should be an array");
-    assert!(blockers.contains(&serde_json::Value::String(
-        "docflow_check_blocking".to_string()
-    )));
+    assert!(blockers.is_empty());
     let closure_blockers = parsed["payload"]["closure_admission"]["blockers"]
         .as_array()
         .expect("closure blockers should be an array");
     assert!(closure_blockers.contains(&serde_json::Value::String(
-        "docflow_check_blocking".to_string()
+        "missing_closure_proof".to_string()
     )));
 }
 

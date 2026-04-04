@@ -1025,7 +1025,10 @@ impl StateStore {
             release_1_contract_steps: vec![TaskRelease1ContractStep {
                 id: "doctor_run_graph_negative_control".to_string(),
                 mode: "fail_closed".to_string(),
-                blocker_code: "missing_run_graph_dispatch_receipt_operator_evidence".to_string(),
+                blocker_code: crate::release1_contracts::blocker_code_str(
+                    crate::release1_contracts::BlockerCode::MissingRunGraphDispatchReceiptOperatorEvidence,
+                )
+                .to_string(),
                 next_action: "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.".to_string(),
             }],
             nodes,
@@ -2132,8 +2135,16 @@ impl StateStore {
         .as_str();
         let canonical_lane_status =
             canonical_lane_status_str(raw_lane_status).unwrap_or(raw_lane_status);
+        let downstream_closure_completed = receipt.downstream_dispatch_status.as_deref()
+            == Some("executed")
+            && canonical_lane_status == "lane_completed";
+        let effective_derived_lane_status = if downstream_closure_completed {
+            "lane_completed"
+        } else {
+            derived_lane_status
+        };
         if receipt.downstream_dispatch_status.is_some()
-            && canonical_lane_status != derived_lane_status
+            && canonical_lane_status != effective_derived_lane_status
         {
             return Err(StateStoreError::InvalidTaskRecord {
                 reason: format!(
@@ -2141,7 +2152,7 @@ impl StateStore {
                     receipt.run_id,
                     receipt.downstream_dispatch_status.as_deref().unwrap_or("none"),
                     canonical_lane_status,
-                    derived_lane_status,
+                    effective_derived_lane_status,
                     receipt.dispatch_status
                 ),
             });

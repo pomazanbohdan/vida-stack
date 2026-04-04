@@ -1162,12 +1162,12 @@ pub(crate) fn blocking_runtime_bundle(error: &str) -> TaskflowConsumeBundlePaylo
             "error": error,
         }),
         boot_compatibility: serde_json::json!({
-            "classification": "reader_upgrade_required",
+            "classification": super::release1_contracts::CompatibilityClass::ReaderUpgradeRequired.as_str(),
             "reasons": [error],
             "next_step": "restore_runtime_bundle",
         }),
         migration_preflight: serde_json::json!({
-            "compatibility_classification": "reader_upgrade_required",
+            "compatibility_classification": super::release1_contracts::CompatibilityClass::ReaderUpgradeRequired.as_str(),
             "migration_state": "blocked",
             "blockers": [error],
             "source_version_tuple": [],

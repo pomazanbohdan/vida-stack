@@ -23,7 +23,7 @@ language_policy:
   todo_protocol: english
 
 host_environment:
-  cli_system: qwen
+  cli_system: codex
   codex:
     agents: &codex_agent_catalog
       junior:
@@ -95,14 +95,14 @@ host_environment:
           - meta_analysis
   systems:
     codex:
-      enabled: false
+      enabled: true
       execution_class: internal
       materialization_mode: codex_toml_catalog_render
       template_root: .codex
       runtime_root: .codex
       carriers: *codex_agent_catalog
     qwen:
-      enabled: true
+      enabled: false
       execution_class: external
       materialization_mode: copy_tree_only
       template_root: .qwen

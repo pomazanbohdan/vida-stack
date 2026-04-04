@@ -237,13 +237,23 @@ mod tests {
     #[test]
     fn execution_preparation_contract_gate_accepts_release1_canonical_and_compat_statuses() {
         let cases = [
-            ("pass", "final-pass.json"),
-            ("blocked", "final-blocked.json"),
-            ("ok", "final-ok.json"),
-            ("block", "final-block.json"),
+            ("pass", "final-pass.json", Vec::new(), Vec::new()),
+            (
+                "blocked",
+                "final-blocked.json",
+                vec!["migration_required".to_string()],
+                vec!["Complete required migration before normal operation.".to_string()],
+            ),
+            ("ok", "final-ok.json", Vec::new(), Vec::new()),
+            (
+                "block",
+                "final-block.json",
+                vec!["migration_required".to_string()],
+                vec!["Complete required migration before normal operation.".to_string()],
+            ),
         ];
 
-        for (status, file_name) in cases {
+        for (status, file_name, blocker_codes, next_actions) in cases {
             let root = std::env::temp_dir().join(format!(
                 "vida-taskflow-bridge-release1-operator-contract-gate-{}-{}-{}",
                 std::process::id(),
@@ -252,18 +262,28 @@ mod tests {
             ));
             let snapshot_dir = root.join("runtime-consumption");
             fs::create_dir_all(&snapshot_dir).expect("create snapshot dir");
+            let operator_contracts = crate::build_release1_operator_contracts_envelope(
+                status,
+                blocker_codes,
+                next_actions,
+                serde_json::json!({}),
+            );
+            let shared_fields = serde_json::json!({
+                "status": operator_contracts["status"].clone(),
+                "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                "next_actions": operator_contracts["next_actions"].clone(),
+                "artifact_refs": operator_contracts["artifact_refs"].clone(),
+            });
             let snapshot = serde_json::json!({
+                "status": operator_contracts["status"].clone(),
+                "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                "next_actions": operator_contracts["next_actions"].clone(),
+                "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                "shared_fields": shared_fields,
                 "closure_admission": {
                     "blockers": [],
                 },
-                "operator_contracts": {
-                    "contract_id": "release-1-operator-contracts",
-                    "schema_version": "release-1-v1",
-                    "status": status,
-                    "blocker_codes": [],
-                    "next_actions": [],
-                    "artifact_refs": {},
-                },
+                "operator_contracts": operator_contracts,
                 "dispatch_receipt": {
                     "blocker_code": null,
                 },

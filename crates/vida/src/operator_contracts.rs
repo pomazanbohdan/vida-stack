@@ -1,12 +1,7 @@
 use serde_json::Value;
 
 pub(crate) fn canonical_release1_operator_contract_status(value: &Value) -> Option<&'static str> {
-    let trimmed = value.as_str()?.trim().to_ascii_lowercase();
-    match trimmed.as_str() {
-        "pass" | "ok" => Some("pass"),
-        "blocked" => Some("blocked"),
-        _ => None,
-    }
+    crate::release1_contracts::canonical_release1_contract_status_str(value.as_str()?)
 }
 
 pub(crate) fn is_canonical_release1_operator_contract_status(value: &Value) -> bool {

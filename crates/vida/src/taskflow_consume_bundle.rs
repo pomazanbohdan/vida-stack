@@ -267,45 +267,46 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                     .to_string(),
                 );
             }
-            let db_first_activation_truth =
-                match super::read_or_sync_launcher_activation_snapshot(&store).await {
-                    Ok(snapshot) => {
-                        if let Some(error) =
-                            db_first_activation_snapshot_validation_error(&snapshot)
-                        {
-                            if let Some(code) = crate::release1_contracts::blocker_code_value(
+            let db_first_activation_truth = match super::read_or_sync_launcher_activation_snapshot(
+                &store,
+            )
+            .await
+            {
+                Ok(snapshot) => {
+                    if let Some(error) = db_first_activation_snapshot_validation_error(&snapshot) {
+                        if let Some(code) = crate::release1_contracts::blocker_code_value(
                                 crate::release1_contracts::BlockerCode::MissingLauncherActivationSnapshot,
                             ) {
                                 effective_blockers.push(code);
                             }
-                            serde_json::json!({
-                                "ok": false,
-                                "error": error,
-                                "source": snapshot.source,
-                                "source_config_path": snapshot.source_config_path,
-                                "source_config_digest": snapshot.source_config_digest,
-                            })
-                        } else {
-                            serde_json::json!({
-                                "ok": true,
-                                "source": snapshot.source,
-                                "source_config_path": snapshot.source_config_path,
-                                "source_config_digest": snapshot.source_config_digest,
-                            })
-                        }
-                    }
-                    Err(error) => {
-                        if let Some(code) = crate::release1_contracts::blocker_code_value(
-                            crate::release1_contracts::BlockerCode::MissingLauncherActivationSnapshot,
-                        ) {
-                            effective_blockers.push(code);
-                        }
                         serde_json::json!({
                             "ok": false,
                             "error": error,
+                            "source": snapshot.source,
+                            "source_config_path": snapshot.source_config_path,
+                            "source_config_digest": snapshot.source_config_digest,
+                        })
+                    } else {
+                        serde_json::json!({
+                            "ok": true,
+                            "source": snapshot.source,
+                            "source_config_path": snapshot.source_config_path,
+                            "source_config_digest": snapshot.source_config_digest,
                         })
                     }
-                };
+                }
+                Err(error) => {
+                    if let Some(code) = crate::release1_contracts::blocker_code_value(
+                        crate::release1_contracts::BlockerCode::MissingLauncherActivationSnapshot,
+                    ) {
+                        effective_blockers.push(code);
+                    }
+                    serde_json::json!({
+                        "ok": false,
+                        "error": error,
+                    })
+                }
+            };
             let blocker_codes = normalize_consume_bundle_blocker_codes(&effective_blockers);
             let next_actions = consume_bundle_check_next_actions(&blocker_codes);
             let artifact_refs = serde_json::json!({

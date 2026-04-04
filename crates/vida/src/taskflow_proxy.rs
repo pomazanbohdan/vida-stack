@@ -336,9 +336,9 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         );
         Some("vida taskflow consume continue --json".to_string())
     } else {
-        if let Some(code) =
-            crate::release1_contracts::blocker_code_value(crate::release1_contracts::BlockerCode::NoReadyTasks)
-        {
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::NoReadyTasks,
+        ) {
             blocker_codes.push(code);
         }
         let ready_command = if let Some(task_id) = scope_task_id {
@@ -522,9 +522,9 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         );
     }
     if ready_tasks.is_empty() {
-        if let Some(code) =
-            crate::release1_contracts::blocker_code_value(crate::release1_contracts::BlockerCode::NoReadyTasks)
-        {
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::NoReadyTasks,
+        ) {
             blocker_codes.push(code);
         }
     }

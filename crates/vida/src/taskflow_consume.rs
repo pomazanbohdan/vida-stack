@@ -1185,23 +1185,19 @@ mod tests {
         let mut docflow_verdict = crate::RuntimeConsumptionDocflowVerdict {
             status: "blocked".to_string(),
             ready: false,
-            blockers: vec![
-                crate::release1_contracts::blocker_code_value(
-                    crate::release1_contracts::BlockerCode::MissingProofVerdict,
-                )
-                .expect("missing proof verdict blocker should be canonical"),
-            ],
+            blockers: vec![crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::MissingProofVerdict,
+            )
+            .expect("missing proof verdict blocker should be canonical")],
             proof_surfaces: vec![],
         };
         let mut closure_admission = crate::RuntimeConsumptionClosureAdmission {
             status: "blocked".to_string(),
             admitted: false,
-            blockers: vec![
-                crate::release1_contracts::blocker_code_value(
-                    crate::release1_contracts::BlockerCode::MissingClosureProof,
-                )
-                .expect("missing closure proof blocker should be canonical"),
-            ],
+            blockers: vec![crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::MissingClosureProof,
+            )
+            .expect("missing closure proof blocker should be canonical")],
             proof_surfaces: vec![],
         };
 

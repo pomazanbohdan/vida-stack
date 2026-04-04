@@ -472,6 +472,10 @@ pub(crate) enum BlockerCode {
     RestoreReconcileNotGreen,
     PendingDesignPacket,
     PendingDeveloperHandoffPacket,
+    ImplementationReviewDenied,
+    ImplementationReviewExpired,
+    ImplementationReviewFindings,
+    ImplementationReviewChangedScope,
     BundleActivationNotReady,
     DocflowVerdictBlock,
     ClosureAdmissionBlock,
@@ -613,6 +617,10 @@ impl BlockerCode {
             Self::RestoreReconcileNotGreen => "restore_reconcile_not_green",
             Self::PendingDesignPacket => "pending_design_packet",
             Self::PendingDeveloperHandoffPacket => "pending_developer_handoff_packet",
+            Self::ImplementationReviewDenied => "implementation_review_denied",
+            Self::ImplementationReviewExpired => "implementation_review_expired",
+            Self::ImplementationReviewFindings => "implementation_review_findings",
+            Self::ImplementationReviewChangedScope => "implementation_review_changed_scope",
             Self::BundleActivationNotReady => "bundle_activation_not_ready",
             Self::DocflowVerdictBlock => "docflow_verdict_block",
             Self::ClosureAdmissionBlock => "closure_admission_block",
@@ -762,6 +770,10 @@ impl BlockerCode {
             "restore_reconcile_not_green" => Some(Self::RestoreReconcileNotGreen),
             "pending_design_packet" => Some(Self::PendingDesignPacket),
             "pending_developer_handoff_packet" => Some(Self::PendingDeveloperHandoffPacket),
+            "implementation_review_denied" => Some(Self::ImplementationReviewDenied),
+            "implementation_review_expired" => Some(Self::ImplementationReviewExpired),
+            "implementation_review_findings" => Some(Self::ImplementationReviewFindings),
+            "implementation_review_changed_scope" => Some(Self::ImplementationReviewChangedScope),
             "bundle_activation_not_ready" => Some(Self::BundleActivationNotReady),
             "docflow_verdict_block" => Some(Self::DocflowVerdictBlock),
             "closure_admission_block" => Some(Self::ClosureAdmissionBlock),
@@ -1045,6 +1057,25 @@ mod tests {
                 "policy_denied".to_string(),
                 "protocol_binding_not_runtime_ready".to_string(),
                 "unsupported_blocker_code".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn blocker_code_normalization_supports_implementation_review_codes() {
+        let codes = canonical_blocker_code_list([
+            " implementation_review_denied ",
+            "implementation_review_expired",
+            "implementation_review_findings",
+            "implementation_review_changed_scope",
+        ]);
+        assert_eq!(
+            codes,
+            vec![
+                "implementation_review_changed_scope".to_string(),
+                "implementation_review_denied".to_string(),
+                "implementation_review_expired".to_string(),
+                "implementation_review_findings".to_string(),
             ]
         );
     }

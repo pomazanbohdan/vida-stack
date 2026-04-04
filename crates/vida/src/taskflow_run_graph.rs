@@ -626,10 +626,18 @@ fn print_run_graph_json_error(
 
 fn run_graph_blocker_code(status: &str) -> Option<&'static str> {
     match status {
-        "denied" => Some("implementation_review_denied"),
-        "expired" => Some("implementation_review_expired"),
-        "review_findings" => Some("implementation_review_findings"),
-        "changed_scope" => Some("implementation_review_changed_scope"),
+        "denied" => Some(crate::release1_contracts::blocker_code_str(
+            crate::release1_contracts::BlockerCode::ImplementationReviewDenied,
+        )),
+        "expired" => Some(crate::release1_contracts::blocker_code_str(
+            crate::release1_contracts::BlockerCode::ImplementationReviewExpired,
+        )),
+        "review_findings" => Some(crate::release1_contracts::blocker_code_str(
+            crate::release1_contracts::BlockerCode::ImplementationReviewFindings,
+        )),
+        "changed_scope" => Some(crate::release1_contracts::blocker_code_str(
+            crate::release1_contracts::BlockerCode::ImplementationReviewChangedScope,
+        )),
         _ => None,
     }
 }
@@ -996,10 +1004,16 @@ fn implementation_verification_outcome(status: &str) -> ImplementationVerificati
             ImplementationVerificationOutcome::ReworkReady,
         ),
         ("clean", ImplementationVerificationOutcome::Clean),
-        ("approved", ImplementationVerificationOutcome::Approved),
-        ("denied", ImplementationVerificationOutcome::FindingsBlocked),
         (
-            "expired",
+            crate::release1_contracts::ApprovalStatus::Approved.as_str(),
+            ImplementationVerificationOutcome::Approved,
+        ),
+        (
+            crate::release1_contracts::ApprovalStatus::Denied.as_str(),
+            ImplementationVerificationOutcome::FindingsBlocked,
+        ),
+        (
+            crate::release1_contracts::ApprovalStatus::Expired.as_str(),
             ImplementationVerificationOutcome::FindingsBlocked,
         ),
         (
@@ -1367,7 +1381,10 @@ pub(crate) async fn derive_advanced_run_graph_status(
                             next_node: Some("approval".to_string()),
                             lane_id: existing.lane_id.clone(),
                             lifecycle_stage: "approval_wait".to_string(),
-                            policy_gate: "approval_required".to_string(),
+                            policy_gate:
+                                crate::release1_contracts::ApprovalStatus::ApprovalRequired
+                                    .as_str()
+                                    .to_string(),
                             checkpoint_kind: existing.checkpoint_kind.clone(),
                             target_format: DispatchTargetFormat::Direct,
                             recovery_ready: true,

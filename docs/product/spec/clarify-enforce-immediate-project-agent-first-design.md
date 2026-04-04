@@ -24,6 +24,8 @@ Use this template for one bounded feature/change design before implementation.
   - The project law is explicit about delegation-first, but some guidance still describes “agentic” or “delegated Codex team” behavior too generically.
   - That leaves room to misread project agent mode as host-level `spawn_agent` semantics instead of the canonical `vida agent-init` lane flow.
   - The startup/runtime guidance does not state strongly enough that host subagent APIs are optional carrier/executor details, not the canonical meaning of project-agent-first development.
+  - The repository overlay still points the active host CLI selection at `qwen` external mode even though the active project canon and rendered runtime guidance treat the Codex/internal path as the primary agent-first execution posture.
+  - `vida status --json` still treats enabled external CLI subagents as if they make the whole session externally dependent, even when the selected host execution class is internal and the external subagents are only optional carrier details.
   - Runtime-consumption status and continuation also allowed one live ambiguity: a newer `bundle-check` snapshot could overshadow the latest valid `final` snapshot and re-open release-admission blockers even after lawful `consume final` evidence already existed.
   - Runtime dispatch packets still rely on prose/template alignment rather than one compiled template-specific packet-minimum validator, so `vida taskflow consume final`, persisted dispatch packets, resume, and `vida agent-init` can drift if packet-family requirements are not enforced from shared code.
 
@@ -65,9 +67,11 @@ Use this template for one bounded feature/change design before implementation.
 
 ## Ownership And Canonical Surfaces
 - Project docs / specs affected:
+  - `vida.config.yaml`
   - `AGENTS.md`
   - `AGENTS.sidecar.md`
   - `install/assets/AGENTS.scaffold.md`
+  - `docs/process/decisions.md`
   - `docs/process/project-orchestrator-operating-protocol.md`
   - `docs/process/project-packet-and-lane-runtime-capsule.md`
   - `docs/process/team-development-and-orchestration-protocol.md`
@@ -156,6 +160,8 @@ Will implement / choose:
 - `AGENTS.md`
 - `AGENTS.sidecar.md`
 - `install/assets/AGENTS.scaffold.md`
+- `vida.config.yaml`
+- `docs/process/decisions.md`
 - `docs/process/project-orchestrator-operating-protocol.md`
 - `docs/process/project-packet-and-lane-runtime-capsule.md`
 - `docs/process/project-development-packet-template-protocol.md`

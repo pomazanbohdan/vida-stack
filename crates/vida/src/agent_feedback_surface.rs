@@ -170,7 +170,10 @@ fn canonical_close_status_from_reason(reason: &str) -> Option<(&'static str, &'s
         "pending approval".to_string(),
     ];
     if !super::contains_keywords(&normalized, &approval_keywords).is_empty() {
-        return Some(("awaiting_approval", "approval_required"));
+        return Some((
+            "awaiting_approval",
+            crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str(),
+        ));
     }
 
     let blocker_keywords = [

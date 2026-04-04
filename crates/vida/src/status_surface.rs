@@ -202,7 +202,7 @@ fn external_cli_preflight_summary(
                 })
             })
             .unwrap_or(false);
-    let requires_external_cli = selected_is_external || has_enabled_external_subagents;
+    let requires_external_cli = selected_is_external;
     let sandbox_active = is_sandbox_active_from_env();
     let network_reachable = can_resolve_public_network();
 
@@ -210,6 +210,7 @@ fn external_cli_preflight_summary(
         return serde_json::json!({
             "status": "blocked",
             "requires_external_cli": true,
+            "external_cli_subagents_present": has_enabled_external_subagents,
             "selected_execution_class": selected_execution_class,
             "sandbox_active": true,
             "network_reachable": false,
@@ -225,6 +226,7 @@ fn external_cli_preflight_summary(
     serde_json::json!({
         "status": "pass",
         "requires_external_cli": requires_external_cli,
+        "external_cli_subagents_present": has_enabled_external_subagents,
         "selected_execution_class": selected_execution_class,
         "sandbox_active": sandbox_active,
         "network_reachable": network_reachable,
@@ -1362,7 +1364,13 @@ pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
     let guard_ok = has_runtime_root_session_write_guard(&guard);
     serde_json::json!({
         "status": if guard_ok { "blocked_by_default" } else { "missing" },
-        "reason": if guard_ok { serde_json::Value::Null } else { serde_json::Value::String("missing_root_session_write_guard".to_string()) },
+        "reason": if guard_ok {
+            serde_json::Value::Null
+        } else {
+            serde_json::Value::String(
+                blocker_code_str(BlockerCode::MissingRootSessionWriteGuard).to_string()
+            )
+        },
         "root_session_role": guard["root_session_role"].clone(),
         "local_write_requires_exception_path": guard["local_write_requires_exception_path"].clone(),
         "required_exception_evidence": guard["required_exception_evidence"].clone(),
@@ -1734,6 +1742,34 @@ host_environment:
         let (selected, entry) = selected_host_cli_system_entry(&overlay);
         let summary = super::external_cli_preflight_summary(&overlay, &selected, entry.as_ref());
         assert_eq!(summary["requires_external_cli"], false);
+        assert_eq!(summary["selected_execution_class"], "internal");
+    }
+
+    #[test]
+    fn external_cli_preflight_keeps_optional_external_subagents_non_blocking_for_internal_host() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      runtime_root: .codex
+agent_system:
+  subagents:
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+"#,
+        )
+        .expect("overlay yaml should parse");
+
+        let (selected, entry) = selected_host_cli_system_entry(&overlay);
+        let summary = super::external_cli_preflight_summary(&overlay, &selected, entry.as_ref());
+        assert_eq!(summary["status"], "pass");
+        assert_eq!(summary["requires_external_cli"], false);
+        assert_eq!(summary["external_cli_subagents_present"], true);
         assert_eq!(summary["selected_execution_class"], "internal");
     }
 

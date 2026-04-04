@@ -332,10 +332,7 @@ pub(crate) fn read_dispatch_packet(path: &str) -> Result<serde_json::Value, Stri
         )
         .map_err(|error| format!("Failed to persist normalized dispatch packet: {error}"))?;
     }
-    crate::validate_runtime_dispatch_packet_contract(
-        &packet,
-        "Persisted dispatch packet",
-    )?;
+    crate::validate_runtime_dispatch_packet_contract(&packet, "Persisted dispatch packet")?;
     Ok(packet)
 }
 
@@ -1281,10 +1278,33 @@ mod tests {
         let snapshot_dir = store.root().join("runtime-consumption");
         fs::create_dir_all(&snapshot_dir).expect("create runtime-consumption directory");
         let snapshot_path = snapshot_dir.join("final-2026-03-18T00-00-00Z.json");
+        let operator_contracts = crate::build_release1_operator_contracts_envelope(
+            "pass",
+            Vec::new(),
+            Vec::new(),
+            serde_json::json!({
+                "runtime_consumption_latest_snapshot_path": snapshot_path.display().to_string(),
+                "latest_run_graph_dispatch_receipt_id": "run-final-snapshot",
+                "latest_task_reconciliation_receipt_id": serde_json::Value::Null,
+                "consume_final_surface": "vida taskflow consume final",
+            }),
+        );
+        let shared_fields = serde_json::json!({
+            "status": operator_contracts["status"].clone(),
+            "blocker_codes": operator_contracts["blocker_codes"].clone(),
+            "next_actions": operator_contracts["next_actions"].clone(),
+            "artifact_refs": operator_contracts["artifact_refs"].clone(),
+        });
         fs::write(
             &snapshot_path,
             serde_json::json!({
                 "surface": "vida taskflow consume final",
+                "status": operator_contracts["status"].clone(),
+                "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                "next_actions": operator_contracts["next_actions"].clone(),
+                "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                "shared_fields": shared_fields,
+                "operator_contracts": operator_contracts,
                 "payload": {
                     "dispatch_receipt": {
                         "run_id": "run-final-snapshot"
