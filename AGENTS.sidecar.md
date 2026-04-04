@@ -97,7 +97,7 @@ Project-routing rule:
 9. For task/backlog lifecycle work, prefer the DB-backed `vida taskflow task` surface over flat task artifacts.
 10. The expected local operator path is plain `vida taskflow ...` with project-local defaults already bound to this repository root; manual `VIDA_ROOT=...` overrides are fallback-only.
 11. For development work, assume `delivery_task` is the default decomposition leaf and use `execution_block` only when one-owner bounded closure still fails.
-12. For normal write-producing work, assume delegated agents are the default execution path once a lawful packet exists.
+12. For normal write-producing work, assume delegated agents are the default execution path once a lawful packet exists, and interpret that path as the project runtime's delegated lane flow through `vida agent-init` rather than host-tool-specific subagent primitives.
 13. For cheaper orchestrator lanes, prefer the project orchestrator operating protocol over broad free-form planning.
 14. For new or resumed development orchestration sessions, prefer the compact project startup bundle for routine reads and expand only the needed deeper startup/packet owner surfaces when the bundle and project runtime capsules do not settle the question.
 15. Do not pre-split the whole backlog into `execution_block` leaves during bootstrap; keep launch readiness at `delivery_task` depth and refine just-in-time for the next active item.

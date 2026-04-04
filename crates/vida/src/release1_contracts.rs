@@ -452,6 +452,29 @@ pub(crate) enum BlockerCode {
     InvalidMetadataTupleKeys,
     CacheTupleProtocolBindingEvidenceUntrusted,
     CacheTupleProtocolBindingTokenMismatch,
+    MissingLauncherActivationSnapshot,
+    InvalidCompiledBundleRoleSelectionMode,
+    InvalidCompiledBundleAgentSystemMode,
+    InvalidCompiledBundleAgentSystemStateOwner,
+    MissingEffectiveBundleReceiptId,
+    MissingEffectiveBundleRootArtifactId,
+    EmptyEffectiveBundleArtifactCount,
+    MissingEffectiveBundleReceipt,
+    NoReadyTasks,
+    ExecutionPreparationGateBlocked,
+    TaskGraphEmpty,
+    MissingDocflowActivation,
+    DocflowCheckBlocking,
+    MissingReadinessVerdict,
+    MissingInventoryOrProjectionEvidence,
+    MissingProofVerdict,
+    MissingClosureProof,
+    RestoreReconcileNotGreen,
+    PendingDesignPacket,
+    PendingDeveloperHandoffPacket,
+    BundleActivationNotReady,
+    DocflowVerdictBlock,
+    ClosureAdmissionBlock,
     Unsupported,
 }
 
@@ -560,6 +583,39 @@ impl BlockerCode {
             Self::CacheTupleProtocolBindingTokenMismatch => {
                 "cache_tuple_protocol_binding_token_mismatch"
             }
+            Self::MissingLauncherActivationSnapshot => "missing_launcher_activation_snapshot",
+            Self::InvalidCompiledBundleRoleSelectionMode => {
+                "invalid_compiled_bundle_role_selection_mode"
+            }
+            Self::InvalidCompiledBundleAgentSystemMode => {
+                "invalid_compiled_bundle_agent_system_mode"
+            }
+            Self::InvalidCompiledBundleAgentSystemStateOwner => {
+                "invalid_compiled_bundle_agent_system_state_owner"
+            }
+            Self::MissingEffectiveBundleReceiptId => "missing_effective_bundle_receipt_id",
+            Self::MissingEffectiveBundleRootArtifactId => {
+                "missing_effective_bundle_root_artifact_id"
+            }
+            Self::EmptyEffectiveBundleArtifactCount => "empty_effective_bundle_artifact_count",
+            Self::MissingEffectiveBundleReceipt => "missing_effective_bundle_receipt",
+            Self::NoReadyTasks => "no_ready_tasks",
+            Self::ExecutionPreparationGateBlocked => "execution_preparation_gate_blocked",
+            Self::TaskGraphEmpty => "task_graph_empty",
+            Self::MissingDocflowActivation => "missing_docflow_activation",
+            Self::DocflowCheckBlocking => "docflow_check_blocking",
+            Self::MissingReadinessVerdict => "missing_readiness_verdict",
+            Self::MissingInventoryOrProjectionEvidence => {
+                "missing_inventory_or_projection_evidence"
+            }
+            Self::MissingProofVerdict => "missing_proof_verdict",
+            Self::MissingClosureProof => "missing_closure_proof",
+            Self::RestoreReconcileNotGreen => "restore_reconcile_not_green",
+            Self::PendingDesignPacket => "pending_design_packet",
+            Self::PendingDeveloperHandoffPacket => "pending_developer_handoff_packet",
+            Self::BundleActivationNotReady => "bundle_activation_not_ready",
+            Self::DocflowVerdictBlock => "docflow_verdict_block",
+            Self::ClosureAdmissionBlock => "closure_admission_block",
             Self::Unsupported => "unsupported_blocker_code",
         }
     }
@@ -674,6 +730,41 @@ impl BlockerCode {
             "cache_tuple_protocol_binding_token_mismatch" => {
                 Some(Self::CacheTupleProtocolBindingTokenMismatch)
             }
+            "missing_launcher_activation_snapshot" => Some(Self::MissingLauncherActivationSnapshot),
+            "invalid_compiled_bundle_role_selection_mode" => {
+                Some(Self::InvalidCompiledBundleRoleSelectionMode)
+            }
+            "invalid_compiled_bundle_agent_system_mode" => {
+                Some(Self::InvalidCompiledBundleAgentSystemMode)
+            }
+            "invalid_compiled_bundle_agent_system_state_owner" => {
+                Some(Self::InvalidCompiledBundleAgentSystemStateOwner)
+            }
+            "missing_effective_bundle_receipt_id" => Some(Self::MissingEffectiveBundleReceiptId),
+            "missing_effective_bundle_root_artifact_id" => {
+                Some(Self::MissingEffectiveBundleRootArtifactId)
+            }
+            "empty_effective_bundle_artifact_count" => {
+                Some(Self::EmptyEffectiveBundleArtifactCount)
+            }
+            "missing_effective_bundle_receipt" => Some(Self::MissingEffectiveBundleReceipt),
+            "no_ready_tasks" => Some(Self::NoReadyTasks),
+            "execution_preparation_gate_blocked" => Some(Self::ExecutionPreparationGateBlocked),
+            "task_graph_empty" => Some(Self::TaskGraphEmpty),
+            "missing_docflow_activation" => Some(Self::MissingDocflowActivation),
+            "docflow_check_blocking" => Some(Self::DocflowCheckBlocking),
+            "missing_readiness_verdict" => Some(Self::MissingReadinessVerdict),
+            "missing_inventory_or_projection_evidence" => {
+                Some(Self::MissingInventoryOrProjectionEvidence)
+            }
+            "missing_proof_verdict" => Some(Self::MissingProofVerdict),
+            "missing_closure_proof" => Some(Self::MissingClosureProof),
+            "restore_reconcile_not_green" => Some(Self::RestoreReconcileNotGreen),
+            "pending_design_packet" => Some(Self::PendingDesignPacket),
+            "pending_developer_handoff_packet" => Some(Self::PendingDeveloperHandoffPacket),
+            "bundle_activation_not_ready" => Some(Self::BundleActivationNotReady),
+            "docflow_verdict_block" => Some(Self::DocflowVerdictBlock),
+            "closure_admission_block" => Some(Self::ClosureAdmissionBlock),
             "unsupported_blocker_code" => Some(Self::Unsupported),
             _ => None,
         }
@@ -765,6 +856,8 @@ pub(crate) fn missing_downstream_lane_evidence_blocker(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::{
         blocker_code_str, blocker_code_value, canonical_approval_status_str,
         canonical_blocker_code_list, canonical_compatibility_class_str, canonical_gate_level_str,
@@ -953,6 +1046,49 @@ mod tests {
                 "protocol_binding_not_runtime_ready".to_string(),
                 "unsupported_blocker_code".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn explicit_blocker_push_literals_are_registry_backed() {
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut missing = BTreeSet::new();
+
+        for entry in std::fs::read_dir(src_dir).expect("read src dir") {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                continue;
+            }
+
+            let source = std::fs::read_to_string(&path).expect("read source");
+            for needle in ["blockers.push(\"", "blocker_codes.push(\""] {
+                let mut rest = source.as_str();
+                while let Some(idx) = rest.find(needle) {
+                    let after = &rest[idx + needle.len()..];
+                    let Some(end) = after.find('"') else {
+                        break;
+                    };
+                    let candidate = &after[..end];
+                    let simple_literal = candidate
+                        .chars()
+                        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_');
+                    if simple_literal && super::canonical_blocker_code_str(candidate).is_none() {
+                        missing.insert(format!(
+                            "{}:{}",
+                            path.file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("unknown"),
+                            candidate
+                        ));
+                    }
+                    rest = &after[end + 1..];
+                }
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "found explicit blocker push literals outside registry: {missing:?}"
         );
     }
 

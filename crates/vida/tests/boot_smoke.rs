@@ -4397,11 +4397,31 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
             ["local_implementation_without_exception_path_forbidden"],
         true
     );
+    assert_eq!(
+        downstream_packet_json["orchestration_contract"]["delegation_policy"]
+            ["canonical_project_delegated_execution_surface"],
+        "vida agent-init"
+    );
+    assert_eq!(
+        downstream_packet_json["orchestration_contract"]["delegation_policy"]
+            ["host_subagent_apis_are_backend_details"],
+        true
+    );
     assert!(downstream_packet_json["prompt"]
         .as_str()
         .expect("prompt should be present")
         .contains(
             "First substantive response: publish a concise plan before edits or implementation."
+        ));
+    assert!(downstream_packet_json["prompt"]
+        .as_str()
+        .expect("prompt should be present")
+        .contains("Canonical delegated execution surface=vida agent-init"));
+    assert!(downstream_packet_json["prompt"]
+        .as_str()
+        .expect("prompt should be present")
+        .contains(
+            "Host subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract."
         ));
     assert!(parsed["payload"]["dispatch_receipt"]["activation_agent_type"].is_null());
     let matched_terms = parsed["payload"]["role_selection"]["matched_terms"]
@@ -4538,6 +4558,15 @@ fn taskflow_consume_final_routes_mixed_feature_delivery_requests_to_spec_first()
     assert_eq!(
         orchestration_contract["delegation_policy"]["normal_write_producing_work"],
         "delegated_by_default"
+    );
+    assert_eq!(
+        orchestration_contract["delegation_policy"]
+            ["canonical_project_delegated_execution_surface"],
+        "vida agent-init"
+    );
+    assert_eq!(
+        orchestration_contract["delegation_policy"]["host_subagent_apis_are_backend_details"],
+        true
     );
     assert_eq!(
         orchestration_contract["delegation_policy"]
@@ -11278,12 +11307,14 @@ fn status_surface_supports_compact_json_summary_view() {
         parsed["artifact_refs"]["runtime_consumption_latest_snapshot_path"],
         snapshot_path
     );
-    assert!(parsed["blocker_codes"]
-        .as_array()
-        .is_some_and(|codes| codes.iter().any(|code| code == "incomplete_release_admission_operator_evidence")));
-    assert!(!parsed["blocker_codes"]
-        .as_array()
-        .is_some_and(|codes| codes.iter().any(|code| code == "missing_root_session_write_guard")));
+    assert!(parsed["blocker_codes"].as_array().is_some_and(|codes| codes
+        .iter()
+        .any(|code| code == "incomplete_release_admission_operator_evidence")));
+    assert!(
+        !parsed["blocker_codes"].as_array().is_some_and(|codes| codes
+            .iter()
+            .any(|code| code == "missing_root_session_write_guard"))
+    );
     assert!(parsed["state_spine"].is_object());
     assert!(parsed["project_activation"].is_object());
     assert!(parsed["protocol_binding"].is_object());
@@ -11402,7 +11433,10 @@ fn doctor_surface_supports_compact_json_summary_view() {
     assert_eq!(parsed["surface"], "vida doctor");
     assert_eq!(parsed["view"], "summary");
     assert_eq!(parsed["runtime_consumption"]["latest_kind"], "final");
-    assert_eq!(parsed["runtime_consumption"]["latest_snapshot_path"], snapshot_path);
+    assert_eq!(
+        parsed["runtime_consumption"]["latest_snapshot_path"],
+        snapshot_path
+    );
     assert!(parsed.get("storage_metadata").is_none());
     assert!(parsed.get("task_store").is_none());
     assert_eq!(

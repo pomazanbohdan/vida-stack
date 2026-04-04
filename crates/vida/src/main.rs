@@ -2654,6 +2654,8 @@ fn build_runtime_orchestration_contract(
         "delegation_policy": {
             "normal_write_producing_work": "delegated_by_default",
             "agent_only_development_required": agent_only_development,
+            "canonical_project_delegated_execution_surface": "vida agent-init",
+            "host_subagent_apis_are_backend_details": true,
             "generic_single_worker_dispatch_forbidden": true,
             "local_implementation_without_exception_path_forbidden": true,
             "required_lanes": dispatch_contract["lane_sequence"]
@@ -4498,7 +4500,7 @@ fn runtime_packet_prompt(
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nFirst substantive response: publish a concise plan before edits or implementation.\nLocal orchestrator coding is forbidden without an explicit exception path.\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
+        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nFirst substantive response: publish a concise plan before edits or implementation.\nLocal orchestrator coding is forbidden without an explicit exception path.\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
     )
 }
 

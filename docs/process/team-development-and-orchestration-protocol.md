@@ -175,6 +175,7 @@ The orchestrator must:
 9. reroute partial implementer returns instead of absorbing the same write scope locally by inertia.
 10. keep delegated lane state explicit and avoid closure-style final reporting while delegated work remains open.
 11. preserve the full write-producing lane cycle after bounded read-only findings instead of collapsing directly into local patching.
+12. treat project-delegated execution as the runtime lane flow through `vida agent-init`; host executor subagent APIs remain optional carrier details and are not the canonical packet-dispatch surface.
 
 The orchestrator must not:
 

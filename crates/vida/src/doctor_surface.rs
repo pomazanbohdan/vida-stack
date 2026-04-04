@@ -460,9 +460,10 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                             .to_string(),
                     );
                 }
-                if operator_blocker_codes.iter().any(|code| {
-                    code == blocker_code_str(BlockerCode::MissingRootSessionWriteGuard)
-                }) {
+                if operator_blocker_codes
+                    .iter()
+                    .any(|code| code == blocker_code_str(BlockerCode::MissingRootSessionWriteGuard))
+                {
                     operator_next_actions.push(
                         "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard."
                             .to_string(),
@@ -749,7 +750,9 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 &match root_session_write_guard["reason"].as_str() {
                     Some(reason) => format!(
                         "{} ({reason})",
-                        root_session_write_guard["status"].as_str().unwrap_or("unknown")
+                        root_session_write_guard["status"]
+                            .as_str()
+                            .unwrap_or("unknown")
                     ),
                     None => root_session_write_guard["status"]
                         .as_str()

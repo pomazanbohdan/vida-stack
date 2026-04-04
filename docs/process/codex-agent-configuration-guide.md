@@ -157,10 +157,11 @@ Normalization rule:
 
 1. `orchestrator-only` is lawful only for bounded bootstrap, direct chat diagnosis, or recorded saturation/exception handling,
 2. normal project development posture is agentic: orchestrator-led, delegation-first, and verification-backed,
-3. if delegation temporarily fails because of thread or lane saturation, attempt lawful reuse or recorded saturation recovery before accepting local-only continuation as the active posture.
-4. generic implementation intent is not a lane-change receipt and must not by itself authorize root-session coding.
-5. recorded saturation recovery must explicitly check whether any delegated Codex lanes already completed or were superseded and can now be closed/reclaimed before "agent limits" remains a valid blocker.
-6. worker wait timeout or empty poll result does not authorize replacing the packet cycle with one generic internal development lane.
+3. canonical delegated execution still routes through `vida agent-init`; host-tool-specific Codex subagent APIs are executor details and are not the primary project delegation surface,
+4. if delegation temporarily fails because of thread or lane saturation, attempt lawful reuse or recorded saturation recovery before accepting local-only continuation as the active posture.
+5. generic implementation intent is not a lane-change receipt and must not by itself authorize root-session coding.
+6. recorded saturation recovery must explicitly check whether any delegated Codex lanes already completed or were superseded and can now be closed/reclaimed before "agent limits" remains a valid blocker.
+7. worker wait timeout or empty poll result does not authorize replacing the packet cycle with one generic internal development lane.
 
 Coach separation rule:
 

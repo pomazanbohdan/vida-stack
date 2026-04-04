@@ -16,6 +16,7 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - project-local agent extensions remain under `.vida/project/agent-extensions/`
 - research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists
 - delegated worker dispatch still materializes through `vida agent-init` until the operator-surface promotion slice closes
+- project "agent-first" development therefore means `vida agent-init`-backed delegated lanes first; host-tool-specific subagent APIs are optional carrier mechanics, not the canonical project execution contract
 - for external CLI setups, `vida status --json` reports `host_agents.external_cli_preflight`; when sandbox is active and network is unavailable, preflight fails closed with actionable next steps
 
 -----

@@ -153,6 +153,7 @@ Full-orchestration rule:
 2. discovering the exact patch location does not by itself authorize local orchestrator patching,
 3. local departure from this full cycle requires an explicit recorded exception path.
 4. a worker wait timeout, empty poll result, or slow delegated response does not compress the full cycle into one generic development lane or root-session coding; the next lawful step is renewed waiting, bounded inspection, reuse, reroute, or explicit escalation.
+5. in this project, the canonical delegated execution surface for that cycle is the runtime lane flow through `vida agent-init`; host-tool-specific subagent APIs are backend details and must not be treated as the primary legality gate for project delegation.
 
 Keep work local only when:
 

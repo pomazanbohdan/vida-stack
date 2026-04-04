@@ -50,6 +50,7 @@ For normal write-producing work:
 5. orchestrator synthesizes
 
 Read-only findings feed the next packet; they do not transfer root-session write ownership.
+The canonical delegated execution surface is the runtime lane flow through `vida agent-init`; host subagent APIs may exist under the selected carrier system, but they do not replace the project runtime contract.
 
 ## Local-Work Boundary
 

@@ -13,6 +13,7 @@ Core rule:
 4. In host-agent execution, treat agent ids as execution carriers (model/tier/cost/effectiveness), while runtime role remains a separate activation state.
 5. Runtime may bind any admissible carrier to any runtime role when role/task-class constraints allow it, then select by capability/admissibility, local score/telemetry guard, and cheapest eligible carrier.
 6. L0 thinking activation: keep `instruction-contracts/overlay.step-thinking-protocol` and `instruction-contracts/overlay.session-context-continuity-protocol` active for orchestrator lanes; worker lanes activate them only when the packet/runtime explicitly requires them.
+7. For normal write-producing development work, "agent mode" means the project runtime's delegated lane flow through `vida agent-init`; host-tool-specific subagent APIs are optional carrier/executor details and do not replace the canonical VIDA/TaskFlow delegation path.
 
 Canonical bootstrap routes:
 1. Main/root lane: `vida orchestrator-init`
@@ -30,6 +31,7 @@ Normal feature-delivery rule:
 2. Start from the local project template referenced by `AGENTS.sidecar.md`.
 3. Keep that document canonical through `vida docflow`.
 4. After the design document fixes the bounded file set and proof targets, continue through orchestrated execution rather than collapsing immediately into root-session coding.
+5. When normal write-producing work is lawful, shape and dispatch the next bounded packet through `vida agent-init` rather than waiting for or substituting any host-local subagent primitive.
 
 Host CLI rule:
 1. Host agent templates are activated through `vida project-activator`, not `vida init`.

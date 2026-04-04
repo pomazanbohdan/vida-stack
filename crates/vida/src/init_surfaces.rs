@@ -431,7 +431,7 @@ Use `AGENTS.md` for framework bootstrap, `AGENTS.sidecar.md` for project docs ro
 pub(crate) fn render_project_root_map() -> String {
     with_scaffold_footer(
         &format!(
-        "# Project Root Map\n\n\
+            "# Project Root Map\n\n\
 This project uses the following canonical documentation roots:\n\n\
 - `docs/product/` for product-facing intent and architecture notes\n\
 - `docs/process/` for project operations and working agreements\n\
@@ -445,13 +445,13 @@ Primary pointers:\n\n\
 - Codex agent guide: `{}`\n\
 - Research index: `{}`\n\
 - Repository overview: `README.md`\n",
-        super::DEFAULT_PROJECT_PRODUCT_INDEX,
-        super::DEFAULT_PROJECT_PRODUCT_SPEC_README,
-        super::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE,
-        super::DEFAULT_PROJECT_PROCESS_README,
-        super::DEFAULT_PROJECT_DOC_TOOLING_DOC,
-        super::DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC,
-        super::DEFAULT_PROJECT_RESEARCH_README
+            super::DEFAULT_PROJECT_PRODUCT_INDEX,
+            super::DEFAULT_PROJECT_PRODUCT_SPEC_README,
+            super::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE,
+            super::DEFAULT_PROJECT_PROCESS_README,
+            super::DEFAULT_PROJECT_DOC_TOOLING_DOC,
+            super::DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC,
+            super::DEFAULT_PROJECT_RESEARCH_README
         ),
         "project/root-map",
         "document",
@@ -462,12 +462,12 @@ Primary pointers:\n\n\
 pub(crate) fn render_project_product_index() -> String {
     with_scaffold_footer(
         &format!(
-        "# Product Index\n\n\
+            "# Product Index\n\n\
 Product documentation currently contains:\n\n\
 - `{}` for the initial project architecture outline\n\
 - `{}` for bounded feature/change design and ADR routing\n",
-        super::DEFAULT_PROJECT_ARCHITECTURE_DOC,
-        super::DEFAULT_PROJECT_PRODUCT_SPEC_README
+            super::DEFAULT_PROJECT_ARCHITECTURE_DOC,
+            super::DEFAULT_PROJECT_PRODUCT_SPEC_README
         ),
         "product/index",
         "product_index",
@@ -535,12 +535,12 @@ Initial activation decisions:\n\n\
 pub(crate) fn render_project_environments_doc(project_root: &Path) -> String {
     with_scaffold_footer(
         &format!(
-        "# Environments\n\n\
+            "# Environments\n\n\
 Initial environment assumptions:\n\n\
 - local project root: `{}`\n\
 - VIDA runtime directories are managed under `.vida/`\n\
 - host CLI agent template is selected through `vida project-activator`\n",
-        project_root.display()
+            project_root.display()
         ),
         "process/environments",
         "process_doc",
@@ -566,7 +566,8 @@ Default feature-delivery flow:\n\n\
 6. When `.codex/**` is materialized, use the delegated Codex team surface instead of collapsing the root session directly into coding.\n\
 7. Treat `vida.config.yaml` as the owner of carrier tiers and optional internal Codex aliases; project-visible activation should still use the selected carrier tier plus explicit runtime role.\n\
 8. Let runtime map the current packet role into the cheapest capable carrier tier with a healthy local score from `.vida/state/worker-strategy.json`.\n\
-9. Keep the root session in orchestration posture unless an explicit exception path is recorded.\n",
+9. For normal write-producing work, treat project agent-first execution as the delegated lane flow through `vida agent-init`; host-tool-specific subagent APIs are optional executor details and not the canonical project control surface.\n\
+10. Keep the root session in orchestration posture unless an explicit exception path is recorded.\n",
         super::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE
         ),
         "process/project-operations",
@@ -577,7 +578,7 @@ Default feature-delivery flow:\n\n\
 
 pub(crate) fn render_project_agent_system_doc() -> String {
     with_scaffold_footer(
-        "# Agent System\n\nProject activation owns host CLI agent-template selection and runtime admission.\n\n- default framework host templates become available only after the selected host CLI template is materialized\n- supported host CLI systems are config-driven under `vida.config.yaml -> host_environment.systems`\n- built-in template roots currently include `.codex/**`, `.qwen/**`, `.kilo/**`, and `.opencode/**`\n- carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers` (Codex additionally keeps `vida.config.yaml -> host_environment.codex.agents` as the rendered tier-catalog source)\n- dispatch aliases are owned by the configured registry path under `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` and are not the primary project-visible agent model\n- the selected runtime surface is rendered under the configured runtime root and is not the owner of tier/rate/task-class policy\n- project activation materializes the selected host template using the configured `materialization_mode`; Codex renders `.codex/config.toml` and `.codex/agents/*.toml`, while external CLI systems use their own runtime root\n- runtime chooses the cheapest capable configured carrier tier that still satisfies the local score guard from `.vida/state/worker-strategy.json`\n- project-local agent extensions remain under `.vida/project/agent-extensions/`\n- research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists\n",
+        "# Agent System\n\nProject activation owns host CLI agent-template selection and runtime admission.\n\n- default framework host templates become available only after the selected host CLI template is materialized\n- supported host CLI systems are config-driven under `vida.config.yaml -> host_environment.systems`\n- built-in template roots currently include `.codex/**`, `.qwen/**`, `.kilo/**`, and `.opencode/**`\n- carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers` (Codex additionally keeps `vida.config.yaml -> host_environment.codex.agents` as the rendered tier-catalog source)\n- dispatch aliases are owned by the configured registry path under `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` and are not the primary project-visible agent model\n- the selected runtime surface is rendered under the configured runtime root and is not the owner of tier/rate/task-class policy\n- project activation materializes the selected host template using the configured `materialization_mode`; Codex renders `.codex/config.toml` and `.codex/agents/*.toml`, while external CLI systems use their own runtime root\n- runtime chooses the cheapest capable configured carrier tier that still satisfies the local score guard from `.vida/state/worker-strategy.json`\n- project-local agent extensions remain under `.vida/project/agent-extensions/`\n- research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists\n- project \"agent-first\" development means the delegated lane flow through `vida agent-init`; host-tool-specific subagent APIs are optional carrier mechanics and not the canonical execution contract\n",
         "process/agent-system",
         "process_doc",
         "docs/process/agent-system.md",
@@ -623,7 +624,7 @@ pub(crate) fn render_project_research_readme() -> String {
 
 pub(crate) fn render_project_codex_guide() -> String {
     with_scaffold_footer(
-        "# Codex Agent Configuration Guide\n\nThis project uses framework-materialized `.codex/**` as the local Codex runtime surface.\n\nSource-of-truth rule:\n\n- `vida.config.yaml -> host_environment.codex.agents` owns carrier-tier metadata, rates, runtime-role fit, and task-class fit\n- `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` owns the dispatch-alias registry for executor-local overlays\n- `.codex/**` is the rendered executor surface used by Codex after activation\n- `.codex/config.toml` should expose the carrier tiers materialized from overlay\n\nCarrier rule:\n\n- the primary visible agent model is `junior`, `middle`, `senior`, `architect`\n- runtime role remains explicit activation state such as `worker`, `coach`, `verifier`, or `solution_architect`\n- internal alias ids may exist in registry state, but they must not replace the carrier-tier model at the project surface\n\nWorking rule:\n\n1. The root session stays the orchestrator.\n2. Documentation/specification work should complete the bounded design document first.\n3. Before delegated implementation starts, open the feature epic/spec task in `vida taskflow` and close the spec task only after the design artifact is finalized.\n4. After a bounded packet exists, route research, specification, planning, implementation, review, and verification through the configured tier ladder instead of collapsing into root-session coding.\n5. Let runtime choose the cheapest capable configured carrier tier with a healthy local score from `.vida/state/worker-strategy.json` and pass the lawful runtime role explicitly.\n6. Use `.vida/project/agent-extensions/**` for project-local role and skill overlays; do not treat `.codex/**` as the owner of framework or product law.\n",
+        "# Codex Agent Configuration Guide\n\nThis project uses framework-materialized `.codex/**` as the local Codex runtime surface.\n\nSource-of-truth rule:\n\n- `vida.config.yaml -> host_environment.codex.agents` owns carrier-tier metadata, rates, runtime-role fit, and task-class fit\n- `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` owns the dispatch-alias registry for executor-local overlays\n- `.codex/**` is the rendered executor surface used by Codex after activation\n- `.codex/config.toml` should expose the carrier tiers materialized from overlay\n\nCarrier rule:\n\n- the primary visible agent model is `junior`, `middle`, `senior`, `architect`\n- runtime role remains explicit activation state such as `worker`, `coach`, `verifier`, or `solution_architect`\n- internal alias ids may exist in registry state, but they must not replace the carrier-tier model at the project surface\n\nWorking rule:\n\n1. The root session stays the orchestrator.\n2. Documentation/specification work should complete the bounded design document first.\n3. Before delegated implementation starts, open the feature epic/spec task in `vida taskflow` and close the spec task only after the design artifact is finalized.\n4. After a bounded packet exists, route research, specification, planning, implementation, review, and verification through the configured tier ladder instead of collapsing into root-session coding.\n5. Let runtime choose the cheapest capable configured carrier tier with a healthy local score from `.vida/state/worker-strategy.json` and pass the lawful runtime role explicitly.\n6. Canonical delegated execution still dispatches through `vida agent-init`; host-tool-specific Codex subagent APIs are optional executor details and not the primary project delegation surface.\n7. Use `.vida/project/agent-extensions/**` for project-local role and skill overlays; do not treat `.codex/**` as the owner of framework or product law.\n",
         "process/codex-agent-configuration-guide",
         "process_doc",
         "docs/process/codex-agent-configuration-guide.md",

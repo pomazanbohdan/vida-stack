@@ -110,8 +110,7 @@ fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> boo
         Some(value) => value,
         None => return true,
     };
-    crate::operator_contracts::shared_operator_output_contract_parity_error(&summary_json)
-        .is_some()
+    crate::operator_contracts::shared_operator_output_contract_parity_error(&summary_json).is_some()
         || crate::operator_contracts::release1_operator_contracts_consistency_error(
             summary_json["status"].as_str().unwrap_or(""),
             &operator_contracts["blocker_codes"]
@@ -458,10 +457,13 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 .is_some_and(final_snapshot_missing_release_admission_evidence);
                     if incomplete_release_admission_operator_evidence {
                         operator_blocker_codes.push(
-                            blocker_code_str(BlockerCode::IncompleteReleaseAdmissionOperatorEvidence)
-                                .to_string(),
+                            blocker_code_str(
+                                BlockerCode::IncompleteReleaseAdmissionOperatorEvidence,
+                            )
+                            .to_string(),
                         );
-                    } else if root_session_write_guard["status"].as_str() != Some("blocked_by_default")
+                    } else if root_session_write_guard["status"].as_str()
+                        != Some("blocked_by_default")
                     {
                         operator_blocker_codes.push(
                             blocker_code_str(BlockerCode::MissingRootSessionWriteGuard).to_string(),
@@ -729,43 +731,43 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                     let summary_json = if summary_only {
                         serde_json::json!({
-                            "surface": "vida status",
-                            "view": "summary",
-                            "status": operator_contracts["status"].clone(),
-                            "blocker_codes": operator_contracts["blocker_codes"].clone(),
-                            "next_actions": operator_contracts["next_actions"].clone(),
-                            "artifact_refs": operator_contracts["artifact_refs"].clone(),
-                            "shared_fields": {
+                                "surface": "vida status",
+                                "view": "summary",
                                 "status": operator_contracts["status"].clone(),
                                 "blocker_codes": operator_contracts["blocker_codes"].clone(),
                                 "next_actions": operator_contracts["next_actions"].clone(),
                                 "artifact_refs": operator_contracts["artifact_refs"].clone(),
-                            },
-                            "operator_contracts": operator_contracts,
-                            "backend_summary": backend_summary,
-                            "state_spine": {
-                                "state_schema_version": state_spine.state_schema_version,
-                                "entity_surface_count": state_spine.entity_surface_count,
-                                "authoritative_mutation_root": state_spine.authoritative_mutation_root,
-                            },
-                        "project_activation": activation_truth.as_ref().map(|truth| serde_json::json!({
-                            "status": project_activation_status.unwrap_or("pending"),
-                            "activation_pending": project_activation_pending,
-                            "next_steps": truth.next_steps,
-                        })).unwrap_or_else(|| serde_json::json!({
-                                "status": "unknown",
-                                "activation_pending": true,
-                                "next_steps": [
-                                    "run `vida project-activator --json` from the project root to load canonical activation state"
-                                ],
-                        })),
-                        "protocol_binding": protocol_binding,
-                        "root_session_write_guard": root_session_write_guard,
-                        "latest_run_graph_status": latest_run_graph_status,
-                        "latest_run_graph_recovery": latest_run_graph_recovery,
-                        "latest_run_graph_gate": latest_run_graph_gate,
-                        "host_agents": host_agents_json_value(host_agents.as_ref()),
-                    })
+                                "shared_fields": {
+                                    "status": operator_contracts["status"].clone(),
+                                    "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                                    "next_actions": operator_contracts["next_actions"].clone(),
+                                    "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                                },
+                                "operator_contracts": operator_contracts,
+                                "backend_summary": backend_summary,
+                                "state_spine": {
+                                    "state_schema_version": state_spine.state_schema_version,
+                                    "entity_surface_count": state_spine.entity_surface_count,
+                                    "authoritative_mutation_root": state_spine.authoritative_mutation_root,
+                                },
+                            "project_activation": activation_truth.as_ref().map(|truth| serde_json::json!({
+                                "status": project_activation_status.unwrap_or("pending"),
+                                "activation_pending": project_activation_pending,
+                                "next_steps": truth.next_steps,
+                            })).unwrap_or_else(|| serde_json::json!({
+                                    "status": "unknown",
+                                    "activation_pending": true,
+                                    "next_steps": [
+                                        "run `vida project-activator --json` from the project root to load canonical activation state"
+                                    ],
+                            })),
+                            "protocol_binding": protocol_binding,
+                            "root_session_write_guard": root_session_write_guard,
+                            "latest_run_graph_status": latest_run_graph_status,
+                            "latest_run_graph_recovery": latest_run_graph_recovery,
+                            "latest_run_graph_gate": latest_run_graph_gate,
+                            "host_agents": host_agents_json_value(host_agents.as_ref()),
+                        })
                     } else {
                         serde_json::json!({
                             "surface": "vida status",
