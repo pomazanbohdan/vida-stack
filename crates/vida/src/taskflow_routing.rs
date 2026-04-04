@@ -109,6 +109,12 @@ fn carrier_backend_from_route(route: &serde_json::Value) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn legacy_route_backend_hint(route: &serde_json::Value) -> Option<String> {
+    json_string(route.get("carrier_backend_hint"))
+        .or_else(|| json_string(route.get("subagents")))
+        .filter(|value| !value.is_empty())
+}
+
 pub(crate) fn selected_backend_from_execution_plan_route(
     execution_plan: &serde_json::Value,
     route: &serde_json::Value,
@@ -117,6 +123,6 @@ pub(crate) fn selected_backend_from_execution_plan_route(
         .or_else(|| {
             carrier_backend_from_assignment(runtime_assignment_from_execution_plan(execution_plan))
         })
-        .or_else(|| json_string(route.get("subagents")))
+        .or_else(|| legacy_route_backend_hint(route))
         .filter(|value| !value.is_empty())
 }

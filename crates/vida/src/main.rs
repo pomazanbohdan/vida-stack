@@ -1646,6 +1646,7 @@ fn summarize_agent_route_from_snapshot(
     };
     serde_json::json!({
         "route_id": route_id,
+        "carrier_backend_hint": json_string(json_lookup(route, &["subagents"])).unwrap_or_default(),
         "subagents": json_string(json_lookup(route, &["subagents"])).unwrap_or_default(),
         "fanout_subagents": json_string(json_lookup(route, &["fanout_subagents"])).unwrap_or_default(),
         "preferred_agent_type": runtime_assignment["selected_agent_id"],
@@ -6954,6 +6955,27 @@ mod tests {
         assert_eq!(
             selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
             Some("middle")
+        );
+    }
+
+    #[test]
+    fn selected_backend_prefers_carrier_backend_hint_over_legacy_subagents() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "implementation": {
+                    "carrier_backend_hint": "neutral_hint",
+                    "subagents": "internal_subagents"
+                }
+            },
+            "default_route": {
+                "subagents": "internal_subagents"
+            },
+            "status": "execution_ready",
+        });
+        let route = &execution_plan["development_flow"]["implementation"];
+        assert_eq!(
+            selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
+            Some("neutral_hint")
         );
     }
 
