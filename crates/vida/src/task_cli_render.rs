@@ -187,8 +187,14 @@ pub(crate) fn print_task_dependencies(
     dependencies: &[TaskDependencyStatus],
     as_json: bool,
 ) {
+    let payload = serde_json::json!({
+        "surface": title,
+        "task_id": task_id,
+        "dependency_count": dependencies.len(),
+        "dependencies": dependencies,
+    });
     if crate::surface_render::print_surface_json(
-        dependencies,
+        &payload,
         as_json,
         "task dependencies should render as json",
     ) {
