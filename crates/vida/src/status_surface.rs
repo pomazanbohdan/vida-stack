@@ -1078,124 +1078,107 @@ fn build_host_agent_status_summary(project_root: &Path) -> Option<serde_json::Va
         host_cli_system_entry_summary(host_cli_entry.as_ref(), &selected_cli_system),
     );
 
-    match selected_cli_system.as_str() {
-        "codex" => {
-            let overlay_roles =
-                super::project_activator_surface::overlay_codex_agent_catalog(&overlay);
-            let codex_roles = if overlay_roles.is_empty() {
-                super::project_activator_surface::read_codex_agent_catalog(
-                    &project_root.join(".codex"),
-                )
-            } else {
-                overlay_roles
-            };
-            let strategy =
-                super::read_json_file_if_present(&super::worker_strategy_state_path(project_root))
-                    .unwrap_or(serde_json::Value::Null);
-            let scorecards = super::read_json_file_if_present(
-                &super::worker_scorecards_state_path(project_root),
-            )
+    let (carrier_system, carrier_catalog) =
+        super::project_activator_surface::resolved_host_cli_agent_catalog_for_root(
+            project_root,
+            &overlay,
+        )
+        .unwrap_or_else(|_| (selected_cli_system.clone(), Vec::new()));
+    let strategy =
+        super::read_json_file_if_present(&super::worker_strategy_state_path(project_root))
+            .unwrap_or(serde_json::Value::Null);
+    let scorecards =
+        super::read_json_file_if_present(&super::worker_scorecards_state_path(project_root))
             .unwrap_or(serde_json::Value::Null);
 
-            let mut agents = serde_json::Map::new();
-            for role in &codex_roles {
-                let Some(role_id) = role["role_id"].as_str() else {
-                    continue;
-                };
-                let feedback_rows = scorecards["agents"][role_id]["feedback"]
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default();
-                let last_feedback = feedback_rows
-                    .last()
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null);
-                agents.insert(
-                    role_id.to_string(),
-                    serde_json::json!({
-                        "tier": role["tier"],
-                        "rate": role["rate"],
-                        "reasoning_band": role["reasoning_band"],
-                        "default_runtime_role": role["default_runtime_role"],
-                        "runtime_roles": role["runtime_roles"],
-                        "task_classes": role["task_classes"],
-                        "feedback_count": feedback_rows.len(),
-                        "last_feedback_at": last_feedback["recorded_at"],
-                        "last_feedback_outcome": last_feedback["outcome"],
-                        "effective_score": strategy["agents"][role_id]["effective_score"],
-                        "lifecycle_state": strategy["agents"][role_id]["lifecycle_state"],
-                    }),
-                );
-            }
-            let overlay_dispatch_aliases_result =
-                super::project_activator_surface::codex_dispatch_alias_catalog_for_root(
-                    &overlay,
-                    project_root,
-                    &codex_roles,
-                );
-            let internal_dispatch_alias_load_error = overlay_dispatch_aliases_result
-                .as_ref()
-                .err()
-                .map(std::string::ToString::to_string);
-            let overlay_dispatch_aliases = overlay_dispatch_aliases_result.unwrap_or_default();
+    let mut agents = serde_json::Map::new();
+    for role in &carrier_catalog {
+        let Some(role_id) = role["role_id"].as_str() else {
+            continue;
+        };
+        let feedback_rows = scorecards["agents"][role_id]["feedback"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let last_feedback = feedback_rows
+            .last()
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        agents.insert(
+            role_id.to_string(),
+            serde_json::json!({
+                "tier": role["tier"],
+                "rate": role["rate"],
+                "reasoning_band": role["reasoning_band"],
+                "default_runtime_role": role["default_runtime_role"],
+                "runtime_roles": role["runtime_roles"],
+                "task_classes": role["task_classes"],
+                "feedback_count": feedback_rows.len(),
+                "last_feedback_at": last_feedback["recorded_at"],
+                "last_feedback_outcome": last_feedback["outcome"],
+                "effective_score": strategy["agents"][role_id]["effective_score"],
+                "lifecycle_state": strategy["agents"][role_id]["lifecycle_state"],
+            }),
+        );
+    }
+    if agents.is_empty() {
+        agents = host_cli_system_carrier_summary(host_cli_entry.as_ref(), &selected_cli_system);
+    }
 
-            payload.insert(
-                "selection_policy".to_string(),
-                strategy["selection_policy"].clone(),
+    payload.insert(
+        "selection_policy".to_string(),
+        strategy["selection_policy"].clone(),
+    );
+    payload.insert(
+        "agents".to_string(),
+        serde_json::Value::Object(agents.clone()),
+    );
+    if let Some(system_entry) = payload
+        .get_mut("system_entry")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        let carriers_empty = system_entry
+            .get("carriers")
+            .is_none_or(|value| value.is_null() || value == &serde_json::json!({}));
+        if carriers_empty {
+            system_entry.insert(
+                "carriers".to_string(),
+                synthesized_host_cli_carrier_contract(&agents),
             );
-            payload.insert("agents".to_string(), serde_json::Value::Object(agents));
-            payload.insert(
-                "internal_dispatch_alias_count".to_string(),
-                serde_json::json!(overlay_dispatch_aliases.len()),
-            );
-            payload.insert(
-                "internal_dispatch_alias_load_error".to_string(),
-                internal_dispatch_alias_load_error
-                    .map(serde_json::Value::String)
-                    .unwrap_or(serde_json::Value::Null),
-            );
-            payload.insert(
-                "stores".to_string(),
-                serde_json::json!({
-                    "scorecards": super::WORKER_SCORECARDS_STATE,
-                    "strategy": super::WORKER_STRATEGY_STATE,
-                    "observability": super::HOST_AGENT_OBSERVABILITY_STATE,
-                }),
-            );
-            Some(serde_json::Value::Object(payload))
-        }
-        _ => {
-            let carrier_summary =
-                host_cli_system_carrier_summary(host_cli_entry.as_ref(), &selected_cli_system);
-            payload.insert(
-                "agents".to_string(),
-                serde_json::Value::Object(carrier_summary.clone()),
-            );
-            if let Some(system_entry) = payload
-                .get_mut("system_entry")
-                .and_then(serde_json::Value::as_object_mut)
-            {
-                let carriers_empty = system_entry
-                    .get("carriers")
-                    .is_none_or(|value| value.is_null() || value == &serde_json::json!({}));
-                if carriers_empty {
-                    system_entry.insert(
-                        "carriers".to_string(),
-                        synthesized_host_cli_carrier_contract(&carrier_summary),
-                    );
-                }
-            }
-            payload.insert(
-                "stores".to_string(),
-                serde_json::json!({
-                    "scorecards": serde_json::Value::Null,
-                    "strategy": serde_json::Value::Null,
-                    "observability": super::HOST_AGENT_OBSERVABILITY_STATE,
-                }),
-            );
-            Some(serde_json::Value::Object(payload))
         }
     }
+    if carrier_system == "codex" && !carrier_catalog.is_empty() {
+        let overlay_dispatch_aliases_result =
+            super::project_activator_surface::codex_dispatch_alias_catalog_for_root(
+                &overlay,
+                project_root,
+                &carrier_catalog,
+            );
+        let internal_dispatch_alias_load_error = overlay_dispatch_aliases_result
+            .as_ref()
+            .err()
+            .map(std::string::ToString::to_string);
+        let overlay_dispatch_aliases = overlay_dispatch_aliases_result.unwrap_or_default();
+        payload.insert(
+            "internal_dispatch_alias_count".to_string(),
+            serde_json::json!(overlay_dispatch_aliases.len()),
+        );
+        payload.insert(
+            "internal_dispatch_alias_load_error".to_string(),
+            internal_dispatch_alias_load_error
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null),
+        );
+    }
+    payload.insert(
+        "stores".to_string(),
+        serde_json::json!({
+            "scorecards": if strategy.is_null() { serde_json::Value::Null } else { serde_json::Value::String(super::WORKER_SCORECARDS_STATE.to_string()) },
+            "strategy": if strategy.is_null() { serde_json::Value::Null } else { serde_json::Value::String(super::WORKER_STRATEGY_STATE.to_string()) },
+            "observability": super::HOST_AGENT_OBSERVABILITY_STATE,
+        }),
+    );
+    Some(serde_json::Value::Object(payload))
 }
 
 pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
@@ -1729,17 +1712,17 @@ host_environment:
     fn shared_operator_output_contract_parity_rejects_noncanonical_mirrored_string_entries() {
         let summary_json = serde_json::json!({
             "status": "blocked",
-            "blocker_codes": ["missing_protocol_binding_receipt"],
-            "next_actions": [" Run `vida taskflow protocol-binding sync --json` "],
+            "blocker_codes": [" pending_lane_evidence "],
+            "next_actions": [" "],
             "shared_fields": {
                 "status": "blocked",
-                "blocker_codes": ["missing_protocol_binding_receipt"],
-                "next_actions": [" Run `vida taskflow protocol-binding sync --json` "]
+                "blocker_codes": [" pending_lane_evidence "],
+                "next_actions": [" "]
             },
             "operator_contracts": {
                 "status": "blocked",
-                "blocker_codes": ["missing_protocol_binding_receipt"],
-                "next_actions": [" Run `vida taskflow protocol-binding sync --json` "]
+                "blocker_codes": [" pending_lane_evidence "],
+                "next_actions": [" "]
             }
         });
         assert_eq!(

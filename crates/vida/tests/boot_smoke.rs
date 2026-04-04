@@ -10781,8 +10781,9 @@ fn status_surface_reports_backend_and_bundle_receipt() {
     assert!(stdout.contains("latest effective bundle root: framework-agent-definition"));
     assert!(stdout.contains("latest effective bundle artifact count: 3"));
     assert!(stdout.contains("boot compatibility: compatible (normal_boot_allowed)"));
-    assert!(stdout
-        .contains("migration state: compatible / no_migration_required (normal_boot_allowed)"));
+    assert!(stdout.contains(
+        "migration state: backward_compatible / no_migration_required (normal_boot_allowed)"
+    ));
     assert!(stdout.contains(
         "migration receipts: compatibility=1, application=0, verification=0, cutover=0, rollback=0"
     ));
