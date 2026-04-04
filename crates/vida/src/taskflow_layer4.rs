@@ -82,6 +82,24 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  `next` is an inspection/planning surface and must not be treated as a mutation or dispatch command by itself.");
             return;
         }
+        Some("graph-summary") => {
+            println!("VIDA TaskFlow help: graph-summary");
+            println!();
+            println!("Purpose:");
+            println!("  Summarize backlog graph pressure across the ready set, blocked set, and current critical path.");
+            println!("  This is a read-only launcher-owned operator surface over the authoritative TaskFlow state store.");
+            println!();
+            println!("Canonical command:");
+            println!("  vida taskflow graph-summary [--json]");
+            println!();
+            println!("Returned semantics:");
+            println!("  status, blocker_codes, next_actions, ready_count, blocked_count, critical_path_length, primary_ready_task, primary_blocked_task, critical_path");
+            println!();
+            println!("Failure modes:");
+            println!("  Missing or unreadable authoritative state fails closed.");
+            println!("  Invalid dependency graphs fail closed through the critical-path contract; repair with `vida task validate-graph` first.");
+            return;
+        }
         Some("consume") => {
             println!("VIDA TaskFlow help: consume");
             println!();
@@ -221,7 +239,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!();
     println!("Usage:");
     println!("  vida taskflow <args...>");
-    println!("  vida taskflow help [task|next|consume|run-graph|recovery|doctor|protocol-binding]");
+    println!("  vida taskflow help [task|next|graph-summary|consume|run-graph|recovery|doctor|protocol-binding]");
     println!("  vida taskflow <command> --help");
     println!();
     println!("Purpose:");
@@ -243,6 +261,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Most-used command homes:");
     println!("  task        backlog inspection and mutation");
     println!("  next        aggregate next lawful step across backlog and recovery state");
+    println!("  graph-summary  ready/blocked pressure plus critical-path summary");
     println!("  run-graph   resumability and node-state inspection");
     println!("  consume     explicit TaskFlow -> final closure handoff");
     println!(
@@ -253,6 +272,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Canonical examples:");
     println!("  vida task ready --json");
     println!("  vida taskflow next --json");
+    println!("  vida taskflow graph-summary --json");
     println!("  vida task show <task-id> --json");
     println!("  vida taskflow run-graph status <task-id>");
     println!("  vida taskflow consume final \"proof path\" --json");
@@ -262,6 +282,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!();
     println!("Operator recipes:");
     println!("  Find the next lawful step: vida taskflow next --json");
+    println!("  Inspect ready vs blocked pressure: vida taskflow graph-summary --json");
     println!("  Inspect the canonical backlog contract: vida task --help");
     println!("  Inspect resumability state: vida taskflow help run-graph");
     println!("  Review runtime diagnostics: vida taskflow help doctor");

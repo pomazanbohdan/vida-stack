@@ -220,6 +220,158 @@ async fn run_taskflow_next(args: &[String]) -> ExitCode {
     }
 }
 
+async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
+    let as_json = match args {
+        [head] if head == "graph-summary" => false,
+        [head, flag] if head == "graph-summary" && flag == "--json" => true,
+        [head, flag] if head == "graph-summary" && matches!(flag.as_str(), "--help" | "-h") => {
+            print_taskflow_proxy_help(Some("graph-summary"));
+            return ExitCode::SUCCESS;
+        }
+        _ => {
+            eprintln!("Usage: vida taskflow graph-summary [--json]");
+            return ExitCode::from(2);
+        }
+    };
+
+    let store = match crate::state_store::StateStore::open_existing(proxy_state_dir()).await {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let ready_tasks = match store.ready_tasks_scoped(None).await {
+        Ok(tasks) => tasks,
+        Err(error) => {
+            eprintln!("Failed to compute ready tasks: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let blocked_tasks = match store.blocked_tasks().await {
+        Ok(tasks) => tasks,
+        Err(error) => {
+            eprintln!("Failed to compute blocked tasks: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let critical_path = match store.critical_path().await {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("Failed to compute critical path: {error}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let primary_ready_task = ready_tasks.first().map(|task| {
+        serde_json::json!({
+            "id": task.id,
+            "display_id": task.display_id,
+            "title": task.title,
+            "status": task.status,
+            "priority": task.priority,
+            "issue_type": task.issue_type,
+        })
+    });
+    let primary_blocked_task = blocked_tasks.first().map(|record| {
+        serde_json::json!({
+            "id": record.task.id,
+            "display_id": record.task.display_id,
+            "title": record.task.title,
+            "status": record.task.status,
+            "priority": record.task.priority,
+            "issue_type": record.task.issue_type,
+            "blocker_count": record.blockers.len(),
+            "blockers": record.blockers,
+        })
+    });
+
+    let mut blocker_codes = Vec::<String>::new();
+    let mut next_actions = Vec::<String>::new();
+
+    if let Some(task) = ready_tasks.first() {
+        next_actions.push(format!(
+            "Inspect the primary ready task with `vida task show {} --json` before dispatch.",
+            task.id
+        ));
+    }
+    if let Some(record) = blocked_tasks.first() {
+        next_actions.push(format!(
+            "Inspect the highest-priority blocked task with `vida task deps {} --json` before resequencing.",
+            record.task.id
+        ));
+    }
+    if critical_path.length > 0 {
+        next_actions.push(
+            "Inspect the current graph bottleneck with `vida task critical-path --json` before parallelizing additional work."
+                .to_string(),
+        );
+    }
+    if ready_tasks.is_empty() {
+        blocker_codes.push("no_ready_tasks".to_string());
+    }
+    if blocked_tasks.is_empty() && critical_path.length == 0 {
+        blocker_codes.push("task_graph_empty".to_string());
+        next_actions.push(
+            "No active execution graph is present; inspect `vida task list --all --json` before sequencing new work."
+                .to_string(),
+        );
+    }
+
+    let status = if blocker_codes.is_empty() {
+        "pass"
+    } else {
+        "blocked"
+    };
+    let payload = serde_json::json!({
+        "surface": "vida taskflow graph-summary",
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "ready_count": ready_tasks.len(),
+        "blocked_count": blocked_tasks.len(),
+        "critical_path_length": critical_path.length,
+        "primary_ready_task": primary_ready_task,
+        "primary_blocked_task": primary_blocked_task,
+        "critical_path": critical_path,
+    });
+
+    if as_json {
+        crate::print_json_pretty(&payload);
+    } else {
+        crate::print_surface_header(RenderMode::Plain, "vida taskflow graph-summary");
+        crate::print_surface_line(RenderMode::Plain, "status", status);
+        crate::print_surface_line(
+            RenderMode::Plain,
+            "ready_count",
+            &ready_tasks.len().to_string(),
+        );
+        crate::print_surface_line(
+            RenderMode::Plain,
+            "blocked_count",
+            &blocked_tasks.len().to_string(),
+        );
+        crate::print_surface_line(
+            RenderMode::Plain,
+            "critical_path_length",
+            &critical_path.length.to_string(),
+        );
+        if let Some(task) = ready_tasks.first() {
+            crate::print_surface_line(RenderMode::Plain, "primary_ready_task", &task.id);
+        }
+        if let Some(record) = blocked_tasks.first() {
+            crate::print_surface_line(RenderMode::Plain, "primary_blocked_task", &record.task.id);
+        }
+    }
+
+    if status == "pass" {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
     if matches!(args.args.first().map(String::as_str), Some("query")) {
         return run_taskflow_query(&args.args);
@@ -240,6 +392,10 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
 
     if matches!(args.args.first().map(String::as_str), Some("next")) {
         return run_taskflow_next(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("graph-summary")) {
+        return run_taskflow_graph_summary(&args.args).await;
     }
 
     if matches!(args.args.first().map(String::as_str), Some("doctor")) {

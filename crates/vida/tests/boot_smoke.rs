@@ -900,7 +900,7 @@ fn taskflow_proxy_help_is_runtime_specific() {
     ));
     assert!(stdout.contains("vida task ready --json"));
     assert!(stdout.contains(
-        "vida taskflow help [task|next|consume|run-graph|recovery|doctor|protocol-binding]"
+        "vida taskflow help [task|next|graph-summary|consume|run-graph|recovery|doctor|protocol-binding]"
     ));
 }
 
@@ -957,6 +957,43 @@ fn taskflow_next_reports_aggregate_next_step_surface() {
     assert!(parsed["ready_count"].is_number());
     assert!(parsed.get("primary_ready_task").is_some());
     assert!(parsed.get("recovery").is_some());
+}
+
+#[test]
+fn taskflow_graph_summary_reports_ready_blocked_and_critical_path() {
+    let output = vida()
+        .args(["taskflow", "graph-summary", "--json"])
+        .output()
+        .expect("taskflow graph-summary should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("taskflow graph-summary json should parse");
+    assert_eq!(parsed["surface"], "vida taskflow graph-summary");
+    assert!(parsed["status"].is_string());
+    assert!(parsed["blocker_codes"].is_array());
+    assert!(parsed["next_actions"].is_array());
+    assert!(parsed["ready_count"].is_number());
+    assert!(parsed["blocked_count"].is_number());
+    assert!(parsed["critical_path_length"].is_number());
+    assert!(parsed.get("primary_ready_task").is_some());
+    assert!(parsed.get("primary_blocked_task").is_some());
+    assert!(parsed.get("critical_path").is_some());
+}
+
+#[test]
+fn taskflow_proxy_help_supports_graph_summary_topic() {
+    let output = vida()
+        .args(["taskflow", "help", "graph-summary"])
+        .output()
+        .expect("taskflow graph-summary topic help should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA TaskFlow help: graph-summary"));
+    assert!(stdout.contains("vida taskflow graph-summary [--json]"));
+    assert!(stdout.contains("ready_count, blocked_count, critical_path_length"));
+    assert!(stdout.contains("vida task validate-graph"));
 }
 
 #[test]
