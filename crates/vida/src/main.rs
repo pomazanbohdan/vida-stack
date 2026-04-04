@@ -6925,6 +6925,30 @@ mod tests {
     }
 
     #[test]
+    fn selected_backend_accepts_legacy_codex_runtime_assignment_alias() {
+        let execution_plan = serde_json::json!({
+            "codex_runtime_assignment": {
+                "selected_tier": "middle",
+                "activation_agent_type": "middle",
+            },
+            "development_flow": {
+                "implementation": {
+                    "subagents": "internal_subagents"
+                }
+            },
+            "default_route": {
+                "subagents": "internal_subagents"
+            },
+            "status": "execution_ready",
+        });
+        let route = &execution_plan["development_flow"]["implementation"];
+        assert_eq!(
+            selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
+            Some("middle")
+        );
+    }
+
+    #[test]
     fn fallback_run_graph_status_uses_carrier_tier_for_conversation_routes() {
         let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,

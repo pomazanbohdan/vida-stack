@@ -81,15 +81,27 @@ fn carrier_backend_from_assignment(assignment: &serde_json::Value) -> Option<Str
         .filter(|value| !value.is_empty())
 }
 
-fn carrier_backend_from_route(route: &serde_json::Value) -> Option<String> {
-    let route_assignment = route
+fn runtime_assignment_from_route<'a>(route: &'a serde_json::Value) -> &'a serde_json::Value {
+    route
         .get("activation")
         .or_else(|| route.get("runtime_assignment"))
         .or_else(|| route.get("codex_runtime_assignment"))
-        .unwrap_or(&serde_json::Value::Null);
+        .unwrap_or(&serde_json::Value::Null)
+}
+
+fn runtime_assignment_from_execution_plan<'a>(
+    execution_plan: &'a serde_json::Value,
+) -> &'a serde_json::Value {
+    execution_plan
+        .get("runtime_assignment")
+        .or_else(|| execution_plan.get("codex_runtime_assignment"))
+        .unwrap_or(&serde_json::Value::Null)
+}
+
+fn carrier_backend_from_route(route: &serde_json::Value) -> Option<String> {
     json_string(route.get("preferred_agent_tier"))
         .or_else(|| json_string(route.get("preferred_agent_type")))
-        .or_else(|| carrier_backend_from_assignment(route_assignment))
+        .or_else(|| carrier_backend_from_assignment(runtime_assignment_from_route(route)))
         .filter(|value| !value.is_empty())
 }
 
@@ -99,12 +111,7 @@ pub(crate) fn selected_backend_from_execution_plan_route(
 ) -> Option<String> {
     carrier_backend_from_route(route)
         .or_else(|| {
-            carrier_backend_from_assignment(
-                execution_plan
-                    .get("runtime_assignment")
-                    .or_else(|| execution_plan.get("codex_runtime_assignment"))
-                    .unwrap_or(&serde_json::Value::Null),
-            )
+            carrier_backend_from_assignment(runtime_assignment_from_execution_plan(execution_plan))
         })
         .or_else(|| json_string(route.get("subagents")))
         .filter(|value| !value.is_empty())
