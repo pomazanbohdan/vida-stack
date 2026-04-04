@@ -770,14 +770,20 @@ fn build_approval_delegation_evidence_gate(
 fn build_retrieval_policy_decision_gate(
     bundle_check: &super::TaskflowConsumeBundleCheck,
 ) -> RetrievalPolicyDecisionGate {
+    let missing_protocol_binding_receipt = super::release1_contracts::blocker_code_str(
+        super::release1_contracts::BlockerCode::MissingProtocolBindingReceipt,
+    );
+    let protocol_binding_not_runtime_ready = super::release1_contracts::blocker_code_str(
+        super::release1_contracts::BlockerCode::ProtocolBindingNotRuntimeReady,
+    );
     let has_protocol_binding_receipt = !bundle_check
         .blockers
         .iter()
-        .any(|code| code == "missing_protocol_binding_receipt");
+        .any(|code| code == missing_protocol_binding_receipt);
     let protocol_binding_runtime_ready = !bundle_check
         .blockers
         .iter()
-        .any(|code| code == "protocol_binding_not_runtime_ready");
+        .any(|code| code == protocol_binding_not_runtime_ready);
 
     let blocker_code = super::release1_contracts::evaluate_policy_gate_protocol_binding(
         "retrieval_evidence",
@@ -1202,8 +1208,14 @@ mod tests {
         let bundle_check = crate::TaskflowConsumeBundleCheck {
             ok: false,
             blockers: vec![
-                "missing_protocol_binding_receipt".to_string(),
-                "protocol_binding_not_runtime_ready".to_string(),
+                crate::release1_contracts::blocker_code_str(
+                    crate::release1_contracts::BlockerCode::MissingProtocolBindingReceipt,
+                )
+                .to_string(),
+                crate::release1_contracts::blocker_code_str(
+                    crate::release1_contracts::BlockerCode::ProtocolBindingNotRuntimeReady,
+                )
+                .to_string(),
             ],
             root_artifact_id: "artifact-1".to_string(),
             artifact_count: 1,
@@ -1216,7 +1228,12 @@ mod tests {
         assert_eq!(
             gate,
             RetrievalPolicyDecisionGate {
-                blocker_code: Some("missing_protocol_binding_receipt".to_string())
+                blocker_code: Some(
+                    crate::release1_contracts::blocker_code_str(
+                        crate::release1_contracts::BlockerCode::MissingProtocolBindingReceipt,
+                    )
+                    .to_string()
+                )
             }
         );
     }

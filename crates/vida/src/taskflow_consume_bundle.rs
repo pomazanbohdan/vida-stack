@@ -260,7 +260,12 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                 .as_bool()
                 .unwrap_or(false)
             {
-                effective_blockers.push("missing_protocol_binding_receipt".to_string());
+                effective_blockers.push(
+                    crate::release1_contracts::blocker_code_str(
+                        crate::release1_contracts::BlockerCode::MissingProtocolBindingReceipt,
+                    )
+                    .to_string(),
+                );
             }
             let db_first_activation_truth =
                 match super::read_or_sync_launcher_activation_snapshot(&store).await {

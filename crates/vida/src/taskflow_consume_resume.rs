@@ -1088,14 +1088,18 @@ mod tests {
         let blockers = vec!["pending_lane_evidence".to_string()];
         assert_eq!(
             super::resume_packet_ready_blocker_parity_error(Some("ready"), &blockers),
-            Some(
-                "Persisted downstream dispatch packet has downstream_dispatch_ready signal but also blocker evidence"
-                    .to_string()
-            )
+            None
         );
         assert_eq!(
             super::resume_packet_ready_blocker_parity_error(Some("ready"), &[]),
             None
+        );
+        assert_eq!(
+            super::resume_packet_ready_blocker_parity_error(Some("packet_ready"), &blockers),
+            Some(
+                "Persisted downstream dispatch packet has packet_ready status but also blocker evidence"
+                    .to_string()
+            )
         );
         assert_eq!(
             super::resume_packet_ready_blocker_parity_error(Some("blocked"), &blockers),

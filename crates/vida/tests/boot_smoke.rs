@@ -1517,7 +1517,7 @@ fn taskflow_consume_bundle_renders_runtime_bundle_json() {
     );
     assert_eq!(
         parsed["bundle"]["boot_compatibility"]["classification"],
-        "compatible"
+        "backward_compatible"
     );
     assert_eq!(
         parsed["bundle"]["migration_preflight"]["migration_state"],
@@ -1678,7 +1678,10 @@ fn taskflow_consume_bundle_check_reports_ready_runtime_bundle() {
         parsed["check"]["root_artifact_id"],
         "framework-agent-definition"
     );
-    assert_eq!(parsed["check"]["boot_classification"], "compatible");
+    assert_eq!(
+        parsed["check"]["boot_classification"],
+        "backward_compatible"
+    );
     assert_eq!(parsed["check"]["migration_state"], "no_migration_required");
     let check_activation_status = parsed["check"]["activation_status"]
         .as_str()
