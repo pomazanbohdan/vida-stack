@@ -70,6 +70,35 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 print_taskflow_proxy_help(Some("task"));
                 ExitCode::SUCCESS
             }
+            Some("next") => {
+                print_taskflow_proxy_help(Some("next"));
+                ExitCode::SUCCESS
+            }
+            Some("graph-summary") => {
+                print_taskflow_proxy_help(Some("graph-summary"));
+                ExitCode::SUCCESS
+            }
+            Some(
+                "ready"
+                | "deps"
+                | "reverse-deps"
+                | "blocked"
+                | "tree"
+                | "critical-path"
+                | "next-display-id"
+                | "create"
+                | "update"
+                | "close"
+                | "list"
+                | "show"
+                | "import-jsonl"
+                | "export-jsonl"
+                | "validate-graph"
+                | "dep",
+            ) => {
+                print_taskflow_proxy_help(Some("task"));
+                ExitCode::SUCCESS
+            }
             Some(topic) => {
                 eprintln!("Unsupported task help topic: {topic}");
                 ExitCode::from(2)

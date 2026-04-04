@@ -946,6 +946,35 @@ fn taskflow_task_help_alias_routes_to_canonical_task_help() {
 }
 
 #[test]
+fn root_task_help_supports_next_topic() {
+    let output = vida()
+        .args(["task", "help", "next"])
+        .output()
+        .expect("root task next help should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA TaskFlow help: next"));
+    assert!(stdout.contains(
+        "vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]"
+    ));
+}
+
+#[test]
+fn root_task_help_routes_backlog_subcommand_topics_to_canonical_task_help() {
+    let output = vida()
+        .args(["task", "help", "blocked"])
+        .output()
+        .expect("root task blocked help should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA TaskFlow help: task"));
+    assert!(stdout.contains("vida task blocked --json"));
+    assert!(stdout.contains("vida task critical-path --json"));
+}
+
+#[test]
 fn taskflow_next_reports_aggregate_next_step_surface() {
     let output = vida()
         .args(["taskflow", "next", "--json"])
