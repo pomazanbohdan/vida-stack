@@ -27,7 +27,7 @@ Structured-template rule:
   - explicit execution-preparation enforcement for code-shaped work
   - broader platform-level contracts and registries beyond shell-local runtime behavior
   - launcher concentration in `crates/vida/src/main.rs` and `crates/vida/src/state_store.rs`
-  - config-driven multi-system carrier law is now live for host-system execution posture and readiness, but runtime execution and bundle truth remain codex-centric through `codex_multi_agent`, `codex_runtime_assignment`, and `vida agent-init`
+  - config-driven multi-system carrier law is now live for host-system execution posture and readiness, and neutral runtime fields already exist as `carrier_runtime` plus `runtime_assignment`, but runtime execution still mirrors `codex_multi_agent` / `codex_runtime_assignment` as compatibility aliases and still routes worker dispatch through `vida agent-init`
   - DB-first activation truth is persisted as a launcher-captured snapshot rather than owned by one DB-native configurator service
   - top-level `consume` / `lane` / `approval` / `recovery` contracts and the full shared enum/value layer remain incomplete
   - final `TaskFlow -> DocFlow -> Release 1 closure` seam hardening

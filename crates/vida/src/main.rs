@@ -137,7 +137,8 @@ const DEFAULT_PROJECT_DECISIONS_DOC: &str = "docs/process/decisions.md";
 const DEFAULT_PROJECT_ENVIRONMENTS_DOC: &str = "docs/process/environments.md";
 const DEFAULT_PROJECT_OPERATIONS_DOC: &str = "docs/process/project-operations.md";
 const DEFAULT_PROJECT_AGENT_SYSTEM_DOC: &str = "docs/process/agent-system.md";
-const DEFAULT_PROJECT_CODEX_GUIDE_DOC: &str = "docs/process/codex-agent-configuration-guide.md";
+const DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC: &str =
+    "docs/process/codex-agent-configuration-guide.md";
 const DEFAULT_PROJECT_DOC_TOOLING_DOC: &str = "docs/process/documentation-tooling-map.md";
 const DEFAULT_PROJECT_RESEARCH_README: &str = "docs/research/README.md";
 const PROJECT_ACTIVATION_RECEIPT_LATEST: &str = ".vida/receipts/project-activation.latest.json";
@@ -6459,13 +6460,15 @@ mod tests {
         assert_eq!(view["host_environment"]["template_materialized"], true);
         assert_eq!(view["host_environment"]["runtime_template_root"], ".codex");
         assert_eq!(
-            view["normal_work_defaults"]["carrier_tier_rates"],
-            view["normal_work_defaults"]["codex_tier_rates"]
-        );
-        assert_eq!(
             view["normal_work_defaults"]["local_host_agent_guide"],
-            DEFAULT_PROJECT_CODEX_GUIDE_DOC
+            DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC
         );
+        assert!(view["normal_work_defaults"]
+            .get("local_codex_guide")
+            .is_none());
+        assert!(view["normal_work_defaults"]
+            .get("codex_tier_rates")
+            .is_none());
     }
 
     #[test]
@@ -6513,10 +6516,12 @@ mod tests {
             view["normal_work_defaults"]["carrier_tier_rates"]["qwen"],
             4
         );
-        assert_eq!(
-            view["normal_work_defaults"]["carrier_tier_rates"],
-            view["normal_work_defaults"]["codex_tier_rates"]
-        );
+        assert!(view["normal_work_defaults"]
+            .get("local_codex_guide")
+            .is_none());
+        assert!(view["normal_work_defaults"]
+            .get("codex_tier_rates")
+            .is_none());
         assert!(view["host_environment"]["supported_cli_systems"]
             .as_array()
             .expect("supported cli systems should render")
@@ -6823,8 +6828,10 @@ mod tests {
             )
             .expect("selection should build");
             let plan = build_runtime_execution_plan_from_snapshot(&bundle, &selection);
-            assert_eq!(plan["runtime_assignment"], plan["codex_runtime_assignment"]);
-            plan["runtime_assignment"].clone()
+            let runtime_assignment = plan["runtime_assignment"].clone();
+            let legacy_runtime_assignment = plan["codex_runtime_assignment"].clone();
+            assert_eq!(runtime_assignment, legacy_runtime_assignment);
+            runtime_assignment
         };
         let implementation = assignment_for("write one bounded implementation patch");
         assert_eq!(implementation["enabled"], true);
@@ -7506,8 +7513,10 @@ mod tests {
         .expect("selection should build");
         let plan = build_runtime_execution_plan_from_snapshot(&bundle, &selection);
 
-        assert_eq!(plan["runtime_assignment"], plan["codex_runtime_assignment"]);
-        assert!(plan["runtime_assignment"]
+        let runtime_assignment = plan["runtime_assignment"].clone();
+        let legacy_runtime_assignment = plan["codex_runtime_assignment"].clone();
+        assert_eq!(runtime_assignment, legacy_runtime_assignment);
+        assert!(runtime_assignment
             .get("internal_named_lane_id")
             .is_none());
         assert_eq!(
@@ -7543,8 +7552,10 @@ mod tests {
         .expect("config");
         let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
             .expect("bundle should compile");
-        assert_eq!(bundle["carrier_runtime"], bundle["codex_multi_agent"]);
-        let dispatch_aliases = bundle["carrier_runtime"]["dispatch_aliases"]
+        let carrier_runtime = bundle["carrier_runtime"].clone();
+        let legacy_carrier_runtime = bundle["codex_multi_agent"].clone();
+        assert_eq!(carrier_runtime, legacy_carrier_runtime);
+        let dispatch_aliases = carrier_runtime["dispatch_aliases"]
             .as_array()
             .expect("dispatch aliases should still be an array");
 

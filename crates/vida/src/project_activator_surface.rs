@@ -129,7 +129,7 @@ Repository: `{project_title}`\n\n\
 7. Project agent-system baseline:\n\
    - `{DEFAULT_PROJECT_AGENT_SYSTEM_DOC}`\n\
 8. Project Codex agent guide:\n\
-   - `{DEFAULT_PROJECT_CODEX_GUIDE_DOC}`\n\
+   - `{DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC}`\n\
 9. Project research index:\n\
    - `{DEFAULT_PROJECT_RESEARCH_README}`\n\n\
 Working rule:\n\
@@ -1335,7 +1335,7 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     let product_spec_readme = project_root.join(DEFAULT_PROJECT_PRODUCT_SPEC_README);
     let feature_design_template = project_root.join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE);
     let process_readme = project_root.join("docs/process/README.md");
-    let codex_agent_guide = project_root.join(DEFAULT_PROJECT_CODEX_GUIDE_DOC);
+    let codex_agent_guide = project_root.join(DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC);
     let documentation_tooling_map = project_root.join(DEFAULT_PROJECT_DOC_TOOLING_DOC);
     let runtime_agent_extensions = runtime_agent_extensions_root(project_root);
     let runtime_agent_extensions_readme = runtime_agent_extensions.join("README.md");
@@ -1802,11 +1802,9 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
             "local_feature_design_template": DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE,
             "local_product_spec_guide": DEFAULT_PROJECT_PRODUCT_SPEC_README,
             "local_documentation_tooling_map": DEFAULT_PROJECT_DOC_TOOLING_DOC,
-            "local_host_agent_guide": DEFAULT_PROJECT_CODEX_GUIDE_DOC,
-            "local_codex_guide": DEFAULT_PROJECT_CODEX_GUIDE_DOC,
+            "local_host_agent_guide": DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC,
             "default_agent_topology": default_agent_topology,
             "carrier_tier_rates": carrier_tier_rates,
-            "codex_tier_rates": carrier_tier_rates,
             "local_agent_score_state": {
                 "strategy_store": WORKER_STRATEGY_STATE,
                 "scorecards_store": WORKER_SCORECARDS_STATE
@@ -2574,9 +2572,9 @@ fn apply_project_activation_answers(
             DEFAULT_PROJECT_AGENT_SYSTEM_DOC,
         ),
         (
-            project_root.join(DEFAULT_PROJECT_CODEX_GUIDE_DOC),
+            project_root.join(DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC),
             super::init_surfaces::render_project_codex_guide(),
-            DEFAULT_PROJECT_CODEX_GUIDE_DOC,
+            DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC,
         ),
         (
             project_root.join(DEFAULT_PROJECT_DOC_TOOLING_DOC),

@@ -26,6 +26,7 @@ Structured-template rule:
   - [`crates/vida/src/main.rs`](/home/unnamed/project/vida-stack/crates/vida/src/main.rs) still owns `codex_*` runtime-assignment logic, pricing policy, and bundle field names, although local worker score/state stores are already neutralized.
   - [`crates/vida/src/taskflow_consume_bundle.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_consume_bundle.rs) publishes bundle snapshots from `activation_bundle["codex_multi_agent"]`.
   - [`crates/vida/src/taskflow_routing.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_routing.rs) derives routing from codex-shaped assignment payloads.
+  - [`crates/vida/src/taskflow_run_graph.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_run_graph.rs) still carries route/backend fallback logic that reads legacy runtime-assignment aliases directly.
   - [`crates/vida/tests/boot_smoke.rs`](/home/unnamed/project/vida-stack/crates/vida/tests/boot_smoke.rs) and bundle-oriented proof paths still prove codex-era names, while [`crates/vida/tests/task_smoke.rs`](/home/unnamed/project/vida-stack/crates/vida/tests/task_smoke.rs) now includes bounded non-codex status parity coverage.
 - Current pain point or gap:
   - launcher still owns carrier truth instead of activation + compiled bundle + routing contracts
@@ -35,11 +36,11 @@ Structured-template rule:
 
 ## Goal
 - What this change should achieve:
-  - replace codex-era carrier/bundle field names with carrier-neutral runtime contracts
+  - finish the migration onto already-landed carrier-neutral runtime contracts and burn down codex-era compatibility aliases
   - make host-system selection and materialization come from configured activation surfaces rather than launcher-local vendor defaults
   - keep vendor-specific carrier renderers as bounded adapters instead of canonical runtime law
 - What success looks like:
-  - compiled bundle exposes neutral `carrier_catalog`, `runtime_assignment`, `dispatch_aliases`, and `worker_strategy` contracts
+  - compiled bundle exposes neutral `carrier_runtime` and `runtime_assignment` contracts, and consume/status views expose `carriers`, `dispatch_aliases`, and `worker_strategy`
   - status/init/activation surfaces can describe configured internal and external systems without defaulting to `.codex` or `codex`
   - routing and execution selection use neutral runtime-assignment DTOs
   - smoke/golden proofs validate neutral carrier/runtime contracts first and vendor-specific compatibility second
@@ -99,9 +100,10 @@ Structured-template rule:
 
 ## Design Decisions
 
-### 1. Carrier-neutral bundle contracts replace codex-era canonical names
+### 1. Carrier-neutral bundle contracts become the only canonical names
 Will implement / choose:
-- introduce neutral bundle sections such as `carrier_catalog`, `runtime_assignment`, `dispatch_alias_catalog`, and `carrier_strategy`
+- keep `carrier_runtime` and `runtime_assignment` as the canonical runtime outputs already emitted by the launcher
+- keep consume/status snapshots centered on `carriers`, `dispatch_aliases`, and `worker_strategy`
 - keep codex-era field names only as bounded compatibility aliases during migration
 - Why:
   - Release-1 canon already requires one carrier-neutral runtime artifact pack
@@ -110,8 +112,8 @@ Will implement / choose:
   - bundle consumers and tests must migrate together
   - short compatibility bridge period is required
 - Alternatives considered:
-  - keep codex-era names and document them as historical
-  - add neutral aliases without changing canonical names
+  - keep codex-era names as the canonical long-term contract
+  - introduce a second neutral naming set on top of the fields already shipped
 - ADR link if this must become a durable decision record:
   - add ADR only if the compatibility window becomes long-lived
 
@@ -202,6 +204,7 @@ Will implement / choose:
   - [`crates/vida/src/main.rs`](/home/unnamed/project/vida-stack/crates/vida/src/main.rs)
   - [`crates/vida/src/taskflow_consume_bundle.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_consume_bundle.rs)
   - [`crates/vida/src/taskflow_routing.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_routing.rs)
+  - [`crates/vida/src/taskflow_run_graph.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_run_graph.rs)
 - Likely follow-on tests and proof assets:
   - [`crates/vida/tests/boot_smoke.rs`](/home/unnamed/project/vida-stack/crates/vida/tests/boot_smoke.rs)
   - [`crates/vida/tests/task_smoke.rs`](/home/unnamed/project/vida-stack/crates/vida/tests/task_smoke.rs)
@@ -222,7 +225,7 @@ Will implement / choose:
 
 ### Phase 1
 - Freeze neutral DTO names and compatibility alias map for bundle, assignment, and carrier catalog payloads.
-- Replace launcher-local `codex_multi_agent` and `codex_runtime_assignment` canonical references with neutral contract builders.
+- Replace launcher-local `codex_multi_agent` and `codex_runtime_assignment` canonical assumptions with canonical `carrier_runtime` and `runtime_assignment` builders plus explicit compatibility fallbacks.
 - First proof target:
   - compiled bundle and consume/status projections expose neutral carrier/runtime keys.
 

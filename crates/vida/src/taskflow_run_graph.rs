@@ -75,10 +75,24 @@ fn json_bool_field(value: &serde_json::Value, key: &str) -> Option<bool> {
     value.get(key)?.as_bool()
 }
 
-fn codex_carrier_backend_from_assignment(assignment: &serde_json::Value) -> Option<String> {
+fn carrier_backend_from_assignment(assignment: &serde_json::Value) -> Option<String> {
     json_string_field(assignment, "selected_tier")
         .or_else(|| json_string_field(assignment, "activation_agent_type"))
         .filter(|value| !value.is_empty())
+}
+
+fn runtime_assignment_from_route<'a>(route: &'a serde_json::Value) -> Option<&'a serde_json::Value> {
+    route
+        .get("runtime_assignment")
+        .or_else(|| route.get("codex_runtime_assignment"))
+}
+
+fn runtime_assignment_from_execution_plan<'a>(
+    execution_plan: &'a serde_json::Value,
+) -> Option<&'a serde_json::Value> {
+    execution_plan
+        .get("runtime_assignment")
+        .or_else(|| execution_plan.get("codex_runtime_assignment"))
 }
 
 fn selected_backend_from_route(
@@ -96,20 +110,11 @@ fn selected_backend_from_route(
                 .map(str::to_string)
         })
         .or_else(|| {
-            route
-                .get("runtime_assignment")
-                .and_then(codex_carrier_backend_from_assignment)
+            runtime_assignment_from_route(route).and_then(carrier_backend_from_assignment)
         })
         .or_else(|| {
-            route
-                .get("codex_runtime_assignment")
-                .and_then(codex_carrier_backend_from_assignment)
-        })
-        .or_else(|| {
-            execution_plan
-                .get("runtime_assignment")
-                .or_else(|| execution_plan.get("codex_runtime_assignment"))
-                .and_then(codex_carrier_backend_from_assignment)
+            runtime_assignment_from_execution_plan(execution_plan)
+                .and_then(carrier_backend_from_assignment)
         })
         .or_else(|| json_string_field(route, "subagents"))
         .filter(|value| !value.is_empty())

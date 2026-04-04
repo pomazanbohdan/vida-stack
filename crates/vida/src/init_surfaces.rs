@@ -386,7 +386,7 @@ fn materialize_project_docs_scaffold(project_root: &Path) -> Result<(), String> 
             render_project_doc_tooling_map(),
         ),
         (
-            project_root.join(super::DEFAULT_PROJECT_CODEX_GUIDE_DOC),
+            project_root.join(super::DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC),
             render_project_codex_guide(),
         ),
         (
@@ -431,7 +431,7 @@ Primary pointers:\n\n\
         super::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE,
         super::DEFAULT_PROJECT_PROCESS_README,
         super::DEFAULT_PROJECT_DOC_TOOLING_DOC,
-        super::DEFAULT_PROJECT_CODEX_GUIDE_DOC,
+        super::DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC,
         super::DEFAULT_PROJECT_RESEARCH_README
     )
 }
