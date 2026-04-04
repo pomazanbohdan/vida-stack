@@ -296,6 +296,10 @@ pub(crate) fn host_cli_system_execution_class(entry: &serde_yaml::Value, system:
         })
 }
 
+fn host_cli_system_agent_only_defaults_enabled(entry: &serde_yaml::Value, system: &str) -> bool {
+    host_cli_system_execution_class(entry, system) == "internal"
+}
+
 pub(crate) fn inferred_project_id_candidate(project_root: &Path) -> String {
     project_root
         .file_name()
@@ -513,7 +517,11 @@ pub(crate) fn apply_host_cli_selection(
             contents.trim_end()
         )
     };
-    if cli_system == "codex" {
+    let builtin_entry = builtin_host_cli_system_registry().remove(cli_system);
+    if builtin_entry
+        .as_ref()
+        .is_some_and(|entry| host_cli_system_agent_only_defaults_enabled(entry, cli_system))
+    {
         updated = apply_agent_only_development_defaults(&updated);
     }
     fs::write(&config_path, updated)
@@ -562,36 +570,36 @@ pub(crate) fn materialize_host_cli_template(
     match mode.as_str() {
         "codex_toml_catalog_render" => {
             copy_tree_if_missing(&source, &copy_tree_target)?;
-            if cli_system == "codex" {
-                let overlay = read_yaml_file_checked(&project_root.join("vida.config.yaml"))
-                    .unwrap_or(serde_yaml::Value::Null);
-                let scoring_policy = serde_json::to_value(
-                    yaml_lookup(&overlay, &["agent_system", "scoring"])
-                        .cloned()
-                        .unwrap_or(serde_yaml::Value::Null),
-                )
-                .unwrap_or(serde_json::Value::Null);
-                let codex_root = project_root.join(".codex");
-                let codex_roles = {
-                    let overlay_roles = overlay_codex_agent_catalog(&overlay);
-                    if overlay_roles.is_empty() {
-                        read_codex_agent_catalog(&codex_root)
-                    } else {
-                        overlay_roles
-                    }
-                };
-                let codex_dispatch_aliases =
-                    codex_dispatch_alias_catalog_for_root(&overlay, project_root, &codex_roles)?;
-                if !codex_roles.is_empty() {
-                    render_codex_template_from_catalog(
-                        project_root,
-                        &source,
-                        &codex_roles,
-                        &codex_dispatch_aliases,
-                    )?;
+            let overlay = read_yaml_file_checked(&project_root.join("vida.config.yaml"))
+                .unwrap_or(serde_yaml::Value::Null);
+            let scoring_policy = serde_json::to_value(
+                yaml_lookup(&overlay, &["agent_system", "scoring"])
+                    .cloned()
+                    .unwrap_or(serde_yaml::Value::Null),
+            )
+            .unwrap_or(serde_json::Value::Null);
+            let rendered_catalog_root = project_root.join(
+                host_cli_system_runtime_surface(&entry_ref, cli_system),
+            );
+            let carrier_roles = {
+                let overlay_roles = overlay_codex_agent_catalog(&overlay);
+                if overlay_roles.is_empty() {
+                    read_codex_agent_catalog(&rendered_catalog_root)
+                } else {
+                    overlay_roles
                 }
-                refresh_worker_strategy(project_root, &codex_roles, &scoring_policy);
+            };
+            let carrier_dispatch_aliases =
+                codex_dispatch_alias_catalog_for_root(&overlay, project_root, &carrier_roles)?;
+            if !carrier_roles.is_empty() {
+                render_codex_template_from_catalog(
+                    project_root,
+                    &source,
+                    &carrier_roles,
+                    &carrier_dispatch_aliases,
+                )?;
             }
+            refresh_worker_strategy(project_root, &carrier_roles, &scoring_policy);
             Ok(runtime_root)
         }
         "copy_tree_only" => {
