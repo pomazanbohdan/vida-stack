@@ -230,8 +230,7 @@ async fn resume_inputs_from_downstream_packet(
         "downstream dispatch packet",
     )?;
     validate_run_graph_resume_state_for_downstream_packet(store, run_id).await?;
-    let role_selection =
-        decode_role_selection_from_packet(&packet, "downstream dispatch packet")?;
+    let role_selection = decode_role_selection_from_packet(&packet, "downstream dispatch packet")?;
     let dispatch_target = packet
         .get("downstream_dispatch_target")
         .and_then(serde_json::Value::as_str)

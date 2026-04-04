@@ -899,8 +899,9 @@ fn taskflow_proxy_help_is_runtime_specific() {
         "`vida task` and `vida taskflow task` address the same authoritative backlog store."
     ));
     assert!(stdout.contains("vida task ready --json"));
-    assert!(stdout
-        .contains("vida taskflow help [task|consume|run-graph|recovery|doctor|protocol-binding]"));
+    assert!(stdout.contains(
+        "vida taskflow help [task|next|consume|run-graph|recovery|doctor|protocol-binding]"
+    ));
 }
 
 #[test]
@@ -921,6 +922,39 @@ fn taskflow_proxy_help_supports_task_topic() {
     assert!(stdout.contains("vida task update <task-id> --status in_progress --notes"));
     assert!(stdout.contains("vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json"));
     assert!(stdout.contains("Parent-child edges preserve epic/task structure"));
+}
+
+#[test]
+fn taskflow_task_help_alias_routes_to_canonical_task_help() {
+    let output = vida()
+        .args(["taskflow", "task", "help"])
+        .output()
+        .expect("taskflow task help alias should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VIDA TaskFlow help: task"));
+    assert!(stdout.contains("vida task next-display-id <parent-display-id> --json"));
+    assert!(stdout.contains("vida task update <task-id> --status in_progress --notes"));
+}
+
+#[test]
+fn taskflow_next_reports_aggregate_next_step_surface() {
+    let output = vida()
+        .args(["taskflow", "next", "--json"])
+        .output()
+        .expect("taskflow next should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("taskflow next json should parse");
+    assert_eq!(parsed["surface"], "vida taskflow next");
+    assert!(parsed["status"].is_string());
+    assert!(parsed["blocker_codes"].is_array());
+    assert!(parsed["next_actions"].is_array());
+    assert!(parsed["ready_count"].is_number());
+    assert!(parsed.get("primary_ready_task").is_some());
+    assert!(parsed.get("recovery").is_some());
 }
 
 #[test]

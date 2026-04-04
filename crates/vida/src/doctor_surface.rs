@@ -1,10 +1,10 @@
 use std::process::ExitCode;
 
-use crate::release1_contracts::{classify_compatibility_boundary, CompatibilityBoundary};
 use crate::operator_contracts::{
     canonical_release1_operator_contract_status, release1_operator_contracts_consistency_error,
     shared_operator_output_contract_parity_error,
 };
+use crate::release1_contracts::{classify_compatibility_boundary, CompatibilityBoundary};
 
 fn migration_requires_action(migration_state: &str) -> bool {
     !matches!(migration_state, "none_required" | "no_migration_required")
@@ -56,8 +56,7 @@ fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> boo
         Some(value) => value,
         None => return true,
     };
-    let status_ok =
-        canonical_release1_operator_contract_status(&summary_json["status"]).is_some();
+    let status_ok = canonical_release1_operator_contract_status(&summary_json["status"]).is_some();
     let operator_status_ok =
         canonical_release1_operator_contract_status(&operator_contracts["status"]).is_some();
     if !status_ok || !operator_status_ok {
@@ -77,8 +76,6 @@ fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> boo
         .is_some_and(|value| value.is_object());
     !(blockers_ok && next_actions_ok && trust_signal_ok)
 }
-
-
 
 pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
     let state_dir = args

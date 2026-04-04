@@ -27,7 +27,7 @@ const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION: &str =
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER: &str =
     "missing_run_graph_dispatch_receipt_operator_evidence";
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
-    "Run `vida taskflow run-graph dispatch --json` to materialize run-graph dispatch receipt evidence before operator handoff.";
+    "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.";
 
 fn sync_protocol_binding(state_dir: &str) {
     let output = vida()
@@ -184,13 +184,13 @@ fn doctor_json_emits_operator_contract_fields() {
     let has_retrieval_trust_next_action = next_actions.iter().any(|action| {
         action.as_str()
             == Some(
-                "Run `vida taskflow consume bundle-check --json` to record retrieval-trust operator evidence.",
+                "Run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence.",
             )
     });
     let has_retrieval_trust_signal_next_action = next_actions.iter().any(|action| {
         action.as_str()
             == Some(
-                "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle-check --json` to materialize retrieval-trust citation/freshness/ACL signal.",
+                "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal.",
             )
     });
     let has_retrieval_trust_source_blocker = blocker_codes
@@ -199,7 +199,7 @@ fn doctor_json_emits_operator_contract_fields() {
     let has_retrieval_trust_source_next_action = next_actions.iter().any(|action| {
         action.as_str()
             == Some(
-                "Run `vida taskflow consume bundle-check --json` so runtime consumption snapshots publish retrieval-trust source evidence.",
+                "Run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence.",
             )
     });
     let has_recovery_readiness_blocker = blocker_codes
@@ -578,11 +578,11 @@ fn doctor_json_blocks_when_final_snapshot_top_level_operator_contract_parity_is_
         .as_array()
         .expect("shared_fields blocker_codes should be array");
     assert!(
-    shared_blocker_codes.iter().any(|code| {
-        code.as_str() == Some("incomplete_release_admission_operator_evidence")
-    }),
-    "shared_fields mirror must surface the same parity blocker"
-);
+        shared_blocker_codes.iter().any(|code| {
+            code.as_str() == Some("incomplete_release_admission_operator_evidence")
+        }),
+        "shared_fields mirror must surface the same parity blocker"
+    );
 }
 
 #[test]

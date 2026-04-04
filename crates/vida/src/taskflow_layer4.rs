@@ -52,6 +52,24 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  Export the current runtime snapshot when needed: vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             return;
         }
+        Some("next") => {
+            println!("VIDA TaskFlow help: next");
+            println!();
+            println!("Purpose:");
+            println!("  Aggregate the next lawful operator step from backlog readiness, latest run-graph recovery, and bounded continuation state.");
+            println!("  This is a read-only launcher-owned planning surface over the authoritative TaskFlow state store.");
+            println!();
+            println!("Canonical command:");
+            println!("  vida taskflow next [--json]");
+            println!();
+            println!("Returned semantics:");
+            println!("  status, blocker_codes, next_actions, recommended_command, ready_count, primary_ready_task, latest_run_graph, recovery, gate, dispatch");
+            println!();
+            println!("Failure modes:");
+            println!("  Missing or unreadable authoritative state fails closed.");
+            println!("  `next` is an inspection/planning surface and must not be treated as a mutation or dispatch command by itself.");
+            return;
+        }
         Some("consume") => {
             println!("VIDA TaskFlow help: consume");
             println!();
@@ -186,7 +204,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!();
     println!("Usage:");
     println!("  vida taskflow <args...>");
-    println!("  vida taskflow help [task|consume|run-graph|recovery|doctor|protocol-binding]");
+    println!("  vida taskflow help [task|next|consume|run-graph|recovery|doctor|protocol-binding]");
     println!("  vida taskflow <command> --help");
     println!();
     println!("Purpose:");
@@ -207,6 +225,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!();
     println!("Most-used command homes:");
     println!("  task        backlog inspection and mutation");
+    println!("  next        aggregate next lawful step across backlog and recovery state");
     println!("  run-graph   resumability and node-state inspection");
     println!("  consume     explicit TaskFlow -> final closure handoff");
     println!(
@@ -216,6 +235,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!();
     println!("Canonical examples:");
     println!("  vida task ready --json");
+    println!("  vida taskflow next --json");
     println!("  vida task show <task-id> --json");
     println!("  vida taskflow run-graph status <task-id>");
     println!("  vida taskflow consume final \"proof path\" --json");
@@ -224,7 +244,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida taskflow bootstrap-spec \"feature request\" --json");
     println!();
     println!("Operator recipes:");
-    println!("  Find the next lawful slice: vida task ready --json");
+    println!("  Find the next lawful step: vida taskflow next --json");
     println!("  Inspect the canonical backlog contract: vida task --help");
     println!("  Inspect resumability state: vida taskflow help run-graph");
     println!("  Review runtime diagnostics: vida taskflow help doctor");
@@ -275,8 +295,8 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "next-ready-slice",
             why: "TaskFlow readiness is the canonical way to pick the next unblocked execution slice.",
-            command: "vida task ready --json",
-            failure_modes: "Ready output depends on current runtime state; blocked or stale exported artifacts must be checked through the runtime store.",
+            command: "vida taskflow next --json",
+            failure_modes: "Next-step output depends on current runtime state; inspect the embedded blockers, ready task, and recovery summary before mutating runtime state.",
         };
     }
 

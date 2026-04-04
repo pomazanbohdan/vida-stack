@@ -2058,9 +2058,7 @@ impl StateStore {
         &self,
         run_id: &str,
     ) -> Result<RunGraphRecoverySummary, StateStoreError> {
-        let status = self
-            .load_consistent_run_graph_status(run_id)
-            .await?;
+        let status = self.load_consistent_run_graph_status(run_id).await?;
         Ok(RunGraphRecoverySummary::from_status(status))
     }
 
@@ -6073,11 +6071,8 @@ hierarchy: framework,contracts
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!(
-            "vida-update-task-{}-{}",
-            std::process::id(),
-            nanos
-        ));
+        let root =
+            std::env::temp_dir().join(format!("vida-update-task-{}-{}", std::process::id(), nanos));
         let store = StateStore::open(root.clone()).await.expect("open store");
         let labels = vec!["framework".to_string()];
 

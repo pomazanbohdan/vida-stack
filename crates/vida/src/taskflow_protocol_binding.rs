@@ -2,11 +2,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use super::state_store::{ProtocolBindingState, ProtocolBindingSummary, StateStore};
 use crate::operator_contracts::{
     canonical_release1_blocker_code_entries, shared_operator_output_contract_parity_error,
 };
 use crate::release1_contracts::release1_contract_status_str;
-use super::state_store::{ProtocolBindingState, ProtocolBindingSummary, StateStore};
 
 #[derive(Clone, serde::Serialize)]
 struct ProtocolBindingDecisionGateStatus {
@@ -466,11 +466,7 @@ fn render_protocol_binding_check_plain(context: &ProtocolBindingCheckContext) {
         super::RenderMode::Plain,
         "vida taskflow protocol-binding check",
     );
-    super::print_surface_line(
-        super::RenderMode::Plain,
-        "status",
-        &context.payload.status,
-    );
+    super::print_surface_line(super::RenderMode::Plain, "status", &context.payload.status);
     super::print_surface_line(
         super::RenderMode::Plain,
         "summary",
@@ -507,11 +503,7 @@ fn render_protocol_binding_check_plain(context: &ProtocolBindingCheckContext) {
     );
     let next_actions_list = serde_json::to_string(&context.payload.next_actions)
         .expect("protocol-binding next_actions should render");
-    super::print_surface_line(
-        super::RenderMode::Plain,
-        "next_actions",
-        &next_actions_list,
-    );
+    super::print_surface_line(super::RenderMode::Plain, "next_actions", &next_actions_list);
     let shared_fields_list = serde_json::to_string(&context.payload.shared_fields)
         .expect("protocol-binding shared_fields should render");
     super::print_surface_line(

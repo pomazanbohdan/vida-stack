@@ -7,7 +7,7 @@
       "id": "doctor_run_graph_negative_control",
       "mode": "fail_closed",
       "blocker_code": "missing_run_graph_dispatch_receipt_operator_evidence",
-      "next_action": "Run `vida taskflow run-graph dispatch --json` to materialize run-graph dispatch receipt evidence before operator handoff."
+      "next_action": "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff."
     }
   ],
   "nodes": [

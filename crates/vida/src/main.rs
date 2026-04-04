@@ -919,13 +919,6 @@ fn block_on_state_store<T>(
     }
 }
 
-fn print_jsonl_value(value: &serde_json::Value) {
-    println!(
-        "{}",
-        serde_json::to_string(value).expect("jsonl payload should render")
-    );
-}
-
 fn print_json_pretty(value: &serde_json::Value) {
     println!(
         "{}",
@@ -7516,9 +7509,7 @@ mod tests {
         let runtime_assignment = plan["runtime_assignment"].clone();
         let legacy_runtime_assignment = plan["codex_runtime_assignment"].clone();
         assert_eq!(runtime_assignment, legacy_runtime_assignment);
-        assert!(runtime_assignment
-            .get("internal_named_lane_id")
-            .is_none());
+        assert!(runtime_assignment.get("internal_named_lane_id").is_none());
         assert_eq!(
             plan["development_flow"]["dispatch_contract"]["implementer_activation"]
                 ["activation_agent_type"],

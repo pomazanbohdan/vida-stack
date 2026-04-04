@@ -120,14 +120,16 @@ pub(crate) fn shared_operator_output_contract_parity_error(
             "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch",
         );
     };
-    let Some(contract_status) = canonical_release1_operator_contract_status(&contracts["status"]) else {
+    let Some(contract_status) = canonical_release1_operator_contract_status(&contracts["status"])
+    else {
         return Some(
             "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch",
         );
     };
     let status_has_canonical_mirror =
         shared_operator_has_canonical_status(summary_json, shared, contracts);
-    let Some(top_blocker_codes) = canonical_release1_blocker_code_entries(upper_blocker_codes) else {
+    let Some(top_blocker_codes) = canonical_release1_blocker_code_entries(upper_blocker_codes)
+    else {
         return Some(
             "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch",
         );
@@ -141,22 +143,29 @@ pub(crate) fn shared_operator_output_contract_parity_error(
     };
     let next_actions_has_canonical_mirror =
         shared_operator_has_canonical_next_actions(summary_json, shared, contracts);
-    let Some(shared_blocker_codes) = canonical_release1_blocker_code_entries(&shared["blocker_codes"]) else {
+    let Some(shared_blocker_codes) =
+        canonical_release1_blocker_code_entries(&shared["blocker_codes"])
+    else {
         return Some(
             "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch",
         );
     };
-    let Some(shared_next_actions) = canonical_release1_next_action_entries(&shared["next_actions"]) else {
+    let Some(shared_next_actions) = canonical_release1_next_action_entries(&shared["next_actions"])
+    else {
         return Some(
             "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch",
         );
     };
-    let Some(contract_blocker_codes) = canonical_release1_blocker_code_entries(&contracts["blocker_codes"]) else {
+    let Some(contract_blocker_codes) =
+        canonical_release1_blocker_code_entries(&contracts["blocker_codes"])
+    else {
         return Some(
             "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch",
         );
     };
-    let Some(contract_next_actions) = canonical_release1_next_action_entries(&contracts["next_actions"]) else {
+    let Some(contract_next_actions) =
+        canonical_release1_next_action_entries(&contracts["next_actions"])
+    else {
         return Some(
             "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch",
         );
@@ -178,21 +187,13 @@ pub(crate) fn shared_operator_output_contract_parity_error(
     )
 }
 
-fn shared_operator_has_canonical_status(
-    top: &Value,
-    shared: &Value,
-    contract: &Value,
-) -> bool {
+fn shared_operator_has_canonical_status(top: &Value, shared: &Value, contract: &Value) -> bool {
     is_canonical_release1_operator_contract_status(&top["status"])
         || is_canonical_release1_operator_contract_status(&shared["status"])
         || is_canonical_release1_operator_contract_status(&contract["status"])
 }
 
-fn shared_operator_has_canonical_blockers(
-    top: &Value,
-    shared: &Value,
-    contract: &Value,
-) -> bool {
+fn shared_operator_has_canonical_blockers(top: &Value, shared: &Value, contract: &Value) -> bool {
     is_canonical_release1_blocker_code_entries(&top["blocker_codes"])
         || is_canonical_release1_blocker_code_entries(&shared["blocker_codes"])
         || is_canonical_release1_blocker_code_entries(&contract["blocker_codes"])
@@ -213,8 +214,7 @@ mod tests {
     use super::{
         canonical_release1_blocker_code_entries, canonical_release1_next_action_entries,
         canonical_release1_operator_contract_status, is_canonical_release1_blocker_code_entries,
-        is_canonical_release1_next_action_entries,
-        is_canonical_release1_operator_contract_status,
+        is_canonical_release1_next_action_entries, is_canonical_release1_operator_contract_status,
         release1_operator_contracts_consistency_error,
         shared_operator_output_contract_parity_error,
     };
@@ -223,9 +223,15 @@ mod tests {
     #[test]
     fn canonical_operator_status_recognizes_pass_ok_and_blocked() {
         let value = json!("ok");
-        assert_eq!(canonical_release1_operator_contract_status(&value), Some("pass"));
+        assert_eq!(
+            canonical_release1_operator_contract_status(&value),
+            Some("pass")
+        );
         let value = json!("blocked");
-        assert_eq!(canonical_release1_operator_contract_status(&value), Some("blocked"));
+        assert_eq!(
+            canonical_release1_operator_contract_status(&value),
+            Some("blocked")
+        );
     }
 
     #[test]
@@ -238,7 +244,10 @@ mod tests {
     #[test]
     fn canonical_blocker_codes_require_lower_snake_case() {
         let value = json!(["valid_code"]);
-        assert_eq!(canonical_release1_blocker_code_entries(&value), Some(vec!["valid_code".into()]));
+        assert_eq!(
+            canonical_release1_blocker_code_entries(&value),
+            Some(vec!["valid_code".into()])
+        );
         let value = json!(["INVALID"]);
         assert!(canonical_release1_blocker_code_entries(&value).is_none());
         assert!(!is_canonical_release1_blocker_code_entries(&value));
@@ -247,7 +256,10 @@ mod tests {
     #[test]
     fn canonical_next_actions_downcases_and_trims() {
         let value = json!([" Run `task` "]);
-        assert_eq!(canonical_release1_next_action_entries(&value), Some(vec!["run `task`".into()]));
+        assert_eq!(
+            canonical_release1_next_action_entries(&value),
+            Some(vec!["run `task`".into()])
+        );
         assert!(is_canonical_release1_next_action_entries(&value));
     }
 
@@ -256,11 +268,7 @@ mod tests {
         let blocker_codes = vec!["migration_required".into()];
         let next_actions = vec!["reconcile migration".into()];
         assert_eq!(
-            release1_operator_contracts_consistency_error(
-                "blocked",
-                &blocker_codes,
-                &next_actions,
-            ),
+            release1_operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions,),
             None
         );
     }
