@@ -1,6 +1,12 @@
 use crate::taskflow_run_graph::validate_run_graph_resume_gate;
 use std::process::ExitCode;
 
+const DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS: [&str; 3] = [
+    ".vida/data/state/runtime-consumption",
+    "docs/product/spec",
+    "docs/process",
+];
+
 fn missing_dispatch_packet_path_error(latest: bool) -> String {
     let _ = super::blocker_code_str(super::BlockerCode::MissingPacket);
     if latest {
@@ -268,11 +274,64 @@ async fn validate_run_graph_resume_state_for_downstream_packet(
     validate_run_graph_resume_gate(&status)
 }
 
+fn packet_nonempty_string_array(packet: &serde_json::Value, key: &str) -> bool {
+    packet
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|rows| {
+            !rows.is_empty()
+                && rows.iter().all(|row| {
+                    row.as_str()
+                        .map(str::trim)
+                        .is_some_and(|value| !value.is_empty())
+                })
+        })
+}
+
+fn packet_has_owned_or_read_only_paths(packet: &serde_json::Value) -> bool {
+    packet_nonempty_string_array(packet, "owned_paths")
+        || packet_nonempty_string_array(packet, "read_only_paths")
+}
+
+fn normalize_runtime_dispatch_packet(packet: &mut serde_json::Value) -> bool {
+    let Some(packet_template_kind) = packet
+        .get("packet_template_kind")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+    else {
+        return false;
+    };
+    let Some(active_packet) = packet.get_mut(&packet_template_kind) else {
+        return false;
+    };
+    if active_packet.is_null() || packet_has_owned_or_read_only_paths(active_packet) {
+        return false;
+    }
+    let Some(active_packet_object) = active_packet.as_object_mut() else {
+        return false;
+    };
+    active_packet_object.insert(
+        "read_only_paths".to_string(),
+        serde_json::json!(DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS),
+    );
+    true
+}
+
 pub(crate) fn read_dispatch_packet(path: &str) -> Result<serde_json::Value, String> {
     let body = std::fs::read_to_string(path)
         .map_err(|error| format!("Failed to read persisted dispatch packet: {error}"))?;
-    let packet: serde_json::Value = serde_json::from_str(&body)
+    let mut packet: serde_json::Value = serde_json::from_str(&body)
         .map_err(|error| format!("Failed to parse persisted dispatch packet: {error}"))?;
+    if normalize_runtime_dispatch_packet(&mut packet) {
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(&packet)
+                .map_err(|error| format!("Failed to encode normalized dispatch packet: {error}"))?,
+        )
+        .map_err(|error| format!("Failed to persist normalized dispatch packet: {error}"))?;
+    }
     crate::validate_runtime_dispatch_packet_contract(
         &packet,
         "Persisted dispatch packet",
@@ -1087,8 +1146,9 @@ pub(crate) async fn run_taskflow_consume_advance_command(
 mod tests {
     use super::{
         canonical_resume_dispatch_status, canonical_resume_lane_status,
-        canonical_resume_string_array_entries, resume_from_persisted_final_snapshot,
-        resume_packet_ready_blocker_parity_error,
+        canonical_resume_string_array_entries, normalize_runtime_dispatch_packet,
+        read_dispatch_packet, resume_from_persisted_final_snapshot,
+        resume_packet_ready_blocker_parity_error, DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
     use crate::downstream_dispatch_ready_blocker_parity_error;
     use crate::StateStore;
@@ -1238,5 +1298,67 @@ mod tests {
         assert!(resume_from_persisted_final_snapshot(&store).expect("runtime consumption summary"),);
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn normalize_runtime_dispatch_packet_backfills_read_only_paths_for_legacy_packets() {
+        let mut packet = serde_json::json!({
+            "packet_template_kind": "coach_review_packet",
+            "coach_review_packet": {
+                "packet_id": "run-1::coach::coach-review",
+                "review_goal": "review bounded packet",
+                "owned_paths": [],
+                "definition_of_done": ["return bounded review evidence"],
+                "proof_target": "bounded proof target",
+                "blocking_question": "is it aligned?"
+            }
+        });
+
+        assert!(normalize_runtime_dispatch_packet(&mut packet));
+        assert_eq!(
+            packet["coach_review_packet"]["read_only_paths"],
+            serde_json::json!(DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS)
+        );
+    }
+
+    #[test]
+    fn read_dispatch_packet_repairs_legacy_packet_scope_before_validation() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let packet_path = std::env::temp_dir().join(format!(
+            "vida-legacy-dispatch-packet-{}-{}.json",
+            std::process::id(),
+            nanos
+        ));
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_template_kind": "coach_review_packet",
+                "coach_review_packet": {
+                    "packet_id": "run-1::coach::coach-review",
+                    "review_goal": "review bounded packet",
+                    "owned_paths": [],
+                    "definition_of_done": ["return bounded review evidence"],
+                    "proof_target": "bounded proof target",
+                    "blocking_question": "is it aligned?"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write legacy packet");
+
+        let packet =
+            read_dispatch_packet(packet_path.to_str().expect("packet path should be utf-8"))
+                .expect("legacy packet should normalize and validate");
+        assert_eq!(
+            packet["coach_review_packet"]["read_only_paths"],
+            serde_json::json!(DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS)
+        );
+
+        let persisted = fs::read_to_string(&packet_path).expect("normalized packet should persist");
+        assert!(persisted.contains("\"read_only_paths\""));
+        let _ = fs::remove_file(packet_path);
     }
 }

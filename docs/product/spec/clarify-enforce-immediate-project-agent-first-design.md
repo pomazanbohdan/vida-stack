@@ -140,7 +140,9 @@ Will implement / choose:
   - `runtime_assignment`
   - root-session exception-path requirements
 - Migration or compatibility notes
-  - No state migration required; this is wording and contract-surface clarification only.
+  - No store/schema migration is required.
+  - Resume/read paths must stay backward-compatible with older persisted runtime packets that predate the current packet-minimum contract.
+  - `vida taskflow consume continue` may normalize legacy persisted dispatch/downstream packets by backfilling the canonical runtime `read_only_paths` set before fail-closed validation runs.
 
 ### Integration Points
 - APIs
@@ -231,6 +233,7 @@ Will implement / choose:
   - update docs and runtime prompt surfaces in one bounded change
 - Migration / compatibility notes
   - no data migration
+  - legacy persisted runtime packets remain admissible through bounded resume-path normalization rather than operator-side manual packet repair
 - Operator or user restart / restart-notice requirements
   - reinstall/update the system `vida` binary after the release build so future sessions read the corrected runtime surfaces immediately
 
