@@ -200,9 +200,19 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
+            let latest_final_snapshot_path =
+                match super::latest_final_runtime_consumption_snapshot_path(store.root()) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("runtime consumption: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                };
             let root_session_write_guard =
                 super::status_surface::root_session_write_guard_summary_from_snapshot_path(
-                    runtime_consumption.latest_snapshot_path.as_deref(),
+                    latest_final_snapshot_path
+                        .as_deref()
+                        .or(runtime_consumption.latest_snapshot_path.as_deref()),
                 );
             let protocol_binding = match store.protocol_binding_summary().await {
                 Ok(summary) => summary,
@@ -311,14 +321,19 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues).to_string(),
                     );
                 }
-                let retrieval_trust_source = runtime_consumption
-                    .latest_snapshot_path
+                let evidence_snapshot_path = latest_final_snapshot_path
                     .as_deref()
-                    .map(|_| "runtime_consumption_snapshot_index");
+                    .or(runtime_consumption.latest_snapshot_path.as_deref());
+                let evidence_snapshot_kind = latest_final_snapshot_path
+                    .as_ref()
+                    .map(|_| "final")
+                    .or(runtime_consumption.latest_kind.as_deref());
+                let retrieval_trust_source =
+                    evidence_snapshot_path.map(|_| "runtime_consumption_snapshot_index");
                 let retrieval_trust_signal = retrieval_trust_signal(
                     retrieval_trust_source,
-                    runtime_consumption.latest_snapshot_path.as_deref(),
-                    runtime_consumption.latest_kind.as_deref(),
+                    evidence_snapshot_path,
+                    evidence_snapshot_kind,
                     protocol_binding.latest_receipt_id.as_deref(),
                 );
                 if retrieval_trust_source.is_none() {
@@ -333,15 +348,13 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                             .to_string(),
                     );
                 }
-                if runtime_consumption.latest_snapshot_path.is_none() {
+                if evidence_snapshot_path.is_none() {
                     operator_blocker_codes.push(
                         blocker_code_str(BlockerCode::MissingRetrievalTrustOperatorEvidence)
                             .to_string(),
                     );
                 }
-                if runtime_consumption
-                    .latest_snapshot_path
-                    .as_deref()
+                if evidence_snapshot_path
                     .is_some_and(final_snapshot_missing_release_admission_evidence)
                 {
                     operator_blocker_codes.push(
@@ -513,7 +526,9 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
                 let operator_artifact_refs = serde_json::json!({
-                    "runtime_consumption_latest_snapshot_path": runtime_consumption.latest_snapshot_path,
+                    "runtime_consumption_latest_snapshot_path": latest_final_snapshot_path
+                        .as_ref()
+                        .or(runtime_consumption.latest_snapshot_path.as_ref()),
                     "latest_run_graph_dispatch_receipt_id": latest_run_graph_dispatch_receipt
                         .as_ref()
                         .map(|receipt| receipt.run_id.clone()),

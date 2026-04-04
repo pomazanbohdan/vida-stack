@@ -16,8 +16,10 @@ Default feature-delivery flow:
 6. When `.codex/**` is materialized, use the delegated Codex team surface instead of collapsing the root session directly into coding.
 7. Treat `vida.config.yaml` as the owner of carrier tiers and optional internal Codex aliases; project-visible activation should still use the selected carrier tier plus explicit runtime role.
 8. Let runtime map the current packet role into the cheapest capable carrier tier with a healthy local score from `.vida/state/worker-strategy.json`.
-9. Keep the root session in orchestration posture unless an explicit exception path is recorded.
-10. Prefer the launcher-owned intake/runtime progression surfaces over manual reconstruction:
+9. For normal write-producing work, treat project agent-first execution as the delegated lane flow through `vida agent-init`; host-tool-specific subagent APIs are optional executor details and not the canonical project control surface.
+10. Keep the root session in orchestration posture unless an explicit exception path is recorded.
+11. Finding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session coding; wait, reroute, or record the exception path first.
+12. Prefer the launcher-owned intake/runtime progression surfaces over manual reconstruction:
    - `vida taskflow consume final "<request>" --json` to materialize the routed intake, dispatch receipt, and first lawful packet
    - `vida taskflow consume continue [--run-id <run-id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]` to resume one persisted chain entry
    - `vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] [--json]` to let the bounded scheduler progress ready steps automatically

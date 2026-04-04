@@ -2948,6 +2948,31 @@ fn taskflow_consume_continue_resumes_from_persisted_final_snapshot() {
     let resumed_json: serde_json::Value =
         serde_json::from_slice(&resumed.stdout).expect("consume continue json should parse");
     assert_eq!(resumed_json["surface"], "vida taskflow consume continue");
+    assert_eq!(resumed_json["status"], "pass");
+    assert_eq!(
+        resumed_json["operator_contracts"]["contract_id"],
+        "release-1-operator-contracts"
+    );
+    assert_eq!(
+        resumed_json["operator_contracts"]["schema_version"],
+        "release-1-v1"
+    );
+    assert_eq!(
+        resumed_json["status"],
+        resumed_json["operator_contracts"]["status"]
+    );
+    assert_eq!(
+        resumed_json["blocker_codes"],
+        resumed_json["operator_contracts"]["blocker_codes"]
+    );
+    assert_eq!(
+        resumed_json["next_actions"],
+        resumed_json["operator_contracts"]["next_actions"]
+    );
+    assert_eq!(
+        resumed_json["artifact_refs"],
+        resumed_json["operator_contracts"]["artifact_refs"]
+    );
     assert_eq!(
         resumed_json["source_dispatch_packet_path"],
         dispatch_packet_path
@@ -3058,6 +3083,120 @@ fn taskflow_consume_continue_accepts_explicit_dispatch_packet_path() {
         "packet_ready"
     );
     assert!(resumed_json["dispatch_receipt"]["downstream_dispatch_target"].is_null());
+}
+
+#[test]
+fn taskflow_consume_continue_prefers_latest_final_snapshot_after_bundle_check() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let sync = vida()
+        .args(["taskflow", "protocol-binding", "sync", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("protocol-binding sync should run");
+    assert!(sync.status.success());
+
+    let initial = vida()
+        .args([
+            "taskflow",
+            "consume",
+            "final",
+            "continue development",
+            "--json",
+        ])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow consume final json should run");
+    assert!(initial.status.success());
+
+    let check = vida()
+        .args(["taskflow", "consume", "bundle", "check", "--json"])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow consume bundle check should run");
+    assert!(check.status.success());
+
+    let resumed = run_with_retry_until(
+        || {
+            vida()
+                .args(["taskflow", "consume", "continue", "--json"])
+                .env_remove("VIDA_ROOT")
+                .env_remove("VIDA_HOME")
+                .env("VIDA_STATE_DIR", &state_dir)
+                .output()
+                .expect("taskflow consume continue should run")
+        },
+        |output| output.status.success(),
+    );
+    assert!(
+        resumed.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&resumed.stdout),
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+
+    let resumed_json: serde_json::Value =
+        serde_json::from_slice(&resumed.stdout).expect("consume continue json should parse");
+    assert_eq!(resumed_json["surface"], "vida taskflow consume continue");
+    assert_eq!(resumed_json["status"], "pass");
+    let resumed_snapshot_path = resumed_json["snapshot_path"]
+        .as_str()
+        .expect("resume snapshot path should be present");
+    let resumed_snapshot_body: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(resumed_snapshot_path).expect("resume snapshot body should read"),
+    )
+    .expect("resume snapshot body should parse");
+    assert_eq!(
+        resumed_snapshot_body["operator_contracts"]["contract_id"],
+        "release-1-operator-contracts"
+    );
+    assert_eq!(
+        resumed_snapshot_body["status"],
+        resumed_snapshot_body["operator_contracts"]["status"]
+    );
+    assert_eq!(
+        resumed_json["dispatch_receipt"]["dispatch_target"],
+        "analysis"
+    );
+    assert_eq!(
+        resumed_json["dispatch_receipt"]["dispatch_status"],
+        "packet_ready"
+    );
+
+    let status = vida()
+        .args(["status", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("status json should run");
+    assert!(status.status.success());
+    let status_json: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("status json should parse");
+    assert_eq!(
+        status_json["artifact_refs"]["runtime_consumption_latest_snapshot_path"],
+        resumed_snapshot_path
+    );
+    assert_eq!(status_json["status"], "pass");
+    assert!(!status_json["blocker_codes"]
+        .as_array()
+        .is_some_and(|codes| codes
+            .iter()
+            .any(|code| code == "incomplete_release_admission_operator_evidence")));
+    assert!(!status_json["blocker_codes"]
+        .as_array()
+        .is_some_and(|codes| codes
+            .iter()
+            .any(|code| code == "missing_root_session_write_guard")));
 }
 
 #[test]
@@ -4422,6 +4561,12 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
         .expect("prompt should be present")
         .contains(
             "Host subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract."
+        ));
+    assert!(downstream_packet_json["prompt"]
+        .as_str()
+        .expect("prompt should be present")
+        .contains(
+            "Finding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session fallback; wait, reroute, or record the exception path first."
         ));
     assert!(parsed["payload"]["dispatch_receipt"]["activation_agent_type"].is_null());
     let matched_terms = parsed["payload"]["role_selection"]["matched_terms"]

@@ -160,8 +160,9 @@ Normalization rule:
 3. canonical delegated execution still routes through `vida agent-init`; host-tool-specific Codex subagent APIs are executor details and are not the primary project delegation surface,
 4. if delegation temporarily fails because of thread or lane saturation, attempt lawful reuse or recorded saturation recovery before accepting local-only continuation as the active posture.
 5. generic implementation intent is not a lane-change receipt and must not by itself authorize root-session coding.
-6. recorded saturation recovery must explicitly check whether any delegated Codex lanes already completed or were superseded and can now be closed/reclaimed before "agent limits" remains a valid blocker.
-7. worker wait timeout or empty poll result does not authorize replacing the packet cycle with one generic internal development lane.
+6. finding the patch location or reproducing a runtime defect is still read-only packet shaping evidence, not permission for root-session completion of the same write scope.
+7. recorded saturation recovery must explicitly check whether any delegated Codex lanes already completed or were superseded and can now be closed/reclaimed before "agent limits" remains a valid blocker.
+8. worker wait timeout or empty poll result does not authorize replacing the packet cycle with one generic internal development lane.
 
 Coach separation rule:
 

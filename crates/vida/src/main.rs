@@ -4500,7 +4500,7 @@ fn runtime_packet_prompt(
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nFirst substantive response: publish a concise plan before edits or implementation.\nLocal orchestrator coding is forbidden without an explicit exception path.\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
+        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nFirst substantive response: publish a concise plan before edits or implementation.\nLocal orchestrator coding is forbidden without an explicit exception path.\nFinding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session fallback; wait, reroute, or record the exception path first.\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
     )
 }
 
@@ -5822,6 +5822,89 @@ fn runtime_consumption_summary(state_root: &Path) -> Result<RuntimeConsumptionSu
         latest_kind: latest.as_ref().map(|(_, kind, _)| kind.clone()),
         latest_snapshot_path: latest.map(|(_, _, path)| path),
     })
+}
+
+fn runtime_consumption_snapshot_has_release_admission_evidence(
+    snapshot: &serde_json::Value,
+) -> bool {
+    let operator_contracts = match snapshot.get("operator_contracts") {
+        Some(value) => value,
+        None => return false,
+    };
+    crate::operator_contracts::shared_operator_output_contract_parity_error(snapshot).is_none()
+        && crate::operator_contracts::release1_operator_contracts_consistency_error(
+            snapshot["status"].as_str().unwrap_or(""),
+            &operator_contracts["blocker_codes"]
+                .as_array()
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+            &operator_contracts["next_actions"]
+                .as_array()
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+        )
+        .is_none()
+}
+
+fn latest_final_runtime_consumption_snapshot_path(
+    state_root: &Path,
+) -> Result<Option<String>, String> {
+    let snapshot_dir = state_root.join("runtime-consumption");
+    if !snapshot_dir.exists() {
+        return Ok(None);
+    }
+
+    let mut final_snapshots = Vec::<(SystemTime, String)>::new();
+    for entry in std::fs::read_dir(&snapshot_dir)
+        .map_err(|error| format!("Failed to read runtime-consumption directory: {error}"))?
+    {
+        let entry = entry
+            .map_err(|error| format!("Failed to inspect runtime-consumption entry: {error}"))?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if !file_name.starts_with("final-") {
+            continue;
+        }
+
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let path_display = path.display().to_string();
+        final_snapshots.push((modified, path_display));
+    }
+
+    final_snapshots.sort_by(|left, right| right.0.cmp(&left.0));
+
+    for (_, path_display) in final_snapshots {
+        let snapshot_body = match std::fs::read_to_string(&path_display) {
+            Ok(body) => body,
+            Err(_) => continue,
+        };
+        let snapshot = match serde_json::from_str::<serde_json::Value>(&snapshot_body) {
+            Ok(snapshot) => snapshot,
+            Err(_) => continue,
+        };
+        if runtime_consumption_snapshot_has_release_admission_evidence(&snapshot) {
+            return Ok(Some(path_display));
+        }
+    }
+
+    Ok(None)
 }
 
 fn normalize_root_arg(path: &Path) -> String {

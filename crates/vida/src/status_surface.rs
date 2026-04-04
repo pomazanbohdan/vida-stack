@@ -424,8 +424,14 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let mut host_agents = status_project_root
                     .as_deref()
                     .and_then(build_host_agent_status_summary);
+                let latest_final_snapshot_path =
+                    super::latest_final_runtime_consumption_snapshot_path(store.root())
+                        .ok()
+                        .flatten();
                 let root_session_write_guard = root_session_write_guard_summary_from_snapshot_path(
-                    runtime_consumption.latest_snapshot_path.as_deref(),
+                    latest_final_snapshot_path
+                        .as_deref()
+                        .or(runtime_consumption.latest_snapshot_path.as_deref()),
                 );
                 if let Some(host_agents_value) = host_agents.as_mut() {
                     if let Some(object) = host_agents_value.as_object_mut() {
@@ -449,12 +455,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let project_activation_pending = project_activation_status == Some("pending");
                 if as_json {
                     let mut operator_blocker_codes: Vec<String> = Vec::new();
-                    let incomplete_release_admission_operator_evidence =
-                        runtime_consumption.latest_kind.as_deref() != Some("final")
-                            || runtime_consumption
-                                .latest_snapshot_path
-                                .as_deref()
-                                .is_some_and(final_snapshot_missing_release_admission_evidence);
+                    let incomplete_release_admission_operator_evidence = latest_final_snapshot_path
+                        .as_deref()
+                        .map(final_snapshot_missing_release_admission_evidence)
+                        .unwrap_or(true);
                     if incomplete_release_admission_operator_evidence {
                         operator_blocker_codes.push(
                             blocker_code_str(
@@ -686,7 +690,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         );
                     }
                     let operator_artifact_refs = serde_json::json!({
-                        "runtime_consumption_latest_snapshot_path": runtime_consumption.latest_snapshot_path,
+                        "runtime_consumption_latest_snapshot_path": latest_final_snapshot_path
+                            .as_ref()
+                            .or(runtime_consumption.latest_snapshot_path.as_ref()),
                         "latest_run_graph_dispatch_receipt_id": latest_run_graph_dispatch_receipt
                             .as_ref()
                             .map(|receipt| receipt.run_id.clone()),

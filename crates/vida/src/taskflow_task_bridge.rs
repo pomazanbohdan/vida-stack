@@ -25,16 +25,11 @@ pub(crate) fn infer_project_root_from_state_root(state_root: &Path) -> Option<Pa
 }
 
 fn read_runtime_consumption_snapshot(state_root: &Path) -> Result<serde_json::Value, String> {
-    let summary = crate::runtime_consumption_summary(state_root)?;
-    if summary.latest_kind.as_deref() != Some("final") {
-        return Err(
+    let snapshot_path = crate::latest_final_runtime_consumption_snapshot_path(state_root)?
+        .ok_or_else(|| {
             "execution_preparation_gate_blocked: latest runtime-consumption snapshot is not `final`"
-                .to_string(),
-        );
-    }
-    let snapshot_path = summary.latest_snapshot_path.ok_or_else(|| {
-        "execution_preparation_gate_blocked: missing runtime-consumption snapshot".to_string()
-    })?;
+                .to_string()
+        })?;
     let snapshot_body = std::fs::read_to_string(&snapshot_path).map_err(|error| {
         format!(
             "execution_preparation_gate_blocked: failed to read runtime-consumption snapshot: {error}"

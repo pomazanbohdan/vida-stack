@@ -131,8 +131,125 @@ async fn validate_run_graph_resume_state(
 }
 
 fn resume_from_persisted_final_snapshot(store: &super::StateStore) -> Result<bool, String> {
-    let summary = super::runtime_consumption_summary(store.root())?;
-    Ok(summary.latest_kind.as_deref() == Some("final") && summary.latest_snapshot_path.is_some())
+    Ok(super::latest_final_runtime_consumption_snapshot_path(store.root())?.is_some())
+}
+
+fn emit_runtime_consumption_resume_json(
+    store: &super::StateStore,
+    surface_name: &str,
+    dispatch_packet_path: &str,
+    dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    emit_output: bool,
+    as_json: bool,
+) -> Result<(), String> {
+    let mut payload_json = serde_json::json!({
+        "dispatch_receipt": dispatch_receipt,
+        "role_selection": role_selection,
+        "source_dispatch_packet_path": dispatch_packet_path,
+        "source_run_id": dispatch_receipt.run_id,
+    });
+    let runtime_dispatch_receipt_blocker_code =
+        super::runtime_consumption_final_dispatch_receipt_blocker_code(store, &payload_json)?;
+    let mut blocker_codes = Vec::new();
+    let mut next_actions = Vec::new();
+    if let Some(blocker_code) = runtime_dispatch_receipt_blocker_code.as_deref() {
+        super::apply_runtime_consumption_final_dispatch_receipt_blocker(
+            &mut payload_json,
+            blocker_code,
+        );
+        blocker_codes.push(blocker_code.to_string());
+        next_actions.push(
+            match blocker_code {
+                super::RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_BLOCKER => {
+                    super::RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_NEXT_ACTION
+                }
+                _ => super::RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_NEXT_ACTION,
+            }
+            .to_string(),
+        );
+    }
+    let status = if blocker_codes.is_empty() {
+        "pass"
+    } else {
+        "blocked"
+    };
+    let snapshot = serde_json::json!({
+        "surface": surface_name,
+        "payload": payload_json,
+    });
+    let snapshot_path =
+        super::write_runtime_consumption_snapshot(store.root(), "final", &snapshot)?;
+    let operator_contracts = super::build_release1_operator_contracts_envelope(
+        status,
+        blocker_codes.clone(),
+        next_actions.clone(),
+        serde_json::json!({
+            "runtime_consumption_latest_snapshot_path": snapshot_path,
+            "latest_run_graph_dispatch_receipt_id": dispatch_receipt.run_id,
+            "latest_task_reconciliation_receipt_id": serde_json::Value::Null,
+            "consume_final_surface": surface_name,
+        }),
+    );
+    let shared_fields = serde_json::json!({
+        "status": operator_contracts["status"].clone(),
+        "blocker_codes": operator_contracts["blocker_codes"].clone(),
+        "next_actions": operator_contracts["next_actions"].clone(),
+        "artifact_refs": operator_contracts["artifact_refs"].clone(),
+    });
+    let snapshot_with_operator_contracts = serde_json::json!({
+        "surface": surface_name,
+        "status": status,
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "artifact_refs": operator_contracts["artifact_refs"].clone(),
+        "shared_fields": shared_fields.clone(),
+        "operator_contracts": operator_contracts.clone(),
+        "payload": payload_json,
+    });
+    std::fs::write(
+        &snapshot_path,
+        serde_json::to_string_pretty(&snapshot_with_operator_contracts)
+            .map_err(|error| format!("Failed to encode runtime-consumption snapshot: {error}"))?,
+    )
+    .map_err(|error| format!("Failed to write runtime-consumption snapshot: {error}"))?;
+    if !emit_output {
+        return Ok(());
+    }
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "surface": surface_name,
+                "status": status,
+                "blocker_codes": snapshot_with_operator_contracts["blocker_codes"].clone(),
+                "next_actions": snapshot_with_operator_contracts["next_actions"].clone(),
+                "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                "shared_fields": shared_fields,
+                "operator_contracts": operator_contracts,
+                "source_run_id": dispatch_receipt.run_id,
+                "source_dispatch_packet_path": dispatch_packet_path,
+                "dispatch_receipt": dispatch_receipt,
+                "snapshot_path": snapshot_path,
+            }))
+            .expect("resume command should render as json")
+        );
+    } else {
+        super::print_surface_header(super::RenderMode::Plain, surface_name);
+        super::print_surface_line(super::RenderMode::Plain, "status", status);
+        super::print_surface_line(
+            super::RenderMode::Plain,
+            "source run",
+            &dispatch_receipt.run_id,
+        );
+        super::print_surface_line(
+            super::RenderMode::Plain,
+            "source packet",
+            dispatch_packet_path,
+        );
+        super::print_surface_line(super::RenderMode::Plain, "snapshot path", &snapshot_path);
+    }
+    Ok(())
 }
 
 async fn validate_run_graph_resume_state_for_downstream_packet(
@@ -792,57 +909,21 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 eprintln!("Failed to record resumed run-graph dispatch receipt: {error}");
                 return ExitCode::from(1);
             }
-            let resume_snapshot = serde_json::json!({
-                "surface": surface_name,
-                "source_run_id": dispatch_receipt.run_id,
-                "source_dispatch_packet_path": dispatch_packet_path,
-                "dispatch_receipt": &dispatch_receipt,
-            });
-            let snapshot_path = match super::write_runtime_consumption_snapshot(
-                store.root(),
-                "final",
-                &resume_snapshot,
+            match emit_runtime_consumption_resume_json(
+                &store,
+                surface_name,
+                &dispatch_packet_path,
+                &dispatch_receipt,
+                &role_selection,
+                emit_output,
+                as_json,
             ) {
-                Ok(path) => path,
+                Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("{error}");
-                    return ExitCode::from(1);
+                    ExitCode::from(1)
                 }
-            };
-            if !emit_output {
-                return ExitCode::SUCCESS;
             }
-            if as_json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "surface": surface_name,
-                        "source_run_id": dispatch_receipt.run_id,
-                        "source_dispatch_packet_path": dispatch_packet_path,
-                        "dispatch_receipt": dispatch_receipt,
-                        "snapshot_path": snapshot_path,
-                    }))
-                    .expect("resume command should render as json")
-                );
-            } else {
-                super::print_surface_header(super::RenderMode::Plain, surface_name);
-                super::print_surface_line(
-                    super::RenderMode::Plain,
-                    "source run",
-                    &dispatch_receipt.run_id,
-                );
-                super::print_surface_line(
-                    super::RenderMode::Plain,
-                    "source packet",
-                    &dispatch_packet_path,
-                );
-                super::print_surface_line(
-                    super::RenderMode::Plain,
-                    "snapshot path",
-                    &snapshot_path,
-                );
-            }
-            ExitCode::SUCCESS
         }
         Err(error) => {
             eprintln!("Failed to open authoritative state store: {error}");
@@ -920,12 +1001,12 @@ pub(crate) async fn run_taskflow_consume_advance_command(
             .clone()
             .or_else(|| after_receipt.downstream_dispatch_packet_path.clone())
             .unwrap_or_else(|| "none".to_string());
-        let snapshot_path = match super::runtime_consumption_summary(store.root()) {
-            Ok(summary) => summary
-                .latest_snapshot_path
-                .unwrap_or_else(|| "none".to_string()),
-            Err(_) => "none".to_string(),
-        };
+        let snapshot_path =
+            match super::latest_final_runtime_consumption_snapshot_path(store.root()) {
+                Ok(Some(path)) => path,
+                Ok(None) => "none".to_string(),
+                Err(_) => "none".to_string(),
+            };
         last_result = Some((
             after_packet_path.clone(),
             after_receipt.clone(),

@@ -24,6 +24,7 @@ Use this template for one bounded feature/change design before implementation.
   - The project law is explicit about delegation-first, but some guidance still describes “agentic” or “delegated Codex team” behavior too generically.
   - That leaves room to misread project agent mode as host-level `spawn_agent` semantics instead of the canonical `vida agent-init` lane flow.
   - The startup/runtime guidance does not state strongly enough that host subagent APIs are optional carrier/executor details, not the canonical meaning of project-agent-first development.
+  - Runtime-consumption status and continuation also allowed one live ambiguity: a newer `bundle-check` snapshot could overshadow the latest valid `final` snapshot and re-open release-admission blockers even after lawful `consume final` evidence already existed.
 
 ## Goal
 - What this change should achieve
@@ -47,6 +48,7 @@ Use this template for one bounded feature/change design before implementation.
 - Must keep root-session write prohibition and exception-path law intact.
 - Must update both live bootstrap docs and scaffold sources when bootstrap carrier wording changes.
 - Must update runtime-generated operator/prompt surfaces so the distinction is visible during actual delegated execution.
+- Must ensure release-admission and continuation gates prefer the newest valid `final` runtime-consumption snapshot over newer non-final helper snapshots such as `bundle-check`.
 
 ### Non-Functional Requirements
 - Performance
@@ -152,9 +154,14 @@ Will implement / choose:
 - `docs/process/team-development-and-orchestration-protocol.md`
 - `docs/process/agent-system.md`
 - `docs/process/codex-agent-configuration-guide.md`
+- `docs/process/project-operations.md`
 - `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
 - `crates/vida/src/init_surfaces.rs`
 - `crates/vida/src/main.rs`
+- `crates/vida/src/status_surface.rs`
+- `crates/vida/src/doctor_surface.rs`
+- `crates/vida/src/taskflow_task_bridge.rs`
+- `crates/vida/src/taskflow_consume_resume.rs`
 - `crates/vida/tests/boot_smoke.rs`
 
 ## Fail-Closed Constraints
