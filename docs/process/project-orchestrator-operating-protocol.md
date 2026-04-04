@@ -89,6 +89,10 @@ Loop binding rule:
    - delegated handoff state is resolved,
    - no ready continuation item exists in TaskFlow unless the user explicitly requests stop/closure.
 7. if any pre-response gate check fails, continue orchestration and reporting through commentary updates only.
+8. after any green proof/build/test result, finished delegated lane, or intermediate report, the orchestrator must immediately bind the next lawful continuation item in the same cycle when one is already evidenced.
+9. “report now, continue later” is forbidden when the next lawful item is already known from TaskFlow, recovery state, delegated evidence, or the just-finished proof result.
+10. when the user gives an explicit ordered sequence, that sequence is the controlling execution contract; the orchestrator must not reorder it because some adjacent cleanup or broader technical program looks more complete.
+11. scope expansion is forbidden unless the current bounded step cannot be completed without it or the user explicitly authorizes the broader track.
 
 The orchestrator must not:
 
@@ -321,5 +325,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-operating-protocol.md
 created_at: '2026-03-13T18:40:00+02:00'
-updated_at: 2026-03-16T08:30:26.630461215Z
+updated_at: 2026-04-04T18:05:00+03:00
 changelog_ref: project-orchestrator-operating-protocol.changelog.jsonl

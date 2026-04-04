@@ -43,10 +43,6 @@ pub(crate) use config_value_utils::{
     load_project_overlay_yaml, split_csv_like, yaml_bool, yaml_lookup, yaml_string,
     yaml_string_list,
 };
-use docflow_cli::{
-    CheckArgs as DocflowCheckArgs, Cli as DocflowCli, Command as DocflowCommand,
-    ProofcheckArgs as DocflowProofcheckArgs, RegistryScanArgs,
-};
 pub(crate) use init_surfaces::resolve_init_bootstrap_source_root;
 pub(crate) use project_activator_surface::build_project_activator_view;
 pub(crate) use project_activator_surface::merge_project_activation_into_init_view;
@@ -161,6 +157,11 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> ExitCode {
+    if let Some(error) = prepare_runtime_state_dir(&cli.command) {
+        eprintln!("{error}");
+        return ExitCode::from(1);
+    }
+
     match cli.command {
         None => {
             print_root_help();
@@ -184,6 +185,36 @@ async fn run(cli: Cli) -> ExitCode {
         Some(Command::Taskflow(args)) => run_taskflow_proxy(args).await,
         Some(Command::Docflow(args)) => docflow_proxy::run_docflow_proxy(args),
         Some(Command::External(args)) => run_unknown(&args),
+    }
+}
+
+fn task_command_needs_project_root(args: &TaskArgs) -> bool {
+    !matches!(args.command, TaskCommand::Help(_))
+}
+
+fn prepare_runtime_state_dir(command: &Option<Command>) -> Option<String> {
+    if std::env::var_os("VIDA_STATE_DIR").is_some() {
+        return None;
+    }
+
+    let needs_project_root = match command {
+        Some(Command::Task(args)) => task_command_needs_project_root(args),
+        _ => false,
+    };
+
+    if !needs_project_root {
+        return None;
+    }
+
+    match resolve_runtime_project_root() {
+        Ok(project_root) => {
+            std::env::set_var(
+                "VIDA_STATE_DIR",
+                project_root.join(state_store::default_state_dir()),
+            );
+            None
+        }
+        Err(error) => Some(error),
     }
 }
 
@@ -929,6 +960,18 @@ fn print_json_pretty(value: &serde_json::Value) {
     );
 }
 
+fn runtime_assignment_alias_fields(
+    runtime_assignment: &serde_json::Value,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut fields = serde_json::Map::new();
+    fields.insert(
+        "carrier_runtime_assignment".to_string(),
+        runtime_assignment.clone(),
+    );
+    fields.insert("runtime_assignment".to_string(), runtime_assignment.clone());
+    fields
+}
+
 fn infer_task_class_from_task_payload(task: &serde_json::Value) -> String {
     let labels = task["labels"]
         .as_array()
@@ -1644,7 +1687,7 @@ fn summarize_agent_route_from_snapshot(
             runtime_role,
         )
     };
-    serde_json::json!({
+    let mut route_summary = serde_json::json!({
         "route_id": route_id,
         "carrier_backend_hint": json_string(json_lookup(route, &["subagents"])).unwrap_or_default(),
         "subagents": json_string(json_lookup(route, &["subagents"])).unwrap_or_default(),
@@ -1652,9 +1695,6 @@ fn summarize_agent_route_from_snapshot(
         "preferred_agent_type": runtime_assignment["selected_agent_id"],
         "preferred_agent_tier": runtime_assignment["selected_tier"],
         "preferred_runtime_role": runtime_assignment["runtime_role"],
-        "carrier_runtime_assignment": runtime_assignment.clone(),
-        "runtime_assignment": runtime_assignment.clone(),
-        "codex_runtime_assignment": runtime_assignment,
         "profiles": json_lookup(route, &["profiles"]).cloned().unwrap_or(serde_json::Value::Null),
         "write_scope": json_string(json_lookup(route, &["write_scope"])).unwrap_or_default(),
         "dispatch_required": json_string(json_lookup(route, &["dispatch_required"])).unwrap_or_default(),
@@ -1667,7 +1707,11 @@ fn summarize_agent_route_from_snapshot(
         "independent_verification_required": json_bool(json_lookup(route, &["independent_verification_required"]), false),
         "graph_strategy": json_string(json_lookup(route, &["graph_strategy"])).unwrap_or_default(),
         "internal_escalation_trigger": json_string(json_lookup(route, &["internal_escalation_trigger"])).unwrap_or_default(),
-    })
+    });
+    if let Some(summary) = route_summary.as_object_mut() {
+        summary.extend(runtime_assignment_alias_fields(&runtime_assignment));
+    }
+    route_summary
 }
 
 fn coach_review_terms(normalized_request: &str) -> Vec<String> {
@@ -2590,6 +2634,7 @@ fn build_runtime_orchestration_contract(
         "mode": "delegated_orchestration_cycle",
         "root_session_role": "orchestrator",
         "root_session_must_remain_orchestrator": true,
+        "root_session_write_guard": build_root_session_write_guard(),
         "initial_response": {
             "plan_required_before_substantive_execution": true,
             "plan_scope": "one bounded active cycle",
@@ -2619,6 +2664,16 @@ fn build_runtime_orchestration_contract(
             "trigger_rule": "replan after each bounded gate or delegated evidence return before the next write-producing step"
         },
         "active_cycle": active_cycle
+    })
+}
+
+fn build_root_session_write_guard() -> serde_json::Value {
+    serde_json::json!({
+        "status": "blocked_by_default",
+        "root_session_role": "orchestrator",
+        "local_write_requires_exception_path": true,
+        "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
+        "pre_write_checkpoint_required": true,
     })
 }
 
@@ -2665,7 +2720,7 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
         .as_array()
         .cloned()
         .unwrap_or_default();
-    serde_json::json!({
+    let mut execution_plan = serde_json::json!({
         "status": if requires_design_gate {
             "design_first"
         } else {
@@ -2784,9 +2839,6 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
             }
         },
         "tracked_flow_bootstrap": tracked_flow_bootstrap,
-        "carrier_runtime_assignment": runtime_assignment.clone(),
-        "runtime_assignment": runtime_assignment.clone(),
-        "codex_runtime_assignment": runtime_assignment,
         "development_flow": {
             "activation_status": if requires_design_gate {
                 "blocked_pending_design_packet"
@@ -2812,7 +2864,15 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
             "coach": summarize_agent_route_from_snapshot(compiled_bundle, agent_system, coach_route_id),
             "verification": summarize_agent_route_from_snapshot(compiled_bundle, agent_system, verification_route_id),
         },
-    })
+    });
+    if let Some(plan) = execution_plan.as_object_mut() {
+        plan.insert(
+            "root_session_write_guard".to_string(),
+            build_root_session_write_guard(),
+        );
+        plan.extend(runtime_assignment_alias_fields(&runtime_assignment));
+    }
+    execution_plan
 }
 
 fn role_exists_in_lane_bundle(bundle: &serde_json::Value, role_id: &str) -> bool {
@@ -3514,36 +3574,49 @@ fn build_docflow_runtime_evidence() -> (
     RuntimeConsumptionEvidence,
     RuntimeConsumptionOverview,
 ) {
-    let registry_root = resolve_repo_root()
-        .expect("docflow registry evidence should resolve the repo root")
-        .display()
-        .to_string();
-    let registry_output = docflow_cli::run(DocflowCli {
-        command: DocflowCommand::Registry(RegistryScanArgs {
-            root: registry_root.clone(),
-            exclude_globs: vec![],
-        }),
-    });
-    let check_output = docflow_cli::run(DocflowCli {
-        command: DocflowCommand::Check(DocflowCheckArgs {
-            root: None,
-            profile: "active-canon".to_string(),
-            files: Vec::new(),
-        }),
-    });
-    let readiness_output = docflow_cli::run(DocflowCli {
-        command: DocflowCommand::ReadinessCheck(DocflowCheckArgs {
-            root: None,
-            profile: "active-canon".to_string(),
-            files: Vec::new(),
-        }),
-    });
-    let proof_output = docflow_cli::run(DocflowCli {
-        command: DocflowCommand::Proofcheck(DocflowProofcheckArgs {
-            layer: None,
-            profile: "active-canon".to_string(),
-        }),
-    });
+    let registry_root = std::env::current_dir()
+        .ok()
+        .filter(|cwd| looks_like_project_root(cwd))
+        .or_else(|| resolve_repo_root().ok())
+        .expect("docflow registry evidence should resolve the repo root");
+    let registry_root = registry_root.display().to_string();
+    let registry_root_path = std::path::PathBuf::from(&registry_root);
+    let registry_output = crate::taskflow_spec_bootstrap::run_docflow_cli_command(
+        &registry_root_path,
+        &[
+            "registry".to_string(),
+            "--root".to_string(),
+            registry_root.clone(),
+        ],
+    )
+    .expect("docflow registry evidence should render");
+    let check_output = crate::taskflow_spec_bootstrap::run_docflow_cli_command(
+        &registry_root_path,
+        &[
+            "check".to_string(),
+            "--profile".to_string(),
+            "active-canon".to_string(),
+        ],
+    )
+    .expect("docflow check evidence should render");
+    let readiness_output = crate::taskflow_spec_bootstrap::run_docflow_cli_command(
+        &registry_root_path,
+        &[
+            "readiness-check".to_string(),
+            "--profile".to_string(),
+            "active-canon".to_string(),
+        ],
+    )
+    .expect("docflow readiness evidence should render");
+    let proof_output = crate::taskflow_spec_bootstrap::run_docflow_cli_command(
+        &registry_root_path,
+        &[
+            "proofcheck".to_string(),
+            "--profile".to_string(),
+            "active-canon".to_string(),
+        ],
+    )
+    .expect("docflow proof evidence should render");
 
     let registry_rows = count_nonempty_lines(&registry_output);
     let check_rows = count_nonempty_lines(&check_output);
@@ -5485,12 +5558,19 @@ fn emit_taskflow_consume_final_json(
             "consume_final_surface": "vida taskflow consume final",
         }),
     );
+    let shared_fields = serde_json::json!({
+        "status": operator_contracts["status"].clone(),
+        "blocker_codes": operator_contracts["blocker_codes"].clone(),
+        "next_actions": operator_contracts["next_actions"].clone(),
+        "artifact_refs": operator_contracts["artifact_refs"].clone(),
+    });
     let snapshot_with_operator_contracts = serde_json::json!({
         "surface": "vida taskflow consume final",
         "status": consume_final_status,
         "blocker_codes": consume_final_blocker_codes,
         "next_actions": consume_final_next_actions,
         "artifact_refs": operator_contracts["artifact_refs"].clone(),
+        "shared_fields": shared_fields.clone(),
         "operator_contracts": operator_contracts.clone(),
         "payload": payload_json,
     });
@@ -5508,6 +5588,7 @@ fn emit_taskflow_consume_final_json(
             "blocker_codes": consume_final_blocker_codes,
             "next_actions": consume_final_next_actions,
             "artifact_refs": operator_contracts["artifact_refs"].clone(),
+            "shared_fields": shared_fields,
             "operator_contracts": operator_contracts,
             "payload": payload_json,
             "snapshot_path": snapshot_path,
@@ -6831,9 +6912,8 @@ mod tests {
             let plan = build_runtime_execution_plan_from_snapshot(&bundle, &selection);
             let carrier_runtime_assignment = plan["carrier_runtime_assignment"].clone();
             let runtime_assignment = plan["runtime_assignment"].clone();
-            let legacy_runtime_assignment = plan["codex_runtime_assignment"].clone();
             assert_eq!(carrier_runtime_assignment, runtime_assignment);
-            assert_eq!(runtime_assignment, legacy_runtime_assignment);
+            assert!(plan["codex_runtime_assignment"].is_null());
             runtime_assignment
         };
         let implementation = assignment_for("write one bounded implementation patch");
@@ -7539,9 +7619,8 @@ mod tests {
 
         let carrier_runtime_assignment = plan["carrier_runtime_assignment"].clone();
         let runtime_assignment = plan["runtime_assignment"].clone();
-        let legacy_runtime_assignment = plan["codex_runtime_assignment"].clone();
         assert_eq!(carrier_runtime_assignment, runtime_assignment);
-        assert_eq!(runtime_assignment, legacy_runtime_assignment);
+        assert!(plan["codex_runtime_assignment"].is_null());
         assert!(runtime_assignment.get("internal_named_lane_id").is_none());
         assert_eq!(
             plan["development_flow"]["dispatch_contract"]["implementer_activation"]

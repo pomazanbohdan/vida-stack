@@ -21,3 +21,15 @@ Default feature-delivery flow:
    - `vida taskflow consume final "<request>" --json` to materialize the routed intake, dispatch receipt, and first lawful packet
    - `vida taskflow consume continue [--run-id <run-id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]` to resume one persisted chain entry
    - `vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] [--json]` to let the bounded scheduler progress ready steps automatically
+
+-----
+artifact_path: process/project-operations
+artifact_type: process_doc
+artifact_version: '1'
+artifact_revision: '2026-04-04'
+schema_version: '1'
+status: canonical
+source_path: docs/process/project-operations.md
+created_at: '2026-04-04T20:24:09+03:00'
+updated_at: '2026-04-04T20:24:09+03:00'
+changelog_ref: project-operations.changelog.jsonl

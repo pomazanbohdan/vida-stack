@@ -328,7 +328,7 @@ fn materialize_project_docs_scaffold(project_root: &Path) -> Result<(), String> 
     let project_title = super::inferred_project_title(&project_id, None);
     let source_root = resolve_init_bootstrap_source_root();
     let feature_template_source =
-        source_root.join("docs/framework/templates/feature-design-document.template.md");
+        source_root.join("docs/product/spec/templates/feature-design-document.template.md");
     let feature_template = std::fs::read_to_string(&feature_template_source).map_err(|error| {
         format!(
             "Failed to read framework feature-design template source {}: {error}",
@@ -367,7 +367,12 @@ fn materialize_project_docs_scaffold(project_root: &Path) -> Result<(), String> 
         ),
         (
             project_root.join(super::DEFAULT_PROJECT_DECISIONS_DOC),
-            "# Decisions\n\nRecord bounded architecture and product decisions here.\n".to_string(),
+            with_scaffold_footer(
+                "# Decisions\n\nRecord bounded architecture and product decisions here.\n",
+                "process/decisions",
+                "process_doc",
+                "docs/process/decisions.md",
+            ),
         ),
         (
             project_root.join(super::DEFAULT_PROJECT_ENVIRONMENTS_DOC),
@@ -397,21 +402,35 @@ fn materialize_project_docs_scaffold(project_root: &Path) -> Result<(), String> 
 
     for (path, content) in generated_files {
         write_file_if_missing(&path, &content)?;
+        if let Ok(relative_source_path) = path.strip_prefix(project_root) {
+            write_scaffold_changelog_if_missing(
+                &path,
+                relative_source_path,
+                scaffold_artifact_path_for(relative_source_path),
+                scaffold_artifact_type_for(relative_source_path),
+            )?;
+        }
     }
 
     Ok(())
 }
 
 pub(crate) fn render_project_readme(project_title: &str) -> String {
-    format!(
+    with_scaffold_footer(
+        &format!(
         "# {project_title}\n\n\
 This repository contains a VIDA-initialized project scaffold.\n\n\
 Use `AGENTS.md` for framework bootstrap, `AGENTS.sidecar.md` for project docs routing, and `docs/` for project-owned operating context.\n"
+        ),
+        "project/readme",
+        "document",
+        "README.md",
     )
 }
 
 pub(crate) fn render_project_root_map() -> String {
-    format!(
+    with_scaffold_footer(
+        &format!(
         "# Project Root Map\n\n\
 This project uses the following canonical documentation roots:\n\n\
 - `docs/product/` for product-facing intent and architecture notes\n\
@@ -433,22 +452,32 @@ Primary pointers:\n\n\
         super::DEFAULT_PROJECT_DOC_TOOLING_DOC,
         super::DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC,
         super::DEFAULT_PROJECT_RESEARCH_README
+        ),
+        "project/root-map",
+        "document",
+        "docs/project-root-map.md",
     )
 }
 
 pub(crate) fn render_project_product_index() -> String {
-    format!(
+    with_scaffold_footer(
+        &format!(
         "# Product Index\n\n\
 Product documentation currently contains:\n\n\
 - `{}` for the initial project architecture outline\n\
 - `{}` for bounded feature/change design and ADR routing\n",
         super::DEFAULT_PROJECT_ARCHITECTURE_DOC,
         super::DEFAULT_PROJECT_PRODUCT_SPEC_README
+        ),
+        "product/index",
+        "product_index",
+        "docs/product/index.md",
     )
 }
 
 pub(crate) fn render_project_product_spec_readme() -> String {
-    format!(
+    with_scaffold_footer(
+        &format!(
         "# Product Spec Guide\n\n\
 Use this directory for bounded product-facing feature/change design documents and linked ADRs.\n\n\
 Default rule:\n\n\
@@ -463,15 +492,29 @@ Suggested homes:\n\n\
 - `docs/product/spec/<feature>-design.md` for committed feature/change designs\n\
 - `docs/research/<topic>.md` for exploratory research before design closure\n",
         super::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE
+        ),
+        "product/spec/readme",
+        "product_spec",
+        "docs/product/spec/README.md",
     )
 }
 
 pub(crate) fn render_project_architecture_doc() -> String {
-    "# Architecture\n\nCurrent project posture:\n\n- VIDA bootstrap scaffold is initialized\n- project documentation roots are materialized\n- project-specific implementation modules are not yet defined\n".to_string()
+    with_scaffold_footer(
+        "# Architecture\n\nCurrent project posture:\n\n- VIDA bootstrap scaffold is initialized\n- project documentation roots are materialized\n- project-specific implementation modules are not yet defined\n",
+        "product/architecture",
+        "document",
+        "docs/product/architecture.md",
+    )
 }
 
 pub(crate) fn render_project_process_readme() -> String {
-    "# Process Docs\n\nThis directory contains the minimum process documentation expected by VIDA activation.\n\nAvailable process docs:\n\n- `decisions.md`\n- `environments.md`\n- `project-operations.md`\n- `agent-system.md`\n- `documentation-tooling-map.md`\n- `codex-agent-configuration-guide.md`\n".to_string()
+    with_scaffold_footer(
+        "# Process Docs\n\nThis directory contains the minimum process documentation expected by VIDA activation.\n\nAvailable process docs:\n\n- `decisions.md`\n- `environments.md`\n- `project-operations.md`\n- `agent-system.md`\n- `documentation-tooling-map.md`\n- `codex-agent-configuration-guide.md`\n",
+        "process/readme",
+        "process_doc",
+        "docs/process/README.md",
+    )
 }
 
 pub(crate) fn render_project_decisions_doc(answers: &super::ProjectActivationAnswers) -> String {
@@ -490,18 +533,24 @@ Initial activation decisions:\n\n\
 }
 
 pub(crate) fn render_project_environments_doc(project_root: &Path) -> String {
-    format!(
+    with_scaffold_footer(
+        &format!(
         "# Environments\n\n\
 Initial environment assumptions:\n\n\
 - local project root: `{}`\n\
 - VIDA runtime directories are managed under `.vida/`\n\
 - host CLI agent template is selected through `vida project-activator`\n",
         project_root.display()
+        ),
+        "process/environments",
+        "process_doc",
+        "docs/process/environments.md",
     )
 }
 
 pub(crate) fn render_project_operations_doc() -> String {
-    format!(
+    with_scaffold_footer(
+        &format!(
         "# Project Operations\n\n\
 Current operating baseline:\n\n\
 - bootstrap through `AGENTS.md` followed by the bounded VIDA init surfaces\n\
@@ -519,15 +568,25 @@ Default feature-delivery flow:\n\n\
 8. Let runtime map the current packet role into the cheapest capable carrier tier with a healthy local score from `.vida/state/worker-strategy.json`.\n\
 9. Keep the root session in orchestration posture unless an explicit exception path is recorded.\n",
         super::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE
+        ),
+        "process/project-operations",
+        "process_doc",
+        "docs/process/project-operations.md",
     )
 }
 
 pub(crate) fn render_project_agent_system_doc() -> String {
-    "# Agent System\n\nProject activation owns host CLI agent-template selection and runtime admission.\n\n- default framework host templates become available only after the selected host CLI template is materialized\n- supported host CLI systems are config-driven under `vida.config.yaml -> host_environment.systems`\n- built-in template roots currently include `.codex/**`, `.qwen/**`, `.kilo/**`, and `.opencode/**`\n- carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers` (Codex additionally keeps `vida.config.yaml -> host_environment.codex.agents` as the rendered tier-catalog source)\n- dispatch aliases are owned by the configured registry path under `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` and are not the primary project-visible agent model\n- the selected runtime surface is rendered under the configured runtime root and is not the owner of tier/rate/task-class policy\n- project activation materializes the selected host template using the configured `materialization_mode`; Codex renders `.codex/config.toml` and `.codex/agents/*.toml`, while external CLI systems use their own runtime root\n- runtime chooses the cheapest capable configured carrier tier that still satisfies the local score guard from `.vida/state/worker-strategy.json`\n- project-local agent extensions remain under `.vida/project/agent-extensions/`\n- research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists\n".to_string()
+    with_scaffold_footer(
+        "# Agent System\n\nProject activation owns host CLI agent-template selection and runtime admission.\n\n- default framework host templates become available only after the selected host CLI template is materialized\n- supported host CLI systems are config-driven under `vida.config.yaml -> host_environment.systems`\n- built-in template roots currently include `.codex/**`, `.qwen/**`, `.kilo/**`, and `.opencode/**`\n- carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers` (Codex additionally keeps `vida.config.yaml -> host_environment.codex.agents` as the rendered tier-catalog source)\n- dispatch aliases are owned by the configured registry path under `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` and are not the primary project-visible agent model\n- the selected runtime surface is rendered under the configured runtime root and is not the owner of tier/rate/task-class policy\n- project activation materializes the selected host template using the configured `materialization_mode`; Codex renders `.codex/config.toml` and `.codex/agents/*.toml`, while external CLI systems use their own runtime root\n- runtime chooses the cheapest capable configured carrier tier that still satisfies the local score guard from `.vida/state/worker-strategy.json`\n- project-local agent extensions remain under `.vida/project/agent-extensions/`\n- research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists\n",
+        "process/agent-system",
+        "process_doc",
+        "docs/process/agent-system.md",
+    )
 }
 
 pub(crate) fn render_project_doc_tooling_map() -> String {
-    format!(
+    with_scaffold_footer(
+        &format!(
         "# Documentation Tooling Map\n\n\
 Use `vida docflow` for documentation inventory, mutation, validation, and readiness checks.\n\n\
 Design-document rule:\n\n\
@@ -546,15 +605,114 @@ Activation rule:\n\n\
 2. `vida taskflow` and any non-canonical external TaskFlow runtime are not lawful activation-entry surfaces while activation is pending.\n\
 3. After activation writes, prefer `vida docflow` for documentation-oriented inspection and proof before multi-step implementation.\n",
         super::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE
+        ),
+        "process/documentation-tooling-map",
+        "process_doc",
+        "docs/process/documentation-tooling-map.md",
     )
 }
 
 pub(crate) fn render_project_research_readme() -> String {
-    "# Research Notes\n\nUse this directory for research artifacts, discovery notes, and external references that support future project work.\n".to_string()
+    with_scaffold_footer(
+        "# Research Notes\n\nUse this directory for research artifacts, discovery notes, and external references that support future project work.\n",
+        "research/readme",
+        "document",
+        "docs/research/README.md",
+    )
 }
 
 pub(crate) fn render_project_codex_guide() -> String {
-    "# Codex Agent Configuration Guide\n\nThis project uses framework-materialized `.codex/**` as the local Codex runtime surface.\n\nSource-of-truth rule:\n\n- `vida.config.yaml -> host_environment.codex.agents` owns carrier-tier metadata, rates, runtime-role fit, and task-class fit\n- `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` owns the dispatch-alias registry for executor-local overlays\n- `.codex/**` is the rendered executor surface used by Codex after activation\n- `.codex/config.toml` should expose the carrier tiers materialized from overlay\n\nCarrier rule:\n\n- the primary visible agent model is `junior`, `middle`, `senior`, `architect`\n- runtime role remains explicit activation state such as `worker`, `coach`, `verifier`, or `solution_architect`\n- internal alias ids may exist in registry state, but they must not replace the carrier-tier model at the project surface\n\nWorking rule:\n\n1. The root session stays the orchestrator.\n2. Documentation/specification work should complete the bounded design document first.\n3. Before delegated implementation starts, open the feature epic/spec task in `vida taskflow` and close the spec task only after the design artifact is finalized.\n4. After a bounded packet exists, route research, specification, planning, implementation, review, and verification through the configured tier ladder instead of collapsing into root-session coding.\n5. Let runtime choose the cheapest capable configured carrier tier with a healthy local score from `.vida/state/worker-strategy.json` and pass the lawful runtime role explicitly.\n6. Use `.vida/project/agent-extensions/**` for project-local role and skill overlays; do not treat `.codex/**` as the owner of framework or product law.\n".to_string()
+    with_scaffold_footer(
+        "# Codex Agent Configuration Guide\n\nThis project uses framework-materialized `.codex/**` as the local Codex runtime surface.\n\nSource-of-truth rule:\n\n- `vida.config.yaml -> host_environment.codex.agents` owns carrier-tier metadata, rates, runtime-role fit, and task-class fit\n- `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` owns the dispatch-alias registry for executor-local overlays\n- `.codex/**` is the rendered executor surface used by Codex after activation\n- `.codex/config.toml` should expose the carrier tiers materialized from overlay\n\nCarrier rule:\n\n- the primary visible agent model is `junior`, `middle`, `senior`, `architect`\n- runtime role remains explicit activation state such as `worker`, `coach`, `verifier`, or `solution_architect`\n- internal alias ids may exist in registry state, but they must not replace the carrier-tier model at the project surface\n\nWorking rule:\n\n1. The root session stays the orchestrator.\n2. Documentation/specification work should complete the bounded design document first.\n3. Before delegated implementation starts, open the feature epic/spec task in `vida taskflow` and close the spec task only after the design artifact is finalized.\n4. After a bounded packet exists, route research, specification, planning, implementation, review, and verification through the configured tier ladder instead of collapsing into root-session coding.\n5. Let runtime choose the cheapest capable configured carrier tier with a healthy local score from `.vida/state/worker-strategy.json` and pass the lawful runtime role explicitly.\n6. Use `.vida/project/agent-extensions/**` for project-local role and skill overlays; do not treat `.codex/**` as the owner of framework or product law.\n",
+        "process/codex-agent-configuration-guide",
+        "process_doc",
+        "docs/process/codex-agent-configuration-guide.md",
+    )
+}
+
+fn with_scaffold_footer(
+    body: &str,
+    artifact_path: &str,
+    artifact_type: &str,
+    source_path: &str,
+) -> String {
+    let changelog_ref = scaffold_changelog_ref_for(source_path);
+    format!(
+        "{body}\n-----\nartifact_path: {artifact_path}\nartifact_type: {artifact_type}\nartifact_version: '1'\nartifact_revision: '2026-04-04'\nschema_version: '1'\nstatus: scaffold\nsource_path: {source_path}\ncreated_at: '2026-04-04T00:00:00Z'\nupdated_at: '2026-04-04T00:00:00Z'\nchangelog_ref: {changelog_ref}\n"
+    )
+}
+
+fn scaffold_changelog_ref_for(source_path: &str) -> String {
+    let source_path = Path::new(source_path);
+    let stem = source_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("artifact");
+    format!("{stem}.changelog.jsonl")
+}
+
+fn scaffold_artifact_path_for(relative_source_path: &Path) -> &'static str {
+    match relative_source_path.to_string_lossy().as_ref() {
+        "README.md" => "project/readme",
+        "docs/project-root-map.md" => "project/root-map",
+        "docs/product/index.md" => "product/index",
+        "docs/product/architecture.md" => "product/architecture",
+        "docs/product/spec/README.md" => "product/spec/readme",
+        "docs/product/spec/templates/feature-design-document.template.md" => {
+            "product/spec/templates/feature-design-document.template"
+        }
+        "docs/process/README.md" => "process/readme",
+        "docs/process/agent-system.md" => "process/agent-system",
+        "docs/process/codex-agent-configuration-guide.md" => {
+            "process/codex-agent-configuration-guide"
+        }
+        "docs/process/decisions.md" => "process/decisions",
+        "docs/process/documentation-tooling-map.md" => "process/documentation-tooling-map",
+        "docs/process/environments.md" => "process/environments",
+        "docs/process/project-operations.md" => "process/project-operations",
+        "docs/research/README.md" => "research/readme",
+        _ => "project/scaffold-doc",
+    }
+}
+
+fn scaffold_artifact_type_for(relative_source_path: &Path) -> &'static str {
+    match relative_source_path.to_string_lossy().as_ref() {
+        "docs/process/README.md"
+        | "docs/process/agent-system.md"
+        | "docs/process/codex-agent-configuration-guide.md"
+        | "docs/process/decisions.md"
+        | "docs/process/documentation-tooling-map.md"
+        | "docs/process/environments.md"
+        | "docs/process/project-operations.md" => "process_doc",
+        "docs/product/index.md" => "product_index",
+        "docs/product/spec/README.md"
+        | "docs/product/spec/templates/feature-design-document.template.md" => "product_spec",
+        _ => "document",
+    }
+}
+
+fn write_scaffold_changelog_if_missing(
+    absolute_source_path: &Path,
+    relative_source_path: &Path,
+    artifact_path: &str,
+    artifact_type: &str,
+) -> Result<(), String> {
+    let parent = absolute_source_path.parent().ok_or_else(|| {
+        format!(
+            "Failed to determine scaffold parent directory for {}",
+            absolute_source_path.display()
+        )
+    })?;
+    let stem = absolute_source_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("artifact");
+    let changelog_path = parent.join(format!("{stem}.changelog.jsonl"));
+    let entry = format!(
+        "{{\"ts\":\"2026-04-04T00:00:00Z\",\"event\":\"metadata_initialized\",\"artifact_path\":\"{artifact_path}\",\"artifact_type\":\"{artifact_type}\",\"artifact_version\":\"1\",\"artifact_revision\":\"2026-04-04\",\"source_path\":\"{}\",\"reason\":\"initialize scaffold metadata for docflow-ready project bootstrap\",\"actor\":\"vida\",\"scope\":\"scaffold-init\",\"tags\":[\"scaffold\",\"docflow\"]}}\n",
+        relative_source_path.display()
+    );
+    write_file_if_missing(&changelog_path, &entry)
 }
 
 fn materialize_framework_agents_and_sidecar(

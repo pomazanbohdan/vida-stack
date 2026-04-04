@@ -242,7 +242,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!();
     println!("Usage:");
     println!("  vida taskflow <args...>");
-    println!("  vida taskflow help [task|next|graph-summary|consume|run-graph|recovery|doctor|protocol-binding]");
+    println!("  vida taskflow help [task|next|graph-summary|status|consume|run-graph|recovery|doctor|protocol-binding|query]");
     println!("  vida taskflow <command> --help");
     println!();
     println!("Purpose:");
@@ -265,8 +265,10 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  task        backlog inspection and mutation");
     println!("  next        aggregate next lawful step across backlog and recovery state");
     println!("  graph-summary  ready/blocked pressure plus critical-path summary");
+    println!("  status      family-scoped alias to the root operator status surface");
     println!("  run-graph   resumability and node-state inspection");
     println!("  consume     explicit TaskFlow -> final closure handoff");
+    println!("  query       launcher-owned command-discovery helper");
     println!(
         "  bootstrap-spec  one-shot epic/spec/doc bootstrap for design-first feature requests"
     );
@@ -276,6 +278,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida task ready --json");
     println!("  vida task next --json");
     println!("  vida taskflow graph-summary --json");
+    println!("  vida taskflow status --summary --json");
     println!("  vida task show <task-id> --json");
     println!("  vida taskflow run-graph status <task-id>");
     println!("  vida taskflow consume final \"proof path\" --json");
@@ -286,13 +289,17 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Operator recipes:");
     println!("  Find the next lawful step: vida task next --json");
     println!("  Inspect ready vs blocked pressure: vida taskflow graph-summary --json");
+    println!("  Inspect TaskFlow-wide operator posture: vida taskflow status --summary --json");
     println!("  Inspect the canonical backlog contract: vida task --help");
+    println!("  Ask which surface to use: vida taskflow query \"what should I run next?\"");
     println!("  Inspect resumability state: vida taskflow help run-graph");
     println!("  Review runtime diagnostics: vida taskflow help doctor");
     println!();
     println!("Failure modes:");
     println!("  Missing runtime family binary, ambiguous root, and unsupported delegated arguments fail closed.");
     println!("  Use topic help to inspect command contracts before mutating runtime state.");
+    println!("  A green test, successful build, or commentary update is not a stop boundary when a next lawful continuation item is already known.");
+    println!("  User-ordered execution takes priority over self-directed cleanup or adjacent development unless the user explicitly authorizes a broader scope.");
 }
 
 pub(crate) fn taskflow_help_topic(args: &[String]) -> Option<Option<&str>> {
@@ -522,6 +529,7 @@ fn print_taskflow_query_help() {
     println!();
     println!("Failure modes:");
     println!("  Vague queries fall back to `vida taskflow help`.");
+    println!("  Query/help output is advisory only and does not authorize stopping when a next lawful bounded step is already known.");
 }
 
 pub(crate) fn run_taskflow_query(args: &[String]) -> ExitCode {

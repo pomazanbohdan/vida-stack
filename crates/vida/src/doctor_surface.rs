@@ -86,6 +86,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
         .unwrap_or_else(super::state_store::default_state_dir);
     let render = args.render;
     let as_json = args.json;
+    let summary_only = args.summary;
 
     match super::StateStore::open_existing(state_dir).await {
         Ok(store) => {
@@ -199,6 +200,10 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
             };
+            let root_session_write_guard =
+                super::status_surface::root_session_write_guard_summary_from_snapshot_path(
+                    runtime_consumption.latest_snapshot_path.as_deref(),
+                );
             let protocol_binding = match store.protocol_binding_summary().await {
                 Ok(summary) => summary,
                 Err(error) => {
@@ -287,8 +292,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     CompatibilityBoundary::Compatible => {}
                     CompatibilityBoundary::BlockingSupported => {
                         operator_blocker_codes.push(
-                            blocker_code_str(BlockerCode::MigrationPreflightNotReady)
-                                .to_string(),
+                            blocker_code_str(BlockerCode::MigrationPreflightNotReady).to_string(),
                         );
                     }
                     CompatibilityBoundary::Unsupported => {
@@ -345,13 +349,17 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                             .to_string(),
                     );
                 }
+                if root_session_write_guard["status"].as_str() != Some("blocked_by_default") {
+                    operator_blocker_codes.push(
+                        blocker_code_str(BlockerCode::MissingRootSessionWriteGuard).to_string(),
+                    );
+                }
                 if latest_run_graph_recovery
                     .as_ref()
                     .is_some_and(|summary| !summary.recovery_ready)
                 {
-                    operator_blocker_codes.push(
-                        blocker_code_str(BlockerCode::RecoveryReadinessBlocked).to_string(),
-                    );
+                    operator_blocker_codes
+                        .push(blocker_code_str(BlockerCode::RecoveryReadinessBlocked).to_string());
                 }
                 if latest_run_graph_gate.as_ref().is_some_and(|summary| {
                     is_unsupported_architecture_reserved_workflow_boundary(&summary.policy_gate)
@@ -389,12 +397,9 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 {
                     operator_next_actions.push(boot_compatibility.next_step.clone());
                 }
-                if operator_blocker_codes
-                    .iter()
-                    .any(|code| {
-                        code == blocker_code_str(BlockerCode::BootCompatibilityUnsupportedBoundary)
-                    })
-                {
+                if operator_blocker_codes.iter().any(|code| {
+                    code == blocker_code_str(BlockerCode::BootCompatibilityUnsupportedBoundary)
+                }) {
                     operator_next_actions.push(
                         "Normalize boot compatibility classification to release-1 values: backward_compatible|reader_upgrade_required.".to_string(),
                     );
@@ -405,15 +410,9 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 {
                     operator_next_actions.push(migration_preflight.next_step.clone());
                 }
-                if operator_blocker_codes
-                    .iter()
-                    .any(|code| {
-                        code
-                            == blocker_code_str(
-                                BlockerCode::MigrationPreflightUnsupportedBoundary,
-                            )
-                    })
-                {
+                if operator_blocker_codes.iter().any(|code| {
+                    code == blocker_code_str(BlockerCode::MigrationPreflightUnsupportedBoundary)
+                }) {
                     operator_next_actions.push(
                         "Normalize migration preflight compatibility classification to release-1 values: backward_compatible|reader_upgrade_required.".to_string(),
                     );
@@ -425,68 +424,55 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     operator_next_actions
                         .push("Complete required migration before normal operation.".to_string());
                 }
-                if operator_blocker_codes
-                    .iter()
-                    .any(|code| {
-                        code == blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues)
-                    })
-                {
+                if operator_blocker_codes.iter().any(|code| {
+                    code == blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues)
+                }) {
                     operator_next_actions.push(
                         "Run `vida taskflow protocol-binding check --json` and clear blockers."
                             .to_string(),
                     );
                 }
-                if operator_blocker_codes
-                    .iter()
-                    .any(|code| {
-                        code
-                            == blocker_code_str(
-                                BlockerCode::MissingRetrievalTrustSignalOperatorEvidence,
-                            )
-                    })
-                {
+                if operator_blocker_codes.iter().any(|code| {
+                    code == blocker_code_str(
+                        BlockerCode::MissingRetrievalTrustSignalOperatorEvidence,
+                    )
+                }) {
                     operator_next_actions.push(
                         "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal."
                             .to_string(),
                     );
                 }
-                if operator_blocker_codes
-                    .iter()
-                    .any(|code| {
-                        code
-                            == blocker_code_str(
-                                BlockerCode::MissingRetrievalTrustSourceOperatorEvidence,
-                            )
-                    })
-                {
+                if operator_blocker_codes.iter().any(|code| {
+                    code == blocker_code_str(
+                        BlockerCode::MissingRetrievalTrustSourceOperatorEvidence,
+                    )
+                }) {
                     operator_next_actions.push(
                         "Run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence."
                             .to_string(),
                     );
                 }
-                if operator_blocker_codes
-                    .iter()
-                    .any(|code| {
-                        code
-                            == blocker_code_str(
-                                BlockerCode::MissingRetrievalTrustOperatorEvidence,
-                            )
-                    })
-                {
+                if operator_blocker_codes.iter().any(|code| {
+                    code == blocker_code_str(BlockerCode::MissingRetrievalTrustOperatorEvidence)
+                }) {
                     operator_next_actions.push(
                         "Run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence."
                             .to_string(),
                     );
                 }
-                if operator_blocker_codes
-                    .iter()
-                    .any(|code| {
-                        code
-                            == blocker_code_str(
-                                BlockerCode::IncompleteReleaseAdmissionOperatorEvidence,
-                            )
-                    })
-                {
+                if operator_blocker_codes.iter().any(|code| {
+                    code == blocker_code_str(BlockerCode::MissingRootSessionWriteGuard)
+                }) {
+                    operator_next_actions.push(
+                        "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard."
+                            .to_string(),
+                    );
+                }
+                if operator_blocker_codes.iter().any(|code| {
+                    code == blocker_code_str(
+                        BlockerCode::IncompleteReleaseAdmissionOperatorEvidence,
+                    )
+                }) {
                     operator_next_actions.push(
                         "Regenerate consume-final evidence so canonical risk/register, closure/readiness, and release-1 operator-contract fields are complete."
                             .to_string(),
@@ -494,9 +480,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 }
                 if operator_blocker_codes
                     .iter()
-                    .any(|code| {
-                        code == blocker_code_str(BlockerCode::RecoveryReadinessBlocked)
-                    })
+                    .any(|code| code == blocker_code_str(BlockerCode::RecoveryReadinessBlocked))
                 {
                     operator_next_actions.push(
                         "Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff."
@@ -538,6 +522,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         .as_ref()
                         .map(|receipt| receipt.receipt_id.clone()),
                     "effective_instruction_bundle_receipt_id": effective_instruction_bundle.receipt_id,
+                    "root_session_write_guard_status": root_session_write_guard["status"].clone(),
                 });
                 let operator_contracts = super::build_release1_operator_contracts_envelope(
                     operator_status,
@@ -545,94 +530,133 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     operator_next_actions,
                     operator_artifact_refs,
                 );
-                let summary_json = serde_json::json!({
-                    "surface": "vida doctor",
-                    "status": operator_contracts["status"].clone(),
-                    "blocker_codes": operator_contracts["blocker_codes"].clone(),
-                    "next_actions": operator_contracts["next_actions"].clone(),
-                    "artifact_refs": operator_contracts["artifact_refs"].clone(),
-                    "shared_fields": {
-                        "contract_id": "release-1-shared-fields",
-                        "schema_version": "release-1-v1",
+                let summary_json = if summary_only {
+                    serde_json::json!({
+                        "surface": "vida doctor",
+                        "view": "summary",
                         "status": operator_contracts["status"].clone(),
                         "blocker_codes": operator_contracts["blocker_codes"].clone(),
                         "next_actions": operator_contracts["next_actions"].clone(),
                         "artifact_refs": operator_contracts["artifact_refs"].clone(),
-                    },
-                    "operator_contracts": operator_contracts,
-                    "storage_metadata": {
-                        "engine": storage_metadata.engine,
-                        "backend": storage_metadata.backend,
-                        "namespace": storage_metadata.namespace,
-                        "database": storage_metadata.database,
-                        "state_schema_version": storage_metadata.state_schema_version,
-                        "instruction_schema_version": storage_metadata.instruction_schema_version,
-                    },
-                    "state_spine": {
-                        "state_schema_version": state_spine.state_schema_version,
-                        "entity_surface_count": state_spine.entity_surface_count,
-                        "authoritative_mutation_root": state_spine.authoritative_mutation_root,
-                    },
-                    "task_store": {
-                        "total_count": task_store.total_count,
-                        "open_count": task_store.open_count,
-                        "in_progress_count": task_store.in_progress_count,
-                        "closed_count": task_store.closed_count,
-                        "epic_count": task_store.epic_count,
-                        "ready_count": task_store.ready_count,
-                    },
-                    "run_graph": {
-                        "execution_plan_count": run_graph.execution_plan_count,
-                        "routed_run_count": run_graph.routed_run_count,
-                        "governance_count": run_graph.governance_count,
-                        "resumability_count": run_graph.resumability_count,
-                        "reconciliation_count": run_graph.reconciliation_count,
-                    },
-                    "launcher_runtime_paths": launcher_runtime_paths,
-                    "dependency_graph": {
-                        "issue_count": dependency_graph.len(),
-                    },
-                    "boot_compatibility": {
-                        "classification": boot_compatibility.classification,
-                        "reasons": boot_compatibility.reasons,
-                        "next_step": boot_compatibility.next_step,
-                    },
-                    "migration_preflight": {
-                        "compatibility_classification": canonical_compatibility_class_str(
-                            &migration_preflight.compatibility_classification
-                        ).unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str()),
-                        "migration_state": migration_preflight.migration_state,
-                        "blockers": migration_preflight.blockers,
-                        "source_version_tuple": migration_preflight.source_version_tuple,
-                        "next_step": migration_preflight.next_step,
-                    },
-                    "migration_receipts": {
-                        "compatibility_receipts": migration_receipts.compatibility_receipts,
-                        "application_receipts": migration_receipts.application_receipts,
-                        "verification_receipts": migration_receipts.verification_receipts,
-                        "cutover_readiness_receipts": migration_receipts.cutover_readiness_receipts,
-                        "rollback_notes": migration_receipts.rollback_notes,
-                    },
-                    "latest_task_reconciliation": latest_task_reconciliation,
-                    "task_reconciliation_rollup": task_reconciliation_rollup,
-                    "taskflow_snapshot_bridge": snapshot_bridge,
-                    "runtime_consumption": runtime_consumption,
-                    "protocol_binding": protocol_binding,
-                    "latest_run_graph_status": latest_run_graph_status,
-                    "latest_run_graph_delegation_gate": latest_run_graph_status.as_ref().map(|status| status.delegation_gate()),
-                    "latest_run_graph_recovery": latest_run_graph_recovery,
-                    "latest_run_graph_checkpoint": latest_run_graph_checkpoint,
-                    "latest_run_graph_gate": latest_run_graph_gate,
-                    "latest_run_graph_dispatch_receipt": latest_run_graph_dispatch_receipt,
-                    "effective_instruction_bundle": {
-                        "root_artifact_id": effective_instruction_bundle.root_artifact_id,
-                        "mandatory_chain_order": effective_instruction_bundle.mandatory_chain_order,
-                        "source_version_tuple": effective_instruction_bundle.source_version_tuple,
-                        "receipt_id": effective_instruction_bundle.receipt_id,
-                        "artifact_count": effective_instruction_bundle.projected_artifacts.len(),
-                    },
-                    "storage_metadata_display": storage_metadata_display,
-                });
+                        "shared_fields": {
+                            "contract_id": "release-1-shared-fields",
+                            "schema_version": "release-1-v1",
+                            "status": operator_contracts["status"].clone(),
+                            "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                            "next_actions": operator_contracts["next_actions"].clone(),
+                            "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                        },
+                        "operator_contracts": operator_contracts,
+                        "storage_metadata_display": storage_metadata_display,
+                        "dependency_graph": {
+                            "issue_count": dependency_graph.len(),
+                        },
+                        "boot_compatibility": {
+                            "classification": boot_compatibility.classification,
+                            "next_step": boot_compatibility.next_step,
+                        },
+                        "runtime_consumption": runtime_consumption,
+                        "root_session_write_guard": root_session_write_guard,
+                        "protocol_binding": protocol_binding,
+                        "latest_run_graph_recovery": latest_run_graph_recovery,
+                        "latest_run_graph_gate": latest_run_graph_gate,
+                        "effective_instruction_bundle": {
+                            "root_artifact_id": effective_instruction_bundle.root_artifact_id,
+                            "receipt_id": effective_instruction_bundle.receipt_id,
+                            "artifact_count": effective_instruction_bundle.projected_artifacts.len(),
+                        },
+                    })
+                } else {
+                    serde_json::json!({
+                        "surface": "vida doctor",
+                        "status": operator_contracts["status"].clone(),
+                        "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                        "next_actions": operator_contracts["next_actions"].clone(),
+                        "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                        "shared_fields": {
+                            "contract_id": "release-1-shared-fields",
+                            "schema_version": "release-1-v1",
+                            "status": operator_contracts["status"].clone(),
+                            "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                            "next_actions": operator_contracts["next_actions"].clone(),
+                            "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                        },
+                        "operator_contracts": operator_contracts,
+                        "storage_metadata": {
+                            "engine": storage_metadata.engine,
+                            "backend": storage_metadata.backend,
+                            "namespace": storage_metadata.namespace,
+                            "database": storage_metadata.database,
+                            "state_schema_version": storage_metadata.state_schema_version,
+                            "instruction_schema_version": storage_metadata.instruction_schema_version,
+                        },
+                        "state_spine": {
+                            "state_schema_version": state_spine.state_schema_version,
+                            "entity_surface_count": state_spine.entity_surface_count,
+                            "authoritative_mutation_root": state_spine.authoritative_mutation_root,
+                        },
+                        "task_store": {
+                            "total_count": task_store.total_count,
+                            "open_count": task_store.open_count,
+                            "in_progress_count": task_store.in_progress_count,
+                            "closed_count": task_store.closed_count,
+                            "epic_count": task_store.epic_count,
+                            "ready_count": task_store.ready_count,
+                        },
+                        "run_graph": {
+                            "execution_plan_count": run_graph.execution_plan_count,
+                            "routed_run_count": run_graph.routed_run_count,
+                            "governance_count": run_graph.governance_count,
+                            "resumability_count": run_graph.resumability_count,
+                            "reconciliation_count": run_graph.reconciliation_count,
+                        },
+                        "launcher_runtime_paths": launcher_runtime_paths,
+                        "dependency_graph": {
+                            "issue_count": dependency_graph.len(),
+                        },
+                        "boot_compatibility": {
+                            "classification": boot_compatibility.classification,
+                            "reasons": boot_compatibility.reasons,
+                            "next_step": boot_compatibility.next_step,
+                        },
+                        "migration_preflight": {
+                            "compatibility_classification": canonical_compatibility_class_str(
+                                &migration_preflight.compatibility_classification
+                            ).unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str()),
+                            "migration_state": migration_preflight.migration_state,
+                            "blockers": migration_preflight.blockers,
+                            "source_version_tuple": migration_preflight.source_version_tuple,
+                            "next_step": migration_preflight.next_step,
+                        },
+                        "migration_receipts": {
+                            "compatibility_receipts": migration_receipts.compatibility_receipts,
+                            "application_receipts": migration_receipts.application_receipts,
+                            "verification_receipts": migration_receipts.verification_receipts,
+                            "cutover_readiness_receipts": migration_receipts.cutover_readiness_receipts,
+                            "rollback_notes": migration_receipts.rollback_notes,
+                        },
+                        "latest_task_reconciliation": latest_task_reconciliation,
+                        "task_reconciliation_rollup": task_reconciliation_rollup,
+                        "taskflow_snapshot_bridge": snapshot_bridge,
+                        "runtime_consumption": runtime_consumption,
+                        "root_session_write_guard": root_session_write_guard,
+                        "protocol_binding": protocol_binding,
+                        "latest_run_graph_status": latest_run_graph_status,
+                        "latest_run_graph_delegation_gate": latest_run_graph_status.as_ref().map(|status| status.delegation_gate()),
+                        "latest_run_graph_recovery": latest_run_graph_recovery,
+                        "latest_run_graph_checkpoint": latest_run_graph_checkpoint,
+                        "latest_run_graph_gate": latest_run_graph_gate,
+                        "latest_run_graph_dispatch_receipt": latest_run_graph_dispatch_receipt,
+                        "effective_instruction_bundle": {
+                            "root_artifact_id": effective_instruction_bundle.root_artifact_id,
+                            "mandatory_chain_order": effective_instruction_bundle.mandatory_chain_order,
+                            "source_version_tuple": effective_instruction_bundle.source_version_tuple,
+                            "receipt_id": effective_instruction_bundle.receipt_id,
+                            "artifact_count": effective_instruction_bundle.projected_artifacts.len(),
+                        },
+                        "storage_metadata_display": storage_metadata_display,
+                    })
+                };
                 if let Some(error) = shared_operator_output_contract_parity_error(&summary_json) {
                     eprintln!("doctor json contract: failed ({error})");
                     return ExitCode::from(1);
@@ -718,6 +742,20 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 render,
                 "runtime consumption",
                 &runtime_consumption.as_display(),
+            );
+            super::print_surface_ok(
+                render,
+                "root session write guard",
+                &match root_session_write_guard["reason"].as_str() {
+                    Some(reason) => format!(
+                        "{} ({reason})",
+                        root_session_write_guard["status"].as_str().unwrap_or("unknown")
+                    ),
+                    None => root_session_write_guard["status"]
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_string(),
+                },
             );
             super::print_surface_ok(render, "protocol binding", &protocol_binding.as_display());
             match latest_run_graph_status {

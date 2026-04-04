@@ -79,22 +79,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 ExitCode::SUCCESS
             }
             Some(
-                "ready"
-                | "deps"
-                | "reverse-deps"
-                | "blocked"
-                | "tree"
-                | "critical-path"
-                | "next-display-id"
-                | "create"
-                | "update"
-                | "close"
-                | "list"
-                | "show"
-                | "import-jsonl"
-                | "export-jsonl"
-                | "validate-graph"
-                | "dep",
+                "ready" | "deps" | "reverse-deps" | "blocked" | "tree" | "critical-path"
+                | "next-display-id" | "create" | "update" | "close" | "list" | "show"
+                | "import-jsonl" | "export-jsonl" | "validate-graph" | "dep",
             ) => {
                 print_taskflow_proxy_help(Some("task"));
                 ExitCode::SUCCESS
@@ -184,7 +171,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     .await
                 {
                     Ok(tasks) => {
-                        print_task_list(command.render, &tasks, command.json);
+                        print_task_list(command.render, &tasks, command.summary, command.json);
                         ExitCode::SUCCESS
                     }
                     Err(error) => {
@@ -270,7 +257,12 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.ready_tasks_scoped(command.scope.as_deref()).await {
                     Ok(tasks) => {
-                        print_task_ready(command.render, command.scope.as_deref(), &tasks, command.json);
+                        print_task_ready(
+                            command.render,
+                            command.scope.as_deref(),
+                            &tasks,
+                            command.json,
+                        );
                         ExitCode::SUCCESS
                     }
                     Err(error) => {
@@ -518,6 +510,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 .clone()
                 .unwrap_or_else(state_store::default_state_dir);
             let project_root = project_root_for_task_state(&state_dir);
+            let feedback_source = command.source.as_deref().unwrap_or("vida task close");
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.close_task(&command.task_id, &command.reason).await {
                     Ok(task) => {
@@ -529,7 +522,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                                     project_root,
                                     &task_value,
                                     &command.reason,
-                                    "vida task close",
+                                    feedback_source,
                                 )
                             }
                             None => serde_json::json!({
@@ -638,7 +631,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.blocked_tasks().await {
                     Ok(tasks) => {
-                        print_blocked_tasks(command.render, &tasks, command.json);
+                        print_blocked_tasks(command.render, &tasks, command.summary, command.json);
                         ExitCode::SUCCESS
                     }
                     Err(error) => {

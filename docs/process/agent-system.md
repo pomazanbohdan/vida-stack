@@ -17,3 +17,15 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists
 - delegated worker dispatch still materializes through `vida agent-init` until the operator-surface promotion slice closes
 - for external CLI setups, `vida status --json` reports `host_agents.external_cli_preflight`; when sandbox is active and network is unavailable, preflight fails closed with actionable next steps
+
+-----
+artifact_path: process/agent-system
+artifact_type: process_doc
+artifact_version: '1'
+artifact_revision: '2026-04-04'
+schema_version: '1'
+status: canonical
+source_path: docs/process/agent-system.md
+created_at: '2026-04-04T20:24:09+03:00'
+updated_at: '2026-04-04T20:24:09+03:00'
+changelog_ref: agent-system.changelog.jsonl

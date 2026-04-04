@@ -97,6 +97,43 @@ fn run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action() -> &'stati
     "Refresh the latest checkpoint evidence for the run graph before rerunning `vida status --json` so checkpoint rows and dispatch receipt evidence share the same run_id."
 }
 
+fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> bool {
+    let payload = match std::fs::read_to_string(snapshot_path) {
+        Ok(payload) => payload,
+        Err(_) => return true,
+    };
+    let summary_json = match serde_json::from_str::<serde_json::Value>(&payload) {
+        Ok(json) => json,
+        Err(_) => return true,
+    };
+    let operator_contracts = match summary_json.get("operator_contracts") {
+        Some(value) => value,
+        None => return true,
+    };
+    crate::operator_contracts::shared_operator_output_contract_parity_error(&summary_json)
+        .is_some()
+        || crate::operator_contracts::release1_operator_contracts_consistency_error(
+            summary_json["status"].as_str().unwrap_or(""),
+            &operator_contracts["blocker_codes"]
+                .as_array()
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+            &operator_contracts["next_actions"]
+                .as_array()
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+        )
+        .is_some()
+}
+
 fn is_sandbox_active_from_env() -> bool {
     let candidates = [
         std::env::var("CODEX_SANDBOX_MODE").ok(),
@@ -149,13 +186,7 @@ fn external_cli_preflight_summary(
                 selected_cli_system,
             )
         })
-        .unwrap_or_else(|| {
-            if selected_cli_system == "codex" {
-                "internal".to_string()
-            } else {
-                "external".to_string()
-            }
-        });
+        .unwrap_or_else(|| "unknown".to_string());
     let selected_is_external = selected_execution_class == "external";
     let has_enabled_external_subagents =
         super::yaml_lookup(overlay, &["agent_system", "subagents"])
@@ -209,6 +240,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
         .unwrap_or_else(state_store::default_state_dir);
     let render = args.render;
     let as_json = args.json;
+    let summary_only = args.summary;
 
     match StateStore::open_existing(state_dir).await {
         Ok(store) => match store.storage_metadata_summary().await {
@@ -418,7 +450,19 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let project_activation_pending = project_activation_status == Some("pending");
                 if as_json {
                     let mut operator_blocker_codes: Vec<String> = Vec::new();
-                    if root_session_write_guard["status"].as_str() != Some("blocked_by_default") {
+                    let incomplete_release_admission_operator_evidence =
+                        runtime_consumption.latest_kind.as_deref() != Some("final")
+                            || runtime_consumption
+                                .latest_snapshot_path
+                                .as_deref()
+                                .is_some_and(final_snapshot_missing_release_admission_evidence);
+                    if incomplete_release_admission_operator_evidence {
+                        operator_blocker_codes.push(
+                            blocker_code_str(BlockerCode::IncompleteReleaseAdmissionOperatorEvidence)
+                                .to_string(),
+                        );
+                    } else if root_session_write_guard["status"].as_str() != Some("blocked_by_default")
+                    {
                         operator_blocker_codes.push(
                             blocker_code_str(BlockerCode::MissingRootSessionWriteGuard).to_string(),
                         );
@@ -508,8 +552,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         }
                         None => {
                             operator_blocker_codes.push(
-                                blocker_code_str(BlockerCode::ProjectActivationUnknown)
-                                    .to_string(),
+                                blocker_code_str(BlockerCode::ProjectActivationUnknown).to_string(),
                             );
                         }
                         _ => {}
@@ -544,12 +587,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             "Complete required migration before normal operation.".to_string(),
                         );
                     }
-                    if operator_blocker_codes
-                        .iter()
-                        .any(|code| {
-                            code == blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues)
-                        })
-                    {
+                    if operator_blocker_codes.iter().any(|code| {
+                        code == blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues)
+                    }) {
                         operator_next_actions.push(
                             "Run `vida taskflow protocol-binding check --json` and clear blockers."
                                 .to_string(),
@@ -579,74 +619,65 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 .to_string(),
                         );
                     }
-                    if operator_blocker_codes
-                        .iter()
-                        .any(|code| {
-                            code
-                                == blocker_code_str(
-                                    BlockerCode::MissingRunGraphDispatchReceiptOperatorEvidence,
-                                )
-                        })
-                    {
+                    if operator_blocker_codes.iter().any(|code| {
+                        code == blocker_code_str(
+                            BlockerCode::MissingRunGraphDispatchReceiptOperatorEvidence,
+                        )
+                    }) {
                         operator_next_actions.push(
                             "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff."
                                 .to_string(),
                         );
                     }
-                    if operator_blocker_codes
-                        .iter()
-                        .any(|code| {
-                            code == blocker_code_str(BlockerCode::RunGraphLatestSnapshotInconsistent)
-                        })
-                    {
+                    if operator_blocker_codes.iter().any(|code| {
+                        code == blocker_code_str(BlockerCode::RunGraphLatestSnapshotInconsistent)
+                    }) {
                         operator_next_actions
                             .push(run_graph_latest_snapshot_inconsistent_next_action().to_string());
                     }
-                    if operator_blocker_codes
-                        .iter()
-                        .any(|code| {
-                            code
-                                == blocker_code_str(
-                                    BlockerCode::RunGraphLatestDispatchReceiptSignalAmbiguous,
-                                )
-                        })
-                    {
+                    if operator_blocker_codes.iter().any(|code| {
+                        code == blocker_code_str(
+                            BlockerCode::RunGraphLatestDispatchReceiptSignalAmbiguous,
+                        )
+                    }) {
                         operator_next_actions.push(
                             run_graph_latest_dispatch_receipt_signal_ambiguous_next_action()
                                 .to_string(),
                         );
                     }
                     if operator_blocker_codes.iter().any(|code| {
-                        code
-                            == blocker_code_str(
-                                BlockerCode::RunGraphLatestDispatchReceiptSummaryInconsistent,
-                            )
+                        code == blocker_code_str(
+                            BlockerCode::RunGraphLatestDispatchReceiptSummaryInconsistent,
+                        )
                     }) {
                         operator_next_actions.push(
                             run_graph_latest_dispatch_receipt_summary_inconsistent_next_action()
                                 .to_string(),
                         );
                     }
-                    if operator_blocker_codes
-                        .iter()
-                        .any(|code| {
-                            code
-                                == blocker_code_str(
-                                    BlockerCode::RunGraphLatestDispatchReceiptCheckpointLeakage,
-                                )
-                        })
-                    {
+                    if operator_blocker_codes.iter().any(|code| {
+                        code == blocker_code_str(
+                            BlockerCode::RunGraphLatestDispatchReceiptCheckpointLeakage,
+                        )
+                    }) {
                         operator_next_actions.push(
                             run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action()
                                 .to_string(),
                         );
                     }
-                    if operator_blocker_codes
-                        .iter()
-                        .any(|code| {
-                            code == blocker_code_str(BlockerCode::MissingRootSessionWriteGuard)
-                        })
-                    {
+                    if operator_blocker_codes.iter().any(|code| {
+                        code == blocker_code_str(
+                            BlockerCode::IncompleteReleaseAdmissionOperatorEvidence,
+                        )
+                    }) {
+                        operator_next_actions.push(
+                            "Regenerate consume-final evidence so canonical risk/register, closure/readiness, and release-1 operator-contract fields are complete."
+                                .to_string(),
+                        );
+                    }
+                    if operator_blocker_codes.iter().any(|code| {
+                        code == blocker_code_str(BlockerCode::MissingRootSessionWriteGuard)
+                    }) {
                         operator_next_actions.push(
                             "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard."
                                 .to_string(),
@@ -696,83 +727,124 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         eprintln!("Failed to render status json: {error}");
                         return ExitCode::from(1);
                     }
-                    let summary_json = serde_json::json!({
-                        "surface": "vida status",
-                        "status": operator_contracts["status"].clone(),
-                        "blocker_codes": operator_contracts["blocker_codes"].clone(),
-                        "next_actions": operator_contracts["next_actions"].clone(),
-                        "artifact_refs": operator_contracts["artifact_refs"].clone(),
-                        "shared_fields": {
+                    let summary_json = if summary_only {
+                        serde_json::json!({
+                            "surface": "vida status",
+                            "view": "summary",
                             "status": operator_contracts["status"].clone(),
                             "blocker_codes": operator_contracts["blocker_codes"].clone(),
                             "next_actions": operator_contracts["next_actions"].clone(),
                             "artifact_refs": operator_contracts["artifact_refs"].clone(),
-                        },
-                        "operator_contracts": operator_contracts,
-                        "state_dir": store.root().display().to_string(),
-                        "storage_metadata": {
-                            "engine": storage_metadata.engine,
-                            "backend": storage_metadata.backend,
-                            "namespace": storage_metadata.namespace,
-                            "database": storage_metadata.database,
-                            "state_schema_version": storage_metadata.state_schema_version,
-                            "instruction_schema_version": storage_metadata.instruction_schema_version,
-                        },
-                        "backend_summary": backend_summary,
-                        "state_spine": {
-                            "state_schema_version": state_spine.state_schema_version,
-                            "entity_surface_count": state_spine.entity_surface_count,
-                            "authoritative_mutation_root": state_spine.authoritative_mutation_root,
-                        },
-                        "latest_effective_bundle_receipt": effective_bundle_receipt,
-                        "boot_compatibility": boot_compatibility.as_ref().map(|compatibility| serde_json::json!({
-                            "classification": canonical_compatibility_class_str(
-                                &compatibility.classification
-                            ).unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str()),
-                            "reasons": compatibility.reasons,
-                            "next_step": compatibility.next_step,
-                        })),
-                        "migration_state": migration_state.as_ref().map(|migration| serde_json::json!({
-                            "compatibility_classification": canonical_compatibility_class_str(
-                                &migration.compatibility_classification
-                            ).unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str()),
-                            "migration_state": migration.migration_state,
-                            "blockers": migration.blockers,
-                            "source_version_tuple": migration.source_version_tuple,
-                            "next_step": migration.next_step,
-                        })),
-                        "migration_receipts": {
-                            "compatibility_receipts": migration_receipts.compatibility_receipts,
-                            "application_receipts": migration_receipts.application_receipts,
-                            "verification_receipts": migration_receipts.verification_receipts,
-                            "cutover_readiness_receipts": migration_receipts.cutover_readiness_receipts,
-                            "rollback_notes": migration_receipts.rollback_notes,
-                        },
-                        "latest_task_reconciliation": latest_task_reconciliation,
-                        "task_reconciliation_rollup": task_reconciliation_rollup,
-                        "taskflow_snapshot_bridge": snapshot_bridge,
-                        "runtime_consumption": runtime_consumption,
-                        "protocol_binding": protocol_binding,
+                            "shared_fields": {
+                                "status": operator_contracts["status"].clone(),
+                                "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                                "next_actions": operator_contracts["next_actions"].clone(),
+                                "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                            },
+                            "operator_contracts": operator_contracts,
+                            "backend_summary": backend_summary,
+                            "state_spine": {
+                                "state_schema_version": state_spine.state_schema_version,
+                                "entity_surface_count": state_spine.entity_surface_count,
+                                "authoritative_mutation_root": state_spine.authoritative_mutation_root,
+                            },
                         "project_activation": activation_truth.as_ref().map(|truth| serde_json::json!({
                             "status": project_activation_status.unwrap_or("pending"),
                             "activation_pending": project_activation_pending,
                             "next_steps": truth.next_steps,
                         })).unwrap_or_else(|| serde_json::json!({
-                            "status": "unknown",
-                            "activation_pending": true,
-                            "next_steps": [
-                                "run `vida project-activator --json` from the project root to load canonical activation state"
-                            ],
+                                "status": "unknown",
+                                "activation_pending": true,
+                                "next_steps": [
+                                    "run `vida project-activator --json` from the project root to load canonical activation state"
+                                ],
                         })),
-                        "host_agents": host_agents_json_value(host_agents.as_ref()),
+                        "protocol_binding": protocol_binding,
                         "root_session_write_guard": root_session_write_guard,
                         "latest_run_graph_status": latest_run_graph_status,
-                        "latest_run_graph_delegation_gate": latest_run_graph_status.as_ref().map(|status| status.delegation_gate()),
                         "latest_run_graph_recovery": latest_run_graph_recovery,
-                        "latest_run_graph_checkpoint": latest_run_graph_checkpoint,
                         "latest_run_graph_gate": latest_run_graph_gate,
-                        "latest_run_graph_dispatch_receipt": latest_run_graph_dispatch_receipt,
-                    });
+                        "host_agents": host_agents_json_value(host_agents.as_ref()),
+                    })
+                    } else {
+                        serde_json::json!({
+                            "surface": "vida status",
+                            "status": operator_contracts["status"].clone(),
+                            "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                            "next_actions": operator_contracts["next_actions"].clone(),
+                            "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                            "shared_fields": {
+                                "status": operator_contracts["status"].clone(),
+                                "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                                "next_actions": operator_contracts["next_actions"].clone(),
+                                "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                            },
+                            "operator_contracts": operator_contracts,
+                            "state_dir": store.root().display().to_string(),
+                            "storage_metadata": {
+                                "engine": storage_metadata.engine,
+                                "backend": storage_metadata.backend,
+                                "namespace": storage_metadata.namespace,
+                                "database": storage_metadata.database,
+                                "state_schema_version": storage_metadata.state_schema_version,
+                                "instruction_schema_version": storage_metadata.instruction_schema_version,
+                            },
+                            "backend_summary": backend_summary,
+                            "state_spine": {
+                                "state_schema_version": state_spine.state_schema_version,
+                                "entity_surface_count": state_spine.entity_surface_count,
+                                "authoritative_mutation_root": state_spine.authoritative_mutation_root,
+                            },
+                            "latest_effective_bundle_receipt": effective_bundle_receipt,
+                            "boot_compatibility": boot_compatibility.as_ref().map(|compatibility| serde_json::json!({
+                                "classification": canonical_compatibility_class_str(
+                                    &compatibility.classification
+                                ).unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str()),
+                                "reasons": compatibility.reasons,
+                                "next_step": compatibility.next_step,
+                            })),
+                            "migration_state": migration_state.as_ref().map(|migration| serde_json::json!({
+                                "compatibility_classification": canonical_compatibility_class_str(
+                                    &migration.compatibility_classification
+                                ).unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str()),
+                                "migration_state": migration.migration_state,
+                                "blockers": migration.blockers,
+                                "source_version_tuple": migration.source_version_tuple,
+                                "next_step": migration.next_step,
+                            })),
+                            "migration_receipts": {
+                                "compatibility_receipts": migration_receipts.compatibility_receipts,
+                                "application_receipts": migration_receipts.application_receipts,
+                                "verification_receipts": migration_receipts.verification_receipts,
+                                "cutover_readiness_receipts": migration_receipts.cutover_readiness_receipts,
+                                "rollback_notes": migration_receipts.rollback_notes,
+                            },
+                            "latest_task_reconciliation": latest_task_reconciliation,
+                            "task_reconciliation_rollup": task_reconciliation_rollup,
+                            "taskflow_snapshot_bridge": snapshot_bridge,
+                            "runtime_consumption": runtime_consumption,
+                            "protocol_binding": protocol_binding,
+                            "project_activation": activation_truth.as_ref().map(|truth| serde_json::json!({
+                                "status": project_activation_status.unwrap_or("pending"),
+                                "activation_pending": project_activation_pending,
+                                "next_steps": truth.next_steps,
+                            })).unwrap_or_else(|| serde_json::json!({
+                                "status": "unknown",
+                                "activation_pending": true,
+                                "next_steps": [
+                                    "run `vida project-activator --json` from the project root to load canonical activation state"
+                                ],
+                            })),
+                            "host_agents": host_agents_json_value(host_agents.as_ref()),
+                            "root_session_write_guard": root_session_write_guard,
+                            "latest_run_graph_status": latest_run_graph_status,
+                            "latest_run_graph_delegation_gate": latest_run_graph_status.as_ref().map(|status| status.delegation_gate()),
+                            "latest_run_graph_recovery": latest_run_graph_recovery,
+                            "latest_run_graph_checkpoint": latest_run_graph_checkpoint,
+                            "latest_run_graph_gate": latest_run_graph_gate,
+                            "latest_run_graph_dispatch_receipt": latest_run_graph_dispatch_receipt,
+                        })
+                    };
                     if let Some(error) = shared_operator_output_contract_parity_error(&summary_json)
                     {
                         eprintln!("Failed to render status json: {error}");
@@ -837,10 +909,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 }
                 match boot_compatibility {
                     Some(compatibility) => {
-                        let compatibility_classification = canonical_compatibility_class_str(
-                            &compatibility.classification,
-                        )
-                        .unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str());
+                        let compatibility_classification =
+                            canonical_compatibility_class_str(&compatibility.classification)
+                                .unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str());
                         super::print_surface_line(
                             render,
                             "boot compatibility",
@@ -1372,13 +1443,7 @@ fn host_cli_system_entry_summary(
         .map(|value| {
             super::project_activator_surface::host_cli_system_execution_class(value, system)
         })
-        .unwrap_or_else(|| {
-            if system == "codex" {
-                "internal".to_string()
-            } else {
-                "external".to_string()
-            }
-        });
+        .unwrap_or_else(|| "unknown".to_string());
     let carriers = entry
         .and_then(|value| super::yaml_lookup(value, &["carriers"]))
         .filter(|value| !value.is_null())
@@ -1501,8 +1566,9 @@ fn host_agents_json_value(host_agents: Option<&serde_json::Value>) -> serde_json
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_activation_status, release1_operator_contracts_consistency_error,
-        selected_host_cli_system_entry, shared_operator_output_contract_parity_error,
+        canonical_activation_status, external_cli_preflight_summary, host_cli_system_entry_summary,
+        release1_operator_contracts_consistency_error, selected_host_cli_system_entry,
+        shared_operator_output_contract_parity_error,
     };
     use crate::state_store;
 
@@ -1661,6 +1727,27 @@ host_environment:
         let summary = super::external_cli_preflight_summary(&overlay, &selected, entry.as_ref());
         assert_eq!(summary["requires_external_cli"], false);
         assert_eq!(summary["selected_execution_class"], "internal");
+    }
+
+    #[test]
+    fn external_cli_preflight_defaults_to_unknown_without_registry_entry() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: codex
+  systems: {}
+"#,
+        )
+        .expect("overlay yaml should parse");
+
+        let summary = external_cli_preflight_summary(&overlay, "codex", None);
+        assert_eq!(summary["selected_execution_class"], "unknown");
+    }
+
+    #[test]
+    fn host_cli_system_entry_summary_defaults_execution_class_to_unknown_without_entry() {
+        let summary = host_cli_system_entry_summary(None, "codex");
+        assert_eq!(summary["execution_class"], "unknown");
     }
 
     #[test]

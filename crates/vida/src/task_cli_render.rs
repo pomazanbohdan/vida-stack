@@ -30,13 +30,41 @@ fn print_task_record(render: RenderMode, title: &str, task: &TaskRecord) {
     }
 }
 
-pub(crate) fn print_task_list(render: RenderMode, tasks: &[TaskRecord], as_json: bool) {
-    if crate::surface_render::print_surface_json(tasks, as_json, "task list should render as json")
-    {
+pub(crate) fn print_task_list(
+    render: RenderMode,
+    tasks: &[TaskRecord],
+    summary_only: bool,
+    as_json: bool,
+) {
+    let payload = if summary_only {
+        serde_json::json!({
+            "surface": "vida task list",
+            "view": "summary",
+            "task_count": tasks.len(),
+            "tasks": tasks.iter().map(|task| serde_json::json!({
+                "id": task.id,
+                "display_id": task.display_id,
+                "status": task.status,
+                "title": task.title,
+                "priority": task.priority,
+                "issue_type": task.issue_type,
+            })).collect::<Vec<_>>(),
+        })
+    } else {
+        serde_json::to_value(tasks).expect("task list should serialize")
+    };
+    if crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task list should render as json",
+    ) {
         return;
     }
 
     print_surface_header(render, "vida task");
+    if summary_only {
+        print_surface_line(render, "view", "summary");
+    }
     for task in tasks {
         println!("{}\t{}\t{}", task.id, task.status, task.title);
     }
@@ -224,13 +252,40 @@ pub(crate) fn print_task_dependencies(
     }
 }
 
-pub(crate) fn print_blocked_tasks(render: RenderMode, tasks: &[BlockedTaskRecord], as_json: bool) {
-    let payload = serde_json::json!({
-        "surface": "vida task blocked",
-        "status": "pass",
-        "blocked_count": tasks.len(),
-        "tasks": tasks,
-    });
+pub(crate) fn print_blocked_tasks(
+    render: RenderMode,
+    tasks: &[BlockedTaskRecord],
+    summary_only: bool,
+    as_json: bool,
+) {
+    let payload = if summary_only {
+        serde_json::json!({
+            "surface": "vida task blocked",
+            "view": "summary",
+            "status": "pass",
+            "blocked_count": tasks.len(),
+            "tasks": tasks.iter().map(|blocked| serde_json::json!({
+                "id": blocked.task.id,
+                "display_id": blocked.task.display_id,
+                "status": blocked.task.status,
+                "title": blocked.task.title,
+                "blocker_count": blocked.blockers.len(),
+                "blockers": blocked.blockers.iter().map(|blocker| serde_json::json!({
+                    "depends_on_id": blocker.depends_on_id,
+                    "edge_type": blocker.edge_type,
+                    "dependency_status": blocker.dependency_status,
+                    "dependency_issue_type": blocker.dependency_issue_type,
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        })
+    } else {
+        serde_json::json!({
+            "surface": "vida task blocked",
+            "status": "pass",
+            "blocked_count": tasks.len(),
+            "tasks": tasks,
+        })
+    };
     if crate::surface_render::print_surface_json(
         &payload,
         as_json,
@@ -240,6 +295,9 @@ pub(crate) fn print_blocked_tasks(render: RenderMode, tasks: &[BlockedTaskRecord
     }
 
     print_surface_header(render, "vida task blocked");
+    if summary_only {
+        print_surface_line(render, "view", "summary");
+    }
     if tasks.is_empty() {
         print_surface_line(render, "blocked tasks", "none");
         return;

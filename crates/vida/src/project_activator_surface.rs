@@ -578,9 +578,8 @@ pub(crate) fn materialize_host_cli_template(
                     .unwrap_or(serde_yaml::Value::Null),
             )
             .unwrap_or(serde_json::Value::Null);
-            let rendered_catalog_root = project_root.join(
-                host_cli_system_runtime_surface(&entry_ref, cli_system),
-            );
+            let rendered_catalog_root =
+                project_root.join(host_cli_system_runtime_surface(&entry_ref, cli_system));
             let carrier_roles = {
                 let overlay_roles = overlay_codex_agent_catalog(&overlay);
                 if overlay_roles.is_empty() {

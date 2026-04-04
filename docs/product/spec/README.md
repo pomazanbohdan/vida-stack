@@ -30,3 +30,15 @@ Active design docs:
 - `docs/product/spec/api-constraints-specification-make-bounded-patch-design.md`
 - `docs/product/spec/flappy-bird-flappy-bird-every-mechanism-design.md`
 - `docs/product/spec/spec-proof-auto-flow-design.md`
+
+-----
+artifact_path: product/spec/readme
+artifact_type: product_spec
+artifact_version: '1'
+artifact_revision: '2026-04-04'
+schema_version: '1'
+status: canonical
+source_path: docs/product/spec/README.md
+created_at: '2026-04-04T20:24:09+03:00'
+updated_at: '2026-04-04T20:24:09+03:00'
+changelog_ref: README.changelog.jsonl

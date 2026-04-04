@@ -65,6 +65,10 @@ Host CLI rule:
 7. Immediately after that terminal line, emit one extra blank line.
 8. Under sticky continuation intent, `final` channel/user-facing terminal wording is fail-closed forbidden; only `commentary`/progress updates are lawful until the user explicitly requests stop/closure.
 9. If a premature closure-style message is emitted by mistake, immediately re-enter commentary mode, acknowledge protocol violation, and continue TaskFlow dispatch without waiting for additional user confirmation.
+10. After any completed bounded step, green test, successful build, finished agent handoff, or intermediate report, immediately bind the next lawful continuation item and continue without waiting for additional user confirmation when continuation intent is active.
+11. Commentary is visibility only; it is never a lawful pause boundary by itself while a next bounded continuation item is already known.
+12. Under active user direction, the explicit user-ordered sequence has priority over the agent's own notion of technical completeness, cleanup order, or preferred development plan.
+13. The agent must not expand scope, reorder the user-specified sequence, or begin adjacent development tracks unless the current bounded step cannot be completed without that work or the user explicitly authorizes the expansion.
 
 -----
 artifact_path: install/assets/agents-scaffold
@@ -75,5 +79,5 @@ schema_version: '1'
 status: canonical
 source_path: install/assets/AGENTS.scaffold.md
 created_at: '2026-03-14T18:10:00+02:00'
-updated_at: '2026-03-14T18:10:00+02:00'
+updated_at: '2026-04-04T18:05:00+03:00'
 changelog_ref: AGENTS.scaffold.changelog.jsonl

@@ -6,10 +6,11 @@ use crate::taskflow_run_graph::{
     run_taskflow_recovery, run_taskflow_run_graph, run_taskflow_run_graph_mutation,
 };
 use crate::taskflow_spec_bootstrap::run_taskflow_bootstrap_spec;
-use crate::taskflow_task_bridge::{
-    enforce_execution_preparation_contract_gate, proxy_state_dir, proxy_state_dir_with_override,
+use crate::taskflow_task_bridge::{enforce_execution_preparation_contract_gate, proxy_state_dir};
+use crate::{
+    print_surface_header, print_surface_line, surface_render, taskflow_consume,
+    taskflow_protocol_binding, Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs,
 };
-use crate::{taskflow_consume, taskflow_protocol_binding, Command, ProxyArgs, RenderMode};
 use clap::Parser;
 
 fn parse_taskflow_next_args(
@@ -31,14 +32,18 @@ fn parse_taskflow_next_args(
             }
             "--scope" => {
                 let Some(task_id) = args.get(index + 1) else {
-                    return Err("Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]");
+                    return Err(
+                        "Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]",
+                    );
                 };
                 scope_task_id = Some(task_id.as_str());
                 index += 2;
             }
             "--state-dir" => {
                 let Some(path) = args.get(index + 1) else {
-                    return Err("Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]");
+                    return Err(
+                        "Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]",
+                    );
                 };
                 state_dir = Some(PathBuf::from(path));
                 index += 2;
@@ -47,7 +52,9 @@ fn parse_taskflow_next_args(
                 return Ok((false, Some("__help__"), None));
             }
             _ => {
-                return Err("Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]");
+                return Err(
+                    "Usage: vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]",
+                );
             }
         }
     }
@@ -76,14 +83,135 @@ async fn route_taskflow_doctor(args: &[String]) -> ExitCode {
     }
 }
 
-async fn route_taskflow_task(args: &[String]) -> ExitCode {
+async fn route_taskflow_status(args: &[String]) -> ExitCode {
     let argv = std::iter::once("vida".to_string())
-        .chain(std::iter::once("task".to_string()))
-        .chain(args.iter().skip(1).cloned())
+        .chain(args.iter().cloned())
         .collect::<Vec<_>>();
     match super::Cli::try_parse_from(argv) {
         Ok(cli) => match cli.command {
-            Some(Command::Task(task_args)) => crate::task_surface::run_task(task_args).await,
+            Some(Command::Status(mut status_args)) => {
+                if status_args.state_dir.is_none() {
+                    let state_dir = match resolve_taskflow_proxy_state_dir(None) {
+                        Ok(state_dir) => state_dir,
+                        Err(error) => {
+                            eprintln!("{error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                    status_args.state_dir = Some(state_dir);
+                }
+                crate::status_surface::run_status(status_args).await
+            }
+            _ => {
+                eprintln!("Unsupported `vida taskflow status` routing request.");
+                ExitCode::from(2)
+            }
+        },
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+async fn route_taskflow_ready(command: TaskReadyArgs) -> ExitCode {
+    let state_dir = match resolve_taskflow_proxy_state_dir(command.state_dir) {
+        Ok(state_dir) => state_dir,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+    let store = if state_dir.exists() {
+        crate::state_store::StateStore::open_existing(state_dir).await
+    } else {
+        crate::state_store::StateStore::open(state_dir).await
+    };
+    match store {
+        Ok(store) => match store.ready_tasks_scoped(command.scope.as_deref()).await {
+            Ok(tasks) => {
+                let payload =
+                    serde_json::to_value(&tasks).expect("taskflow ready payload should serialize");
+                if surface_render::print_surface_json(
+                    &payload,
+                    command.json,
+                    "taskflow ready payload should render as json",
+                ) {
+                    return ExitCode::SUCCESS;
+                }
+
+                print_surface_header(command.render, "vida taskflow task ready");
+                if tasks.is_empty() {
+                    print_surface_line(command.render, "ready tasks", "none");
+                    return ExitCode::SUCCESS;
+                }
+
+                for task in tasks {
+                    println!("{}\t{}\t{}", task.id, task.status, task.title);
+                }
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("Failed to compute taskflow ready tasks: {error}");
+                ExitCode::from(1)
+            }
+        },
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn taskflow_task_subcommand_supported(subcommand: &str) -> bool {
+    matches!(
+        subcommand,
+        "help"
+            | "import-jsonl"
+            | "export-jsonl"
+            | "list"
+            | "show"
+            | "ready"
+            | "next"
+            | "next-display-id"
+            | "create"
+            | "update"
+            | "close"
+            | "deps"
+            | "reverse-deps"
+            | "blocked"
+            | "tree"
+            | "validate-graph"
+            | "dep"
+            | "critical-path"
+    )
+}
+
+async fn route_taskflow_task(args: &[String]) -> ExitCode {
+    if let Some(subcommand) = args.get(1).map(String::as_str) {
+        if !subcommand.starts_with('-') && !taskflow_task_subcommand_supported(subcommand) {
+            eprintln!(
+                "Unsupported `vida taskflow task` subcommand. This launcher-owned task surface fails closed instead of delegating to the external TaskFlow runtime."
+            );
+            return ExitCode::from(2);
+        }
+    }
+
+    let mut argv = vec!["vida".to_string(), "task".to_string()];
+    if matches!(args.get(1).map(String::as_str), Some("close")) {
+        argv.push("close".to_string());
+        argv.push("--source".to_string());
+        argv.push("vida taskflow task close".to_string());
+        argv.extend(args.iter().skip(2).cloned());
+    } else {
+        argv.extend(args.iter().skip(1).cloned());
+    }
+    match super::Cli::try_parse_from(argv) {
+        Ok(cli) => match cli.command {
+            Some(Command::Task(task_args)) => match task_args.command {
+                TaskCommand::Ready(command) => route_taskflow_ready(command).await,
+                _ => crate::task_surface::run_task(task_args).await,
+            },
             _ => {
                 eprintln!(
                     "Unsupported `vida taskflow task` subcommand. This compatibility alias must match the canonical `vida task` contract."
@@ -95,6 +223,14 @@ async fn route_taskflow_task(args: &[String]) -> ExitCode {
             eprintln!("{error}");
             ExitCode::from(2)
         }
+    }
+}
+
+fn resolve_taskflow_proxy_state_dir(state_dir: Option<PathBuf>) -> Result<PathBuf, String> {
+    match state_dir {
+        Some(state_dir) => Ok(state_dir),
+        None => crate::resolve_runtime_project_root()
+            .map(|project_root| project_root.join(crate::state_store::default_state_dir())),
     }
 }
 
@@ -111,7 +247,13 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         }
     };
 
-    let state_dir = proxy_state_dir_with_override(state_dir.as_deref());
+    let state_dir = match resolve_taskflow_proxy_state_dir(state_dir) {
+        Ok(state_dir) => state_dir,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(1);
+        }
+    };
     let runtime_consumption = match crate::runtime_consumption_summary(&state_dir) {
         Ok(summary) => summary,
         Err(error) => {
@@ -473,6 +615,10 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
 
     if matches!(args.args.first().map(String::as_str), Some("doctor")) {
         return route_taskflow_doctor(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("status")) {
+        return route_taskflow_status(&args.args).await;
     }
 
     if matches!(

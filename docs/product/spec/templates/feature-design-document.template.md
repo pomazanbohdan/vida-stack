@@ -131,3 +131,15 @@ Will implement / choose:
 - Related protocols
 - Related ADRs
 - External references
+
+-----
+artifact_path: product/spec/templates/feature-design-document.template
+artifact_type: product_spec
+artifact_version: '1'
+artifact_revision: '2026-04-04'
+schema_version: '1'
+status: canonical
+source_path: docs/product/spec/templates/feature-design-document.template.md
+created_at: '2026-04-04T20:24:09+03:00'
+updated_at: '2026-04-04T20:24:09+03:00'
+changelog_ref: feature-design-document.template.changelog.jsonl

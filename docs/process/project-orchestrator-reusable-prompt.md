@@ -57,6 +57,10 @@ Execution rules:
    - classify next_leaf_required | blocked | fully_closed,
    - continue immediately when the next lawful item is already known.
 10. If in_work remains 1, any report is intermediate only and execution must continue after it.
+11. After any delegated agent return, verification pass, or successful tool result, launch the next lawful bounded step immediately unless a real blocker or explicit user stop request exists.
+12. Never treat “I have explained the result” as a lawful pause boundary.
+13. If the user gives an explicit ordered sequence, execute that order as written; do not replace it with your own cleanup-first, polish-first, or breadth-first plan.
+14. Do not widen scope into adjacent fixes, repo cleanup, or self-directed development unless the current bounded step cannot be completed without it or the user explicitly authorizes the wider track.
 
 Output style for each new or resumed session:
 
@@ -103,5 +107,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-reusable-prompt.md
 created_at: '2026-03-13T18:55:00+02:00'
-updated_at: '2026-03-13T21:35:00+02:00'
+updated_at: '2026-04-04T18:05:00+03:00'
 changelog_ref: project-orchestrator-reusable-prompt.changelog.jsonl

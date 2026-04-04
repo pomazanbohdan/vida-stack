@@ -189,6 +189,9 @@ pub(crate) struct TaskListArgs {
     #[arg(long = "all")]
     pub(crate) all: bool,
 
+    #[arg(long = "summary")]
+    pub(crate) summary: bool,
+
     #[arg(long = "json")]
     pub(crate) json: bool,
 }
@@ -302,6 +305,9 @@ pub(crate) struct TaskCloseArgs {
     #[arg(long = "reason")]
     pub(crate) reason: String,
 
+    #[arg(long = "source", hide = true)]
+    pub(crate) source: Option<String>,
+
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
 
@@ -360,6 +366,9 @@ pub(crate) struct TaskBlockedArgs {
 
     #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
     pub(crate) render: RenderMode,
+
+    #[arg(long = "summary")]
+    pub(crate) summary: bool,
 
     #[arg(long = "json")]
     pub(crate) json: bool,
@@ -506,6 +515,9 @@ pub(crate) struct StatusArgs {
     #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
     pub(crate) render: RenderMode,
 
+    #[arg(long = "summary")]
+    pub(crate) summary: bool,
+
     #[arg(long = "json")]
     pub(crate) json: bool,
 }
@@ -517,6 +529,9 @@ pub(crate) struct DoctorArgs {
 
     #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
     pub(crate) render: RenderMode,
+
+    #[arg(long = "summary")]
+    pub(crate) summary: bool,
 
     #[arg(long = "json")]
     pub(crate) json: bool,

@@ -521,9 +521,7 @@ impl BlockerCode {
             Self::MissingRunGraphDispatchReceiptOperatorEvidence => {
                 "missing_run_graph_dispatch_receipt_operator_evidence"
             }
-            Self::RunGraphLatestSnapshotInconsistent => {
-                "run_graph_latest_snapshot_inconsistent"
-            }
+            Self::RunGraphLatestSnapshotInconsistent => "run_graph_latest_snapshot_inconsistent",
             Self::RunGraphLatestDispatchReceiptSignalAmbiguous => {
                 "run_graph_latest_dispatch_receipt_signal_ambiguous"
             }
@@ -535,9 +533,7 @@ impl BlockerCode {
             }
             Self::ProjectActivationUnknown => "project_activation_unknown",
             Self::DependencyGraphIssues => "dependency_graph_issues",
-            Self::BootCompatibilityUnsupportedBoundary => {
-                "boot_compatibility_unsupported_boundary"
-            }
+            Self::BootCompatibilityUnsupportedBoundary => "boot_compatibility_unsupported_boundary",
             Self::MigrationPreflightUnsupportedBoundary => {
                 "migration_preflight_unsupported_boundary"
             }
