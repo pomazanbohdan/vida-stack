@@ -663,7 +663,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         },
                         "latest_effective_bundle_receipt": effective_bundle_receipt,
                         "boot_compatibility": boot_compatibility.as_ref().map(|compatibility| serde_json::json!({
-                            "classification": compatibility.classification,
+                            "classification": canonical_compatibility_class_str(
+                                &compatibility.classification
+                            ).unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str()),
                             "reasons": compatibility.reasons,
                             "next_step": compatibility.next_step,
                         })),
@@ -772,12 +774,16 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 }
                 match boot_compatibility {
                     Some(compatibility) => {
+                        let compatibility_classification = canonical_compatibility_class_str(
+                            &compatibility.classification,
+                        )
+                        .unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str());
                         super::print_surface_line(
                             render,
                             "boot compatibility",
                             &format!(
                                 "{} ({})",
-                                compatibility.classification, compatibility.next_step
+                                compatibility_classification, compatibility.next_step
                             ),
                         );
                     }
