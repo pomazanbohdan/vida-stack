@@ -5,8 +5,8 @@ use crate::operator_contracts::{
     shared_operator_output_contract_parity_error,
 };
 use crate::release1_contracts::{
-    canonical_compatibility_class_str, classify_compatibility_boundary, CompatibilityBoundary,
-    CompatibilityClass,
+    blocker_code_str, canonical_compatibility_class_str, classify_compatibility_boundary,
+    BlockerCode, CompatibilityBoundary, CompatibilityClass,
 };
 
 fn migration_requires_action(migration_state: &str) -> bool {
@@ -263,21 +263,22 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
             if as_json {
                 let mut operator_blocker_codes: Vec<String> = Vec::new();
                 if !dependency_graph.is_empty() {
-                    operator_blocker_codes.push("dependency_graph_issues".to_string());
+                    operator_blocker_codes
+                        .push(blocker_code_str(BlockerCode::DependencyGraphIssues).to_string());
                 }
                 match classify_compatibility_boundary(&boot_compatibility.classification) {
                     CompatibilityBoundary::Compatible => {}
                     CompatibilityBoundary::BlockingSupported => {
                         operator_blocker_codes.push(
-                            crate::release1_contracts::blocker_code_str(
-                                crate::release1_contracts::BlockerCode::BootCompatibilityNotCompatible,
-                            )
-                            .to_string(),
+                            blocker_code_str(BlockerCode::BootCompatibilityNotCompatible)
+                                .to_string(),
                         );
                     }
                     CompatibilityBoundary::Unsupported => {
-                        operator_blocker_codes
-                            .push("boot_compatibility_unsupported_boundary".to_string());
+                        operator_blocker_codes.push(
+                            blocker_code_str(BlockerCode::BootCompatibilityUnsupportedBoundary)
+                                .to_string(),
+                        );
                     }
                 }
                 match classify_compatibility_boundary(
@@ -286,22 +287,25 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     CompatibilityBoundary::Compatible => {}
                     CompatibilityBoundary::BlockingSupported => {
                         operator_blocker_codes.push(
-                            crate::release1_contracts::blocker_code_str(
-                                crate::release1_contracts::BlockerCode::MigrationPreflightNotReady,
-                            )
-                            .to_string(),
+                            blocker_code_str(BlockerCode::MigrationPreflightNotReady)
+                                .to_string(),
                         );
                     }
                     CompatibilityBoundary::Unsupported => {
-                        operator_blocker_codes
-                            .push("migration_preflight_unsupported_boundary".to_string());
+                        operator_blocker_codes.push(
+                            blocker_code_str(BlockerCode::MigrationPreflightUnsupportedBoundary)
+                                .to_string(),
+                        );
                     }
                 }
                 if migration_requires_action(&migration_preflight.migration_state) {
-                    operator_blocker_codes.push("migration_required".to_string());
+                    operator_blocker_codes
+                        .push(blocker_code_str(BlockerCode::MigrationRequired).to_string());
                 }
                 if protocol_binding.blocking_issue_count > 0 {
-                    operator_blocker_codes.push("protocol_binding_blocking_issues".to_string());
+                    operator_blocker_codes.push(
+                        blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues).to_string(),
+                    );
                 }
                 let retrieval_trust_source = runtime_consumption
                     .latest_snapshot_path
@@ -314,30 +318,40 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     protocol_binding.latest_receipt_id.as_deref(),
                 );
                 if retrieval_trust_source.is_none() {
-                    operator_blocker_codes
-                        .push("missing_retrieval_trust_source_operator_evidence".to_string());
+                    operator_blocker_codes.push(
+                        blocker_code_str(BlockerCode::MissingRetrievalTrustSourceOperatorEvidence)
+                            .to_string(),
+                    );
                 }
                 if retrieval_trust_signal.is_none() {
-                    operator_blocker_codes
-                        .push("missing_retrieval_trust_signal_operator_evidence".to_string());
+                    operator_blocker_codes.push(
+                        blocker_code_str(BlockerCode::MissingRetrievalTrustSignalOperatorEvidence)
+                            .to_string(),
+                    );
                 }
                 if runtime_consumption.latest_snapshot_path.is_none() {
-                    operator_blocker_codes
-                        .push("missing_retrieval_trust_operator_evidence".to_string());
+                    operator_blocker_codes.push(
+                        blocker_code_str(BlockerCode::MissingRetrievalTrustOperatorEvidence)
+                            .to_string(),
+                    );
                 }
                 if runtime_consumption
                     .latest_snapshot_path
                     .as_deref()
                     .is_some_and(final_snapshot_missing_release_admission_evidence)
                 {
-                    operator_blocker_codes
-                        .push("incomplete_release_admission_operator_evidence".to_string());
+                    operator_blocker_codes.push(
+                        blocker_code_str(BlockerCode::IncompleteReleaseAdmissionOperatorEvidence)
+                            .to_string(),
+                    );
                 }
                 if latest_run_graph_recovery
                     .as_ref()
                     .is_some_and(|summary| !summary.recovery_ready)
                 {
-                    operator_blocker_codes.push("recovery_readiness_blocked".to_string());
+                    operator_blocker_codes.push(
+                        blocker_code_str(BlockerCode::RecoveryReadinessBlocked).to_string(),
+                    );
                 }
                 if latest_run_graph_gate.as_ref().is_some_and(|summary| {
                     is_unsupported_architecture_reserved_workflow_boundary(&summary.policy_gate)
@@ -362,7 +376,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 let mut operator_next_actions: Vec<String> = Vec::new();
                 if operator_blocker_codes
                     .iter()
-                    .any(|code| code == "dependency_graph_issues")
+                    .any(|code| code == blocker_code_str(BlockerCode::DependencyGraphIssues))
                 {
                     operator_next_actions.push(
                         "Run `vida task validate-graph --json` and resolve graph issues."
@@ -377,7 +391,9 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 }
                 if operator_blocker_codes
                     .iter()
-                    .any(|code| code == "boot_compatibility_unsupported_boundary")
+                    .any(|code| {
+                        code == blocker_code_str(BlockerCode::BootCompatibilityUnsupportedBoundary)
+                    })
                 {
                     operator_next_actions.push(
                         "Normalize boot compatibility classification to release-1 values: backward_compatible|reader_upgrade_required.".to_string(),
@@ -391,7 +407,12 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 }
                 if operator_blocker_codes
                     .iter()
-                    .any(|code| code == "migration_preflight_unsupported_boundary")
+                    .any(|code| {
+                        code
+                            == blocker_code_str(
+                                BlockerCode::MigrationPreflightUnsupportedBoundary,
+                            )
+                    })
                 {
                     operator_next_actions.push(
                         "Normalize migration preflight compatibility classification to release-1 values: backward_compatible|reader_upgrade_required.".to_string(),
@@ -399,14 +420,16 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 }
                 if operator_blocker_codes
                     .iter()
-                    .any(|code| code == "migration_required")
+                    .any(|code| code == blocker_code_str(BlockerCode::MigrationRequired))
                 {
                     operator_next_actions
                         .push("Complete required migration before normal operation.".to_string());
                 }
                 if operator_blocker_codes
                     .iter()
-                    .any(|code| code == "protocol_binding_blocking_issues")
+                    .any(|code| {
+                        code == blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues)
+                    })
                 {
                     operator_next_actions.push(
                         "Run `vida taskflow protocol-binding check --json` and clear blockers."
@@ -415,7 +438,12 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 }
                 if operator_blocker_codes
                     .iter()
-                    .any(|code| code == "missing_retrieval_trust_signal_operator_evidence")
+                    .any(|code| {
+                        code
+                            == blocker_code_str(
+                                BlockerCode::MissingRetrievalTrustSignalOperatorEvidence,
+                            )
+                    })
                 {
                     operator_next_actions.push(
                         "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal."
@@ -424,7 +452,12 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 }
                 if operator_blocker_codes
                     .iter()
-                    .any(|code| code == "missing_retrieval_trust_source_operator_evidence")
+                    .any(|code| {
+                        code
+                            == blocker_code_str(
+                                BlockerCode::MissingRetrievalTrustSourceOperatorEvidence,
+                            )
+                    })
                 {
                     operator_next_actions.push(
                         "Run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence."
@@ -433,7 +466,12 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 }
                 if operator_blocker_codes
                     .iter()
-                    .any(|code| code == "missing_retrieval_trust_operator_evidence")
+                    .any(|code| {
+                        code
+                            == blocker_code_str(
+                                BlockerCode::MissingRetrievalTrustOperatorEvidence,
+                            )
+                    })
                 {
                     operator_next_actions.push(
                         "Run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence."
@@ -442,7 +480,12 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 }
                 if operator_blocker_codes
                     .iter()
-                    .any(|code| code == "incomplete_release_admission_operator_evidence")
+                    .any(|code| {
+                        code
+                            == blocker_code_str(
+                                BlockerCode::IncompleteReleaseAdmissionOperatorEvidence,
+                            )
+                    })
                 {
                     operator_next_actions.push(
                         "Regenerate consume-final evidence so canonical risk/register, closure/readiness, and release-1 operator-contract fields are complete."
@@ -451,7 +494,9 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 }
                 if operator_blocker_codes
                     .iter()
-                    .any(|code| code == "recovery_readiness_blocked")
+                    .any(|code| {
+                        code == blocker_code_str(BlockerCode::RecoveryReadinessBlocked)
+                    })
                 {
                     operator_next_actions.push(
                         "Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff."

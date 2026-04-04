@@ -2,7 +2,9 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use crate::{
-    release1_contracts::{canonical_compatibility_class_str, CompatibilityClass},
+    release1_contracts::{
+        blocker_code_str, canonical_compatibility_class_str, BlockerCode, CompatibilityClass,
+    },
     state_store,
     state_store::StateStore,
     StatusArgs,
@@ -417,7 +419,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 if as_json {
                     let mut operator_blocker_codes: Vec<String> = Vec::new();
                     if root_session_write_guard["status"].as_str() != Some("blocked_by_default") {
-                        operator_blocker_codes.push("missing_root_session_write_guard".to_string());
+                        operator_blocker_codes.push(
+                            blocker_code_str(BlockerCode::MissingRootSessionWriteGuard).to_string(),
+                        );
                     }
                     if boot_compatibility.as_ref().is_some_and(|compatibility| {
                         canonical_compatibility_class_str(&compatibility.classification)
@@ -444,34 +448,53 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     if migration_state.as_ref().is_some_and(|migration| {
                         migration_requires_action(&migration.migration_state)
                     }) {
-                        operator_blocker_codes.push("migration_required".to_string());
+                        operator_blocker_codes
+                            .push(blocker_code_str(BlockerCode::MigrationRequired).to_string());
                     }
                     if protocol_binding.blocking_issue_count > 0 {
-                        operator_blocker_codes.push("protocol_binding_blocking_issues".to_string());
+                        operator_blocker_codes.push(
+                            blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues)
+                                .to_string(),
+                        );
                     }
                     if latest_run_graph_gate.is_some()
                         && !latest_run_graph_dispatch_receipt_matches_status
                     {
                         operator_blocker_codes.push(
-                            "missing_run_graph_dispatch_receipt_operator_evidence".to_string(),
+                            blocker_code_str(
+                                BlockerCode::MissingRunGraphDispatchReceiptOperatorEvidence,
+                            )
+                            .to_string(),
                         );
                     }
                     if latest_run_graph_snapshot_inconsistent {
-                        operator_blocker_codes
-                            .push("run_graph_latest_snapshot_inconsistent".to_string());
+                        operator_blocker_codes.push(
+                            blocker_code_str(BlockerCode::RunGraphLatestSnapshotInconsistent)
+                                .to_string(),
+                        );
                     }
                     if latest_run_graph_dispatch_receipt_signal_ambiguous {
-                        operator_blocker_codes
-                            .push("run_graph_latest_dispatch_receipt_signal_ambiguous".to_string());
+                        operator_blocker_codes.push(
+                            blocker_code_str(
+                                BlockerCode::RunGraphLatestDispatchReceiptSignalAmbiguous,
+                            )
+                            .to_string(),
+                        );
                     }
                     if latest_run_graph_dispatch_receipt_summary_inconsistent {
                         operator_blocker_codes.push(
-                            "run_graph_latest_dispatch_receipt_summary_inconsistent".to_string(),
+                            blocker_code_str(
+                                BlockerCode::RunGraphLatestDispatchReceiptSummaryInconsistent,
+                            )
+                            .to_string(),
                         );
                     }
                     if latest_run_graph_dispatch_receipt_checkpoint_leakage {
                         operator_blocker_codes.push(
-                            "run_graph_latest_dispatch_receipt_checkpoint_leakage".to_string(),
+                            blocker_code_str(
+                                BlockerCode::RunGraphLatestDispatchReceiptCheckpointLeakage,
+                            )
+                            .to_string(),
                         );
                     }
                     match activation_truth.as_ref() {
@@ -484,7 +507,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             );
                         }
                         None => {
-                            operator_blocker_codes.push("project_activation_unknown".to_string());
+                            operator_blocker_codes.push(
+                                blocker_code_str(BlockerCode::ProjectActivationUnknown)
+                                    .to_string(),
+                            );
                         }
                         _ => {}
                     }
@@ -512,7 +538,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                     if operator_blocker_codes
                         .iter()
-                        .any(|code| code == "migration_required")
+                        .any(|code| code == blocker_code_str(BlockerCode::MigrationRequired))
                     {
                         operator_next_actions.push(
                             "Complete required migration before normal operation.".to_string(),
@@ -520,7 +546,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                     if operator_blocker_codes
                         .iter()
-                        .any(|code| code == "protocol_binding_blocking_issues")
+                        .any(|code| {
+                            code == blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues)
+                        })
                     {
                         operator_next_actions.push(
                             "Run `vida taskflow protocol-binding check --json` and clear blockers."
@@ -544,7 +572,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                     if operator_blocker_codes
                         .iter()
-                        .any(|code| code == "project_activation_unknown")
+                        .any(|code| code == blocker_code_str(BlockerCode::ProjectActivationUnknown))
                     {
                         operator_next_actions.push(
                             "Resolve project root detection and run `vida project-activator --json` to surface canonical activation state."
@@ -553,7 +581,12 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                     if operator_blocker_codes
                         .iter()
-                        .any(|code| code == "missing_run_graph_dispatch_receipt_operator_evidence")
+                        .any(|code| {
+                            code
+                                == blocker_code_str(
+                                    BlockerCode::MissingRunGraphDispatchReceiptOperatorEvidence,
+                                )
+                        })
                     {
                         operator_next_actions.push(
                             "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff."
@@ -562,14 +595,21 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                     if operator_blocker_codes
                         .iter()
-                        .any(|code| code == "run_graph_latest_snapshot_inconsistent")
+                        .any(|code| {
+                            code == blocker_code_str(BlockerCode::RunGraphLatestSnapshotInconsistent)
+                        })
                     {
                         operator_next_actions
                             .push(run_graph_latest_snapshot_inconsistent_next_action().to_string());
                     }
                     if operator_blocker_codes
                         .iter()
-                        .any(|code| code == "run_graph_latest_dispatch_receipt_signal_ambiguous")
+                        .any(|code| {
+                            code
+                                == blocker_code_str(
+                                    BlockerCode::RunGraphLatestDispatchReceiptSignalAmbiguous,
+                                )
+                        })
                     {
                         operator_next_actions.push(
                             run_graph_latest_dispatch_receipt_signal_ambiguous_next_action()
@@ -577,7 +617,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         );
                     }
                     if operator_blocker_codes.iter().any(|code| {
-                        code == "run_graph_latest_dispatch_receipt_summary_inconsistent"
+                        code
+                            == blocker_code_str(
+                                BlockerCode::RunGraphLatestDispatchReceiptSummaryInconsistent,
+                            )
                     }) {
                         operator_next_actions.push(
                             run_graph_latest_dispatch_receipt_summary_inconsistent_next_action()
@@ -586,7 +629,12 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                     if operator_blocker_codes
                         .iter()
-                        .any(|code| code == "run_graph_latest_dispatch_receipt_checkpoint_leakage")
+                        .any(|code| {
+                            code
+                                == blocker_code_str(
+                                    BlockerCode::RunGraphLatestDispatchReceiptCheckpointLeakage,
+                                )
+                        })
                     {
                         operator_next_actions.push(
                             run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action()
@@ -595,7 +643,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                     if operator_blocker_codes
                         .iter()
-                        .any(|code| code == "missing_root_session_write_guard")
+                        .any(|code| {
+                            code == blocker_code_str(BlockerCode::MissingRootSessionWriteGuard)
+                        })
                     {
                         operator_next_actions.push(
                             "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard."

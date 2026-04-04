@@ -429,6 +429,23 @@ pub(crate) enum BlockerCode {
     TaskflowBlockedDuringPendingActivation,
     MissingProtocolBindingReceipt,
     ProtocolBindingNotRuntimeReady,
+    MissingRootSessionWriteGuard,
+    MigrationRequired,
+    ProtocolBindingBlockingIssues,
+    MissingRunGraphDispatchReceiptOperatorEvidence,
+    RunGraphLatestSnapshotInconsistent,
+    RunGraphLatestDispatchReceiptSignalAmbiguous,
+    RunGraphLatestDispatchReceiptSummaryInconsistent,
+    RunGraphLatestDispatchReceiptCheckpointLeakage,
+    ProjectActivationUnknown,
+    DependencyGraphIssues,
+    BootCompatibilityUnsupportedBoundary,
+    MigrationPreflightUnsupportedBoundary,
+    MissingRetrievalTrustSourceOperatorEvidence,
+    MissingRetrievalTrustSignalOperatorEvidence,
+    MissingRetrievalTrustOperatorEvidence,
+    IncompleteReleaseAdmissionOperatorEvidence,
+    RecoveryReadinessBlocked,
     Unsupported,
 }
 
@@ -492,6 +509,45 @@ impl BlockerCode {
             }
             Self::MissingProtocolBindingReceipt => "missing_protocol_binding_receipt",
             Self::ProtocolBindingNotRuntimeReady => "protocol_binding_not_runtime_ready",
+            Self::MissingRootSessionWriteGuard => "missing_root_session_write_guard",
+            Self::MigrationRequired => "migration_required",
+            Self::ProtocolBindingBlockingIssues => "protocol_binding_blocking_issues",
+            Self::MissingRunGraphDispatchReceiptOperatorEvidence => {
+                "missing_run_graph_dispatch_receipt_operator_evidence"
+            }
+            Self::RunGraphLatestSnapshotInconsistent => {
+                "run_graph_latest_snapshot_inconsistent"
+            }
+            Self::RunGraphLatestDispatchReceiptSignalAmbiguous => {
+                "run_graph_latest_dispatch_receipt_signal_ambiguous"
+            }
+            Self::RunGraphLatestDispatchReceiptSummaryInconsistent => {
+                "run_graph_latest_dispatch_receipt_summary_inconsistent"
+            }
+            Self::RunGraphLatestDispatchReceiptCheckpointLeakage => {
+                "run_graph_latest_dispatch_receipt_checkpoint_leakage"
+            }
+            Self::ProjectActivationUnknown => "project_activation_unknown",
+            Self::DependencyGraphIssues => "dependency_graph_issues",
+            Self::BootCompatibilityUnsupportedBoundary => {
+                "boot_compatibility_unsupported_boundary"
+            }
+            Self::MigrationPreflightUnsupportedBoundary => {
+                "migration_preflight_unsupported_boundary"
+            }
+            Self::MissingRetrievalTrustSourceOperatorEvidence => {
+                "missing_retrieval_trust_source_operator_evidence"
+            }
+            Self::MissingRetrievalTrustSignalOperatorEvidence => {
+                "missing_retrieval_trust_signal_operator_evidence"
+            }
+            Self::MissingRetrievalTrustOperatorEvidence => {
+                "missing_retrieval_trust_operator_evidence"
+            }
+            Self::IncompleteReleaseAdmissionOperatorEvidence => {
+                "incomplete_release_admission_operator_evidence"
+            }
+            Self::RecoveryReadinessBlocked => "recovery_readiness_blocked",
             Self::Unsupported => "unsupported_blocker_code",
         }
     }
@@ -555,6 +611,45 @@ impl BlockerCode {
             }
             "missing_protocol_binding_receipt" => Some(Self::MissingProtocolBindingReceipt),
             "protocol_binding_not_runtime_ready" => Some(Self::ProtocolBindingNotRuntimeReady),
+            "missing_root_session_write_guard" => Some(Self::MissingRootSessionWriteGuard),
+            "migration_required" => Some(Self::MigrationRequired),
+            "protocol_binding_blocking_issues" => Some(Self::ProtocolBindingBlockingIssues),
+            "missing_run_graph_dispatch_receipt_operator_evidence" => {
+                Some(Self::MissingRunGraphDispatchReceiptOperatorEvidence)
+            }
+            "run_graph_latest_snapshot_inconsistent" => {
+                Some(Self::RunGraphLatestSnapshotInconsistent)
+            }
+            "run_graph_latest_dispatch_receipt_signal_ambiguous" => {
+                Some(Self::RunGraphLatestDispatchReceiptSignalAmbiguous)
+            }
+            "run_graph_latest_dispatch_receipt_summary_inconsistent" => {
+                Some(Self::RunGraphLatestDispatchReceiptSummaryInconsistent)
+            }
+            "run_graph_latest_dispatch_receipt_checkpoint_leakage" => {
+                Some(Self::RunGraphLatestDispatchReceiptCheckpointLeakage)
+            }
+            "project_activation_unknown" => Some(Self::ProjectActivationUnknown),
+            "dependency_graph_issues" => Some(Self::DependencyGraphIssues),
+            "boot_compatibility_unsupported_boundary" => {
+                Some(Self::BootCompatibilityUnsupportedBoundary)
+            }
+            "migration_preflight_unsupported_boundary" => {
+                Some(Self::MigrationPreflightUnsupportedBoundary)
+            }
+            "missing_retrieval_trust_source_operator_evidence" => {
+                Some(Self::MissingRetrievalTrustSourceOperatorEvidence)
+            }
+            "missing_retrieval_trust_signal_operator_evidence" => {
+                Some(Self::MissingRetrievalTrustSignalOperatorEvidence)
+            }
+            "missing_retrieval_trust_operator_evidence" => {
+                Some(Self::MissingRetrievalTrustOperatorEvidence)
+            }
+            "incomplete_release_admission_operator_evidence" => {
+                Some(Self::IncompleteReleaseAdmissionOperatorEvidence)
+            }
+            "recovery_readiness_blocked" => Some(Self::RecoveryReadinessBlocked),
             "unsupported_blocker_code" => Some(Self::Unsupported),
             _ => None,
         }
