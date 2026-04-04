@@ -225,8 +225,14 @@ pub(crate) fn print_task_dependencies(
 }
 
 pub(crate) fn print_blocked_tasks(render: RenderMode, tasks: &[BlockedTaskRecord], as_json: bool) {
+    let payload = serde_json::json!({
+        "surface": "vida task blocked",
+        "status": "pass",
+        "blocked_count": tasks.len(),
+        "tasks": tasks,
+    });
     if crate::surface_render::print_surface_json(
-        tasks,
+        &payload,
         as_json,
         "blocked tasks should render as json",
     ) {
@@ -258,8 +264,15 @@ pub(crate) fn print_task_dependency_tree(
     tree: &TaskDependencyTreeNode,
     as_json: bool,
 ) {
+    let payload = serde_json::json!({
+        "surface": "vida task tree",
+        "status": "pass",
+        "root_task_id": tree.task.id,
+        "dependency_count": tree.dependencies.len(),
+        "tree": tree,
+    });
     if crate::surface_render::print_surface_json(
-        tree,
+        &payload,
         as_json,
         "task dependency tree should render as json",
     ) {

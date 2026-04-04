@@ -314,6 +314,14 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
 
     let blocked_stdout = run_and_assert_success(&["task", "blocked", "--json"], &state_dir);
     assert!(
+        blocked_stdout.contains("\"surface\": \"vida task blocked\"")
+            || blocked_stdout.contains("\"surface\":\"vida task blocked\"")
+    );
+    assert!(
+        blocked_stdout.contains("\"blocked_count\": 1")
+            || blocked_stdout.contains("\"blocked_count\":1")
+    );
+    assert!(
         blocked_stdout.contains("\"id\": \"vida-b\"")
             || blocked_stdout.contains("\"id\":\"vida-b\"")
     );
@@ -323,6 +331,14 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
     );
 
     let tree_stdout = run_and_assert_success(&["task", "tree", "vida-b", "--json"], &state_dir);
+    assert!(
+        tree_stdout.contains("\"surface\": \"vida task tree\"")
+            || tree_stdout.contains("\"surface\":\"vida task tree\"")
+    );
+    assert!(
+        tree_stdout.contains("\"root_task_id\": \"vida-b\"")
+            || tree_stdout.contains("\"root_task_id\":\"vida-b\"")
+    );
     assert!(
         tree_stdout.contains("\"id\": \"vida-b\"") || tree_stdout.contains("\"id\":\"vida-b\"")
     );
@@ -394,7 +410,18 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
 
     let deps_after_remove_stdout =
         run_and_assert_success(&["task", "deps", "vida-c", "--json"], &state_dir);
-    assert_eq!(deps_after_remove_stdout.trim(), "[]");
+    assert!(
+        deps_after_remove_stdout.contains("\"surface\": \"vida task deps\"")
+            || deps_after_remove_stdout.contains("\"surface\":\"vida task deps\"")
+    );
+    assert!(
+        deps_after_remove_stdout.contains("\"task_id\": \"vida-c\"")
+            || deps_after_remove_stdout.contains("\"task_id\":\"vida-c\"")
+    );
+    assert!(
+        deps_after_remove_stdout.contains("\"dependency_count\": 0")
+            || deps_after_remove_stdout.contains("\"dependency_count\":0")
+    );
 
     let _ = fs::remove_dir_all(&state_dir);
 }

@@ -205,30 +205,35 @@ fn host_cli_system_registry(config: &serde_yaml::Value) -> HashMap<String, serde
     registry
 }
 
-fn default_codex_host_cli_entry() -> serde_yaml::Value {
-    serde_yaml::from_str(
-        r#"
-enabled: true
-execution_class: internal
-template_root: .codex
-runtime_root: .codex
-materialization_mode: codex_toml_catalog_render
-"#,
-    )
-    .unwrap_or(serde_yaml::Value::Null)
+fn builtin_host_cli_execution_class(system: &str) -> &'static str {
+    if system.eq_ignore_ascii_case("codex") {
+        "internal"
+    } else {
+        "external"
+    }
 }
 
-fn default_copy_tree_host_cli_entry(system: &str) -> serde_yaml::Value {
+fn builtin_host_cli_materialization_mode(system: &str) -> &'static str {
+    if system.eq_ignore_ascii_case("codex") {
+        "codex_toml_catalog_render"
+    } else {
+        "copy_tree_only"
+    }
+}
+
+fn default_builtin_host_cli_entry(system: &str) -> serde_yaml::Value {
     serde_yaml::from_str(&format!(
-        "enabled: true\nexecution_class: external\ntemplate_root: .{system}\nruntime_root: .{system}\nmaterialization_mode: copy_tree_only\n"
+        "enabled: true\nexecution_class: {}\ntemplate_root: .{system}\nruntime_root: .{system}\nmaterialization_mode: {}\n",
+        builtin_host_cli_execution_class(system),
+        builtin_host_cli_materialization_mode(system),
     ))
     .unwrap_or(serde_yaml::Value::Null)
 }
 
 fn builtin_host_cli_system_registry() -> HashMap<String, serde_yaml::Value> {
     let mut registry = HashMap::new();
-    registry.insert("codex".to_string(), default_codex_host_cli_entry());
-    registry.insert("qwen".to_string(), default_copy_tree_host_cli_entry("qwen"));
+    registry.insert("codex".to_string(), default_builtin_host_cli_entry("codex"));
+    registry.insert("qwen".to_string(), default_builtin_host_cli_entry("qwen"));
     registry
 }
 
@@ -274,13 +279,7 @@ fn host_cli_system_runtime_surface(entry: &serde_yaml::Value, system: &str) -> S
 
 fn host_cli_system_materialization_mode(entry: &serde_yaml::Value, system: &str) -> String {
     yaml_string(yaml_lookup(entry, &["materialization_mode"]))
-        .unwrap_or_else(|| {
-            if system == "codex" {
-                "codex_toml_catalog_render".to_string()
-            } else {
-                "copy_tree_only".to_string()
-            }
-        })
+        .unwrap_or_else(|| builtin_host_cli_materialization_mode(system).to_string())
         .to_ascii_lowercase()
 }
 
