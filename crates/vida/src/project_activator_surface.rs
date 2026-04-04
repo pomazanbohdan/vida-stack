@@ -1115,6 +1115,33 @@ pub(crate) fn synthesized_host_cli_carrier_catalog(system: &str) -> Vec<serde_js
     })]
 }
 
+fn host_cli_uses_rendered_carrier_catalog(entry: Option<&serde_yaml::Value>, system: &str) -> bool {
+    let null = serde_yaml::Value::Null;
+    let entry = entry.unwrap_or(&null);
+    host_cli_system_materialization_mode(entry, system) == "codex_toml_catalog_render"
+}
+
+fn resolve_host_cli_fallback_carrier_catalog(
+    system: &str,
+    entry: Option<&serde_yaml::Value>,
+    overlay: Option<&serde_yaml::Value>,
+    carrier_catalog_root: Option<&Path>,
+) -> Vec<serde_json::Value> {
+    if !host_cli_uses_rendered_carrier_catalog(entry, system) {
+        return synthesized_host_cli_carrier_catalog(system);
+    }
+
+    overlay
+        .map(overlay_codex_agent_catalog)
+        .filter(|rows| !rows.is_empty())
+        .or_else(|| {
+            carrier_catalog_root
+                .map(read_codex_agent_catalog)
+                .filter(|rows| !rows.is_empty())
+        })
+        .unwrap_or_default()
+}
+
 pub(crate) fn resolved_host_cli_agent_catalog_for_root(
     project_root: &Path,
     overlay: &serde_yaml::Value,
@@ -1128,15 +1155,17 @@ pub(crate) fn resolved_host_cli_agent_catalog_for_root(
     let registry = host_cli_system_registry_with_fallback(Some(overlay));
     let catalog_entry = registry.get(&selected_host_cli_system);
     let mut host_cli_agent_catalog = host_cli_entry_carrier_catalog(catalog_entry);
-    if host_cli_agent_catalog.is_empty() && selected_host_cli_system == "codex" {
-        let overlay_roles = overlay_codex_agent_catalog(overlay);
-        host_cli_agent_catalog = if overlay_roles.is_empty() {
-            read_codex_agent_catalog(&project_root.join(".codex"))
-        } else {
-            overlay_roles
-        };
-    } else if host_cli_agent_catalog.is_empty() {
-        host_cli_agent_catalog = synthesized_host_cli_carrier_catalog(&selected_host_cli_system);
+    if host_cli_agent_catalog.is_empty() {
+        let carrier_catalog_root = project_root.join(host_cli_system_runtime_surface(
+            catalog_entry.unwrap_or(&serde_yaml::Value::Null),
+            &selected_host_cli_system,
+        ));
+        host_cli_agent_catalog = resolve_host_cli_fallback_carrier_catalog(
+            &selected_host_cli_system,
+            catalog_entry,
+            Some(overlay),
+            Some(carrier_catalog_root.as_path()),
+        );
     }
     Ok((selected_host_cli_system, host_cli_agent_catalog))
 }
@@ -1523,23 +1552,14 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
         .as_deref()
         .map(list_host_cli_agent_templates)
         .unwrap_or_default();
-    let host_cli_agent_catalog = host_cli_entry_carrier_catalog(catalog_entry)
-        .into_iter()
-        .collect::<Vec<_>>();
-    let host_cli_agent_catalog = if host_cli_agent_catalog.is_empty() && catalog_system == "codex" {
-        project_overlay
-            .as_ref()
-            .map(overlay_codex_agent_catalog)
-            .filter(|rows| !rows.is_empty())
-            .or_else(|| {
-                host_cli_template_source_root
-                    .as_deref()
-                    .map(read_codex_agent_catalog)
-                    .filter(|rows| !rows.is_empty())
-            })
-            .unwrap_or_default()
-    } else if host_cli_agent_catalog.is_empty() {
-        synthesized_host_cli_carrier_catalog(&catalog_system)
+    let host_cli_agent_catalog = host_cli_entry_carrier_catalog(catalog_entry);
+    let host_cli_agent_catalog = if host_cli_agent_catalog.is_empty() {
+        resolve_host_cli_fallback_carrier_catalog(
+            &catalog_system,
+            catalog_entry,
+            project_overlay.as_ref(),
+            host_cli_template_source_root.as_deref(),
+        )
     } else {
         host_cli_agent_catalog
     };
