@@ -410,6 +410,13 @@ pub(crate) enum BlockerCode {
     SupersessionWithoutReceipt,
     LocalTakeoverForbidden,
     RecoveryNotTrustworthy,
+    InvalidControlCoreKeys,
+    MissingRootArtifactId,
+    MissingMandatoryChainOrder,
+    MissingEffectiveBundleArtifacts,
+    MissingBundleId,
+    MissingBundleSchemaVersion,
+    MissingAuthoritativeProtocolBindingImportEvidence,
     BootCompatibilityNotCompatible,
     MigrationPreflightNotReady,
     MissingProtocolBindingRows,
@@ -456,6 +463,15 @@ impl BlockerCode {
             Self::SupersessionWithoutReceipt => "supersession_without_receipt",
             Self::LocalTakeoverForbidden => "local_takeover_forbidden",
             Self::RecoveryNotTrustworthy => "recovery_not_trustworthy",
+            Self::InvalidControlCoreKeys => "invalid_control_core_keys",
+            Self::MissingRootArtifactId => "missing_root_artifact_id",
+            Self::MissingMandatoryChainOrder => "missing_mandatory_chain_order",
+            Self::MissingEffectiveBundleArtifacts => "missing_effective_bundle_artifacts",
+            Self::MissingBundleId => "missing_bundle_id",
+            Self::MissingBundleSchemaVersion => "missing_bundle_schema_version",
+            Self::MissingAuthoritativeProtocolBindingImportEvidence => {
+                "missing_authoritative_protocol_binding_import_evidence"
+            }
             Self::BootCompatibilityNotCompatible => "boot_incompatible",
             Self::MigrationPreflightNotReady => "migration_not_ready",
             Self::MissingProtocolBindingRows => "missing_protocol_binding_rows",
@@ -506,6 +522,15 @@ impl BlockerCode {
             "supersession_without_receipt" => Some(Self::SupersessionWithoutReceipt),
             "local_takeover_forbidden" => Some(Self::LocalTakeoverForbidden),
             "recovery_not_trustworthy" => Some(Self::RecoveryNotTrustworthy),
+            "invalid_control_core_keys" => Some(Self::InvalidControlCoreKeys),
+            "missing_root_artifact_id" => Some(Self::MissingRootArtifactId),
+            "missing_mandatory_chain_order" => Some(Self::MissingMandatoryChainOrder),
+            "missing_effective_bundle_artifacts" => Some(Self::MissingEffectiveBundleArtifacts),
+            "missing_bundle_id" => Some(Self::MissingBundleId),
+            "missing_bundle_schema_version" => Some(Self::MissingBundleSchemaVersion),
+            "missing_authoritative_protocol_binding_import_evidence" => {
+                Some(Self::MissingAuthoritativeProtocolBindingImportEvidence)
+            }
             "boot_incompatible" => Some(Self::BootCompatibilityNotCompatible),
             "migration_not_ready" => Some(Self::MigrationPreflightNotReady),
             "missing_protocol_binding_rows" => Some(Self::MissingProtocolBindingRows),

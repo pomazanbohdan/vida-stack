@@ -339,18 +339,38 @@ pub(crate) fn taskflow_consume_bundle_check(
                 .all(|key| is_canonical_release1_control_core_key(key))
         })
     {
-        blockers.push("invalid_control_core_keys".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::InvalidControlCoreKeys,
+            )
+            .to_string(),
+        );
     }
     let metadata = &payload.metadata;
 
     if root_artifact_id.is_empty() {
-        blockers.push("missing_root_artifact_id".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::MissingRootArtifactId,
+            )
+            .to_string(),
+        );
     }
     if bundle_order == 0 {
-        blockers.push("missing_mandatory_chain_order".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::MissingMandatoryChainOrder,
+            )
+            .to_string(),
+        );
     }
     if artifact_count == 0 {
-        blockers.push("missing_effective_bundle_artifacts".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::MissingEffectiveBundleArtifacts,
+            )
+            .to_string(),
+        );
     }
     if metadata
         .get("bundle_id")
@@ -358,7 +378,12 @@ pub(crate) fn taskflow_consume_bundle_check(
         .unwrap_or_default()
         .is_empty()
     {
-        blockers.push("missing_bundle_id".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::MissingBundleId,
+            )
+            .to_string(),
+        );
     }
     if metadata
         .get("bundle_schema_version")
@@ -366,7 +391,12 @@ pub(crate) fn taskflow_consume_bundle_check(
         .unwrap_or_default()
         .is_empty()
     {
-        blockers.push("missing_bundle_schema_version".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::MissingBundleSchemaVersion,
+            )
+            .to_string(),
+        );
     }
     if boot_classification
         != super::release1_contracts::CompatibilityClass::BackwardCompatible.as_str()
@@ -445,7 +475,12 @@ pub(crate) fn taskflow_consume_bundle_check(
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
     {
-        blockers.push("missing_authoritative_protocol_binding_import_evidence".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::MissingAuthoritativeProtocolBindingImportEvidence,
+            )
+            .to_string(),
+        );
     }
     if protocol_rows.map(|rows| {
         rows.iter().all(|row| {
