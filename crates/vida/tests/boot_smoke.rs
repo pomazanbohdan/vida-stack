@@ -2005,24 +2005,15 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
             ["default"]["dispatch_required"],
         "external_first_when_eligible"
     );
-    assert_eq!(
-        parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"]["enabled"],
-        true
-    );
-    assert_eq!(
-        parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"]["max_threads"],
-        "4"
-    );
-    assert_eq!(
-        parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"]["max_depth"],
-        "2"
-    );
-    assert_eq!(
-        parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"],
-        parsed["payload"]["role_selection"]["compiled_bundle"]["codex_multi_agent"]
-    );
-    let carrier_roles = parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"]
-        ["roles"]
+    let carrier_runtime =
+        &parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"];
+    let legacy_carrier_runtime =
+        &parsed["payload"]["role_selection"]["compiled_bundle"]["codex_multi_agent"];
+    assert_eq!(carrier_runtime["enabled"], true);
+    assert_eq!(carrier_runtime["max_threads"], "4");
+    assert_eq!(carrier_runtime["max_depth"], "2");
+    assert_eq!(carrier_runtime, legacy_carrier_runtime);
+    let carrier_roles = carrier_runtime["roles"]
         .as_array()
         .expect("carrier roles should be an array");
     assert!(carrier_roles.iter().any(|row| {
@@ -2051,8 +2042,7 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
             && row["rate"] == 32
     }));
     assert_eq!(
-        parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"]["worker_strategy"]
-            ["store_path"],
+        carrier_runtime["worker_strategy"]["store_path"],
         ".vida/state/worker-strategy.json"
     );
     assert_eq!(
@@ -2079,10 +2069,10 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
         parsed["payload"]["role_selection"]["reason"],
         "auto_no_keyword_match"
     );
-    assert_eq!(
-        parsed["payload"]["execution_plan"]["runtime_assignment"],
-        parsed["payload"]["execution_plan"]["codex_runtime_assignment"]
-    );
+    let runtime_assignment = &parsed["payload"]["execution_plan"]["runtime_assignment"];
+    let legacy_runtime_assignment =
+        &parsed["payload"]["execution_plan"]["codex_runtime_assignment"];
+    assert_eq!(runtime_assignment, legacy_runtime_assignment);
     assert!(parsed["payload"]["bundle_check"]["ok"].is_boolean());
     assert!(parsed["payload"]["direct_consumption_ready"].is_boolean());
     assert_eq!(
