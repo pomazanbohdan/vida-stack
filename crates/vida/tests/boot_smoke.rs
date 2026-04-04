@@ -265,7 +265,7 @@ fn seed_run_graph_status(
             .content(TestRoutedRunStateRow {
                 run_id: run_id.to_string(),
                 route_task_class: "analysis".to_string(),
-                selected_backend: "codex".to_string(),
+                selected_backend: "middle".to_string(),
                 lane_id: "writer_lane".to_string(),
                 lifecycle_stage: "active".to_string(),
                 updated_at: updated_at.clone(),
