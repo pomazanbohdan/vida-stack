@@ -1026,7 +1026,7 @@ impl StateStore {
                 id: "doctor_run_graph_negative_control".to_string(),
                 mode: "fail_closed".to_string(),
                 blocker_code: "missing_run_graph_dispatch_receipt_operator_evidence".to_string(),
-                next_action: "Run `vida taskflow run-graph dispatch --json` to materialize run-graph dispatch receipt evidence before operator handoff.".to_string(),
+                next_action: "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.".to_string(),
             }],
             nodes,
         })
@@ -5988,7 +5988,7 @@ hierarchy: framework,contracts
         );
         assert_eq!(
             step.next_action,
-            "Run `vida taskflow run-graph dispatch --json` to materialize run-graph dispatch receipt evidence before operator handoff."
+            "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff."
         );
 
         let _ = fs::remove_dir_all(&root);

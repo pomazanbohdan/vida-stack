@@ -395,8 +395,8 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "inspect-resumability",
             why: "Run-graph and recovery state are the canonical node-level resumability surfaces for one routed execution run.",
-            command: "vida taskflow recovery status <run-id> --json",
-            failure_modes: "Recovery inspection must not be treated as backlog readiness authority, and missing run ids fail closed.",
+            command: "vida taskflow recovery latest --json",
+            failure_modes: "Recovery inspection must not be treated as backlog readiness authority; when no latest run exists, continue via `vida taskflow consume continue --json` or inspect a specific run id explicitly.",
         };
     }
 

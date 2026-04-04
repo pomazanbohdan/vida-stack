@@ -17,7 +17,7 @@ const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION: &str =
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER: &str =
     "missing_run_graph_dispatch_receipt_operator_evidence";
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
-    "Run `vida taskflow run-graph dispatch --json` to materialize run-graph dispatch receipt evidence before operator handoff.";
+    "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.";
 
 fn is_unsupported_architecture_reserved_workflow_boundary(value: &str) -> bool {
     matches!(
@@ -410,7 +410,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     .any(|code| code == "missing_retrieval_trust_signal_operator_evidence")
                 {
                     operator_next_actions.push(
-                        "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle-check --json` to materialize retrieval-trust citation/freshness/ACL signal."
+                        "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal."
                             .to_string(),
                     );
                 }
@@ -419,7 +419,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     .any(|code| code == "missing_retrieval_trust_source_operator_evidence")
                 {
                     operator_next_actions.push(
-                        "Run `vida taskflow consume bundle-check --json` so runtime consumption snapshots publish retrieval-trust source evidence."
+                        "Run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence."
                             .to_string(),
                     );
                 }
@@ -428,7 +428,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     .any(|code| code == "missing_retrieval_trust_operator_evidence")
                 {
                     operator_next_actions.push(
-                        "Run `vida taskflow consume bundle-check --json` to record retrieval-trust operator evidence."
+                        "Run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence."
                             .to_string(),
                     );
                 }

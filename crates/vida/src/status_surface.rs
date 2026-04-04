@@ -80,11 +80,11 @@ fn migration_requires_action(migration_state: &str) -> bool {
 }
 
 fn run_graph_latest_snapshot_inconsistent_next_action() -> &'static str {
-    "Rebuild the latest run-graph evidence by rerunning `vida taskflow run-graph dispatch --json` and then recheck `vida status --json` once status, recovery, checkpoint, gate, and dispatch receipt share the same run_id."
+    "Rebuild the latest run-graph evidence by rerunning `vida taskflow consume continue --json` and then recheck `vida status --json` once status, recovery, checkpoint, gate, and dispatch receipt share the same run_id."
 }
 
 fn run_graph_latest_dispatch_receipt_signal_ambiguous_next_action() -> &'static str {
-    "Rebuild the latest run-graph dispatch receipt with `vida taskflow run-graph dispatch --json` so lane_status and dispatch_status are canonical and aligned before trusting the operator signal."
+    "Rebuild the latest run-graph dispatch receipt with `vida taskflow consume continue --json` so lane_status and dispatch_status are canonical and aligned before trusting the operator signal."
 }
 
 fn run_graph_latest_dispatch_receipt_summary_inconsistent_next_action() -> &'static str {
@@ -542,7 +542,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         .any(|code| code == "missing_run_graph_dispatch_receipt_operator_evidence")
                     {
                         operator_next_actions.push(
-                            "Run `vida taskflow run-graph dispatch --json` to materialize run-graph dispatch receipt evidence before operator handoff."
+                            "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff."
                                 .to_string(),
                         );
                     }
@@ -584,7 +584,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         .any(|code| code == "missing_root_session_write_guard")
                     {
                         operator_next_actions.push(
-                            "Run `vida taskflow consume final <request> --json` again and confirm runtime artifacts expose the canonical root-session pre-write guard."
+                            "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard."
                                 .to_string(),
                         );
                     }
