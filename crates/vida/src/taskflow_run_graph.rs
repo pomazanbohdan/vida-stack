@@ -4,7 +4,7 @@ use crate::{
     print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
     state_store::{RunGraphStatus, StateStore, StateStoreError},
     taskflow_layer4::print_taskflow_proxy_help,
-    taskflow_routing::{runtime_assignment_from_execution_plan, runtime_assignment_from_route},
+    taskflow_routing::selected_backend_from_execution_plan_route,
     taskflow_task_bridge::proxy_state_dir,
     RenderMode, RuntimeConsumptionLaneSelection,
 };
@@ -74,35 +74,6 @@ fn json_string_field(value: &serde_json::Value, key: &str) -> Option<String> {
 
 fn json_bool_field(value: &serde_json::Value, key: &str) -> Option<bool> {
     value.get(key)?.as_bool()
-}
-
-fn carrier_backend_from_assignment(assignment: &serde_json::Value) -> Option<String> {
-    json_string_field(assignment, "selected_tier")
-        .or_else(|| json_string_field(assignment, "activation_agent_type"))
-        .filter(|value| !value.is_empty())
-}
-
-fn selected_backend_from_route(
-    execution_plan: &serde_json::Value,
-    route: &serde_json::Value,
-) -> String {
-    route
-        .get("preferred_agent_tier")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
-        .or_else(|| {
-            route
-                .get("preferred_agent_type")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        })
-        .or_else(|| carrier_backend_from_assignment(runtime_assignment_from_route(route)))
-        .or_else(|| {
-            carrier_backend_from_assignment(runtime_assignment_from_execution_plan(execution_plan))
-        })
-        .or_else(|| json_string_field(route, "subagents"))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "unknown".to_string())
 }
 
 pub(crate) fn default_run_graph_status(
@@ -1069,7 +1040,8 @@ pub(crate) async fn derive_seeded_run_graph_status(
     } else {
         &execution_plan["development_flow"]["implementation"]
     };
-    let selected_backend = selected_backend_from_route(execution_plan, route);
+    let selected_backend = selected_backend_from_execution_plan_route(execution_plan, route)
+        .unwrap_or_else(|| "unknown".to_string());
     let lane_node = if is_conversation {
         selection.selected_role.clone()
     } else {
