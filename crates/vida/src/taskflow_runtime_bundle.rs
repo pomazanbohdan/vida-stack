@@ -417,10 +417,20 @@ pub(crate) fn taskflow_consume_bundle_check(
         );
     }
     if payload.vida_root != payload.launcher_runtime_paths.project_root {
-        blockers.push("mixed_runtime_root".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::MixedRuntimeRoot,
+            )
+            .to_string(),
+        );
     }
     if payload.config_path != expected_config_path(&payload.vida_root) {
-        blockers.push("mixed_config_path".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::MixedConfigPath,
+            )
+            .to_string(),
+        );
     }
     for (value, family) in [
         (&payload.metadata, "metadata"),
@@ -508,7 +518,12 @@ pub(crate) fn taskflow_consume_bundle_check(
         .and_then(serde_json::Value::as_object)
         .is_none()
     {
-        blockers.push("missing_cache_key_inputs".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::MissingCacheKeyInputs,
+            )
+            .to_string(),
+        );
     }
     if payload
         .cache_delivery_contract
@@ -516,7 +531,12 @@ pub(crate) fn taskflow_consume_bundle_check(
         .and_then(serde_json::Value::as_object)
         .is_none()
     {
-        blockers.push("missing_invalidation_tuple".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::MissingInvalidationTuple,
+            )
+            .to_string(),
+        );
     }
     blockers.extend(cache_contract_consistency_blockers(payload));
     blockers.extend(cache_registry_contract_blockers(payload));

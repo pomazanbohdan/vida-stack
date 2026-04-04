@@ -417,6 +417,10 @@ pub(crate) enum BlockerCode {
     MissingBundleId,
     MissingBundleSchemaVersion,
     MissingAuthoritativeProtocolBindingImportEvidence,
+    MixedRuntimeRoot,
+    MixedConfigPath,
+    MissingCacheKeyInputs,
+    MissingInvalidationTuple,
     BootCompatibilityNotCompatible,
     MigrationPreflightNotReady,
     MissingProtocolBindingRows,
@@ -472,6 +476,10 @@ impl BlockerCode {
             Self::MissingAuthoritativeProtocolBindingImportEvidence => {
                 "missing_authoritative_protocol_binding_import_evidence"
             }
+            Self::MixedRuntimeRoot => "mixed_runtime_root",
+            Self::MixedConfigPath => "mixed_config_path",
+            Self::MissingCacheKeyInputs => "missing_cache_key_inputs",
+            Self::MissingInvalidationTuple => "missing_invalidation_tuple",
             Self::BootCompatibilityNotCompatible => "boot_incompatible",
             Self::MigrationPreflightNotReady => "migration_not_ready",
             Self::MissingProtocolBindingRows => "missing_protocol_binding_rows",
@@ -531,6 +539,10 @@ impl BlockerCode {
             "missing_authoritative_protocol_binding_import_evidence" => {
                 Some(Self::MissingAuthoritativeProtocolBindingImportEvidence)
             }
+            "mixed_runtime_root" => Some(Self::MixedRuntimeRoot),
+            "mixed_config_path" => Some(Self::MixedConfigPath),
+            "missing_cache_key_inputs" => Some(Self::MissingCacheKeyInputs),
+            "missing_invalidation_tuple" => Some(Self::MissingInvalidationTuple),
             "boot_incompatible" => Some(Self::BootCompatibilityNotCompatible),
             "migration_not_ready" => Some(Self::MigrationPreflightNotReady),
             "missing_protocol_binding_rows" => Some(Self::MissingProtocolBindingRows),
