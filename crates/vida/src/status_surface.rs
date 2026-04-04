@@ -669,7 +669,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         "migration_state": migration_state.as_ref().map(|migration| serde_json::json!({
                             "compatibility_classification": canonical_compatibility_class_str(
                                 &migration.compatibility_classification
-                            ).unwrap_or(CompatibilityClass::Incompatible.as_str()),
+                            ).unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str()),
                             "migration_state": migration.migration_state,
                             "blockers": migration.blockers,
                             "source_version_tuple": migration.source_version_tuple,
@@ -789,7 +789,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         let compatibility_classification = canonical_compatibility_class_str(
                             &migration.compatibility_classification,
                         )
-                        .unwrap_or(CompatibilityClass::Incompatible.as_str());
+                        .unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str());
                         super::print_surface_line(
                             render,
                             "migration state",

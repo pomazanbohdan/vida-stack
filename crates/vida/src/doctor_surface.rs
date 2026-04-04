@@ -4,7 +4,10 @@ use crate::operator_contracts::{
     canonical_release1_operator_contract_status, release1_operator_contracts_consistency_error,
     shared_operator_output_contract_parity_error,
 };
-use crate::release1_contracts::{classify_compatibility_boundary, CompatibilityBoundary};
+use crate::release1_contracts::{
+    canonical_compatibility_class_str, classify_compatibility_boundary, CompatibilityBoundary,
+    CompatibilityClass,
+};
 
 fn migration_requires_action(migration_state: &str) -> bool {
     !matches!(migration_state, "none_required" | "no_migration_required")
@@ -443,7 +446,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     .any(|code| code == "recovery_readiness_blocked")
                 {
                     operator_next_actions.push(
-                        "Run `vida taskflow run-graph recover --json` and confirm `recovery_ready=true` before resume/rollback handoff."
+                        "Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff."
                             .to_string(),
                     );
                 }
@@ -496,9 +499,12 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     "next_actions": operator_contracts["next_actions"].clone(),
                     "artifact_refs": operator_contracts["artifact_refs"].clone(),
                     "shared_fields": {
+                        "contract_id": "release-1-shared-fields",
+                        "schema_version": "release-1-v1",
                         "status": operator_contracts["status"].clone(),
                         "blocker_codes": operator_contracts["blocker_codes"].clone(),
                         "next_actions": operator_contracts["next_actions"].clone(),
+                        "artifact_refs": operator_contracts["artifact_refs"].clone(),
                     },
                     "operator_contracts": operator_contracts,
                     "storage_metadata": {
@@ -539,7 +545,9 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         "next_step": boot_compatibility.next_step,
                     },
                     "migration_preflight": {
-                        "compatibility_classification": migration_preflight.compatibility_classification,
+                        "compatibility_classification": canonical_compatibility_class_str(
+                            &migration_preflight.compatibility_classification
+                        ).unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str()),
                         "migration_state": migration_preflight.migration_state,
                         "blockers": migration_preflight.blockers,
                         "source_version_tuple": migration_preflight.source_version_tuple,
@@ -622,7 +630,10 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 "migration preflight",
                 &format!(
                     "{} / {} ({})",
-                    migration_preflight.compatibility_classification,
+                    canonical_compatibility_class_str(
+                        &migration_preflight.compatibility_classification
+                    )
+                    .unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str()),
                     migration_preflight.migration_state,
                     migration_preflight.next_step
                 ),
@@ -733,8 +744,9 @@ mod tests {
     #[test]
     fn release1_operator_contracts_consistency_accepts_blocked_with_actions() {
         let blocker_codes = vec!["recovery_readiness_blocked".to_string()];
-        let next_actions =
-            vec!["Run `vida taskflow run-graph recover --json` before resume.".to_string()];
+        let next_actions = vec![
+            "Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff.".to_string(),
+        ];
         assert_eq!(
             release1_operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
             None
@@ -778,7 +790,7 @@ mod tests {
             release1_operator_contracts_consistency_error(
                 " blocked ",
                 &["recovery_readiness_blocked".to_string()],
-                &["Run `vida taskflow run-graph recover --json` before resume.".to_string()],
+                &["Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff.".to_string()],
             ),
             None
         );
@@ -963,11 +975,11 @@ mod tests {
         let summary_json = serde_json::json!({
             "status": "blocked",
             "blocker_codes": ["recovery_readiness_blocked"],
-            "next_actions": ["  Run `vida taskflow run-graph recover --json` before resume.  "],
+            "next_actions": ["  Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff.  "],
             "shared_fields": {
                 "status": "blocked",
                 "blocker_codes": ["recovery_readiness_blocked"],
-                "next_actions": ["run `vida taskflow run-graph recover --json` before resume."]
+                "next_actions": ["inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff."]
             },
             "operator_contracts": {
                 "status": "blocked",

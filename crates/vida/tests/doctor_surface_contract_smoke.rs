@@ -208,7 +208,7 @@ fn doctor_json_emits_operator_contract_fields() {
     let has_recovery_readiness_next_action = next_actions.iter().any(|action| {
         action.as_str()
             == Some(
-                "Run `vida taskflow run-graph recover --json` and confirm `recovery_ready=true` before resume/rollback handoff.",
+                "Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff.",
             )
     });
     let has_unsupported_architecture_reserved_boundary_blocker = blocker_codes.iter().any(|code| {

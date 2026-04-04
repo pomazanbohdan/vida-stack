@@ -915,6 +915,7 @@ fn taskflow_proxy_help_supports_task_topic() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: task"));
     assert!(stdout.contains("`vida task` is the root parity surface"));
+    assert!(stdout.contains("vida task ready --scope <task-id> --json"));
     assert!(stdout.contains("vida task next-display-id <parent-display-id> --json"));
     assert!(stdout.contains(
         "vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description"
@@ -934,6 +935,7 @@ fn taskflow_task_help_alias_routes_to_canonical_task_help() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: task"));
+    assert!(stdout.contains("vida task ready --scope <task-id> --json"));
     assert!(stdout.contains("vida task next-display-id <parent-display-id> --json"));
     assert!(stdout.contains("vida task update <task-id> --status in_progress --notes"));
 }
@@ -988,6 +990,9 @@ fn taskflow_proxy_help_supports_doctor_topic() {
     assert!(stdout.contains("VIDA TaskFlow help: doctor"));
     assert!(stdout.contains("vida taskflow doctor [--json]"));
     assert!(stdout.contains("task store summary"));
+    assert!(stdout.contains("dependency graph integrity"));
+    assert!(stdout.contains("runtime-consumption evidence posture"));
+    assert!(stdout.contains("latest recovery, checkpoint, gate, and dispatch receipt summaries"));
 }
 
 #[test]

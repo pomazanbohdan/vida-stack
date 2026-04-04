@@ -256,12 +256,18 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         orchestrator_init_view,
         agent_init_view,
         boot_compatibility: serde_json::json!({
-            "classification": boot_compatibility.classification,
+            "classification": super::release1_contracts::canonical_compatibility_class_str(
+                &boot_compatibility.classification
+            )
+            .unwrap_or(super::release1_contracts::CompatibilityClass::ReaderUpgradeRequired.as_str()),
             "reasons": boot_compatibility.reasons,
             "next_step": boot_compatibility.next_step,
         }),
         migration_preflight: serde_json::json!({
-            "compatibility_classification": migration_preflight.compatibility_classification,
+            "compatibility_classification": super::release1_contracts::canonical_compatibility_class_str(
+                &migration_preflight.compatibility_classification
+            )
+            .unwrap_or(super::release1_contracts::CompatibilityClass::ReaderUpgradeRequired.as_str()),
             "migration_state": migration_preflight.migration_state,
             "blockers": migration_preflight.blockers,
             "source_version_tuple": migration_preflight.source_version_tuple,
@@ -304,7 +310,8 @@ pub(crate) fn taskflow_consume_bundle_check(
         .boot_compatibility
         .get("classification")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or("unknown")
+        .and_then(super::release1_contracts::canonical_compatibility_class_str)
+        .unwrap_or(super::release1_contracts::CompatibilityClass::ReaderUpgradeRequired.as_str())
         .to_string();
     let migration_state = payload
         .migration_preflight
@@ -361,7 +368,9 @@ pub(crate) fn taskflow_consume_bundle_check(
     {
         blockers.push("missing_bundle_schema_version".to_string());
     }
-    if boot_classification != "compatible" {
+    if boot_classification
+        != super::release1_contracts::CompatibilityClass::BackwardCompatible.as_str()
+    {
         blockers.push("boot_incompatible".to_string());
     }
     if migration_state != "no_migration_required" || next_step != "normal_boot_allowed" {
@@ -852,7 +861,11 @@ fn protocol_binding_registry_contract_blockers(
             .and_then(serde_json::Value::as_str),
         Release1StringFieldRule::CanonicalNonempty,
     ) {
-        blockers.push("missing_protocol_binding_receipt".to_string());
+        if let Some(code) = super::release1_contracts::blocker_code_value(
+            super::release1_contracts::BlockerCode::MissingProtocolBindingReceipt,
+        ) {
+            blockers.push(code);
+        }
     }
     if !release1_string_field_matches(
         protocol_binding_registry
@@ -860,7 +873,11 @@ fn protocol_binding_registry_contract_blockers(
             .and_then(serde_json::Value::as_str),
         Release1StringFieldRule::ExactTrimmed(TASKFLOW_PROTOCOL_BINDING_AUTHORITY),
     ) {
-        blockers.push("non_authoritative_protocol_binding_authority".to_string());
+        if let Some(code) = super::release1_contracts::blocker_code_value(
+            super::release1_contracts::BlockerCode::OwnerSurfaceContradiction,
+        ) {
+            blockers.push(code);
+        }
     }
     if !release1_string_field_matches(
         protocol_binding_registry
@@ -868,7 +885,11 @@ fn protocol_binding_registry_contract_blockers(
             .and_then(serde_json::Value::as_str),
         Release1StringFieldRule::CanonicalEnum(&["bound"]),
     ) {
-        blockers.push("protocol_binding_not_runtime_ready".to_string());
+        if let Some(code) = super::release1_contracts::blocker_code_value(
+            super::release1_contracts::BlockerCode::ProtocolBindingNotRuntimeReady,
+        ) {
+            blockers.push(code);
+        }
     }
     blockers
 }
@@ -1026,12 +1047,12 @@ pub(crate) fn blocking_runtime_bundle(error: &str) -> TaskflowConsumeBundlePaylo
             "error": error,
         }),
         boot_compatibility: serde_json::json!({
-            "classification": "blocking",
+            "classification": "reader_upgrade_required",
             "reasons": [error],
             "next_step": "restore_runtime_bundle",
         }),
         migration_preflight: serde_json::json!({
-            "compatibility_classification": "blocking",
+            "compatibility_classification": "reader_upgrade_required",
             "migration_state": "blocked",
             "blockers": [error],
             "source_version_tuple": [],

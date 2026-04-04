@@ -1,5 +1,169 @@
 use std::collections::BTreeSet;
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkflowClass {
+    InformationalAnswer,
+    RetrievalGroundedAnswer,
+    DocumentationMutation,
+    InternalStateMutation,
+    DelegatedDevelopmentPacket,
+    ToolAssistedRead,
+    ToolAssistedWrite,
+    MemoryWrite,
+    IdentityOrPolicyChange,
+    IncidentResponseOrRecovery,
+}
+
+impl WorkflowClass {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::InformationalAnswer => "informational_answer",
+            Self::RetrievalGroundedAnswer => "retrieval_grounded_answer",
+            Self::DocumentationMutation => "documentation_mutation",
+            Self::InternalStateMutation => "internal_state_mutation",
+            Self::DelegatedDevelopmentPacket => "delegated_development_packet",
+            Self::ToolAssistedRead => "tool_assisted_read",
+            Self::ToolAssistedWrite => "tool_assisted_write",
+            Self::MemoryWrite => "memory_write",
+            Self::IdentityOrPolicyChange => "identity_or_policy_change",
+            Self::IncidentResponseOrRecovery => "incident_response_or_recovery",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim() {
+            "informational_answer" => Some(Self::InformationalAnswer),
+            "retrieval_grounded_answer" => Some(Self::RetrievalGroundedAnswer),
+            "documentation_mutation" => Some(Self::DocumentationMutation),
+            "internal_state_mutation" => Some(Self::InternalStateMutation),
+            "delegated_development_packet" => Some(Self::DelegatedDevelopmentPacket),
+            "tool_assisted_read" => Some(Self::ToolAssistedRead),
+            "tool_assisted_write" => Some(Self::ToolAssistedWrite),
+            "memory_write" => Some(Self::MemoryWrite),
+            "identity_or_policy_change" => Some(Self::IdentityOrPolicyChange),
+            "incident_response_or_recovery" => Some(Self::IncidentResponseOrRecovery),
+            _ => None,
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn canonical_workflow_class_str(value: &str) -> Option<&'static str> {
+    WorkflowClass::from_str(value).map(WorkflowClass::as_str)
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RiskTier {
+    R0,
+    R1,
+    R2,
+    R3,
+    R4,
+}
+
+impl RiskTier {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::R0 => "R0",
+            Self::R1 => "R1",
+            Self::R2 => "R2",
+            Self::R3 => "R3",
+            Self::R4 => "R4",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim() {
+            "R0" => Some(Self::R0),
+            "R1" => Some(Self::R1),
+            "R2" => Some(Self::R2),
+            "R3" => Some(Self::R3),
+            "R4" => Some(Self::R4),
+            _ => None,
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn canonical_risk_tier_str(value: &str) -> Option<&'static str> {
+    RiskTier::from_str(value).map(RiskTier::as_str)
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApprovalStatus {
+    ApprovalNotRequired,
+    ApprovalRequired,
+    WaitingForApproval,
+    Approved,
+    Denied,
+    Expired,
+}
+
+impl ApprovalStatus {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ApprovalNotRequired => "approval_not_required",
+            Self::ApprovalRequired => "approval_required",
+            Self::WaitingForApproval => "waiting_for_approval",
+            Self::Approved => "approved",
+            Self::Denied => "denied",
+            Self::Expired => "expired",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim() {
+            "approval_not_required" => Some(Self::ApprovalNotRequired),
+            "approval_required" => Some(Self::ApprovalRequired),
+            "waiting_for_approval" => Some(Self::WaitingForApproval),
+            "approved" => Some(Self::Approved),
+            "denied" => Some(Self::Denied),
+            "expired" => Some(Self::Expired),
+            _ => None,
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn canonical_approval_status_str(value: &str) -> Option<&'static str> {
+    ApprovalStatus::from_str(value).map(ApprovalStatus::as_str)
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GateLevel {
+    Block,
+    Warn,
+    Observe,
+}
+
+impl GateLevel {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Block => "block",
+            Self::Warn => "warn",
+            Self::Observe => "observe",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim() {
+            "block" => Some(Self::Block),
+            "warn" => Some(Self::Warn),
+            "observe" => Some(Self::Observe),
+            _ => None,
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn canonical_gate_level_str(value: &str) -> Option<&'static str> {
+    GateLevel::from_str(value).map(GateLevel::as_str)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LaneStatus {
     PacketReady,
@@ -44,28 +208,27 @@ pub(crate) fn canonical_lane_status_str(value: &str) -> Option<&'static str> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompatibilityClass {
-    Compatible,
-    Incompatible,
-    Degraded,
-    Blocking,
+    BackwardCompatible,
+    ReaderUpgradeRequired,
+    MigrationRequired,
 }
 
 impl CompatibilityClass {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::Compatible => "compatible",
-            Self::Incompatible => "incompatible",
-            Self::Degraded => "degraded",
-            Self::Blocking => "blocking",
+            Self::BackwardCompatible => "backward_compatible",
+            Self::ReaderUpgradeRequired => "reader_upgrade_required",
+            Self::MigrationRequired => "migration_required",
         }
     }
 
     pub(crate) fn from_str(value: &str) -> Option<Self> {
         match value.trim() {
-            "compatible" => Some(Self::Compatible),
-            "incompatible" => Some(Self::Incompatible),
-            "degraded" => Some(Self::Degraded),
-            "blocking" => Some(Self::Blocking),
+            "backward_compatible" | "compatible" => Some(Self::BackwardCompatible),
+            "reader_upgrade_required" | "incompatible" | "degraded" | "blocking" => {
+                Some(Self::ReaderUpgradeRequired)
+            }
+            "migration_required" => Some(Self::MigrationRequired),
             _ => None,
         }
     }
@@ -84,7 +247,7 @@ pub(crate) enum CompatibilityBoundary {
 
 pub(crate) fn classify_compatibility_boundary(value: &str) -> CompatibilityBoundary {
     match canonical_compatibility_class_str(value) {
-        Some("compatible") => CompatibilityBoundary::Compatible,
+        Some("backward_compatible") => CompatibilityBoundary::Compatible,
         Some(_) => CompatibilityBoundary::BlockingSupported,
         None => CompatibilityBoundary::Unsupported,
     }
@@ -219,6 +382,34 @@ pub(crate) enum BlockerCode {
     MissingLaneReceipt,
     OpenDelegatedCycle,
     ExceptionPathMissing,
+    ClosureEvidenceIncomplete,
+    OwnerSurfaceContradiction,
+    PolicyDenied,
+    PolicyContextMissing,
+    ApprovalRequired,
+    ApprovalDenied,
+    ApprovalExpired,
+    DelegationChainBroken,
+    ToolContractMissing,
+    ToolContractIncomplete,
+    ToolExecutionFailed,
+    ToolResultUnusable,
+    CitationMissing,
+    SourceUnregistered,
+    FreshnessPolicyMissing,
+    FreshnessViolation,
+    AclContextMissing,
+    TraceIncomplete,
+    TraceMissing,
+    IncidentEvidenceMissing,
+    RollbackUnavailable,
+    ProofVerdictMissing,
+    MetricGateFailed,
+    SchemaContractMissing,
+    TimeoutWithoutTakeoverAuthority,
+    SupersessionWithoutReceipt,
+    LocalTakeoverForbidden,
+    RecoveryNotTrustworthy,
     MissingProtocolBindingReceipt,
     ProtocolBindingNotRuntimeReady,
     Unsupported,
@@ -231,6 +422,34 @@ impl BlockerCode {
             Self::MissingLaneReceipt => "missing_lane_receipt",
             Self::OpenDelegatedCycle => "open_delegated_cycle",
             Self::ExceptionPathMissing => "exception_path_missing",
+            Self::ClosureEvidenceIncomplete => "closure_evidence_incomplete",
+            Self::OwnerSurfaceContradiction => "owner_surface_contradiction",
+            Self::PolicyDenied => "policy_denied",
+            Self::PolicyContextMissing => "policy_context_missing",
+            Self::ApprovalRequired => "approval_required",
+            Self::ApprovalDenied => "approval_denied",
+            Self::ApprovalExpired => "approval_expired",
+            Self::DelegationChainBroken => "delegation_chain_broken",
+            Self::ToolContractMissing => "tool_contract_missing",
+            Self::ToolContractIncomplete => "tool_contract_incomplete",
+            Self::ToolExecutionFailed => "tool_execution_failed",
+            Self::ToolResultUnusable => "tool_result_unusable",
+            Self::CitationMissing => "citation_missing",
+            Self::SourceUnregistered => "source_unregistered",
+            Self::FreshnessPolicyMissing => "freshness_policy_missing",
+            Self::FreshnessViolation => "freshness_violation",
+            Self::AclContextMissing => "acl_context_missing",
+            Self::TraceIncomplete => "trace_incomplete",
+            Self::TraceMissing => "trace_missing",
+            Self::IncidentEvidenceMissing => "incident_evidence_missing",
+            Self::RollbackUnavailable => "rollback_unavailable",
+            Self::ProofVerdictMissing => "proof_verdict_missing",
+            Self::MetricGateFailed => "metric_gate_failed",
+            Self::SchemaContractMissing => "schema_contract_missing",
+            Self::TimeoutWithoutTakeoverAuthority => "timeout_without_takeover_authority",
+            Self::SupersessionWithoutReceipt => "supersession_without_receipt",
+            Self::LocalTakeoverForbidden => "local_takeover_forbidden",
+            Self::RecoveryNotTrustworthy => "recovery_not_trustworthy",
             Self::MissingProtocolBindingReceipt => "missing_protocol_binding_receipt",
             Self::ProtocolBindingNotRuntimeReady => "protocol_binding_not_runtime_ready",
             Self::Unsupported => "unsupported_blocker_code",
@@ -243,6 +462,34 @@ impl BlockerCode {
             "missing_lane_receipt" => Some(Self::MissingLaneReceipt),
             "open_delegated_cycle" => Some(Self::OpenDelegatedCycle),
             "exception_path_missing" => Some(Self::ExceptionPathMissing),
+            "closure_evidence_incomplete" => Some(Self::ClosureEvidenceIncomplete),
+            "owner_surface_contradiction" => Some(Self::OwnerSurfaceContradiction),
+            "policy_denied" => Some(Self::PolicyDenied),
+            "policy_context_missing" => Some(Self::PolicyContextMissing),
+            "approval_required" => Some(Self::ApprovalRequired),
+            "approval_denied" => Some(Self::ApprovalDenied),
+            "approval_expired" => Some(Self::ApprovalExpired),
+            "delegation_chain_broken" => Some(Self::DelegationChainBroken),
+            "tool_contract_missing" => Some(Self::ToolContractMissing),
+            "tool_contract_incomplete" => Some(Self::ToolContractIncomplete),
+            "tool_execution_failed" => Some(Self::ToolExecutionFailed),
+            "tool_result_unusable" => Some(Self::ToolResultUnusable),
+            "citation_missing" => Some(Self::CitationMissing),
+            "source_unregistered" => Some(Self::SourceUnregistered),
+            "freshness_policy_missing" => Some(Self::FreshnessPolicyMissing),
+            "freshness_violation" => Some(Self::FreshnessViolation),
+            "acl_context_missing" => Some(Self::AclContextMissing),
+            "trace_incomplete" => Some(Self::TraceIncomplete),
+            "trace_missing" => Some(Self::TraceMissing),
+            "incident_evidence_missing" => Some(Self::IncidentEvidenceMissing),
+            "rollback_unavailable" => Some(Self::RollbackUnavailable),
+            "proof_verdict_missing" => Some(Self::ProofVerdictMissing),
+            "metric_gate_failed" => Some(Self::MetricGateFailed),
+            "schema_contract_missing" => Some(Self::SchemaContractMissing),
+            "timeout_without_takeover_authority" => Some(Self::TimeoutWithoutTakeoverAuthority),
+            "supersession_without_receipt" => Some(Self::SupersessionWithoutReceipt),
+            "local_takeover_forbidden" => Some(Self::LocalTakeoverForbidden),
+            "recovery_not_trustworthy" => Some(Self::RecoveryNotTrustworthy),
             "missing_protocol_binding_receipt" => Some(Self::MissingProtocolBindingReceipt),
             "protocol_binding_not_runtime_ready" => Some(Self::ProtocolBindingNotRuntimeReady),
             "unsupported_blocker_code" => Some(Self::Unsupported),
@@ -337,13 +584,15 @@ pub(crate) fn missing_downstream_lane_evidence_blocker(
 #[cfg(test)]
 mod tests {
     use super::{
-        blocker_code_str, blocker_code_value, canonical_blocker_code_list,
-        canonical_compatibility_class_str, canonical_release1_contract_status_str,
-        canonical_release1_contract_type_str, canonical_release1_schema_version_str,
-        classify_compatibility_boundary, evaluate_policy_gate_protocol_binding,
-        missing_downstream_lane_evidence_blocker, release1_contract_status_str, BlockerCode,
-        CompatibilityBoundary, CompatibilityClass, LaneStatus, Release1ContractStatus,
-        Release1ContractType, Release1SchemaVersion,
+        blocker_code_str, blocker_code_value, canonical_approval_status_str,
+        canonical_blocker_code_list, canonical_compatibility_class_str, canonical_gate_level_str,
+        canonical_release1_contract_status_str, canonical_release1_contract_type_str,
+        canonical_release1_schema_version_str, canonical_risk_tier_str,
+        canonical_workflow_class_str, classify_compatibility_boundary,
+        evaluate_policy_gate_protocol_binding, missing_downstream_lane_evidence_blocker,
+        release1_contract_status_str, ApprovalStatus, BlockerCode, CompatibilityBoundary,
+        CompatibilityClass, GateLevel, LaneStatus, Release1ContractStatus, Release1ContractType,
+        Release1SchemaVersion, RiskTier, WorkflowClass,
     };
 
     #[test]
@@ -356,6 +605,52 @@ mod tests {
             blocker_code_value(BlockerCode::MissingLaneReceipt),
             Some("missing_lane_receipt".to_string())
         );
+    }
+
+    #[test]
+    fn workflow_class_round_trips_to_canonical_values() {
+        assert_eq!(
+            canonical_workflow_class_str(WorkflowClass::ToolAssistedWrite.as_str()),
+            Some("tool_assisted_write")
+        );
+        assert_eq!(
+            canonical_workflow_class_str("incident_response_or_recovery"),
+            Some("incident_response_or_recovery")
+        );
+        assert_eq!(canonical_workflow_class_str("unknown"), None);
+    }
+
+    #[test]
+    fn risk_tier_round_trips_to_canonical_values() {
+        assert_eq!(canonical_risk_tier_str(RiskTier::R0.as_str()), Some("R0"));
+        assert_eq!(canonical_risk_tier_str(RiskTier::R4.as_str()), Some("R4"));
+        assert_eq!(canonical_risk_tier_str("r1"), None);
+    }
+
+    #[test]
+    fn approval_status_round_trips_to_canonical_values() {
+        assert_eq!(
+            canonical_approval_status_str(ApprovalStatus::ApprovalRequired.as_str()),
+            Some("approval_required")
+        );
+        assert_eq!(
+            canonical_approval_status_str(ApprovalStatus::WaitingForApproval.as_str()),
+            Some("waiting_for_approval")
+        );
+        assert_eq!(canonical_approval_status_str("pending"), None);
+    }
+
+    #[test]
+    fn gate_level_round_trips_to_canonical_values() {
+        assert_eq!(
+            canonical_gate_level_str(GateLevel::Block.as_str()),
+            Some("block")
+        );
+        assert_eq!(
+            canonical_gate_level_str(GateLevel::Warn.as_str()),
+            Some("warn")
+        );
+        assert_eq!(canonical_gate_level_str("deny"), None);
     }
 
     #[test]
@@ -377,21 +672,34 @@ mod tests {
 
     #[test]
     fn compatibility_class_round_trips_to_canonical_values() {
-        assert_eq!(CompatibilityClass::Compatible.as_str(), "compatible");
-        assert_eq!(CompatibilityClass::Incompatible.as_str(), "incompatible");
+        assert_eq!(
+            CompatibilityClass::BackwardCompatible.as_str(),
+            "backward_compatible"
+        );
+        assert_eq!(
+            CompatibilityClass::ReaderUpgradeRequired.as_str(),
+            "reader_upgrade_required"
+        );
         assert_eq!(
             canonical_compatibility_class_str("degraded"),
-            Some("degraded")
+            Some("reader_upgrade_required")
         );
         assert_eq!(
             canonical_compatibility_class_str("blocking"),
-            Some("blocking")
+            Some("reader_upgrade_required")
+        );
+        assert_eq!(
+            canonical_compatibility_class_str("migration_required"),
+            Some("migration_required")
         );
     }
 
     #[test]
     fn compatibility_class_rejects_unknown_values() {
-        assert_eq!(canonical_compatibility_class_str("COMPATIBLE"), None);
+        assert_eq!(
+            canonical_compatibility_class_str("reader-upgrade-required"),
+            None
+        );
         assert_eq!(canonical_compatibility_class_str("unknown"), None);
     }
 
@@ -418,12 +726,14 @@ mod tests {
             "open_delegated_cycle",
             "missing_lane_receipt",
             "exception_path_missing",
+            "approval_required",
             "protocol_binding_not_runtime_ready",
             "open_delegated_cycle",
         ]);
         assert_eq!(
             codes,
             vec![
+                "approval_required".to_string(),
                 "exception_path_missing".to_string(),
                 "missing_lane_receipt".to_string(),
                 "open_delegated_cycle".to_string(),
@@ -450,12 +760,14 @@ mod tests {
         let codes = canonical_blocker_code_list([
             " missing_protocol_binding_receipt ",
             "protocol_binding_not_runtime_ready",
+            "policy_denied",
             "unsupported_blocker_code",
         ]);
         assert_eq!(
             codes,
             vec![
                 "missing_protocol_binding_receipt".to_string(),
+                "policy_denied".to_string(),
                 "protocol_binding_not_runtime_ready".to_string(),
                 "unsupported_blocker_code".to_string()
             ]
@@ -466,7 +778,7 @@ mod tests {
     fn compatibility_class_canonicalization_trims_surrounding_whitespace() {
         assert_eq!(
             canonical_compatibility_class_str(" compatible "),
-            Some("compatible")
+            Some("backward_compatible")
         );
     }
 
@@ -478,6 +790,10 @@ mod tests {
         );
         assert_eq!(
             classify_compatibility_boundary("degraded"),
+            CompatibilityBoundary::BlockingSupported
+        );
+        assert_eq!(
+            classify_compatibility_boundary("migration_required"),
             CompatibilityBoundary::BlockingSupported
         );
         assert_eq!(

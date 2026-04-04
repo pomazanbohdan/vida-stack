@@ -1384,9 +1384,9 @@ impl StateStore {
         };
 
         let compatibility_classification = if blockers.is_empty() {
-            CompatibilityClass::Compatible
+            CompatibilityClass::BackwardCompatible
         } else {
-            CompatibilityClass::Incompatible
+            CompatibilityClass::ReaderUpgradeRequired
         };
         let migration_state = if blockers.is_empty() {
             "no_migration_required"
@@ -1469,7 +1469,7 @@ impl StateStore {
             compatibility_classification: canonical_compatibility_class_str(
                 &row.compatibility_classification,
             )
-            .unwrap_or(CompatibilityClass::Incompatible.as_str())
+            .unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str())
             .to_string(),
             migration_state: row.migration_state,
             blockers: row.blockers,
