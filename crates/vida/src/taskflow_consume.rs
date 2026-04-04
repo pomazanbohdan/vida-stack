@@ -350,11 +350,16 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             eprintln!("Failed to record run-graph dispatch receipt: {error}");
                             return ExitCode::from(1);
                         }
+                        let pending_design_packet =
+                            super::blocker_code_str(super::BlockerCode::PendingDesignPacket);
+                        let pending_execution_preparation_evidence = super::blocker_code_str(
+                            super::BlockerCode::PendingExecutionPreparationEvidence,
+                        );
                         let direct_consumption_ready = bundle_check.ok
                             && docflow_verdict.ready
                             && !closure_admission.blockers.iter().any(|row| {
-                                row == "pending_design_packet"
-                                    || row == "pending_execution_preparation_evidence"
+                                row == pending_design_packet
+                                    || row == pending_execution_preparation_evidence
                             });
                         let payload = super::TaskflowDirectConsumptionPayload {
                             artifact_name: "taskflow_direct_runtime_consumption".to_string(),
@@ -642,7 +647,9 @@ struct ExecutionPreparationEvidenceGate {
 impl ExecutionPreparationEvidenceGate {
     fn blocker_code(self) -> Option<&'static str> {
         if self.missing_evidence_or_handoff_packet {
-            Some("pending_execution_preparation_evidence")
+            Some(super::blocker_code_str(
+                super::BlockerCode::PendingExecutionPreparationEvidence,
+            ))
         } else {
             None
         }
@@ -657,7 +664,9 @@ struct ApprovalDelegationEvidenceGate {
 impl ApprovalDelegationEvidenceGate {
     fn blocker_code(self) -> Option<&'static str> {
         if self.missing_approval_or_delegation_evidence {
-            Some("pending_approval_delegation_evidence")
+            Some(super::blocker_code_str(
+                super::BlockerCode::PendingApprovalDelegationEvidence,
+            ))
         } else {
             None
         }

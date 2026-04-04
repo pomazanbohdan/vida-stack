@@ -470,8 +470,17 @@ pub(crate) enum BlockerCode {
     MissingProofVerdict,
     MissingClosureProof,
     RestoreReconcileNotGreen,
+    PendingSpecificationEvidence,
+    PendingExecutionPreparationEvidence,
+    PendingApprovalDelegationEvidence,
+    PendingImplementationEvidence,
+    PendingReviewCleanEvidence,
+    PendingVerificationEvidence,
+    PendingLaneEvidence,
+    PendingReviewFindings,
     PendingDesignPacket,
     PendingDeveloperHandoffPacket,
+    MissingExecutionPreparationContract,
     ImplementationReviewDenied,
     ImplementationReviewExpired,
     ImplementationReviewFindings,
@@ -615,8 +624,17 @@ impl BlockerCode {
             Self::MissingProofVerdict => "missing_proof_verdict",
             Self::MissingClosureProof => "missing_closure_proof",
             Self::RestoreReconcileNotGreen => "restore_reconcile_not_green",
+            Self::PendingSpecificationEvidence => "pending_specification_evidence",
+            Self::PendingExecutionPreparationEvidence => "pending_execution_preparation_evidence",
+            Self::PendingApprovalDelegationEvidence => "pending_approval_delegation_evidence",
+            Self::PendingImplementationEvidence => "pending_implementation_evidence",
+            Self::PendingReviewCleanEvidence => "pending_review_clean_evidence",
+            Self::PendingVerificationEvidence => "pending_verification_evidence",
+            Self::PendingLaneEvidence => "pending_lane_evidence",
+            Self::PendingReviewFindings => "pending_review_findings",
             Self::PendingDesignPacket => "pending_design_packet",
             Self::PendingDeveloperHandoffPacket => "pending_developer_handoff_packet",
+            Self::MissingExecutionPreparationContract => "missing_execution_preparation_contract",
             Self::ImplementationReviewDenied => "implementation_review_denied",
             Self::ImplementationReviewExpired => "implementation_review_expired",
             Self::ImplementationReviewFindings => "implementation_review_findings",
@@ -768,8 +786,21 @@ impl BlockerCode {
             "missing_proof_verdict" => Some(Self::MissingProofVerdict),
             "missing_closure_proof" => Some(Self::MissingClosureProof),
             "restore_reconcile_not_green" => Some(Self::RestoreReconcileNotGreen),
+            "pending_specification_evidence" => Some(Self::PendingSpecificationEvidence),
+            "pending_execution_preparation_evidence" => {
+                Some(Self::PendingExecutionPreparationEvidence)
+            }
+            "pending_approval_delegation_evidence" => Some(Self::PendingApprovalDelegationEvidence),
+            "pending_implementation_evidence" => Some(Self::PendingImplementationEvidence),
+            "pending_review_clean_evidence" => Some(Self::PendingReviewCleanEvidence),
+            "pending_verification_evidence" => Some(Self::PendingVerificationEvidence),
+            "pending_lane_evidence" => Some(Self::PendingLaneEvidence),
+            "pending_review_findings" => Some(Self::PendingReviewFindings),
             "pending_design_packet" => Some(Self::PendingDesignPacket),
             "pending_developer_handoff_packet" => Some(Self::PendingDeveloperHandoffPacket),
+            "missing_execution_preparation_contract" => {
+                Some(Self::MissingExecutionPreparationContract)
+            }
             "implementation_review_denied" => Some(Self::ImplementationReviewDenied),
             "implementation_review_expired" => Some(Self::ImplementationReviewExpired),
             "implementation_review_findings" => Some(Self::ImplementationReviewFindings),
@@ -1273,6 +1304,35 @@ mod tests {
     }
 
     #[test]
+    fn blocker_code_normalization_supports_development_flow_completion_codes() {
+        let codes = canonical_blocker_code_list([
+            " pending_specification_evidence ",
+            "pending_execution_preparation_evidence",
+            "pending_approval_delegation_evidence",
+            "pending_implementation_evidence",
+            "pending_review_clean_evidence",
+            "pending_verification_evidence",
+            "pending_lane_evidence",
+            "pending_review_findings",
+            "missing_execution_preparation_contract",
+        ]);
+        assert_eq!(
+            codes,
+            vec![
+                "missing_execution_preparation_contract".to_string(),
+                "pending_approval_delegation_evidence".to_string(),
+                "pending_execution_preparation_evidence".to_string(),
+                "pending_implementation_evidence".to_string(),
+                "pending_lane_evidence".to_string(),
+                "pending_review_clean_evidence".to_string(),
+                "pending_review_findings".to_string(),
+                "pending_specification_evidence".to_string(),
+                "pending_verification_evidence".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn blocker_code_normalization_supports_parameterized_registry_families() {
         let codes = canonical_blocker_code_list([
             " missing_metadata_family ",
@@ -1347,6 +1407,48 @@ mod tests {
         assert!(
             missing.is_empty(),
             "found explicit blocker push literals outside registry: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn completion_blocker_literals_are_registry_backed() {
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut missing = BTreeSet::new();
+
+        for entry in std::fs::read_dir(src_dir).expect("read src dir") {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                continue;
+            }
+
+            let source = std::fs::read_to_string(&path).expect("read source");
+            let needle = "\"completion_blocker\": \"";
+            let mut rest = source.as_str();
+            while let Some(idx) = rest.find(needle) {
+                let after = &rest[idx + needle.len()..];
+                let Some(end) = after.find('"') else {
+                    break;
+                };
+                let candidate = &after[..end];
+                let simple_literal = candidate
+                    .chars()
+                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_');
+                if simple_literal && super::canonical_blocker_code_str(candidate).is_none() {
+                    missing.insert(format!(
+                        "{}:{}",
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("unknown"),
+                        candidate
+                    ));
+                }
+                rest = &after[end + 1..];
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "found completion_blocker literals outside registry: {missing:?}"
         );
     }
 

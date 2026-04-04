@@ -2174,6 +2174,14 @@ fn request_requires_execution_preparation(
 }
 
 fn legacy_development_flow_templates() -> Vec<serde_json::Value> {
+    let pending_specification_evidence =
+        blocker_code_str(BlockerCode::PendingSpecificationEvidence);
+    let pending_execution_preparation_evidence =
+        blocker_code_str(BlockerCode::PendingExecutionPreparationEvidence);
+    let pending_implementation_evidence =
+        blocker_code_str(BlockerCode::PendingImplementationEvidence);
+    let pending_review_clean_evidence = blocker_code_str(BlockerCode::PendingReviewCleanEvidence);
+    let pending_verification_evidence = blocker_code_str(BlockerCode::PendingVerificationEvidence);
     vec![
         serde_json::json!({
             "lane_id": "specification",
@@ -2184,7 +2192,7 @@ fn legacy_development_flow_templates() -> Vec<serde_json::Value> {
             "closure_class": "law",
             "stage": "design_gate",
             "inclusion_rule": "when_design_gate",
-            "completion_blocker": "pending_specification_evidence",
+            "completion_blocker": pending_specification_evidence,
         }),
         serde_json::json!({
             "lane_id": "execution_preparation",
@@ -2195,7 +2203,7 @@ fn legacy_development_flow_templates() -> Vec<serde_json::Value> {
             "closure_class": "refactor",
             "stage": "execution",
             "inclusion_rule": "when_execution_preparation_required",
-            "completion_blocker": "pending_execution_preparation_evidence",
+            "completion_blocker": pending_execution_preparation_evidence,
         }),
         serde_json::json!({
             "lane_id": "implementation",
@@ -2206,7 +2214,7 @@ fn legacy_development_flow_templates() -> Vec<serde_json::Value> {
             "closure_class": "implementation",
             "stage": "execution",
             "inclusion_rule": "always",
-            "completion_blocker": "pending_implementation_evidence",
+            "completion_blocker": pending_implementation_evidence,
         }),
         serde_json::json!({
             "lane_id": "coach",
@@ -2217,7 +2225,7 @@ fn legacy_development_flow_templates() -> Vec<serde_json::Value> {
             "closure_class": "proof",
             "stage": "execution",
             "inclusion_rule": "when_flow_requires_coach",
-            "completion_blocker": "pending_review_clean_evidence",
+            "completion_blocker": pending_review_clean_evidence,
         }),
         serde_json::json!({
             "lane_id": "verification",
@@ -2228,7 +2236,7 @@ fn legacy_development_flow_templates() -> Vec<serde_json::Value> {
             "closure_class": "proof",
             "stage": "execution",
             "inclusion_rule": "when_flow_requires_verification",
-            "completion_blocker": "pending_verification_evidence",
+            "completion_blocker": pending_verification_evidence,
         }),
     ]
 }
@@ -4193,7 +4201,7 @@ fn derive_downstream_dispatch_preview(
             {
                 let evidence_blocker = current_lane
                     .and_then(|lane| lane["completion_blocker"].as_str())
-                    .unwrap_or("pending_specification_evidence");
+                    .unwrap_or(blocker_code_str(BlockerCode::PendingSpecificationEvidence));
                 return (
                     Some("work-pool-pack".to_string()),
                     json_string(
@@ -4248,7 +4256,7 @@ fn derive_downstream_dispatch_preview(
                     .as_deref()
                     .and_then(|target| dispatch_contract_lane(&role_selection.execution_plan, target))
                     .and_then(|lane| lane["completion_blocker"].as_str())
-                    .unwrap_or("pending_lane_evidence")
+                    .unwrap_or(blocker_code_str(BlockerCode::PendingLaneEvidence))
                     .to_string();
                 let has_lane_evidence = receipt.dispatch_status == "executed"
                     || receipt
@@ -4601,7 +4609,7 @@ fn runtime_packet_prompt(
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nHost-local shell/edit capability is not a write-authority receipt.\nFirst substantive response: publish a concise plan before edits or implementation.\nLocal orchestrator coding is forbidden without an explicit exception path.\nFinding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session fallback; wait, reroute, or record the exception path first.\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
+        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nHost-local shell/edit capability is not a write-authority receipt.\nFirst substantive response: publish a concise plan before edits or implementation.\nLocal orchestrator coding is forbidden without an explicit exception path.\nBefore any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`.\nUnder continued-development intent, stay in commentary/progress mode; final closure wording is forbidden unless the user explicitly asks to stop.\nAfter any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item instead of pausing at a summary.\nFinding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session fallback; wait, reroute, or record the exception path first.\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
     )
 }
 

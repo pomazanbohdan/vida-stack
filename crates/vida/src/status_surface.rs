@@ -77,6 +77,18 @@ fn has_runtime_root_session_write_guard(value: &serde_json::Value) -> bool {
         && value["pre_write_checkpoint_required"].is_boolean()
 }
 
+fn canonical_root_session_write_guard_defaults() -> serde_json::Value {
+    serde_json::json!({
+        "status": "blocked_by_default",
+        "root_session_role": "orchestrator",
+        "lawful_write_surface": "vida agent-init",
+        "host_local_write_capability_is_not_authority": true,
+        "local_write_requires_exception_path": true,
+        "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
+        "pre_write_checkpoint_required": true,
+    })
+}
+
 fn migration_requires_action(migration_state: &str) -> bool {
     !matches!(migration_state, "none_required" | "no_migration_required")
 }
@@ -1364,7 +1376,19 @@ pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
             }
         }
     }
-    let guard = guard.unwrap_or(serde_json::Value::Null);
+    let mut guard = guard.unwrap_or(serde_json::Value::Null);
+    if guard["status"].as_str() == Some("blocked_by_default") {
+        let defaults = canonical_root_session_write_guard_defaults();
+        if let (Some(guard_obj), Some(defaults_obj)) = (guard.as_object_mut(), defaults.as_object())
+        {
+            for (key, value) in defaults_obj {
+                let missing = guard_obj.get(key).is_none_or(|existing| existing.is_null());
+                if missing {
+                    guard_obj.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
     let guard_ok = has_runtime_root_session_write_guard(&guard);
     serde_json::json!({
         "status": if guard_ok { "blocked_by_default" } else { "missing" },
@@ -1587,9 +1611,12 @@ fn host_agents_json_value(host_agents: Option<&serde_json::Value>) -> serde_json
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, time::SystemTime};
+
     use super::{
         canonical_activation_status, external_cli_preflight_summary, host_cli_system_entry_summary,
-        release1_operator_contracts_consistency_error, selected_host_cli_system_entry,
+        release1_operator_contracts_consistency_error,
+        root_session_write_guard_summary_from_snapshot_path, selected_host_cli_system_entry,
         shared_operator_output_contract_parity_error,
     };
     use crate::state_store;
@@ -1777,6 +1804,52 @@ agent_system:
         assert_eq!(summary["requires_external_cli"], false);
         assert_eq!(summary["external_cli_subagents_present"], true);
         assert_eq!(summary["selected_execution_class"], "internal");
+    }
+
+    #[test]
+    fn root_session_write_guard_summary_backfills_canonical_defaults_for_legacy_snapshot() {
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-status-root-session-guard-legacy-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let snapshot_path = root.join("runtime-consumption/final-legacy.json");
+        fs::write(
+            &snapshot_path,
+            serde_json::json!({
+                "payload": {
+                    "role_selection": {
+                        "execution_plan": {
+                            "root_session_write_guard": {
+                                "status": "blocked_by_default",
+                                "root_session_role": "orchestrator",
+                                "local_write_requires_exception_path": true,
+                                "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
+                                "pre_write_checkpoint_required": true
+                            }
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("legacy snapshot should write");
+
+        let summary = root_session_write_guard_summary_from_snapshot_path(snapshot_path.to_str());
+        assert_eq!(summary["status"], "blocked_by_default");
+        assert_eq!(summary["lawful_write_surface"], "vida agent-init");
+        assert_eq!(
+            summary["host_local_write_capability_is_not_authority"],
+            true
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

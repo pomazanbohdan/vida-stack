@@ -4647,6 +4647,24 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
         .as_str()
         .expect("prompt should be present")
         .contains(
+            "Before any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`."
+        ));
+    assert!(downstream_packet_json["prompt"]
+        .as_str()
+        .expect("prompt should be present")
+        .contains(
+            "Under continued-development intent, stay in commentary/progress mode; final closure wording is forbidden unless the user explicitly asks to stop."
+        ));
+    assert!(downstream_packet_json["prompt"]
+        .as_str()
+        .expect("prompt should be present")
+        .contains(
+            "After any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item instead of pausing at a summary."
+        ));
+    assert!(downstream_packet_json["prompt"]
+        .as_str()
+        .expect("prompt should be present")
+        .contains(
             "Finding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session fallback; wait, reroute, or record the exception path first."
         ));
     assert!(parsed["payload"]["dispatch_receipt"]["activation_agent_type"].is_null());

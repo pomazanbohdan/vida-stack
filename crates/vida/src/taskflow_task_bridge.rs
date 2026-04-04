@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use crate::release1_contracts::canonical_release1_contract_status_str;
+use crate::release1_contracts::{
+    blocker_code_str, canonical_release1_contract_status_str, BlockerCode,
+};
 use crate::state_store::TaskRecord;
 
 pub(crate) fn taskflow_native_state_root(project_root: &Path) -> PathBuf {
@@ -43,6 +45,10 @@ fn read_runtime_consumption_snapshot(state_root: &Path) -> Result<serde_json::Va
 }
 
 fn has_execution_preparation_blocker(snapshot: &serde_json::Value) -> bool {
+    let pending_execution_preparation_evidence =
+        blocker_code_str(BlockerCode::PendingExecutionPreparationEvidence);
+    let missing_execution_preparation_contract =
+        blocker_code_str(BlockerCode::MissingExecutionPreparationContract);
     let mut blockers: Vec<&str> = Vec::new();
     if let Some(rows) = snapshot["closure_admission"]["blockers"].as_array() {
         blockers.extend(rows.iter().filter_map(serde_json::Value::as_str));
@@ -54,8 +60,8 @@ fn has_execution_preparation_blocker(snapshot: &serde_json::Value) -> bool {
         blockers.push(code);
     }
     blockers.iter().any(|value| {
-        *value == "pending_execution_preparation_evidence"
-            || *value == "missing_execution_preparation_contract"
+        *value == pending_execution_preparation_evidence
+            || *value == missing_execution_preparation_contract
     })
 }
 
@@ -85,10 +91,10 @@ pub(crate) fn enforce_execution_preparation_contract_gate(state_root: &Path) -> 
         );
     }
     if has_execution_preparation_blocker(&snapshot) {
-        return Err(
-            "execution_preparation_gate_blocked: pending_execution_preparation_evidence"
-                .to_string(),
-        );
+        return Err(format!(
+            "execution_preparation_gate_blocked: {}",
+            blocker_code_str(BlockerCode::PendingExecutionPreparationEvidence)
+        ));
     }
     Ok(())
 }
