@@ -697,7 +697,12 @@ pub(crate) async fn run_boot(args: BootArgs) -> ExitCode {
                                             compatibility.classification, compatibility.next_step
                                         ),
                                     );
-                                    if compatibility.classification != "compatible" {
+                                    if crate::release1_contracts::canonical_compatibility_class_str(
+                                        &compatibility.classification,
+                                    ) != Some(
+                                        crate::release1_contracts::CompatibilityClass::BackwardCompatible
+                                            .as_str(),
+                                    ) {
                                         eprintln!(
                                             "Boot compatibility check failed: {}",
                                             compatibility.reasons.join(", ")

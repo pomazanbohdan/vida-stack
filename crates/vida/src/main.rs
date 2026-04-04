@@ -1025,7 +1025,9 @@ async fn ensure_launcher_bootstrap(
         .evaluate_boot_compatibility()
         .await
         .map_err(|error| format!("Failed to evaluate boot compatibility: {error}"))?;
-    if compatibility.classification != "compatible" {
+    if crate::release1_contracts::canonical_compatibility_class_str(&compatibility.classification)
+        != Some(crate::release1_contracts::CompatibilityClass::BackwardCompatible.as_str())
+    {
         return Err(format!(
             "Boot compatibility check failed: {}",
             compatibility.reasons.join(", ")

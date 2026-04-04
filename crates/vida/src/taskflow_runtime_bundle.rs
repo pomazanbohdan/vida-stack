@@ -1332,7 +1332,8 @@ fn init_status(
     migration_state: &str,
     protocol_binding_registry: &serde_json::Value,
 ) -> &'static str {
-    if boot_classification == "compatible"
+    if super::release1_contracts::canonical_compatibility_class_str(boot_classification)
+        == Some(super::release1_contracts::CompatibilityClass::BackwardCompatible.as_str())
         && migration_state == "no_migration_required"
         && protocol_binding_registry["binding_status"] == "bound"
     {
