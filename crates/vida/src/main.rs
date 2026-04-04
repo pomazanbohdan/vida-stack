@@ -2656,6 +2656,7 @@ fn build_runtime_orchestration_contract(
             "agent_only_development_required": agent_only_development,
             "canonical_project_delegated_execution_surface": "vida agent-init",
             "host_subagent_apis_are_backend_details": true,
+            "host_local_write_capability_is_not_authority": true,
             "generic_single_worker_dispatch_forbidden": true,
             "local_implementation_without_exception_path_forbidden": true,
             "required_lanes": dispatch_contract["lane_sequence"]
@@ -2674,6 +2675,8 @@ fn build_root_session_write_guard() -> serde_json::Value {
         "status": "blocked_by_default",
         "root_session_role": "orchestrator",
         "local_write_requires_exception_path": true,
+        "lawful_write_surface": "vida agent-init",
+        "host_local_write_capability_is_not_authority": true,
         "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
         "pre_write_checkpoint_required": true,
     })
@@ -4598,7 +4601,7 @@ fn runtime_packet_prompt(
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nFirst substantive response: publish a concise plan before edits or implementation.\nLocal orchestrator coding is forbidden without an explicit exception path.\nFinding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session fallback; wait, reroute, or record the exception path first.\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
+        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nHost-local shell/edit capability is not a write-authority receipt.\nFirst substantive response: publish a concise plan before edits or implementation.\nLocal orchestrator coding is forbidden without an explicit exception path.\nFinding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session fallback; wait, reroute, or record the exception path first.\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
     )
 }
 

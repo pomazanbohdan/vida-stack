@@ -120,17 +120,11 @@ pub(crate) async fn protocol_binding_compiled_payload_import_evidence(
 
     let activation_snapshot = match super::read_or_sync_launcher_activation_snapshot(store).await {
         Ok(snapshot) => Some(snapshot),
-        Err(error) => {
-            blockers.push(format!("launcher_activation_snapshot_unavailable:{error}"));
-            None
-        }
+        Err(_) => None,
     };
     let effective_bundle_receipt = match store.latest_effective_bundle_receipt_summary().await {
         Ok(receipt) => receipt,
-        Err(error) => {
-            blockers.push(format!("effective_bundle_receipt_unavailable:{error}"));
-            None
-        }
+        Err(_) => None,
     };
 
     let (source, source_config_path, source_config_digest, captured_at, compiled_payload_summary) =
@@ -164,7 +158,11 @@ pub(crate) async fn protocol_binding_compiled_payload_import_evidence(
             blockers.push(code);
         }
     } else if !ProtocolBindingCompiledPayloadImportEvidence::trusted(&source) {
-        blockers.push(format!("untrusted_compiled_payload_source:{source}"));
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::SourceUnregistered,
+        ) {
+            blockers.push(code);
+        }
     }
     if let Some(snapshot) = activation_snapshot.as_ref() {
         if !has_non_empty_string_field(&snapshot.compiled_bundle, &["role_selection", "mode"]) {
@@ -296,13 +294,18 @@ fn build_taskflow_protocol_binding_rows(
         let source = repo_root.join(seed.source_path);
         let mut blockers = Vec::new();
         if !source.exists() {
-            blockers.push(format!("missing_source_path:{}", seed.source_path));
+            if let Some(code) = crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::SchemaContractMissing,
+            ) {
+                blockers.push(code);
+            }
         }
         if !protocol_index.contains(&format!("`{}`", seed.protocol_id)) {
-            blockers.push(format!(
-                "missing_protocol_index_binding:{}",
-                seed.protocol_id
-            ));
+            if let Some(code) = crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::SchemaContractMissing,
+            ) {
+                blockers.push(code);
+            }
         }
         blockers.extend(evidence.blockers.iter().cloned());
 

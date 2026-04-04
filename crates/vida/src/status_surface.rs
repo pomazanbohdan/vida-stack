@@ -1339,6 +1339,8 @@ pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
         return serde_json::json!({
             "status": "missing",
             "reason": "runtime_consumption_snapshot_missing",
+            "lawful_write_surface": serde_json::Value::Null,
+            "host_local_write_capability_is_not_authority": serde_json::Value::Null,
             "local_write_requires_exception_path": serde_json::Value::Null,
             "required_exception_evidence": serde_json::Value::Null,
         });
@@ -1348,6 +1350,8 @@ pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
         return serde_json::json!({
             "status": "missing",
             "reason": "runtime_consumption_snapshot_unreadable",
+            "lawful_write_surface": serde_json::Value::Null,
+            "host_local_write_capability_is_not_authority": serde_json::Value::Null,
             "local_write_requires_exception_path": serde_json::Value::Null,
             "required_exception_evidence": serde_json::Value::Null,
         });
@@ -1372,6 +1376,8 @@ pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
             )
         },
         "root_session_role": guard["root_session_role"].clone(),
+        "lawful_write_surface": guard["lawful_write_surface"].clone(),
+        "host_local_write_capability_is_not_authority": guard["host_local_write_capability_is_not_authority"].clone(),
         "local_write_requires_exception_path": guard["local_write_requires_exception_path"].clone(),
         "required_exception_evidence": guard["required_exception_evidence"].clone(),
         "pre_write_checkpoint_required": guard["pre_write_checkpoint_required"].clone(),

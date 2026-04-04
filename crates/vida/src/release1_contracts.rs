@@ -787,6 +787,153 @@ pub(crate) fn canonical_blocker_code_str(value: &str) -> Option<&'static str> {
     BlockerCode::from_str(value).map(BlockerCode::as_str)
 }
 
+const BLOCKER_FAMILY_NAMES: &[&str] = &[
+    "metadata",
+    "control_core",
+    "activation_bundle",
+    "protocol_binding_registry",
+    "cache_delivery_contract",
+    "orchestrator_init_view",
+    "agent_init_view",
+];
+const CACHE_KEY_INPUT_KEYS: &[&str] = &[
+    "source_version_tuple",
+    "project_activation_revision",
+    "protocol_binding_revision",
+    "protocol_binding_cache_token",
+    "startup_bundle_revision",
+];
+const INVALIDATION_TUPLE_KEYS: &[&str] = &[
+    "framework_revision",
+    "project_activation_revision",
+    "protocol_binding_revision",
+    "protocol_binding_cache_token",
+    "startup_bundle_revision",
+];
+const METADATA_TUPLE_KEYS: &[&str] = &[
+    "framework_revision",
+    "project_activation_revision",
+    "protocol_binding_revision",
+    "protocol_binding_cache_token",
+];
+const CACHE_KEY_MISMATCH_KEYS: &[&str] = &[
+    "project_activation_revision",
+    "protocol_binding_revision",
+    "protocol_binding_cache_token",
+];
+const RETRIEVAL_OPTIONAL_BOUNDARY_KEYS: &[&str] = &[
+    "full_project_owner_protocols",
+    "non_promoted_project_docs",
+    "broad_repo_manual_scan",
+];
+const RETRIEVAL_TRUST_EVIDENCE_KEYS: &[&str] = &["source", "citation", "freshness", "acl"];
+
+fn canonical_parametric_blocker_code_value(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if BLOCKER_FAMILY_NAMES
+        .iter()
+        .any(|family| trimmed == format!("missing_{family}_family"))
+    {
+        return Some(trimmed.to_string());
+    }
+    if trimmed == "missing_triggered_domain_bundle_partition"
+        || trimmed == "cache_registry_contract_missing_triggered_domain_binding"
+        || trimmed == "missing_retrieval_only_optional_context_boundary"
+        || trimmed == "missing_retrieval_trust_evidence"
+    {
+        return Some(trimmed.to_string());
+    }
+    canonical_parametric_blocker_code_with_suffix(
+        trimmed,
+        "missing_cache_key_input:",
+        CACHE_KEY_INPUT_KEYS,
+    )
+    .or_else(|| {
+        canonical_parametric_blocker_code_with_suffix(
+            trimmed,
+            "missing_invalidation_tuple_key:",
+            INVALIDATION_TUPLE_KEYS,
+        )
+    })
+    .or_else(|| {
+        canonical_parametric_blocker_code_with_suffix(
+            trimmed,
+            "invalid_cache_key_input:",
+            CACHE_KEY_INPUT_KEYS,
+        )
+    })
+    .or_else(|| {
+        canonical_parametric_blocker_code_with_suffix(
+            trimmed,
+            "invalid_invalidation_tuple_key:",
+            INVALIDATION_TUPLE_KEYS,
+        )
+    })
+    .or_else(|| {
+        canonical_parametric_blocker_code_with_suffix(
+            trimmed,
+            "missing_metadata_tuple_key:",
+            METADATA_TUPLE_KEYS,
+        )
+    })
+    .or_else(|| {
+        canonical_parametric_blocker_code_with_suffix(
+            trimmed,
+            "invalid_metadata_tuple_key:",
+            METADATA_TUPLE_KEYS,
+        )
+    })
+    .or_else(|| {
+        canonical_parametric_blocker_code_with_suffix(
+            trimmed,
+            "cache_key_mismatch:",
+            CACHE_KEY_MISMATCH_KEYS,
+        )
+    })
+    .or_else(|| {
+        canonical_parametric_blocker_code_with_suffix(
+            trimmed,
+            "invalidation_tuple_mismatch:",
+            INVALIDATION_TUPLE_KEYS,
+        )
+    })
+    .or_else(|| {
+        canonical_parametric_blocker_code_with_suffix(
+            trimmed,
+            "missing_retrieval_optional_boundary_entry:",
+            RETRIEVAL_OPTIONAL_BOUNDARY_KEYS,
+        )
+    })
+    .or_else(|| {
+        canonical_parametric_blocker_code_with_suffix(
+            trimmed,
+            "missing_retrieval_trust_evidence_field:",
+            RETRIEVAL_TRUST_EVIDENCE_KEYS,
+        )
+    })
+}
+
+fn canonical_parametric_blocker_code_with_suffix(
+    value: &str,
+    prefix: &str,
+    allowed_suffixes: &[&str],
+) -> Option<String> {
+    let suffix = value.strip_prefix(prefix)?;
+    allowed_suffixes
+        .contains(&suffix)
+        .then(|| value.to_string())
+}
+
+pub(crate) fn canonical_blocker_code_value_from_str(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    canonical_blocker_code_str(trimmed)
+        .map(str::to_string)
+        .or_else(|| canonical_parametric_blocker_code_value(trimmed))
+}
+
 pub(crate) fn canonical_blocker_code_list<I, S>(values: I) -> Vec<String>
 where
     I: IntoIterator<Item = S>,
@@ -794,8 +941,7 @@ where
 {
     values
         .into_iter()
-        .filter_map(|value| canonical_blocker_code_str(value.as_ref()))
-        .map(str::to_string)
+        .filter_map(|value| canonical_blocker_code_value_from_str(value.as_ref()))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
@@ -809,6 +955,52 @@ pub(crate) fn blocker_code_value(code: BlockerCode) -> Option<String> {
     canonical_blocker_code_list([code.as_str()])
         .into_iter()
         .next()
+}
+
+pub(crate) fn missing_family_blocker_code(family: &str) -> Option<String> {
+    canonical_blocker_code_value_from_str(&format!("missing_{family}_family"))
+}
+
+pub(crate) fn missing_cache_key_input_blocker_code(key: &str) -> Option<String> {
+    canonical_blocker_code_value_from_str(&format!("missing_cache_key_input:{key}"))
+}
+
+pub(crate) fn missing_invalidation_tuple_key_blocker_code(key: &str) -> Option<String> {
+    canonical_blocker_code_value_from_str(&format!("missing_invalidation_tuple_key:{key}"))
+}
+
+pub(crate) fn invalid_cache_key_input_blocker_code(key: &str) -> Option<String> {
+    canonical_blocker_code_value_from_str(&format!("invalid_cache_key_input:{key}"))
+}
+
+pub(crate) fn invalid_invalidation_tuple_key_blocker_code(key: &str) -> Option<String> {
+    canonical_blocker_code_value_from_str(&format!("invalid_invalidation_tuple_key:{key}"))
+}
+
+pub(crate) fn missing_metadata_tuple_key_blocker_code(key: &str) -> Option<String> {
+    canonical_blocker_code_value_from_str(&format!("missing_metadata_tuple_key:{key}"))
+}
+
+pub(crate) fn invalid_metadata_tuple_key_blocker_code(key: &str) -> Option<String> {
+    canonical_blocker_code_value_from_str(&format!("invalid_metadata_tuple_key:{key}"))
+}
+
+pub(crate) fn cache_key_mismatch_blocker_code(key: &str) -> Option<String> {
+    canonical_blocker_code_value_from_str(&format!("cache_key_mismatch:{key}"))
+}
+
+pub(crate) fn invalidation_tuple_mismatch_blocker_code(key: &str) -> Option<String> {
+    canonical_blocker_code_value_from_str(&format!("invalidation_tuple_mismatch:{key}"))
+}
+
+pub(crate) fn missing_retrieval_optional_boundary_entry_blocker_code(key: &str) -> Option<String> {
+    canonical_blocker_code_value_from_str(&format!(
+        "missing_retrieval_optional_boundary_entry:{key}"
+    ))
+}
+
+pub(crate) fn missing_retrieval_trust_evidence_field_blocker_code(key: &str) -> Option<String> {
+    canonical_blocker_code_value_from_str(&format!("missing_retrieval_trust_evidence_field:{key}"))
 }
 
 struct DecisionGateRule {
@@ -1078,6 +1270,41 @@ mod tests {
                 "implementation_review_findings".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn blocker_code_normalization_supports_parameterized_registry_families() {
+        let codes = canonical_blocker_code_list([
+            " missing_metadata_family ",
+            "missing_cache_key_input:protocol_binding_revision",
+            "invalid_invalidation_tuple_key:startup_bundle_revision",
+            "cache_key_mismatch:protocol_binding_revision",
+            "missing_retrieval_optional_boundary_entry:non_promoted_project_docs",
+            "missing_retrieval_trust_evidence_field:acl",
+            "missing_retrieval_trust_evidence",
+        ]);
+        assert_eq!(
+            codes,
+            vec![
+                "cache_key_mismatch:protocol_binding_revision".to_string(),
+                "invalid_invalidation_tuple_key:startup_bundle_revision".to_string(),
+                "missing_cache_key_input:protocol_binding_revision".to_string(),
+                "missing_metadata_family".to_string(),
+                "missing_retrieval_optional_boundary_entry:non_promoted_project_docs".to_string(),
+                "missing_retrieval_trust_evidence".to_string(),
+                "missing_retrieval_trust_evidence_field:acl".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn blocker_code_normalization_rejects_unknown_parameterized_suffixes() {
+        let codes = canonical_blocker_code_list([
+            "missing_cache_key_input:not_real",
+            "missing_retrieval_trust_evidence_field:not_real",
+            "missing_unknown_family",
+        ]);
+        assert!(codes.is_empty());
     }
 
     #[test]

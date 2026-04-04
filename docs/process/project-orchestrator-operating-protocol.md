@@ -166,6 +166,7 @@ Clarification:
 
 1. a "very small one-file fix" is not an independent bypass around worker-first or open-delegation law,
 2. if the work is still write-producing, local handling must still satisfy the exception-path and delegated-cycle gates.
+3. local shell access, `apply_patch`, or any other host-tool write affordance is not by itself a legality signal for root-session implementation.
 
 Lane-identity rule:
 
@@ -323,5 +324,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-orchestrator-operating-protocol.md
 created_at: '2026-03-13T18:40:00+02:00'
-updated_at: 2026-04-04T18:05:00+03:00
+updated_at: 2026-04-04T20:12:10.232383544Z
 changelog_ref: project-orchestrator-operating-protocol.changelog.jsonl

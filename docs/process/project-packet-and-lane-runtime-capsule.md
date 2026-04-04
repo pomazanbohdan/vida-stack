@@ -50,6 +50,7 @@ For normal write-producing work:
 
 Read-only findings feed the next packet; they do not transfer root-session write ownership.
 The canonical delegated execution surface is the runtime lane flow through `vida agent-init`; host subagent APIs may exist under the selected carrier system, but they do not replace the project runtime contract.
+Host-local shell or patch capability is not a receipt and does not transfer write ownership back to the root session.
 
 ## Local-Work Boundary
 
@@ -85,5 +86,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-packet-and-lane-runtime-capsule.md
 created_at: '2026-03-13T18:05:15+02:00'
-updated_at: '2026-03-13T18:05:15+02:00'
+updated_at: 2026-04-04T20:12:10.23251331Z
 changelog_ref: project-packet-and-lane-runtime-capsule.changelog.jsonl

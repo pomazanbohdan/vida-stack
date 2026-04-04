@@ -190,6 +190,8 @@ fn seed_runtime_consumption_final_snapshot(state_dir: &str) -> String {
                             "status": "blocked_by_default",
                             "root_session_role": "orchestrator",
                             "local_write_requires_exception_path": true,
+                            "lawful_write_surface": "vida agent-init",
+                            "host_local_write_capability_is_not_authority": true,
                             "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
                             "pre_write_checkpoint_required": true
                         },
@@ -198,6 +200,8 @@ fn seed_runtime_consumption_final_snapshot(state_dir: &str) -> String {
                                 "status": "blocked_by_default",
                                 "root_session_role": "orchestrator",
                                 "local_write_requires_exception_path": true,
+                                "lawful_write_surface": "vida agent-init",
+                                "host_local_write_capability_is_not_authority": true,
                                 "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
                                 "pre_write_checkpoint_required": true
                             }
@@ -4614,6 +4618,11 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
             ["host_subagent_apis_are_backend_details"],
         true
     );
+    assert_eq!(
+        downstream_packet_json["orchestration_contract"]["delegation_policy"]
+            ["host_local_write_capability_is_not_authority"],
+        true
+    );
     assert!(downstream_packet_json["prompt"]
         .as_str()
         .expect("prompt should be present")
@@ -4630,6 +4639,10 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
         .contains(
             "Host subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract."
         ));
+    assert!(downstream_packet_json["prompt"]
+        .as_str()
+        .expect("prompt should be present")
+        .contains("Host-local shell/edit capability is not a write-authority receipt."));
     assert!(downstream_packet_json["prompt"]
         .as_str()
         .expect("prompt should be present")
@@ -11536,6 +11549,14 @@ fn status_surface_supports_compact_json_summary_view() {
         parsed["root_session_write_guard"]["status"],
         "blocked_by_default"
     );
+    assert_eq!(
+        parsed["root_session_write_guard"]["lawful_write_surface"],
+        "vida agent-init"
+    );
+    assert_eq!(
+        parsed["root_session_write_guard"]["host_local_write_capability_is_not_authority"],
+        true
+    );
 }
 
 #[test]
@@ -11663,6 +11684,14 @@ fn doctor_surface_supports_compact_json_summary_view() {
     assert_eq!(
         parsed["root_session_write_guard"]["status"],
         "blocked_by_default"
+    );
+    assert_eq!(
+        parsed["root_session_write_guard"]["lawful_write_surface"],
+        "vida agent-init"
+    );
+    assert_eq!(
+        parsed["root_session_write_guard"]["host_local_write_capability_is_not_authority"],
+        true
     );
 }
 

@@ -74,7 +74,37 @@ This taxonomy defines:
 2. Multiple codes are allowed when multiple primary causes exist.
 3. Free-form text does not replace canonical codes.
 
-## 9. References
+## 9. Parameterized Blocker Families
+
+The canonical registry also admits the following bounded parameterized blocker families. Their prefixes are part of the owner law; suffixes are constrained to the enumerated domains and may not be improvised ad hoc in runtime code.
+
+1. `missing_<family>_family`
+   Allowed `<family>` values:
+   `metadata`, `control_core`, `activation_bundle`, `protocol_binding_registry`, `cache_delivery_contract`, `orchestrator_init_view`, `agent_init_view`
+2. `missing_cache_key_input:<key>` and `invalid_cache_key_input:<key>`
+   Allowed `<key>` values:
+   `source_version_tuple`, `project_activation_revision`, `protocol_binding_revision`, `protocol_binding_cache_token`, `startup_bundle_revision`
+3. `missing_invalidation_tuple_key:<key>`, `invalid_invalidation_tuple_key:<key>`, and `invalidation_tuple_mismatch:<key>`
+   Allowed `<key>` values:
+   `framework_revision`, `project_activation_revision`, `protocol_binding_revision`, `protocol_binding_cache_token`, `startup_bundle_revision`
+4. `missing_metadata_tuple_key:<key>` and `invalid_metadata_tuple_key:<key>`
+   Allowed `<key>` values:
+   `framework_revision`, `project_activation_revision`, `protocol_binding_revision`, `protocol_binding_cache_token`
+5. `cache_key_mismatch:<key>`
+   Allowed `<key>` values:
+   `project_activation_revision`, `protocol_binding_revision`, `protocol_binding_cache_token`
+6. `missing_triggered_domain_bundle_partition`
+7. `cache_registry_contract_missing_triggered_domain_binding`
+8. `missing_retrieval_only_optional_context_boundary`
+9. `missing_retrieval_optional_boundary_entry:<entry>`
+   Allowed `<entry>` values:
+   `full_project_owner_protocols`, `non_promoted_project_docs`, `broad_repo_manual_scan`
+10. `missing_retrieval_trust_evidence`
+11. `missing_retrieval_trust_evidence_field:<field>`
+   Allowed `<field>` values:
+   `source`, `citation`, `freshness`, `acl`
+
+## 10. References
 
 1. `docs/product/spec/release-1-closure-contract.md`
 2. `docs/product/spec/release-1-state-machine-specs.md`
@@ -89,5 +119,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/spec/release-1-error-and-exception-taxonomy.md
 created_at: 2026-03-16T11:35:00Z
-updated_at: 2026-03-16T11:28:19.792966228Z
+updated_at: 2026-04-04T20:12:10.235730643Z
 changelog_ref: release-1-error-and-exception-taxonomy.changelog.jsonl

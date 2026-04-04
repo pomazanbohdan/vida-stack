@@ -99,13 +99,14 @@ Project-routing rule:
 11. For development work, assume `delivery_task` is the default decomposition leaf and use `execution_block` only when one-owner bounded closure still fails.
 12. For normal write-producing work, assume delegated agents are the default execution path once a lawful packet exists, and interpret that path as the project runtime's delegated lane flow through `vida agent-init` rather than host-tool-specific subagent primitives.
 13. For cheaper orchestrator lanes, prefer the project orchestrator operating protocol over broad free-form planning.
-14. For new or resumed development orchestration sessions, prefer the compact project startup bundle for routine reads and expand only the needed deeper startup/packet owner surfaces when the bundle and project runtime capsules do not settle the question.
-15. Do not pre-split the whole backlog into `execution_block` leaves during bootstrap; keep launch readiness at `delivery_task` depth and refine just-in-time for the next active item.
-16. Before bounded work begins, inspect the current available skill catalog and activate the minimal relevant skill set or make `no_applicable_skill` explicit.
-17. Use the canonical project packet-template and prompt-stack protocols rather than inventing packet structure or prompt-layer precedence ad hoc.
-18. Treat boot readiness as incomplete until the project boot-readiness validation protocol can be satisfied for the current session.
-19. Keep the live root bootstrap carrier `AGENTS.md` synchronized with `install/assets/AGENTS.scaffold.md`; when one changes, update the other in the same bounded change.
-20. Synchronization is bidirectional and mandatory: if either `AGENTS.md` or `install/assets/AGENTS.scaffold.md` is changed, update the counterpart in the same bounded change before closure.
+14. Host-local shell/edit capability is read-side convenience only; it does not grant root-session write ownership while the delegated path remains lawful.
+15. For new or resumed development orchestration sessions, prefer the compact project startup bundle for routine reads and expand only the needed deeper startup/packet owner surfaces when the bundle and project runtime capsules do not settle the question.
+16. Do not pre-split the whole backlog into `execution_block` leaves during bootstrap; keep launch readiness at `delivery_task` depth and refine just-in-time for the next active item.
+17. Before bounded work begins, inspect the current available skill catalog and activate the minimal relevant skill set or make `no_applicable_skill` explicit.
+18. Use the canonical project packet-template and prompt-stack protocols rather than inventing packet structure or prompt-layer precedence ad hoc.
+19. Treat boot readiness as incomplete until the project boot-readiness validation protocol can be satisfied for the current session.
+20. Keep the live root bootstrap carrier `AGENTS.md` synchronized with `install/assets/AGENTS.scaffold.md`; when one changes, update the other in the same bounded change.
+21. Synchronization is bidirectional and mandatory: if either `AGENTS.md` or `install/assets/AGENTS.scaffold.md` is changed, update the counterpart in the same bounded change before closure.
 21. During active development, if a runtime/workflow blockage is detected and that blockage does not conform to project specs or canonical runtime requirements, treat it as implementation debt: fix the code path to restore spec-compliant behavior, prove it with bounded tests/evidence, and then continue execution without manual blocker bypass hacks.
 22. After completing a complex task, or after fixing any error/blocking condition, run a fresh release build, update the system-installed binary, and continue development immediately in the next cycle.
 
@@ -118,5 +119,5 @@ schema_version: '1'
 status: canonical
 source_path: AGENTS.sidecar.md
 created_at: '2026-03-10T02:13:40+02:00'
-updated_at: 2026-03-16T10:06:24.472459377Z
+updated_at: 2026-04-04T20:12:10.229590098Z
 changelog_ref: AGENTS.sidecar.changelog.jsonl

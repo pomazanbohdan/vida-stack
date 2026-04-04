@@ -53,17 +53,19 @@ Canonical entrypoints:
    - project-owned prompt-stack model that fixes the precedence between framework bootstrap, project role prompts, dynamic packets, skill overlays, and runtime state
 20. `docs/process/project-boot-readiness-validation-protocol.md`
    - project-owned bounded validation sequence that proves a development orchestration session is boot-ready before first dispatch
-21. `instruction-contracts/meta.protocol-naming-grammar-protocol.md`
+21. `docs/process/project-operations.md`
+   - current canonical process surface for feature-delivery flow, delegated execution posture, and launcher-owned progression commands
+22. `instruction-contracts/meta.protocol-naming-grammar-protocol.md`
    - canonical framework naming law and sequential rename-wave protocol for instruction artifacts
-22. `docs/process/framework-source-lineage-index.md`
+23. `docs/process/framework-source-lineage-index.md`
    - project-owned provenance index for deleted framework-formation plans/research documents and their promoted canonical homes
-23. `docs/process/framework-three-layer-refactoring-audit.md`
+24. `docs/process/framework-three-layer-refactoring-audit.md`
    - unified-format consolidated report for the first three refactored framework layers: `core`, orchestration shell, and runtime-family execution
-24. `docs/process/release-formatting-protocol.md`
+25. `docs/process/release-formatting-protocol.md`
    - canonical project process for rendering clean public GitHub release pages from canonical release-note artifacts
-25. `docs/product/spec/feature-design-and-adr-model.md`
+26. `docs/product/spec/feature-design-and-adr-model.md`
    - product-law owner for the split between structured feature/change design documents and linked ADRs
-26. `docs/framework/templates/feature-design-document.template.md`
+27. `docs/framework/templates/feature-design-document.template.md`
    - framework-owned reusable feature/change design template with stable sections and bounded variable fields
 
 -----
@@ -75,5 +77,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/README.md
 created_at: '2026-03-10T00:00:00+02:00'
-updated_at: '2026-03-14T17:15:00+02:00'
+updated_at: 2026-04-04T20:12:10.23219126Z
 changelog_ref: README.changelog.jsonl

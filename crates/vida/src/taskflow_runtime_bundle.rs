@@ -445,7 +445,9 @@ pub(crate) fn taskflow_consume_bundle_check(
         (&payload.agent_init_view, "agent_init_view"),
     ] {
         if !value.is_object() {
-            blockers.push(format!("missing_{family}_family"));
+            if let Some(code) = super::release1_contracts::missing_family_blocker_code(family) {
+                blockers.push(code);
+            }
         }
     }
     let protocol_rows = payload
@@ -689,7 +691,10 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
     ];
     for key in cache_required {
         if !cache_key_inputs.contains_key(key) {
-            blockers.push(format!("missing_cache_key_input:{key}"));
+            if let Some(code) = super::release1_contracts::missing_cache_key_input_blocker_code(key)
+            {
+                blockers.push(code);
+            }
         }
     }
 
@@ -702,7 +707,11 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
     ];
     for key in invalidation_required {
         if !invalidation_tuple.contains_key(key) {
-            blockers.push(format!("missing_invalidation_tuple_key:{key}"));
+            if let Some(code) =
+                super::release1_contracts::missing_invalidation_tuple_key_blocker_code(key)
+            {
+                blockers.push(code);
+            }
         }
     }
 
@@ -712,7 +721,11 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
         .map(|rows| rows.is_empty() || !rows.iter().all(is_canonical_release1_tuple_entry))
         .unwrap_or(true)
     {
-        blockers.push("invalid_cache_key_input:source_version_tuple".to_string());
+        if let Some(code) =
+            super::release1_contracts::invalid_cache_key_input_blocker_code("source_version_tuple")
+        {
+            blockers.push(code);
+        }
     }
     for key in [
         "project_activation_revision",
@@ -724,7 +737,10 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
             .get(key)
             .is_some_and(is_canonical_nonempty_string)
         {
-            blockers.push(format!("invalid_cache_key_input:{key}"));
+            if let Some(code) = super::release1_contracts::invalid_cache_key_input_blocker_code(key)
+            {
+                blockers.push(code);
+            }
         }
     }
     for key in [
@@ -738,7 +754,11 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
             .get(key)
             .is_some_and(is_canonical_nonempty_string)
         {
-            blockers.push(format!("invalid_invalidation_tuple_key:{key}"));
+            if let Some(code) =
+                super::release1_contracts::invalid_invalidation_tuple_key_blocker_code(key)
+            {
+                blockers.push(code);
+            }
         }
     }
 
@@ -762,56 +782,82 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
             "protocol_binding_cache_token",
         ] {
             if !metadata.contains_key(key) {
-                blockers.push(format!("missing_metadata_tuple_key:{key}"));
+                if let Some(code) =
+                    super::release1_contracts::missing_metadata_tuple_key_blocker_code(key)
+                {
+                    blockers.push(code);
+                }
             }
             if !metadata.get(key).is_some_and(is_canonical_nonempty_string) {
-                blockers.push(format!("invalid_metadata_tuple_key:{key}"));
+                if let Some(code) =
+                    super::release1_contracts::invalid_metadata_tuple_key_blocker_code(key)
+                {
+                    blockers.push(code);
+                }
             }
         }
         for (left, right, blocker_code) in [
             (
                 metadata.get("project_activation_revision"),
                 cache_key_inputs.get("project_activation_revision"),
-                "cache_key_mismatch:project_activation_revision",
+                super::release1_contracts::cache_key_mismatch_blocker_code(
+                    "project_activation_revision",
+                ),
             ),
             (
                 metadata.get("protocol_binding_revision"),
                 cache_key_inputs.get("protocol_binding_revision"),
-                "cache_key_mismatch:protocol_binding_revision",
+                super::release1_contracts::cache_key_mismatch_blocker_code(
+                    "protocol_binding_revision",
+                ),
             ),
             (
                 metadata.get("protocol_binding_cache_token"),
                 cache_key_inputs.get("protocol_binding_cache_token"),
-                "cache_key_mismatch:protocol_binding_cache_token",
+                super::release1_contracts::cache_key_mismatch_blocker_code(
+                    "protocol_binding_cache_token",
+                ),
             ),
             (
                 metadata.get("framework_revision"),
                 invalidation_tuple.get("framework_revision"),
-                "invalidation_tuple_mismatch:framework_revision",
+                super::release1_contracts::invalidation_tuple_mismatch_blocker_code(
+                    "framework_revision",
+                ),
             ),
             (
                 cache_key_inputs.get("project_activation_revision"),
                 invalidation_tuple.get("project_activation_revision"),
-                "invalidation_tuple_mismatch:project_activation_revision",
+                super::release1_contracts::invalidation_tuple_mismatch_blocker_code(
+                    "project_activation_revision",
+                ),
             ),
             (
                 cache_key_inputs.get("protocol_binding_revision"),
                 invalidation_tuple.get("protocol_binding_revision"),
-                "invalidation_tuple_mismatch:protocol_binding_revision",
+                super::release1_contracts::invalidation_tuple_mismatch_blocker_code(
+                    "protocol_binding_revision",
+                ),
             ),
             (
                 cache_key_inputs.get("protocol_binding_cache_token"),
                 invalidation_tuple.get("protocol_binding_cache_token"),
-                "invalidation_tuple_mismatch:protocol_binding_cache_token",
+                super::release1_contracts::invalidation_tuple_mismatch_blocker_code(
+                    "protocol_binding_cache_token",
+                ),
             ),
             (
                 cache_key_inputs.get("startup_bundle_revision"),
                 invalidation_tuple.get("startup_bundle_revision"),
-                "invalidation_tuple_mismatch:startup_bundle_revision",
+                super::release1_contracts::invalidation_tuple_mismatch_blocker_code(
+                    "startup_bundle_revision",
+                ),
             ),
         ] {
             if left.is_some() && right.is_some() && left != right {
-                blockers.push(blocker_code.to_string());
+                if let Some(code) = blocker_code {
+                    blockers.push(code);
+                }
             }
         }
     }
@@ -865,7 +911,11 @@ fn cache_registry_contract_blockers(payload: &TaskflowConsumeBundlePayload) -> V
         .get("triggered_domain_bundle")
         .and_then(serde_json::Value::as_array)
     else {
-        return vec!["missing_triggered_domain_bundle_partition".to_string()];
+        return super::release1_contracts::canonical_blocker_code_value_from_str(
+            "missing_triggered_domain_bundle_partition",
+        )
+        .into_iter()
+        .collect();
     };
 
     let includes_registry_contract = triggered_domain_bundle
@@ -874,7 +924,11 @@ fn cache_registry_contract_blockers(payload: &TaskflowConsumeBundlePayload) -> V
     if includes_registry_contract {
         Vec::new()
     } else {
-        vec!["cache_registry_contract_missing_triggered_domain_binding".to_string()]
+        super::release1_contracts::canonical_blocker_code_value_from_str(
+            "cache_registry_contract_missing_triggered_domain_binding",
+        )
+        .into_iter()
+        .collect()
     }
 }
 
@@ -885,10 +939,18 @@ fn retrieval_optional_context_boundary_blockers(
         .get("retrieval_only_optional_context_boundary")
         .and_then(serde_json::Value::as_array)
     else {
-        return vec!["missing_retrieval_only_optional_context_boundary".to_string()];
+        return super::release1_contracts::canonical_blocker_code_value_from_str(
+            "missing_retrieval_only_optional_context_boundary",
+        )
+        .into_iter()
+        .collect();
     };
     if rows.is_empty() {
-        return vec!["missing_retrieval_only_optional_context_boundary".to_string()];
+        return super::release1_contracts::canonical_blocker_code_value_from_str(
+            "missing_retrieval_only_optional_context_boundary",
+        )
+        .into_iter()
+        .collect();
     }
     let values = rows
         .iter()
@@ -897,7 +959,11 @@ fn retrieval_optional_context_boundary_blockers(
     let mut blockers = RETRIEVAL_OPTIONAL_CONTEXT_BOUNDARY_REQUIRED
         .iter()
         .filter(|required| !values.contains(**required))
-        .map(|required| format!("missing_retrieval_optional_boundary_entry:{required}"))
+        .filter_map(|required| {
+            super::release1_contracts::missing_retrieval_optional_boundary_entry_blocker_code(
+                required,
+            )
+        })
         .collect::<Vec<_>>();
     blockers.sort();
     blockers
@@ -908,13 +974,21 @@ fn retrieval_trust_evidence_blockers(cache_delivery_contract: &serde_json::Value
         .get("retrieval_trust_evidence")
         .and_then(serde_json::Value::as_object)
     else {
-        return vec!["missing_retrieval_trust_evidence".to_string()];
+        return super::release1_contracts::canonical_blocker_code_value_from_str(
+            "missing_retrieval_trust_evidence",
+        )
+        .into_iter()
+        .collect();
     };
 
     let mut blockers = Vec::new();
     for key in ["source", "citation", "freshness", "acl"] {
         if !evidence.get(key).is_some_and(is_canonical_nonempty_string) {
-            blockers.push(format!("missing_retrieval_trust_evidence_field:{key}"));
+            if let Some(code) =
+                super::release1_contracts::missing_retrieval_trust_evidence_field_blocker_code(key)
+            {
+                blockers.push(code);
+            }
         }
     }
     blockers.sort();

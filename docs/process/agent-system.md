@@ -17,6 +17,7 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists
 - delegated worker dispatch still materializes through `vida agent-init` until the operator-surface promotion slice closes
 - project "agent-first" development therefore means `vida agent-init`-backed delegated lanes first; host-tool-specific subagent APIs are optional carrier mechanics, not the canonical project execution contract
+- host-local shell/edit capability is an executor affordance only and must not be interpreted as lawful root-session write ownership
 - if the selected host execution class is internal, optional external CLI subagents remain auxiliary carrier details and must not redefine the whole session as externally gated by default
 - patch localization, runtime-defect diagnosis, or other read-only findings feed the next delegated packet and do not transfer write ownership back to the root session
 - for external CLI setups, `vida status --json` reports `host_agents.external_cli_preflight`; when sandbox is active and network is unavailable, preflight fails closed with actionable next steps
@@ -30,5 +31,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/agent-system.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: '2026-04-04T20:24:09+03:00'
+updated_at: 2026-04-04T20:12:10.235615566Z
 changelog_ref: agent-system.changelog.jsonl
