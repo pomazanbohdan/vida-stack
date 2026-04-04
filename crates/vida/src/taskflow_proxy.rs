@@ -247,6 +247,13 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
     } else {
         crate::print_surface_header(RenderMode::Plain, "vida taskflow next");
         crate::print_surface_line(RenderMode::Plain, "status", status);
+        if !blocker_codes.is_empty() {
+            crate::print_surface_line(
+                RenderMode::Plain,
+                "blocker_codes",
+                &blocker_codes.join(", "),
+            );
+        }
         crate::print_surface_line(
             RenderMode::Plain,
             "ready_count",
@@ -263,6 +270,9 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         }
         if let Some(command) = payload["recommended_command"].as_str() {
             crate::print_surface_line(RenderMode::Plain, "recommended_command", command);
+        }
+        if let Some(next_action) = next_actions.first() {
+            crate::print_surface_line(RenderMode::Plain, "next_action", next_action);
         }
     }
 
@@ -395,6 +405,13 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
     } else {
         crate::print_surface_header(RenderMode::Plain, "vida taskflow graph-summary");
         crate::print_surface_line(RenderMode::Plain, "status", status);
+        if !blocker_codes.is_empty() {
+            crate::print_surface_line(
+                RenderMode::Plain,
+                "blocker_codes",
+                &blocker_codes.join(", "),
+            );
+        }
         crate::print_surface_line(
             RenderMode::Plain,
             "ready_count",
@@ -415,6 +432,9 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         }
         if let Some(record) = blocked_tasks.first() {
             crate::print_surface_line(RenderMode::Plain, "primary_blocked_task", &record.task.id);
+        }
+        if let Some(next_action) = next_actions.first() {
+            crate::print_surface_line(RenderMode::Plain, "next_action", next_action);
         }
     }
 
