@@ -7661,6 +7661,57 @@ mod tests {
     }
 
     #[test]
+    fn agent_feedback_records_scorecard_for_non_codex_selected_system() {
+        let _lock = current_dir_lock().lock().expect("lock should succeed");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = CurrentDirGuard::change_to(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "qwen",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "agent-feedback",
+                "--agent-id",
+                "qwen-primary",
+                "--score",
+                "81",
+                "--outcome",
+                "success",
+                "--task-class",
+                "implementation",
+                "--notes",
+                "external carrier feedback",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        let scorecards = read_json_file_if_present(&harness.path().join(WORKER_SCORECARDS_STATE))
+            .expect("scorecards should exist");
+        let rows = scorecards["agents"]["qwen-primary"]["feedback"]
+            .as_array()
+            .expect("feedback rows should render");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["score"], 81);
+        assert_eq!(rows[0]["outcome"], "success");
+    }
+
+    #[test]
     fn merge_project_activation_marks_init_pending_when_activation_is_incomplete() {
         let init_view = serde_json::json!({
             "status": "ready"

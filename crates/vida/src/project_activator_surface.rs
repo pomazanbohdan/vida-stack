@@ -1088,7 +1088,7 @@ fn host_cli_entry_carrier_catalog(entry: Option<&serde_yaml::Value>) -> Vec<serd
     rows
 }
 
-fn synthesized_host_cli_carrier_catalog(system: &str) -> Vec<serde_json::Value> {
+pub(crate) fn synthesized_host_cli_carrier_catalog(system: &str) -> Vec<serde_json::Value> {
     if system.trim().is_empty() || system.eq_ignore_ascii_case("codex") {
         return Vec::new();
     }
@@ -1106,6 +1106,32 @@ fn synthesized_host_cli_carrier_catalog(system: &str) -> Vec<serde_json::Value> 
         "runtime_roles": ["worker"],
         "task_classes": ["implementation", "research"],
     })]
+}
+
+pub(crate) fn resolved_host_cli_agent_catalog_for_root(
+    project_root: &Path,
+    overlay: &serde_yaml::Value,
+) -> Result<(String, Vec<serde_json::Value>), String> {
+    let selected_host_cli_system = yaml_lookup(overlay, &["host_environment", "cli_system"])
+        .and_then(serde_yaml::Value::as_str)
+        .and_then(normalize_host_cli_system)
+        .ok_or_else(|| {
+            "Host CLI system is missing or unsupported in vida.config.yaml.".to_string()
+        })?;
+    let registry = host_cli_system_registry_with_fallback(Some(overlay));
+    let catalog_entry = registry.get(&selected_host_cli_system);
+    let mut host_cli_agent_catalog = host_cli_entry_carrier_catalog(catalog_entry);
+    if host_cli_agent_catalog.is_empty() && selected_host_cli_system == "codex" {
+        let overlay_roles = overlay_codex_agent_catalog(overlay);
+        host_cli_agent_catalog = if overlay_roles.is_empty() {
+            read_codex_agent_catalog(&project_root.join(".codex"))
+        } else {
+            overlay_roles
+        };
+    } else if host_cli_agent_catalog.is_empty() {
+        host_cli_agent_catalog = synthesized_host_cli_carrier_catalog(&selected_host_cli_system);
+    }
+    Ok((selected_host_cli_system, host_cli_agent_catalog))
 }
 
 pub(crate) fn materialize_codex_dispatch_alias_catalog(

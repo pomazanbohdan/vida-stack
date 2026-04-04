@@ -203,13 +203,23 @@ pub(crate) fn maybe_record_task_close_host_agent_feedback(
             });
         }
     };
-    let selected_cli_system = super::yaml_lookup(&overlay, &["host_environment", "cli_system"])
-        .and_then(serde_yaml::Value::as_str)
-        .and_then(super::project_activator_surface::normalize_host_cli_system);
-    if selected_cli_system.as_deref() != Some("codex") {
+    let (_selected_cli_system, carrier_catalog) =
+        match super::project_activator_surface::resolved_host_cli_agent_catalog_for_root(
+            project_root,
+            &overlay,
+        ) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                return serde_json::json!({
+                    "status": "skipped",
+                    "reason": format!("host_cli_catalog_unavailable: {error}")
+                });
+            }
+        };
+    if carrier_catalog.is_empty() {
         return serde_json::json!({
             "status": "skipped",
-            "reason": "host_cli_not_selected_or_unsupported"
+            "reason": "host_cli_catalog_empty"
         });
     }
 
@@ -322,96 +332,75 @@ fn append_host_agent_feedback(
         &project_root.join("vida.config.yaml"),
     )
     .map_err(|error| format!("Failed to read project overlay: {error}"))?;
-    let selected_cli_system = super::yaml_lookup(&overlay, &["host_environment", "cli_system"])
-        .and_then(serde_yaml::Value::as_str)
-        .and_then(super::project_activator_surface::normalize_host_cli_system)
-        .ok_or_else(|| {
-            "Host CLI system is missing or unsupported in vida.config.yaml.".to_string()
-        })?;
-    match selected_cli_system.as_str() {
-        "codex" => {
-            let codex_roles = {
-                let overlay_roles =
-                    super::project_activator_surface::overlay_codex_agent_catalog(&overlay);
-                if overlay_roles.is_empty() {
-                    super::project_activator_surface::read_codex_agent_catalog(
-                        &project_root.join(".codex"),
-                    )
-                } else {
-                    overlay_roles
-                }
-            };
-            if !codex_roles
-                .iter()
-                .any(|row| row["role_id"].as_str() == Some(input.agent_id))
-            {
-                return Err(format!(
-                    "Unknown host agent `{}` for selected CLI system `codex`.",
-                    input.agent_id
-                ));
-            }
-            let scorecards_path = super::worker_scorecards_state_path(project_root);
-            let mut scorecards =
-                super::load_or_initialize_worker_scorecards(project_root, &codex_roles);
-            if !scorecards["agents"][input.agent_id]["feedback"].is_array() {
-                scorecards["agents"][input.agent_id]["feedback"] = serde_json::json!([]);
-            }
-            let feedback_rows = scorecards["agents"][input.agent_id]["feedback"]
-                .as_array_mut()
-                .expect("feedback array should initialize");
-            feedback_rows.push(serde_json::json!({
-                "recorded_at": time::OffsetDateTime::now_utc()
-                    .format(&time::format_description::well_known::Rfc3339)
-                    .expect("rfc3339 timestamp should render"),
-                "score": input.score,
-                "outcome": input.outcome,
-                "task_class": input.task_class,
-                "notes": input.notes.unwrap_or(""),
-                "source": input.source,
-                "task_id": input.task_id.unwrap_or(""),
-                "task_display_id": input.task_display_id.unwrap_or(""),
-                "task_title": input.task_title.unwrap_or(""),
-            }));
-            scorecards["updated_at"] = serde_json::Value::String(
-                time::OffsetDateTime::now_utc()
-                    .format(&time::format_description::well_known::Rfc3339)
-                    .expect("rfc3339 timestamp should render"),
-            );
-            if let Some(parent) = scorecards_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            std::fs::write(
-                &scorecards_path,
-                serde_json::to_string_pretty(&scorecards).expect("scorecards json should render"),
-            )
-            .map_err(|error| format!("Failed to write {}: {error}", scorecards_path.display()))?;
-            let scoring_policy = serde_json::to_value(
-                super::yaml_lookup(&overlay, &["agent_system", "scoring"])
-                    .cloned()
-                    .unwrap_or(serde_yaml::Value::Null),
-            )
-            .unwrap_or(serde_json::Value::Null);
-            let strategy =
-                super::refresh_worker_strategy(project_root, &codex_roles, &scoring_policy);
-            let observability_event =
-                super::append_host_agent_observability_event(project_root, input)?;
-            Ok(serde_json::json!({
-                "surface": "vida agent-feedback",
-                "host_cli_system": "codex",
-                "agent_id": input.agent_id,
-                "recorded_score": input.score,
-                "recorded_outcome": input.outcome,
-                "recorded_task_class": input.task_class,
-                "recorded_notes": input.notes.unwrap_or(""),
-                "scorecards_store": super::WORKER_SCORECARDS_STATE,
-                "strategy_store": super::WORKER_STRATEGY_STATE,
-                "observability_store": super::HOST_AGENT_OBSERVABILITY_STATE,
-                "strategy_row": strategy["agents"][input.agent_id],
-                "observability_event": observability_event
-            }))
-        }
-        other => Err(format!(
-            "Feedback writeback is not implemented for host CLI system `{other}`."
-        )),
+    let (selected_cli_system, carrier_catalog) =
+        super::project_activator_surface::resolved_host_cli_agent_catalog_for_root(
+            project_root,
+            &overlay,
+        )?;
+    if !carrier_catalog
+        .iter()
+        .any(|row| row["role_id"].as_str() == Some(input.agent_id))
+    {
+        return Err(format!(
+            "Unknown host agent `{}` for selected CLI system `{}`.",
+            input.agent_id, selected_cli_system
+        ));
     }
+    let scorecards_path = super::worker_scorecards_state_path(project_root);
+    let mut scorecards =
+        super::load_or_initialize_worker_scorecards(project_root, &carrier_catalog);
+    if !scorecards["agents"][input.agent_id]["feedback"].is_array() {
+        scorecards["agents"][input.agent_id]["feedback"] = serde_json::json!([]);
+    }
+    let feedback_rows = scorecards["agents"][input.agent_id]["feedback"]
+        .as_array_mut()
+        .expect("feedback array should initialize");
+    feedback_rows.push(serde_json::json!({
+        "recorded_at": time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("rfc3339 timestamp should render"),
+        "score": input.score,
+        "outcome": input.outcome,
+        "task_class": input.task_class,
+        "notes": input.notes.unwrap_or(""),
+        "source": input.source,
+        "task_id": input.task_id.unwrap_or(""),
+        "task_display_id": input.task_display_id.unwrap_or(""),
+        "task_title": input.task_title.unwrap_or(""),
+    }));
+    scorecards["updated_at"] = serde_json::Value::String(
+        time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("rfc3339 timestamp should render"),
+    );
+    if let Some(parent) = scorecards_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(
+        &scorecards_path,
+        serde_json::to_string_pretty(&scorecards).expect("scorecards json should render"),
+    )
+    .map_err(|error| format!("Failed to write {}: {error}", scorecards_path.display()))?;
+    let scoring_policy = serde_json::to_value(
+        super::yaml_lookup(&overlay, &["agent_system", "scoring"])
+            .cloned()
+            .unwrap_or(serde_yaml::Value::Null),
+    )
+    .unwrap_or(serde_json::Value::Null);
+    let strategy = super::refresh_worker_strategy(project_root, &carrier_catalog, &scoring_policy);
+    let observability_event = super::append_host_agent_observability_event(project_root, input)?;
+    Ok(serde_json::json!({
+        "surface": "vida agent-feedback",
+        "host_cli_system": selected_cli_system,
+        "agent_id": input.agent_id,
+        "recorded_score": input.score,
+        "recorded_outcome": input.outcome,
+        "recorded_task_class": input.task_class,
+        "recorded_notes": input.notes.unwrap_or(""),
+        "scorecards_store": super::WORKER_SCORECARDS_STATE,
+        "strategy_store": super::WORKER_STRATEGY_STATE,
+        "observability_store": super::HOST_AGENT_OBSERVABILITY_STATE,
+        "strategy_row": strategy["agents"][input.agent_id],
+        "observability_event": observability_event
+    }))
 }
