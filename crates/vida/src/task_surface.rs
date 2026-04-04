@@ -255,6 +255,17 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         }
+        TaskCommand::Next(command) => {
+            let mut proxy_args = vec!["next".to_string()];
+            if let Some(scope) = command.scope.as_deref() {
+                proxy_args.push("--scope".to_string());
+                proxy_args.push(scope.to_string());
+            }
+            if command.json {
+                proxy_args.push("--json".to_string());
+            }
+            crate::taskflow_proxy::run_taskflow_next_surface(&proxy_args).await
+        }
         TaskCommand::NextDisplayId(command) => {
             let state_dir = command
                 .state_dir

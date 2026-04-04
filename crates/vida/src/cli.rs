@@ -81,6 +81,7 @@ pub(crate) enum TaskCommand {
     List(TaskListArgs),
     Show(TaskShowArgs),
     Ready(TaskReadyArgs),
+    Next(TaskReadyArgs),
     NextDisplayId(TaskNextDisplayIdArgs),
     Create(TaskCreateArgs),
     Update(TaskUpdateArgs),

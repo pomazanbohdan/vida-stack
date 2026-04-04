@@ -85,7 +85,7 @@ async fn route_taskflow_task(args: &[String]) -> ExitCode {
     }
 }
 
-async fn run_taskflow_next(args: &[String]) -> ExitCode {
+pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
     let (as_json, scope_task_id) = match parse_taskflow_next_args(args) {
         Ok((_, Some("__help__"))) => {
             print_taskflow_proxy_help(Some("next"));
@@ -431,7 +431,7 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
     }
 
     if matches!(args.args.first().map(String::as_str), Some("next")) {
-        return run_taskflow_next(&args.args).await;
+        return run_taskflow_next_surface(&args.args).await;
     }
 
     if matches!(args.args.first().map(String::as_str), Some("graph-summary")) {

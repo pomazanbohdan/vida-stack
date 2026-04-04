@@ -29,6 +29,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("Canonical commands:");
             println!("  vida task list --all --json");
             println!("  vida task ready --json");
+            println!("  vida task next [--scope <task-id>] [--json]");
             println!("  vida task ready --scope <task-id> --json");
             println!("  vida task show <task-id> --json");
             println!("  vida task deps <task-id> --json");
@@ -51,6 +52,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Operator recipes:");
             println!("  Check the next lawful slice: vida task ready --json");
+            println!("  Read the aggregate next operator step: vida task next [--scope <task-id>] [--json]");
             println!("  Check the next lawful slice within one subtree: vida task ready --scope <task-id> --json");
             println!("  Inspect one task before mutation: vida task show <task-id> --json");
             println!("  Inspect direct dependencies before resequencing: vida task deps <task-id> --json");
@@ -272,7 +274,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!();
     println!("Canonical examples:");
     println!("  vida task ready --json");
-    println!("  vida taskflow next --json");
+    println!("  vida task next --json");
     println!("  vida taskflow graph-summary --json");
     println!("  vida task show <task-id> --json");
     println!("  vida taskflow run-graph status <task-id>");
@@ -282,7 +284,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida taskflow bootstrap-spec \"feature request\" --json");
     println!();
     println!("Operator recipes:");
-    println!("  Find the next lawful step: vida taskflow next --json");
+    println!("  Find the next lawful step: vida task next --json");
     println!("  Inspect ready vs blocked pressure: vida taskflow graph-summary --json");
     println!("  Inspect the canonical backlog contract: vida task --help");
     println!("  Inspect resumability state: vida taskflow help run-graph");
@@ -334,7 +336,7 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "next-ready-slice",
             why: "TaskFlow readiness is the canonical way to pick the next unblocked execution slice.",
-            command: "vida taskflow next --json",
+            command: "vida task next --json",
             failure_modes: "Next-step output depends on current runtime state; inspect the embedded blockers, ready task, and recovery summary before mutating runtime state.",
         };
     }

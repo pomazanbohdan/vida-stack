@@ -899,6 +899,7 @@ fn taskflow_proxy_help_is_runtime_specific() {
         "`vida task` and `vida taskflow task` address the same authoritative backlog store."
     ));
     assert!(stdout.contains("vida task ready --json"));
+    assert!(stdout.contains("vida task next --json"));
     assert!(stdout.contains(
         "vida taskflow help [task|next|graph-summary|consume|run-graph|recovery|doctor|protocol-binding]"
     ));
@@ -915,6 +916,7 @@ fn taskflow_proxy_help_supports_task_topic() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: task"));
     assert!(stdout.contains("`vida task` is the root parity surface"));
+    assert!(stdout.contains("vida task next [--scope <task-id>] [--json]"));
     assert!(stdout.contains("vida task ready --scope <task-id> --json"));
     assert!(stdout.contains("vida task next-display-id <parent-display-id> --json"));
     assert!(stdout.contains(
@@ -935,6 +937,7 @@ fn taskflow_task_help_alias_routes_to_canonical_task_help() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: task"));
+    assert!(stdout.contains("vida task next [--scope <task-id>] [--json]"));
     assert!(stdout.contains("vida task ready --scope <task-id> --json"));
     assert!(stdout.contains("vida task next-display-id <parent-display-id> --json"));
     assert!(stdout.contains("vida task update <task-id> --status in_progress --notes"));
@@ -973,6 +976,22 @@ fn taskflow_next_accepts_scope_for_subtree_planning() {
     assert_eq!(parsed["scope_task_id"], "r1-01-commands");
     assert!(parsed["status"].is_string());
     assert!(parsed["ready_count"].is_number());
+    assert!(parsed["recommended_command"].is_string());
+}
+
+#[test]
+fn task_root_next_alias_routes_to_taskflow_next_surface() {
+    let output = vida()
+        .args(["task", "next", "--scope", "r1-01-commands", "--json"])
+        .output()
+        .expect("root task next alias should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("root task next json should parse");
+    assert_eq!(parsed["surface"], "vida taskflow next");
+    assert_eq!(parsed["scope_task_id"], "r1-01-commands");
+    assert!(parsed["status"].is_string());
     assert!(parsed["recommended_command"].is_string());
 }
 
@@ -8016,7 +8035,7 @@ fn taskflow_query_recommends_ready_surface_for_next_step_questions() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow query answer"));
     assert!(stdout.contains("next-ready-slice"));
-    assert!(stdout.contains("vida task ready --json"));
+    assert!(stdout.contains("vida task next --json"));
 }
 
 #[test]
