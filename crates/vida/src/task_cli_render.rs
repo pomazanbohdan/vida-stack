@@ -42,6 +42,42 @@ pub(crate) fn print_task_list(render: RenderMode, tasks: &[TaskRecord], as_json:
     }
 }
 
+pub(crate) fn print_task_ready(
+    render: RenderMode,
+    scope_task_id: Option<&str>,
+    tasks: &[TaskRecord],
+    as_json: bool,
+) {
+    let payload = serde_json::json!({
+        "surface": "vida task ready",
+        "status": "pass",
+        "scope_task_id": scope_task_id,
+        "ready_count": tasks.len(),
+        "tasks": tasks,
+    });
+    if crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task ready payload should render as json",
+    ) {
+        return;
+    }
+
+    print_surface_header(render, "vida task ready");
+    if let Some(scope_task_id) = scope_task_id {
+        print_surface_line(render, "scope task", scope_task_id);
+    }
+    print_surface_line(render, "ready count", &tasks.len().to_string());
+    if tasks.is_empty() {
+        print_surface_line(render, "ready tasks", "none");
+        return;
+    }
+
+    for task in tasks {
+        println!("{}\t{}\t{}", task.id, task.status, task.title);
+    }
+}
+
 pub(crate) fn print_task_show(render: RenderMode, task: &TaskRecord, as_json: bool) {
     if crate::surface_render::print_surface_json(task, as_json, "task should render as json") {
         return;

@@ -270,7 +270,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.ready_tasks_scoped(command.scope.as_deref()).await {
                     Ok(tasks) => {
-                        print_task_list(command.render, &tasks, command.json);
+                        print_task_ready(command.render, command.scope.as_deref(), &tasks, command.json);
                         ExitCode::SUCCESS
                     }
                     Err(error) => {

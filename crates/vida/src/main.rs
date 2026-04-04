@@ -63,7 +63,7 @@ use task_cli_render::{
     print_blocked_tasks, print_task_critical_path, print_task_dependencies,
     print_task_dependency_mutation, print_task_dependency_tree, print_task_export_summary,
     print_task_graph_issues, print_task_list, print_task_mutation, print_task_next_display_id,
-    print_task_show,
+    print_task_ready, print_task_show,
 };
 use taskflow_layer4::print_taskflow_proxy_help;
 use taskflow_proxy::run_taskflow_proxy;

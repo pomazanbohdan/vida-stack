@@ -145,7 +145,11 @@ fn assert_json_status_pass(output: &str) {
 
 fn donor_ready_semantic(value: &str) -> String {
     let parsed: serde_json::Value = serde_json::from_str(value).expect("json output should parse");
-    let rows = parsed.as_array().expect("ready output should be an array");
+    let rows = parsed
+        .get("tasks")
+        .and_then(serde_json::Value::as_array)
+        .or_else(|| parsed.as_array())
+        .expect("ready output should expose task rows");
     let normalized = rows
         .iter()
         .map(|row| {

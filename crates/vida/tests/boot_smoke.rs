@@ -8337,13 +8337,8 @@ fn taskflow_task_ready_routes_through_local_db_bridge_without_taskflow_binary() 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("taskflow task ready json should parse");
-    assert_eq!(
-        parsed
-            .as_array()
-            .expect("ready payload should be an array")
-            .len(),
-        0
-    );
+    assert_eq!(parsed["surface"], "vida task ready");
+    assert_eq!(parsed["ready_count"], 0);
     assert!(!stderr.contains("delegated-taskflow-binary-ran"));
 }
 
@@ -8692,13 +8687,8 @@ fn taskflow_proxy_resolves_repo_root_from_nested_project_pwd_without_env() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("taskflow task ready json should parse");
-    assert_eq!(
-        parsed
-            .as_array()
-            .expect("ready payload should be an array")
-            .len(),
-        0
-    );
+    assert_eq!(parsed["surface"], "vida task ready");
+    assert_eq!(parsed["ready_count"], 0);
     assert!(!stderr.contains("delegated-taskflow-binary-ran"));
 }
 
