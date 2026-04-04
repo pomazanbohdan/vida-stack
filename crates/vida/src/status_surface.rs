@@ -423,15 +423,23 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         canonical_compatibility_class_str(&compatibility.classification)
                             != Some(CompatibilityClass::BackwardCompatible.as_str())
                     }) {
-                        operator_blocker_codes
-                            .push("boot_compatibility_not_compatible".to_string());
+                        operator_blocker_codes.push(
+                            crate::release1_contracts::blocker_code_str(
+                                crate::release1_contracts::BlockerCode::BootCompatibilityNotCompatible,
+                            )
+                            .to_string(),
+                        );
                     }
                     if migration_state.as_ref().is_some_and(|migration| {
                         canonical_compatibility_class_str(&migration.compatibility_classification)
                             != Some(CompatibilityClass::BackwardCompatible.as_str())
                     }) {
-                        operator_blocker_codes
-                            .push("migration_preflight_not_compatible".to_string());
+                        operator_blocker_codes.push(
+                            crate::release1_contracts::blocker_code_str(
+                                crate::release1_contracts::BlockerCode::MigrationPreflightNotReady,
+                            )
+                            .to_string(),
+                        );
                     }
                     if migration_state.as_ref().is_some_and(|migration| {
                         migration_requires_action(&migration.migration_state)
@@ -468,7 +476,12 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                     match activation_truth.as_ref() {
                         Some(_) if project_activation_pending => {
-                            operator_blocker_codes.push("project_activation_pending".to_string());
+                            operator_blocker_codes.push(
+                                crate::release1_contracts::blocker_code_str(
+                                    crate::release1_contracts::BlockerCode::ActivationPending,
+                                )
+                                .to_string(),
+                            );
                         }
                         None => {
                             operator_blocker_codes.push("project_activation_unknown".to_string());
@@ -483,7 +496,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     let mut operator_next_actions: Vec<String> = Vec::new();
                     if operator_blocker_codes
                         .iter()
-                        .any(|code| code == "boot_compatibility_not_compatible")
+                        .any(|code| code == "boot_incompatible")
                     {
                         if let Some(compatibility) = boot_compatibility.as_ref() {
                             operator_next_actions.push(compatibility.next_step.clone());
@@ -491,7 +504,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                     if operator_blocker_codes
                         .iter()
-                        .any(|code| code == "migration_preflight_not_compatible")
+                        .any(|code| code == "migration_not_ready")
                     {
                         if let Some(migration) = migration_state.as_ref() {
                             operator_next_actions.push(migration.next_step.clone());
@@ -516,7 +529,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                     if operator_blocker_codes
                         .iter()
-                        .any(|code| code == "project_activation_pending")
+                        .any(|code| code == "activation_pending")
                     {
                         if let Some(truth) = activation_truth.as_ref() {
                             if truth.next_steps.is_empty() {
@@ -1453,7 +1466,7 @@ mod tests {
 
     #[test]
     fn release1_operator_contracts_consistency_rejects_pass_with_blockers() {
-        let blocker_codes = vec!["boot_compatibility_not_compatible".to_string()];
+        let blocker_codes = vec!["boot_incompatible".to_string()];
         assert_eq!(
             release1_operator_contracts_consistency_error("pass", &blocker_codes, &[]),
             Some(

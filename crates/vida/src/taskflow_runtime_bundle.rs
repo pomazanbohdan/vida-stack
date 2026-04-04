@@ -371,10 +371,20 @@ pub(crate) fn taskflow_consume_bundle_check(
     if boot_classification
         != super::release1_contracts::CompatibilityClass::BackwardCompatible.as_str()
     {
-        blockers.push("boot_incompatible".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::BootCompatibilityNotCompatible,
+            )
+            .to_string(),
+        );
     }
     if migration_state != "no_migration_required" || next_step != "normal_boot_allowed" {
-        blockers.push("migration_not_ready".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::MigrationPreflightNotReady,
+            )
+            .to_string(),
+        );
     }
     if payload.vida_root != payload.launcher_runtime_paths.project_root {
         blockers.push("mixed_runtime_root".to_string());
@@ -403,7 +413,12 @@ pub(crate) fn taskflow_consume_bundle_check(
         .get("protocols")
         .and_then(serde_json::Value::as_array);
     if protocol_rows.map(|rows| rows.is_empty()).unwrap_or(true) {
-        blockers.push("missing_protocol_binding_rows".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::MissingProtocolBindingRows,
+            )
+            .to_string(),
+        );
     }
     blockers.extend(protocol_binding_registry_contract_blockers(
         &payload.protocol_binding_registry,
@@ -445,7 +460,12 @@ pub(crate) fn taskflow_consume_bundle_check(
         })
     }) != Some(true)
     {
-        blockers.push("protocol_binding_rows_not_runtime_trusted".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::ProtocolBindingRowsNotRuntimeTrusted,
+            )
+            .to_string(),
+        );
     }
     if payload
         .cache_delivery_contract
@@ -475,7 +495,12 @@ pub(crate) fn taskflow_consume_bundle_check(
         init_view_activation_is_pending(&payload.orchestrator_init_view);
     let agent_activation_pending = init_view_activation_is_pending(&payload.agent_init_view);
     if orchestrator_activation_pending || agent_activation_pending {
-        blockers.push("activation_pending".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::ActivationPending,
+            )
+            .to_string(),
+        );
     }
     if payload
         .orchestrator_init_view
@@ -484,7 +509,12 @@ pub(crate) fn taskflow_consume_bundle_check(
         .and_then(serde_json::Value::as_bool)
         == Some(false)
     {
-        blockers.push("taskflow_blocked_during_pending_activation".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::TaskflowBlockedDuringPendingActivation,
+            )
+            .to_string(),
+        );
     }
     let activation_pending = orchestrator_activation_pending
         || agent_activation_pending

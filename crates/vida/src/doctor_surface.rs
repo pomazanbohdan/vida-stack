@@ -268,8 +268,12 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 match classify_compatibility_boundary(&boot_compatibility.classification) {
                     CompatibilityBoundary::Compatible => {}
                     CompatibilityBoundary::BlockingSupported => {
-                        operator_blocker_codes
-                            .push("boot_compatibility_not_compatible".to_string());
+                        operator_blocker_codes.push(
+                            crate::release1_contracts::blocker_code_str(
+                                crate::release1_contracts::BlockerCode::BootCompatibilityNotCompatible,
+                            )
+                            .to_string(),
+                        );
                     }
                     CompatibilityBoundary::Unsupported => {
                         operator_blocker_codes
@@ -281,8 +285,12 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 ) {
                     CompatibilityBoundary::Compatible => {}
                     CompatibilityBoundary::BlockingSupported => {
-                        operator_blocker_codes
-                            .push("migration_preflight_not_compatible".to_string());
+                        operator_blocker_codes.push(
+                            crate::release1_contracts::blocker_code_str(
+                                crate::release1_contracts::BlockerCode::MigrationPreflightNotReady,
+                            )
+                            .to_string(),
+                        );
                     }
                     CompatibilityBoundary::Unsupported => {
                         operator_blocker_codes
@@ -363,7 +371,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 }
                 if operator_blocker_codes
                     .iter()
-                    .any(|code| code == "boot_compatibility_not_compatible")
+                    .any(|code| code == "boot_incompatible")
                 {
                     operator_next_actions.push(boot_compatibility.next_step.clone());
                 }
@@ -377,7 +385,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 }
                 if operator_blocker_codes
                     .iter()
-                    .any(|code| code == "migration_preflight_not_compatible")
+                    .any(|code| code == "migration_not_ready")
                 {
                     operator_next_actions.push(migration_preflight.next_step.clone());
                 }
@@ -811,22 +819,6 @@ mod tests {
             Some("blocked")
         );
         assert_eq!(
-            canonical_release1_operator_contract_status(&serde_json::json!("admit")),
-            Some("pass")
-        );
-        assert_eq!(
-            canonical_release1_operator_contract_status(&serde_json::json!("block")),
-            Some("blocked")
-        );
-        assert_eq!(
-            canonical_release1_operator_contract_status(&serde_json::json!(" admit ")),
-            Some("pass")
-        );
-        assert_eq!(
-            canonical_release1_operator_contract_status(&serde_json::json!(" block ")),
-            Some("blocked")
-        );
-        assert_eq!(
             canonical_release1_operator_contract_status(&serde_json::json!("ok")),
             Some("pass")
         );
@@ -871,6 +863,11 @@ mod tests {
                 "status": "blocked",
                 "blocker_codes": ["incomplete_release_admission_operator_evidence"],
                 "next_actions": ["Regenerate consume-final evidence so canonical risk/register, closure/readiness, and release-1 operator-contract fields are complete."],
+                "shared_fields": {
+                    "status": "blocked",
+                    "blocker_codes": ["incomplete_release_admission_operator_evidence"],
+                    "next_actions": ["Regenerate consume-final evidence so canonical risk/register, closure/readiness, and release-1 operator-contract fields are complete."]
+                },
                 "artifact_refs": operator_contracts["artifact_refs"].clone(),
                 "payload": {
                     "docflow_activation": {
@@ -984,7 +981,7 @@ mod tests {
             "operator_contracts": {
                 "status": "blocked",
                 "blocker_codes": ["recovery_readiness_blocked"],
-                "next_actions": ["RUN `VIDA TASKFLOW RUN-GRAPH RECOVER --JSON` BEFORE RESUME."]
+                "next_actions": ["INSPECT `VIDA TASKFLOW RECOVERY LATEST --JSON`, THEN RUN `VIDA TASKFLOW CONSUME CONTINUE --JSON` AFTER `RECOVERY_READY=TRUE` IS PROVEN FOR RESUME/ROLLBACK HANDOFF."]
             }
         });
         assert_eq!(

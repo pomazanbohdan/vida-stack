@@ -410,6 +410,12 @@ pub(crate) enum BlockerCode {
     SupersessionWithoutReceipt,
     LocalTakeoverForbidden,
     RecoveryNotTrustworthy,
+    BootCompatibilityNotCompatible,
+    MigrationPreflightNotReady,
+    MissingProtocolBindingRows,
+    ProtocolBindingRowsNotRuntimeTrusted,
+    ActivationPending,
+    TaskflowBlockedDuringPendingActivation,
     MissingProtocolBindingReceipt,
     ProtocolBindingNotRuntimeReady,
     Unsupported,
@@ -450,6 +456,16 @@ impl BlockerCode {
             Self::SupersessionWithoutReceipt => "supersession_without_receipt",
             Self::LocalTakeoverForbidden => "local_takeover_forbidden",
             Self::RecoveryNotTrustworthy => "recovery_not_trustworthy",
+            Self::BootCompatibilityNotCompatible => "boot_incompatible",
+            Self::MigrationPreflightNotReady => "migration_not_ready",
+            Self::MissingProtocolBindingRows => "missing_protocol_binding_rows",
+            Self::ProtocolBindingRowsNotRuntimeTrusted => {
+                "protocol_binding_rows_not_runtime_trusted"
+            }
+            Self::ActivationPending => "activation_pending",
+            Self::TaskflowBlockedDuringPendingActivation => {
+                "taskflow_blocked_during_pending_activation"
+            }
             Self::MissingProtocolBindingReceipt => "missing_protocol_binding_receipt",
             Self::ProtocolBindingNotRuntimeReady => "protocol_binding_not_runtime_ready",
             Self::Unsupported => "unsupported_blocker_code",
@@ -490,6 +506,16 @@ impl BlockerCode {
             "supersession_without_receipt" => Some(Self::SupersessionWithoutReceipt),
             "local_takeover_forbidden" => Some(Self::LocalTakeoverForbidden),
             "recovery_not_trustworthy" => Some(Self::RecoveryNotTrustworthy),
+            "boot_incompatible" => Some(Self::BootCompatibilityNotCompatible),
+            "migration_not_ready" => Some(Self::MigrationPreflightNotReady),
+            "missing_protocol_binding_rows" => Some(Self::MissingProtocolBindingRows),
+            "protocol_binding_rows_not_runtime_trusted" => {
+                Some(Self::ProtocolBindingRowsNotRuntimeTrusted)
+            }
+            "activation_pending" => Some(Self::ActivationPending),
+            "taskflow_blocked_during_pending_activation" => {
+                Some(Self::TaskflowBlockedDuringPendingActivation)
+            }
             "missing_protocol_binding_receipt" => Some(Self::MissingProtocolBindingReceipt),
             "protocol_binding_not_runtime_ready" => Some(Self::ProtocolBindingNotRuntimeReady),
             "unsupported_blocker_code" => Some(Self::Unsupported),
