@@ -1310,9 +1310,9 @@ impl StateStore {
         }
 
         let classification = if reasons.is_empty() {
-            "compatible"
+            CompatibilityClass::BackwardCompatible.as_str()
         } else if hard_failures > 0 {
-            "incompatible"
+            CompatibilityClass::ReaderUpgradeRequired.as_str()
         } else {
             "insufficient_evidence"
         };
@@ -1320,7 +1320,7 @@ impl StateStore {
         let summary = BootCompatibilitySummary {
             classification: classification.to_string(),
             reasons,
-            next_step: if classification == "compatible" {
+            next_step: if classification == CompatibilityClass::BackwardCompatible.as_str() {
                 "normal_boot_allowed".to_string()
             } else {
                 "stop_and_repair_prerequisites".to_string()
@@ -6506,7 +6506,10 @@ hierarchy: framework,contracts
             .evaluate_boot_compatibility()
             .await
             .expect("compatibility evaluation should succeed");
-        assert_eq!(compatibility.classification, "incompatible");
+        assert_eq!(
+            compatibility.classification,
+            CompatibilityClass::ReaderUpgradeRequired.as_str()
+        );
         assert!(compatibility
             .reasons
             .iter()
@@ -6554,7 +6557,10 @@ hierarchy: framework,contracts
             .evaluate_boot_compatibility()
             .await
             .expect("compatibility evaluation should succeed");
-        assert_eq!(compatibility.classification, "incompatible");
+        assert_eq!(
+            compatibility.classification,
+            CompatibilityClass::ReaderUpgradeRequired.as_str()
+        );
         assert!(compatibility
             .reasons
             .iter()
@@ -6593,7 +6599,10 @@ hierarchy: framework,contracts
             .evaluate_boot_compatibility()
             .await
             .expect("compatibility evaluation should succeed");
-        assert_eq!(compatibility.classification, "compatible");
+        assert_eq!(
+            compatibility.classification,
+            CompatibilityClass::BackwardCompatible.as_str()
+        );
         assert!(compatibility.reasons.is_empty());
         assert_eq!(compatibility.next_step, "normal_boot_allowed");
 
@@ -6619,7 +6628,10 @@ hierarchy: framework,contracts
             .await
             .expect("latest boot compatibility should load")
             .expect("persisted boot compatibility should exist");
-        assert_eq!(persisted.classification, "compatible");
+        assert_eq!(
+            persisted.classification,
+            CompatibilityClass::BackwardCompatible.as_str()
+        );
         assert!(persisted.reasons.is_empty());
         assert_eq!(persisted.next_step, "normal_boot_allowed");
 

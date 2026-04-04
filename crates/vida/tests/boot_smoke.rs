@@ -808,7 +808,7 @@ fn boot_succeeds() {
     assert!(stdout.contains(
         "instruction ingest: 3 imported, 0 unchanged, 0 updated from vida/config/instructions/bundles/framework-source"
     ));
-    assert!(stdout.contains("boot compatibility: compatible (normal_boot_allowed)"));
+    assert!(stdout.contains("boot compatibility: backward_compatible (normal_boot_allowed)"));
     assert!(stdout
         .contains("migration preflight: compatible / no_migration_required (normal_boot_allowed)"));
     assert!(stdout.contains(
@@ -865,7 +865,7 @@ fn boot_is_idempotent_for_unchanged_source_trees() {
     assert!(stdout.contains(
         "framework memory ingest: 0 imported, 1 unchanged, 0 updated from vida/config/instructions/bundles/framework-memory-source"
     ));
-    assert!(stdout.contains("boot compatibility: compatible (normal_boot_allowed)"));
+    assert!(stdout.contains("boot compatibility: backward_compatible (normal_boot_allowed)"));
     assert!(stdout
         .contains("migration preflight: compatible / no_migration_required (normal_boot_allowed)"));
     assert!(stdout.contains(
@@ -10783,7 +10783,7 @@ fn status_surface_reports_backend_and_bundle_receipt() {
         .contains("latest effective bundle receipt: effective-bundle-framework-agent-definition-"));
     assert!(stdout.contains("latest effective bundle root: framework-agent-definition"));
     assert!(stdout.contains("latest effective bundle artifact count: 3"));
-    assert!(stdout.contains("boot compatibility: compatible (normal_boot_allowed)"));
+    assert!(stdout.contains("boot compatibility: backward_compatible (normal_boot_allowed)"));
     assert!(stdout.contains(
         "migration state: backward_compatible / no_migration_required (normal_boot_allowed)"
     ));
@@ -10966,7 +10966,10 @@ fn status_surface_supports_json_summary() {
         parsed["latest_effective_bundle_receipt"]["artifact_count"],
         3
     );
-    assert_eq!(parsed["boot_compatibility"]["classification"], "compatible");
+    assert_eq!(
+        parsed["boot_compatibility"]["classification"],
+        "backward_compatible"
+    );
     assert_eq!(
         parsed["migration_state"]["migration_state"],
         "no_migration_required"
@@ -11040,7 +11043,10 @@ fn doctor_surface_supports_json_summary() {
     assert_eq!(parsed["task_store"]["ready_count"], 0);
     assert_eq!(parsed["run_graph"]["execution_plan_count"], 0);
     assert_eq!(parsed["dependency_graph"]["issue_count"], 0);
-    assert_eq!(parsed["boot_compatibility"]["classification"], "compatible");
+    assert_eq!(
+        parsed["boot_compatibility"]["classification"],
+        "backward_compatible"
+    );
     assert_eq!(
         parsed["migration_preflight"]["migration_state"],
         "no_migration_required"

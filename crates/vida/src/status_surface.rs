@@ -419,15 +419,16 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     if root_session_write_guard["status"].as_str() != Some("blocked_by_default") {
                         operator_blocker_codes.push("missing_root_session_write_guard".to_string());
                     }
-                    if boot_compatibility
-                        .as_ref()
-                        .is_some_and(|compatibility| compatibility.classification != "compatible")
-                    {
+                    if boot_compatibility.as_ref().is_some_and(|compatibility| {
+                        canonical_compatibility_class_str(&compatibility.classification)
+                            != Some(CompatibilityClass::BackwardCompatible.as_str())
+                    }) {
                         operator_blocker_codes
                             .push("boot_compatibility_not_compatible".to_string());
                     }
                     if migration_state.as_ref().is_some_and(|migration| {
-                        migration.compatibility_classification != "compatible"
+                        canonical_compatibility_class_str(&migration.compatibility_classification)
+                            != Some(CompatibilityClass::BackwardCompatible.as_str())
                     }) {
                         operator_blocker_codes
                             .push("migration_preflight_not_compatible".to_string());
