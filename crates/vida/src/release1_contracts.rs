@@ -446,6 +446,12 @@ pub(crate) enum BlockerCode {
     MissingRetrievalTrustOperatorEvidence,
     IncompleteReleaseAdmissionOperatorEvidence,
     RecoveryReadinessBlocked,
+    InvalidProtocolBindingRegistryKeys,
+    InvalidCacheKeyInputsKeys,
+    InvalidInvalidationTupleKeys,
+    InvalidMetadataTupleKeys,
+    CacheTupleProtocolBindingEvidenceUntrusted,
+    CacheTupleProtocolBindingTokenMismatch,
     Unsupported,
 }
 
@@ -548,6 +554,16 @@ impl BlockerCode {
                 "incomplete_release_admission_operator_evidence"
             }
             Self::RecoveryReadinessBlocked => "recovery_readiness_blocked",
+            Self::InvalidProtocolBindingRegistryKeys => "invalid_protocol_binding_registry_keys",
+            Self::InvalidCacheKeyInputsKeys => "invalid_cache_key_inputs_keys",
+            Self::InvalidInvalidationTupleKeys => "invalid_invalidation_tuple_keys",
+            Self::InvalidMetadataTupleKeys => "invalid_metadata_tuple_keys",
+            Self::CacheTupleProtocolBindingEvidenceUntrusted => {
+                "cache_tuple_protocol_binding_evidence_untrusted"
+            }
+            Self::CacheTupleProtocolBindingTokenMismatch => {
+                "cache_tuple_protocol_binding_token_mismatch"
+            }
             Self::Unsupported => "unsupported_blocker_code",
         }
     }
@@ -650,6 +666,18 @@ impl BlockerCode {
                 Some(Self::IncompleteReleaseAdmissionOperatorEvidence)
             }
             "recovery_readiness_blocked" => Some(Self::RecoveryReadinessBlocked),
+            "invalid_protocol_binding_registry_keys" => {
+                Some(Self::InvalidProtocolBindingRegistryKeys)
+            }
+            "invalid_cache_key_inputs_keys" => Some(Self::InvalidCacheKeyInputsKeys),
+            "invalid_invalidation_tuple_keys" => Some(Self::InvalidInvalidationTupleKeys),
+            "invalid_metadata_tuple_keys" => Some(Self::InvalidMetadataTupleKeys),
+            "cache_tuple_protocol_binding_evidence_untrusted" => {
+                Some(Self::CacheTupleProtocolBindingEvidenceUntrusted)
+            }
+            "cache_tuple_protocol_binding_token_mismatch" => {
+                Some(Self::CacheTupleProtocolBindingTokenMismatch)
+            }
             "unsupported_blocker_code" => Some(Self::Unsupported),
             _ => None,
         }

@@ -472,7 +472,12 @@ pub(crate) fn taskflow_consume_bundle_check(
                 .all(|key| is_canonical_release1_protocol_binding_registry_key(key))
         })
     {
-        blockers.push("invalid_protocol_binding_registry_keys".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::InvalidProtocolBindingRegistryKeys,
+            )
+            .to_string(),
+        );
     }
     let compiled_payload_import_evidence =
         &payload.protocol_binding_registry["compiled_payload_import_evidence"];
@@ -656,13 +661,23 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
         .keys()
         .all(|key| is_canonical_release1_cache_key_input_key(key))
     {
-        blockers.push("invalid_cache_key_inputs_keys".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::InvalidCacheKeyInputsKeys,
+            )
+            .to_string(),
+        );
     }
     if !invalidation_tuple
         .keys()
         .all(|key| is_canonical_release1_invalidation_tuple_key(key))
     {
-        blockers.push("invalid_invalidation_tuple_keys".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::InvalidInvalidationTupleKeys,
+            )
+            .to_string(),
+        );
     }
 
     let cache_required = [
@@ -733,7 +748,12 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
             .keys()
             .all(|key| is_canonical_release1_metadata_key(key))
         {
-            blockers.push("invalid_metadata_tuple_keys".to_string());
+            blockers.push(
+                super::release1_contracts::blocker_code_str(
+                    super::release1_contracts::BlockerCode::InvalidMetadataTupleKeys,
+                )
+                .to_string(),
+            );
         }
         for key in [
             "framework_revision",
@@ -816,12 +836,22 @@ fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -
     if !protocol_binding_revision.is_empty()
         && (protocol_binding_receipt_id.is_empty() || protocol_binding_status != "bound")
     {
-        blockers.push("cache_tuple_protocol_binding_evidence_untrusted".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::CacheTupleProtocolBindingEvidenceUntrusted,
+            )
+            .to_string(),
+        );
     }
     if !protocol_binding_revision.is_empty()
         && !protocol_binding_cache_token.contains(protocol_binding_receipt_id)
     {
-        blockers.push("cache_tuple_protocol_binding_token_mismatch".to_string());
+        blockers.push(
+            super::release1_contracts::blocker_code_str(
+                super::release1_contracts::BlockerCode::CacheTupleProtocolBindingTokenMismatch,
+            )
+            .to_string(),
+        );
     }
 
     blockers.sort();
