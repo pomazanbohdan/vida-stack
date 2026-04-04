@@ -86,6 +86,7 @@ pub(crate) fn runtime_assignment_from_route<'a>(
 ) -> &'a serde_json::Value {
     route
         .get("activation")
+        .or_else(|| route.get("carrier_runtime_assignment"))
         .or_else(|| route.get("runtime_assignment"))
         .or_else(|| route.get("codex_runtime_assignment"))
         .unwrap_or(&serde_json::Value::Null)
@@ -96,6 +97,7 @@ pub(crate) fn runtime_assignment_from_execution_plan<'a>(
 ) -> &'a serde_json::Value {
     execution_plan
         .get("runtime_assignment")
+        .or_else(|| execution_plan.get("carrier_runtime_assignment"))
         .or_else(|| execution_plan.get("codex_runtime_assignment"))
         .unwrap_or(&serde_json::Value::Null)
 }

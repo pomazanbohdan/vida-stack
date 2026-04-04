@@ -895,6 +895,7 @@ fn runtime_assignment_from_execution_plan<'a>(
 ) -> &'a serde_json::Value {
     execution_plan
         .get("runtime_assignment")
+        .or_else(|| execution_plan.get("carrier_runtime_assignment"))
         .or_else(|| execution_plan.get("codex_runtime_assignment"))
         .unwrap_or(&serde_json::Value::Null)
 }
@@ -1650,6 +1651,7 @@ fn summarize_agent_route_from_snapshot(
         "preferred_agent_type": runtime_assignment["selected_agent_id"],
         "preferred_agent_tier": runtime_assignment["selected_tier"],
         "preferred_runtime_role": runtime_assignment["runtime_role"],
+        "carrier_runtime_assignment": runtime_assignment.clone(),
         "runtime_assignment": runtime_assignment.clone(),
         "codex_runtime_assignment": runtime_assignment,
         "profiles": json_lookup(route, &["profiles"]).cloned().unwrap_or(serde_json::Value::Null),
@@ -2781,6 +2783,7 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
             }
         },
         "tracked_flow_bootstrap": tracked_flow_bootstrap,
+        "carrier_runtime_assignment": runtime_assignment.clone(),
         "runtime_assignment": runtime_assignment.clone(),
         "codex_runtime_assignment": runtime_assignment,
         "development_flow": {
@@ -6825,8 +6828,10 @@ mod tests {
             )
             .expect("selection should build");
             let plan = build_runtime_execution_plan_from_snapshot(&bundle, &selection);
+            let carrier_runtime_assignment = plan["carrier_runtime_assignment"].clone();
             let runtime_assignment = plan["runtime_assignment"].clone();
             let legacy_runtime_assignment = plan["codex_runtime_assignment"].clone();
+            assert_eq!(carrier_runtime_assignment, runtime_assignment);
             assert_eq!(runtime_assignment, legacy_runtime_assignment);
             runtime_assignment
         };
@@ -7510,8 +7515,10 @@ mod tests {
         .expect("selection should build");
         let plan = build_runtime_execution_plan_from_snapshot(&bundle, &selection);
 
+        let carrier_runtime_assignment = plan["carrier_runtime_assignment"].clone();
         let runtime_assignment = plan["runtime_assignment"].clone();
         let legacy_runtime_assignment = plan["codex_runtime_assignment"].clone();
+        assert_eq!(carrier_runtime_assignment, runtime_assignment);
         assert_eq!(runtime_assignment, legacy_runtime_assignment);
         assert!(runtime_assignment.get("internal_named_lane_id").is_none());
         assert_eq!(
