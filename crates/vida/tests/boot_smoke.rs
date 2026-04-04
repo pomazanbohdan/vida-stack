@@ -960,6 +960,23 @@ fn taskflow_next_reports_aggregate_next_step_surface() {
 }
 
 #[test]
+fn taskflow_next_accepts_scope_for_subtree_planning() {
+    let output = vida()
+        .args(["taskflow", "next", "--scope", "r1-01-commands", "--json"])
+        .output()
+        .expect("scoped taskflow next should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("scoped taskflow next json should parse");
+    assert_eq!(parsed["surface"], "vida taskflow next");
+    assert_eq!(parsed["scope_task_id"], "r1-01-commands");
+    assert!(parsed["status"].is_string());
+    assert!(parsed["ready_count"].is_number());
+    assert!(parsed["recommended_command"].is_string());
+}
+
+#[test]
 fn taskflow_graph_summary_reports_ready_blocked_and_critical_path() {
     let output = vida()
         .args(["taskflow", "graph-summary", "--json"])
@@ -994,6 +1011,20 @@ fn taskflow_proxy_help_supports_graph_summary_topic() {
     assert!(stdout.contains("vida taskflow graph-summary [--json]"));
     assert!(stdout.contains("ready_count, blocked_count, critical_path_length"));
     assert!(stdout.contains("vida task validate-graph"));
+}
+
+#[test]
+fn taskflow_proxy_help_supports_next_scope_contract() {
+    let output = vida()
+        .args(["taskflow", "help", "next"])
+        .output()
+        .expect("taskflow next topic help should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("vida taskflow next [--scope <task-id>] [--json]"));
+    assert!(stdout.contains("scope_task_id"));
+    assert!(stdout.contains("Unknown scoped task ids fail closed"));
 }
 
 #[test]

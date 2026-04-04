@@ -9,6 +9,39 @@ use crate::taskflow_task_bridge::{enforce_execution_preparation_contract_gate, p
 use crate::{taskflow_consume, taskflow_protocol_binding, Command, ProxyArgs, RenderMode};
 use clap::Parser;
 
+fn parse_taskflow_next_args(args: &[String]) -> Result<(bool, Option<&str>), &'static str> {
+    if !matches!(args.first().map(String::as_str), Some("next")) {
+        return Err("Usage: vida taskflow next [--scope <task-id>] [--json]");
+    }
+
+    let mut as_json = false;
+    let mut scope_task_id = None;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => {
+                as_json = true;
+                index += 1;
+            }
+            "--scope" => {
+                let Some(task_id) = args.get(index + 1) else {
+                    return Err("Usage: vida taskflow next [--scope <task-id>] [--json]");
+                };
+                scope_task_id = Some(task_id.as_str());
+                index += 2;
+            }
+            "--help" | "-h" if index == 1 && args.len() == 2 => {
+                return Ok((false, Some("__help__")));
+            }
+            _ => {
+                return Err("Usage: vida taskflow next [--scope <task-id>] [--json]");
+            }
+        }
+    }
+
+    Ok((as_json, scope_task_id))
+}
+
 async fn route_taskflow_doctor(args: &[String]) -> ExitCode {
     let argv = std::iter::once("vida".to_string())
         .chain(args.iter().cloned())
@@ -53,15 +86,14 @@ async fn route_taskflow_task(args: &[String]) -> ExitCode {
 }
 
 async fn run_taskflow_next(args: &[String]) -> ExitCode {
-    let as_json = match args {
-        [head] if head == "next" => false,
-        [head, flag] if head == "next" && flag == "--json" => true,
-        [head, flag] if head == "next" && matches!(flag.as_str(), "--help" | "-h") => {
+    let (as_json, scope_task_id) = match parse_taskflow_next_args(args) {
+        Ok((_, Some("__help__"))) => {
             print_taskflow_proxy_help(Some("next"));
             return ExitCode::SUCCESS;
         }
-        _ => {
-            eprintln!("Usage: vida taskflow next [--json]");
+        Ok(parsed) => parsed,
+        Err(usage) => {
+            eprintln!("{usage}");
             return ExitCode::from(2);
         }
     };
@@ -83,7 +115,7 @@ async fn run_taskflow_next(args: &[String]) -> ExitCode {
         }
     };
 
-    let ready_tasks = match store.ready_tasks_scoped(None).await {
+    let ready_tasks = match store.ready_tasks_scoped(scope_task_id).await {
         Ok(tasks) => tasks,
         Err(error) => {
             eprintln!("Failed to compute ready tasks: {error}");
@@ -150,11 +182,15 @@ async fn run_taskflow_next(args: &[String]) -> ExitCode {
         Some("vida taskflow consume continue --json".to_string())
     } else {
         blocker_codes.push("no_ready_tasks".to_string());
-        next_actions.push(
-            "No ready backlog slice is available right now; inspect `vida task ready --json` and `vida taskflow recovery latest --json`."
-                .to_string(),
-        );
-        Some("vida task ready --json".to_string())
+        let ready_command = if let Some(task_id) = scope_task_id {
+            format!("vida task ready --scope {task_id} --json")
+        } else {
+            "vida task ready --json".to_string()
+        };
+        next_actions.push(format!(
+            "No ready backlog slice is available right now; inspect `{ready_command}` and `vida taskflow recovery latest --json`."
+        ));
+        Some(ready_command)
     };
 
     if recovery.is_some() {
@@ -183,6 +219,7 @@ async fn run_taskflow_next(args: &[String]) -> ExitCode {
         "blocker_codes": blocker_codes,
         "next_actions": next_actions,
         "recommended_command": recommended_command,
+        "scope_task_id": scope_task_id,
         "ready_count": ready_tasks.len(),
         "primary_ready_task": primary_ready_task,
         "latest_run_graph": latest_run_graph,
@@ -202,6 +239,9 @@ async fn run_taskflow_next(args: &[String]) -> ExitCode {
             "ready_count",
             &ready_tasks.len().to_string(),
         );
+        if let Some(task_id) = scope_task_id {
+            crate::print_surface_line(RenderMode::Plain, "scope_task_id", task_id);
+        }
         if let Some(task) = ready_tasks.first() {
             crate::print_surface_line(RenderMode::Plain, "primary_ready_task", &task.id);
             crate::print_surface_line(RenderMode::Plain, "title", &task.title);

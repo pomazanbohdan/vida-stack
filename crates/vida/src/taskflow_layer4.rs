@@ -72,13 +72,14 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  This is a read-only launcher-owned planning surface over the authoritative TaskFlow state store.");
             println!();
             println!("Canonical command:");
-            println!("  vida taskflow next [--json]");
+            println!("  vida taskflow next [--scope <task-id>] [--json]");
             println!();
             println!("Returned semantics:");
-            println!("  status, blocker_codes, next_actions, recommended_command, ready_count, primary_ready_task, latest_run_graph, recovery, gate, dispatch");
+            println!("  status, blocker_codes, next_actions, recommended_command, scope_task_id, ready_count, primary_ready_task, latest_run_graph, recovery, gate, dispatch");
             println!();
             println!("Failure modes:");
             println!("  Missing or unreadable authoritative state fails closed.");
+            println!("  Unknown scoped task ids fail closed from the authoritative task graph.");
             println!("  `next` is an inspection/planning surface and must not be treated as a mutation or dispatch command by itself.");
             return;
         }
