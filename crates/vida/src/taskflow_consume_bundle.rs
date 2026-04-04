@@ -724,6 +724,46 @@ mod tests {
     }
 
     #[test]
+    fn agent_system_snapshot_accepts_legacy_codex_multi_agent_alias() {
+        let activation_bundle = serde_json::json!({
+            "agent_system": {
+                "mode": "native",
+                "state_owner": "orchestrator_only",
+                "max_parallel_agents": 2
+            },
+            "autonomous_execution": {
+                "enabled": true
+            },
+            "codex_multi_agent": {
+                "roles": [
+                    {
+                        "role_id": "legacy",
+                        "tier": "legacy",
+                        "rate": 4,
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "default_runtime_role": "worker",
+                        "reasoning_band": "medium",
+                        "model_reasoning_effort": "medium"
+                    }
+                ],
+                "worker_strategy": {
+                    "selection_policy": {
+                        "rule": "capability_first_then_score_guard_then_cheapest_tier"
+                    },
+                    "agents": {},
+                    "store_path": ".vida/data/state/agents.json",
+                    "scorecards_path": ".vida/data/state/agent-scorecards.json"
+                },
+                "dispatch_aliases": {}
+            }
+        });
+
+        let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
+        assert_eq!(snapshot["carriers"][0]["carrier_id"], "legacy");
+    }
+
+    #[test]
     fn normalize_agent_system_max_parallel_agents_uses_positive_numeric_value() {
         let agent_system = serde_json::json!({
             "max_parallel_agents": 4
@@ -761,7 +801,7 @@ mod tests {
             "autonomous_execution": {
                 "enabled": true
             },
-            "codex_multi_agent": {
+            "carrier_runtime": {
                 "roles": [],
                 "worker_strategy": {
                     "selection_policy": {
@@ -790,7 +830,7 @@ mod tests {
             "autonomous_execution": {
                 "enabled": true
             },
-            "codex_multi_agent": {
+            "carrier_runtime": {
                 "roles": [],
                 "worker_strategy": {
                     "selection_policy": {},
@@ -877,7 +917,7 @@ mod tests {
             "autonomous_execution": {
                 "enabled": true
             },
-            "codex_multi_agent": {
+            "carrier_runtime": {
                 "roles": [
                     {
                         "role_id": "a",
@@ -928,7 +968,7 @@ mod tests {
             "autonomous_execution": {
                 "enabled": true
             },
-            "codex_multi_agent": {
+            "carrier_runtime": {
                 "roles": [
                     {
                         "role_id": "z-role",
@@ -991,7 +1031,7 @@ mod tests {
             "autonomous_execution": {
                 "enabled": true
             },
-            "codex_multi_agent": {
+            "carrier_runtime": {
                 "roles": [
                     {
                         "role_id": "no-rate",
@@ -1044,7 +1084,7 @@ mod tests {
             "autonomous_execution": {
                 "enabled": true
             },
-            "codex_multi_agent": {
+            "carrier_runtime": {
                 "roles": [
                     {
                         "role_id": "mixed",
@@ -1086,7 +1126,7 @@ mod tests {
             "autonomous_execution": {
                 "enabled": true
             },
-            "codex_multi_agent": {
+            "carrier_runtime": {
                 "roles": [],
                 "worker_strategy": {
                     "agents": {},
@@ -1115,7 +1155,7 @@ mod tests {
             "autonomous_execution": {
                 "enabled": true
             },
-            "codex_multi_agent": {
+            "carrier_runtime": {
                 "roles": [
                     {
                         "role_id": 123,
