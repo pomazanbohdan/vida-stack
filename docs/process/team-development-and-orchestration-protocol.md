@@ -92,8 +92,12 @@ Every delegated development packet must include:
 
 Readiness rule:
 
-1. if any of `goal`, `owned_paths`, `definition_of_done`, `verification_command`, or `blocking_question` is missing, the packet is invalid,
-2. invalid packets must be reshaped by the orchestrator before delegation.
+1. readiness is template-specific and must follow `docs/process/project-development-packet-template-protocol.md`,
+2. `delivery_task_packet` and `execution_block_packet` are invalid if any of `goal`, `scope_in`, `owned_paths` or `read_only_paths`, `definition_of_done`, `verification_command`, `proof_target`, `stop_rules`, or `blocking_question` is missing,
+3. `coach_review_packet` is invalid if any of `review_goal`, `owned_paths` or `read_only_paths`, `definition_of_done`, `proof_target`, or `blocking_question` is missing,
+4. `verifier_proof_packet` is invalid if any of `proof_goal`, `verification_command`, `proof_target`, `owned_paths` or `read_only_paths`, or `blocking_question` is missing,
+5. `escalation_packet` is invalid if any of `decision_needed`, `options`, `constraints`, or `blocking_question` is missing,
+6. invalid packets must be reshaped by the orchestrator before delegation.
 
 Template rule:
 

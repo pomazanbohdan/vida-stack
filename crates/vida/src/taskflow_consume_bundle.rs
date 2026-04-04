@@ -273,8 +273,11 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                         if let Some(error) =
                             db_first_activation_snapshot_validation_error(&snapshot)
                         {
-                            effective_blockers
-                                .push("missing_launcher_activation_snapshot".to_string());
+                            if let Some(code) = crate::release1_contracts::blocker_code_value(
+                                crate::release1_contracts::BlockerCode::MissingLauncherActivationSnapshot,
+                            ) {
+                                effective_blockers.push(code);
+                            }
                             serde_json::json!({
                                 "ok": false,
                                 "error": error,
@@ -292,7 +295,11 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                         }
                     }
                     Err(error) => {
-                        effective_blockers.push("missing_launcher_activation_snapshot".to_string());
+                        if let Some(code) = crate::release1_contracts::blocker_code_value(
+                            crate::release1_contracts::BlockerCode::MissingLauncherActivationSnapshot,
+                        ) {
+                            effective_blockers.push(code);
+                        }
                         serde_json::json!({
                             "ok": false,
                             "error": error,

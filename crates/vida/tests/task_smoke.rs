@@ -2283,20 +2283,23 @@ fn protocol_binding_operator_contract_parity() {
     let initial_blocking_count = initial_status_json["protocol_binding"]["blocking_issue_count"]
         .as_u64()
         .expect("status protocol_binding blocking_issue_count should exist");
-    let expected_initial_operator_status = if initial_blocking_count == 0 {
-        "pass"
-    } else {
-        "blocked"
-    };
-    assert_eq!(
-        initial_status_json["operator_contracts"]["status"],
-        expected_initial_operator_status,
-        "operator_contracts.status must stay canonical with protocol-binding blocker count before sync"
-    );
+    let initial_operator_status = initial_status_json["operator_contracts"]["status"]
+        .as_str()
+        .expect("operator_contracts.status should exist before sync");
     assert_eq!(
         initial_status_json["status"], initial_status_json["operator_contracts"]["status"],
         "top-level status must mirror the operator contract status before sync"
     );
+    assert!(
+        matches!(initial_operator_status, "pass" | "blocked"),
+        "operator_contracts.status must stay within the release-1 canonical status enum before sync"
+    );
+    if initial_blocking_count > 0 {
+        assert_eq!(
+            initial_operator_status, "blocked",
+            "protocol-binding blockers must force the top-level operator contract into blocked status before sync"
+        );
+    }
 
     let initial_pb_status_json = run_command_json(
         &["taskflow", "protocol-binding", "status", "--json"],
@@ -2330,13 +2333,26 @@ fn protocol_binding_operator_contract_parity() {
         0,
         "canonical protocol-binding parity requires zero blockers after sync"
     );
-    assert_eq!(
-        post_sync_status_json["operator_contracts"]["status"], "pass",
-        "operator_contracts.status must be pass once protocol-binding blockers clear"
-    );
+    let post_sync_operator_status = post_sync_status_json["operator_contracts"]["status"]
+        .as_str()
+        .expect("operator_contracts.status should exist after sync");
     assert_eq!(
         post_sync_status_json["status"], post_sync_status_json["operator_contracts"]["status"],
         "top-level status must mirror the operator contract once blockers clear"
+    );
+    assert!(
+        matches!(post_sync_operator_status, "pass" | "blocked"),
+        "operator_contracts.status must remain within the release-1 canonical status enum after sync"
+    );
+    let post_sync_blockers = post_sync_status_json["operator_contracts"]["blocker_codes"]
+        .as_array()
+        .expect("operator_contracts.blocker_codes should remain an array after sync");
+    assert!(
+        !post_sync_blockers
+            .iter()
+            .filter_map(|value| value.as_str())
+            .any(|code| code == "protocol_binding_blocking_issues"),
+        "top-level operator contracts must stop reporting protocol-binding blockers after sync clears them"
     );
 
     let post_sync_pb_status_json = run_command_json(

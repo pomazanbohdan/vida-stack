@@ -336,7 +336,11 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         );
         Some("vida taskflow consume continue --json".to_string())
     } else {
-        blocker_codes.push("no_ready_tasks".to_string());
+        if let Some(code) =
+            crate::release1_contracts::blocker_code_value(crate::release1_contracts::BlockerCode::NoReadyTasks)
+        {
+            blocker_codes.push(code);
+        }
         let ready_command = if let Some(task_id) = scope_task_id {
             format!("vida task ready --scope {task_id} --json")
         } else {
@@ -356,7 +360,11 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
     }
 
     if recovery.is_some() && runtime_consumption.latest_kind.as_deref() != Some("final") {
-        blocker_codes.push("execution_preparation_gate_blocked".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::ExecutionPreparationGateBlocked,
+        ) {
+            blocker_codes.push(code);
+        }
         next_actions.push(
             "Materialize final execution-preparation evidence with `vida taskflow consume final \"<request>\" --json` before attempting continuation."
                 .to_string(),
@@ -514,10 +522,18 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         );
     }
     if ready_tasks.is_empty() {
-        blocker_codes.push("no_ready_tasks".to_string());
+        if let Some(code) =
+            crate::release1_contracts::blocker_code_value(crate::release1_contracts::BlockerCode::NoReadyTasks)
+        {
+            blocker_codes.push(code);
+        }
     }
     if blocked_tasks.is_empty() && critical_path.length == 0 {
-        blocker_codes.push("task_graph_empty".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::TaskGraphEmpty,
+        ) {
+            blocker_codes.push(code);
+        }
         next_actions.push(
             "No active execution graph is present; inspect `vida task list --all --json` before sequencing new work."
                 .to_string(),

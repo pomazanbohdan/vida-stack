@@ -27,17 +27,16 @@ Project development stays:
 
 ## Packet Minimum
 
-Before dispatch, one packet must name at least:
+Before dispatch, the active packet must satisfy the template-specific minimum from `docs/process/project-development-packet-template-protocol.md`.
 
-1. `goal`
-2. `scope_in`
-3. `owned_paths` or `read_only_paths`
-4. `definition_of_done`
-5. `verification_command`
-6. `proof_target`
-7. one `blocking_question`
+Runtime shorthand:
 
-If any of those are missing, reshape before delegation.
+1. `delivery_task_packet` and `execution_block_packet` must name `goal`, `scope_in`, `owned_paths` or `read_only_paths`, `definition_of_done`, `verification_command`, `proof_target`, `stop_rules`, and one `blocking_question`,
+2. `coach_review_packet` must name `review_goal`, `owned_paths` or `read_only_paths`, `definition_of_done`, `proof_target`, and one `blocking_question`,
+3. `verifier_proof_packet` must name `proof_goal`, `verification_command`, `proof_target`, `owned_paths` or `read_only_paths`, and one `blocking_question`,
+4. `escalation_packet` must name `decision_needed`, `options`, `constraints`, and one `blocking_question`.
+
+If the active packet template is missing any mandatory field, dispatch must fail closed and the packet must be reshaped first.
 
 ## Default Lane Sequence
 
@@ -74,7 +73,8 @@ Local write work still requires an explicit exception-path receipt and remains b
 ## Routing
 
 1. for full delegated-lane law and packet closure semantics, read `docs/process/team-development-and-orchestration-protocol.md`,
-2. for routine packet rendering and prompt-layer precedence, read `docs/process/project-packet-rendering-runtime-capsule.md`.
+2. for routine packet rendering and prompt-layer precedence, read `docs/process/project-packet-rendering-runtime-capsule.md`,
+3. for packet-family field ownership, read `docs/process/project-development-packet-template-protocol.md`.
 
 -----
 artifact_path: process/project-packet-and-lane-runtime-capsule

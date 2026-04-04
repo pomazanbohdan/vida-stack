@@ -3086,6 +3086,70 @@ fn taskflow_consume_continue_accepts_explicit_dispatch_packet_path() {
 }
 
 #[test]
+fn agent_init_fails_closed_for_dispatch_packet_missing_template_required_fields() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let sync = vida()
+        .args(["taskflow", "protocol-binding", "sync", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("protocol-binding sync should run");
+    assert!(sync.status.success());
+
+    let initial = vida()
+        .args([
+            "taskflow",
+            "consume",
+            "final",
+            "fix dispatch packet validation",
+            "--json",
+        ])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow consume final should run");
+    assert!(initial.status.success());
+
+    let initial_json: serde_json::Value =
+        serde_json::from_slice(&initial.stdout).expect("initial consume final json should parse");
+    let dispatch_packet_path = initial_json["payload"]["dispatch_receipt"]["dispatch_packet_path"]
+        .as_str()
+        .expect("dispatch packet path should be present")
+        .to_string();
+    let _restore = FileRestoreGuard::new(dispatch_packet_path.clone());
+    let mut dispatch_packet_json: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(&dispatch_packet_path).expect("dispatch packet should read"),
+    )
+    .expect("dispatch packet should parse");
+    dispatch_packet_json["delivery_task_packet"]["goal"] = serde_json::Value::Null;
+    atomic_write_file(
+        &dispatch_packet_path,
+        &serde_json::to_string_pretty(&dispatch_packet_json)
+            .expect("mutated dispatch packet should render"),
+    );
+
+    let output = vida()
+        .args(["agent-init", "--dispatch-packet", &dispatch_packet_path, "--json"])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("agent-init should run");
+    assert!(!output.status.success(), "agent-init should fail closed");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("missing required packet fields"));
+    assert!(stderr.contains("goal"));
+}
+
+#[test]
 fn taskflow_consume_continue_prefers_latest_final_snapshot_after_bundle_check() {
     let state_dir = unique_state_dir();
 

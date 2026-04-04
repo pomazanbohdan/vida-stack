@@ -25,6 +25,7 @@ Use this template for one bounded feature/change design before implementation.
   - That leaves room to misread project agent mode as host-level `spawn_agent` semantics instead of the canonical `vida agent-init` lane flow.
   - The startup/runtime guidance does not state strongly enough that host subagent APIs are optional carrier/executor details, not the canonical meaning of project-agent-first development.
   - Runtime-consumption status and continuation also allowed one live ambiguity: a newer `bundle-check` snapshot could overshadow the latest valid `final` snapshot and re-open release-admission blockers even after lawful `consume final` evidence already existed.
+  - Runtime dispatch packets still rely on prose/template alignment rather than one compiled template-specific packet-minimum validator, so `vida taskflow consume final`, persisted dispatch packets, resume, and `vida agent-init` can drift if packet-family requirements are not enforced from shared code.
 
 ## Goal
 - What this change should achieve
@@ -34,6 +35,7 @@ Use this template for one bounded feature/change design before implementation.
 - What success looks like
   - Bootstrap and process docs explicitly distinguish project delegated lanes from host-local subagent APIs.
   - Runtime packet prompts remind worker lanes that project agent-first execution is `vida agent-init`-backed and root-session local coding is forbidden without an exception path.
+  - Runtime dispatch and downstream packets fail closed when the active `packet_template_kind` is missing its canonical mandatory fields.
   - Targeted tests stay green after the wording and contract updates.
 - What is explicitly out of scope
   - Changing the carrier-selection model.
@@ -49,6 +51,7 @@ Use this template for one bounded feature/change design before implementation.
 - Must update both live bootstrap docs and scaffold sources when bootstrap carrier wording changes.
 - Must update runtime-generated operator/prompt surfaces so the distinction is visible during actual delegated execution.
 - Must ensure release-admission and continuation gates prefer the newest valid `final` runtime-consumption snapshot over newer non-final helper snapshots such as `bundle-check`.
+- Must enforce one shared template-specific packet validator for persisted/runtime dispatch packets so packet-ready handoff cannot bypass the canonical project packet minimum.
 
 ### Non-Functional Requirements
 - Performance
@@ -78,6 +81,7 @@ Use this template for one bounded feature/change design before implementation.
 - Config / receipts / runtime surfaces affected:
   - delegated orchestration contract JSON emitted from `crates/vida/src/main.rs`
   - packet prompt text emitted for `vida agent-init` lanes
+  - persisted dispatch packet validation for `vida agent-init` and `vida taskflow consume continue`
   - scaffolded process docs emitted from `crates/vida/src/init_surfaces.rs`
 
 ## Design Decisions
@@ -115,6 +119,7 @@ Will implement / choose:
   - Bootstrap carrier docs and sidecar map.
   - Project process docs for orchestrator, packet/lane, team topology, and host agent system.
   - Runtime-generated init/scaffold docs and delegated packet prompt text.
+  - Shared dispatch-packet template validator used by packet writing and packet reading surfaces.
 - Key interfaces
   - `vida orchestrator-init`
   - `vida agent-init`
@@ -151,6 +156,7 @@ Will implement / choose:
 - `install/assets/AGENTS.scaffold.md`
 - `docs/process/project-orchestrator-operating-protocol.md`
 - `docs/process/project-packet-and-lane-runtime-capsule.md`
+- `docs/process/project-development-packet-template-protocol.md`
 - `docs/process/team-development-and-orchestration-protocol.md`
 - `docs/process/agent-system.md`
 - `docs/process/codex-agent-configuration-guide.md`
@@ -158,10 +164,10 @@ Will implement / choose:
 - `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
 - `crates/vida/src/init_surfaces.rs`
 - `crates/vida/src/main.rs`
+- `crates/vida/src/taskflow_consume_resume.rs`
 - `crates/vida/src/status_surface.rs`
 - `crates/vida/src/doctor_surface.rs`
 - `crates/vida/src/taskflow_task_bridge.rs`
-- `crates/vida/src/taskflow_consume_resume.rs`
 - `crates/vida/tests/boot_smoke.rs`
 
 ## Fail-Closed Constraints
@@ -185,6 +191,7 @@ Will implement / choose:
 
 ### Phase 2
 - Update generated init/scaffold guidance and runtime packet/orchestration prompts.
+- Add shared packet-template validation for dispatch packet persistence, resume, and `vida agent-init`.
 - Add or update tests that pin the clarified wording where runtime emits it.
 - Second proof target
   - targeted `cargo test -p vida ...` coverage for boot/runtime guidance surfaces

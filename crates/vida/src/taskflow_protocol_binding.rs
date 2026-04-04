@@ -158,34 +158,66 @@ pub(crate) async fn protocol_binding_compiled_payload_import_evidence(
         };
 
     if source.is_empty() {
-        blockers.push("missing_launcher_activation_snapshot".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::MissingLauncherActivationSnapshot,
+        ) {
+            blockers.push(code);
+        }
     } else if !ProtocolBindingCompiledPayloadImportEvidence::trusted(&source) {
         blockers.push(format!("untrusted_compiled_payload_source:{source}"));
     }
     if let Some(snapshot) = activation_snapshot.as_ref() {
         if !has_non_empty_string_field(&snapshot.compiled_bundle, &["role_selection", "mode"]) {
-            blockers.push("invalid_compiled_bundle_role_selection_mode".to_string());
+            if let Some(code) = crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::InvalidCompiledBundleRoleSelectionMode,
+            ) {
+                blockers.push(code);
+            }
         }
         if !has_non_empty_string_field(&snapshot.compiled_bundle, &["agent_system", "mode"]) {
-            blockers.push("invalid_compiled_bundle_agent_system_mode".to_string());
+            if let Some(code) = crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::InvalidCompiledBundleAgentSystemMode,
+            ) {
+                blockers.push(code);
+            }
         }
         if !has_non_empty_string_field(&snapshot.compiled_bundle, &["agent_system", "state_owner"])
         {
-            blockers.push("invalid_compiled_bundle_agent_system_state_owner".to_string());
+            if let Some(code) = crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::InvalidCompiledBundleAgentSystemStateOwner,
+            ) {
+                blockers.push(code);
+            }
         }
     }
     if let Some(receipt) = effective_bundle_receipt.as_ref() {
         if receipt.receipt_id.trim().is_empty() {
-            blockers.push("missing_effective_bundle_receipt_id".to_string());
+            if let Some(code) = crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::MissingEffectiveBundleReceiptId,
+            ) {
+                blockers.push(code);
+            }
         }
         if receipt.root_artifact_id.trim().is_empty() {
-            blockers.push("missing_effective_bundle_root_artifact_id".to_string());
+            if let Some(code) = crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::MissingEffectiveBundleRootArtifactId,
+            ) {
+                blockers.push(code);
+            }
         }
         if receipt.artifact_count == 0 {
-            blockers.push("empty_effective_bundle_artifact_count".to_string());
+            if let Some(code) = crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::EmptyEffectiveBundleArtifactCount,
+            ) {
+                blockers.push(code);
+            }
         }
     } else {
-        blockers.push("missing_effective_bundle_receipt".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::MissingEffectiveBundleReceipt,
+        ) {
+            blockers.push(code);
+        }
     }
 
     ProtocolBindingCompiledPayloadImportEvidence {

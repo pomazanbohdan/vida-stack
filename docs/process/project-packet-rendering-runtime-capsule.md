@@ -33,18 +33,16 @@ For routine write-producing work:
 
 ## Required Packet Fields
 
-The runtime-visible packet minimum is:
+The runtime-visible packet minimum is template-specific and must match `docs/process/project-development-packet-template-protocol.md`.
 
-1. `goal`
-2. `scope_in`
-3. `owned_paths` or `read_only_paths`
-4. `definition_of_done`
-5. `verification_command`
-6. `proof_target`
-7. `stop_rules`
-8. `blocking_question`
+Dispatch-readiness summary:
 
-If any are missing, the packet is not dispatch-ready.
+1. `delivery_task_packet` and `execution_block_packet` require `goal`, `scope_in`, `owned_paths` or `read_only_paths`, `definition_of_done`, `verification_command`, `proof_target`, `stop_rules`, and `blocking_question`,
+2. `coach_review_packet` requires `review_goal`, `owned_paths` or `read_only_paths`, `definition_of_done`, `proof_target`, and `blocking_question`,
+3. `verifier_proof_packet` requires `proof_goal`, `verification_command`, `proof_target`, `owned_paths` or `read_only_paths`, and `blocking_question`,
+4. `escalation_packet` requires `decision_needed`, `options`, `constraints`, and `blocking_question`.
+
+If the active template minimum is missing, the packet is not dispatch-ready and runtime must fail closed instead of emitting a `packet_ready` handoff.
 
 ## Prompt-Stack Minimum
 

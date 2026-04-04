@@ -184,26 +184,23 @@ Escalate only when:
 
 ## Packet Readiness Rule
 
-Before dispatch, the orchestrator must ensure the packet includes:
+Before dispatch, the orchestrator must ensure the active packet satisfies the template-specific minimum for its `packet_template_kind`.
 
-1. `goal`
-2. `non_goals`
-3. `scope_in`
-4. `scope_out`
-5. `owned_paths` or `read_only_paths`
-6. `definition_of_done`
-7. `verification_command`
-8. `proof_target`
-9. `stop_rules`
-10. one `blocking_question`
+Minimum by packet family:
 
-If any of those are missing, the packet is not ready and must be reshaped first.
+1. `delivery_task_packet` and `execution_block_packet` must include `goal`, `scope_in`, `owned_paths` or `read_only_paths`, `definition_of_done`, `verification_command`, `proof_target`, `stop_rules`, and one `blocking_question`,
+2. `coach_review_packet` must include `review_goal`, `owned_paths` or `read_only_paths`, `definition_of_done`, `proof_target`, and one `blocking_question`,
+3. `verifier_proof_packet` must include `proof_goal`, `verification_command`, `proof_target`, `owned_paths` or `read_only_paths`, and one `blocking_question`,
+4. `escalation_packet` must include `decision_needed`, `options`, `constraints`, and one `blocking_question`.
+
+If any mandatory field for the active packet family is missing, the packet is not ready and must be reshaped first.
 
 Interpretation rule:
 
 1. packet fields must be rendered and checked through `docs/process/project-development-packet-template-protocol.md`,
 2. prompt-layer precedence must follow `docs/process/project-agent-prompt-stack-protocol.md`,
-3. startup must satisfy `docs/process/project-boot-readiness-validation-protocol.md` before the first write-producing dispatch.
+3. startup must satisfy `docs/process/project-boot-readiness-validation-protocol.md` before the first write-producing dispatch,
+4. runtime surfaces such as `vida taskflow consume final`, dispatch-packet persistence, resume, and `vida agent-init` must fail closed when the active packet template minimum is missing.
 
 ## Anti-Stop Rule
 

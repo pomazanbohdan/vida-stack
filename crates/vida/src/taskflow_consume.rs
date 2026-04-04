@@ -550,9 +550,18 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 status: "blocked".to_string(),
                                 ready: false,
                                 blockers: vec![
-                                    "missing_docflow_activation".to_string(),
-                                    "missing_readiness_verdict".to_string(),
-                                    "missing_proof_verdict".to_string(),
+                                    crate::release1_contracts::blocker_code_value(
+                                        crate::release1_contracts::BlockerCode::MissingDocflowActivation,
+                                    )
+                                    .expect("missing docflow activation blocker should be canonical"),
+                                    crate::release1_contracts::blocker_code_value(
+                                        crate::release1_contracts::BlockerCode::MissingReadinessVerdict,
+                                    )
+                                    .expect("missing readiness verdict blocker should be canonical"),
+                                    crate::release1_contracts::blocker_code_value(
+                                        crate::release1_contracts::BlockerCode::MissingProofVerdict,
+                                    )
+                                    .expect("missing proof verdict blocker should be canonical"),
                                 ],
                                 proof_surfaces: vec![],
                             };
@@ -1176,13 +1185,23 @@ mod tests {
         let mut docflow_verdict = crate::RuntimeConsumptionDocflowVerdict {
             status: "blocked".to_string(),
             ready: false,
-            blockers: vec!["missing_proof_verdict".to_string()],
+            blockers: vec![
+                crate::release1_contracts::blocker_code_value(
+                    crate::release1_contracts::BlockerCode::MissingProofVerdict,
+                )
+                .expect("missing proof verdict blocker should be canonical"),
+            ],
             proof_surfaces: vec![],
         };
         let mut closure_admission = crate::RuntimeConsumptionClosureAdmission {
             status: "blocked".to_string(),
             admitted: false,
-            blockers: vec!["missing_closure_proof".to_string()],
+            blockers: vec![
+                crate::release1_contracts::blocker_code_value(
+                    crate::release1_contracts::BlockerCode::MissingClosureProof,
+                )
+                .expect("missing closure proof blocker should be canonical"),
+            ],
             proof_surfaces: vec![],
         };
 

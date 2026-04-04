@@ -155,7 +155,9 @@ coach_review_packet:
   source_packet_id: <delivery task or execution block packet>
   review_goal: <what the coach must judge>
   owned_paths:
-    - <paths under review>
+    - <optional writable paths under review>
+  read_only_paths:
+    - <optional bounded read paths under review>
   definition_of_done:
     - <same bounded done rule>
   proof_target: <same bounded proof target>
@@ -180,7 +182,9 @@ verifier_proof_packet:
   verification_command: <one bounded verification command or procedure>
   proof_target: <what closure depends on>
   owned_paths:
-    - <paths or artifacts to inspect>
+    - <optional writable paths or artifacts to inspect>
+  read_only_paths:
+    - <optional bounded read paths or artifacts to inspect>
   active_skills: <required skills or no_applicable_skill>
   blocking_question: <one proof question>
   handoff_runtime_role: verifier
@@ -231,6 +235,13 @@ If a packet:
 5. has no explicit stop rule,
 
 then it is not lawful and must be reshaped before dispatch.
+
+Template-specific readiness note:
+
+1. `delivery_task_packet` and `execution_block_packet` require `goal`, `scope_in`, `owned_paths` or `read_only_paths`, `definition_of_done`, `verification_command`, `proof_target`, `stop_rules`, and `blocking_question`,
+2. `coach_review_packet` requires `review_goal`, `owned_paths` or `read_only_paths`, `definition_of_done`, `proof_target`, and `blocking_question`,
+3. `verifier_proof_packet` requires `proof_goal`, `verification_command`, `proof_target`, `owned_paths` or `read_only_paths`, and `blocking_question`,
+4. `escalation_packet` requires `decision_needed`, `options`, `constraints`, and `blocking_question`.
 
 ## Routing
 

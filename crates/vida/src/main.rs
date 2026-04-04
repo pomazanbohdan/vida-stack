@@ -3682,13 +3682,25 @@ fn build_docflow_runtime_verdict(
 ) -> RuntimeConsumptionDocflowVerdict {
     let mut blockers = Vec::new();
     if !registry.ok {
-        blockers.push("missing_docflow_activation".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::MissingDocflowActivation,
+        ) {
+            blockers.push(code);
+        }
     }
     if !check.ok {
-        blockers.push("docflow_check_blocking".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::DocflowCheckBlocking,
+        ) {
+            blockers.push(code);
+        }
     }
     if !readiness.ok {
-        blockers.push("missing_readiness_verdict".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::MissingReadinessVerdict,
+        ) {
+            blockers.push(code);
+        }
     }
     if readiness
         .artifact_path
@@ -3696,10 +3708,18 @@ fn build_docflow_runtime_verdict(
         .map(str::trim)
         .is_none_or(str::is_empty)
     {
-        blockers.push("missing_inventory_or_projection_evidence".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::MissingInventoryOrProjectionEvidence,
+        ) {
+            blockers.push(code);
+        }
     }
     if !proof.ok {
-        blockers.push("missing_proof_verdict".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::MissingProofVerdict,
+        ) {
+            blockers.push(code);
+        }
     }
 
     RuntimeConsumptionDocflowVerdict {
@@ -3726,7 +3746,11 @@ fn build_runtime_closure_admission(
 ) -> RuntimeConsumptionClosureAdmission {
     let mut blockers = Vec::new();
     if !bundle_check.ok {
-        blockers.push("missing_closure_proof".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::MissingClosureProof,
+        ) {
+            blockers.push(code);
+        }
         blockers.extend(bundle_check.blockers.iter().cloned());
     }
     if !docflow_verdict.ready {
@@ -3737,7 +3761,11 @@ fn build_runtime_closure_admission(
         .iter()
         .any(|surface| surface.contains("proofcheck"))
     {
-        blockers.push("missing_closure_proof".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::MissingClosureProof,
+        ) {
+            blockers.push(code);
+        }
     }
     let has_readiness_surface = docflow_verdict
         .proof_surfaces
@@ -3748,11 +3776,23 @@ fn build_runtime_closure_admission(
         .iter()
         .any(|surface| surface.contains("proofcheck"));
     if !(has_readiness_surface && has_proof_surface) {
-        blockers.push("restore_reconcile_not_green".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::RestoreReconcileNotGreen,
+        ) {
+            blockers.push(code);
+        }
     }
     if role_selection.execution_plan["status"] == "design_first" {
-        blockers.push("pending_design_packet".to_string());
-        blockers.push("pending_developer_handoff_packet".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::PendingDesignPacket,
+        ) {
+            blockers.push(code);
+        }
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::PendingDeveloperHandoffPacket,
+        ) {
+            blockers.push(code);
+        }
     }
     blockers.sort();
     blockers.dedup();
@@ -4399,6 +4439,11 @@ fn runtime_execution_block_packet(
             "new feature scope without bounded packet update"
         ],
         "owned_paths": [],
+        "read_only_paths": [
+            ".vida/data/state/runtime-consumption",
+            "docs/product/spec",
+            "docs/process"
+        ],
         "definition_of_done": [
             "bounded blocker is resolved with receipt-backed evidence"
         ],
@@ -4425,6 +4470,11 @@ fn runtime_coach_review_packet(
         "source_packet_id": format!("{run_id}::implementer::delivery"),
         "review_goal": format!("Judge whether `{dispatch_target}` remains aligned with the approved bounded packet, acceptance criteria, and definition of done"),
         "owned_paths": [],
+        "read_only_paths": [
+            ".vida/data/state/runtime-consumption",
+            "docs/product/spec",
+            "docs/process"
+        ],
         "definition_of_done": [
             "coach review returns bounded approval-forward or bounded rework evidence"
         ],
@@ -4454,6 +4504,11 @@ fn runtime_verifier_proof_packet(
         "verification_command": format!("vida taskflow consume continue --run-id {run_id} --json"),
         "proof_target": proof_target,
         "owned_paths": [],
+        "read_only_paths": [
+            ".vida/data/state/runtime-consumption",
+            "docs/product/spec",
+            "docs/process"
+        ],
         "active_skills": "no_applicable_skill",
         "blocking_question": format!("What proof is still missing before `{dispatch_target}` can close?"),
         "handoff_runtime_role": "verifier",
@@ -4476,6 +4531,11 @@ fn runtime_escalation_packet(run_id: &str, dispatch_target: &str) -> serde_json:
         "constraints": [
             "preserve one bounded packet owner",
             "do not widen scope without a new bounded packet"
+        ],
+        "read_only_paths": [
+            ".vida/data/state/runtime-consumption",
+            "docs/product/spec",
+            "docs/process"
         ],
         "active_skills": "no_applicable_skill",
         "blocking_question": format!("Which architectural decision is required before `{dispatch_target}` can proceed coherently?"),
@@ -4502,6 +4562,158 @@ fn runtime_packet_prompt(
     format!(
         "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nFirst substantive response: publish a concise plan before edits or implementation.\nLocal orchestrator coding is forbidden without an explicit exception path.\nFinding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session fallback; wait, reroute, or record the exception path first.\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
     )
+}
+
+fn packet_nonempty_string(value: Option<&serde_json::Value>) -> bool {
+    value.and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+}
+
+fn packet_nonempty_string_array(packet: &serde_json::Value, key: &str) -> bool {
+    packet
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|rows| {
+            !rows.is_empty()
+                && rows.iter().all(|row| {
+                    row.as_str()
+                        .map(str::trim)
+                        .is_some_and(|value| !value.is_empty())
+                })
+        })
+}
+
+fn packet_has_owned_or_read_only_paths(packet: &serde_json::Value) -> bool {
+    packet_nonempty_string_array(packet, "owned_paths")
+        || packet_nonempty_string_array(packet, "read_only_paths")
+}
+
+fn active_runtime_packet<'a>(
+    packet: &'a serde_json::Value,
+) -> Result<(&'a str, &'a serde_json::Value), String> {
+    let packet_template_kind = packet
+        .get("packet_template_kind")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Persisted dispatch packet is missing packet_template_kind".to_string())?;
+    let packet_value = packet
+        .get(packet_template_kind)
+        .ok_or_else(|| {
+            format!(
+                "Persisted dispatch packet is missing active packet body `{packet_template_kind}`"
+            )
+        })?;
+    if packet_value.is_null() {
+        return Err(format!(
+            "Persisted dispatch packet has null active packet body `{packet_template_kind}`"
+        ));
+    }
+    Ok((packet_template_kind, packet_value))
+}
+
+pub(crate) fn validate_runtime_dispatch_packet_contract(
+    packet: &serde_json::Value,
+    packet_label: &str,
+) -> Result<(), String> {
+    let (packet_template_kind, active_packet) = active_runtime_packet(packet)?;
+    let missing = match packet_template_kind {
+        "delivery_task_packet" | "execution_block_packet" => {
+            let mut missing = Vec::new();
+            if !packet_nonempty_string(active_packet.get("goal")) {
+                missing.push("goal");
+            }
+            if !packet_nonempty_string_array(active_packet, "scope_in") {
+                missing.push("scope_in");
+            }
+            if !packet_has_owned_or_read_only_paths(active_packet) {
+                missing.push("owned_paths|read_only_paths");
+            }
+            if !packet_nonempty_string_array(active_packet, "definition_of_done") {
+                missing.push("definition_of_done");
+            }
+            if !packet_nonempty_string(active_packet.get("verification_command")) {
+                missing.push("verification_command");
+            }
+            if !packet_nonempty_string(active_packet.get("proof_target")) {
+                missing.push("proof_target");
+            }
+            if !packet_nonempty_string_array(active_packet, "stop_rules") {
+                missing.push("stop_rules");
+            }
+            if !packet_nonempty_string(active_packet.get("blocking_question")) {
+                missing.push("blocking_question");
+            }
+            missing
+        }
+        "coach_review_packet" => {
+            let mut missing = Vec::new();
+            if !packet_nonempty_string(active_packet.get("review_goal")) {
+                missing.push("review_goal");
+            }
+            if !packet_has_owned_or_read_only_paths(active_packet) {
+                missing.push("owned_paths|read_only_paths");
+            }
+            if !packet_nonempty_string_array(active_packet, "definition_of_done") {
+                missing.push("definition_of_done");
+            }
+            if !packet_nonempty_string(active_packet.get("proof_target")) {
+                missing.push("proof_target");
+            }
+            if !packet_nonempty_string(active_packet.get("blocking_question")) {
+                missing.push("blocking_question");
+            }
+            missing
+        }
+        "verifier_proof_packet" => {
+            let mut missing = Vec::new();
+            if !packet_nonempty_string(active_packet.get("proof_goal")) {
+                missing.push("proof_goal");
+            }
+            if !packet_nonempty_string(active_packet.get("verification_command")) {
+                missing.push("verification_command");
+            }
+            if !packet_nonempty_string(active_packet.get("proof_target")) {
+                missing.push("proof_target");
+            }
+            if !packet_has_owned_or_read_only_paths(active_packet) {
+                missing.push("owned_paths|read_only_paths");
+            }
+            if !packet_nonempty_string(active_packet.get("blocking_question")) {
+                missing.push("blocking_question");
+            }
+            missing
+        }
+        "escalation_packet" => {
+            let mut missing = Vec::new();
+            if !packet_nonempty_string(active_packet.get("decision_needed")) {
+                missing.push("decision_needed");
+            }
+            if !packet_nonempty_string_array(active_packet, "options") {
+                missing.push("options");
+            }
+            if !packet_nonempty_string_array(active_packet, "constraints") {
+                missing.push("constraints");
+            }
+            if !packet_nonempty_string(active_packet.get("blocking_question")) {
+                missing.push("blocking_question");
+            }
+            missing
+        }
+        other => {
+            return Err(format!(
+                "Persisted dispatch packet has unsupported packet_template_kind `{other}`"
+            ))
+        }
+    };
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{packet_label} `{packet_template_kind}` is missing required packet fields: {}",
+        missing.join(", ")
+    ))
 }
 
 fn runtime_dispatch_command_for_packet_path(
@@ -4733,6 +4945,7 @@ fn write_runtime_dispatch_packet(ctx: &RuntimeDispatchPacketContext<'_>) -> Resu
         "run_graph_bootstrap": ctx.run_graph_bootstrap,
         "orchestration_contract": ctx.role_selection.execution_plan["orchestration_contract"],
     });
+    validate_runtime_dispatch_packet_contract(&body, "Runtime dispatch packet")?;
     let encoded = serde_json::to_string_pretty(&body)
         .map_err(|error| format!("Failed to encode dispatch packet: {error}"))?;
     std::fs::write(&packet_path, encoded)
@@ -5149,6 +5362,7 @@ fn write_runtime_downstream_dispatch_packet_at(
         receipt,
         Some(packet_path),
     );
+    validate_runtime_dispatch_packet_contract(&body, "Runtime downstream dispatch packet")?;
     let encoded = serde_json::to_string_pretty(&body)
         .map_err(|error| format!("Failed to encode downstream dispatch packet: {error}"))?;
     std::fs::write(packet_path, encoded)
@@ -5633,13 +5847,25 @@ fn consume_final_operator_blocker_codes(payload: &serde_json::Value) -> Vec<Stri
     let mut blocker_codes = Vec::new();
     if payload["bundle_check"]["activation_status"].as_str() != Some("ready_enough_for_normal_work")
     {
-        blocker_codes.push("bundle_activation_not_ready".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::BundleActivationNotReady,
+        ) {
+            blocker_codes.push(code);
+        }
     }
     if release1_status_is_blocked(&payload["docflow_verdict"]["status"]) {
-        blocker_codes.push("docflow_verdict_block".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::DocflowVerdictBlock,
+        ) {
+            blocker_codes.push(code);
+        }
     }
     if release1_status_is_blocked(&payload["closure_admission"]["status"]) {
-        blocker_codes.push("closure_admission_block".to_string());
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::ClosureAdmissionBlock,
+        ) {
+            blocker_codes.push(code);
+        }
     }
     blocker_codes
 }
@@ -7978,6 +8204,63 @@ mod tests {
             runtime.block_on(run(cli(&["agent-init", "--role", "worker", "--json"]))),
             ExitCode::SUCCESS
         );
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_contract_accepts_template_specific_minimums() {
+        let delivery = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "delivery_task_packet": runtime_delivery_task_packet(
+                "run-1",
+                "implementer",
+                "worker",
+                "implementation",
+                "implementation",
+                "request text",
+            ),
+        });
+        assert!(validate_runtime_dispatch_packet_contract(&delivery, "test packet").is_ok());
+
+        let coach = serde_json::json!({
+            "packet_template_kind": "coach_review_packet",
+            "coach_review_packet": runtime_coach_review_packet(
+                "run-1",
+                "coach",
+                "bounded proof target",
+            ),
+        });
+        assert!(validate_runtime_dispatch_packet_contract(&coach, "test packet").is_ok());
+
+        let verifier = serde_json::json!({
+            "packet_template_kind": "verifier_proof_packet",
+            "verifier_proof_packet": runtime_verifier_proof_packet(
+                "run-1",
+                "verification",
+                "bounded proof target",
+            ),
+        });
+        assert!(validate_runtime_dispatch_packet_contract(&verifier, "test packet").is_ok());
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_contract_fails_closed_for_missing_required_fields() {
+        let malformed = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "delivery_task_packet": {
+                "packet_id": "run-1::implementer::delivery",
+                "scope_in": ["dispatch_target:implementer"],
+                "read_only_paths": ["docs/process"],
+                "definition_of_done": ["done"],
+                "verification_command": "vida taskflow consume continue --run-id run-1 --json",
+                "proof_target": "proof",
+                "stop_rules": ["stop"],
+                "blocking_question": "what next?"
+            }
+        });
+        let error = validate_runtime_dispatch_packet_contract(&malformed, "test packet")
+            .expect_err("packet without goal should fail closed");
+        assert!(error.contains("missing required packet fields"));
+        assert!(error.contains("goal"));
     }
 
     #[test]

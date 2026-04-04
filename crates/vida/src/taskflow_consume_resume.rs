@@ -271,8 +271,13 @@ async fn validate_run_graph_resume_state_for_downstream_packet(
 pub(crate) fn read_dispatch_packet(path: &str) -> Result<serde_json::Value, String> {
     let body = std::fs::read_to_string(path)
         .map_err(|error| format!("Failed to read persisted dispatch packet: {error}"))?;
-    serde_json::from_str(&body)
-        .map_err(|error| format!("Failed to parse persisted dispatch packet: {error}"))
+    let packet: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|error| format!("Failed to parse persisted dispatch packet: {error}"))?;
+    crate::validate_runtime_dispatch_packet_contract(
+        &packet,
+        "Persisted dispatch packet",
+    )?;
+    Ok(packet)
 }
 
 struct ResumeInputs {
