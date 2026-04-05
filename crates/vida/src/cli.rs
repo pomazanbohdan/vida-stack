@@ -84,6 +84,7 @@ pub(crate) enum TaskCommand {
     Next(TaskNextArgs),
     NextDisplayId(TaskNextDisplayIdArgs),
     Create(TaskCreateArgs),
+    Ensure(TaskCreateArgs),
     Update(TaskUpdateArgs),
     Close(TaskCloseArgs),
     Deps(TaskDepsArgs),

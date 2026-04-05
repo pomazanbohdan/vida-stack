@@ -63,6 +63,150 @@ fn project_root_for_task_state(state_dir: &std::path::Path) -> Option<std::path:
         .or_else(|| crate::resolve_runtime_project_root().ok())
 }
 
+async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) -> ExitCode {
+    let state_dir = command
+        .state_dir
+        .clone()
+        .unwrap_or_else(state_store::default_state_dir);
+    let project_root = project_root_for_task_state(&state_dir).unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    });
+    match open_task_store(state_dir).await {
+        Ok(store) => {
+            let mut parent_id = command.parent_id.clone();
+            let mut display_id = command.display_id.clone().unwrap_or_default();
+            let auto_display_from = command.auto_display_from.clone().unwrap_or_default();
+            let parent_display_id = command.parent_display_id.clone().unwrap_or_default();
+            if display_id.is_empty() && !auto_display_from.is_empty() && parent_id.is_some() {
+                display_id = format!("{auto_display_from}.1");
+            }
+            if (display_id.is_empty() && !auto_display_from.is_empty())
+                || (parent_id.is_none() && !parent_display_id.is_empty())
+            {
+                match store.list_tasks(None, true).await {
+                    Ok(tasks) => match task_rows_as_values(&tasks) {
+                        Ok(rows) => {
+                            if display_id.is_empty() && !auto_display_from.is_empty() {
+                                let next = crate::taskflow_task_bridge::next_display_id_payload(
+                                    &rows,
+                                    &auto_display_from,
+                                );
+                                if !next
+                                    .get("valid")
+                                    .and_then(serde_json::Value::as_bool)
+                                    .unwrap_or(false)
+                                {
+                                    print_task_next_display_id(command.render, &next, command.json);
+                                    return ExitCode::from(1);
+                                }
+                                display_id = next
+                                    .get("next_display_id")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_string();
+                            }
+                            if parent_id.is_none() && !parent_display_id.is_empty() {
+                                let resolved =
+                                    crate::taskflow_task_bridge::resolve_task_id_by_display_id(
+                                        &rows,
+                                        &parent_display_id,
+                                    );
+                                if !resolved
+                                    .get("found")
+                                    .and_then(serde_json::Value::as_bool)
+                                    .unwrap_or(false)
+                                {
+                                    if command.json {
+                                        crate::print_json_pretty(&resolved);
+                                    } else {
+                                        eprintln!(
+                                            "{}",
+                                            resolved
+                                                .get("reason")
+                                                .and_then(serde_json::Value::as_str)
+                                                .unwrap_or("parent_display_id_not_found")
+                                        );
+                                    }
+                                    return ExitCode::from(1);
+                                }
+                                parent_id = Some(
+                                    resolved
+                                        .get("task_id")
+                                        .and_then(serde_json::Value::as_str)
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to {} task: {error}",
+                                if ensure_existing { "ensure" } else { "create" }
+                            );
+                            return ExitCode::from(1);
+                        }
+                    },
+                    Err(error) => {
+                        eprintln!(
+                            "Failed to {} task: {error}",
+                            if ensure_existing { "ensure" } else { "create" }
+                        );
+                        return ExitCode::from(1);
+                    }
+                }
+            }
+            if ensure_existing {
+                if let Ok(task) = store.show_task(&command.task_id).await {
+                    print_task_mutation(command.render, "vida task ensure", &task, command.json);
+                    return ExitCode::SUCCESS;
+                }
+            }
+            let source_repo = project_root.display().to_string();
+            match store
+                .create_task(state_store::CreateTaskRequest {
+                    task_id: &command.task_id,
+                    title: &command.title,
+                    display_id: (!display_id.is_empty()).then_some(display_id.as_str()),
+                    description: &command.description,
+                    issue_type: &command.issue_type,
+                    status: &command.status,
+                    priority: command.priority,
+                    parent_id: parent_id.as_deref(),
+                    labels: &command.labels,
+                    created_by: "vida task",
+                    source_repo: &source_repo,
+                })
+                .await
+            {
+                Ok(task) => {
+                    print_task_mutation(
+                        command.render,
+                        if ensure_existing {
+                            "vida task ensure"
+                        } else {
+                            "vida task create"
+                        },
+                        &task,
+                        command.json,
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!(
+                        "Failed to {} task: {error}",
+                        if ensure_existing { "ensure" } else { "create" }
+                    );
+                    ExitCode::from(1)
+                }
+            }
+        }
+        Err(error) => {
+            eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
     match args.command {
         TaskCommand::Help(command) => match command.topic.as_deref() {
@@ -80,7 +224,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             }
             Some(
                 "ready" | "deps" | "reverse-deps" | "blocked" | "tree" | "critical-path"
-                | "next-display-id" | "create" | "update" | "close" | "list" | "show"
+                | "next-display-id" | "create" | "ensure" | "update" | "close" | "list" | "show"
                 | "import-jsonl" | "export-jsonl" | "validate-graph" | "dep",
             ) => {
                 print_taskflow_proxy_help(Some("task"));
@@ -330,135 +474,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         }
-        TaskCommand::Create(command) => {
-            let state_dir = command
-                .state_dir
-                .clone()
-                .unwrap_or_else(state_store::default_state_dir);
-            let project_root = project_root_for_task_state(&state_dir).unwrap_or_else(|| {
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-            });
-            match open_task_store(state_dir).await {
-                Ok(store) => {
-                    let mut parent_id = command.parent_id.clone();
-                    let mut display_id = command.display_id.clone().unwrap_or_default();
-                    let auto_display_from = command.auto_display_from.clone().unwrap_or_default();
-                    let parent_display_id = command.parent_display_id.clone().unwrap_or_default();
-                    if display_id.is_empty() && !auto_display_from.is_empty() && parent_id.is_some()
-                    {
-                        display_id = format!("{auto_display_from}.1");
-                    }
-                    if (display_id.is_empty() && !auto_display_from.is_empty())
-                        || (parent_id.is_none() && !parent_display_id.is_empty())
-                    {
-                        match store.list_tasks(None, true).await {
-                            Ok(tasks) => match task_rows_as_values(&tasks) {
-                                Ok(rows) => {
-                                    if display_id.is_empty() && !auto_display_from.is_empty() {
-                                        let next =
-                                            crate::taskflow_task_bridge::next_display_id_payload(
-                                                &rows,
-                                                &auto_display_from,
-                                            );
-                                        if !next
-                                            .get("valid")
-                                            .and_then(serde_json::Value::as_bool)
-                                            .unwrap_or(false)
-                                        {
-                                            print_task_next_display_id(
-                                                command.render,
-                                                &next,
-                                                command.json,
-                                            );
-                                            return ExitCode::from(1);
-                                        }
-                                        display_id = next
-                                            .get("next_display_id")
-                                            .and_then(serde_json::Value::as_str)
-                                            .unwrap_or_default()
-                                            .to_string();
-                                    }
-                                    if parent_id.is_none() && !parent_display_id.is_empty() {
-                                        let resolved = crate::taskflow_task_bridge::resolve_task_id_by_display_id(
-                                            &rows,
-                                            &parent_display_id,
-                                        );
-                                        if !resolved
-                                            .get("found")
-                                            .and_then(serde_json::Value::as_bool)
-                                            .unwrap_or(false)
-                                        {
-                                            if command.json {
-                                                crate::print_json_pretty(&resolved);
-                                            } else {
-                                                eprintln!(
-                                                    "{}",
-                                                    resolved
-                                                        .get("reason")
-                                                        .and_then(serde_json::Value::as_str)
-                                                        .unwrap_or("parent_display_id_not_found")
-                                                );
-                                            }
-                                            return ExitCode::from(1);
-                                        }
-                                        parent_id = Some(
-                                            resolved
-                                                .get("task_id")
-                                                .and_then(serde_json::Value::as_str)
-                                                .unwrap_or_default()
-                                                .to_string(),
-                                        );
-                                    }
-                                }
-                                Err(error) => {
-                                    eprintln!("Failed to create task: {error}");
-                                    return ExitCode::from(1);
-                                }
-                            },
-                            Err(error) => {
-                                eprintln!("Failed to create task: {error}");
-                                return ExitCode::from(1);
-                            }
-                        }
-                    }
-                    let source_repo = project_root.display().to_string();
-                    match store
-                        .create_task(state_store::CreateTaskRequest {
-                            task_id: &command.task_id,
-                            title: &command.title,
-                            display_id: (!display_id.is_empty()).then_some(display_id.as_str()),
-                            description: &command.description,
-                            issue_type: &command.issue_type,
-                            status: &command.status,
-                            priority: command.priority,
-                            parent_id: parent_id.as_deref(),
-                            labels: &command.labels,
-                            created_by: "vida task",
-                            source_repo: &source_repo,
-                        })
-                        .await
-                    {
-                        Ok(task) => {
-                            print_task_mutation(
-                                command.render,
-                                "vida task create",
-                                &task,
-                                command.json,
-                            );
-                            ExitCode::SUCCESS
-                        }
-                        Err(error) => {
-                            eprintln!("Failed to create task: {error}");
-                            ExitCode::from(1)
-                        }
-                    }
-                }
-                Err(error) => {
-                    eprintln!("Failed to open authoritative state store: {error}");
-                    ExitCode::from(1)
-                }
-            }
-        }
+        TaskCommand::Create(command) => run_task_create_like(command, false).await,
+        TaskCommand::Ensure(command) => run_task_create_like(command, true).await,
         TaskCommand::Update(command) => {
             let state_dir = command
                 .state_dir

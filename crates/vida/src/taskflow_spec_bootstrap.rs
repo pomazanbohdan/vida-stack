@@ -201,10 +201,10 @@ pub(crate) async fn run_taskflow_bootstrap_spec(args: &[String]) -> ExitCode {
         if let Some(command) = payload["next"]["close_spec_task_command"].as_str() {
             crate::print_surface_line(crate::RenderMode::Plain, "close spec task", command);
         }
-        if let Some(command) = payload["next"]["work_pool_create_command"].as_str() {
+        if let Some(command) = payload["next"]["work_pool_ensure_command"].as_str() {
             crate::print_surface_line(crate::RenderMode::Plain, "next work-pool command", command);
         }
-        if let Some(command) = payload["next"]["dev_task_create_command"].as_str() {
+        if let Some(command) = payload["next"]["dev_task_ensure_command"].as_str() {
             crate::print_surface_line(crate::RenderMode::Plain, "next dev command", command);
         }
     }
@@ -430,9 +430,17 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
         &tracked["work_pool_task"]["create_command"],
         "tracked_flow_bootstrap.work_pool_task.create_command",
     )?;
+    let work_pool_ensure_command = required_str(
+        &tracked["work_pool_task"]["ensure_command"],
+        "tracked_flow_bootstrap.work_pool_task.ensure_command",
+    )?;
     let dev_task_create_command = required_str(
         &tracked["dev_task"]["create_command"],
         "tracked_flow_bootstrap.dev_task.create_command",
+    )?;
+    let dev_task_ensure_command = required_str(
+        &tracked["dev_task"]["ensure_command"],
+        "tracked_flow_bootstrap.dev_task.ensure_command",
     )?;
 
     let mut changed_files = Vec::new();
@@ -539,9 +547,11 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
                 "tracked_flow_bootstrap.docflow.finalize_command",
                 "tracked_flow_bootstrap.docflow.check_command",
                 "tracked_flow_bootstrap.spec_task.close_command",
-                "tracked_flow_bootstrap.work_pool_task.create_command",
-                "tracked_flow_bootstrap.dev_task.create_command",
-            ],
+            "tracked_flow_bootstrap.work_pool_task.create_command",
+            "tracked_flow_bootstrap.work_pool_task.ensure_command",
+            "tracked_flow_bootstrap.dev_task.create_command",
+            "tracked_flow_bootstrap.dev_task.ensure_command",
+        ],
         },
         "request": request_text,
         "feature_slug": feature_slug,
@@ -564,7 +574,9 @@ pub(crate) fn execute_taskflow_bootstrap_spec_with_store(
             "check_command": check_command,
             "close_spec_task_command": close_spec_task_command,
             "work_pool_create_command": work_pool_create_command,
+            "work_pool_ensure_command": work_pool_ensure_command,
             "dev_task_create_command": dev_task_create_command,
+            "dev_task_ensure_command": dev_task_ensure_command,
         },
         "receipt_path": receipt_path,
         "changed_files": changed_files,
@@ -637,7 +649,7 @@ pub(crate) fn execute_work_packet_create_with_store(
     }
 
     Ok(serde_json::json!({
-        "surface": "vida task create",
+        "surface": "vida task ensure",
         "status": "pass",
         "packet_key": packet_key,
         "epic": {
@@ -647,6 +659,7 @@ pub(crate) fn execute_work_packet_create_with_store(
         "task": {
             "task_id": task_id,
             "created": packet_created,
+            "reused_existing": !packet_created,
             "label": packet_label,
         },
         "changed_files": changed_files,

@@ -202,6 +202,7 @@ Interpretation rule:
 2. prompt-layer precedence must follow `docs/process/project-agent-prompt-stack-protocol.md`,
 3. startup must satisfy `docs/process/project-boot-readiness-validation-protocol.md` before the first write-producing dispatch,
 4. runtime surfaces such as `vida taskflow consume final`, dispatch-packet persistence, resume, and `vida agent-init` must fail closed when the active packet template minimum is missing.
+5. for `tracked_flow_packet` handoffs, raw `create_command` is initial materialization evidence only; once the tracked task id already exists, continue through the runtime-provided ensure/reuse command instead of retrying duplicate creation.
 
 ## Anti-Stop Rule
 

@@ -24,6 +24,7 @@ Each pack handoff must produce:
 3. a bounded output packet that the next owner may lawfully consume,
 4. an admissibility verdict for the handoff,
 5. blocker visibility when the next pack may not start yet.
+6. stable tracked-pack identity when the same `work-pool-pack` or `dev-pack` task is resumed later in the same tracked flow.
 
 ## Handoff Matrix
 
@@ -46,6 +47,7 @@ Each pack handoff must produce:
      - ready queue in the DB-backed task runtime
      - explicit launch decision
      - dependency state
+     - reuse of the already materialized tracked task id when the `work-pool-pack` or downstream `dev-pack` task was created earlier in the same tracked flow
    - next owner:
      - `command-instructions/execution.implement-execution-protocol`
 4. `work-pool-pack -> bug-pool-pack`
@@ -81,6 +83,7 @@ A next pack may start only when all are true:
 3. the next pack's mandatory input contract is satisfied,
 4. user approval exists when the next pack requires explicit launch or approval,
 5. required web / live-validation evidence exists when external-fact triggers were active.
+6. if the tracked task id already exists, the handoff uses reuse/ensure semantics instead of retrying duplicate raw creation for the same id.
 
 If any item fails, the handoff must stop with an explicit blocker or waiting verdict rather than silently continuing.
 
@@ -112,6 +115,7 @@ Each handoff should be expressible as:
 1. Do not treat pack order alone as proof of lawful handoff.
 2. Do not treat wrapper completion as canonical handoff evidence.
 3. Do not start the next pack when required outputs or approvals are still missing.
+4. Do not rerun raw `vida task create <same-task-id> ...` for an already materialized tracked `work-pool-pack` or `dev-pack`; reuse the existing tracked task and continue shaping from that id.
 
 -----
 artifact_path: config/runtime-instructions/pack-handoff.protocol

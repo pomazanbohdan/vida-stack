@@ -1130,6 +1130,7 @@ fn taskflow_graph_summary_reports_ready_blocked_and_critical_path() {
     assert!(parsed["critical_path_length"].is_number());
     assert!(parsed.get("primary_ready_task").is_some());
     assert!(parsed.get("primary_blocked_task").is_some());
+    assert!(parsed["waves"].is_array());
     assert!(parsed.get("critical_path").is_some());
 }
 
@@ -1145,6 +1146,7 @@ fn taskflow_proxy_help_supports_graph_summary_topic() {
     assert!(stdout.contains("VIDA TaskFlow help: graph-summary"));
     assert!(stdout.contains("vida taskflow graph-summary [--json]"));
     assert!(stdout.contains("ready_count, blocked_count, critical_path_length"));
+    assert!(stdout.contains("waves"));
     assert!(stdout.contains("vida task validate-graph"));
 }
 
@@ -1753,9 +1755,7 @@ fn taskflow_consume_bundle_renders_runtime_bundle_json() {
         parsed["bundle"]["migration_preflight"]["compatibility_class"],
         "backward_compatible"
     );
-    assert!(
-        parsed["bundle"]["migration_preflight"]["compatibility_classification"].is_null()
-    );
+    assert!(parsed["bundle"]["migration_preflight"]["compatibility_classification"].is_null());
     let vida_root = parsed["bundle"]["vida_root"]
         .as_str()
         .expect("consume bundle should render vida_root");
@@ -5135,8 +5135,8 @@ fn taskflow_bootstrap_spec_plain_reports_orchestrated_follow_up_commands() {
     assert!(stdout.contains("finalize design: vida docflow finalize-edit "));
     assert!(stdout.contains("check design: vida docflow check --root . "));
     assert!(stdout.contains("close spec task: vida task close "));
-    assert!(stdout.contains("next work-pool command: vida task create "));
-    assert!(stdout.contains("next dev command: vida task create "));
+    assert!(stdout.contains("next work-pool command: vida task ensure "));
+    assert!(stdout.contains("next dev command: vida task ensure "));
 
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
@@ -5821,7 +5821,7 @@ fn taskflow_consume_final_selects_pbi_discussion_role_for_backlog_queries() {
     );
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["dispatch_surface"],
-        "vida task create"
+        "vida task ensure"
     );
     let dispatch_packet_path = parsed["payload"]["dispatch_receipt"]["dispatch_packet_path"]
         .as_str()
@@ -9020,6 +9020,39 @@ fn task_root_mutation_commands_use_authoritative_db_store_without_taskflow_binar
     assert_eq!(create_child_json["description"], "root-task");
     assert!(
         !String::from_utf8_lossy(&create_child.stderr).contains("delegated-taskflow-binary-ran")
+    );
+
+    let ensure_child = run_with_state_lock_retry(|| {
+        vida()
+            .args([
+                "task",
+                "ensure",
+                "vida-child",
+                "Child",
+                "--parent-id",
+                "vida-root",
+                "--display-id",
+                &child_display_id,
+                "--description",
+                "root-task",
+                "--json",
+            ])
+            .current_dir(&root)
+            .env("VIDA_ROOT", &root)
+            .env("VIDA_STATE_DIR", &state_dir)
+            .env("VIDA_TASKFLOW_BIN", &script_path)
+            .output()
+            .expect("task ensure should run")
+    });
+    assert!(ensure_child.status.success());
+    let ensure_child_stdout = String::from_utf8_lossy(&ensure_child.stdout);
+    let ensure_child_json: serde_json::Value =
+        serde_json::from_str(&ensure_child_stdout).expect("task ensure json should parse");
+    assert_eq!(ensure_child_json["id"], "vida-child");
+    assert_eq!(ensure_child_json["status"], "open");
+    assert_eq!(ensure_child_json["description"], "root-task");
+    assert!(
+        !String::from_utf8_lossy(&ensure_child.stderr).contains("delegated-taskflow-binary-ran")
     );
 
     let update = run_with_state_lock_retry(|| {

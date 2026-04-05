@@ -405,6 +405,37 @@ fn build_task_create_command(
     command
 }
 
+fn build_task_ensure_command(
+    task_id: &str,
+    title: &str,
+    task_type: &str,
+    parent_id: Option<&str>,
+    labels: &[&str],
+    description_quoted: Option<&str>,
+) -> String {
+    let mut command = format!(
+        "vida task ensure {} {} --type {} --status open",
+        task_id,
+        shell_quote(title),
+        task_type
+    );
+    if let Some(parent_id) = parent_id {
+        command.push_str(&format!(" --parent-id {parent_id}"));
+    }
+    for label in labels {
+        command.push_str(&format!(" --labels {label}"));
+    }
+    if let Some(description_quoted) = description_quoted {
+        command.push_str(&format!(" --description {description_quoted}"));
+    }
+    command.push_str(" --json");
+    command
+}
+
+fn build_task_show_command(task_id: &str) -> String {
+    format!("vida task show {task_id} --json")
+}
+
 fn build_task_close_command(task_id: &str, reason: &str) -> String {
     format!(
         "vida task close {} --reason {} --json",
@@ -1807,6 +1838,15 @@ fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_json::Value
             "task_id": work_pool_task_id,
             "title": work_pool_title,
             "runtime": "vida taskflow",
+            "inspect_command": build_task_show_command(&work_pool_task_id),
+            "ensure_command": build_task_ensure_command(
+                &work_pool_task_id,
+                &work_pool_title,
+                "task",
+                Some(&epic_task_id),
+                &["work-pool-pack"],
+                None,
+            ),
             "create_command": build_task_create_command(
                 &work_pool_task_id,
                 &work_pool_title,
@@ -1825,6 +1865,15 @@ fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_json::Value
             "task_id": dev_task_id,
             "title": dev_title,
             "runtime": "vida taskflow",
+            "inspect_command": build_task_show_command(&dev_task_id),
+            "ensure_command": build_task_ensure_command(
+                &dev_task_id,
+                &dev_title,
+                "task",
+                Some(&epic_task_id),
+                &["dev-pack"],
+                None,
+            ),
             "create_command": build_task_create_command(
                 &dev_task_id,
                 &dev_title,
@@ -3902,8 +3951,8 @@ fn downstream_activation_fields(
             "taskflow_pack".to_string(),
             match dispatch_target {
                 "spec-pack" => Some("vida taskflow bootstrap-spec".to_string()),
-                "work-pool-pack" => Some("vida task create".to_string()),
-                "dev-pack" => Some("vida task create".to_string()),
+                "work-pool-pack" => Some("vida task ensure".to_string()),
+                "dev-pack" => Some("vida task ensure".to_string()),
                 _ => None,
             },
             None,
@@ -4083,11 +4132,11 @@ fn runtime_dispatch_command_for_target(
         ),
         "work-pool-pack" => json_string(
             role_selection.execution_plan["tracked_flow_bootstrap"]["work_pool_task"]
-                .get("create_command"),
+                .get("ensure_command"),
         ),
         "dev-pack" => json_string(
             role_selection.execution_plan["tracked_flow_bootstrap"]["dev_task"]
-                .get("create_command"),
+                .get("ensure_command"),
         ),
         _ => Some("vida agent-init".to_string()),
     }
@@ -4148,10 +4197,10 @@ fn derive_downstream_dispatch_preview(
                 Some("work-pool-pack".to_string()),
                 json_string(
                     role_selection.execution_plan["tracked_flow_bootstrap"]["work_pool_task"]
-                        .get("create_command"),
+                        .get("ensure_command"),
                 ),
                 Some(
-                    "after the design document is finalized and the spec task is closed, create the tracked work-pool packet"
+                    "after the design document is finalized and the spec task is closed, ensure or reuse the tracked work-pool packet"
                         .to_string(),
                 ),
                 false,
@@ -4162,10 +4211,10 @@ fn derive_downstream_dispatch_preview(
             Some("dev-pack".to_string()),
             json_string(
                 role_selection.execution_plan["tracked_flow_bootstrap"]["dev_task"]
-                    .get("create_command"),
+                    .get("ensure_command"),
             ),
             Some(
-                "after the work-pool packet is shaped, create the bounded dev packet for delegated implementation"
+                "after the work-pool packet is shaped, ensure or reuse the bounded dev packet for delegated implementation"
                     .to_string(),
             ),
             receipt.dispatch_status == "executed",
@@ -4206,15 +4255,15 @@ fn derive_downstream_dispatch_preview(
                     Some("work-pool-pack".to_string()),
                     json_string(
                         role_selection.execution_plan["tracked_flow_bootstrap"]["work_pool_task"]
-                            .get("create_command"),
+                            .get("ensure_command"),
                     ),
                     Some(
                         if receipt.dispatch_status == "executed" {
-                            "after specification/planning evidence is recorded, finalize the design doc and close spec-pack before work-pool shaping"
+                            "after specification/planning evidence is recorded, finalize the design doc and close spec-pack before work-pool shaping via tracked work-pool ensure/reuse"
                         } else {
-                            "specification/planning lane is active; wait for bounded evidence return before design finalization, spec-pack closure, and work-pool shaping"
+                            "specification/planning lane is active; wait for bounded evidence return before design finalization, spec-pack closure, and tracked work-pool ensure/reuse"
                         }
-                            .to_string(),
+                        .to_string(),
                     ),
                     false,
                     vec![
@@ -4587,6 +4636,9 @@ fn runtime_tracked_flow_packet(
         "task_id": tracked["task_id"],
         "title": tracked["title"],
         "runtime": tracked["runtime"],
+        "inspect_command": tracked["inspect_command"],
+        "ensure_command": tracked["ensure_command"],
+        "next_command": tracked["ensure_command"],
         "create_command": tracked["create_command"],
         "close_command": tracked["close_command"],
         "required": tracked["required"],
@@ -4766,6 +4818,12 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
             }
             if !packet_nonempty_string(active_packet.get("create_command")) {
                 missing.push("create_command");
+            }
+            if !packet_nonempty_string(active_packet.get("ensure_command")) {
+                missing.push("ensure_command");
+            }
+            if !packet_nonempty_string(active_packet.get("next_command")) {
+                missing.push("next_command");
             }
             missing
         }
@@ -7721,7 +7779,7 @@ mod tests {
             supersedes_receipt_id: None,
             exception_path_receipt_id: None,
             dispatch_kind: "taskflow_pack".to_string(),
-            dispatch_surface: Some("vida task create".to_string()),
+            dispatch_surface: Some("vida task ensure".to_string()),
             dispatch_command: None,
             dispatch_packet_path: None,
             dispatch_result_path: None,
@@ -7772,7 +7830,8 @@ mod tests {
                 },
                 "tracked_flow_bootstrap": {
                     "work_pool_task": {
-                        "create_command": "vida task create feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
+                        "create_command": "vida task create feature-x-work-pool \"Work-pool pack\" --type task --status open --json",
+                        "ensure_command": "vida task ensure feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
                     }
                 },
                 "development_flow": {
@@ -7864,7 +7923,8 @@ mod tests {
             execution_plan: serde_json::json!({
                 "tracked_flow_bootstrap": {
                     "work_pool_task": {
-                        "create_command": "vida task create feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
+                        "create_command": "vida task create feature-x-work-pool \"Work-pool pack\" --type task --status open --json",
+                        "ensure_command": "vida task ensure feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
                     }
                 },
                 "development_flow": {
@@ -7919,7 +7979,7 @@ mod tests {
         assert_eq!(
             command.as_deref(),
             Some(
-                "vida task create feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
+                "vida task ensure feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
             )
         );
         assert!(!ready);

@@ -39,6 +39,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida task critical-path --json");
             println!("  vida task next-display-id <parent-display-id> --json");
             println!("  vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json");
+            println!("  vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels <label> --json");
             println!("  vida task update <task-id> --status in_progress --notes \"...\" --json");
             println!("  vida task close <task-id> --reason \"...\" --json");
             println!("  vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
@@ -62,6 +63,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  Inspect the current critical path before parallelizing: vida task critical-path --json");
             println!("  Reserve the next child display id: vida task next-display-id <parent-display-id> --json");
             println!("  Create one bounded child task: vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json");
+            println!("  Reuse-or-create one tracked handoff task idempotently: vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels <label> --json");
             println!("  Record real progress after a proven step: vida task update <task-id> --status <status> --notes \"...\" --json");
             println!("  Export the current runtime snapshot when needed: vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             return;
@@ -96,7 +98,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida taskflow graph-summary [--json]");
             println!();
             println!("Returned semantics:");
-            println!("  status, blocker_codes, next_actions, ready_count, blocked_count, critical_path_length, primary_ready_task, primary_blocked_task, critical_path");
+            println!("  status, blocker_codes, next_actions, ready_count, blocked_count, critical_path_length, primary_ready_task, primary_blocked_task, waves, critical_path");
             println!();
             println!("Failure modes:");
             println!("  Missing or unreadable authoritative state fails closed.");

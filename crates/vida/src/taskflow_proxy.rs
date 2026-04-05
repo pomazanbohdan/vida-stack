@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -12,6 +13,163 @@ use crate::{
     taskflow_protocol_binding, Command, ProxyArgs, RenderMode, TaskCommand, TaskReadyArgs,
 };
 use clap::Parser;
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct GraphSummaryTaskRef {
+    id: String,
+    display_id: Option<String>,
+    title: String,
+    status: String,
+    priority: u32,
+    issue_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct GraphSummaryWaveBucket {
+    wave_id: String,
+    task_count: usize,
+    ready_count: usize,
+    blocked_count: usize,
+    primary_ready_task: Option<GraphSummaryTaskRef>,
+    primary_blocked_task: Option<GraphSummaryTaskRef>,
+}
+
+fn graph_summary_task_ref(task: &crate::state_store::TaskRecord) -> GraphSummaryTaskRef {
+    GraphSummaryTaskRef {
+        id: task.id.clone(),
+        display_id: task.display_id.clone(),
+        title: task.title.clone(),
+        status: task.status.clone(),
+        priority: task.priority,
+        issue_type: task.issue_type.clone(),
+    }
+}
+
+fn task_wave_label(
+    task_id: &str,
+    by_id: &BTreeMap<String, crate::state_store::TaskRecord>,
+    memo: &mut BTreeMap<String, Option<String>>,
+    active: &mut BTreeSet<String>,
+) -> Option<String> {
+    if let Some(cached) = memo.get(task_id) {
+        return cached.clone();
+    }
+    if !active.insert(task_id.to_string()) {
+        return None;
+    }
+
+    let resolved = by_id.get(task_id).and_then(|task| {
+        task.labels
+            .iter()
+            .find(|label| label.as_str() == "wave" || label.starts_with("wave-"))
+            .cloned()
+            .or_else(|| {
+                task.dependencies
+                    .iter()
+                    .filter(|dependency| dependency.edge_type == "parent-child")
+                    .find_map(|dependency| {
+                        task_wave_label(&dependency.depends_on_id, by_id, memo, active)
+                    })
+            })
+    });
+
+    active.remove(task_id);
+    memo.insert(task_id.to_string(), resolved.clone());
+    resolved
+}
+
+fn wave_sort_key(wave_id: &str) -> (usize, usize, &str) {
+    if wave_id == "unassigned" {
+        return (2, usize::MAX, wave_id);
+    }
+    if wave_id == "wave" {
+        return (0, 0, wave_id);
+    }
+    if let Some(index) = wave_id.strip_prefix("wave-") {
+        if let Ok(parsed) = index.parse::<usize>() {
+            return (0, parsed, wave_id);
+        }
+    }
+    (1, usize::MAX, wave_id)
+}
+
+fn build_graph_summary_waves(
+    all_tasks: &[crate::state_store::TaskRecord],
+    ready_tasks: &[crate::state_store::TaskRecord],
+    blocked_tasks: &[crate::state_store::BlockedTaskRecord],
+) -> Vec<GraphSummaryWaveBucket> {
+    #[derive(Default)]
+    struct WaveAccumulator {
+        task_ids: BTreeSet<String>,
+        ready_count: usize,
+        blocked_count: usize,
+        primary_ready_task: Option<GraphSummaryTaskRef>,
+        primary_blocked_task: Option<GraphSummaryTaskRef>,
+    }
+
+    let by_id = all_tasks
+        .iter()
+        .cloned()
+        .map(|task| (task.id.clone(), task))
+        .collect::<BTreeMap<_, _>>();
+    let mut memo = BTreeMap::<String, Option<String>>::new();
+    let mut active = BTreeSet::<String>::new();
+    let mut buckets = BTreeMap::<String, WaveAccumulator>::new();
+
+    for task in all_tasks {
+        if task.issue_type == "epic" || task.status == "closed" {
+            continue;
+        }
+        let wave_id = task_wave_label(&task.id, &by_id, &mut memo, &mut active)
+            .unwrap_or_else(|| "unassigned".to_string());
+        buckets
+            .entry(wave_id)
+            .or_default()
+            .task_ids
+            .insert(task.id.clone());
+    }
+
+    for task in ready_tasks {
+        let wave_id = task_wave_label(&task.id, &by_id, &mut memo, &mut active)
+            .unwrap_or_else(|| "unassigned".to_string());
+        let bucket = buckets.entry(wave_id).or_default();
+        bucket.ready_count += 1;
+        if bucket.primary_ready_task.is_none() {
+            bucket.primary_ready_task = Some(graph_summary_task_ref(task));
+        }
+    }
+
+    for record in blocked_tasks {
+        let wave_id = task_wave_label(&record.task.id, &by_id, &mut memo, &mut active)
+            .unwrap_or_else(|| "unassigned".to_string());
+        let bucket = buckets.entry(wave_id).or_default();
+        bucket.blocked_count += 1;
+        if bucket.primary_blocked_task.is_none() {
+            bucket.primary_blocked_task = Some(graph_summary_task_ref(&record.task));
+        }
+    }
+
+    let mut waves = buckets
+        .into_iter()
+        .map(|(wave_id, bucket)| GraphSummaryWaveBucket {
+            wave_id,
+            task_count: bucket.task_ids.len(),
+            ready_count: bucket.ready_count,
+            blocked_count: bucket.blocked_count,
+            primary_ready_task: bucket.primary_ready_task,
+            primary_blocked_task: bucket.primary_blocked_task,
+        })
+        .collect::<Vec<_>>();
+    waves.sort_by(|left, right| {
+        wave_sort_key(&left.wave_id)
+            .cmp(&wave_sort_key(&right.wave_id))
+            .then_with(|| right.ready_count.cmp(&left.ready_count))
+            .then_with(|| right.blocked_count.cmp(&left.blocked_count))
+            .then_with(|| left.wave_id.cmp(&right.wave_id))
+    });
+    waves
+}
 
 fn parse_taskflow_next_args(
     args: &[String],
@@ -469,6 +627,13 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let all_tasks = match store.list_tasks(None, true).await {
+        Ok(tasks) => tasks,
+        Err(error) => {
+            eprintln!("Failed to list tasks for wave summary: {error}");
+            return ExitCode::from(1);
+        }
+    };
     let critical_path = match store.critical_path().await {
         Ok(path) => path,
         Err(error) => {
@@ -476,17 +641,9 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let waves = build_graph_summary_waves(&all_tasks, &ready_tasks, &blocked_tasks);
 
-    let primary_ready_task = ready_tasks.first().map(|task| {
-        serde_json::json!({
-            "id": task.id,
-            "display_id": task.display_id,
-            "title": task.title,
-            "status": task.status,
-            "priority": task.priority,
-            "issue_type": task.issue_type,
-        })
-    });
+    let primary_ready_task = ready_tasks.first().map(graph_summary_task_ref);
     let primary_blocked_task = blocked_tasks.first().map(|record| {
         serde_json::json!({
             "id": record.task.id,
@@ -555,6 +712,7 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         "critical_path_length": critical_path.length,
         "primary_ready_task": primary_ready_task,
         "primary_blocked_task": primary_blocked_task,
+        "waves": waves,
         "critical_path": critical_path,
     });
 
@@ -585,11 +743,15 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             "critical_path_length",
             &critical_path.length.to_string(),
         );
+        crate::print_surface_line(RenderMode::Plain, "wave_count", &waves.len().to_string());
         if let Some(task) = ready_tasks.first() {
             crate::print_surface_line(RenderMode::Plain, "primary_ready_task", &task.id);
         }
         if let Some(record) = blocked_tasks.first() {
             crate::print_surface_line(RenderMode::Plain, "primary_blocked_task", &record.task.id);
+        }
+        if let Some(wave) = waves.first() {
+            crate::print_surface_line(RenderMode::Plain, "primary_wave", &wave.wave_id);
         }
         if let Some(next_action) = next_actions.first() {
             crate::print_surface_line(RenderMode::Plain, "next_action", next_action);
@@ -600,6 +762,111 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_graph_summary_waves, GraphSummaryWaveBucket};
+    use crate::state_store::{BlockedTaskRecord, TaskDependencyRecord, TaskRecord};
+
+    fn task(
+        id: &str,
+        issue_type: &str,
+        status: &str,
+        priority: u32,
+        labels: &[&str],
+        dependencies: Vec<TaskDependencyRecord>,
+    ) -> TaskRecord {
+        TaskRecord {
+            id: id.to_string(),
+            display_id: None,
+            title: format!("task {id}"),
+            description: String::new(),
+            issue_type: issue_type.to_string(),
+            status: status.to_string(),
+            priority,
+            created_at: "0".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "0".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: ".".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: labels.iter().map(|label| label.to_string()).collect(),
+            dependencies,
+        }
+    }
+
+    fn parent_dependency(issue_id: &str, depends_on_id: &str) -> TaskDependencyRecord {
+        TaskDependencyRecord {
+            issue_id: issue_id.to_string(),
+            depends_on_id: depends_on_id.to_string(),
+            edge_type: "parent-child".to_string(),
+            created_at: "0".to_string(),
+            created_by: "test".to_string(),
+            metadata: "{}".to_string(),
+            thread_id: String::new(),
+        }
+    }
+
+    #[test]
+    fn graph_summary_waves_follow_parent_chain_wave_labels() {
+        let wave_epic = task("wave-0-epic", "epic", "open", 1, &["wave-0"], Vec::new());
+        let child_ready = task(
+            "r1-ready",
+            "task",
+            "open",
+            1,
+            &[],
+            vec![parent_dependency("r1-ready", "wave-0-epic")],
+        );
+        let child_blocked = task(
+            "r1-blocked",
+            "task",
+            "in_progress",
+            2,
+            &[],
+            vec![parent_dependency("r1-blocked", "wave-0-epic")],
+        );
+        let unassigned = task("r1-unassigned", "task", "open", 3, &[], Vec::new());
+
+        let all_tasks = vec![
+            wave_epic.clone(),
+            child_ready.clone(),
+            child_blocked.clone(),
+            unassigned.clone(),
+        ];
+        let ready_tasks = vec![child_ready.clone(), unassigned.clone()];
+        let blocked_tasks = vec![BlockedTaskRecord {
+            task: child_blocked.clone(),
+            blockers: Vec::new(),
+        }];
+
+        let waves = build_graph_summary_waves(&all_tasks, &ready_tasks, &blocked_tasks);
+        assert_eq!(
+            waves,
+            vec![
+                GraphSummaryWaveBucket {
+                    wave_id: "wave-0".to_string(),
+                    task_count: 2,
+                    ready_count: 1,
+                    blocked_count: 1,
+                    primary_ready_task: Some(super::graph_summary_task_ref(&child_ready)),
+                    primary_blocked_task: Some(super::graph_summary_task_ref(&child_blocked)),
+                },
+                GraphSummaryWaveBucket {
+                    wave_id: "unassigned".to_string(),
+                    task_count: 1,
+                    ready_count: 1,
+                    blocked_count: 0,
+                    primary_ready_task: Some(super::graph_summary_task_ref(&unassigned)),
+                    primary_blocked_task: None,
+                },
+            ]
+        );
     }
 }
 
