@@ -427,6 +427,163 @@ fn task_command_round_trip_succeeds_via_binary_surface() {
 }
 
 #[test]
+fn task_create_update_close_round_trip_supports_planning_graph_views() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+
+    let root = run_command_json(
+        &[
+            "task",
+            "create",
+            "vida-root",
+            "Root epic",
+            "--type",
+            "epic",
+            "--status",
+            "open",
+            "--priority",
+            "1",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(root["status"], "open");
+    assert_eq!(root["issue_type"], "epic");
+
+    let task_a = run_command_json(
+        &[
+            "task",
+            "create",
+            "vida-a",
+            "Task A",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--priority",
+            "2",
+            "--parent-id",
+            "vida-root",
+            "--description",
+            "first",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task_a["status"], "open");
+    assert_eq!(task_a["title"], "Task A");
+
+    let task_b = run_command_json(
+        &[
+            "task",
+            "create",
+            "vida-b",
+            "Task B",
+            "--type",
+            "task",
+            "--status",
+            "open",
+            "--priority",
+            "1",
+            "--parent-id",
+            "vida-root",
+            "--description",
+            "second",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(task_b["status"], "open");
+    assert_eq!(task_b["title"], "Task B");
+
+    let dep = run_command_json(
+        &[
+            "task",
+            "dep",
+            "add",
+            "vida-b",
+            "vida-a",
+            "blocks",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(dep["issue_id"], "vida-b");
+    assert_eq!(dep["depends_on_id"], "vida-a");
+    assert_eq!(dep["edge_type"], "blocks");
+
+    let updated = run_command_json(
+        &[
+            "task",
+            "update",
+            "vida-b",
+            "--status",
+            "in_progress",
+            "--notes",
+            "planning round trip proof",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(updated["status"], "in_progress");
+    assert_eq!(updated["notes"], "planning round trip proof");
+
+    let deps = run_command_json(&["task", "deps", "vida-b", "--json"], &state_dir);
+    assert_eq!(deps["task_id"], "vida-b");
+    assert_eq!(deps["dependency_count"], 2);
+    let dependency_targets = deps["dependencies"]
+        .as_array()
+        .expect("dependencies should be an array")
+        .iter()
+        .map(|dependency| {
+            dependency["depends_on_id"]
+                .as_str()
+                .expect("depends_on_id")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert!(dependency_targets.contains(&"vida-root".to_string()));
+    assert!(dependency_targets.contains(&"vida-a".to_string()));
+
+    let reverse = run_and_assert_success(&["task", "reverse-deps", "vida-a", "--json"], &state_dir);
+    assert!(reverse.contains("\"issue_id\": \"vida-b\"") || reverse.contains("\"issue_id\":\"vida-b\""));
+
+    let blocked = run_and_assert_success(&["task", "blocked", "--json"], &state_dir);
+    assert!(blocked.contains("\"blocked_count\": 1") || blocked.contains("\"blocked_count\":1"));
+    assert!(blocked.contains("\"id\": \"vida-b\"") || blocked.contains("\"id\":\"vida-b\""));
+
+    let critical_path = run_command_json(&["task", "critical-path", "--json"], &state_dir);
+    assert_eq!(critical_path["length"], 2);
+    assert_eq!(critical_path["root_task_id"], "vida-a");
+    assert_eq!(critical_path["terminal_task_id"], "vida-b");
+
+    let validate = run_and_assert_success(&["task", "validate-graph", "--json"], &state_dir);
+    assert_eq!(validate.trim(), "[]");
+
+    let closed = run_command_json(
+        &[
+            "task",
+            "close",
+            "vida-b",
+            "--reason",
+            "planning proof complete",
+            "--json",
+        ],
+        &state_dir,
+    );
+    assert_eq!(closed["status"], "pass");
+    assert_eq!(closed["task"]["status"], "closed");
+    assert_eq!(closed["task"]["close_reason"], "planning proof complete");
+
+    let shown = run_command_json(&["task", "show", "vida-b", "--json"], &state_dir);
+    assert_eq!(shown["status"], "closed");
+    assert_eq!(shown["close_reason"], "planning proof complete");
+    assert_eq!(shown["notes"], "planning round trip proof");
+
+    let _ = fs::remove_dir_all(&state_dir);
+}
+
+#[test]
 fn validate_graph_broken_edge_matches_golden_fixture() {
     let state_dir = unique_state_dir();
     let jsonl_path = format!("{state_dir}/issues.jsonl");
