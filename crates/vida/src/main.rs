@@ -4,6 +4,7 @@ mod cli;
 mod config_value_utils;
 mod docflow_proxy;
 mod doctor_surface;
+mod host_agent_state;
 mod init_surfaces;
 mod memory_surface;
 mod operator_contracts;
@@ -11,6 +12,7 @@ mod project_activator_surface;
 mod protocol_surface;
 mod release1_contracts;
 mod root_command_router;
+mod runtime_consumption_state;
 mod state_store;
 mod status_surface;
 mod surface_render;
@@ -31,7 +33,6 @@ mod temp_state;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::SystemTime;
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -45,6 +46,12 @@ pub(crate) use config_value_utils::{
     yaml_string_list,
 };
 pub(crate) use init_surfaces::resolve_init_bootstrap_source_root;
+pub(crate) use host_agent_state::{
+    append_host_agent_observability_event, build_carrier_pricing_policy,
+    host_agent_observability_state_path, load_or_initialize_host_agent_observability_state,
+    load_or_initialize_worker_scorecards, read_json_file_if_present, refresh_worker_strategy,
+    worker_scorecards_state_path, worker_strategy_state_path, HostAgentFeedbackInput,
+};
 pub(crate) use project_activator_surface::build_project_activator_view;
 pub(crate) use project_activator_surface::merge_project_activation_into_init_view;
 pub(crate) use project_activator_surface::ProjectActivationAnswers;
@@ -53,6 +60,17 @@ use release1_contracts::{
     derive_lane_status, missing_downstream_lane_evidence_blocker, BlockerCode, LaneStatus,
 };
 use root_command_router::run_root_command;
+pub(crate) use runtime_consumption_state::{
+    latest_final_runtime_consumption_snapshot_path,
+    runtime_consumption_snapshot_has_release_admission_evidence, runtime_consumption_summary,
+    write_runtime_consumption_snapshot,
+};
+use runtime_consumption_state::{
+    apply_runtime_consumption_final_dispatch_receipt_blocker,
+    runtime_consumption_final_dispatch_receipt_blocker_code,
+};
+#[cfg(test)]
+use runtime_consumption_state::runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result;
 use state_store::{LauncherActivationSnapshot, StateStore, StateStoreError};
 pub(crate) use surface_render::{
     print_root_help, print_surface_header, print_surface_line, print_surface_ok,
@@ -463,415 +481,11 @@ fn is_missing_or_placeholder(value: Option<&str>, placeholder: &str) -> bool {
     }
 }
 
-fn worker_scorecards_state_path(project_root: &Path) -> PathBuf {
-    project_root.join(WORKER_SCORECARDS_STATE)
-}
-
-fn worker_strategy_state_path(project_root: &Path) -> PathBuf {
-    project_root.join(WORKER_STRATEGY_STATE)
-}
-
-fn host_agent_observability_state_path(project_root: &Path) -> PathBuf {
-    project_root.join(HOST_AGENT_OBSERVABILITY_STATE)
-}
-
-fn read_json_file_if_present(path: &Path) -> Option<serde_json::Value> {
-    let raw = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&raw).ok()
-}
-
-fn load_or_initialize_host_agent_observability_state(project_root: &Path) -> serde_json::Value {
-    read_json_file_if_present(&host_agent_observability_state_path(project_root)).unwrap_or_else(
-        || {
-            serde_json::json!({
-                "schema_version": 1,
-                "updated_at": time::OffsetDateTime::now_utc()
-                    .format(&Rfc3339)
-                    .expect("rfc3339 timestamp should render"),
-                "store_path": HOST_AGENT_OBSERVABILITY_STATE,
-                "budget": {
-                    "total_estimated_units": 0,
-                    "by_agent_id": {},
-                    "by_task_class": {},
-                    "event_count": 0,
-                    "latest_event_at": serde_json::Value::Null,
-                },
-                "events": []
-            })
-        },
-    )
-}
-
-#[derive(Debug, Clone)]
-struct HostAgentFeedbackInput<'a> {
-    agent_id: &'a str,
-    score: u64,
-    outcome: &'a str,
-    task_class: &'a str,
-    notes: Option<&'a str>,
-    source: &'a str,
-    task_id: Option<&'a str>,
-    task_display_id: Option<&'a str>,
-    task_title: Option<&'a str>,
-    runtime_role: Option<&'a str>,
-    selected_tier: Option<&'a str>,
-    estimated_task_price_units: Option<u64>,
-    lifecycle_state: Option<&'a str>,
-    effective_score: Option<u64>,
-    reason: Option<&'a str>,
-}
-
-fn increment_object_counter(
-    object: &mut serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    delta: u64,
-) {
-    let current = object
-        .get(key)
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    object.insert(
-        key.to_string(),
-        serde_json::Value::Number(serde_json::Number::from(current + delta)),
-    );
-}
-
-fn append_host_agent_observability_event(
-    project_root: &Path,
-    input: &HostAgentFeedbackInput<'_>,
-) -> Result<serde_json::Value, String> {
-    let mut ledger = load_or_initialize_host_agent_observability_state(project_root);
-    if !ledger["events"].is_array() {
-        ledger["events"] = serde_json::json!([]);
-    }
-    if !ledger["budget"].is_object() {
-        ledger["budget"] = serde_json::json!({
-            "total_estimated_units": 0,
-            "by_agent_id": {},
-            "by_task_class": {},
-            "event_count": 0,
-            "latest_event_at": serde_json::Value::Null,
-        });
-    }
-
-    let recorded_at = time::OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .expect("rfc3339 timestamp should render");
-    let estimated_units = input.estimated_task_price_units.unwrap_or_default();
-    let event = serde_json::json!({
-        "recorded_at": recorded_at,
-        "event_kind": "feedback",
-        "source": input.source,
-        "agent_id": input.agent_id,
-        "selected_tier": input.selected_tier.unwrap_or(input.agent_id),
-        "runtime_role": input.runtime_role.unwrap_or(""),
-        "task_id": input.task_id.unwrap_or(""),
-        "task_display_id": input.task_display_id.unwrap_or(""),
-        "task_title": input.task_title.unwrap_or(""),
-        "task_class": input.task_class,
-        "outcome": input.outcome,
-        "score": input.score,
-        "notes": input.notes.unwrap_or(""),
-        "reason": input.reason.unwrap_or(""),
-        "estimated_task_price_units": estimated_units,
-        "effective_score": input.effective_score,
-        "lifecycle_state": input.lifecycle_state.unwrap_or(""),
-    });
-    let event_count = {
-        let events = ledger["events"]
-            .as_array_mut()
-            .expect("events array should initialize");
-        events.push(event.clone());
-        events.len() as u64
-    };
-
-    let budget = ledger["budget"]
-        .as_object_mut()
-        .expect("budget object should initialize");
-    let total_estimated_units = budget
-        .get("total_estimated_units")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    budget.insert(
-        "total_estimated_units".to_string(),
-        serde_json::Value::Number(serde_json::Number::from(
-            total_estimated_units + estimated_units,
-        )),
-    );
-    if budget
-        .get("by_agent_id")
-        .and_then(serde_json::Value::as_object)
-        .is_none()
-    {
-        budget.insert("by_agent_id".to_string(), serde_json::json!({}));
-    }
-    if budget
-        .get("by_task_class")
-        .and_then(serde_json::Value::as_object)
-        .is_none()
-    {
-        budget.insert("by_task_class".to_string(), serde_json::json!({}));
-    }
-    if let Some(by_agent_id) = budget
-        .get_mut("by_agent_id")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        increment_object_counter(by_agent_id, input.agent_id, estimated_units);
-    }
-    if let Some(by_task_class) = budget
-        .get_mut("by_task_class")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        increment_object_counter(by_task_class, input.task_class, estimated_units);
-    }
-    budget.insert(
-        "event_count".to_string(),
-        serde_json::Value::Number(serde_json::Number::from(event_count)),
-    );
-    budget.insert(
-        "latest_event_at".to_string(),
-        serde_json::Value::String(recorded_at.clone()),
-    );
-    ledger["updated_at"] = serde_json::Value::String(recorded_at.clone());
-
-    let ledger_path = host_agent_observability_state_path(project_root);
-    if let Some(parent) = ledger_path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    fs::write(
-        &ledger_path,
-        serde_json::to_string_pretty(&ledger).expect("observability json should render"),
-    )
-    .map_err(|error| format!("Failed to write {}: {error}", ledger_path.display()))?;
-    Ok(event)
-}
-
 fn json_u64(value: Option<&serde_json::Value>) -> Option<u64> {
     value.and_then(|node| match node {
         serde_json::Value::Number(number) => number.as_u64(),
         serde_json::Value::String(text) => text.parse::<u64>().ok(),
         _ => None,
-    })
-}
-
-fn clamp_score(value: f64) -> u64 {
-    value.round().clamp(0.0, 100.0) as u64
-}
-
-fn worker_scorecard_feedback_rows(
-    scorecards: &serde_json::Value,
-    role_id: &str,
-) -> Vec<serde_json::Value> {
-    scorecards["agents"][role_id]["feedback"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-}
-
-fn load_or_initialize_worker_scorecards(
-    project_root: &Path,
-    carrier_roles: &[serde_json::Value],
-) -> serde_json::Value {
-    let path = worker_scorecards_state_path(project_root);
-    let mut scorecards = read_json_file_if_present(&path).unwrap_or_else(|| {
-        serde_json::json!({
-            "schema_version": 1,
-            "updated_at": time::OffsetDateTime::now_utc()
-                .format(&time::format_description::well_known::Rfc3339)
-                .expect("rfc3339 timestamp should render"),
-            "agents": {}
-        })
-    });
-
-    let Some(agents) = scorecards["agents"].as_object_mut() else {
-        scorecards["agents"] = serde_json::json!({});
-        let agents = scorecards["agents"]
-            .as_object_mut()
-            .expect("agents object should exist");
-        for row in carrier_roles {
-            if let Some(role_id) = row["role_id"].as_str() {
-                agents.insert(role_id.to_string(), serde_json::json!({"feedback": []}));
-            }
-        }
-        let body =
-            serde_json::to_string_pretty(&scorecards).expect("scorecards json should render");
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let _ = fs::write(&path, body);
-        return scorecards;
-    };
-
-    let mut changed = false;
-    for row in carrier_roles {
-        let Some(role_id) = row["role_id"].as_str() else {
-            continue;
-        };
-        if !agents.contains_key(role_id) {
-            agents.insert(role_id.to_string(), serde_json::json!({"feedback": []}));
-            changed = true;
-        }
-    }
-    if changed {
-        scorecards["updated_at"] = serde_json::Value::String(
-            time::OffsetDateTime::now_utc()
-                .format(&time::format_description::well_known::Rfc3339)
-                .expect("rfc3339 timestamp should render"),
-        );
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let body =
-            serde_json::to_string_pretty(&scorecards).expect("scorecards json should render");
-        let _ = fs::write(&path, body);
-    }
-    scorecards
-}
-
-fn refresh_worker_strategy(
-    project_root: &Path,
-    carrier_roles: &[serde_json::Value],
-    scoring_policy: &serde_json::Value,
-) -> serde_json::Value {
-    let scorecards = load_or_initialize_worker_scorecards(project_root, carrier_roles);
-    let promotion_score = json_u64(json_lookup(scoring_policy, &["promotion_score"])).unwrap_or(75);
-    let demotion_score = json_u64(json_lookup(scoring_policy, &["demotion_score"])).unwrap_or(45);
-    let consecutive_failure_limit =
-        json_u64(json_lookup(scoring_policy, &["consecutive_failure_limit"])).unwrap_or(3);
-    let probation_task_runs =
-        json_u64(json_lookup(scoring_policy, &["probation_task_runs"])).unwrap_or(2);
-    let retirement_failure_limit =
-        json_u64(json_lookup(scoring_policy, &["retirement_failure_limit"])).unwrap_or(8);
-
-    let mut agents = serde_json::Map::new();
-    for row in carrier_roles {
-        let Some(role_id) = row["role_id"].as_str() else {
-            continue;
-        };
-        let tier = row["tier"].as_str().unwrap_or(role_id);
-        let rate = row["rate"].as_u64().unwrap_or(0);
-        let feedback_rows = worker_scorecard_feedback_rows(&scorecards, role_id);
-        let feedback_count = feedback_rows.len() as u64;
-        let mut success_runs = 0u64;
-        let mut failure_runs = 0u64;
-        let mut last_feedback_score = None::<u64>;
-        let mut total_feedback_score = 0f64;
-        let mut consecutive_failures = 0u64;
-
-        for item in &feedback_rows {
-            let outcome = item["outcome"].as_str().unwrap_or("neutral");
-            let score = json_u64(item.get("score")).unwrap_or(70);
-            last_feedback_score = Some(score);
-            total_feedback_score += score as f64;
-            if outcome == "success" {
-                success_runs += 1;
-                consecutive_failures = 0;
-            } else if outcome == "failure" {
-                failure_runs += 1;
-                consecutive_failures += 1;
-            } else {
-                consecutive_failures = 0;
-            }
-        }
-
-        let average_feedback = if feedback_count > 0 {
-            total_feedback_score / feedback_count as f64
-        } else {
-            70.0
-        };
-        let base_score = 70.0;
-        let success_bonus = (success_runs as f64 * 2.5).min(15.0);
-        let failure_penalty = (failure_runs as f64 * 4.0).min(28.0);
-        let feedback_adjustment = (average_feedback - 70.0) * 0.45;
-        let effective_score =
-            clamp_score(base_score + success_bonus - failure_penalty + feedback_adjustment);
-        let lifecycle_state = if consecutive_failures >= retirement_failure_limit {
-            "retired"
-        } else if consecutive_failures >= consecutive_failure_limit
-            || effective_score < demotion_score
-        {
-            "degraded"
-        } else if feedback_count < probation_task_runs {
-            "probation"
-        } else if effective_score >= promotion_score {
-            "promoted"
-        } else {
-            "active"
-        };
-
-        agents.insert(
-            role_id.to_string(),
-            serde_json::json!({
-                "tier": tier,
-                "rate": rate,
-                "reasoning_band": row["reasoning_band"],
-                "default_runtime_role": row["default_runtime_role"],
-                "task_classes": row["task_classes"],
-                "feedback_count": feedback_count,
-                "success_runs": success_runs,
-                "failure_runs": failure_runs,
-                "consecutive_failures": consecutive_failures,
-                "average_feedback": (average_feedback * 100.0).round() / 100.0,
-                "last_feedback_score": last_feedback_score,
-                "effective_score": effective_score,
-                "lifecycle_state": lifecycle_state,
-            }),
-        );
-    }
-
-    let strategy = serde_json::json!({
-        "schema_version": 1,
-        "updated_at": time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .expect("rfc3339 timestamp should render"),
-        "store_path": WORKER_STRATEGY_STATE,
-        "scorecards_path": WORKER_SCORECARDS_STATE,
-        "selection_policy": {
-            "rule": "capability_first_then_score_guard_then_cheapest_tier",
-            "promotion_score": promotion_score,
-            "demotion_score": demotion_score,
-            "consecutive_failure_limit": consecutive_failure_limit,
-            "retirement_failure_limit": retirement_failure_limit
-        },
-        "agents": agents
-    });
-    let path = worker_strategy_state_path(project_root);
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let body = serde_json::to_string_pretty(&strategy).expect("strategy json should render");
-    let _ = fs::write(&path, body);
-    strategy
-}
-
-fn build_carrier_pricing_policy(
-    carrier_roles: &[serde_json::Value],
-    worker_strategy: &serde_json::Value,
-) -> serde_json::Value {
-    let mut tiers = carrier_roles.to_vec();
-    tiers.sort_by(|left, right| {
-        left["rate"]
-            .as_u64()
-            .unwrap_or(u64::MAX)
-            .cmp(&right["rate"].as_u64().unwrap_or(u64::MAX))
-    });
-    let mut rate_map = serde_json::Map::new();
-    for row in &tiers {
-        if let (Some(tier), Some(rate)) = (row["tier"].as_str(), row["rate"].as_u64()) {
-            rate_map.insert(tier.to_string(), serde_json::Value::Number(rate.into()));
-        }
-    }
-    serde_json::json!({
-        "selection_rule": "choose the cheapest configured agent that satisfies runtime-role admissibility, task-class fit, and the local score guard; escalate only when the cheaper candidate is degraded or score-insufficient",
-        "rates": rate_map,
-        "vendor_basis": {
-            "openai": "structured role configs and reasoning-effort tuning in Codex project config; prefer explicit task/runtime settings over implicit chat heuristics",
-            "anthropic": "structured prompt templates, explicit sections, and evaluation-backed refinement loops",
-            "microsoft": "record one bounded decision/design artifact per change and route on explicit cost-quality tradeoffs instead of ad hoc escalation"
-        },
-        "local_strategy_store": worker_strategy["store_path"],
-        "local_scorecards_store": worker_strategy["scorecards_path"],
-        "tiers": tiers
     })
 }
 
@@ -1203,16 +817,6 @@ struct TaskflowDirectConsumptionPayload {
     run_graph_bootstrap: serde_json::Value,
     dispatch_receipt: serde_json::Value,
     direct_consumption_ready: bool,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct RuntimeConsumptionSummary {
-    total_snapshots: usize,
-    bundle_snapshots: usize,
-    bundle_check_snapshots: usize,
-    final_snapshots: usize,
-    latest_kind: Option<String>,
-    latest_snapshot_path: Option<String>,
 }
 
 fn config_file_path() -> Result<PathBuf, String> {
@@ -3541,24 +3145,6 @@ fn feature_delivery_design_terms(request: &str) -> Vec<String> {
         }
     }
     combined
-}
-
-impl RuntimeConsumptionSummary {
-    fn as_display(&self) -> String {
-        if self.total_snapshots == 0 {
-            return "0 snapshots".to_string();
-        }
-
-        format!(
-            "{} snapshots (bundle={}, bundle_check={}, final={}, latest_kind={}, latest_path={})",
-            self.total_snapshots,
-            self.bundle_snapshots,
-            self.bundle_check_snapshots,
-            self.final_snapshots,
-            self.latest_kind.as_deref().unwrap_or("none"),
-            self.latest_snapshot_path.as_deref().unwrap_or("none")
-        )
-    }
 }
 
 fn count_nonempty_lines(output: &str) -> usize {
@@ -6446,276 +6032,6 @@ fn consume_final_operator_next_actions(payload: &serde_json::Value) -> Vec<Strin
         );
     }
     next_actions
-}
-
-fn write_runtime_consumption_snapshot(
-    state_root: &Path,
-    prefix: &str,
-    payload: &serde_json::Value,
-) -> Result<String, String> {
-    let snapshot_dir = state_root.join("runtime-consumption");
-    std::fs::create_dir_all(&snapshot_dir)
-        .map_err(|error| format!("Failed to create runtime-consumption directory: {error}"))?;
-    let ts = time::OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .expect("rfc3339 timestamp should render")
-        .replace(':', "-");
-    let snapshot_path = snapshot_dir.join(format!("{prefix}-{ts}.json"));
-    let body = serde_json::to_string_pretty(payload)
-        .map_err(|error| format!("Failed to encode runtime-consumption snapshot: {error}"))?;
-    std::fs::write(&snapshot_path, body)
-        .map_err(|error| format!("Failed to write runtime-consumption snapshot: {error}"))?;
-    Ok(snapshot_path.display().to_string())
-}
-
-fn runtime_consumption_final_dispatch_receipt_blocker_code(
-    store: &StateStore,
-    payload_json: &serde_json::Value,
-) -> Result<Option<String>, String> {
-    let Some(latest_status) = block_on_state_store(store.latest_run_graph_status())? else {
-        return Ok(None);
-    };
-    let Some(payload_run_id) = payload_json["dispatch_receipt"]["run_id"]
-        .as_str()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return Ok(Some(
-            RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER.to_string(),
-        ));
-    };
-    runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result(
-        latest_status.run_id.as_str(),
-        payload_run_id,
-        block_on_state_store(store.latest_run_graph_dispatch_receipt_summary()),
-    )
-}
-
-fn runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result(
-    latest_status_run_id: &str,
-    payload_run_id: &str,
-    dispatch_receipt_summary: Result<
-        Option<crate::state_store::RunGraphDispatchReceiptSummary>,
-        String,
-    >,
-) -> Result<Option<String>, String> {
-    if payload_run_id != latest_status_run_id {
-        return Ok(Some(
-            RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER.to_string(),
-        ));
-    }
-
-    match dispatch_receipt_summary {
-        Ok(Some(summary)) if summary.run_id == latest_status_run_id => Ok(None),
-        Ok(_) => Ok(Some(
-            RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER.to_string(),
-        )),
-        Err(error) if error.contains("latest checkpoint evidence must share the same run_id") => {
-            Ok(Some(
-                RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_BLOCKER.to_string(),
-            ))
-        }
-        Err(error) => Err(error),
-    }
-}
-
-fn apply_runtime_consumption_final_dispatch_receipt_blocker(
-    payload_json: &mut serde_json::Value,
-    blocker_code: &str,
-) {
-    if let Some(payload_object) = payload_json.as_object_mut() {
-        payload_object.insert(
-            "direct_consumption_ready".to_string(),
-            serde_json::Value::Bool(false),
-        );
-    }
-    if let Some(dispatch_receipt) = payload_json
-        .get_mut("dispatch_receipt")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        dispatch_receipt.insert(
-            "blocker_code".to_string(),
-            serde_json::Value::String(blocker_code.to_string()),
-        );
-    }
-}
-
-fn runtime_consumption_summary(state_root: &Path) -> Result<RuntimeConsumptionSummary, String> {
-    let snapshot_dir = state_root.join("runtime-consumption");
-    if !snapshot_dir.exists() {
-        return Ok(RuntimeConsumptionSummary {
-            total_snapshots: 0,
-            bundle_snapshots: 0,
-            bundle_check_snapshots: 0,
-            final_snapshots: 0,
-            latest_kind: None,
-            latest_snapshot_path: None,
-        });
-    }
-
-    let mut total_snapshots = 0usize;
-    let mut bundle_snapshots = 0usize;
-    let mut bundle_check_snapshots = 0usize;
-    let mut final_snapshots = 0usize;
-    let mut latest: Option<(SystemTime, String, String)> = None;
-
-    for entry in std::fs::read_dir(&snapshot_dir)
-        .map_err(|error| format!("Failed to read runtime-consumption directory: {error}"))?
-    {
-        let entry = entry
-            .map_err(|error| format!("Failed to inspect runtime-consumption entry: {error}"))?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        total_snapshots += 1;
-        let file_name = path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_string();
-        let kind = if file_name.starts_with("bundle-check-") {
-            bundle_check_snapshots += 1;
-            "bundle-check".to_string()
-        } else if file_name.starts_with("bundle-") {
-            bundle_snapshots += 1;
-            "bundle".to_string()
-        } else if file_name.starts_with("final-") {
-            final_snapshots += 1;
-            "final".to_string()
-        } else {
-            "unknown".to_string()
-        };
-
-        let modified = entry
-            .metadata()
-            .ok()
-            .and_then(|meta| meta.modified().ok())
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-        let path_display = path.display().to_string();
-        match &latest {
-            Some((latest_modified, _, _)) if modified <= *latest_modified => {}
-            _ => latest = Some((modified, kind, path_display)),
-        }
-    }
-
-    Ok(RuntimeConsumptionSummary {
-        total_snapshots,
-        bundle_snapshots,
-        bundle_check_snapshots,
-        final_snapshots,
-        latest_kind: latest.as_ref().map(|(_, kind, _)| kind.clone()),
-        latest_snapshot_path: latest.map(|(_, _, path)| path),
-    })
-}
-
-pub(crate) fn runtime_consumption_snapshot_has_release_admission_evidence(
-    snapshot: &serde_json::Value,
-) -> bool {
-    let operator_contracts = match snapshot.get("operator_contracts") {
-        Some(value) => value,
-        None => return false,
-    };
-    let status_ok =
-        crate::operator_contracts::canonical_release1_operator_contract_status(&snapshot["status"])
-            .is_some();
-    let operator_status_ok =
-        crate::operator_contracts::canonical_release1_operator_contract_status(
-            &operator_contracts["status"],
-        )
-        .is_some();
-    let blockers_ok = operator_contracts
-        .get("blocker_codes")
-        .and_then(|value| value.as_array())
-        .is_some();
-    let next_actions_ok = operator_contracts
-        .get("next_actions")
-        .and_then(|value| value.as_array())
-        .is_some();
-    let trust_signal_ok = operator_contracts
-        .get("artifact_refs")
-        .and_then(|refs| refs.get("retrieval_trust_signal"))
-        .is_some_and(|value| value.is_object());
-
-    status_ok
-        && operator_status_ok
-        && blockers_ok
-        && next_actions_ok
-        && trust_signal_ok
-        && crate::operator_contracts::shared_operator_output_contract_parity_error(snapshot)
-            .is_none()
-        && crate::operator_contracts::release1_operator_contracts_consistency_error(
-            snapshot["status"].as_str().unwrap_or(""),
-            &operator_contracts["blocker_codes"]
-                .as_array()
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default(),
-            &operator_contracts["next_actions"]
-                .as_array()
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default(),
-        )
-        .is_none()
-}
-
-fn latest_final_runtime_consumption_snapshot_path(
-    state_root: &Path,
-) -> Result<Option<String>, String> {
-    let snapshot_dir = state_root.join("runtime-consumption");
-    if !snapshot_dir.exists() {
-        return Ok(None);
-    }
-
-    let mut final_snapshots = Vec::<(SystemTime, String)>::new();
-    for entry in std::fs::read_dir(&snapshot_dir)
-        .map_err(|error| format!("Failed to read runtime-consumption directory: {error}"))?
-    {
-        let entry = entry
-            .map_err(|error| format!("Failed to inspect runtime-consumption entry: {error}"))?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if !file_name.starts_with("final-") {
-            continue;
-        }
-
-        let modified = entry
-            .metadata()
-            .ok()
-            .and_then(|meta| meta.modified().ok())
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-        let path_display = path.display().to_string();
-        final_snapshots.push((modified, path_display));
-    }
-
-    final_snapshots.sort_by(|left, right| right.0.cmp(&left.0));
-
-    for (_, path_display) in final_snapshots {
-        let snapshot_body = match std::fs::read_to_string(&path_display) {
-            Ok(body) => body,
-            Err(_) => continue,
-        };
-        let snapshot = match serde_json::from_str::<serde_json::Value>(&snapshot_body) {
-            Ok(snapshot) => snapshot,
-            Err(_) => continue,
-        };
-        if runtime_consumption_snapshot_has_release_admission_evidence(&snapshot) {
-            return Ok(Some(path_display));
-        }
-    }
-
-    Ok(None)
 }
 
 fn normalize_root_arg(path: &Path) -> String {
