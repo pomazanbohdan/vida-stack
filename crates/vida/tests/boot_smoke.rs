@@ -1872,7 +1872,10 @@ fn agent_init_renders_worker_startup_view_json_for_explicit_role() {
     assert_eq!(parsed["selection"]["selected_role"], "worker");
     assert!(parsed["init"]["allowed_non_orchestrator_roles"].is_array());
     assert_eq!(parsed["init"]["reporting_contract"]["required"], true);
-    assert_eq!(parsed["activation_semantics"]["activation_kind"], "activation_view");
+    assert_eq!(
+        parsed["activation_semantics"]["activation_kind"],
+        "activation_view"
+    );
     assert_eq!(parsed["activation_semantics"]["view_only"], true);
     assert_eq!(
         parsed["activation_semantics"]["transfers_root_session_write_authority"],
@@ -1882,13 +1885,11 @@ fn agent_init_renders_worker_startup_view_json_for_explicit_role() {
         parsed["init"]["reporting_contract"]["thinking_mode_prefix"],
         "Thinking mode: <STC|PR-CoT|MAR>."
     );
-    assert!(
-        parsed["init"]["project_activation"]["normal_work_defaults"]["execution_carrier_model"]
-            ["inspect_commands"]["selection_preview"]
-            .as_str()
-            .unwrap_or_default()
-            .contains(".payload.taskflow_handoff_plan.runtime_assignment")
-    );
+    assert!(parsed["init"]["project_activation"]["normal_work_defaults"]
+        ["execution_carrier_model"]["inspect_commands"]["selection_preview"]
+        .as_str()
+        .unwrap_or_default()
+        .contains(".payload.taskflow_handoff_plan.runtime_assignment"));
     assert!(parsed["activation_semantics"]["next_lawful_action"]
         .as_str()
         .unwrap_or_default()
@@ -1914,7 +1915,13 @@ fn agent_init_dispatch_packet_reports_view_only_activation_semantics() {
     assert!(sync.status.success());
 
     let initial = vida()
-        .args(["taskflow", "consume", "final", "continue development", "--json"])
+        .args([
+            "taskflow",
+            "consume",
+            "final",
+            "continue development",
+            "--json",
+        ])
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -1929,7 +1936,12 @@ fn agent_init_dispatch_packet_reports_view_only_activation_semantics() {
         .expect("dispatch packet path should be present");
 
     let output = vida()
-        .args(["agent-init", "--dispatch-packet", dispatch_packet_path, "--json"])
+        .args([
+            "agent-init",
+            "--dispatch-packet",
+            dispatch_packet_path,
+            "--json",
+        ])
         .env_remove("VIDA_ROOT")
         .env_remove("VIDA_HOME")
         .env("VIDA_STATE_DIR", &state_dir)
@@ -2472,11 +2484,9 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
     assert_eq!(carrier_runtime["enabled"], true);
     assert_eq!(carrier_runtime["max_threads"], "4");
     assert_eq!(carrier_runtime["max_depth"], "2");
-    assert!(
-        parsed["payload"]["role_selection"]["compiled_bundle"]
-            .get("codex_multi_agent")
-            .is_none()
-    );
+    assert!(parsed["payload"]["role_selection"]["compiled_bundle"]
+        .get("codex_multi_agent")
+        .is_none());
     let carrier_roles = carrier_runtime["roles"]
         .as_array()
         .expect("carrier roles should be an array");
@@ -2536,11 +2546,9 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
     let runtime_assignment = &parsed["payload"]["taskflow_handoff_plan"]["runtime_assignment"];
     assert_eq!(runtime_assignment["selected_tier"], "junior");
     assert_eq!(runtime_assignment["activation_runtime_role"], "worker");
-    assert!(
-        parsed["payload"]["taskflow_handoff_plan"]
-            .get("codex_runtime_assignment")
-            .is_none()
-    );
+    assert!(parsed["payload"]["taskflow_handoff_plan"]
+        .get("codex_runtime_assignment")
+        .is_none());
     assert!(parsed["payload"]["bundle_check"]["ok"].is_boolean());
     assert!(parsed["payload"]["direct_consumption_ready"].is_boolean());
     assert_eq!(
@@ -2604,9 +2612,7 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
             .is_empty(),
         "packet-ready path should clear stale downstream blockers"
     );
-    assert!(
-        parsed["payload"]["dispatch_receipt"]["downstream_dispatch_packet_path"].is_null()
-    );
+    assert!(parsed["payload"]["dispatch_receipt"]["downstream_dispatch_packet_path"].is_null());
     let downstream_dispatch_result_path = parsed["payload"]["dispatch_receipt"]
         ["downstream_dispatch_result_path"]
         .as_str()
@@ -6277,7 +6283,7 @@ fn taskflow_run_graph_bridge_syncs_non_empty_latest_flow_surfaces() {
             "writer",
             "ready",
             "analysis",
-            "{\"next_node\":\"coach\",\"selected_backend\":\"codex\",\"lane_id\":\"writer_lane\",\"lifecycle_stage\":\"active\",\"policy_gate\":\"policy_gate_required\",\"handoff_state\":\"awaiting_coach\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"execution_cursor\",\"resume_target\":\"dispatch.writer_lane\",\"recovery_ready\":true}",
+            "{\"next_node\":\"coach\",\"selected_backend\":\"runtime_selected_tier\",\"lane_id\":\"writer_lane\",\"lifecycle_stage\":\"active\",\"policy_gate\":\"policy_gate_required\",\"handoff_state\":\"awaiting_coach\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"execution_cursor\",\"resume_target\":\"dispatch.writer_lane\",\"recovery_ready\":true}",
         ])
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
@@ -6438,7 +6444,7 @@ fn status_and_doctor_text_surfaces_report_non_empty_latest_flow_state() {
             "writer",
             "ready",
             "analysis",
-            "{\"next_node\":\"coach\",\"selected_backend\":\"codex\",\"lane_id\":\"writer_lane\",\"lifecycle_stage\":\"active\",\"policy_gate\":\"policy_gate_required\",\"handoff_state\":\"awaiting_coach\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"execution_cursor\",\"resume_target\":\"dispatch.writer_lane\",\"recovery_ready\":true}",
+            "{\"next_node\":\"coach\",\"selected_backend\":\"runtime_selected_tier\",\"lane_id\":\"writer_lane\",\"lifecycle_stage\":\"active\",\"policy_gate\":\"policy_gate_required\",\"handoff_state\":\"awaiting_coach\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"execution_cursor\",\"resume_target\":\"dispatch.writer_lane\",\"recovery_ready\":true}",
         ])
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
@@ -6511,7 +6517,7 @@ fn taskflow_direct_run_surfaces_report_non_empty_bridged_flow_state() {
             "writer",
             "ready",
             "analysis",
-            "{\"next_node\":\"coach\",\"selected_backend\":\"codex\",\"lane_id\":\"writer_lane\",\"lifecycle_stage\":\"active\",\"policy_gate\":\"policy_gate_required\",\"handoff_state\":\"awaiting_coach\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"execution_cursor\",\"resume_target\":\"dispatch.writer_lane\",\"recovery_ready\":true}",
+            "{\"next_node\":\"coach\",\"selected_backend\":\"runtime_selected_tier\",\"lane_id\":\"writer_lane\",\"lifecycle_stage\":\"active\",\"policy_gate\":\"policy_gate_required\",\"handoff_state\":\"awaiting_coach\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"execution_cursor\",\"resume_target\":\"dispatch.writer_lane\",\"recovery_ready\":true}",
         ])
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
@@ -6528,7 +6534,7 @@ fn taskflow_direct_run_surfaces_report_non_empty_bridged_flow_state() {
     assert_eq!(run_graph_status_parsed["status"]["next_node"], "writer");
     assert_eq!(
         run_graph_status_parsed["status"]["selected_backend"],
-        "codex"
+        "runtime_selected_tier"
     );
 
     let recovery_status = taskflow_recovery_status_with_timeout(&state_dir, "vida-a", true);
