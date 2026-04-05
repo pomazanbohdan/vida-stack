@@ -169,6 +169,8 @@ Clarification:
 1. a "very small one-file fix" is not an independent bypass around worker-first or open-delegation law,
 2. if the work is still write-producing, local handling must still satisfy the exception-path and delegated-cycle gates.
 3. local shell access, `apply_patch`, or any other host-tool write affordance is not by itself a legality signal for root-session implementation.
+4. `vida agent-init` is an activation/view surface; reading or rendering that surface is not by itself evidence that the selected lane already executed the packet.
+5. if `vida agent-init --dispatch-packet ...` activates only a `tracked_flow_packet` or other shaping-only handoff, the orchestrator must continue shaping/rerouting until a concrete bounded write-producing packet exists or an explicit blocker is recorded.
 
 Lane-identity rule:
 

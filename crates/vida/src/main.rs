@@ -3473,8 +3473,7 @@ fn build_compiled_agent_extension_bundle_for_root(
             .unwrap_or(serde_json::Value::Null),
         "autonomous_execution": serde_json::to_value(yaml_lookup(config, &["autonomous_execution"]).cloned().unwrap_or(serde_yaml::Value::Null))
             .unwrap_or(serde_json::Value::Null),
-        "carrier_runtime": carrier_runtime.clone(),
-        "codex_multi_agent": carrier_runtime,
+        "carrier_runtime": carrier_runtime,
         "role_selection": serde_json::to_value(yaml_lookup(config, &["agent_extensions", "role_selection"]).cloned().unwrap_or(serde_yaml::Value::Null))
             .unwrap_or(serde_json::Value::Null),
     });
@@ -4642,6 +4641,10 @@ fn runtime_tracked_flow_packet(
         "packet_id": format!("{run_id}::{dispatch_target}::tracked-flow"),
         "dispatch_target": dispatch_target,
         "tracked_packet_key": tracked_packet_key,
+        "activation_semantics": "tracked_flow_materialization_only",
+        "view_only": true,
+        "executes_packet": false,
+        "transfers_root_session_write_authority": false,
         "task_id": tracked["task_id"],
         "title": tracked["title"],
         "runtime": tracked["runtime"],
@@ -4670,7 +4673,7 @@ fn runtime_packet_prompt(
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nHost-local shell/edit capability is not a write-authority receipt.\nFirst substantive response: publish a concise plan before edits or implementation.\nLocal orchestrator coding is forbidden without an explicit exception path.\nBefore any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`.\nUnder continued-development intent, stay in commentary/progress mode; final closure wording is forbidden unless the user explicitly asks to stop.\nDo not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\nIf closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting.\nAfter any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item instead of pausing at a summary.\nWhen recording task notes from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\nFinding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session fallback; wait, reroute, or record the exception path first.\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
+        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nThis packet activation view is not an execution receipt and does not transfer root-session write authority.\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nHost-local shell/edit capability is not a write-authority receipt.\nFirst substantive response: publish a concise plan before edits or implementation.\nLocal orchestrator coding is forbidden without an explicit exception path.\nBefore any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`.\nUnder continued-development intent, stay in commentary/progress mode; final closure wording is forbidden unless the user explicitly asks to stop.\nDo not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\nIf closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting.\nAfter any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item instead of pausing at a summary.\nWhen recording task notes from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\nFinding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session fallback; wait, reroute, or record the exception path first.\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
     )
 }
 
@@ -5228,6 +5231,12 @@ async fn execute_and_record_dispatch_receipt(
     if let Some(dispatch_command) = json_string(execution_result.get("activation_command")) {
         receipt.dispatch_command = Some(dispatch_command);
     }
+    refresh_downstream_dispatch_preview(
+        state_root,
+        role_selection,
+        run_graph_bootstrap,
+        receipt,
+    )?;
     if receipt.dispatch_status == "executed" {
         if let Some(run_id) = json_string(run_graph_bootstrap.get("run_id")) {
             if let Ok(status) = store.run_graph_status(&run_id).await {
@@ -7386,7 +7395,7 @@ mod tests {
                 ["selection_preview"]
                 .as_str()
                 .unwrap_or_default()
-                .contains("runtime_assignment")
+                .contains(".payload.taskflow_handoff_plan.runtime_assignment")
         );
 
         let config = fs::read_to_string(harness.path().join(".codex/config.toml"))
@@ -7494,7 +7503,7 @@ mod tests {
             let carrier_runtime_assignment = plan["carrier_runtime_assignment"].clone();
             let runtime_assignment = plan["runtime_assignment"].clone();
             assert_eq!(carrier_runtime_assignment, runtime_assignment);
-            assert!(plan["codex_runtime_assignment"].is_null());
+            assert!(plan.get("codex_runtime_assignment").is_none());
             runtime_assignment
         };
         let implementation = assignment_for("write one bounded implementation patch");
@@ -8136,6 +8145,113 @@ mod tests {
     }
 
     #[test]
+    fn refresh_downstream_dispatch_preview_unblocks_dev_handoff_after_work_pool_execution() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-refresh-downstream-preview-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        let runtime_dir = root.join("runtime-consumption");
+        fs::create_dir_all(&runtime_dir).expect("runtime-consumption dir should exist");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("work-pool-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "tracked_flow_bootstrap": {
+                    "dev_task": {
+                        "ensure_command": "vida task ensure feature-x-dev \"Dev pack\" --type task --status open --json"
+                    }
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["implementer", "coach", "verification"],
+                        "implementer_activation": {
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        },
+                        "coach_activation": {
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "coach"
+                        },
+                        "verifier_activation": {
+                            "activation_agent_type": "senior",
+                            "activation_runtime_role": "verifier"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-work-pool",
+        });
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-work-pool".to_string(),
+            dispatch_target: "work-pool-pack".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida task ensure".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some("/tmp/work-pool-dispatch.json".to_string()),
+            dispatch_result_path: Some("/tmp/work-pool-result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("dev-pack".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_work_pool_shape".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("taskflow_state_store".to_string()),
+            recorded_at: "2026-03-15T00:00:00Z".to_string(),
+        };
+
+        refresh_downstream_dispatch_preview(&root, &role_selection, &run_graph_bootstrap, &mut receipt)
+            .expect("refresh should succeed");
+
+        assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("dev-pack"));
+        assert_eq!(
+            receipt.downstream_dispatch_command.as_deref(),
+            Some("vida task ensure feature-x-dev \"Dev pack\" --type task --status open --json")
+        );
+        assert!(receipt.downstream_dispatch_ready);
+        assert!(receipt.downstream_dispatch_blockers.is_empty());
+        assert!(
+            receipt
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty())
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn downstream_preview_ready_blocker_parity_guard_detects_inconsistency() {
         let blockers = vec!["pending_lane_evidence".to_string()];
         assert_eq!(
@@ -8203,7 +8319,7 @@ mod tests {
         let carrier_runtime_assignment = plan["carrier_runtime_assignment"].clone();
         let runtime_assignment = plan["runtime_assignment"].clone();
         assert_eq!(carrier_runtime_assignment, runtime_assignment);
-        assert!(plan["codex_runtime_assignment"].is_null());
+        assert!(plan.get("codex_runtime_assignment").is_none());
         assert!(runtime_assignment.get("internal_named_lane_id").is_none());
         assert_eq!(
             plan["development_flow"]["dispatch_contract"]["implementer_activation"]
@@ -8239,8 +8355,7 @@ mod tests {
         let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
             .expect("bundle should compile");
         let carrier_runtime = bundle["carrier_runtime"].clone();
-        let legacy_carrier_runtime = bundle["codex_multi_agent"].clone();
-        assert_eq!(carrier_runtime, legacy_carrier_runtime);
+        assert!(bundle.get("codex_multi_agent").is_none());
         let dispatch_aliases = carrier_runtime["dispatch_aliases"]
             .as_array()
             .expect("dispatch aliases should still be an array");
@@ -8533,6 +8648,46 @@ mod tests {
             .expect_err("packet without goal should fail closed");
         assert!(error.contains("missing required packet fields"));
         assert!(error.contains("goal"));
+    }
+
+    #[test]
+    fn runtime_tracked_flow_packet_marks_view_only_materialization_semantics() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("pbi_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("work-pool-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "tracked_flow_bootstrap": {
+                    "work_pool_task": {
+                        "task_id": "feature-x-work-pool",
+                        "title": "Work-pool pack: Feature X",
+                        "runtime": "vida taskflow",
+                        "inspect_command": "vida task show feature-x-work-pool --json",
+                        "ensure_command": "vida task ensure feature-x-work-pool \"Work-pool pack: Feature X\" --type task --status open --json",
+                        "create_command": "vida task create feature-x-work-pool \"Work-pool pack: Feature X\" --type task --status open --json",
+                        "close_command": "vida task close feature-x-work-pool --reason 'closed' --json",
+                        "required": true
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+
+        let packet = runtime_tracked_flow_packet(&role_selection, "run-1", "work-pool-pack");
+        assert_eq!(packet["activation_semantics"], "tracked_flow_materialization_only");
+        assert_eq!(packet["view_only"], true);
+        assert_eq!(packet["executes_packet"], false);
+        assert_eq!(packet["transfers_root_session_write_authority"], false);
     }
 
     #[test]

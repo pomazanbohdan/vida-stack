@@ -1392,6 +1392,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     bundle.agent_init_view,
                     &project_activation_view,
                 );
+            let activation_semantics = agent_init_activation_semantics(&selection);
 
             if args.json {
                 println!(
@@ -1400,6 +1401,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                         "surface": "vida agent-init",
                         "init": init_view,
                         "selection": selection,
+                        "activation_semantics": activation_semantics,
                         "runtime_bundle_summary": {
                             "bundle_id": bundle.metadata["bundle_id"],
                             "activation_source": bundle.activation_source,
@@ -1429,6 +1431,16 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 }
                 if let Some(path) = selection["downstream_packet_path"].as_str() {
                     print_surface_line(RenderMode::Plain, "downstream packet", path);
+                }
+                print_surface_line(
+                    RenderMode::Plain,
+                    "activation semantics",
+                    activation_semantics["activation_kind"]
+                        .as_str()
+                        .unwrap_or("activation_view"),
+                );
+                if let Some(next_step) = activation_semantics["next_lawful_action"].as_str() {
+                    print_surface_line(RenderMode::Plain, "next lawful action", next_step);
                 }
                 if let Some(fallback_surface) = init_view["source_mode_fallback_surface"].as_str() {
                     print_surface_line(RenderMode::Plain, "fallback surface", fallback_surface);
@@ -1461,4 +1473,37 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+fn agent_init_activation_semantics(selection: &serde_json::Value) -> serde_json::Value {
+    let mode = selection["mode"].as_str().unwrap_or("unknown");
+    let packet_template_kind = selection["packet_template_kind"]
+        .as_str()
+        .unwrap_or_default();
+    let tracked_flow_shaping_only = packet_template_kind == "tracked_flow_packet";
+    let next_lawful_action = match mode {
+        "dispatch_packet" | "downstream_packet" if tracked_flow_shaping_only => {
+            "complete only the tracked-flow/task-shaping handoff; this activation does not itself execute implementation and does not authorize root-session writing"
+        }
+        "dispatch_packet" | "downstream_packet" => {
+            "use this activation view to execute only the bounded packet owned by the selected lane; completion still requires receipt-backed evidence and does not transfer root-session write authority"
+        }
+        "explicit_role" => {
+            "use this bounded startup view to initialize the selected non-orchestrator lane; execution still requires a lawful packet or bounded worker request"
+        }
+        _ => {
+            "treat this surface as activation/view-only runtime context; it does not by itself execute work or transfer root-session write authority"
+        }
+    };
+
+    serde_json::json!({
+        "activation_kind": "activation_view",
+        "view_only": true,
+        "executes_packet": false,
+        "records_completion_receipt": false,
+        "transfers_root_session_write_authority": false,
+        "root_session_write_guard_remains_authoritative": true,
+        "tracked_flow_shaping_only": tracked_flow_shaping_only,
+        "next_lawful_action": next_lawful_action,
+    })
 }

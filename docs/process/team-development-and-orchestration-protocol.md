@@ -318,6 +318,13 @@ Default engagement policy:
 4. the runtime-selected `verifier` carrier owns independent proof and closure readiness,
 5. the runtime-selected `solution_architect` carrier is exceptional and activates only when normal packet closure cannot be made coherent.
 
+Agent-init interpretation rule:
+
+1. `vida agent-init` is a lane-activation and packet-consumption surface, not by itself an execution-complete receipt,
+2. `vida agent-init --dispatch-packet ...` or `--downstream-packet ...` does not transfer writer ownership back to the root session,
+3. if the activated packet is still a `tracked_flow_packet`, that lane is shaping/materialization-only until runtime emits a concrete write-producing packet with bounded ownership,
+4. absence of that later write-producing packet is a blocker/reroute condition, not implicit permission for local root-session patching.
+
 Local orchestrator-only work is lawful only for:
 
 1. shaping or reshaping packets,

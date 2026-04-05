@@ -1872,10 +1872,84 @@ fn agent_init_renders_worker_startup_view_json_for_explicit_role() {
     assert_eq!(parsed["selection"]["selected_role"], "worker");
     assert!(parsed["init"]["allowed_non_orchestrator_roles"].is_array());
     assert_eq!(parsed["init"]["reporting_contract"]["required"], true);
+    assert_eq!(parsed["activation_semantics"]["activation_kind"], "activation_view");
+    assert_eq!(parsed["activation_semantics"]["view_only"], true);
+    assert_eq!(
+        parsed["activation_semantics"]["transfers_root_session_write_authority"],
+        false
+    );
     assert_eq!(
         parsed["init"]["reporting_contract"]["thinking_mode_prefix"],
         "Thinking mode: <STC|PR-CoT|MAR>."
     );
+    assert!(
+        parsed["init"]["project_activation"]["normal_work_defaults"]["execution_carrier_model"]
+            ["inspect_commands"]["selection_preview"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(".payload.taskflow_handoff_plan.runtime_assignment")
+    );
+    assert!(parsed["activation_semantics"]["next_lawful_action"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("lawful packet or bounded worker request"));
+}
+
+#[test]
+fn agent_init_dispatch_packet_reports_view_only_activation_semantics() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let sync = vida()
+        .args(["taskflow", "protocol-binding", "sync", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("protocol-binding sync should run");
+    assert!(sync.status.success());
+
+    let initial = vida()
+        .args(["taskflow", "consume", "final", "continue development", "--json"])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow consume final should run");
+    assert!(initial.status.success());
+
+    let initial_json: serde_json::Value =
+        serde_json::from_slice(&initial.stdout).expect("initial consume final json should parse");
+    let dispatch_packet_path = initial_json["payload"]["dispatch_receipt"]["dispatch_packet_path"]
+        .as_str()
+        .expect("dispatch packet path should be present");
+
+    let output = vida()
+        .args(["agent-init", "--dispatch-packet", dispatch_packet_path, "--json"])
+        .env_remove("VIDA_ROOT")
+        .env_remove("VIDA_HOME")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("agent-init dispatch packet should run");
+    assert!(output.status.success());
+
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("agent-init dispatch json should parse");
+    assert_eq!(parsed["selection"]["mode"], "dispatch_packet");
+    assert_eq!(parsed["activation_semantics"]["view_only"], true);
+    assert_eq!(parsed["activation_semantics"]["executes_packet"], false);
+    assert_eq!(
+        parsed["activation_semantics"]["transfers_root_session_write_authority"],
+        false
+    );
+    assert!(parsed["activation_semantics"]["next_lawful_action"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("receipt-backed evidence"));
 }
 
 #[test]
@@ -2395,12 +2469,14 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
     );
     let carrier_runtime =
         &parsed["payload"]["role_selection"]["compiled_bundle"]["carrier_runtime"];
-    let legacy_carrier_runtime =
-        &parsed["payload"]["role_selection"]["compiled_bundle"]["codex_multi_agent"];
     assert_eq!(carrier_runtime["enabled"], true);
     assert_eq!(carrier_runtime["max_threads"], "4");
     assert_eq!(carrier_runtime["max_depth"], "2");
-    assert_eq!(carrier_runtime, legacy_carrier_runtime);
+    assert!(
+        parsed["payload"]["role_selection"]["compiled_bundle"]
+            .get("codex_multi_agent")
+            .is_none()
+    );
     let carrier_roles = carrier_runtime["roles"]
         .as_array()
         .expect("carrier roles should be an array");
@@ -2457,11 +2533,14 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
         parsed["payload"]["role_selection"]["reason"],
         "auto_no_keyword_match"
     );
-    let carrier_runtime_assignment =
-        &parsed["payload"]["execution_plan"]["carrier_runtime_assignment"];
-    let runtime_assignment = &parsed["payload"]["execution_plan"]["runtime_assignment"];
-    assert_eq!(carrier_runtime_assignment, runtime_assignment);
-    assert!(parsed["payload"]["execution_plan"]["codex_runtime_assignment"].is_null());
+    let runtime_assignment = &parsed["payload"]["taskflow_handoff_plan"]["runtime_assignment"];
+    assert_eq!(runtime_assignment["selected_tier"], "junior");
+    assert_eq!(runtime_assignment["activation_runtime_role"], "worker");
+    assert!(
+        parsed["payload"]["taskflow_handoff_plan"]
+            .get("codex_runtime_assignment")
+            .is_none()
+    );
     assert!(parsed["payload"]["bundle_check"]["ok"].is_boolean());
     assert!(parsed["payload"]["direct_consumption_ready"].is_boolean());
     assert_eq!(
@@ -2504,47 +2583,35 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
         .as_str()
         .expect("dispatch result path should be present");
     assert!(std::path::Path::new(dispatch_result_path).is_file());
-    assert_eq!(
-        parsed["payload"]["dispatch_receipt"]["downstream_dispatch_target"],
-        "coach"
-    );
-    assert_eq!(
-        parsed["payload"]["dispatch_receipt"]["downstream_dispatch_command"],
-        "vida agent-init"
-    );
+    assert!(parsed["payload"]["dispatch_receipt"]["downstream_dispatch_target"].is_null());
+    assert!(parsed["payload"]["dispatch_receipt"]["downstream_dispatch_command"].is_null());
     assert_eq!(
         parsed["payload"]["dispatch_receipt"]["downstream_dispatch_ready"],
         false
+    );
+    assert_eq!(
+        parsed["payload"]["dispatch_receipt"]["downstream_dispatch_last_target"],
+        "closure"
+    );
+    assert_eq!(
+        parsed["payload"]["dispatch_receipt"]["downstream_dispatch_status"],
+        "executed"
     );
     assert!(
         parsed["payload"]["dispatch_receipt"]["downstream_dispatch_blockers"]
             .as_array()
             .expect("downstream blockers should be an array")
-            .iter()
-            .any(|value| value == "pending_implementation_evidence")
+            .is_empty(),
+        "packet-ready path should clear stale downstream blockers"
     );
     assert!(
-        !parsed["payload"]["dispatch_receipt"]["downstream_dispatch_blockers"]
-            .as_array()
-            .expect("downstream blockers should be an array")
-            .iter()
-            .any(|value| {
-                matches!(
-                    value.as_str(),
-                    Some("pending_execution_preparation_evidence")
-                        | Some("unsupported_boundary")
-                        | Some("retrieval_evidence")
-                )
-            }),
-        "packet-ready path should not include fail-closed blockers for execution_preparation/unsupported_boundary/retrieval_evidence"
+        parsed["payload"]["dispatch_receipt"]["downstream_dispatch_packet_path"].is_null()
     );
-    let downstream_dispatch_packet_path = parsed["payload"]["dispatch_receipt"]
-        ["downstream_dispatch_packet_path"]
+    let downstream_dispatch_result_path = parsed["payload"]["dispatch_receipt"]
+        ["downstream_dispatch_result_path"]
         .as_str()
-        .expect("downstream dispatch packet path should be present");
-    assert!(std::path::Path::new(downstream_dispatch_packet_path).is_file());
-    assert!(parsed["payload"]["dispatch_receipt"]["downstream_dispatch_status"].is_null());
-    assert!(parsed["payload"]["dispatch_receipt"]["downstream_dispatch_result_path"].is_null());
+        .expect("downstream dispatch result path should be present");
+    assert!(std::path::Path::new(downstream_dispatch_result_path).is_file());
     assert_eq!(
         parsed["payload"]["docflow_activation"]["runtime_family"],
         "docflow"
@@ -2693,7 +2760,7 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
     );
     assert_eq!(
         status_json["latest_run_graph_status"]["lifecycle_stage"],
-        "implementation_dispatch_ready"
+        "closure_complete"
     );
 
     let doctor = status_or_doctor_with_timeout(&state_dir, &["doctor", "--json"]);

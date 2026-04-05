@@ -55,7 +55,7 @@ pub(crate) fn print_root_help() {
     );
     println!("  orchestrator-init  render the compiled startup view for the orchestrator lane");
     println!(
-        "  agent-init         render the bounded startup view or packet activation view for a worker/agent lane"
+        "  agent-init         render the bounded startup view or packet activation view for a worker/agent lane; this surface does not itself execute the packet"
     );
     println!("  protocol  resolve and render framework protocol/guide surfaces");
     println!(
