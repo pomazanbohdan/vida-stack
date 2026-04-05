@@ -77,7 +77,6 @@ pub(crate) fn runtime_consumption_final_dispatch_receipt_blocker_code(
     )
 }
 
-#[cfg(test)]
 pub(crate) fn runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result(
     latest_status_run_id: &str,
     payload_run_id: &str,
