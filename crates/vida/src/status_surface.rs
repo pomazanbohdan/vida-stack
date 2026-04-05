@@ -119,31 +119,7 @@ fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> boo
         Ok(json) => json,
         Err(_) => return true,
     };
-    let operator_contracts = match summary_json.get("operator_contracts") {
-        Some(value) => value,
-        None => return true,
-    };
-    crate::operator_contracts::shared_operator_output_contract_parity_error(&summary_json).is_some()
-        || crate::operator_contracts::release1_operator_contracts_consistency_error(
-            summary_json["status"].as_str().unwrap_or(""),
-            &operator_contracts["blocker_codes"]
-                .as_array()
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default(),
-            &operator_contracts["next_actions"]
-                .as_array()
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default(),
-        )
-        .is_some()
+    !super::runtime_consumption_snapshot_has_release_admission_evidence(&summary_json)
 }
 
 fn is_sandbox_active_from_env() -> bool {

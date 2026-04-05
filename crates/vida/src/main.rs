@@ -4609,7 +4609,7 @@ fn runtime_packet_prompt(
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nHost-local shell/edit capability is not a write-authority receipt.\nFirst substantive response: publish a concise plan before edits or implementation.\nLocal orchestrator coding is forbidden without an explicit exception path.\nBefore any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`.\nUnder continued-development intent, stay in commentary/progress mode; final closure wording is forbidden unless the user explicitly asks to stop.\nAfter any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item instead of pausing at a summary.\nFinding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session fallback; wait, reroute, or record the exception path first.\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
+        "Packet run_id={run_id}\nTarget={dispatch_target}\nRuntime role={handoff_runtime_role}\nRoot session role=orchestrator\nExecution mode=delegated_orchestration_cycle\nCanonical delegated execution surface=vida agent-init\nHost subagent APIs are backend details only; do not substitute them for the project runtime's delegated lane contract.\nHost-local shell/edit capability is not a write-authority receipt.\nFirst substantive response: publish a concise plan before edits or implementation.\nLocal orchestrator coding is forbidden without an explicit exception path.\nBefore any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`.\nUnder continued-development intent, stay in commentary/progress mode; final closure wording is forbidden unless the user explicitly asks to stop.\nDo not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\nAfter any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item instead of pausing at a summary.\nFinding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session fallback; wait, reroute, or record the exception path first.\nReplan checkpoints: {replan_points}\nGoal: execute only this bounded handoff and produce receipt-backed evidence.\nRequest: {request_text}"
     )
 }
 
@@ -6148,14 +6148,41 @@ fn runtime_consumption_summary(state_root: &Path) -> Result<RuntimeConsumptionSu
     })
 }
 
-fn runtime_consumption_snapshot_has_release_admission_evidence(
+pub(crate) fn runtime_consumption_snapshot_has_release_admission_evidence(
     snapshot: &serde_json::Value,
 ) -> bool {
     let operator_contracts = match snapshot.get("operator_contracts") {
         Some(value) => value,
         None => return false,
     };
-    crate::operator_contracts::shared_operator_output_contract_parity_error(snapshot).is_none()
+    let status_ok =
+        crate::operator_contracts::canonical_release1_operator_contract_status(&snapshot["status"])
+            .is_some();
+    let operator_status_ok =
+        crate::operator_contracts::canonical_release1_operator_contract_status(
+            &operator_contracts["status"],
+        )
+        .is_some();
+    let blockers_ok = operator_contracts
+        .get("blocker_codes")
+        .and_then(|value| value.as_array())
+        .is_some();
+    let next_actions_ok = operator_contracts
+        .get("next_actions")
+        .and_then(|value| value.as_array())
+        .is_some();
+    let trust_signal_ok = operator_contracts
+        .get("artifact_refs")
+        .and_then(|refs| refs.get("retrieval_trust_signal"))
+        .is_some_and(|value| value.is_object());
+
+    status_ok
+        && operator_status_ok
+        && blockers_ok
+        && next_actions_ok
+        && trust_signal_ok
+        && crate::operator_contracts::shared_operator_output_contract_parity_error(snapshot)
+            .is_none()
         && crate::operator_contracts::release1_operator_contracts_consistency_error(
             snapshot["status"].as_str().unwrap_or(""),
             &operator_contracts["blocker_codes"]
@@ -6290,6 +6317,84 @@ mod tests {
         while lock_path.exists() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(25));
         }
+    }
+
+    #[test]
+    fn latest_final_runtime_consumption_snapshot_path_prefers_newest_valid_final_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-valid-final-snapshot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        let runtime_dir = root.join("runtime-consumption");
+        fs::create_dir_all(&runtime_dir).expect("runtime-consumption dir should exist");
+
+        let valid_path = runtime_dir.join("final-valid.json");
+        fs::write(
+            &valid_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume final",
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "shared_fields": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": []
+                },
+                "operator_contracts": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "artifact_refs": {
+                        "retrieval_trust_signal": {
+                            "source": "runtime_consumption_snapshot_index",
+                            "citation": "runtime-consumption/final-valid.json",
+                            "freshness": "final",
+                            "acl": "protocol-binding-receipt-id"
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("valid final snapshot should be writable");
+
+        thread::sleep(Duration::from_millis(5));
+
+        let invalid_path = runtime_dir.join("final-incomplete.json");
+        fs::write(
+            &invalid_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume continue",
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "shared_fields": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": []
+                },
+                "operator_contracts": {
+                    "status": "pass",
+                    "blocker_codes": [],
+                    "next_actions": [],
+                    "artifact_refs": {}
+                }
+            })
+            .to_string(),
+        )
+        .expect("incomplete final snapshot should be writable");
+
+        let selected = latest_final_runtime_consumption_snapshot_path(&root)
+            .expect("latest valid final snapshot should resolve")
+            .expect("one valid final snapshot should be available");
+        assert_eq!(selected, valid_path.display().to_string());
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

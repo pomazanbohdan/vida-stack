@@ -165,6 +165,7 @@ Normalization rule:
 8. recorded saturation recovery must explicitly check whether any delegated Codex lanes already completed or were superseded and can now be closed/reclaimed before "agent limits" remains a valid blocker.
 9. worker wait timeout or empty poll result does not authorize replacing the packet cycle with one generic internal development lane.
 10. under continued-development intent, stay in commentary/progress mode and continue routing; do not emit final closure wording while a next lawful continuation item is already known.
+11. do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.
 
 Coach separation rule:
 
@@ -309,5 +310,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/codex-agent-configuration-guide.md
 created_at: '2026-03-12T08:35:27+02:00'
-updated_at: 2026-04-04T20:31:22.443596855Z
+updated_at: 2026-04-05T06:19:10.134108261Z
 changelog_ref: codex-agent-configuration-guide.changelog.jsonl

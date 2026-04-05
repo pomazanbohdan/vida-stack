@@ -31,6 +31,7 @@ Active design docs:
 - `docs/product/spec/flappy-bird-flappy-bird-every-mechanism-design.md`
 - `docs/product/spec/spec-proof-auto-flow-design.md`
 - `docs/product/spec/release-1-shared-operator-envelope-closure-design.md`
+- `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
 
 -----
 artifact_path: product/spec/readme
@@ -41,5 +42,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-04-05T05:20:01.303332154Z
+updated_at: 2026-04-05T06:19:10.127047794Z
 changelog_ref: README.changelog.jsonl

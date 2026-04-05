@@ -1,8 +1,7 @@
 use std::process::ExitCode;
 
 use crate::operator_contracts::{
-    canonical_release1_operator_contract_status, release1_operator_contracts_consistency_error,
-    shared_operator_output_contract_parity_error,
+    release1_operator_contracts_consistency_error, shared_operator_output_contract_parity_error,
 };
 use crate::release1_contracts::{
     blocker_code_str, canonical_blocker_code_list, canonical_compatibility_class_str,
@@ -53,32 +52,7 @@ fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> boo
         Ok(json) => json,
         Err(_) => return true,
     };
-    if shared_operator_output_contract_parity_error(&summary_json).is_some() {
-        return true;
-    }
-    let operator_contracts = match summary_json.get("operator_contracts") {
-        Some(value) => value,
-        None => return true,
-    };
-    let status_ok = canonical_release1_operator_contract_status(&summary_json["status"]).is_some();
-    let operator_status_ok =
-        canonical_release1_operator_contract_status(&operator_contracts["status"]).is_some();
-    if !status_ok || !operator_status_ok {
-        return true;
-    }
-    let blockers_ok = operator_contracts
-        .get("blocker_codes")
-        .and_then(|value| value.as_array())
-        .is_some();
-    let next_actions_ok = operator_contracts
-        .get("next_actions")
-        .and_then(|value| value.as_array())
-        .is_some();
-    let trust_signal_ok = operator_contracts
-        .get("artifact_refs")
-        .and_then(|refs| refs.get("retrieval_trust_signal"))
-        .is_some_and(|value| value.is_object());
-    !(blockers_ok && next_actions_ok && trust_signal_ok)
+    !super::runtime_consumption_snapshot_has_release_admission_evidence(&summary_json)
 }
 
 pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {

@@ -4670,6 +4670,12 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
         .as_str()
         .expect("prompt should be present")
         .contains(
+            "Do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary."
+        ));
+    assert!(downstream_packet_json["prompt"]
+        .as_str()
+        .expect("prompt should be present")
+        .contains(
             "After any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item instead of pausing at a summary."
         ));
     assert!(downstream_packet_json["prompt"]

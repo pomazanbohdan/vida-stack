@@ -26,7 +26,8 @@ Use this template for one bounded feature/change design before implementation.
   - The startup/runtime guidance does not state strongly enough that host subagent APIs are optional carrier/executor details, not the canonical meaning of project-agent-first development.
   - The repository overlay still points the active host CLI selection at `qwen` external mode even though the active project canon and rendered runtime guidance treat the Codex/internal path as the primary agent-first execution posture.
   - `vida status --json` still treats enabled external CLI subagents as if they make the whole session externally dependent, even when the selected host execution class is internal and the external subagents are only optional carrier details.
-  - Runtime-consumption status and continuation also allowed one live ambiguity: a newer `bundle-check` snapshot could overshadow the latest valid `final` snapshot and re-open release-admission blockers even after lawful `consume final` evidence already existed.
+- Runtime-consumption status and continuation also allowed one live ambiguity: a newer incomplete `final` snapshot from `vida taskflow consume continue` could overshadow an older valid `consume final` snapshot and re-open release-admission blockers even after lawful closure evidence already existed.
+- Runtime prompts and generated guidance still left one operator loophole: they warned against final closure wording, but did not state strongly enough that commentary or “I have explained the result” is not a lawful pause boundary.
   - Runtime dispatch packets still rely on prose/template alignment rather than one compiled template-specific packet-minimum validator, so `vida taskflow consume final`, persisted dispatch packets, resume, and `vida agent-init` can drift if packet-family requirements are not enforced from shared code.
 
 ## Goal
@@ -273,5 +274,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md
 created_at: 2026-04-04T17:55:40.339798941Z
-updated_at: 2026-04-04T18:01:04.58943557Z
+updated_at: 2026-04-05T06:19:10.119452599Z
 changelog_ref: clarify-enforce-immediate-project-agent-first-design.changelog.jsonl

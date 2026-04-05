@@ -198,6 +198,9 @@ Companion rule:
 24. [release-1-shared-operator-envelope-closure-design.md](release-1-shared-operator-envelope-closure-design.md)
    Config families: bounded Release-1 closure for shared operator-envelope fields, canonical compatibility-field emission, registry-backed blocker validation, and installed-launcher alignment
    Registered path: `docs/product/spec/release-1-shared-operator-envelope-closure-design.md`
+25. [clarify-enforce-immediate-project-agent-first-design.md](clarify-enforce-immediate-project-agent-first-design.md)
+   Config families: bounded clarification and enforcement for project agent-first delegated execution, anti-pause continuation law, valid release-admission snapshot selection, and packet-minimum fail-closed runtime behavior
+   Registered path: `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
 
 ### Support
 
@@ -253,5 +256,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-04-05T05:20:01.303188478Z
+updated_at: 2026-04-05T06:19:10.123753657Z
 changelog_ref: current-spec-map.changelog.jsonl

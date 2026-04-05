@@ -22,8 +22,9 @@ Default feature-delivery flow:
 12. Host-local shell/edit capability is not a lane-change receipt and does not authorize root-session coding.
 13. Finding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session coding; wait, reroute, or record the exception path first.
 14. Under continued-development intent, stay in commentary/progress mode until the user explicitly asks to stop; do not emit final closure wording while a next lawful TaskFlow continuation item is already known.
-15. After any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.
-16. Prefer the launcher-owned intake/runtime progression surfaces over manual reconstruction:
+15. Do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.
+16. After any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.
+17. Prefer the launcher-owned intake/runtime progression surfaces over manual reconstruction:
    - `vida taskflow consume final "<request>" --json` to materialize the routed intake, dispatch receipt, and first lawful packet
    - `vida taskflow consume continue [--run-id <run-id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]` to resume one persisted chain entry; legacy runtime packets may be normalized to the canonical packet-minimum path scope before fail-closed validation
    - `vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] [--json]` to let the bounded scheduler progress ready steps automatically
@@ -37,5 +38,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-operations.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-04-04T20:31:22.443372495Z
+updated_at: 2026-04-05T06:19:10.12986476Z
 changelog_ref: project-operations.changelog.jsonl
