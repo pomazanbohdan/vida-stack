@@ -10,6 +10,7 @@ mod operator_contracts;
 mod project_activator_surface;
 mod protocol_surface;
 mod release1_contracts;
+mod root_command_router;
 mod state_store;
 mod status_surface;
 mod surface_render;
@@ -51,6 +52,7 @@ use release1_contracts::{
     blocker_code_str, blocker_code_value, canonical_release1_contract_status_str,
     derive_lane_status, missing_downstream_lane_evidence_blocker, BlockerCode, LaneStatus,
 };
+use root_command_router::run_root_command;
 use state_store::{LauncherActivationSnapshot, StateStore, StateStoreError};
 pub(crate) use surface_render::{
     print_root_help, print_surface_header, print_surface_line, print_surface_ok,
@@ -153,77 +155,7 @@ const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_NEXT_ACTION
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    run(Cli::parse()).await
-}
-
-async fn run(cli: Cli) -> ExitCode {
-    if let Some(error) = prepare_runtime_state_dir(&cli.command) {
-        eprintln!("{error}");
-        return ExitCode::from(1);
-    }
-
-    match cli.command {
-        None => {
-            print_root_help();
-            ExitCode::SUCCESS
-        }
-        Some(Command::Init(args)) => init_surfaces::run_init(args).await,
-        Some(Command::Boot(args)) => init_surfaces::run_boot(args).await,
-        Some(Command::OrchestratorInit(args)) => init_surfaces::run_orchestrator_init(args).await,
-        Some(Command::AgentInit(args)) => init_surfaces::run_agent_init(args).await,
-        Some(Command::Protocol(args)) => protocol_surface::run_protocol(args).await,
-        Some(Command::ProjectActivator(args)) => {
-            project_activator_surface::run_project_activator(args).await
-        }
-        Some(Command::AgentFeedback(args)) => {
-            agent_feedback_surface::run_agent_feedback(args).await
-        }
-        Some(Command::Task(args)) => task_surface::run_task(args).await,
-        Some(Command::Memory(args)) => memory_surface::run_memory(args).await,
-        Some(Command::Status(args)) => status_surface::run_status(args).await,
-        Some(Command::Doctor(args)) => doctor_surface::run_doctor(args).await,
-        Some(Command::Taskflow(args)) => run_taskflow_proxy(args).await,
-        Some(Command::Docflow(args)) => docflow_proxy::run_docflow_proxy(args),
-        Some(Command::External(args)) => run_unknown(&args),
-    }
-}
-
-fn task_command_needs_project_root(args: &TaskArgs) -> bool {
-    !matches!(args.command, TaskCommand::Help(_))
-}
-
-fn prepare_runtime_state_dir(command: &Option<Command>) -> Option<String> {
-    if std::env::var_os("VIDA_STATE_DIR").is_some() {
-        return None;
-    }
-
-    let needs_project_root = match command {
-        Some(Command::Task(args)) => task_command_needs_project_root(args),
-        _ => false,
-    };
-
-    if !needs_project_root {
-        return None;
-    }
-
-    match resolve_runtime_project_root() {
-        Ok(project_root) => {
-            std::env::set_var(
-                "VIDA_STATE_DIR",
-                project_root.join(state_store::default_state_dir()),
-            );
-            None
-        }
-        Err(error) => Some(error),
-    }
-}
-
-fn run_unknown(args: &[String]) -> ExitCode {
-    let command = args.first().map(String::as_str).unwrap_or("unknown");
-    eprintln!(
-        "Unknown command family `{command}`. Use `vida --help` to inspect the frozen root surface."
-    );
-    ExitCode::from(2)
+    run_root_command(Cli::parse()).await
 }
 
 fn looks_like_project_root(path: &Path) -> bool {
