@@ -1540,6 +1540,85 @@ fn taskflow_task_update_ignores_legacy_helper_status_override_env() {
 }
 
 #[test]
+fn task_update_accepts_notes_file_for_shell_safe_progress_recording() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let import_path = format!("{state_dir}/tasks.jsonl");
+    let notes_path = format!("{state_dir}/notes.txt");
+    sample_jsonl(&import_path);
+    fs::write(
+        &notes_path,
+        "line 1\nline 2 with `backticks` and $(shell-like text)\n",
+    )
+    .expect("notes file should write");
+
+    run_and_assert_success(
+        &["task", "import-jsonl", &import_path, "--json"],
+        &state_dir,
+    );
+
+    let parsed = run_command_json(
+        &[
+            "task",
+            "update",
+            "vida-a",
+            "--status",
+            "in_progress",
+            "--notes-file",
+            &notes_path,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert_eq!(parsed["status"], "in_progress");
+    assert_eq!(
+        parsed["notes"],
+        "line 1\nline 2 with `backticks` and $(shell-like text)\n"
+    );
+
+    fs::remove_dir_all(&state_dir).expect("cleanup state dir");
+}
+
+#[test]
+fn task_update_rejects_notes_and_notes_file_together() {
+    let state_dir = unique_state_dir();
+    fs::create_dir_all(&state_dir).expect("create state dir");
+    let import_path = format!("{state_dir}/tasks.jsonl");
+    let notes_path = format!("{state_dir}/notes.txt");
+    sample_jsonl(&import_path);
+    fs::write(&notes_path, "safe note\n").expect("notes file should write");
+
+    run_and_assert_success(
+        &["task", "import-jsonl", &import_path, "--json"],
+        &state_dir,
+    );
+
+    let output = run_command_capture(
+        &[
+            "task",
+            "update",
+            "vida-a",
+            "--notes",
+            "inline",
+            "--notes-file",
+            &notes_path,
+            "--json",
+        ],
+        &state_dir,
+    );
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Use only one notes source: --notes <text> or --notes-file <path>"),
+        "stderr was: {stderr}"
+    );
+
+    fs::remove_dir_all(&state_dir).expect("cleanup state dir");
+}
+
+#[test]
 fn consume_bundle_check_blocked_path_matches_blocker_codes_contract() {
     let state_dir = unique_state_dir();
     fs::create_dir_all(&state_dir).expect("create state dir");

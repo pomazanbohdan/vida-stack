@@ -277,6 +277,9 @@ pub(crate) struct TaskUpdateArgs {
     #[arg(long = "notes")]
     pub(crate) notes: Option<String>,
 
+    #[arg(long = "notes-file")]
+    pub(crate) notes_file: Option<PathBuf>,
+
     #[arg(long = "description")]
     pub(crate) description: Option<String>,
 

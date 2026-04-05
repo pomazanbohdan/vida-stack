@@ -166,6 +166,8 @@ Normalization rule:
 9. worker wait timeout or empty poll result does not authorize replacing the packet cycle with one generic internal development lane.
 10. under continued-development intent, stay in commentary/progress mode and continue routing; do not emit final closure wording while a next lawful continuation item is already known.
 11. do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.
+12. if closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.
+13. when recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
 
 Coach separation rule:
 

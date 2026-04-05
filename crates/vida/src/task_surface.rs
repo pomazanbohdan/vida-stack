@@ -63,6 +63,25 @@ fn project_root_for_task_state(state_dir: &std::path::Path) -> Option<std::path:
         .or_else(|| crate::resolve_runtime_project_root().ok())
 }
 
+fn resolve_optional_text_arg(
+    label: &str,
+    direct: Option<&str>,
+    file_path: Option<&std::path::Path>,
+) -> Result<Option<String>, String> {
+    if direct.is_some() && file_path.is_some() {
+        return Err(format!(
+            "Use only one {label} source: --{label} <text> or --{label}-file <path>"
+        ));
+    }
+    if let Some(path) = file_path {
+        let value = std::fs::read_to_string(path).map_err(|error| {
+            format!("Failed to read {label} file `{}`: {error}", path.display())
+        })?;
+        return Ok(Some(value));
+    }
+    Ok(direct.map(ToOwned::to_owned))
+}
+
 async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) -> ExitCode {
     let state_dir = command
         .state_dir
@@ -480,6 +499,17 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             let state_dir = command
                 .state_dir
                 .unwrap_or_else(state_store::default_state_dir);
+            let notes = match resolve_optional_text_arg(
+                "notes",
+                command.notes.as_deref(),
+                command.notes_file.as_deref(),
+            ) {
+                Ok(notes) => notes,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            };
             let set_labels = command.set_labels.as_ref().map(|labels| {
                 labels
                     .split(',')
@@ -493,7 +523,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     .update_task(state_store::UpdateTaskRequest {
                         task_id: &command.task_id,
                         status: command.status.as_deref(),
-                        notes: command.notes.as_deref(),
+                        notes: notes.as_deref(),
                         description: command.description.as_deref(),
                         add_labels: &command.add_labels,
                         remove_labels: &command.remove_labels,

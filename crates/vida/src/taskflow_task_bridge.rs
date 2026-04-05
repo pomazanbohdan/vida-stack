@@ -272,7 +272,14 @@ mod tests {
                 status,
                 blocker_codes,
                 next_actions,
-                serde_json::json!({}),
+                serde_json::json!({
+                    "retrieval_trust_signal": {
+                        "source": "runtime_consumption_snapshot_index",
+                        "citation": format!("runtime-consumption/{file_name}"),
+                        "freshness": "final",
+                        "acl": "protocol-binding-receipt-id"
+                    }
+                }),
             );
             let shared_fields = serde_json::json!({
                 "status": operator_contracts["status"].clone(),

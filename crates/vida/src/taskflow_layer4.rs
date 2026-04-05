@@ -40,8 +40,11 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida task next-display-id <parent-display-id> --json");
             println!("  vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json");
             println!("  vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels <label> --json");
-            println!("  vida task update <task-id> --status in_progress --notes \"...\" --json");
+            println!(
+                "  vida task update <task-id> --status in_progress --notes-file <path> --json"
+            );
             println!("  vida task close <task-id> --reason \"...\" --json");
+            println!("  vida task import-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             println!("  vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             println!();
             println!("Failure modes:");
@@ -64,7 +67,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  Reserve the next child display id: vida task next-display-id <parent-display-id> --json");
             println!("  Create one bounded child task: vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json");
             println!("  Reuse-or-create one tracked handoff task idempotently: vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels <label> --json");
-            println!("  Record real progress after a proven step: vida task update <task-id> --status <status> --notes \"...\" --json");
+            println!("  Record real progress after a proven step: vida task update <task-id> --status <status> --notes-file <path> --json");
+            println!("  Import one bounded backlog snapshot when explicitly needed: vida task import-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             println!("  Export the current runtime snapshot when needed: vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             return;
         }
@@ -76,7 +80,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  This is a read-only launcher-owned planning surface over the authoritative TaskFlow state store.");
             println!();
             println!("Canonical command:");
-            println!("  vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]");
+            println!("  vida task next [--scope <task-id>] [--state-dir <path>] [--json]");
             println!();
             println!("Returned semantics:");
             println!("  status, blocker_codes, next_actions, recommended_command, scope_task_id, ready_count, primary_ready_task, latest_run_graph, recovery, gate, dispatch");
@@ -430,8 +434,8 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         return TaskflowQueryAnswer {
             intent: "record-progress",
             why: "Progress should be recorded against the primary backlog store after a proven runtime or documentation step.",
-            command: "vida task update <task-id> --status in_progress --notes \"...\" --json",
-            failure_modes: "Illegal status transitions or missing task ids fail closed in the delegated runtime.",
+            command: "vida task update <task-id> --status in_progress --notes-file <path> --json",
+            failure_modes: "Illegal status transitions or missing task ids fail closed in the delegated runtime. When shell metacharacters or multiline notes are involved, prefer `--notes-file` over inline shell quoting.",
         };
     }
 

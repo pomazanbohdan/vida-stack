@@ -44,3 +44,4 @@ source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
 updated_at: 2026-04-05T06:19:10.127047794Z
 changelog_ref: README.changelog.jsonl
+- `docs/product/spec/clarify-enforce-immediate-continuation-shell-saf-design.md`

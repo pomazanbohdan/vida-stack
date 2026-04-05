@@ -93,6 +93,8 @@ Loop binding rule:
 9. “report now, continue later” is forbidden when the next lawful item is already known from TaskFlow, recovery state, delegated evidence, or the just-finished proof result.
 10. when the user gives an explicit ordered sequence, that sequence is the controlling execution contract; the orchestrator must not reorder it because some adjacent cleanup or broader technical program looks more complete.
 11. scope expansion is forbidden unless the current bounded step cannot be completed without it or the user explicitly authorizes the broader track.
+12. if closure-style wording is emitted by mistake during active continuation intent, the immediate recovery step is to return to commentary mode and bind the already-evidenced next lawful continuation item in the same cycle.
+13. when shell commands record backlog notes or similar free text, prefer file-backed arguments such as `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
 
 The orchestrator must not:
 

@@ -969,7 +969,10 @@ fn taskflow_proxy_help_supports_task_topic() {
     assert!(stdout.contains(
         "vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description"
     ));
-    assert!(stdout.contains("vida task update <task-id> --status in_progress --notes"));
+    assert!(stdout.contains("vida task ensure <task-id> <title> --parent-id <parent-id>"));
+    assert!(stdout
+        .contains("vida task update <task-id> --status in_progress --notes-file <path> --json"));
+    assert!(stdout.contains("vida task import-jsonl .vida/exports/tasks.snapshot.jsonl --json"));
     assert!(stdout.contains("vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json"));
     assert!(stdout.contains("Parent-child edges preserve epic/task structure"));
 }
@@ -987,7 +990,10 @@ fn taskflow_task_help_alias_routes_to_canonical_task_help() {
     assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>] [--json]"));
     assert!(stdout.contains("vida task ready --scope <task-id> --json"));
     assert!(stdout.contains("vida task next-display-id <parent-display-id> --json"));
-    assert!(stdout.contains("vida task update <task-id> --status in_progress --notes"));
+    assert!(stdout.contains("vida task ensure <task-id> <title> --parent-id <parent-id>"));
+    assert!(stdout.contains("vida task import-jsonl .vida/exports/tasks.snapshot.jsonl --json"));
+    assert!(stdout
+        .contains("vida task update <task-id> --status in_progress --notes-file <path> --json"));
 }
 
 #[test]
@@ -1000,7 +1006,7 @@ fn root_task_help_supports_next_topic() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: next"));
-    assert!(stdout.contains("vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]"));
+    assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>] [--json]"));
 }
 
 #[test]
@@ -1159,7 +1165,7 @@ fn taskflow_proxy_help_supports_next_scope_contract() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("vida taskflow next [--scope <task-id>] [--state-dir <path>] [--json]"));
+    assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>] [--json]"));
     assert!(stdout.contains("scope_task_id"));
     assert!(stdout.contains("Unknown scoped task ids fail closed"));
 }
@@ -4676,7 +4682,19 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
         .as_str()
         .expect("prompt should be present")
         .contains(
+            "If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting."
+        ));
+    assert!(downstream_packet_json["prompt"]
+        .as_str()
+        .expect("prompt should be present")
+        .contains(
             "After any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item instead of pausing at a summary."
+        ));
+    assert!(downstream_packet_json["prompt"]
+        .as_str()
+        .expect("prompt should be present")
+        .contains(
+            "When recording task notes from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text."
         ));
     assert!(downstream_packet_json["prompt"]
         .as_str()
@@ -8609,6 +8627,30 @@ fn taskflow_query_recommends_create_surface_for_new_task_questions() {
     assert!(stdout.contains(
         "vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json"
     ));
+}
+
+#[test]
+fn taskflow_query_recommends_shell_safe_progress_surface_for_update_questions() {
+    let output = vida()
+        .args([
+            "taskflow",
+            "query",
+            "how",
+            "do",
+            "I",
+            "update",
+            "task",
+            "progress?",
+        ])
+        .output()
+        .expect("taskflow update query should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("record-progress"));
+    assert!(stdout
+        .contains("vida task update <task-id> --status in_progress --notes-file <path> --json"));
+    assert!(stdout.contains("prefer `--notes-file` over inline shell quoting"));
 }
 
 #[test]
