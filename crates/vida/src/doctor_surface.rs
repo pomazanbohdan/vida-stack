@@ -367,9 +367,8 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER.to_string(),
                     );
                 }
-                operator_blocker_codes = canonical_blocker_code_list(
-                    operator_blocker_codes.iter().map(String::as_str),
-                );
+                operator_blocker_codes =
+                    canonical_blocker_code_list(operator_blocker_codes.iter().map(String::as_str));
                 let operator_status = if operator_blocker_codes.is_empty() {
                     "pass"
                 } else {

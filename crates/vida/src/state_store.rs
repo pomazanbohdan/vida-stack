@@ -1871,6 +1871,8 @@ impl StateStore {
             resume_target: resumability.resume_target,
             recovery_ready: resumability.recovery_ready,
         };
+        let receipt = self.run_graph_dispatch_receipt_stored(run_id).await?;
+        let status = reconcile_run_graph_status_with_dispatch_receipt(status, receipt.as_ref())?;
         status.validate_memory_governance()?;
         Ok(status)
     }
@@ -4290,6 +4292,40 @@ impl RunGraphStatus {
     pub fn delegation_gate(&self) -> RunGraphDelegationGateSummary {
         RunGraphDelegationGateSummary::from_status(self)
     }
+}
+
+fn reconcile_run_graph_status_with_dispatch_receipt(
+    mut status: RunGraphStatus,
+    receipt: Option<&RunGraphDispatchReceiptStored>,
+) -> Result<RunGraphStatus, StateStoreError> {
+    let Some(receipt) = receipt else {
+        return Ok(status);
+    };
+    let receipt = StateStore::validate_run_graph_dispatch_receipt_contract(receipt.clone())?;
+    let closure_candidate = receipt.downstream_dispatch_target.as_deref() == Some("closure")
+        && receipt.downstream_dispatch_ready
+        && receipt.downstream_dispatch_blockers.is_empty()
+        && matches!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("packet_ready") | Some("executed")
+        );
+    if !closure_candidate {
+        return Ok(status);
+    }
+
+    if let Some(last_target) = receipt.downstream_dispatch_last_target.as_deref() {
+        if !last_target.trim().is_empty() {
+            status.active_node = last_target.to_string();
+        }
+    }
+    status.next_node = None;
+    status.status = "completed".to_string();
+    status.lifecycle_stage = "implementation_complete".to_string();
+    status.policy_gate = "not_required".to_string();
+    status.handoff_state = "none".to_string();
+    status.resume_target = "none".to_string();
+    status.recovery_ready = false;
+    Ok(status)
 }
 
 fn requires_memory_governance_enforcement(policy_gate: &str) -> bool {
@@ -11960,6 +11996,127 @@ hierarchy: framework,contracts
 
         let tasks = store.all_tasks().await.expect("tasks should still load");
         assert!(tasks.is_empty(), "invalid import must not mutate store");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_status_reconciles_closure_ready_downstream_receipt_into_closure_candidate()
+    {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-status-closure-candidate-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-closure-ready".to_string();
+        status.task_id = "task-closure-ready".to_string();
+        status.active_node = "dev-pack".to_string();
+        status.next_node = None;
+        status.status = "ready".to_string();
+        status.lane_id = "dev_pack_direct".to_string();
+        status.lifecycle_stage = "dev_pack_active".to_string();
+        status.policy_gate = "single_task_scope_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-closure-ready".to_string(),
+            dispatch_target: "work-pool-pack".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida task ensure".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: Some("/tmp/result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("closure".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: Some(
+                "no additional downstream lane is required by the current execution plan after this handoff"
+                    .to_string(),
+            ),
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: Some("/tmp/downstream-result.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 1,
+            downstream_dispatch_active_target: Some("verification".to_string()),
+            downstream_dispatch_last_target: Some("verification".to_string()),
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("taskflow_state_store".to_string()),
+            recorded_at: "2026-03-18T00:00:00Z".to_string(),
+        };
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist closure-ready dispatch receipt");
+
+        let reconciled = store
+            .run_graph_status("run-closure-ready")
+            .await
+            .expect("reconciled run graph status should load");
+        assert_eq!(reconciled.active_node, "verification");
+        assert_eq!(reconciled.status, "completed");
+        assert_eq!(reconciled.lifecycle_stage, "implementation_complete");
+        assert_eq!(reconciled.policy_gate, "not_required");
+        assert_eq!(reconciled.handoff_state, "none");
+        assert_eq!(reconciled.resume_target, "none");
+        assert!(!reconciled.recovery_ready);
+
+        let latest_status = store
+            .latest_run_graph_status()
+            .await
+            .expect("latest reconciled run graph status should load")
+            .expect("latest run graph status should exist");
+        assert_eq!(latest_status.active_node, "verification");
+        assert_eq!(latest_status.status, "completed");
+        assert_eq!(latest_status.lifecycle_stage, "implementation_complete");
+        assert_eq!(latest_status.policy_gate, "not_required");
+        assert_eq!(latest_status.handoff_state, "none");
+        assert_eq!(latest_status.resume_target, "none");
+        assert!(!latest_status.recovery_ready);
+
+        let recovery = store
+            .run_graph_recovery_summary("run-closure-ready")
+            .await
+            .expect("reconciled recovery summary should load");
+        assert_eq!(recovery.active_node, "verification");
+        assert_eq!(recovery.resume_status, "completed");
+        assert_eq!(recovery.lifecycle_stage, "implementation_complete");
+        assert_eq!(recovery.delegation_gate.blocker_code, None);
+        assert_eq!(recovery.delegation_gate.reporting_pause_gate, "closure_candidate");
+
+        let latest_recovery = store
+            .latest_run_graph_recovery_summary()
+            .await
+            .expect("latest reconciled recovery summary should load")
+            .expect("latest run graph recovery summary should exist");
+        assert_eq!(latest_recovery.active_node, "verification");
+        assert_eq!(latest_recovery.resume_status, "completed");
+        assert_eq!(latest_recovery.lifecycle_stage, "implementation_complete");
+        assert_eq!(latest_recovery.delegation_gate.blocker_code, None);
+        assert_eq!(
+            latest_recovery.delegation_gate.reporting_pause_gate,
+            "closure_candidate"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
