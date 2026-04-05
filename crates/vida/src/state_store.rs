@@ -2000,14 +2000,27 @@ impl StateStore {
     pub async fn latest_run_graph_dispatch_receipt(
         &self,
     ) -> Result<Option<RunGraphDispatchReceipt>, StateStoreError> {
-        let mut query = self
-            .db
-            .query(
-                "SELECT * FROM run_graph_dispatch_receipt ORDER BY recorded_at DESC, run_id DESC LIMIT 1;",
-            )
-            .await?;
-        let rows: Vec<RunGraphDispatchReceiptStored> = query.take(0)?;
-        Ok(rows.into_iter().next().map(Into::into))
+        let Some(status) = self.latest_run_graph_status().await? else {
+            return Ok(None);
+        };
+        let latest_checkpoint_run_id = self.latest_run_graph_checkpoint_run_id().await?;
+        if latest_checkpoint_run_id.as_deref() != Some(status.run_id.as_str()) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt is inconsistent for `{}`: latest checkpoint evidence must share the same run_id (latest_checkpoint_run_id={})",
+                    status.run_id,
+                    latest_checkpoint_run_id.as_deref().unwrap_or("none")
+                ),
+            });
+        }
+        let Some(receipt) = self
+            .run_graph_dispatch_receipt_stored(&status.run_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
+        Ok(Some(receipt.into()))
     }
 
     pub async fn run_graph_dispatch_receipt(
@@ -7700,6 +7713,14 @@ hierarchy: framework,contracts
         assert_eq!(summary.run_id, "run-bbb");
         assert_eq!(summary.lane_status, "lane_exception_takeover");
 
+        let receipt = store
+            .latest_run_graph_dispatch_receipt()
+            .await
+            .expect("load latest dispatch receipt")
+            .expect("latest dispatch receipt should exist");
+        assert_eq!(receipt.run_id, "run-bbb");
+        assert_eq!(receipt.lane_status, "lane_exception_takeover");
+
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -12001,8 +12022,7 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn run_graph_status_reconciles_closure_ready_downstream_receipt_into_closure_candidate()
-    {
+    async fn run_graph_status_reconciles_closure_ready_downstream_receipt_into_closure_candidate() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -12102,7 +12122,10 @@ hierarchy: framework,contracts
         assert_eq!(recovery.resume_status, "completed");
         assert_eq!(recovery.lifecycle_stage, "implementation_complete");
         assert_eq!(recovery.delegation_gate.blocker_code, None);
-        assert_eq!(recovery.delegation_gate.reporting_pause_gate, "closure_candidate");
+        assert_eq!(
+            recovery.delegation_gate.reporting_pause_gate,
+            "closure_candidate"
+        );
 
         let latest_recovery = store
             .latest_run_graph_recovery_summary()
