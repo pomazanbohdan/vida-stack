@@ -264,7 +264,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             "next_step": boot_compatibility.next_step,
         }),
         migration_preflight: serde_json::json!({
-            "compatibility_classification": super::release1_contracts::canonical_compatibility_class_str(
+            "compatibility_class": super::release1_contracts::canonical_compatibility_class_str(
                 &migration_preflight.compatibility_classification
             )
             .unwrap_or(super::release1_contracts::CompatibilityClass::ReaderUpgradeRequired.as_str()),
@@ -1241,7 +1241,7 @@ pub(crate) fn blocking_runtime_bundle(error: &str) -> TaskflowConsumeBundlePaylo
             "next_step": "restore_runtime_bundle",
         }),
         migration_preflight: serde_json::json!({
-            "compatibility_classification": super::release1_contracts::CompatibilityClass::ReaderUpgradeRequired.as_str(),
+            "compatibility_class": super::release1_contracts::CompatibilityClass::ReaderUpgradeRequired.as_str(),
             "migration_state": "blocked",
             "blockers": [error],
             "source_version_tuple": [],

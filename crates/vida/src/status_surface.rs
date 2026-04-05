@@ -3,7 +3,8 @@ use std::process::ExitCode;
 
 use crate::{
     release1_contracts::{
-        blocker_code_str, canonical_compatibility_class_str, BlockerCode, CompatibilityClass,
+        blocker_code_str, canonical_blocker_code_list, canonical_compatibility_class_str,
+        BlockerCode, CompatibilityClass,
     },
     state_store,
     state_store::StateStore,
@@ -577,6 +578,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         }
                         _ => {}
                     }
+                    operator_blocker_codes = canonical_blocker_code_list(
+                        operator_blocker_codes.iter().map(String::as_str),
+                    );
                     let operator_status = if operator_blocker_codes.is_empty() {
                         "pass"
                     } else {
@@ -751,13 +755,19 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     }
                     let summary_json = if summary_only {
                         serde_json::json!({
-                                "surface": "vida status",
-                                "view": "summary",
-                                "status": operator_contracts["status"].clone(),
-                                "blocker_codes": operator_contracts["blocker_codes"].clone(),
-                                "next_actions": operator_contracts["next_actions"].clone(),
-                                "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                            "surface": "vida status",
+                            "view": "summary",
+                            "status": operator_contracts["status"].clone(),
+                            "trace_id": operator_contracts["trace_id"].clone(),
+                            "workflow_class": operator_contracts["workflow_class"].clone(),
+                            "risk_tier": operator_contracts["risk_tier"].clone(),
+                            "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                            "next_actions": operator_contracts["next_actions"].clone(),
+                            "artifact_refs": operator_contracts["artifact_refs"].clone(),
                                 "shared_fields": {
+                                    "trace_id": operator_contracts["trace_id"].clone(),
+                                    "workflow_class": operator_contracts["workflow_class"].clone(),
+                                    "risk_tier": operator_contracts["risk_tier"].clone(),
                                     "status": operator_contracts["status"].clone(),
                                     "blocker_codes": operator_contracts["blocker_codes"].clone(),
                                     "next_actions": operator_contracts["next_actions"].clone(),
@@ -792,10 +802,16 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         serde_json::json!({
                             "surface": "vida status",
                             "status": operator_contracts["status"].clone(),
+                            "trace_id": operator_contracts["trace_id"].clone(),
+                            "workflow_class": operator_contracts["workflow_class"].clone(),
+                            "risk_tier": operator_contracts["risk_tier"].clone(),
                             "blocker_codes": operator_contracts["blocker_codes"].clone(),
                             "next_actions": operator_contracts["next_actions"].clone(),
                             "artifact_refs": operator_contracts["artifact_refs"].clone(),
                             "shared_fields": {
+                                "trace_id": operator_contracts["trace_id"].clone(),
+                                "workflow_class": operator_contracts["workflow_class"].clone(),
+                                "risk_tier": operator_contracts["risk_tier"].clone(),
                                 "status": operator_contracts["status"].clone(),
                                 "blocker_codes": operator_contracts["blocker_codes"].clone(),
                                 "next_actions": operator_contracts["next_actions"].clone(),
@@ -826,7 +842,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 "next_step": compatibility.next_step,
                             })),
                             "migration_state": migration_state.as_ref().map(|migration| serde_json::json!({
-                                "compatibility_classification": canonical_compatibility_class_str(
+                                "compatibility_class": canonical_compatibility_class_str(
                                     &migration.compatibility_classification
                                 ).unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str()),
                                 "migration_state": migration.migration_state,

@@ -25,6 +25,10 @@ fn canonical_release1_blocker_candidates(value: &Value) -> Option<Vec<String>> {
         }
         entries.push(trimmed.to_string());
     }
+    let canonical = crate::release1_contracts::canonical_blocker_code_list(&entries);
+    if canonical.len() != entries.len() || canonical != entries {
+        return None;
+    }
     Some(entries)
 }
 
@@ -238,12 +242,19 @@ mod tests {
 
     #[test]
     fn canonical_blocker_codes_require_lower_snake_case() {
-        let value = json!(["valid_code"]);
+        let value = json!(["migration_required"]);
         assert_eq!(
             canonical_release1_blocker_code_entries(&value),
-            Some(vec!["valid_code".into()])
+            Some(vec!["migration_required".into()])
         );
         let value = json!(["INVALID"]);
+        assert!(canonical_release1_blocker_code_entries(&value).is_none());
+        assert!(!is_canonical_release1_blocker_code_entries(&value));
+    }
+
+    #[test]
+    fn canonical_blocker_codes_must_be_registry_backed() {
+        let value = json!(["valid_code"]);
         assert!(canonical_release1_blocker_code_entries(&value).is_none());
         assert!(!is_canonical_release1_blocker_code_entries(&value));
     }

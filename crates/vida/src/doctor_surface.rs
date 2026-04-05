@@ -5,8 +5,8 @@ use crate::operator_contracts::{
     shared_operator_output_contract_parity_error,
 };
 use crate::release1_contracts::{
-    blocker_code_str, canonical_compatibility_class_str, classify_compatibility_boundary,
-    BlockerCode, CompatibilityBoundary, CompatibilityClass,
+    blocker_code_str, canonical_blocker_code_list, canonical_compatibility_class_str,
+    classify_compatibility_boundary, BlockerCode, CompatibilityBoundary, CompatibilityClass,
 };
 
 fn migration_requires_action(migration_state: &str) -> bool {
@@ -14,7 +14,8 @@ fn migration_requires_action(migration_state: &str) -> bool {
 }
 
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER: &str =
-    "unsupported_architecture_reserved_workflow_boundary";
+    crate::release1_contracts::BlockerCode::UnsupportedArchitectureReservedWorkflowBoundary
+        .as_str();
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION: &str =
     "Clear unsupported/architecture-reserved workflow boundary state in run-graph policy/context before operator handoff.";
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER: &str =
@@ -381,7 +382,10 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         )
                 }) {
                     operator_blocker_codes.push(
-                        UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER.to_string(),
+                        blocker_code_str(
+                            BlockerCode::UnsupportedArchitectureReservedWorkflowBoundary,
+                        )
+                        .to_string(),
                     );
                 }
                 if latest_run_graph_gate.is_some() && latest_run_graph_dispatch_receipt.is_none() {
@@ -389,6 +393,9 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER.to_string(),
                     );
                 }
+                operator_blocker_codes = canonical_blocker_code_list(
+                    operator_blocker_codes.iter().map(String::as_str),
+                );
                 let operator_status = if operator_blocker_codes.is_empty() {
                     "pass"
                 } else {
@@ -551,12 +558,18 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         "surface": "vida doctor",
                         "view": "summary",
                         "status": operator_contracts["status"].clone(),
+                        "trace_id": operator_contracts["trace_id"].clone(),
+                        "workflow_class": operator_contracts["workflow_class"].clone(),
+                        "risk_tier": operator_contracts["risk_tier"].clone(),
                         "blocker_codes": operator_contracts["blocker_codes"].clone(),
                         "next_actions": operator_contracts["next_actions"].clone(),
                         "artifact_refs": operator_contracts["artifact_refs"].clone(),
                         "shared_fields": {
                             "contract_id": "release-1-shared-fields",
                             "schema_version": "release-1-v1",
+                            "trace_id": operator_contracts["trace_id"].clone(),
+                            "workflow_class": operator_contracts["workflow_class"].clone(),
+                            "risk_tier": operator_contracts["risk_tier"].clone(),
                             "status": operator_contracts["status"].clone(),
                             "blocker_codes": operator_contracts["blocker_codes"].clone(),
                             "next_actions": operator_contracts["next_actions"].clone(),
@@ -586,12 +599,18 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     serde_json::json!({
                         "surface": "vida doctor",
                         "status": operator_contracts["status"].clone(),
+                        "trace_id": operator_contracts["trace_id"].clone(),
+                        "workflow_class": operator_contracts["workflow_class"].clone(),
+                        "risk_tier": operator_contracts["risk_tier"].clone(),
                         "blocker_codes": operator_contracts["blocker_codes"].clone(),
                         "next_actions": operator_contracts["next_actions"].clone(),
                         "artifact_refs": operator_contracts["artifact_refs"].clone(),
                         "shared_fields": {
                             "contract_id": "release-1-shared-fields",
                             "schema_version": "release-1-v1",
+                            "trace_id": operator_contracts["trace_id"].clone(),
+                            "workflow_class": operator_contracts["workflow_class"].clone(),
+                            "risk_tier": operator_contracts["risk_tier"].clone(),
                             "status": operator_contracts["status"].clone(),
                             "blocker_codes": operator_contracts["blocker_codes"].clone(),
                             "next_actions": operator_contracts["next_actions"].clone(),
@@ -636,7 +655,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                             "next_step": boot_compatibility.next_step,
                         },
                         "migration_preflight": {
-                            "compatibility_classification": canonical_compatibility_class_str(
+                            "compatibility_class": canonical_compatibility_class_str(
                                 &migration_preflight.compatibility_classification
                             ).unwrap_or(CompatibilityClass::ReaderUpgradeRequired.as_str()),
                             "migration_state": migration_preflight.migration_state,

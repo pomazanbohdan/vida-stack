@@ -40,7 +40,8 @@ Envelope rule:
 2. `blocker_codes` must always be present as an array, even when empty,
 3. `next_actions` must always be present as an array, even when empty,
 4. `artifact_refs` must always be present as a machine-readable collection, even when empty,
-5. workflow-bound fields may be `null` when not applicable, but they must not silently disappear from one surface while remaining required on another.
+5. `trace_id` may be `null` when no bounded workflow trace exists for the current surface instance,
+6. workflow-bound fields may be `null` when not applicable, but they must not silently disappear from one surface while remaining required on another.
 
 ## 3. Root Surface Rule
 

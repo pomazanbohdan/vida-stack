@@ -1749,6 +1749,13 @@ fn taskflow_consume_bundle_renders_runtime_bundle_json() {
         parsed["bundle"]["migration_preflight"]["migration_state"],
         "no_migration_required"
     );
+    assert_eq!(
+        parsed["bundle"]["migration_preflight"]["compatibility_class"],
+        "backward_compatible"
+    );
+    assert!(
+        parsed["bundle"]["migration_preflight"]["compatibility_classification"].is_null()
+    );
     let vida_root = parsed["bundle"]["vida_root"]
         .as_str()
         .expect("consume bundle should render vida_root");
@@ -2326,6 +2333,10 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
     assert_eq!(
         parsed["artifact_refs"],
         parsed["operator_contracts"]["artifact_refs"]
+    );
+    assert_eq!(
+        parsed["artifact_refs"]["retrieval_trust_signal"],
+        parsed["payload"]["runtime_bundle"]["cache_delivery_contract"]["retrieval_trust_evidence"]
     );
     assert_eq!(
         parsed["shared_fields"]["status"],
@@ -11411,6 +11422,9 @@ fn status_surface_supports_json_summary() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("status json should parse");
     assert_eq!(parsed["surface"], "vida status");
+    assert!(parsed["trace_id"].is_null());
+    assert!(parsed["workflow_class"].is_null());
+    assert!(parsed["risk_tier"].is_null());
     assert!(
         parsed["host_agents"].is_object(),
         "host_agents must always be an object in status json"
@@ -11494,6 +11508,11 @@ fn status_surface_supports_json_summary() {
         parsed["migration_state"]["migration_state"],
         "no_migration_required"
     );
+    assert_eq!(
+        parsed["migration_state"]["compatibility_class"],
+        "backward_compatible"
+    );
+    assert!(parsed["migration_state"]["compatibility_classification"].is_null());
     assert_eq!(parsed["migration_receipts"]["compatibility_receipts"], 1);
     assert!(parsed["latest_task_reconciliation"].is_null());
     assert_eq!(parsed["task_reconciliation_rollup"]["total_receipts"], 0);
@@ -11541,6 +11560,9 @@ fn status_surface_supports_compact_json_summary_view() {
         serde_json::from_str(&stdout).expect("status summary json should parse");
     assert_eq!(parsed["surface"], "vida status");
     assert_eq!(parsed["view"], "summary");
+    assert!(parsed["trace_id"].is_null());
+    assert!(parsed["workflow_class"].is_null());
+    assert!(parsed["risk_tier"].is_null());
     assert!(parsed.get("storage_metadata").is_none());
     assert!(parsed.get("latest_effective_bundle_receipt").is_none());
     assert_eq!(
@@ -11591,6 +11613,9 @@ fn doctor_surface_supports_json_summary() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("doctor json should parse");
     assert_eq!(parsed["surface"], "vida doctor");
+    assert!(parsed["trace_id"].is_null());
+    assert!(parsed["workflow_class"].is_null());
+    assert!(parsed["risk_tier"].is_null());
     assert_eq!(
         parsed["operator_contracts"]["contract_id"],
         "release-1-operator-contracts"
@@ -11627,6 +11652,11 @@ fn doctor_surface_supports_json_summary() {
         parsed["migration_preflight"]["migration_state"],
         "no_migration_required"
     );
+    assert_eq!(
+        parsed["migration_preflight"]["compatibility_class"],
+        "backward_compatible"
+    );
+    assert!(parsed["migration_preflight"]["compatibility_classification"].is_null());
     assert_eq!(parsed["migration_receipts"]["compatibility_receipts"], 1);
     assert!(parsed["latest_task_reconciliation"].is_null());
     assert_eq!(parsed["task_reconciliation_rollup"]["total_receipts"], 0);
@@ -11684,6 +11714,9 @@ fn doctor_surface_supports_compact_json_summary_view() {
         serde_json::from_str(&stdout).expect("doctor summary json should parse");
     assert_eq!(parsed["surface"], "vida doctor");
     assert_eq!(parsed["view"], "summary");
+    assert!(parsed["trace_id"].is_null());
+    assert!(parsed["workflow_class"].is_null());
+    assert!(parsed["risk_tier"].is_null());
     assert_eq!(parsed["runtime_consumption"]["latest_kind"], "final");
     assert_eq!(
         parsed["runtime_consumption"]["latest_snapshot_path"],

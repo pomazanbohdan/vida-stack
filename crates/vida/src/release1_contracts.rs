@@ -446,6 +446,7 @@ pub(crate) enum BlockerCode {
     MissingRetrievalTrustOperatorEvidence,
     IncompleteReleaseAdmissionOperatorEvidence,
     RecoveryReadinessBlocked,
+    UnsupportedArchitectureReservedWorkflowBoundary,
     InvalidProtocolBindingRegistryKeys,
     InvalidCacheKeyInputsKeys,
     InvalidInvalidationTupleKeys,
@@ -586,6 +587,9 @@ impl BlockerCode {
                 "incomplete_release_admission_operator_evidence"
             }
             Self::RecoveryReadinessBlocked => "recovery_readiness_blocked",
+            Self::UnsupportedArchitectureReservedWorkflowBoundary => {
+                "unsupported_architecture_reserved_workflow_boundary"
+            }
             Self::InvalidProtocolBindingRegistryKeys => "invalid_protocol_binding_registry_keys",
             Self::InvalidCacheKeyInputsKeys => "invalid_cache_key_inputs_keys",
             Self::InvalidInvalidationTupleKeys => "invalid_invalidation_tuple_keys",
@@ -744,6 +748,9 @@ impl BlockerCode {
                 Some(Self::IncompleteReleaseAdmissionOperatorEvidence)
             }
             "recovery_readiness_blocked" => Some(Self::RecoveryReadinessBlocked),
+            "unsupported_architecture_reserved_workflow_boundary" => {
+                Some(Self::UnsupportedArchitectureReservedWorkflowBoundary)
+            }
             "invalid_protocol_binding_registry_keys" => {
                 Some(Self::InvalidProtocolBindingRegistryKeys)
             }

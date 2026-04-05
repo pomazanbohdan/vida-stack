@@ -195,6 +195,9 @@ Companion rule:
 23. [release-1-carrier-neutral-runtime-and-host-materialization-design.md](release-1-carrier-neutral-runtime-and-host-materialization-design.md)
    Config families: bounded Release-1 carrier-neutral runtime contracts, host-system materialization abstraction, runtime-assignment neutralization, and proof migration away from codex-era canonical names
    Registered path: `docs/product/spec/release-1-carrier-neutral-runtime-and-host-materialization-design.md`
+24. [release-1-shared-operator-envelope-closure-design.md](release-1-shared-operator-envelope-closure-design.md)
+   Config families: bounded Release-1 closure for shared operator-envelope fields, canonical compatibility-field emission, registry-backed blocker validation, and installed-launcher alignment
+   Registered path: `docs/product/spec/release-1-shared-operator-envelope-closure-design.md`
 
 ### Support
 
@@ -245,10 +248,10 @@ Activation rule:
 artifact_path: product/spec/current-spec-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-04-03'
+artifact_revision: 2026-04-05
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-04-03T12:58:30+03:00
+updated_at: 2026-04-05T05:20:01.303188478Z
 changelog_ref: current-spec-map.changelog.jsonl

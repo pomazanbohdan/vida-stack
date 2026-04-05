@@ -5835,6 +5835,9 @@ fn emit_taskflow_consume_final_json(
             .to_string(),
         );
     }
+    consume_final_blocker_codes = crate::release1_contracts::canonical_blocker_code_list(
+        consume_final_blocker_codes.iter().map(String::as_str),
+    );
     let consume_final_status = if consume_final_blocker_codes.is_empty() {
         "pass"
     } else {
@@ -5853,10 +5856,14 @@ fn emit_taskflow_consume_final_json(
             "runtime_consumption_latest_snapshot_path": snapshot_path,
             "latest_run_graph_dispatch_receipt_id": payload_json["dispatch_receipt"]["run_id"].as_str(),
             "latest_task_reconciliation_receipt_id": payload_json["task_reconciliation_receipt"]["receipt_id"].as_str(),
+            "retrieval_trust_signal": payload_json["runtime_bundle"]["cache_delivery_contract"]["retrieval_trust_evidence"].clone(),
             "consume_final_surface": "vida taskflow consume final",
         }),
     );
     let shared_fields = serde_json::json!({
+        "trace_id": operator_contracts["trace_id"].clone(),
+        "workflow_class": operator_contracts["workflow_class"].clone(),
+        "risk_tier": operator_contracts["risk_tier"].clone(),
         "status": operator_contracts["status"].clone(),
         "blocker_codes": operator_contracts["blocker_codes"].clone(),
         "next_actions": operator_contracts["next_actions"].clone(),
@@ -5864,6 +5871,9 @@ fn emit_taskflow_consume_final_json(
     });
     let snapshot_with_operator_contracts = serde_json::json!({
         "surface": "vida taskflow consume final",
+        "trace_id": operator_contracts["trace_id"].clone(),
+        "workflow_class": operator_contracts["workflow_class"].clone(),
+        "risk_tier": operator_contracts["risk_tier"].clone(),
         "status": consume_final_status,
         "blocker_codes": consume_final_blocker_codes,
         "next_actions": consume_final_next_actions,
@@ -5882,6 +5892,9 @@ fn emit_taskflow_consume_final_json(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
             "surface": "vida taskflow consume final",
+            "trace_id": operator_contracts["trace_id"].clone(),
+            "workflow_class": operator_contracts["workflow_class"].clone(),
+            "risk_tier": operator_contracts["risk_tier"].clone(),
             "status": consume_final_status,
             "blocker_codes": consume_final_blocker_codes,
             "next_actions": consume_final_next_actions,
@@ -5909,6 +5922,9 @@ pub(crate) fn build_release1_operator_contracts_envelope(
         "contract_id": "release-1-operator-contracts",
         "schema_version": "release-1-v1",
         "status": canonical_status,
+        "trace_id": serde_json::Value::Null,
+        "workflow_class": serde_json::Value::Null,
+        "risk_tier": serde_json::Value::Null,
         "blocker_codes": blocker_codes,
         "next_actions": next_actions,
         "artifact_refs": artifact_refs,

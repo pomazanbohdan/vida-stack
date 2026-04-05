@@ -1,6 +1,6 @@
 # Release 1 Current State
 
-Status: active product execution report (runtime checkpoint refreshed `2026-04-03`)
+Status: active product execution report (runtime checkpoint refreshed `2026-04-05`)
 
 Purpose: record the bounded implementation-reality checkpoint for `Release 1` across `TaskFlow`, `DocFlow`, and the current `vida` launcher shell so execution planning can be based on actual code and proven runtime surfaces rather than architectural intent alone.
 
@@ -57,12 +57,12 @@ Interpretation:
 1. Release 1 is no longer accurately described as runtime-refactor-only work.
 2. Release 1 must now be judged against production trust/control readiness as well as architectural cleanup.
 
-## 1.3 Local Audit Delta Checkpoint (`2026-04-03`)
+## 1.3 Local Audit Delta Checkpoint (`2026-04-05`)
 
 A fresh code/spec pass for the current workspace sharpens the checkpoint in these bounded ways:
 
 1. root CLI still exposes `status`, `doctor`, `project-activator`, `orchestrator-init`, and `agent-init`, but Release-1 operator surfaces `consume`, `lane`, `approval`, and `recovery` are still routed under `vida taskflow ...` rather than promoted as stable top-level root surfaces.
-2. `crates/vida/src/release1_contracts.rs` currently canonicalizes `lane_status`, `compatibility_class`, and a narrow blocker subset only; the canonically required `workflow_class`, `risk_tier`, `approval_status`, and `gate_level` contract layer is still absent from shared Rust code.
+2. `crates/vida/src/release1_contracts.rs` now canonicalizes `workflow_class`, `risk_tier`, `lane_status`, `approval_status`, `gate_level`, `compatibility_class`, and registry-backed blocker values, but live workflow classification remains only partially wired into operator surfaces and currently lands as explicit `null` placeholders where no bounded classifier exists yet.
 3. `crates/taskflow-state/src/lib.rs` and `crates/taskflow-contracts/src/lib.rs` remain intentionally thin while most persisted runtime truth, checkpoint, recovery, and projection logic still lives in `crates/vida/src/state_store.rs`; this confirms the shell-carve-out finding rather than weakening it.
 4. activation materialization and filesystem projection are real in `project_activator_surface.rs` and `init_surfaces.rs`, but they still bridge through `vida.config.yaml` and `.vida/project/agent-extensions/**` rather than closing on one clearly family-owned activation/configurator service.
 5. no SierraDB/event-spine adapter or `domain_event` / `projection_checkpoint_record` contract exists in the workspace today; if event-state is introduced it must remain adapter-backed, feature-gated, and subordinate to the current `SurrealDB`-first activation/projection posture.
@@ -71,7 +71,7 @@ A fresh code/spec pass for the current workspace sharpens the checkpoint in thes
 8. scaffold/template/init/activator surfaces are closer to the multi-system carrier law than before because the template now materializes `host_environment.systems` and execution class, but bundle identity, codex adapter branches, and generated docs still keep codex-heavy assumptions.
 9. activation truth is DB-persisted and read-back verified, but the stored truth is still a launcher-captured snapshot of `vida.config.yaml`, compiled bundle, and pack-router keywords rather than one DB-native configurator authority.
 10. the `TaskFlow -> DocFlow` seam is still assembled in the launcher by in-process `docflow_cli` calls and shell-derived verdict shaping; the current “receipt-backed seam” check proves protocol-binding receipt presence only.
-11. recovery/checkpoint surfaces are meaningful resumability projections, but replay/fork lineage, projection-checkpoint artifacts, and append-only transition history are not implemented; boot, bundle, and recovery-oriented proofs still encode codex-era bundle names, backend literals, and exact legacy surfaces even though status parity now has a bounded neutral path.
+11. recovery/checkpoint surfaces are meaningful resumability projections, but replay/fork lineage, projection-checkpoint artifacts, and append-only transition history are not implemented; boot, bundle, and recovery-oriented proofs still encode some legacy assumptions even though status/doctor/bundle operator envelopes now emit canonical `compatibility_class` plus shared-envelope placeholders for `trace_id`, `workflow_class`, and `risk_tier`.
 
 ## 2. Workspace Reality Snapshot
 

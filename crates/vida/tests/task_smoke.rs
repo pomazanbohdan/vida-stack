@@ -2253,6 +2253,9 @@ fn cross_surface_protocol_binding_blocker_parity() {
     );
     let consume_json: serde_json::Value =
         serde_json::from_slice(&consume_output.stdout).expect("consume final json should parse");
+    assert!(consume_json["trace_id"].is_null());
+    assert!(consume_json["workflow_class"].is_null());
+    assert!(consume_json["risk_tier"].is_null());
     let consume_blockers = require_string_array(
         &consume_json["payload"]["closure_admission"]["blockers"],
         "consume closure blockers",
