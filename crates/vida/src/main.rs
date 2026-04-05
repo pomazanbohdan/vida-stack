@@ -4098,6 +4098,292 @@ fn agent_init_command_for_packet_path(packet_path: &str) -> String {
     )
 }
 
+fn runtime_host_execution_contract_for_root(project_root: &Path) -> serde_json::Value {
+    let project_activation_view =
+        project_activator_surface::build_project_activator_view(project_root);
+    let host_environment = &project_activation_view["host_environment"];
+    serde_json::json!({
+        "selected_cli_system": host_environment["selected_cli_system"],
+        "selected_cli_execution_class": host_environment["selected_cli_execution_class"],
+        "runtime_template_root": host_environment["runtime_template_root"],
+        "template_materialized": host_environment["template_materialized"],
+    })
+}
+
+fn load_project_overlay_yaml_for_root(project_root: &Path) -> Result<serde_yaml::Value, String> {
+    let path = project_root.join("vida.config.yaml");
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    serde_yaml::from_str(&raw).map_err(|error| format!("failed to parse {}: {error}", path.display()))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeAgentLaneDispatch {
+    surface: String,
+    activation_command: String,
+    backend_dispatch: serde_json::Value,
+}
+
+fn selected_host_cli_system_for_runtime_dispatch(
+    overlay: &serde_yaml::Value,
+) -> (String, Option<serde_yaml::Value>) {
+    let registry =
+        project_activator_surface::host_cli_system_registry_with_fallback(Some(overlay));
+    let candidate = yaml_lookup(overlay, &["host_environment", "cli_system"])
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "__HOST_CLI_SYSTEM__")
+        .and_then(project_activator_surface::normalize_host_cli_system);
+    let selected = candidate.unwrap_or_else(|| {
+        let mut supported = registry
+            .iter()
+            .filter(|(_, entry)| yaml_bool(yaml_lookup(entry, &["enabled"]), true))
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        supported.sort();
+        supported
+            .into_iter()
+            .next()
+            .or_else(|| {
+                let mut fallback = registry.keys().cloned().collect::<Vec<_>>();
+                fallback.sort();
+                fallback.into_iter().next()
+            })
+            .unwrap_or_default()
+    });
+    let entry = registry.get(&selected).cloned();
+    (selected, entry)
+}
+
+fn selected_external_backend_for_system(
+    overlay: &serde_yaml::Value,
+    system: &str,
+    preferred_backend: Option<&str>,
+) -> Option<(String, serde_yaml::Value)> {
+    let subagents = yaml_lookup(overlay, &["agent_system", "subagents"])?;
+    let entries = subagents.as_mapping()?;
+    let preferred_key = format!("{system}_cli");
+    if let Some(preferred_backend) = preferred_backend {
+        for (key, value) in entries {
+            let backend_id = key.as_str()?.trim();
+            if backend_id != preferred_backend {
+                continue;
+            }
+            if !yaml_bool(yaml_lookup(value, &["enabled"]), false) {
+                continue;
+            }
+            if yaml_string(yaml_lookup(value, &["subagent_backend_class"])).as_deref()
+                != Some("external_cli")
+            {
+                continue;
+            }
+            return Some((backend_id.to_string(), value.clone()));
+        }
+    }
+    let mut fallback = None;
+    for (key, value) in entries {
+        let backend_id = key.as_str()?.trim();
+        if backend_id.is_empty() || !yaml_bool(yaml_lookup(value, &["enabled"]), false) {
+            continue;
+        }
+        if yaml_string(yaml_lookup(value, &["subagent_backend_class"])).as_deref()
+            != Some("external_cli")
+        {
+            continue;
+        }
+        let detect_command = yaml_string(yaml_lookup(value, &["detect_command"]));
+        if backend_id == preferred_key
+            || detect_command.as_deref() == Some(system)
+            || backend_id.starts_with(system)
+        {
+            return Some((backend_id.to_string(), value.clone()));
+        }
+        if fallback.is_none() {
+            fallback = Some((backend_id.to_string(), value.clone()));
+        }
+    }
+    fallback
+}
+
+fn external_cli_activation_prompt(packet_path: &str) -> String {
+    format!(
+        "Read and execute the VIDA dispatch packet at {}. Return one bounded result that follows the packet.",
+        packet_path
+    )
+}
+
+fn configured_external_activation_command(
+    backend_entry: &serde_yaml::Value,
+    project_root: &Path,
+    packet_path: &str,
+) -> Option<String> {
+    let dispatch = yaml_lookup(backend_entry, &["dispatch"])?;
+    let command = yaml_string(yaml_lookup(dispatch, &["command"]))?;
+    let mut parts = Vec::new();
+    if let Some(env_map) = yaml_lookup(dispatch, &["env"]).and_then(serde_yaml::Value::as_mapping) {
+        let mut env_pairs = env_map
+            .iter()
+            .filter_map(|(key, value)| {
+                Some(format!(
+                    "{}={}",
+                    key.as_str()?.trim(),
+                    shell_quote(value.as_str()?.trim())
+                ))
+            })
+            .collect::<Vec<_>>();
+        env_pairs.sort();
+        parts.extend(env_pairs);
+    }
+    parts.push(command);
+    parts.extend(yaml_string_list(yaml_lookup(dispatch, &["static_args"])));
+    if let Some(workdir_flag) = yaml_string(yaml_lookup(dispatch, &["workdir_flag"])) {
+        parts.push(workdir_flag);
+        parts.push(project_root.display().to_string());
+    }
+    let prompt_mode = yaml_string(yaml_lookup(dispatch, &["prompt_mode"]))
+        .unwrap_or_else(|| "positional".to_string());
+    if prompt_mode == "positional" {
+        parts.push(external_cli_activation_prompt(packet_path));
+    }
+    Some(
+        parts
+            .into_iter()
+            .enumerate()
+            .map(|(index, part)| {
+                if index == 0 || (index > 0 && part.contains('=') && !part.starts_with('-')) {
+                    part
+                } else {
+                    shell_quote(&part)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+fn configured_external_activation_parts(
+    backend_entry: &serde_yaml::Value,
+    project_root: &Path,
+    packet_path: &str,
+) -> Result<(String, Vec<String>), String> {
+    let dispatch = yaml_lookup(backend_entry, &["dispatch"])
+        .ok_or_else(|| "Configured external backend is missing `dispatch`".to_string())?;
+    let command = yaml_string(yaml_lookup(dispatch, &["command"]))
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "Configured external backend is missing non-empty `dispatch.command`".to_string()
+        })?;
+    let mut args = yaml_string_list(yaml_lookup(dispatch, &["static_args"]));
+    if let Some(workdir_flag) = yaml_string(yaml_lookup(dispatch, &["workdir_flag"])) {
+        args.push(workdir_flag);
+        args.push(project_root.display().to_string());
+    }
+    let prompt_mode = yaml_string(yaml_lookup(dispatch, &["prompt_mode"]))
+        .unwrap_or_else(|| "positional".to_string());
+    match prompt_mode.as_str() {
+        "positional" => args.push(external_cli_activation_prompt(packet_path)),
+        other => {
+            return Err(format!(
+                "Configured external backend uses unsupported prompt_mode `{other}`"
+            ))
+        }
+    }
+    Ok((command, args))
+}
+
+fn render_command_display(command: &str, args: &[String]) -> String {
+    let mut rendered = Vec::with_capacity(args.len() + 1);
+    rendered.push(shell_quote(command));
+    rendered.extend(args.iter().map(|arg| shell_quote(arg)));
+    rendered.join(" ")
+}
+
+fn runtime_agent_lane_dispatch_from_overlay(
+    overlay: Option<&serde_yaml::Value>,
+    selected_cli_system: &str,
+    selected_execution_class: &str,
+    project_root: &Path,
+    packet_path: &str,
+    preferred_backend: Option<&str>,
+) -> RuntimeAgentLaneDispatch {
+    let agent_init_command = agent_init_command_for_packet_path(packet_path);
+    if selected_execution_class != "external" {
+        return RuntimeAgentLaneDispatch {
+            surface: "vida agent-init".to_string(),
+            activation_command: agent_init_command,
+            backend_dispatch: serde_json::json!({
+                "selected_cli_system": selected_cli_system,
+                "selected_execution_class": selected_execution_class,
+                "backend_id": serde_json::Value::Null,
+            }),
+        };
+    }
+    let Some(overlay) = overlay else {
+        return RuntimeAgentLaneDispatch {
+            surface: "vida agent-init".to_string(),
+            activation_command: agent_init_command,
+            backend_dispatch: serde_json::json!({
+                "selected_cli_system": selected_cli_system,
+                "selected_execution_class": selected_execution_class,
+                "backend_id": serde_json::Value::Null,
+            }),
+        };
+    };
+    let Some((backend_id, backend_entry)) =
+        selected_external_backend_for_system(overlay, selected_cli_system, preferred_backend)
+    else {
+        return RuntimeAgentLaneDispatch {
+            surface: "vida agent-init".to_string(),
+            activation_command: agent_init_command,
+            backend_dispatch: serde_json::json!({
+                "selected_cli_system": selected_cli_system,
+                "selected_execution_class": selected_execution_class,
+                "backend_id": serde_json::Value::Null,
+            }),
+        };
+    };
+    let activation_command = configured_external_activation_command(
+        &backend_entry,
+        project_root,
+        packet_path,
+    )
+    .unwrap_or_else(|| agent_init_command_for_packet_path(packet_path));
+    RuntimeAgentLaneDispatch {
+        surface: format!("external_cli:{backend_id}"),
+        activation_command,
+        backend_dispatch: serde_json::json!({
+            "selected_cli_system": selected_cli_system,
+            "selected_execution_class": selected_execution_class,
+            "backend_id": backend_id,
+        }),
+    }
+}
+
+fn runtime_agent_lane_dispatch_for_root(
+    project_root: &Path,
+    packet_path: &str,
+    preferred_backend: Option<&str>,
+) -> RuntimeAgentLaneDispatch {
+    let host_runtime = runtime_host_execution_contract_for_root(project_root);
+    let selected_cli_system = json_string(host_runtime.get("selected_cli_system"))
+        .unwrap_or_else(|| "unknown".to_string());
+    let selected_execution_class = json_string(host_runtime.get("selected_cli_execution_class"))
+        .unwrap_or_else(|| "unknown".to_string());
+    let overlay = load_project_overlay_yaml_for_root(project_root).ok();
+    let effective_system = overlay
+        .as_ref()
+        .map(|config| selected_host_cli_system_for_runtime_dispatch(config).0)
+        .unwrap_or_else(|| selected_cli_system.clone());
+    runtime_agent_lane_dispatch_from_overlay(
+        overlay.as_ref(),
+        &effective_system,
+        &selected_execution_class,
+        project_root,
+        packet_path,
+        preferred_backend,
+    )
+}
+
 fn write_runtime_downstream_dispatch_trace(
     state_root: &Path,
     run_id: &str,
@@ -4863,7 +5149,14 @@ fn runtime_dispatch_command_for_packet_path(
         "taskflow_pack" => {
             runtime_dispatch_command_for_target(role_selection, &receipt.dispatch_target)
         }
-        "agent_lane" => Some(agent_init_command_for_packet_path(packet_path)),
+        "agent_lane" => Some(
+            runtime_agent_lane_dispatch_for_root(
+                &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                packet_path,
+                receipt.selected_backend.as_deref(),
+            )
+            .activation_command,
+        ),
         _ => runtime_dispatch_command_for_target(role_selection, &receipt.dispatch_target),
     }
 }
@@ -4976,6 +5269,11 @@ fn write_runtime_dispatch_packet(ctx: &RuntimeDispatchPacketContext<'_>) -> Resu
         .replace(':', "-");
     let packet_path = packet_dir.join(format!("{}-{ts}.json", ctx.receipt.run_id));
     let packet_path_display = packet_path.display().to_string();
+    let project_root = taskflow_task_bridge::infer_project_root_from_state_root(ctx.state_root)
+        .unwrap_or(std::env::current_dir().map_err(|error| {
+            format!("Failed to resolve project root for dispatch packet rendering: {error}")
+        })?);
+    let host_runtime = runtime_host_execution_contract_for_root(&project_root);
     let packet_template_kind = runtime_dispatch_packet_kind(
         &ctx.role_selection.execution_plan,
         &ctx.receipt.dispatch_target,
@@ -5080,6 +5378,7 @@ fn write_runtime_dispatch_packet(ctx: &RuntimeDispatchPacketContext<'_>) -> Resu
         "activation_agent_type": ctx.receipt.activation_agent_type,
         "activation_runtime_role": ctx.receipt.activation_runtime_role,
         "selected_backend": ctx.receipt.selected_backend,
+        "host_runtime": host_runtime,
         "request_text": ctx.role_selection.request,
         "role_selection": {
             "selected_role": ctx.role_selection.selected_role,
@@ -5144,33 +5443,188 @@ async fn execute_runtime_dispatch_handoff(
                 receipt.dispatch_packet_path.as_deref().ok_or_else(|| {
                     missing_agent_lane_dispatch_packet_error(&receipt.dispatch_target)
                 })?;
-            let bundle =
-                crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload(store)
-                    .await?;
-            let project_activation_view =
-                project_activator_surface::build_project_activator_view(&project_root);
-            let init_view = project_activator_surface::merge_project_activation_into_init_view(
-                bundle.agent_init_view,
-                &project_activation_view,
-            );
-            Ok(serde_json::json!({
-                "surface": "vida agent-init",
-                "status": "pass",
-                "execution_state": "packet_ready",
-                "activation_command": agent_init_command_for_packet_path(dispatch_packet_path),
-                "dispatch_packet_path": dispatch_packet_path,
-                "init": init_view,
-                "selection": serde_json::to_value(role_selection)
-                    .expect("lane selection should serialize"),
-                "runtime_bundle_summary": {
-                    "bundle_id": bundle.metadata["bundle_id"],
-                    "activation_source": bundle.activation_source,
-                    "vida_root": bundle.vida_root,
-                    "state_dir": store.root().display().to_string(),
-                },
-            }))
+            let host_runtime = runtime_host_execution_contract_for_root(&project_root);
+            if json_string(host_runtime.get("selected_cli_execution_class")).as_deref()
+                == Some("external")
+            {
+                return execute_external_agent_lane_dispatch(
+                    store,
+                    &project_root,
+                    dispatch_packet_path,
+                    receipt.selected_backend.as_deref(),
+                    role_selection,
+                    receipt,
+                    host_runtime,
+                )
+                .await;
+            }
+            let activation_view =
+                crate::init_surfaces::render_agent_init_packet_activation_with_store(
+                    store,
+                    &project_root,
+                    dispatch_packet_path,
+                    false,
+                )
+                .await?;
+            Ok(agent_lane_dispatch_result(
+                activation_view,
+                dispatch_packet_path,
+                receipt.selected_backend.as_deref(),
+                role_selection,
+                host_runtime,
+            ))
         }
     }
+}
+
+fn agent_lane_dispatch_result(
+    mut activation_view: serde_json::Value,
+    dispatch_packet_path: &str,
+    preferred_backend: Option<&str>,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    host_runtime: serde_json::Value,
+) -> serde_json::Value {
+    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let lane_dispatch =
+        runtime_agent_lane_dispatch_for_root(&project_root, dispatch_packet_path, preferred_backend);
+    let body = activation_view
+        .as_object_mut()
+        .expect("agent-init activation view should serialize to an object");
+    body.insert("surface".to_string(), serde_json::json!(lane_dispatch.surface));
+    body.insert("status".to_string(), serde_json::json!("pass"));
+    body.insert(
+        "execution_state".to_string(),
+        serde_json::json!("packet_ready"),
+    );
+    body.insert(
+        "activation_command".to_string(),
+        serde_json::json!(lane_dispatch.activation_command),
+    );
+    body.insert(
+        "dispatch_packet_path".to_string(),
+        serde_json::json!(dispatch_packet_path),
+    );
+    body.insert("host_runtime".to_string(), host_runtime);
+    body.insert(
+        "backend_dispatch".to_string(),
+        lane_dispatch.backend_dispatch,
+    );
+    body.insert(
+        "role_selection".to_string(),
+        serde_json::to_value(role_selection).expect("lane selection should serialize"),
+    );
+    activation_view
+}
+
+async fn execute_external_agent_lane_dispatch(
+    store: &StateStore,
+    project_root: &Path,
+    dispatch_packet_path: &str,
+    preferred_backend: Option<&str>,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    host_runtime: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let overlay = load_project_overlay_yaml_for_root(project_root)?;
+    let (selected_cli_system, _) = selected_host_cli_system_for_runtime_dispatch(&overlay);
+    let (backend_id, backend_entry) =
+        selected_external_backend_for_system(&overlay, &selected_cli_system, preferred_backend)
+            .ok_or_else(|| {
+                format!(
+                    "Configured host CLI system `{selected_cli_system}` has no enabled external backend dispatch adapter"
+                )
+            })?;
+    let (command, args) =
+        configured_external_activation_parts(&backend_entry, project_root, dispatch_packet_path)?;
+    let activation_command = render_command_display(&command, &args);
+
+    let mut process = std::process::Command::new(&command);
+    process.args(&args).current_dir(project_root);
+    if let Some(serde_yaml::Value::Mapping(env_map)) = yaml_lookup(&backend_entry, &["dispatch", "env"])
+    {
+        for (key, value) in env_map {
+            if let (Some(key), Some(value)) = (key.as_str(), value.as_str()) {
+                process.env(key, value);
+            }
+        }
+    }
+    process.env("VIDA_DISPATCH_PACKET_PATH", dispatch_packet_path);
+    process.env("VIDA_DISPATCH_TARGET", &receipt.dispatch_target);
+    process.env("VIDA_SELECTED_CLI_SYSTEM", &selected_cli_system);
+    if let Some(runtime_role) = receipt.activation_runtime_role.as_deref() {
+        process.env("VIDA_RUNTIME_ROLE", runtime_role);
+    }
+    if let Some(selected_backend) = receipt.selected_backend.as_deref() {
+        process.env("VIDA_SELECTED_BACKEND", selected_backend);
+    }
+
+    let output = process.output().map_err(|error| {
+        format!(
+            "Failed to execute configured external backend `{backend_id}` via `{command}`: {error}"
+        )
+    })?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let success = output.status.success();
+    let exit_code = output.status.code();
+    let activation_view = crate::init_surfaces::render_agent_init_packet_activation_with_store(
+        store,
+        project_root,
+        dispatch_packet_path,
+        false,
+    )
+    .await
+    .unwrap_or_else(|_| {
+        serde_json::json!({
+            "selection": {
+                "mode": "dispatch_packet",
+                "selected_role": receipt
+                    .activation_runtime_role
+                    .as_deref()
+                    .unwrap_or(&role_selection.selected_role),
+            },
+            "activation_semantics": {
+                "activation_kind": "activation_view",
+                "view_only": true,
+            },
+        })
+    });
+    let mut result = agent_lane_dispatch_result(
+        activation_view,
+        dispatch_packet_path,
+        preferred_backend,
+        role_selection,
+        host_runtime,
+    );
+    let body = result
+        .as_object_mut()
+        .expect("agent lane dispatch result should serialize to an object");
+    body.insert(
+        "surface".to_string(),
+        serde_json::json!(format!("external_cli:{backend_id}")),
+    );
+    body.insert(
+        "status".to_string(),
+        serde_json::json!(if success { "pass" } else { "blocked" }),
+    );
+    body.insert(
+        "execution_state".to_string(),
+        serde_json::json!(if success { "executed" } else { "blocked" }),
+    );
+    body.insert(
+        "activation_command".to_string(),
+        serde_json::json!(activation_command),
+    );
+    body.insert("provider_output".to_string(), serde_json::json!(stdout));
+    body.insert("provider_error".to_string(), serde_json::json!(stderr));
+    body.insert("exit_code".to_string(), serde_json::json!(exit_code));
+    if !success {
+        body.insert(
+            "blocker_code".to_string(),
+            serde_json::json!("configured_backend_dispatch_failed"),
+        );
+    }
+    Ok(result)
 }
 
 fn write_runtime_dispatch_result(
@@ -5231,12 +5685,7 @@ async fn execute_and_record_dispatch_receipt(
     if let Some(dispatch_command) = json_string(execution_result.get("activation_command")) {
         receipt.dispatch_command = Some(dispatch_command);
     }
-    refresh_downstream_dispatch_preview(
-        state_root,
-        role_selection,
-        run_graph_bootstrap,
-        receipt,
-    )?;
+    refresh_downstream_dispatch_preview(state_root, role_selection, run_graph_bootstrap, receipt)?;
     if receipt.dispatch_status == "executed" {
         if let Some(run_id) = json_string(run_graph_bootstrap.get("run_id")) {
             if let Ok(status) = store.run_graph_status(&run_id).await {
@@ -5374,6 +5823,7 @@ fn downstream_dispatch_packet_body(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     packet_path: Option<&Path>,
 ) -> serde_json::Value {
+    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let downstream_target = receipt
         .downstream_dispatch_target
         .as_deref()
@@ -5501,6 +5951,8 @@ fn downstream_dispatch_packet_body(
         "downstream_dispatch_active_target": receipt.downstream_dispatch_active_target,
         "activation_agent_type": receipt.activation_agent_type,
         "activation_runtime_role": receipt.activation_runtime_role,
+        "selected_backend": receipt.selected_backend,
+        "host_runtime": runtime_host_execution_contract_for_root(&project_root),
         "role_selection_full": role_selection,
         "run_graph_bootstrap": run_graph_bootstrap,
         "orchestration_contract": role_selection.execution_plan["orchestration_contract"],
@@ -6388,11 +6840,53 @@ mod tests {
     }
 
     fn wait_for_state_unlock(state_dir: &std::path::Path) {
-        let lock_path = state_dir.join("LOCK");
+        let direct_lock_path = state_dir.join("LOCK");
+        let nested_lock_path = state_dir.join(".vida").join("data").join("state").join("LOCK");
         let deadline = Instant::now() + Duration::from_secs(2);
-        while lock_path.exists() && Instant::now() < deadline {
+        while (direct_lock_path.exists() || nested_lock_path.exists()) && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(25));
         }
+    }
+
+    fn install_external_cli_test_subagents(config_path: &Path) {
+        let config = fs::read_to_string(config_path).expect("config should exist");
+        let updated = config.replace(
+            "agent_system:\n  init_on_boot: true\n  mode: native\n  state_owner: orchestrator_only\n  max_parallel_agents: 4\n  routing: {}\n  scoring: {}\n",
+            concat!(
+                "agent_system:\n",
+                "  init_on_boot: true\n",
+                "  mode: native\n",
+                "  state_owner: orchestrator_only\n",
+                "  max_parallel_agents: 4\n",
+                "  subagents:\n",
+                "    qwen_cli:\n",
+                "      enabled: true\n",
+                "      subagent_backend_class: external_cli\n",
+                "      detect_command: qwen\n",
+                "      dispatch:\n",
+                "        command: qwen\n",
+                "        static_args:\n",
+                "          - -y\n",
+                "          - -o\n",
+                "          - text\n",
+                "        prompt_mode: positional\n",
+                "    kilo_cli:\n",
+                "      enabled: true\n",
+                "      subagent_backend_class: external_cli\n",
+                "      detect_command: kilo\n",
+                "      dispatch:\n",
+                "        command: kilo\n",
+                "        static_args:\n",
+                "          - run\n",
+                "          - --auto\n",
+                "        workdir_flag: --dir\n",
+                "        prompt_mode: positional\n",
+                "  routing: {}\n",
+                "  scoring: {}\n",
+            ),
+        );
+        assert_ne!(updated, config, "expected agent_system scaffold replacement");
+        fs::write(config_path, updated).expect("config should update");
     }
 
     #[test]
@@ -7204,6 +7698,37 @@ mod tests {
             .expect("supported cli systems should render")
             .iter()
             .any(|value| value.as_str() == Some("codex")));
+    }
+
+    #[test]
+    fn runtime_host_execution_contract_reflects_external_qwen_selection() {
+        let _lock = current_dir_lock().lock().expect("lock should succeed");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = CurrentDirGuard::change_to(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "qwen",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        let contract = runtime_host_execution_contract_for_root(harness.path());
+        assert_eq!(contract["selected_cli_system"], "qwen");
+        assert_eq!(contract["selected_cli_execution_class"], "external");
+        assert_eq!(contract["runtime_template_root"], ".qwen");
+        assert_eq!(contract["template_materialized"], true);
     }
 
     #[test]
@@ -8231,22 +8756,28 @@ mod tests {
             recorded_at: "2026-03-15T00:00:00Z".to_string(),
         };
 
-        refresh_downstream_dispatch_preview(&root, &role_selection, &run_graph_bootstrap, &mut receipt)
-            .expect("refresh should succeed");
+        refresh_downstream_dispatch_preview(
+            &root,
+            &role_selection,
+            &run_graph_bootstrap,
+            &mut receipt,
+        )
+        .expect("refresh should succeed");
 
-        assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("dev-pack"));
+        assert_eq!(
+            receipt.downstream_dispatch_target.as_deref(),
+            Some("dev-pack")
+        );
         assert_eq!(
             receipt.downstream_dispatch_command.as_deref(),
             Some("vida task ensure feature-x-dev \"Dev pack\" --type task --status open --json")
         );
         assert!(receipt.downstream_dispatch_ready);
         assert!(receipt.downstream_dispatch_blockers.is_empty());
-        assert!(
-            receipt
-                .downstream_dispatch_packet_path
-                .as_deref()
-                .is_some_and(|path| !path.trim().is_empty())
-        );
+        assert!(receipt
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty()));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -8651,6 +9182,111 @@ mod tests {
     }
 
     #[test]
+    fn runtime_dispatch_packet_carries_external_host_runtime_contract() {
+        let _lock = current_dir_lock().lock().expect("lock should succeed");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = CurrentDirGuard::change_to(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "qwen",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        let state_root = harness.path().join(".vida/data/state");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "implement backend execution".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["implementation".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "implementer_activation": {
+                            "activation_agent_type": "qwen-primary",
+                            "activation_runtime_role": "worker",
+                            "closure_class": "implementation",
+                        }
+                    }
+                },
+                "orchestration_contract": {}
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-qwen-dispatch".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("qwen-primary".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("qwen-primary".to_string()),
+            recorded_at: "2026-03-15T00:00:00Z".to_string(),
+        };
+        let handoff_plan = serde_json::json!({});
+        let run_graph_bootstrap = serde_json::json!({});
+        let ctx = RuntimeDispatchPacketContext::new(
+            &state_root,
+            &role_selection,
+            &receipt,
+            &handoff_plan,
+            &run_graph_bootstrap,
+        );
+        let packet_path =
+            write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
+        let packet = read_json_file_if_present(Path::new(&packet_path))
+            .expect("dispatch packet json should load");
+        assert_eq!(packet["host_runtime"]["selected_cli_system"], "qwen");
+        assert_eq!(
+            packet["host_runtime"]["selected_cli_execution_class"],
+            "external"
+        );
+        assert_eq!(packet["host_runtime"]["runtime_template_root"], ".qwen");
+        assert_eq!(packet["selected_backend"], "qwen-primary");
+    }
+
+    #[test]
     fn runtime_tracked_flow_packet_marks_view_only_materialization_semantics() {
         let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,
@@ -8684,10 +9320,366 @@ mod tests {
         };
 
         let packet = runtime_tracked_flow_packet(&role_selection, "run-1", "work-pool-pack");
-        assert_eq!(packet["activation_semantics"], "tracked_flow_materialization_only");
+        assert_eq!(
+            packet["activation_semantics"],
+            "tracked_flow_materialization_only"
+        );
         assert_eq!(packet["view_only"], true);
         assert_eq!(packet["executes_packet"], false);
         assert_eq!(packet["transfers_root_session_write_authority"], false);
+    }
+
+    #[test]
+    fn execute_runtime_dispatch_handoff_reuses_canonical_agent_init_packet_view() {
+        let _lock = current_dir_lock().lock().expect("lock should succeed");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = CurrentDirGuard::change_to(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+
+        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let store = runtime
+            .block_on(StateStore::open(state_root.clone()))
+            .expect("state store should open");
+        let dispatch_packet_path = harness.path().join("agent-dispatch.json");
+        fs::write(
+            &dispatch_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": runtime_delivery_task_packet(
+                    "run-agent-dispatch",
+                    "implementer",
+                    "worker",
+                    "implementation",
+                    "implementation",
+                    "continue development"
+                ),
+                "dispatch_target": "implementer",
+                "request_text": "continue development",
+                "activation_runtime_role": "worker",
+                "role_selection": {
+                    "selected_role": "worker"
+                }
+            }))
+            .expect("dispatch packet json should encode"),
+        )
+        .expect("dispatch packet should write");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-agent-dispatch".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(dispatch_packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-03-17T00:00:00Z".to_string(),
+        };
+
+        let result = runtime
+            .block_on(execute_runtime_dispatch_handoff(
+                &state_root,
+                &store,
+                &role_selection,
+                &receipt,
+            ))
+            .expect("agent-lane dispatch handoff should render");
+
+        assert_eq!(result["surface"], "vida agent-init");
+        assert_eq!(result["execution_state"], "packet_ready");
+        assert_eq!(result["selection"]["mode"], "dispatch_packet");
+        assert_eq!(result["selection"]["selected_role"], "worker");
+        assert_eq!(
+            result["activation_semantics"]["activation_kind"],
+            "activation_view"
+        );
+        assert_eq!(result["activation_semantics"]["view_only"], true);
+        assert_eq!(
+            result["activation_command"],
+            serde_json::json!(format!(
+                "vida agent-init --dispatch-packet {} --json",
+                shell_quote(&dispatch_packet_path.display().to_string())
+            ))
+        );
+        assert_eq!(result["role_selection"]["selected_role"], "worker");
+    }
+
+    #[test]
+    fn execute_runtime_dispatch_handoff_executes_configured_external_backend() {
+        let _lock = current_dir_lock().lock().expect("lock should succeed");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = CurrentDirGuard::change_to(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "qwen",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+
+        let config_path = harness.path().join("vida.config.yaml");
+        install_external_cli_test_subagents(&config_path);
+        let config = fs::read_to_string(&config_path).expect("config should exist");
+        let updated = config.replace(
+            "command: qwen\n        static_args:\n          - -y\n          - -o\n          - text",
+            "command: sh\n        static_args:\n          - -lc\n          - \"printf 'external-dispatch:%s' \\\"$1\\\"\"\n          - vida-dispatch",
+        );
+        fs::write(&config_path, updated).expect("config should update");
+
+        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let store = runtime
+            .block_on(StateStore::open(state_root.clone()))
+            .expect("state store should open");
+        let dispatch_packet_path = harness.path().join("external-agent-dispatch.json");
+        fs::write(
+            &dispatch_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": runtime_delivery_task_packet(
+                    "run-external-dispatch",
+                    "implementer",
+                    "worker",
+                    "implementation",
+                    "implementation",
+                    "continue development"
+                ),
+                "dispatch_target": "implementer",
+                "request_text": "continue development",
+                "activation_runtime_role": "worker",
+                "role_selection": {
+                    "selected_role": "worker"
+                }
+            }))
+            .expect("dispatch packet json should encode"),
+        )
+        .expect("dispatch packet should write");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-external-dispatch".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(dispatch_packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("qwen-primary".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("qwen_cli".to_string()),
+            recorded_at: "2026-03-17T00:00:00Z".to_string(),
+        };
+
+        let result = runtime
+            .block_on(execute_runtime_dispatch_handoff(
+                &state_root,
+                &store,
+                &role_selection,
+                &receipt,
+            ))
+            .expect("external agent-lane dispatch handoff should execute");
+
+        assert_eq!(result["surface"], "external_cli:qwen_cli");
+        assert_eq!(result["status"], "pass");
+        assert_eq!(result["execution_state"], "executed");
+        assert_eq!(result["host_runtime"]["selected_cli_execution_class"], "external");
+        assert_eq!(result["backend_dispatch"]["backend_id"], "qwen_cli");
+        assert!(
+            result["activation_command"]
+                .as_str()
+                .expect("activation command should render")
+                .contains("sh")
+        );
+        assert!(
+            result["provider_output"]
+                .as_str()
+                .expect("provider output should render")
+                .contains("external-dispatch:Read and execute the VIDA dispatch packet")
+        );
+        assert_eq!(result["role_selection"]["selected_role"], "worker");
+    }
+
+    #[test]
+    fn runtime_agent_lane_dispatch_prefers_receipt_selected_backend_for_external_hosts() {
+        let _lock = current_dir_lock().lock().expect("lock should succeed");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = CurrentDirGuard::change_to(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "qwen",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+        install_external_cli_test_subagents(&harness.path().join("vida.config.yaml"));
+
+        let dispatch = runtime_agent_lane_dispatch_for_root(
+            harness.path(),
+            "/tmp/runtime-dispatch-packet.json",
+            Some("kilo_cli"),
+        );
+
+        assert_eq!(dispatch.surface, "external_cli:kilo_cli");
+        assert!(
+            dispatch.activation_command.contains("kilo"),
+            "expected kilo command, got {}",
+            dispatch.activation_command
+        );
+        assert!(
+            dispatch.activation_command.contains("--dir"),
+            "expected workdir flag, got {}",
+            dispatch.activation_command
+        );
+        assert_eq!(dispatch.backend_dispatch["selected_cli_system"], "qwen");
+        assert_eq!(dispatch.backend_dispatch["selected_execution_class"], "external");
+        assert_eq!(dispatch.backend_dispatch["backend_id"], "kilo_cli");
+    }
+
+    #[test]
+    fn runtime_agent_lane_dispatch_keeps_internal_hosts_on_agent_init() {
+        let _lock = current_dir_lock().lock().expect("lock should succeed");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = CurrentDirGuard::change_to(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+
+        let dispatch =
+            runtime_agent_lane_dispatch_for_root(harness.path(), "/tmp/runtime-dispatch-packet.json", None);
+
+        assert_eq!(dispatch.surface, "vida agent-init");
+        assert!(
+            dispatch.activation_command.contains("vida agent-init"),
+            "expected canonical internal activation command, got {}",
+            dispatch.activation_command
+        );
+        assert_eq!(dispatch.backend_dispatch["selected_cli_system"], "codex");
+        assert_eq!(dispatch.backend_dispatch["selected_execution_class"], "internal");
+        assert_eq!(dispatch.backend_dispatch["backend_id"], serde_json::Value::Null);
     }
 
     #[test]
