@@ -570,12 +570,14 @@ Default feature-delivery flow:\n\n\
 10. Keep the root session in orchestration posture unless an explicit exception path is recorded.\n\
 11. Before any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`; if the root-session write guard is still active, continue through packet shaping or `vida agent-init` dispatch instead of local coding.\n\
 12. Host-local shell/edit capability is not a lane-change receipt and does not authorize root-session coding.\n\
-13. Finding the patch location, reproducing a runtime defect, or hitting a worker timeout does not authorize root-session coding; wait, reroute, or record the exception path first.\n\
-14. Under continued-development intent, stay in commentary/progress mode until the user explicitly asks to stop; do not emit final closure wording while a next lawful TaskFlow continuation item is already known.\n\
-15. Do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\n\
-16. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.\n\
-17. After any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.\n\
-18. When recording progress into the backlog from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n",
+13. If the user explicitly orders agent-first or parallel-agent execution, keep that routing intent sticky; do not silently substitute root-session coding.\n\
+14. Finding the patch location, reproducing a runtime defect, hitting a worker timeout, or tripping a thread-limit/`not_found` lane failure does not authorize root-session coding; recover delegated lanes, wait, reroute, or record the exception path first.\n\
+15. Saturation recovery means: inspect active lanes, synthesize completed returns, reclaim closeable lanes, and retry lawful `vida agent-init` dispatch before any local fallback is considered.\n\
+16. Under continued-development intent, stay in commentary/progress mode until the user explicitly asks to stop; do not emit final closure wording while a next lawful TaskFlow continuation item is already known.\n\
+17. Do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\n\
+18. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.\n\
+19. After any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.\n\
+20. When recording progress into the backlog from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n",
         super::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE
         ),
         "process/project-operations",
@@ -632,7 +634,7 @@ pub(crate) fn render_project_research_readme() -> String {
 
 pub(crate) fn render_project_codex_guide() -> String {
     with_scaffold_footer(
-        "# Codex Agent Configuration Guide\n\nThis project uses framework-materialized `.codex/**` as the local Codex runtime surface.\n\nSource-of-truth rule:\n\n- `vida.config.yaml -> host_environment.codex.agents` owns carrier-tier metadata, rates, runtime-role fit, and task-class fit\n- `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` owns the dispatch-alias registry for executor-local overlays\n- `.codex/**` is the rendered executor surface used by Codex after activation\n- `.codex/config.toml` should expose the carrier tiers materialized from overlay\n\nCarrier rule:\n\n- the primary visible agent model is `junior`, `middle`, `senior`, `architect`\n- runtime role remains explicit activation state such as `worker`, `coach`, `verifier`, or `solution_architect`\n- internal alias ids may exist in registry state, but they must not replace the carrier-tier model at the project surface\n\nWorking rule:\n\n1. The root session stays the orchestrator.\n2. Documentation/specification work should complete the bounded design document first.\n3. Before delegated implementation starts, open the feature epic/spec task in `vida taskflow` and close the spec task only after the design artifact is finalized.\n4. After a bounded packet exists, route research, specification, planning, implementation, review, and verification through the configured tier ladder instead of collapsing into root-session coding.\n5. Let runtime choose the cheapest capable configured carrier tier with a healthy local score from `.vida/state/worker-strategy.json` and pass the lawful runtime role explicitly.\n6. Canonical delegated execution still dispatches through `vida agent-init`; host-tool-specific Codex subagent APIs are optional executor details and not the primary project delegation surface.\n7. Before any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`; an active root-session write guard still means orchestration-only.\n8. Finding the patch location, reproducing a runtime defect, or hitting a worker timeout is not a lane-change receipt and does not authorize root-session coding.\n9. Under continued-development intent, stay in commentary/progress mode and continue routing; do not emit final closure wording while a next lawful continuation item is already known.\n10. Do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\n11. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.\n12. When recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n13. Use `.vida/project/agent-extensions/**` for project-local role and skill overlays; do not treat `.codex/**` as the owner of framework or product law.\n",
+        "# Codex Agent Configuration Guide\n\nThis project uses framework-materialized `.codex/**` as the local Codex runtime surface.\n\nSource-of-truth rule:\n\n- `vida.config.yaml -> host_environment.codex.agents` owns carrier-tier metadata, rates, runtime-role fit, and task-class fit\n- `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` owns the dispatch-alias registry for executor-local overlays\n- `.codex/**` is the rendered executor surface used by Codex after activation\n- `.codex/config.toml` should expose the carrier tiers materialized from overlay\n\nCarrier rule:\n\n- the primary visible agent model is `junior`, `middle`, `senior`, `architect`\n- runtime role remains explicit activation state such as `worker`, `coach`, `verifier`, or `solution_architect`\n- internal alias ids may exist in registry state, but they must not replace the carrier-tier model at the project surface\n\nWorking rule:\n\n1. The root session stays the orchestrator.\n2. Documentation/specification work should complete the bounded design document first.\n3. Before delegated implementation starts, open the feature epic/spec task in `vida taskflow` and close the spec task only after the design artifact is finalized.\n4. After a bounded packet exists, route research, specification, planning, implementation, review, and verification through the configured tier ladder instead of collapsing into root-session coding.\n5. Let runtime choose the cheapest capable configured carrier tier with a healthy local score from `.vida/state/worker-strategy.json` and pass the lawful runtime role explicitly.\n6. Canonical delegated execution still dispatches through `vida agent-init`; host-tool-specific Codex subagent APIs are optional executor details and not the primary project delegation surface.\n7. Before any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`; an active root-session write guard still means orchestration-only.\n8. If the user explicitly orders agent-first or parallel-agent execution, keep that routing sticky; do not silently substitute root-session coding because a host tool offers local write access.\n9. Finding the patch location, reproducing a runtime defect, hitting a worker timeout, or tripping a thread-limit/`not_found` lane failure is not a lane-change receipt and does not authorize root-session coding.\n10. Recover delegated-lane saturation first: inspect active lanes, synthesize completed returns, reclaim closeable lanes, and retry lawful `vida agent-init` dispatch before any local fallback is considered.\n11. Under continued-development intent, stay in commentary/progress mode and continue routing; do not emit final closure wording while a next lawful continuation item is already known.\n12. Do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\n13. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.\n14. When recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n15. Use `.vida/project/agent-extensions/**` for project-local role and skill overlays; do not treat `.codex/**` as the owner of framework or product law.\n",
         "process/codex-agent-configuration-guide",
         "process_doc",
         "docs/process/codex-agent-configuration-guide.md",
@@ -1506,4 +1508,76 @@ fn agent_init_activation_semantics(selection: &serde_json::Value) -> serde_json:
         "tracked_flow_shaping_only": tracked_flow_shaping_only,
         "next_lawful_action": next_lawful_action,
     })
+}
+
+pub(crate) async fn render_agent_init_packet_activation_with_store(
+    store: &super::StateStore,
+    project_root: &Path,
+    packet_path: &str,
+    downstream: bool,
+) -> Result<serde_json::Value, String> {
+    let bundle = build_taskflow_consume_bundle_payload(store).await?;
+    let packet = super::taskflow_consume_resume::read_dispatch_packet(packet_path)?;
+    let selected_role = packet
+        .get("activation_runtime_role")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            packet
+                .get("role_selection")
+                .and_then(|value| value.get("selected_role"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown");
+    if selected_role == "orchestrator" || selected_role == "unknown" {
+        return Err(
+            "Packet activation requires a non-orchestrator runtime role in the dispatch packet."
+                .to_string(),
+        );
+    }
+
+    let selection = if downstream {
+        serde_json::json!({
+            "mode": "downstream_packet",
+            "selected_role": selected_role,
+            "request_text": packet.get("request_text").and_then(serde_json::Value::as_str).unwrap_or_default(),
+            "dispatch_target": packet.get("downstream_dispatch_target").and_then(serde_json::Value::as_str).unwrap_or_default(),
+            "downstream_packet_path": packet_path,
+            "packet_kind": packet.get("packet_kind").cloned().unwrap_or(serde_json::Value::Null),
+            "packet_template_kind": packet.get("packet_template_kind").cloned().unwrap_or(serde_json::Value::Null),
+            "packet": packet,
+        })
+    } else {
+        serde_json::json!({
+            "mode": "dispatch_packet",
+            "selected_role": selected_role,
+            "request_text": packet.get("request_text").and_then(serde_json::Value::as_str).unwrap_or_default(),
+            "dispatch_target": packet.get("dispatch_target").and_then(serde_json::Value::as_str).unwrap_or_default(),
+            "dispatch_packet_path": packet_path,
+            "packet_kind": packet.get("packet_kind").cloned().unwrap_or(serde_json::Value::Null),
+            "packet_template_kind": packet.get("packet_template_kind").cloned().unwrap_or(serde_json::Value::Null),
+            "packet": packet,
+        })
+    };
+
+    let project_activation_view =
+        super::project_activator_surface::build_project_activator_view(project_root);
+    let init_view = super::project_activator_surface::merge_project_activation_into_init_view(
+        bundle.agent_init_view,
+        &project_activation_view,
+    );
+    let activation_semantics = agent_init_activation_semantics(&selection);
+
+    Ok(serde_json::json!({
+        "surface": "vida agent-init",
+        "init": init_view,
+        "selection": selection,
+        "activation_semantics": activation_semantics,
+        "runtime_bundle_summary": {
+            "bundle_id": bundle.metadata["bundle_id"],
+            "activation_source": bundle.activation_source,
+            "vida_root": bundle.vida_root,
+            "state_dir": store.root().display().to_string(),
+        },
+    }))
 }

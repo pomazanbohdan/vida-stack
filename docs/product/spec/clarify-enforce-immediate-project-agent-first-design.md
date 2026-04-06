@@ -28,6 +28,7 @@ Use this template for one bounded feature/change design before implementation.
   - `vida status --json` still treats enabled external CLI subagents as if they make the whole session externally dependent, even when the selected host execution class is internal and the external subagents are only optional carrier details.
 - Runtime-consumption status and continuation also allowed one live ambiguity: a newer incomplete `final` snapshot from `vida taskflow consume continue` could overshadow an older valid `consume final` snapshot and re-open release-admission blockers even after lawful closure evidence already existed.
 - Runtime prompts and generated guidance still left one operator loophole: they warned against final closure wording, but did not state strongly enough that commentary or “I have explained the result” is not a lawful pause boundary.
+- Runtime prompts, bootstrap carrier law, and root-session write guard also left one recovery loophole: explicit user-ordered agent-first or parallel-agent routing could still be misread as optional when agent/thread saturation, stale lane ids, or `not_found` carrier failures appeared.
   - Runtime dispatch packets still rely on prose/template alignment rather than one compiled template-specific packet-minimum validator, so `vida taskflow consume final`, persisted dispatch packets, resume, and `vida agent-init` can drift if packet-family requirements are not enforced from shared code.
 
 ## Goal
@@ -38,6 +39,7 @@ Use this template for one bounded feature/change design before implementation.
 - What success looks like
   - Bootstrap and process docs explicitly distinguish project delegated lanes from host-local subagent APIs.
   - Runtime packet prompts remind worker lanes that project agent-first execution is `vida agent-init`-backed and root-session local coding is forbidden without an exception path.
+  - Runtime packet prompts and machine-readable guard surfaces say that explicit user-ordered agent mode is sticky and saturation recovery comes before any local fallback decision.
   - Runtime dispatch and downstream packets fail closed when the active `packet_template_kind` is missing its canonical mandatory fields.
   - Targeted tests stay green after the wording and contract updates.
 - What is explicitly out of scope
@@ -53,6 +55,8 @@ Use this template for one bounded feature/change design before implementation.
 - Must keep root-session write prohibition and exception-path law intact.
 - Must update both live bootstrap docs and scaffold sources when bootstrap carrier wording changes.
 - Must update runtime-generated operator/prompt surfaces so the distinction is visible during actual delegated execution.
+- Must state that explicit user-ordered agent-first or parallel-agent routing is sticky and cannot be silently replaced by local root-session implementation.
+- Must require saturation recovery for thread-limit, stale-lane, and `not_found` carrier failures before any local fallback path can be considered.
 - Must ensure release-admission and continuation gates prefer the newest valid `final` runtime-consumption snapshot over newer non-final helper snapshots such as `bundle-check`.
 - Must enforce one shared template-specific packet validator for persisted/runtime dispatch packets so packet-ready handoff cannot bypass the canonical project packet minimum.
 
@@ -124,6 +128,7 @@ Will implement / choose:
   - Bootstrap carrier docs and sidecar map.
   - Project process docs for orchestrator, packet/lane, team topology, and host agent system.
   - Runtime-generated init/scaffold docs and delegated packet prompt text.
+  - Machine-readable root-session write guard emitted by status/doctor/runtime surfaces.
   - Shared dispatch-packet template validator used by packet writing and packet reading surfaces.
 - Key interfaces
   - `vida orchestrator-init`
@@ -144,6 +149,7 @@ Will implement / choose:
   - `carrier_runtime`
   - `runtime_assignment`
   - root-session exception-path requirements
+  - sticky user-ordered agent-mode and saturation-recovery guard flags
 - Migration or compatibility notes
   - No store/schema migration is required.
   - Resume/read paths must stay backward-compatible with older persisted runtime packets that predate the current packet-minimum contract.
@@ -173,6 +179,7 @@ Will implement / choose:
 - `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
 - `crates/vida/src/init_surfaces.rs`
 - `crates/vida/src/main.rs`
+- `crates/vida/src/runtime_dispatch_state.rs`
 - `crates/vida/src/taskflow_consume_resume.rs`
 - `crates/vida/src/status_surface.rs`
 - `crates/vida/src/doctor_surface.rs`
@@ -183,9 +190,11 @@ Will implement / choose:
 - Forbidden fallback paths
   - No local root-session implementation as the default response to a normal write-producing task.
   - No reinterpretation of host subagent availability as the canonical legality gate for project delegated work.
+  - No silent downgrade from explicit user-ordered agent/parallel-agent execution into root-session implementation because of saturation, stale lane ids, thread limits, or `not_found` carrier errors.
 - Required receipts / proofs / gates
   - root-session local write still requires explicit exception-path evidence.
   - delegated packet execution remains tied to `vida agent-init`/TaskFlow lane receipts.
+  - saturation recovery must run before any local fallback path is considered when agent routing was explicitly ordered.
 - Safety boundaries that must remain true during rollout
   - carrier/runtime neutrality remains intact.
   - delegation-first and coach/verifier separation remain intact.

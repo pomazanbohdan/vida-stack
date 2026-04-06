@@ -15,6 +15,7 @@ Core rule:
 6. L0 thinking activation: keep `instruction-contracts/overlay.step-thinking-protocol` and `instruction-contracts/overlay.session-context-continuity-protocol` active for orchestrator lanes; worker lanes activate them only when the packet/runtime explicitly requires them.
 7. For normal write-producing development work, "agent mode" means the project runtime's delegated lane flow through `vida agent-init`; host-tool-specific subagent APIs are optional carrier/executor details and do not replace the canonical VIDA/TaskFlow delegation path.
 8. Host-local write capability, shell access, or direct patch tools do not authorize root-lane implementation; while the root-session write guard is active, lawful write ownership still routes through `vida agent-init` unless an explicit exception-path receipt exists.
+9. If the user explicitly orders agent-first or parallel-agent execution, that routing intent is sticky; root must restore, reclaim, or re-dispatch delegated lanes before considering any local exception path and must not silently substitute root-session implementation.
 
 Canonical bootstrap routes:
 1. Main/root lane: `vida orchestrator-init`
@@ -34,6 +35,7 @@ Normal feature-delivery rule:
 4. After the design document fixes the bounded file set and proof targets, continue through orchestrated execution rather than collapsing immediately into root-session coding.
 5. When normal write-producing work is lawful, shape and dispatch the next bounded packet through `vida agent-init` rather than waiting for or substituting any host-local subagent primitive.
 6. The mere ability to edit files locally from the host tool is not a lane-change receipt and must not be treated as permission to bypass delegated execution.
+7. Agent/thread saturation, stale lane handles, or `not_found` carrier errors require saturation recovery first: inspect active lanes, synthesize any completed returns, reclaim closeable lanes, and retry lawful `vida agent-init` dispatch before any local fallback is even considered.
 
 Host CLI rule:
 1. Host agent templates are activated through `vida project-activator`, not `vida init`.
@@ -83,5 +85,5 @@ schema_version: '1'
 status: canonical
 source_path: install/assets/AGENTS.scaffold.md
 created_at: '2026-03-14T18:10:00+02:00'
-updated_at: 2026-04-04T20:12:10.229371854Z
+updated_at: 2026-04-04T20:12:10.231336708Z
 changelog_ref: AGENTS.scaffold.changelog.jsonl

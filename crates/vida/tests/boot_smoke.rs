@@ -191,6 +191,9 @@ fn seed_runtime_consumption_final_snapshot(state_dir: &str) -> String {
                             "root_session_role": "orchestrator",
                             "local_write_requires_exception_path": true,
                             "lawful_write_surface": "vida agent-init",
+                            "explicit_user_ordered_agent_mode_is_sticky": true,
+                            "saturation_recovery_required_before_local_fallback": true,
+                            "local_fallback_without_lane_recovery_forbidden": true,
                             "host_local_write_capability_is_not_authority": true,
                             "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
                             "pre_write_checkpoint_required": true
@@ -201,6 +204,9 @@ fn seed_runtime_consumption_final_snapshot(state_dir: &str) -> String {
                                 "root_session_role": "orchestrator",
                                 "local_write_requires_exception_path": true,
                                 "lawful_write_surface": "vida agent-init",
+                                "explicit_user_ordered_agent_mode_is_sticky": true,
+                                "saturation_recovery_required_before_local_fallback": true,
+                                "local_fallback_without_lane_recovery_forbidden": true,
                                 "host_local_write_capability_is_not_authority": true,
                                 "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
                                 "pre_write_checkpoint_required": true
@@ -4751,6 +4757,12 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
         .as_str()
         .expect("prompt should be present")
         .contains(
+            "If the user explicitly ordered agent-first or parallel-agent execution, keep that routing sticky and do not silently substitute root-session implementation."
+        ));
+    assert!(downstream_packet_json["prompt"]
+        .as_str()
+        .expect("prompt should be present")
+        .contains(
             "Under continued-development intent, stay in commentary/progress mode; final closure wording is forbidden unless the user explicitly asks to stop."
         ));
     assert!(downstream_packet_json["prompt"]
@@ -4776,6 +4788,12 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
         .expect("prompt should be present")
         .contains(
             "When recording task notes from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text."
+        ));
+    assert!(downstream_packet_json["prompt"]
+        .as_str()
+        .expect("prompt should be present")
+        .contains(
+            "Agent/thread limits, stale lane handles, or `not_found` carrier failures require saturation recovery first: inspect active lanes, synthesize completed returns, reclaim closeable lanes, and retry lawful `vida agent-init` dispatch before any local fallback is considered."
         ));
     assert!(downstream_packet_json["prompt"]
         .as_str()
@@ -11759,6 +11777,18 @@ fn status_surface_supports_compact_json_summary_view() {
         parsed["root_session_write_guard"]["host_local_write_capability_is_not_authority"],
         true
     );
+    assert_eq!(
+        parsed["root_session_write_guard"]["explicit_user_ordered_agent_mode_is_sticky"],
+        true
+    );
+    assert_eq!(
+        parsed["root_session_write_guard"]["saturation_recovery_required_before_local_fallback"],
+        true
+    );
+    assert_eq!(
+        parsed["root_session_write_guard"]["local_fallback_without_lane_recovery_forbidden"],
+        true
+    );
 }
 
 #[test]
@@ -11904,6 +11934,18 @@ fn doctor_surface_supports_compact_json_summary_view() {
     );
     assert_eq!(
         parsed["root_session_write_guard"]["host_local_write_capability_is_not_authority"],
+        true
+    );
+    assert_eq!(
+        parsed["root_session_write_guard"]["explicit_user_ordered_agent_mode_is_sticky"],
+        true
+    );
+    assert_eq!(
+        parsed["root_session_write_guard"]["saturation_recovery_required_before_local_fallback"],
+        true
+    );
+    assert_eq!(
+        parsed["root_session_write_guard"]["local_fallback_without_lane_recovery_forbidden"],
         true
     );
 }

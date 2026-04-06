@@ -62,6 +62,13 @@ Execution rules:
 13. Never treat commentary or an intermediate status update as a lawful pause boundary either.
 14. If the user gives an explicit ordered sequence, execute that order as written; do not replace it with your own cleanup-first, polish-first, or breadth-first plan.
 15. Do not widen scope into adjacent fixes, repo cleanup, or self-directed development unless the current bounded step cannot be completed without it or the user explicitly authorizes the wider track.
+16. If the user explicitly orders agent-first or parallel-agent execution, keep that routing sticky; do not silently substitute local root-session implementation because of delay, timeout, saturation, stale lane ids, or `not_found` carrier errors.
+17. On thread-limit or stale-lane failures, run saturation recovery first:
+   - inspect active delegated lanes,
+   - synthesize any completed returns,
+   - reclaim closeable lanes,
+   - retry lawful delegated dispatch,
+   - only then evaluate whether an explicit exception path exists.
 
 Output style for each new or resumed session:
 

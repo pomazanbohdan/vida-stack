@@ -83,6 +83,9 @@ fn canonical_root_session_write_guard_defaults() -> serde_json::Value {
         "status": "blocked_by_default",
         "root_session_role": "orchestrator",
         "lawful_write_surface": "vida agent-init",
+        "explicit_user_ordered_agent_mode_is_sticky": true,
+        "saturation_recovery_required_before_local_fallback": true,
+        "local_fallback_without_lane_recovery_forbidden": true,
         "host_local_write_capability_is_not_authority": true,
         "local_write_requires_exception_path": true,
         "required_exception_evidence": "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard.",
@@ -194,6 +197,11 @@ fn external_cli_preflight_summary(
     let requires_external_cli = selected_is_external;
     let sandbox_active = is_sandbox_active_from_env();
     let network_reachable = can_resolve_public_network();
+    let tool_contract = external_cli_tool_contract_summary(
+        selected_execution_class.as_str(),
+        requires_external_cli,
+        selected_cli_entry,
+    );
 
     if requires_external_cli && sandbox_active && !network_reachable {
         return serde_json::json!({
@@ -201,6 +209,7 @@ fn external_cli_preflight_summary(
             "requires_external_cli": true,
             "external_cli_subagents_present": has_enabled_external_subagents,
             "selected_execution_class": selected_execution_class,
+            "tool_contract": tool_contract,
             "sandbox_active": true,
             "network_reachable": false,
             "blocker_code": "external_cli_network_access_unavailable_under_sandbox",
@@ -217,10 +226,60 @@ fn external_cli_preflight_summary(
         "requires_external_cli": requires_external_cli,
         "external_cli_subagents_present": has_enabled_external_subagents,
         "selected_execution_class": selected_execution_class,
+        "tool_contract": tool_contract,
         "sandbox_active": sandbox_active,
         "network_reachable": network_reachable,
         "blocker_code": serde_json::Value::Null,
         "next_actions": []
+    })
+}
+
+fn external_cli_tool_contract_summary(
+    selected_execution_class: &str,
+    requires_external_cli: bool,
+    selected_cli_entry: Option<&serde_yaml::Value>,
+) -> serde_json::Value {
+    let runtime_root_configured = selected_cli_entry
+        .and_then(|entry| super::yaml_lookup(entry, &["runtime_root"]))
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    let auth_mode = match selected_execution_class {
+        "external" => "delegated_host_session",
+        "internal" => "project_runtime_internal",
+        _ => "unknown",
+    };
+    let blocker_code = if selected_cli_entry.is_none() {
+        blocker_code_str(BlockerCode::ToolContractMissing)
+    } else if auth_mode == "unknown" || !runtime_root_configured {
+        blocker_code_str(BlockerCode::ToolContractIncomplete)
+    } else {
+        ""
+    };
+    let status = if blocker_code.is_empty() {
+        "pass"
+    } else {
+        "blocked"
+    };
+
+    serde_json::json!({
+        "contract_id": "release-1-tool-contract-v1",
+        "status": status,
+        "blocker_code": if blocker_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(blocker_code.to_string()) },
+        "execution_class": selected_execution_class,
+        "auth_mode": auth_mode,
+        "idempotency": "read_only_probe",
+        "retry_policy": {
+            "mode": if requires_external_cli { "retry_on_transient_external_cli_probe_failure" } else { "single_probe" },
+            "max_attempts": if requires_external_cli { 3 } else { 1 },
+            "backoff": "exponential"
+        },
+        "side_effect_profile": "read_only_status_probe",
+        "policy_hooks": [
+            "execution_class_gate",
+            "runtime_root_resolution",
+            "sandbox_network_gate"
+        ]
     })
 }
 
@@ -1393,6 +1452,9 @@ pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
         },
         "root_session_role": guard["root_session_role"].clone(),
         "lawful_write_surface": guard["lawful_write_surface"].clone(),
+        "explicit_user_ordered_agent_mode_is_sticky": guard["explicit_user_ordered_agent_mode_is_sticky"].clone(),
+        "saturation_recovery_required_before_local_fallback": guard["saturation_recovery_required_before_local_fallback"].clone(),
+        "local_fallback_without_lane_recovery_forbidden": guard["local_fallback_without_lane_recovery_forbidden"].clone(),
         "host_local_write_capability_is_not_authority": guard["host_local_write_capability_is_not_authority"].clone(),
         "local_write_requires_exception_path": guard["local_write_requires_exception_path"].clone(),
         "required_exception_evidence": guard["required_exception_evidence"].clone(),
@@ -1611,7 +1673,7 @@ mod tests {
         root_session_write_guard_summary_from_snapshot_path, selected_host_cli_system_entry,
         shared_operator_output_contract_parity_error,
     };
-    use crate::state_store;
+    use crate::{blocker_code_str, state_store, BlockerCode};
 
     #[test]
     fn release1_operator_contracts_consistency_accepts_pass_without_blockers() {
@@ -1768,6 +1830,12 @@ host_environment:
         let summary = super::external_cli_preflight_summary(&overlay, &selected, entry.as_ref());
         assert_eq!(summary["requires_external_cli"], false);
         assert_eq!(summary["selected_execution_class"], "internal");
+        assert_eq!(summary["tool_contract"]["status"], "pass");
+        assert_eq!(
+            summary["tool_contract"]["auth_mode"],
+            "project_runtime_internal"
+        );
+        assert_eq!(summary["tool_contract"]["idempotency"], "read_only_probe");
     }
 
     #[test]
@@ -1796,6 +1864,7 @@ agent_system:
         assert_eq!(summary["requires_external_cli"], false);
         assert_eq!(summary["external_cli_subagents_present"], true);
         assert_eq!(summary["selected_execution_class"], "internal");
+        assert_eq!(summary["tool_contract"]["status"], "pass");
     }
 
     #[test]
@@ -1857,6 +1926,39 @@ host_environment:
 
         let summary = external_cli_preflight_summary(&overlay, "codex", None);
         assert_eq!(summary["selected_execution_class"], "unknown");
+        assert_eq!(summary["tool_contract"]["status"], "blocked");
+        assert_eq!(
+            summary["tool_contract"]["blocker_code"],
+            blocker_code_str(BlockerCode::ToolContractMissing)
+        );
+    }
+
+    #[test]
+    fn external_cli_preflight_marks_tool_contract_incomplete_when_runtime_root_is_missing() {
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: external
+"#,
+        )
+        .expect("overlay yaml should parse");
+
+        let (selected, entry) = selected_host_cli_system_entry(&overlay);
+        let summary = external_cli_preflight_summary(&overlay, &selected, entry.as_ref());
+        assert_eq!(summary["selected_execution_class"], "external");
+        assert_eq!(summary["tool_contract"]["status"], "blocked");
+        assert_eq!(
+            summary["tool_contract"]["blocker_code"],
+            blocker_code_str(BlockerCode::ToolContractIncomplete)
+        );
+        assert_eq!(
+            summary["tool_contract"]["auth_mode"],
+            "delegated_host_session"
+        );
     }
 
     #[test]
