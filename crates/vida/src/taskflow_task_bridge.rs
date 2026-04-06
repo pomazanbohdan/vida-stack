@@ -47,6 +47,9 @@ fn read_runtime_consumption_snapshot(state_root: &Path) -> Result<serde_json::Va
 fn has_execution_preparation_blocker(snapshot: &serde_json::Value) -> bool {
     let pending_execution_preparation_evidence =
         blocker_code_str(BlockerCode::PendingExecutionPreparationEvidence);
+    let pending_design_packet = blocker_code_str(BlockerCode::PendingDesignPacket);
+    let pending_developer_handoff_packet =
+        blocker_code_str(BlockerCode::PendingDeveloperHandoffPacket);
     let missing_execution_preparation_contract =
         blocker_code_str(BlockerCode::MissingExecutionPreparationContract);
     let mut blockers: Vec<&str> = Vec::new();
@@ -61,6 +64,8 @@ fn has_execution_preparation_blocker(snapshot: &serde_json::Value) -> bool {
     }
     blockers.iter().any(|value| {
         *value == pending_execution_preparation_evidence
+            || *value == pending_design_packet
+            || *value == pending_developer_handoff_packet
             || *value == missing_execution_preparation_contract
     })
 }
@@ -218,6 +223,36 @@ mod tests {
                 "blocker_codes": [
                     "pending_execution_preparation_evidence",
                 ],
+            },
+            "dispatch_receipt": {},
+        });
+
+        assert!(has_execution_preparation_blocker(&snapshot));
+    }
+
+    #[test]
+    fn execution_preparation_blocker_detects_pending_developer_handoff_packet() {
+        let snapshot = serde_json::json!({
+            "closure_admission": {
+                "blockers": ["pending_developer_handoff_packet"],
+            },
+            "operator_contracts": {
+                "blocker_codes": [],
+            },
+            "dispatch_receipt": {},
+        });
+
+        assert!(has_execution_preparation_blocker(&snapshot));
+    }
+
+    #[test]
+    fn execution_preparation_blocker_detects_pending_design_packet() {
+        let snapshot = serde_json::json!({
+            "closure_admission": {
+                "blockers": ["pending_design_packet"],
+            },
+            "operator_contracts": {
+                "blocker_codes": [],
             },
             "dispatch_receipt": {},
         });

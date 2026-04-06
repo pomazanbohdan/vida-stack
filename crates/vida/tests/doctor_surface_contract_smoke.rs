@@ -345,6 +345,65 @@ fn taskflow_consume_continue_fails_closed_when_operator_contract_status_is_block
 }
 
 #[test]
+fn taskflow_consume_continue_fails_closed_when_developer_handoff_packet_is_pending() {
+    let state_dir = unique_state_dir();
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    write_final_snapshot(
+        &state_dir,
+        "final-developer-handoff-pending.json",
+        serde_json::json!({
+            "surface": "vida taskflow consume final",
+            "operator_contracts": {
+                "contract_id": "release-1-operator-contracts",
+                "schema_version": "release-1-v1",
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {},
+            },
+            "closure_admission": {
+                "status": "blocked",
+                "blockers": ["pending_developer_handoff_packet"],
+            },
+            "payload": {
+                "closure_admission": {
+                    "status": "blocked",
+                    "blockers": ["pending_developer_handoff_packet"],
+                }
+            },
+            "dispatch_receipt": {
+                "blocker_code": null
+            }
+        }),
+    );
+
+    let continue_cmd = vida()
+        .args(["taskflow", "consume", "continue", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("taskflow consume continue should run");
+    assert!(
+        !continue_cmd.status.success(),
+        "continue should fail-closed when developer handoff packet contract is still pending"
+    );
+    let stderr = String::from_utf8_lossy(&continue_cmd.stderr);
+    assert!(
+        stderr.contains("execution_preparation_gate_blocked"),
+        "stderr should mention execution-preparation gate blocker, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("pending_execution_preparation_evidence"),
+        "stderr should preserve canonical execution-preparation gate wording, got: {stderr}"
+    );
+}
+
+#[test]
 fn doctor_and_protocol_binding_share_canonical_status() {
     let state_dir = unique_state_dir();
 
