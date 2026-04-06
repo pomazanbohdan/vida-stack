@@ -3251,7 +3251,11 @@ fn build_docflow_runtime_evidence() -> (
         surface: "vida docflow proofcheck --profile active-canon".to_string(),
         ok: proof_ok,
         row_count: count_nonempty_lines(&proof_output),
-        verdict: None,
+        verdict: Some(if proof_ok {
+            "ready".to_string()
+        } else {
+            "blocked".to_string()
+        }),
         artifact_path: None,
         output: proof_output,
     };
@@ -3295,6 +3299,13 @@ fn build_docflow_runtime_verdict(
             blockers.push(code);
         }
     }
+    if !matches!(readiness.verdict.as_deref(), Some("ready" | "blocked")) {
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::MissingReadinessVerdict,
+        ) {
+            blockers.push(code);
+        }
+    }
     if readiness
         .artifact_path
         .as_deref()
@@ -3308,6 +3319,13 @@ fn build_docflow_runtime_verdict(
         }
     }
     if !proof.ok {
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::MissingProofVerdict,
+        ) {
+            blockers.push(code);
+        }
+    }
+    if !matches!(proof.verdict.as_deref(), Some("ready" | "blocked")) {
         if let Some(code) = crate::release1_contracts::blocker_code_value(
             crate::release1_contracts::BlockerCode::MissingProofVerdict,
         ) {
@@ -3394,6 +3412,7 @@ fn blocking_docflow_activation(error: &str) -> RuntimeConsumptionDocflowActivati
                 "surface": "vida docflow proofcheck --profile active-canon",
                 "ok": false,
                 "row_count": 0,
+                "verdict": "blocked",
                 "output": error
             }
         }),
@@ -7018,7 +7037,7 @@ mod tests {
             surface: "proof".to_string(),
             ok: true,
             row_count: 1,
-            verdict: None,
+            verdict: Some("ready".to_string()),
             artifact_path: None,
             output: "✅ OK: proofcheck".to_string(),
         };
@@ -7064,7 +7083,7 @@ mod tests {
             surface: "proof".to_string(),
             ok: false,
             row_count: 1,
-            verdict: None,
+            verdict: Some("blocked".to_string()),
             artifact_path: None,
             output: "❌ BLOCKING: proofcheck".to_string(),
         };
@@ -7118,7 +7137,7 @@ mod tests {
             surface: "proof".to_string(),
             ok: true,
             row_count: 1,
-            verdict: None,
+            verdict: Some("ready".to_string()),
             artifact_path: None,
             output: "✅ OK: proofcheck".to_string(),
         };
@@ -7163,7 +7182,7 @@ mod tests {
             surface: "proof".to_string(),
             ok: true,
             row_count: 1,
-            verdict: None,
+            verdict: Some("ready".to_string()),
             artifact_path: None,
             output: "✅ OK: proofcheck".to_string(),
         };
@@ -7348,6 +7367,48 @@ mod tests {
             admission.blockers,
             vec!["pending_design_packet", "pending_developer_handoff_packet"]
         );
+    }
+
+    #[test]
+    fn taskflow_consume_final_verdict_blocks_when_proof_verdict_is_missing() {
+        let registry = RuntimeConsumptionEvidence {
+            surface: "registry".to_string(),
+            ok: true,
+            row_count: 1,
+            verdict: None,
+            artifact_path: None,
+            output: String::new(),
+        };
+        let check = RuntimeConsumptionEvidence {
+            surface: "check".to_string(),
+            ok: true,
+            row_count: 0,
+            verdict: None,
+            artifact_path: None,
+            output: String::new(),
+        };
+        let readiness = RuntimeConsumptionEvidence {
+            surface: "readiness".to_string(),
+            ok: true,
+            row_count: 0,
+            verdict: Some("ready".to_string()),
+            artifact_path: Some("vida/config/docflow-readiness.current.jsonl".to_string()),
+            output: String::new(),
+        };
+        let proof = RuntimeConsumptionEvidence {
+            surface: "proof".to_string(),
+            ok: true,
+            row_count: 1,
+            verdict: None,
+            artifact_path: None,
+            output: "✅ OK: proofcheck".to_string(),
+        };
+
+        let verdict = build_docflow_runtime_verdict(&registry, &check, &readiness, &proof);
+
+        assert_eq!(verdict.status, "block");
+        assert!(!verdict.ready);
+        assert_eq!(verdict.blockers, vec!["missing_proof_verdict"]);
     }
 
     #[tokio::test(flavor = "multi_thread")]

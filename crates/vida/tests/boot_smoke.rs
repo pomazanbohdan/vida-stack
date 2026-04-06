@@ -2663,6 +2663,10 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
         .expect("readiness artifact path should be a string");
     assert!(readiness_artifact_path.ends_with("vida/config/docflow-readiness.current.jsonl"));
     assert!(parsed["payload"]["docflow_activation"]["evidence"]["proof"]["ok"].is_boolean());
+    let proof_verdict = parsed["payload"]["docflow_activation"]["evidence"]["proof"]["verdict"]
+        .as_str()
+        .expect("proof verdict should be a string");
+    assert!(matches!(proof_verdict, "ready" | "blocked"));
     assert!(parsed["payload"]["docflow_verdict"]["ready"].is_boolean());
     let docflow_ready = parsed["payload"]["docflow_verdict"]["ready"]
         .as_bool()
@@ -4352,6 +4356,10 @@ fn consume_final_uses_local_project_context_when_repo_context_is_missing() {
     assert_eq!(
         parsed["payload"]["docflow_activation"]["evidence"]["readiness"]["verdict"],
         "ready"
+    );
+    assert_eq!(
+        parsed["payload"]["docflow_activation"]["evidence"]["proof"]["verdict"],
+        "blocked"
     );
     let readiness_artifact_path = parsed["payload"]["docflow_activation"]["evidence"]["readiness"]
         ["artifact_path"]
