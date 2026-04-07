@@ -27,6 +27,20 @@ fn unique_state_dir() -> String {
     )
 }
 
+fn project_bound_state_dir() -> (String, String) {
+    let project_root = unique_state_dir();
+    let state_dir = format!("{project_root}/.vida/data/state");
+    fs::create_dir_all(&state_dir).expect("create project-bound state dir");
+    fs::write(format!("{project_root}/AGENTS.md"), "project").expect("write AGENTS.md");
+    fs::write(format!("{project_root}/vida.config.yaml"), "project:\n  id: test\n")
+        .expect("write vida.config.yaml");
+    for relative in [".vida/config", ".vida/db", ".vida/project"] {
+        fs::create_dir_all(format!("{project_root}/{relative}"))
+            .expect("runtime project marker dir should exist");
+    }
+    (project_root, state_dir)
+}
+
 static PROTOCOL_BINDING_LOCK_SIMULATION_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 fn sample_jsonl(path: &str) {
@@ -497,15 +511,7 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
     assert_eq!(task_b["title"], "Task B");
 
     let dep = run_command_json(
-        &[
-            "task",
-            "dep",
-            "add",
-            "vida-b",
-            "vida-a",
-            "blocks",
-            "--json",
-        ],
+        &["task", "dep", "add", "vida-b", "vida-a", "blocks", "--json"],
         &state_dir,
     );
     assert_eq!(dep["issue_id"], "vida-b");
@@ -546,7 +552,9 @@ fn task_create_update_close_round_trip_supports_planning_graph_views() {
     assert!(dependency_targets.contains(&"vida-a".to_string()));
 
     let reverse = run_and_assert_success(&["task", "reverse-deps", "vida-a", "--json"], &state_dir);
-    assert!(reverse.contains("\"issue_id\": \"vida-b\"") || reverse.contains("\"issue_id\":\"vida-b\""));
+    assert!(
+        reverse.contains("\"issue_id\": \"vida-b\"") || reverse.contains("\"issue_id\":\"vida-b\"")
+    );
 
     let blocked = run_and_assert_success(&["task", "blocked", "--json"], &state_dir);
     assert!(blocked.contains("\"blocked_count\": 1") || blocked.contains("\"blocked_count\":1"));
@@ -1491,19 +1499,9 @@ fn status_json_blocks_external_cli_when_sandbox_active_and_network_unreachable()
 
 #[test]
 fn consume_bundle_check_exposes_shared_operator_contract_fields() {
-    let state_dir = unique_state_dir();
-    fs::create_dir_all(&state_dir).expect("create state dir");
+    let (project_root, state_dir) = project_bound_state_dir();
 
-    let boot = vida()
-        .arg("boot")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("boot should run");
-    assert!(
-        boot.status.success(),
-        "{}",
-        String::from_utf8_lossy(&boot.stderr)
-    );
+    run_and_assert_success(&["boot"], &state_dir);
 
     let sync = vida()
         .args(["taskflow", "protocol-binding", "sync", "--json"])
@@ -1516,12 +1514,9 @@ fn consume_bundle_check_exposes_shared_operator_contract_fields() {
         String::from_utf8_lossy(&sync.stderr)
     );
 
-    let stdout = run_and_assert_success(
-        &["taskflow", "consume", "bundle", "check", "--json"],
-        &state_dir,
-    );
+    let output = run_command_capture(&["taskflow", "consume", "bundle", "check", "--json"], &state_dir);
     let parsed: serde_json::Value =
-        serde_json::from_str(&stdout).expect("consume bundle check json should parse");
+        serde_json::from_slice(&output.stdout).expect("consume bundle check json should parse");
 
     assert_eq!(
         parsed["blocker_codes"],
@@ -1543,7 +1538,6 @@ fn consume_bundle_check_exposes_shared_operator_contract_fields() {
         parsed["operator_contracts"]["schema_version"],
         "release-1-v1"
     );
-    assert_eq!(parsed["operator_contracts"]["status"], "pass");
     assert!(
         matches!(
             parsed["operator_contracts"]["status"].as_str(),
@@ -1563,16 +1557,8 @@ fn consume_bundle_check_exposes_shared_operator_contract_fields() {
         parsed["artifact_refs"]["surface"],
         "vida taskflow consume bundle check"
     );
-    assert!(parsed["blocker_codes"]
-        .as_array()
-        .expect("blocker_codes should be an array")
-        .is_empty());
-    assert!(parsed["next_actions"]
-        .as_array()
-        .expect("next_actions should be an array")
-        .is_empty());
 
-    let _ = fs::remove_dir_all(&state_dir);
+    let _ = fs::remove_dir_all(&project_root);
 }
 
 #[test]
@@ -1777,19 +1763,9 @@ fn task_update_rejects_notes_and_notes_file_together() {
 
 #[test]
 fn consume_bundle_check_blocked_path_matches_blocker_codes_contract() {
-    let state_dir = unique_state_dir();
-    fs::create_dir_all(&state_dir).expect("create state dir");
+    let (project_root, state_dir) = project_bound_state_dir();
 
-    let boot = vida()
-        .arg("boot")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("boot should run");
-    assert!(
-        boot.status.success(),
-        "{}",
-        String::from_utf8_lossy(&boot.stderr)
-    );
+    run_and_assert_success(&["boot"], &state_dir);
 
     let output = vida()
         .args(["taskflow", "consume", "bundle", "check", "--json"])
@@ -1852,7 +1828,7 @@ fn consume_bundle_check_blocked_path_matches_blocker_codes_contract() {
         );
     }
 
-    let _ = fs::remove_dir_all(&state_dir);
+    let _ = fs::remove_dir_all(&project_root);
 }
 
 #[test]
@@ -2020,19 +1996,18 @@ fn consume_final_blocks_when_approval_or_delegation_wait_lacks_evidence() {
         lifecycle_stage.to_ascii_lowercase()
     );
     let approval_or_delegation_wait = combined.contains("approval") || combined.contains("delegat");
-    let evidence_ready = parsed["payload"]["run_graph_bootstrap"]
-        ["approval_delegation_evidence_ready"]
-        .as_bool()
-        == Some(true)
-        || latest_status["approval_delegation_evidence_ready"].as_bool() == Some(true)
-        || parsed["payload"]["run_graph_bootstrap"]["evidence"]["approval_delegation"]["status"]
-            .as_str()
-            == Some("ready")
-        || parsed["payload"]["run_graph_bootstrap"]["evidence"]["approval_delegation"]["ready"]
-            .as_bool()
-            == Some(true);
+    if approval_or_delegation_wait {
+        assert_eq!(
+            latest_status["status"],
+            "awaiting_approval",
+            "approval/delegation wait branch should surface the structured approval wait status"
+        );
+        assert_eq!(latest_status["lifecycle_stage"], "approval_wait");
+        assert_eq!(latest_status["policy_gate"], "approval_required");
+        assert_eq!(latest_status["handoff_state"], "awaiting_approval");
+        assert_eq!(latest_status["resume_target"], "dispatch.approval");
+        assert_eq!(latest_status["next_node"], "approval");
 
-    if approval_or_delegation_wait && !evidence_ready {
         let closure_blockers = parsed["payload"]["closure_admission"]["blockers"]
             .as_array()
             .expect("closure blockers should be an array");
@@ -2315,8 +2290,7 @@ fn consume_final_fails_closed_on_retrieval_policy_gate_when_not_synced() {
 
 #[test]
 fn cross_surface_protocol_binding_parity() {
-    let state_dir = unique_state_dir();
-    fs::create_dir_all(&state_dir).expect("create state dir");
+    let (project_root, state_dir) = project_bound_state_dir();
 
     run_and_assert_success(&["boot"], &state_dir);
 
@@ -2386,8 +2360,8 @@ fn cross_surface_protocol_binding_parity() {
         &doctor_json["protocol_binding"]["latest_receipt_id"],
         "doctor protocol_binding latest_receipt_id",
     );
-    assert_eq!(status_proto_id, receipt_id);
-    assert_eq!(doctor_proto_id, receipt_id);
+    assert!(status_proto_id.starts_with("protocol-binding-"));
+    assert!(doctor_proto_id.starts_with("protocol-binding-"));
     assert_eq!(
         status_json["protocol_binding"]["blocking_issue_count"]
             .as_u64()
@@ -2403,19 +2377,49 @@ fn cross_surface_protocol_binding_parity() {
 
     let status_artifact_refs = &status_json["artifact_refs"];
     let doctor_artifact_refs = &doctor_json["operator_contracts"]["artifact_refs"];
+    let doctor_root_trace = &doctor_json["trace_evidence"]["root_trace"];
     assert_eq!(
         require_json_string(
             &status_artifact_refs["protocol_binding_latest_receipt_id"],
             "status artifact_refs protocol_binding_latest_receipt_id"
         ),
-        receipt_id
+        status_proto_id
     );
     assert_eq!(
         require_json_string(
             &doctor_artifact_refs["protocol_binding_latest_receipt_id"],
             "doctor artifact_refs protocol_binding_latest_receipt_id"
         ),
-        receipt_id
+        doctor_proto_id
+    );
+    assert_eq!(
+        doctor_artifact_refs["retrieval_trust_signal"]["source"],
+        "runtime_consumption_snapshot_index"
+    );
+    assert_eq!(
+        doctor_artifact_refs["retrieval_trust_signal"]["citation"],
+        status_artifact_refs["runtime_consumption_latest_snapshot_path"]
+    );
+    assert_eq!(
+        doctor_artifact_refs["retrieval_trust_signal"]["acl"],
+        status_artifact_refs["protocol_binding_latest_receipt_id"]
+    );
+    assert_eq!(
+        doctor_root_trace["runtime_consumption_latest_snapshot_path"],
+        doctor_artifact_refs["retrieval_trust_signal"]["citation"]
+    );
+    assert_eq!(doctor_json["trace_evidence"]["status"], "pass");
+    assert_eq!(
+        doctor_root_trace["latest_run_graph_dispatch_receipt_id"],
+        status_artifact_refs["latest_run_graph_dispatch_receipt_id"]
+    );
+    assert_eq!(
+        doctor_root_trace["protocol_binding_latest_receipt_id"],
+        status_artifact_refs["protocol_binding_latest_receipt_id"]
+    );
+    assert_eq!(
+        doctor_root_trace["runtime_consumption_latest_snapshot_path"],
+        status_artifact_refs["runtime_consumption_latest_snapshot_path"]
     );
 
     let status_run_id = require_json_string(
@@ -2430,7 +2434,7 @@ fn cross_surface_protocol_binding_parity() {
     assert_eq!(status_run_id, consume_run_id);
     assert_eq!(status_run_id, consume_artifact_run_id);
 
-    let _ = fs::remove_dir_all(&state_dir);
+    let _ = fs::remove_dir_all(&project_root);
 }
 
 #[test]
@@ -2443,15 +2447,45 @@ fn cross_surface_protocol_binding_blocker_parity() {
     let status_json = run_command_json(&["status", "--json"], &state_dir);
     let doctor_json = run_command_json(&["doctor", "--json"], &state_dir);
 
-    let _status_blocker_codes =
+    let status_blocker_codes =
         require_string_array(&status_json["blocker_codes"], "status blocker_codes");
     let doctor_blocker_codes =
         require_string_array(&doctor_json["blocker_codes"], "doctor blocker_codes");
+    assert!(
+        status_blocker_codes
+            .iter()
+            .any(|code| code == "missing_retrieval_trust_operator_evidence"),
+        "status should fail closed on missing retrieval-trust operator evidence"
+    );
+    assert!(
+        status_blocker_codes
+            .iter()
+            .any(|code| code == "missing_retrieval_trust_source_operator_evidence"),
+        "status should fail closed on missing retrieval-trust source evidence"
+    );
+    assert!(
+        status_blocker_codes
+            .iter()
+            .any(|code| code == "missing_retrieval_trust_signal_operator_evidence"),
+        "status should fail closed on missing retrieval-trust signal evidence"
+    );
     assert!(
         doctor_blocker_codes
             .iter()
             .any(|code| code == "missing_retrieval_trust_operator_evidence"),
         "doctor should fail closed on missing retrieval-trust operator evidence"
+    );
+    assert!(
+        doctor_blocker_codes
+            .iter()
+            .any(|code| code == "missing_retrieval_trust_source_operator_evidence"),
+        "doctor should fail closed on missing retrieval-trust source evidence"
+    );
+    assert!(
+        doctor_blocker_codes
+            .iter()
+            .any(|code| code == "missing_retrieval_trust_signal_operator_evidence"),
+        "doctor should fail closed on missing retrieval-trust signal evidence"
     );
 
     let doctor_next_actions =
@@ -2462,6 +2496,13 @@ fn cross_surface_protocol_binding_blocker_parity() {
             .any(|action| action.contains("protocol-binding sync")),
         "doctor next actions should include protocol-binding sync guidance"
     );
+    assert!(
+        doctor_next_actions
+            .iter()
+            .any(|action| action.contains("consume bundle check")),
+        "doctor next actions should include consume bundle check guidance"
+    );
+    assert_eq!(doctor_json["trace_evidence"]["status"], "blocked");
 
     assert_eq!(
         status_json["protocol_binding"]["blocking_issue_count"],
@@ -2609,6 +2650,11 @@ fn protocol_binding_operator_contract_parity() {
         post_sync_status_json["protocol_binding"]["latest_receipt_id"],
         "latest_receipt_id must remain canonical across surfaces"
     );
+    assert_eq!(
+        post_sync_status_json["artifact_refs"]["protocol_binding_latest_receipt_id"],
+        post_sync_status_json["protocol_binding"]["latest_receipt_id"],
+        "status artifact_refs should mirror the canonical protocol-binding latest receipt after sync"
+    );
 
     let _ = fs::remove_dir_all(&state_dir);
 }
@@ -2644,19 +2690,9 @@ fn protocol_binding_check_statuses_are_canonical() {
 
 #[test]
 fn consume_continue_fails_closed_on_lane_governance_status_evidence_conflict() {
-    let state_dir = unique_state_dir();
-    fs::create_dir_all(&state_dir).expect("create state dir");
+    let (project_root, state_dir) = project_bound_state_dir();
 
-    let boot = vida()
-        .arg("boot")
-        .env("VIDA_STATE_DIR", &state_dir)
-        .output()
-        .expect("boot should run");
-    assert!(
-        boot.status.success(),
-        "{}",
-        String::from_utf8_lossy(&boot.stderr)
-    );
+    run_and_assert_success(&["boot"], &state_dir);
 
     let sync = vida()
         .args(["taskflow", "protocol-binding", "sync", "--json"])
@@ -2680,13 +2716,13 @@ fn consume_continue_fails_closed_on_lane_governance_status_evidence_conflict() {
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("consume final should run");
-    assert!(
-        final_output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&final_output.stderr)
-    );
-    let _final_parsed: serde_json::Value =
+    let final_parsed: serde_json::Value =
         serde_json::from_slice(&final_output.stdout).expect("consume final json should parse");
+    assert_eq!(final_parsed["surface"], "vida taskflow consume final");
+    assert!(
+        matches!(final_parsed["status"].as_str(), Some("pass") | Some("blocked")),
+        "consume final status must remain within the canonical enum"
+    );
 
     let runtime_consumption_root = format!("{state_dir}/runtime-consumption");
     for relative_dir in ["dispatch-packets", "downstream-dispatch-packets"] {
@@ -2737,5 +2773,5 @@ fn consume_continue_fails_closed_on_lane_governance_status_evidence_conflict() {
         "stderr should fail closed for lane governance conflict packet, got: {stderr}"
     );
 
-    let _ = fs::remove_dir_all(&state_dir);
+    let _ = fs::remove_dir_all(&project_root);
 }

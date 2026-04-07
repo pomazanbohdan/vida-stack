@@ -65,6 +65,7 @@ use root_command_router::run_root_command;
 use runtime_consumption_state::runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result;
 use runtime_consumption_state::{
     apply_runtime_consumption_final_dispatch_receipt_blocker,
+    latest_admissible_retrieval_trust_signal,
     runtime_consumption_final_dispatch_receipt_blocker_code,
 };
 pub(crate) use runtime_consumption_state::{
@@ -501,7 +502,6 @@ pub(crate) fn carrier_runtime_section<'a>(
 ) -> &'a serde_json::Value {
     compiled_bundle
         .get("carrier_runtime")
-        .or_else(|| compiled_bundle.get("codex_multi_agent"))
         .unwrap_or(&serde_json::Value::Null)
 }
 
@@ -511,7 +511,6 @@ fn runtime_assignment_from_execution_plan<'a>(
     execution_plan
         .get("runtime_assignment")
         .or_else(|| execution_plan.get("carrier_runtime_assignment"))
-        .or_else(|| execution_plan.get("codex_runtime_assignment"))
         .unwrap_or(&serde_json::Value::Null)
 }
 
@@ -989,24 +988,8 @@ async fn sync_launcher_activation_snapshot(
 pub(crate) async fn read_or_sync_launcher_activation_snapshot(
     store: &StateStore,
 ) -> Result<LauncherActivationSnapshot, String> {
-    let current_config = config_file_path().ok().and_then(|path| {
-        let digest = config_file_digest(&path).ok()?;
-        Some((path.display().to_string(), digest))
-    });
     match store.read_launcher_activation_snapshot().await {
-        Ok(snapshot) => {
-            let same_config = current_config
-                .as_ref()
-                .map(|(path, digest)| {
-                    path == &snapshot.source_config_path && digest == &snapshot.source_config_digest
-                })
-                .unwrap_or(false);
-            if same_config {
-                Ok(snapshot)
-            } else {
-                sync_launcher_activation_snapshot(store).await
-            }
-        }
+        Ok(snapshot) => Ok(snapshot),
         Err(StateStoreError::MissingLauncherActivationSnapshot) => {
             sync_launcher_activation_snapshot(store).await
         }
@@ -3458,12 +3441,27 @@ fn emit_taskflow_consume_final_json(
     } else {
         "blocked"
     };
+    let failure_control_evidence = payload_json["dispatch_receipt"]["run_id"]
+        .as_str()
+        .zip(
+            payload_json["dispatch_receipt"]["dispatch_packet_path"]
+                .as_str()
+                .filter(|value| !value.is_empty()),
+        )
+        .map(|(run_id, dispatch_packet_path)| {
+            crate::taskflow_consume_resume::build_failure_control_evidence(run_id, dispatch_packet_path)
+        })
+        .unwrap_or(serde_json::Value::Null);
+    if !failure_control_evidence.is_null() {
+        payload_json["failure_control_evidence"] = failure_control_evidence.clone();
+    }
     let snapshot = serde_json::json!({
         "surface": "vida taskflow consume final",
+        "failure_control_evidence": failure_control_evidence.clone(),
         "payload": payload_json,
     });
     let snapshot_path = write_runtime_consumption_snapshot(store.root(), "final", &snapshot)?;
-    let operator_contracts = build_release1_operator_contracts_envelope(
+    let mut operator_contracts = build_release1_operator_contracts_envelope(
         consume_final_status,
         consume_final_blocker_codes.clone(),
         consume_final_next_actions.clone(),
@@ -3471,11 +3469,11 @@ fn emit_taskflow_consume_final_json(
             "runtime_consumption_latest_snapshot_path": snapshot_path,
             "latest_run_graph_dispatch_receipt_id": payload_json["dispatch_receipt"]["run_id"].as_str(),
             "latest_task_reconciliation_receipt_id": payload_json["task_reconciliation_receipt"]["receipt_id"].as_str(),
-            "retrieval_trust_signal": payload_json["runtime_bundle"]["cache_delivery_contract"]["retrieval_trust_evidence"].clone(),
+            "retrieval_trust_signal": serde_json::json!({}),
             "consume_final_surface": "vida taskflow consume final",
         }),
     );
-    let shared_fields = serde_json::json!({
+    let mut shared_fields = serde_json::json!({
         "trace_id": operator_contracts["trace_id"].clone(),
         "workflow_class": operator_contracts["workflow_class"].clone(),
         "risk_tier": operator_contracts["risk_tier"].clone(),
@@ -3484,7 +3482,7 @@ fn emit_taskflow_consume_final_json(
         "next_actions": operator_contracts["next_actions"].clone(),
         "artifact_refs": operator_contracts["artifact_refs"].clone(),
     });
-    let snapshot_with_operator_contracts = serde_json::json!({
+    let mut snapshot_with_operator_contracts = serde_json::json!({
         "surface": "vida taskflow consume final",
         "trace_id": operator_contracts["trace_id"].clone(),
         "workflow_class": operator_contracts["workflow_class"].clone(),
@@ -3495,8 +3493,54 @@ fn emit_taskflow_consume_final_json(
         "artifact_refs": operator_contracts["artifact_refs"].clone(),
         "shared_fields": shared_fields.clone(),
         "operator_contracts": operator_contracts.clone(),
+        "failure_control_evidence": failure_control_evidence.clone(),
         "payload": payload_json,
     });
+    std::fs::write(
+        &snapshot_path,
+        serde_json::to_string_pretty(&snapshot_with_operator_contracts)
+            .map_err(|error| format!("Failed to encode runtime-consumption snapshot: {error}"))?,
+    )
+    .map_err(|error| format!("Failed to write runtime-consumption snapshot: {error}"))?;
+    let runtime_consumption = runtime_consumption_summary(store.root())?;
+    let latest_final_snapshot_path = latest_final_runtime_consumption_snapshot_path(store.root())?;
+    let protocol_binding_latest_receipt_id = block_on_state_store(store.latest_protocol_binding_receipt())?
+        .map(|receipt| receipt.receipt_id);
+    let retrieval_trust_signal = latest_admissible_retrieval_trust_signal(
+        &runtime_consumption,
+        latest_final_snapshot_path.as_deref(),
+        protocol_binding_latest_receipt_id.as_deref(),
+    )
+    .unwrap_or_else(|| serde_json::json!({}));
+    if let Some(runtime_bundle) = payload_json
+        .get_mut("runtime_bundle")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        runtime_bundle.insert(
+            "retrieval_trust_evidence".to_string(),
+            retrieval_trust_signal.clone(),
+        );
+        if let Some(cache_delivery_contract) = runtime_bundle
+            .get_mut("cache_delivery_contract")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            cache_delivery_contract.insert(
+                "retrieval_trust_evidence".to_string(),
+                retrieval_trust_signal.clone(),
+            );
+        }
+    }
+    operator_contracts["artifact_refs"]["retrieval_trust_signal"] = retrieval_trust_signal.clone();
+    operator_contracts["artifact_refs"]["protocol_binding_latest_receipt_id"] =
+        protocol_binding_latest_receipt_id
+            .clone()
+            .map(serde_json::Value::String)
+            .unwrap_or(serde_json::Value::Null);
+    shared_fields["artifact_refs"] = operator_contracts["artifact_refs"].clone();
+    snapshot_with_operator_contracts["artifact_refs"] = operator_contracts["artifact_refs"].clone();
+    snapshot_with_operator_contracts["shared_fields"] = shared_fields.clone();
+    snapshot_with_operator_contracts["operator_contracts"] = operator_contracts.clone();
+    snapshot_with_operator_contracts["payload"] = payload_json.clone();
     std::fs::write(
         &snapshot_path,
         serde_json::to_string_pretty(&snapshot_with_operator_contracts)
@@ -3516,6 +3560,7 @@ fn emit_taskflow_consume_final_json(
             "artifact_refs": operator_contracts["artifact_refs"].clone(),
             "shared_fields": shared_fields,
             "operator_contracts": operator_contracts,
+            "failure_control_evidence": failure_control_evidence,
             "payload": payload_json,
             "snapshot_path": snapshot_path,
         }))
@@ -3614,31 +3659,40 @@ mod tests {
     use crate::temp_state::TempStateHarness;
     use clap::{CommandFactory, Parser};
     use std::env;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{Mutex, MutexGuard, OnceLock};
 
-    fn current_dir_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
+    struct RecoveringMutex(Mutex<()>);
+
+    impl RecoveringMutex {
+        fn lock(&self) -> MutexGuard<'_, ()> {
+            self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
+    }
+
+    fn current_dir_lock() -> &'static RecoveringMutex {
+        static LOCK: OnceLock<RecoveringMutex> = OnceLock::new();
+        LOCK.get_or_init(|| RecoveringMutex(Mutex::new(())))
     }
 
     struct CurrentDirGuard {
+        _lock: MutexGuard<'static, ()>,
         original: PathBuf,
     }
 
     impl CurrentDirGuard {
         fn change_to(path: &Path) -> Self {
+            let lock = current_dir_lock().lock();
             let original = env::current_dir().expect("current dir should resolve");
             env::set_current_dir(path).expect("current dir should change");
-            Self { original }
+            Self {
+                _lock: lock,
+                original,
+            }
         }
     }
 
     fn guard_current_dir(path: &Path) -> CurrentDirGuard {
-        let guard = {
-            let _lock = current_dir_lock().lock().expect("lock should succeed");
-            CurrentDirGuard::change_to(path)
-        };
-        guard
+        CurrentDirGuard::change_to(path)
     }
 
     impl Drop for CurrentDirGuard {
@@ -3752,6 +3806,14 @@ mod tests {
                             "acl": "protocol-binding-receipt-id"
                         }
                     }
+                },
+                "payload": {
+                    "closure_admission": {
+                        "status": "pass",
+                        "admitted": true,
+                        "blockers": [],
+                        "proof_surfaces": ["vida taskflow consume final"]
+                    }
                 }
             })
             .to_string(),
@@ -3790,6 +3852,32 @@ mod tests {
         assert_eq!(selected, valid_path.display().to_string());
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_consumption_snapshot_release_admission_accepts_payload_closure_admission() {
+        let snapshot = serde_json::json!({
+            "surface": "vida taskflow consume final",
+            "status": "pass",
+            "operator_contracts": {
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {}
+            },
+            "payload": {
+                "closure_admission": {
+                    "status": "pass",
+                    "admitted": true,
+                    "blockers": [],
+                    "proof_surfaces": ["vida taskflow consume final"]
+                }
+            }
+        });
+
+        assert!(runtime_consumption_snapshot_has_release_admission_evidence(
+            &snapshot
+        ));
     }
 
     #[test]
@@ -3981,7 +4069,6 @@ mod tests {
 
     #[test]
     fn init_with_extra_argument_fails_closed() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         assert_eq!(
             runtime.block_on(run(cli(&["init", "unexpected"]))),
@@ -4120,10 +4207,9 @@ mod tests {
 
     #[test]
     fn protocol_view_command_accepts_json_output() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(
             runtime.block_on(run(cli(&["protocol", "view", "AGENTS", "--json"]))),
@@ -4133,10 +4219,9 @@ mod tests {
 
     #[test]
     fn init_preserves_existing_agents_as_sidecar_when_missing() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
         fs::write(
             harness.path().join("AGENTS.md"),
             "project documentation: docs/\n",
@@ -4159,10 +4244,9 @@ mod tests {
 
     #[test]
     fn init_replaces_agents_template_and_keeps_existing_sidecar_with_backup() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         fs::write(
             harness.path().join("AGENTS.md"),
@@ -4347,10 +4431,9 @@ mod tests {
 
     #[test]
     fn project_activator_reports_pending_after_init_scaffold_without_docs() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
 
@@ -4381,10 +4464,9 @@ mod tests {
 
     #[test]
     fn project_activator_fails_closed_for_partial_activation_submission() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(
@@ -4405,10 +4487,9 @@ mod tests {
 
     #[test]
     fn project_activator_accepts_host_cli_selection_and_materializes_codex_template() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(
@@ -4464,10 +4545,9 @@ mod tests {
 
     #[test]
     fn project_activator_accepts_host_cli_selection_and_materializes_copy_tree_template() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(
@@ -4527,10 +4607,9 @@ mod tests {
 
     #[test]
     fn runtime_host_execution_contract_reflects_external_qwen_selection() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(
@@ -4558,10 +4637,9 @@ mod tests {
 
     #[test]
     fn project_activator_view_uses_builtin_host_registry_without_overlay_systems() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
 
@@ -4591,10 +4669,9 @@ mod tests {
 
     #[test]
     fn project_activator_materializes_builtin_copy_tree_template_without_overlay_entry() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
 
@@ -4611,10 +4688,9 @@ mod tests {
 
     #[test]
     fn project_activator_can_complete_bounded_activation_in_one_command() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(
@@ -4679,10 +4755,9 @@ mod tests {
 
     #[test]
     fn project_activator_renders_codex_agent_files_from_overlay_and_keeps_template_contracts() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(
@@ -4811,10 +4886,9 @@ mod tests {
 
     #[test]
     fn runtime_assignment_uses_overlay_ladder_for_all_four_tiers() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(
@@ -4955,11 +5029,15 @@ mod tests {
     }
 
     #[test]
-    fn selected_backend_accepts_legacy_codex_runtime_assignment_alias() {
+    fn selected_backend_uses_canonical_runtime_assignment_when_legacy_alias_is_present() {
         let execution_plan = serde_json::json!({
-            "codex_runtime_assignment": {
+            "runtime_assignment": {
                 "selected_tier": "middle",
                 "activation_agent_type": "middle",
+            },
+            "codex_runtime_assignment": {
+                "selected_tier": "senior",
+                "activation_agent_type": "senior",
             },
             "development_flow": {
                 "implementation": {
@@ -5622,10 +5700,9 @@ mod tests {
 
     #[test]
     fn codex_dispatch_aliases_are_loaded_from_overlay_not_rust_catalog() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
 
@@ -5691,10 +5768,9 @@ mod tests {
 
     #[test]
     fn codex_dispatch_aliases_require_canonical_overlay_key() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
 
@@ -5721,10 +5797,9 @@ mod tests {
 
     #[test]
     fn project_activator_fails_closed_when_dispatch_alias_registry_is_configured_but_missing() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
 
@@ -5756,10 +5831,9 @@ mod tests {
 
     #[test]
     fn agent_feedback_records_scorecard_and_refreshes_strategy() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(
@@ -5828,10 +5902,9 @@ mod tests {
 
     #[test]
     fn agent_feedback_records_scorecard_for_non_codex_selected_system() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(
@@ -5922,10 +5995,9 @@ mod tests {
 
     #[test]
     fn orchestrator_init_succeeds_after_init_scaffold() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(
@@ -5936,10 +6008,9 @@ mod tests {
 
     #[test]
     fn agent_init_succeeds_after_init_scaffold() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -6008,10 +6079,9 @@ mod tests {
 
     #[test]
     fn runtime_dispatch_packet_carries_external_host_runtime_contract() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(
@@ -6156,10 +6226,9 @@ mod tests {
 
     #[test]
     fn execute_runtime_dispatch_handoff_reuses_canonical_agent_init_packet_view() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -6176,6 +6245,8 @@ mod tests {
             ]))),
             ExitCode::SUCCESS
         );
+        wait_for_state_unlock(harness.path());
+        assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
 
         let state_root = taskflow_task_bridge::proxy_state_dir();
@@ -6285,10 +6356,9 @@ mod tests {
 
     #[test]
     fn execute_runtime_dispatch_handoff_executes_configured_external_backend() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -6423,10 +6493,9 @@ mod tests {
 
     #[test]
     fn runtime_agent_lane_dispatch_prefers_receipt_selected_backend_for_external_hosts() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -6473,10 +6542,9 @@ mod tests {
 
     #[test]
     fn runtime_agent_lane_dispatch_keeps_internal_hosts_on_agent_init() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -6852,10 +6920,9 @@ mod tests {
 
     #[test]
     fn project_activator_command_accepts_json_output() {
-        let _lock = current_dir_lock().lock().expect("lock should succeed");
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = CurrentDirGuard::change_to(harness.path());
+        let _cwd = guard_current_dir(harness.path());
 
         assert_eq!(
             runtime.block_on(run(cli(&["project-activator", "--json"]))),

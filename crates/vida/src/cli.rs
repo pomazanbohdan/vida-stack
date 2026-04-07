@@ -77,6 +77,8 @@ pub(crate) struct TaskArgs {
 pub(crate) enum TaskCommand {
     Help(TaskHelpArgs),
     ImportJsonl(TaskImportJsonlArgs),
+    #[command(about = "authoritatively replace backlog state from a canonical snapshot artifact")]
+    ReplaceJsonl(TaskReplaceJsonlArgs),
     ExportJsonl(TaskExportJsonlArgs),
     List(TaskListArgs),
     Show(TaskShowArgs),
@@ -150,6 +152,20 @@ pub(crate) struct TaskDependencyTargetCommandArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskImportJsonlArgs {
+    pub(crate) path: PathBuf,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskReplaceJsonlArgs {
     pub(crate) path: PathBuf,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]

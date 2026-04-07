@@ -49,7 +49,7 @@ Status markers:
 |---|---|---|---|---|---|---|---|---|---|
 | Segment 1: Runtime trust handoff | `TaskFlow` Layer 9 | `DocFlow` Layers 7-8 | `TaskFlow` enters direct runtime consumption or final closure path | runtime state, compiled control/bundle state, active canonical inventory, explicit readiness branch activation, bounded seam handoff packet, restore/reconcile context when trust is being re-established | readiness verdict, blocking reasons, proof-ready documentation branch, seam receipt refs | ✅ | 🟡 | 🟡 | native Rust seam still converges while both runtime families are under active modernization |
 | Segment 2: Readiness/proof return | `DocFlow` Layers 7-8 | `TaskFlow` Layer 9 closure path | `DocFlow` finishes bounded readiness/proof evaluation for the requested closure scope | canonical inventory, validation state, relation/readiness artifacts, projection parity where declared, explicit seam request packet | explicit pass/block verdict consumable by `TaskFlow`; readiness/proof receipts; no hidden shared state | ✅ | 🟡 | 🟡 | final `docflow-rs` Layer-8-ready seam is not yet closure-proven end-to-end |
-| Segment 3: Product closure admission | `TaskFlow` final closure authority | `Release 1` closure proof | `TaskFlow` receives green downstream readiness/proof and bounded restore/reconcile state | executable runtime state, downstream proof receipts, restore/reconcile discipline, replay/checkpoint lineage artifacts, operator closure evidence | Release-1 closure admission or fail-closed blocker | ✅ | ⚪ | ⚪ | final hardening and closure-proof surfaces remain open |
+| Segment 3: Product closure admission | `TaskFlow` final closure authority | `Release 1` closure proof | `TaskFlow` receives green downstream readiness/proof and bounded restore/reconcile state | executable runtime state, downstream proof receipts, restore/reconcile discipline, replay/checkpoint lineage artifacts, operator closure evidence | Release-1 closure admission or fail-closed blocker | ✅ | 🟡 | 🟡 | production-baseline control tracks are now proof-backed, but final matrix refresh, DocFlow readiness/proof hardening, release-candidate build, and explicit closure verdict still gate closure |
 
 Matrix reading rule:
 
@@ -187,15 +187,18 @@ The seam is considered closure-ready only when bounded proof exists across all o
 
 Current proof anchors:
 
-1. `docs/product/spec/release-1-capability-matrix.md`
-2. `docs/product/spec/canonical-runtime-layer-matrix.md`
-3. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
-4. `docs/product/spec/release-1-closure-contract.md`
-5. `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
-6. `docs/product/spec/release-1-control-metrics-and-gates.md`
-7. `docs/product/spec/release-1-canonical-artifact-schemas.md`
-8. `docs/process/vida1-development-conditions.md`
-9. bounded `proofcheck`, `readiness-check`, and runtime/operator proof surfaces named by the owner specs
+1. `vida status --json`
+2. `vida doctor --json`
+3. `vida taskflow protocol-binding check --json`
+4. `docs/product/spec/release-1-capability-matrix.md`
+5. `docs/product/spec/canonical-runtime-layer-matrix.md`
+6. `docs/product/spec/canonical-documentation-and-inventory-layer-matrix.md`
+7. `docs/product/spec/release-1-closure-contract.md`
+8. `docs/product/spec/release-1-workflow-classification-and-risk-matrix.md`
+9. `docs/product/spec/release-1-control-metrics-and-gates.md`
+10. `docs/product/spec/release-1-canonical-artifact-schemas.md`
+11. `docs/process/vida1-development-conditions.md`
+12. bounded `proofcheck`, `readiness-check`, and runtime/operator proof surfaces named by the owner specs
 
 ## 11. Closure Rule
 
@@ -215,10 +218,10 @@ Release 1 is not closure-ready unless all are true:
 artifact_path: product/spec/release-1-seam-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-04-03'
+artifact_revision: 2026-04-06
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-seam-map.md
 created_at: '2026-03-13T13:42:00+02:00'
-updated_at: 2026-04-03T19:05:00+03:00
+updated_at: 2026-04-06T14:21:10.330519471Z
 changelog_ref: release-1-seam-map.changelog.jsonl

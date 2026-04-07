@@ -995,6 +995,90 @@ pub(crate) fn blocker_code_value(code: BlockerCode) -> Option<String> {
         .next()
 }
 
+const CLI_PROBE_TOOL_CONTRACT_ARTIFACT_ID: &str = "status_surface.external_cli_preflight";
+const CLI_PROBE_TOOL_CONTRACT_TOOL_ID: &str = "status_surface.external_cli_preflight";
+const CLI_PROBE_TOOL_CONTRACT_TOOL_VERSION: &str = "release-1-v1";
+const CLI_PROBE_TOOL_CONTRACT_TOOL_NAME: &str = "External CLI Preflight";
+const CLI_PROBE_TOOL_CONTRACT_OPERATION_CLASS: &str = "preflight_probe";
+const CLI_PROBE_TOOL_CONTRACT_SIDE_EFFECT_CLASS: &str = "read_only_status_probe";
+const CLI_PROBE_TOOL_CONTRACT_IDEMPOTENCY_CLASS: &str = "read_only_probe";
+const CLI_PROBE_TOOL_CONTRACT_ROLLBACK_POSTURE: &str = "not_applicable";
+const CLI_PROBE_TOOL_CONTRACT_INPUT_SCHEMA_REF: &str =
+    "status_surface.external_cli_preflight.input_schema.v1";
+const CLI_PROBE_TOOL_CONTRACT_OUTPUT_SCHEMA_REF: &str =
+    "status_surface.external_cli_preflight.output_schema.v1";
+const CLI_PROBE_TOOL_CONTRACT_POLICY_HOOK_IDS: &[&str] = &[
+    "execution_class_gate",
+    "runtime_root_resolution",
+    "sandbox_network_gate",
+];
+const CLI_PROBE_TOOL_CONTRACT_OBSERVABILITY_REQUIREMENTS: &[&str] =
+    &["status_snapshot", "blocker_code", "next_actions"];
+
+fn cli_probe_tool_contract_auth_mode(selected_execution_class: &str) -> &'static str {
+    match selected_execution_class.trim() {
+        "external" => "delegated_host_session",
+        "internal" => "project_runtime_internal",
+        _ => "unknown",
+    }
+}
+
+pub(crate) fn cli_probe_tool_contract_blocker_code(
+    selected_execution_class: &str,
+    selected_cli_entry_present: bool,
+    runtime_root_configured: bool,
+) -> Option<BlockerCode> {
+    if !selected_cli_entry_present {
+        return Some(BlockerCode::ToolContractMissing);
+    }
+    if cli_probe_tool_contract_auth_mode(selected_execution_class) == "unknown"
+        || !runtime_root_configured
+    {
+        return Some(BlockerCode::ToolContractIncomplete);
+    }
+    None
+}
+
+pub(crate) fn cli_probe_tool_contract_summary(
+    selected_execution_class: &str,
+    requires_external_cli: bool,
+    selected_cli_entry_present: bool,
+    runtime_root_configured: bool,
+) -> serde_json::Value {
+    let blocker_code = cli_probe_tool_contract_blocker_code(
+        selected_execution_class,
+        selected_cli_entry_present,
+        runtime_root_configured,
+    );
+    let auth_mode = cli_probe_tool_contract_auth_mode(selected_execution_class);
+    serde_json::json!({
+        "artifact_id": CLI_PROBE_TOOL_CONTRACT_ARTIFACT_ID,
+        "artifact_type": "tool_contract",
+        "status": if blocker_code.is_some() { "blocked" } else { "pass" },
+        "blocker_code": blocker_code
+            .map(|code| serde_json::Value::String(blocker_code_str(code).to_string()))
+            .unwrap_or(serde_json::Value::Null),
+        "tool_id": CLI_PROBE_TOOL_CONTRACT_TOOL_ID,
+        "tool_version": CLI_PROBE_TOOL_CONTRACT_TOOL_VERSION,
+        "tool_name": CLI_PROBE_TOOL_CONTRACT_TOOL_NAME,
+        "operation_class": CLI_PROBE_TOOL_CONTRACT_OPERATION_CLASS,
+        "side_effect_class": CLI_PROBE_TOOL_CONTRACT_SIDE_EFFECT_CLASS,
+        "auth_mode": auth_mode,
+        "approval_required": false,
+        "idempotency_class": CLI_PROBE_TOOL_CONTRACT_IDEMPOTENCY_CLASS,
+        "retry_posture": if requires_external_cli {
+            "retry_on_transient_external_cli_probe_failure"
+        } else {
+            "single_probe"
+        },
+        "rollback_posture": CLI_PROBE_TOOL_CONTRACT_ROLLBACK_POSTURE,
+        "input_schema_ref": CLI_PROBE_TOOL_CONTRACT_INPUT_SCHEMA_REF,
+        "output_schema_ref": CLI_PROBE_TOOL_CONTRACT_OUTPUT_SCHEMA_REF,
+        "policy_hook_ids": CLI_PROBE_TOOL_CONTRACT_POLICY_HOOK_IDS,
+        "observability_requirements": CLI_PROBE_TOOL_CONTRACT_OBSERVABILITY_REQUIREMENTS,
+    })
+}
+
 pub(crate) fn missing_family_blocker_code(family: &str) -> Option<String> {
     canonical_blocker_code_value_from_str(&format!("missing_{family}_family"))
 }
@@ -1106,10 +1190,11 @@ mod tests {
         canonical_release1_contract_status_str, canonical_release1_contract_type_str,
         canonical_release1_schema_version_str, canonical_risk_tier_str,
         canonical_workflow_class_str, classify_compatibility_boundary,
-        evaluate_policy_gate_protocol_binding, missing_downstream_lane_evidence_blocker,
-        release1_contract_status_str, ApprovalStatus, BlockerCode, CompatibilityBoundary,
-        CompatibilityClass, GateLevel, LaneStatus, Release1ContractStatus, Release1ContractType,
-        Release1SchemaVersion, RiskTier, WorkflowClass,
+        cli_probe_tool_contract_summary, evaluate_policy_gate_protocol_binding,
+        missing_downstream_lane_evidence_blocker, release1_contract_status_str, ApprovalStatus,
+        BlockerCode, CompatibilityBoundary, CompatibilityClass, GateLevel, LaneStatus,
+        Release1ContractStatus, Release1ContractType, Release1SchemaVersion, RiskTier,
+        WorkflowClass,
     };
 
     #[test]
@@ -1336,6 +1421,67 @@ mod tests {
                 "pending_specification_evidence".to_string(),
                 "pending_verification_evidence".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn cli_probe_tool_contract_summary_is_canonical_for_internal_probe_paths() {
+        let contract = cli_probe_tool_contract_summary("internal", false, true, true);
+
+        assert_eq!(
+            contract["artifact_id"],
+            "status_surface.external_cli_preflight"
+        );
+        assert_eq!(contract["artifact_type"], "tool_contract");
+        assert_eq!(contract["status"], "pass");
+        assert!(contract["blocker_code"].is_null());
+        assert_eq!(contract["tool_id"], "status_surface.external_cli_preflight");
+        assert_eq!(contract["tool_version"], "release-1-v1");
+        assert_eq!(contract["tool_name"], "External CLI Preflight");
+        assert_eq!(contract["operation_class"], "preflight_probe");
+        assert_eq!(contract["side_effect_class"], "read_only_status_probe");
+        assert_eq!(contract["auth_mode"], "project_runtime_internal");
+        assert_eq!(contract["approval_required"], false);
+        assert_eq!(contract["idempotency_class"], "read_only_probe");
+        assert_eq!(contract["retry_posture"], "single_probe");
+        assert_eq!(contract["rollback_posture"], "not_applicable");
+        assert_eq!(
+            contract["policy_hook_ids"],
+            serde_json::json!([
+                "execution_class_gate",
+                "runtime_root_resolution",
+                "sandbox_network_gate"
+            ])
+        );
+        assert_eq!(
+            contract["observability_requirements"],
+            serde_json::json!(["status_snapshot", "blocker_code", "next_actions"])
+        );
+    }
+
+    #[test]
+    fn cli_probe_tool_contract_summary_blocks_when_required_inputs_are_missing_or_incomplete() {
+        let missing = cli_probe_tool_contract_summary("unknown", true, false, true);
+        assert_eq!(missing["status"], "blocked");
+        assert_eq!(
+            missing["blocker_code"],
+            serde_json::Value::String(
+                blocker_code_str(BlockerCode::ToolContractMissing).to_string()
+            )
+        );
+
+        let incomplete = cli_probe_tool_contract_summary("external", true, true, false);
+        assert_eq!(incomplete["status"], "blocked");
+        assert_eq!(
+            incomplete["blocker_code"],
+            serde_json::Value::String(
+                blocker_code_str(BlockerCode::ToolContractIncomplete).to_string()
+            )
+        );
+        assert_eq!(incomplete["auth_mode"], "delegated_host_session");
+        assert_eq!(
+            incomplete["retry_posture"],
+            "retry_on_transient_external_cli_probe_failure"
         );
     }
 

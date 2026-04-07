@@ -244,7 +244,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             Some(
                 "ready" | "deps" | "reverse-deps" | "blocked" | "tree" | "critical-path"
                 | "next-display-id" | "create" | "ensure" | "update" | "close" | "list" | "show"
-                | "import-jsonl" | "export-jsonl" | "validate-graph" | "dep",
+                | "import-jsonl" | "replace-jsonl" | "export-jsonl" | "validate-graph" | "dep",
             ) => {
                 print_taskflow_proxy_help(Some("task"));
                 ExitCode::SUCCESS
@@ -288,6 +288,42 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     }
                     Err(error) => {
                         eprintln!("Failed to import tasks from JSONL: {error}");
+                        ExitCode::from(1)
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        TaskCommand::ReplaceJsonl(command) => {
+            let state_dir = command
+                .state_dir
+                .unwrap_or_else(state_store::default_state_dir);
+            match StateStore::open(state_dir).await {
+                Ok(store) => match store
+                    .replace_with_taskflow_snapshot_file(&command.path)
+                    .await
+                {
+                    Ok(()) => {
+                        let source_path = command.path.display().to_string();
+                        if command.json {
+                            crate::print_json_pretty(&serde_json::json!({
+                                "status": canonical_release1_task_status("ok"),
+                                "operation": "replace_snapshot",
+                                "source_path": source_path,
+                            }));
+                        } else {
+                            print_surface_header(command.render, "vida task replace-jsonl");
+                            print_surface_line(command.render, "status", "pass");
+                            print_surface_line(command.render, "operation", "replace_snapshot");
+                            print_surface_line(command.render, "source path", &source_path);
+                        }
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to replace tasks from snapshot file: {error}");
                         ExitCode::from(1)
                     }
                 },

@@ -326,6 +326,7 @@ fn taskflow_task_subcommand_supported(subcommand: &str) -> bool {
         subcommand,
         "help"
             | "import-jsonl"
+            | "replace-jsonl"
             | "export-jsonl"
             | "list"
             | "show"
@@ -767,7 +768,9 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_graph_summary_waves, GraphSummaryWaveBucket};
+    use super::{
+        build_graph_summary_waves, taskflow_task_subcommand_supported, GraphSummaryWaveBucket,
+    };
     use crate::state_store::{BlockedTaskRecord, TaskDependencyRecord, TaskRecord};
 
     fn task(
@@ -867,6 +870,11 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn taskflow_task_subcommand_supports_replace_jsonl() {
+        assert!(taskflow_task_subcommand_supported("replace-jsonl"));
     }
 }
 

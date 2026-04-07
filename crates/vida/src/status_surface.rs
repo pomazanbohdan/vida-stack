@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use crate::{
     release1_contracts::{
         blocker_code_str, canonical_blocker_code_list, canonical_compatibility_class_str,
-        BlockerCode, CompatibilityClass,
+        cli_probe_tool_contract_summary, BlockerCode, CompatibilityClass,
     },
     state_store,
     state_store::StateStore,
@@ -113,6 +113,13 @@ fn run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action() -> &'stati
     "Refresh the latest checkpoint evidence for the run graph before rerunning `vida status --json` so checkpoint rows and dispatch receipt evidence share the same run_id."
 }
 
+const MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
+    "Run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence.";
+const MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
+    "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal.";
+const MISSING_RETRIEVAL_TRUST_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
+    "Run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence.";
+
 fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> bool {
     let payload = match std::fs::read_to_string(snapshot_path) {
         Ok(payload) => payload,
@@ -122,6 +129,11 @@ fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> boo
         Ok(json) => json,
         Err(_) => return true,
     };
+    if crate::operator_contracts::shared_operator_output_contract_parity_error(&summary_json)
+        .is_some()
+    {
+        return true;
+    }
     !super::runtime_consumption_snapshot_has_release_admission_evidence(&summary_json)
 }
 
@@ -202,6 +214,24 @@ fn external_cli_preflight_summary(
         requires_external_cli,
         selected_cli_entry,
     );
+    let tool_contract_blocked = tool_contract["status"].as_str() == Some("blocked");
+
+    if tool_contract_blocked {
+        return serde_json::json!({
+            "status": "blocked",
+            "requires_external_cli": requires_external_cli,
+            "external_cli_subagents_present": has_enabled_external_subagents,
+            "selected_execution_class": selected_execution_class,
+            "tool_contract": tool_contract,
+            "sandbox_active": sandbox_active,
+            "network_reachable": network_reachable,
+            "blocker_code": tool_contract["blocker_code"].clone(),
+            "next_actions": [
+                "Fix the selected host CLI system entry or runtime root in `vida.config.yaml`.",
+                "Rerun `vida status --json` after restoring the canonical tool contract fields.",
+            ]
+        });
+    }
 
     if requires_external_cli && sandbox_active && !network_reachable {
         return serde_json::json!({
@@ -244,43 +274,12 @@ fn external_cli_tool_contract_summary(
         .and_then(serde_yaml::Value::as_str)
         .map(str::trim)
         .is_some_and(|value| !value.is_empty());
-    let auth_mode = match selected_execution_class {
-        "external" => "delegated_host_session",
-        "internal" => "project_runtime_internal",
-        _ => "unknown",
-    };
-    let blocker_code = if selected_cli_entry.is_none() {
-        blocker_code_str(BlockerCode::ToolContractMissing)
-    } else if auth_mode == "unknown" || !runtime_root_configured {
-        blocker_code_str(BlockerCode::ToolContractIncomplete)
-    } else {
-        ""
-    };
-    let status = if blocker_code.is_empty() {
-        "pass"
-    } else {
-        "blocked"
-    };
-
-    serde_json::json!({
-        "contract_id": "release-1-tool-contract-v1",
-        "status": status,
-        "blocker_code": if blocker_code.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(blocker_code.to_string()) },
-        "execution_class": selected_execution_class,
-        "auth_mode": auth_mode,
-        "idempotency": "read_only_probe",
-        "retry_policy": {
-            "mode": if requires_external_cli { "retry_on_transient_external_cli_probe_failure" } else { "single_probe" },
-            "max_attempts": if requires_external_cli { 3 } else { 1 },
-            "backoff": "exponential"
-        },
-        "side_effect_profile": "read_only_status_probe",
-        "policy_hooks": [
-            "execution_class_gate",
-            "runtime_root_resolution",
-            "sandbox_network_gate"
-        ]
-    })
+    cli_probe_tool_contract_summary(
+        selected_execution_class,
+        requires_external_cli,
+        selected_cli_entry.is_some(),
+        runtime_root_configured,
+    )
 }
 
 pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
@@ -478,6 +477,10 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     super::latest_final_runtime_consumption_snapshot_path(store.root())
                         .ok()
                         .flatten();
+                let latest_recorded_final_snapshot_path =
+                    super::runtime_consumption_state::latest_recorded_final_runtime_consumption_snapshot_path(store.root())
+                        .ok()
+                        .flatten();
                 let root_session_write_guard = root_session_write_guard_summary_from_snapshot_path(
                     latest_final_snapshot_path
                         .as_deref()
@@ -505,7 +508,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                 let project_activation_pending = project_activation_status == Some("pending");
                 if as_json {
                     let mut operator_blocker_codes: Vec<String> = Vec::new();
-                    let incomplete_release_admission_operator_evidence = latest_final_snapshot_path
+                    let incomplete_release_admission_operator_evidence = latest_recorded_final_snapshot_path
                         .as_deref()
                         .map(final_snapshot_missing_release_admission_evidence)
                         .unwrap_or(true);
@@ -554,6 +557,30 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     if protocol_binding.blocking_issue_count > 0 {
                         operator_blocker_codes.push(
                             blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues)
+                                .to_string(),
+                        );
+                    }
+                    let retrieval_trust_signal =
+                        super::runtime_consumption_state::latest_admissible_retrieval_trust_signal(
+                        &runtime_consumption,
+                        latest_final_snapshot_path.as_deref(),
+                        protocol_binding.latest_receipt_id.as_deref(),
+                    );
+                    if retrieval_trust_signal.is_none() {
+                        operator_blocker_codes.push(
+                            blocker_code_str(
+                                BlockerCode::MissingRetrievalTrustSourceOperatorEvidence,
+                            )
+                            .to_string(),
+                        );
+                        operator_blocker_codes.push(
+                            blocker_code_str(
+                                BlockerCode::MissingRetrievalTrustSignalOperatorEvidence,
+                            )
+                            .to_string(),
+                        );
+                        operator_blocker_codes.push(
+                            blocker_code_str(BlockerCode::MissingRetrievalTrustOperatorEvidence)
                                 .to_string(),
                         );
                     }
@@ -652,6 +679,33 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         operator_next_actions.push(
                             "Run `vida taskflow protocol-binding check --json` and clear blockers."
                                 .to_string(),
+                        );
+                    }
+                    if operator_blocker_codes.iter().any(|code| {
+                        code == blocker_code_str(
+                            BlockerCode::MissingRetrievalTrustSourceOperatorEvidence,
+                        )
+                    }) {
+                        operator_next_actions.push(
+                            MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION
+                                .to_string(),
+                        );
+                    }
+                    if operator_blocker_codes.iter().any(|code| {
+                        code == blocker_code_str(
+                            BlockerCode::MissingRetrievalTrustSignalOperatorEvidence,
+                        )
+                    }) {
+                        operator_next_actions.push(
+                            MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION
+                                .to_string(),
+                        );
+                    }
+                    if operator_blocker_codes.iter().any(|code| {
+                        code == blocker_code_str(BlockerCode::MissingRetrievalTrustOperatorEvidence)
+                    }) {
+                        operator_next_actions.push(
+                            MISSING_RETRIEVAL_TRUST_OPERATOR_EVIDENCE_NEXT_ACTION.to_string(),
                         );
                     }
                     if operator_blocker_codes
@@ -1831,11 +1885,15 @@ host_environment:
         assert_eq!(summary["requires_external_cli"], false);
         assert_eq!(summary["selected_execution_class"], "internal");
         assert_eq!(summary["tool_contract"]["status"], "pass");
+        assert_eq!(summary["tool_contract"]["artifact_type"], "tool_contract");
         assert_eq!(
             summary["tool_contract"]["auth_mode"],
             "project_runtime_internal"
         );
-        assert_eq!(summary["tool_contract"]["idempotency"], "read_only_probe");
+        assert_eq!(
+            summary["tool_contract"]["idempotency_class"],
+            "read_only_probe"
+        );
     }
 
     #[test]
@@ -1865,6 +1923,14 @@ agent_system:
         assert_eq!(summary["external_cli_subagents_present"], true);
         assert_eq!(summary["selected_execution_class"], "internal");
         assert_eq!(summary["tool_contract"]["status"], "pass");
+        assert_eq!(
+            summary["tool_contract"]["policy_hook_ids"],
+            serde_json::json!([
+                "execution_class_gate",
+                "runtime_root_resolution",
+                "sandbox_network_gate"
+            ])
+        );
     }
 
     #[test]
@@ -1931,6 +1997,7 @@ host_environment:
             summary["tool_contract"]["blocker_code"],
             blocker_code_str(BlockerCode::ToolContractMissing)
         );
+        assert_eq!(summary["status"], "blocked");
     }
 
     #[test]
@@ -1959,6 +2026,7 @@ host_environment:
             summary["tool_contract"]["auth_mode"],
             "delegated_host_session"
         );
+        assert_eq!(summary["status"], "blocked");
     }
 
     #[test]

@@ -90,12 +90,25 @@ pub(crate) struct ProtocolBindingCompiledPayloadImportEvidence {
 }
 
 impl ProtocolBindingCompiledPayloadImportEvidence {
-    fn trusted(source: &str) -> bool {
-        matches!(
-            source,
-            "state_store" | super::TASKFLOW_PROTOCOL_BINDING_AUTHORITY
-        )
+    fn trusted(
+        source: &str,
+        source_config_digest: &str,
+        effective_bundle_receipt_id: &str,
+    ) -> bool {
+        source == "state_store"
+            && !source_config_digest.trim().is_empty()
+            && !effective_bundle_receipt_id.trim().is_empty()
     }
+}
+
+fn protocol_binding_compiled_payload_import_ready(
+    evidence: &ProtocolBindingCompiledPayloadImportEvidence,
+) -> bool {
+    evidence.imported
+        && evidence.trusted
+        && evidence.source == "state_store"
+        && !evidence.source_config_digest.trim().is_empty()
+        && !evidence.effective_bundle_receipt_id.trim().is_empty()
 }
 
 fn has_non_empty_string_field(payload: &serde_json::Value, path: &[&str]) -> bool {
@@ -150,6 +163,18 @@ pub(crate) async fn protocol_binding_compiled_payload_import_evidence(
                 serde_json::json!({}),
             )
         };
+    let effective_bundle_receipt_id = effective_bundle_receipt
+        .as_ref()
+        .map(|receipt| receipt.receipt_id.clone())
+        .unwrap_or_default();
+    let effective_bundle_root_artifact_id = effective_bundle_receipt
+        .as_ref()
+        .map(|receipt| receipt.root_artifact_id.clone())
+        .unwrap_or_default();
+    let effective_bundle_artifact_count = effective_bundle_receipt
+        .as_ref()
+        .map(|receipt| receipt.artifact_count)
+        .unwrap_or_default();
 
     if source.is_empty() {
         if let Some(code) = crate::release1_contracts::blocker_code_value(
@@ -157,7 +182,7 @@ pub(crate) async fn protocol_binding_compiled_payload_import_evidence(
         ) {
             blockers.push(code);
         }
-    } else if !ProtocolBindingCompiledPayloadImportEvidence::trusted(&source) {
+    } else if source != "state_store" {
         if let Some(code) = crate::release1_contracts::blocker_code_value(
             crate::release1_contracts::BlockerCode::SourceUnregistered,
         ) {
@@ -218,25 +243,24 @@ pub(crate) async fn protocol_binding_compiled_payload_import_evidence(
         }
     }
 
+    // `source_config_path` is retained as provenance only; trust comes from the
+    // authoritative source, source digest, and effective receipt identity.
+    let trusted = ProtocolBindingCompiledPayloadImportEvidence::trusted(
+        &source,
+        &source_config_digest,
+        &effective_bundle_receipt_id,
+    ) && blockers.is_empty();
+
     ProtocolBindingCompiledPayloadImportEvidence {
         imported: activation_snapshot.is_some() && effective_bundle_receipt.is_some(),
-        trusted: blockers.is_empty(),
+        trusted,
         source,
         source_config_path,
         source_config_digest,
         captured_at,
-        effective_bundle_receipt_id: effective_bundle_receipt
-            .as_ref()
-            .map(|receipt| receipt.receipt_id.clone())
-            .unwrap_or_default(),
-        effective_bundle_root_artifact_id: effective_bundle_receipt
-            .as_ref()
-            .map(|receipt| receipt.root_artifact_id.clone())
-            .unwrap_or_default(),
-        effective_bundle_artifact_count: effective_bundle_receipt
-            .as_ref()
-            .map(|receipt| receipt.artifact_count)
-            .unwrap_or_default(),
+        effective_bundle_receipt_id,
+        effective_bundle_root_artifact_id,
+        effective_bundle_artifact_count,
         compiled_payload_summary,
         blockers,
     }
@@ -339,8 +363,7 @@ fn protocol_binding_check_ok(
     protocol_binding_decision_gate_status(summary, evidence)
         .blocker_code
         .is_none()
-        && evidence.imported
-        && evidence.trusted
+        && protocol_binding_compiled_payload_import_ready(evidence)
         && summary.total_receipts > 0
         && summary.total_bindings == taskflow_protocol_binding_seeds().len()
         && summary.unbound_count == 0
@@ -363,8 +386,7 @@ fn protocol_binding_decision_gate_status(
     } else {
         Some(evidence.effective_bundle_receipt_id.as_str())
     };
-    let runtime_ready = evidence.imported
-        && evidence.trusted
+    let runtime_ready = protocol_binding_compiled_payload_import_ready(evidence)
         && summary.total_receipts > 0
         && summary.unbound_count == 0
         && summary.blocking_issue_count == 0
@@ -883,7 +905,7 @@ mod tests {
             imported,
             trusted,
             source: "state_store".to_string(),
-            source_config_path: "/tmp/project/vida.config.yaml".to_string(),
+            source_config_path: String::new(),
             source_config_digest: "digest-1".to_string(),
             captured_at: "2026-03-17T00:00:00Z".to_string(),
             effective_bundle_receipt_id: "receipt-1".to_string(),
@@ -953,6 +975,20 @@ mod tests {
         let summary = sample_summary();
         let rows = sample_rows();
         let evidence = sample_evidence(true, false);
+
+        assert!(!protocol_binding_check_ok(&summary, &rows, &evidence));
+        assert_eq!(
+            release1_contract_status_str(protocol_binding_check_ok(&summary, &rows, &evidence)),
+            "blocked"
+        );
+    }
+
+    #[test]
+    fn protocol_binding_check_ok_blocks_missing_source_config_digest() {
+        let summary = sample_summary();
+        let rows = sample_rows();
+        let mut evidence = sample_evidence(true, true);
+        evidence.source_config_digest = String::new();
 
         assert!(!protocol_binding_check_ok(&summary, &rows, &evidence));
         assert_eq!(

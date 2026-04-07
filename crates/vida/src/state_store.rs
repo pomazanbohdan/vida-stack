@@ -10,7 +10,9 @@ use crate::release1_contracts::{
     derive_lane_status, BlockerCode, CompatibilityClass, LaneStatus, Release1ContractType,
     Release1SchemaVersion,
 };
-use crate::taskflow_run_graph::is_dispatch_resume_handoff_complete;
+use crate::taskflow_run_graph::{
+    approval_delegation_transition_kind, is_dispatch_resume_handoff_complete,
+};
 use serde_json::Deserializer;
 use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::types::SurrealValue;
@@ -56,6 +58,7 @@ DEFINE TABLE source_tree_config SCHEMALESS;
 DEFINE TABLE protocol_binding_state SCHEMALESS;
 DEFINE TABLE protocol_binding_receipt SCHEMALESS;
 DEFINE TABLE launcher_activation_snapshot SCHEMALESS;
+DEFINE TABLE run_graph_approval_delegation_receipt SCHEMALESS;
 "#;
 
 fn state_schema_document() -> String {
@@ -1251,23 +1254,34 @@ impl StateStore {
     async fn write_task_reconciliation_summary(
         &self,
         input: TaskReconciliationSummaryInput,
-    ) -> Result<(), StateStoreError> {
+    ) -> Result<TaskReconciliationSummary, StateStoreError> {
         let receipt_id = format!("task-reconciliation-{}", unix_timestamp_nanos());
+        let recorded_at = unix_timestamp_nanos().to_string();
+        let summary = TaskReconciliationSummary {
+            receipt_id: receipt_id.clone(),
+            operation: input.operation,
+            source_kind: input.source_kind,
+            source_path: input.source_path,
+            task_count: input.task_count,
+            dependency_count: input.dependency_count,
+            stale_removed_count: input.stale_removed_count,
+            recorded_at: recorded_at.clone(),
+        };
         let _: Option<TaskReconciliationSummaryRow> = self
             .db
             .upsert(("task_reconciliation_summary", receipt_id.as_str()))
             .content(TaskReconciliationSummaryRow {
                 receipt_id,
-                operation: input.operation,
-                source_kind: input.source_kind,
-                source_path: input.source_path,
-                task_count: input.task_count,
-                dependency_count: input.dependency_count,
-                stale_removed_count: input.stale_removed_count,
-                recorded_at: unix_timestamp_nanos().to_string(),
+                operation: summary.operation.clone(),
+                source_kind: summary.source_kind.clone(),
+                source_path: summary.source_path.clone(),
+                task_count: summary.task_count,
+                dependency_count: summary.dependency_count,
+                stale_removed_count: summary.stale_removed_count,
+                recorded_at,
             })
             .await?;
-        Ok(())
+        Ok(summary)
     }
 
     async fn all_tasks(&self) -> Result<Vec<TaskRecord>, StateStoreError> {
@@ -1765,6 +1779,7 @@ impl StateStore {
     ) -> Result<(), StateStoreError> {
         status.validate_memory_governance()?;
         let updated_at = unix_timestamp_nanos().to_string();
+        let receipt_recorded_at = updated_at.clone();
         let _: Option<RoutedRunStateRow> = self
             .db
             .upsert(("routed_run_state", status.run_id.as_str()))
@@ -1812,6 +1827,15 @@ impl StateStore {
                 updated_at: unix_timestamp_nanos().to_string(),
             })
             .await?;
+        if let Some(transition_kind) = approval_delegation_transition_kind(status) {
+            let receipt = RunGraphApprovalDelegationReceipt::from_status(
+                status,
+                transition_kind,
+                receipt_recorded_at,
+            );
+            self.record_run_graph_approval_delegation_receipt(&receipt)
+                .await?;
+        }
         Ok(())
     }
 
@@ -1875,6 +1899,40 @@ impl StateStore {
         let status = reconcile_run_graph_status_with_dispatch_receipt(status, receipt.as_ref())?;
         status.validate_memory_governance()?;
         Ok(status)
+    }
+
+    pub async fn record_run_graph_approval_delegation_receipt(
+        &self,
+        receipt: &RunGraphApprovalDelegationReceipt,
+    ) -> Result<(), StateStoreError> {
+        let receipt = receipt.clone();
+        ensure_run_graph_approval_delegation_receipt_consistency(&receipt)?;
+        let _: Option<RunGraphApprovalDelegationReceipt> = self
+            .db
+            .upsert((
+                "run_graph_approval_delegation_receipt",
+                receipt.run_id.as_str(),
+            ))
+            .content(receipt)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn run_graph_approval_delegation_receipt(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<RunGraphApprovalDelegationReceipt>, StateStoreError> {
+        let receipt: Option<RunGraphApprovalDelegationReceipt> = self
+            .db
+            .select(("run_graph_approval_delegation_receipt", run_id))
+            .await?;
+        Ok(match receipt {
+            Some(receipt) => Some(
+                ensure_run_graph_approval_delegation_receipt_consistency(&receipt)
+                    .map(|()| receipt)?,
+            ),
+            None => None,
+        })
     }
 
     pub async fn latest_run_graph_status(&self) -> Result<Option<RunGraphStatus>, StateStoreError> {
@@ -2248,6 +2306,25 @@ impl StateStore {
             .await?;
         let rows: Vec<TaskReconciliationSummary> = query.take(0)?;
         Ok(rows.into_iter().next())
+    }
+
+    pub async fn record_runtime_consumption_final_task_reconciliation_summary(
+        &self,
+        source_path: Option<String>,
+    ) -> Result<TaskReconciliationSummary, StateStoreError> {
+        if let Some(latest) = self.latest_task_reconciliation_summary().await? {
+            return Ok(latest);
+        }
+
+        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
+            operation: "consume_final".to_string(),
+            source_kind: "runtime_consumption_final_snapshot".to_string(),
+            source_path,
+            task_count: 0,
+            dependency_count: 0,
+            stale_removed_count: 0,
+        })
+        .await
     }
 
     pub async fn task_reconciliation_rollup(
@@ -4653,6 +4730,128 @@ impl RunGraphDispatchReceiptSummary {
     }
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, PartialEq, Eq, Clone)]
+pub struct RunGraphApprovalDelegationReceipt {
+    pub receipt_id: String,
+    pub run_id: String,
+    pub task_id: String,
+    pub task_class: String,
+    pub route_task_class: String,
+    pub active_node: String,
+    pub next_node: Option<String>,
+    pub status: String,
+    pub lifecycle_stage: String,
+    pub policy_gate: String,
+    pub handoff_state: String,
+    pub resume_target: String,
+    pub transition_kind: String,
+    pub recorded_at: String,
+}
+
+#[allow(dead_code)]
+impl RunGraphApprovalDelegationReceipt {
+    fn from_status(status: &RunGraphStatus, transition_kind: &str, recorded_at: String) -> Self {
+        let receipt_id = format!(
+            "run-graph-approval-delegation-{run_id}-{recorded_at}",
+            run_id = status.run_id
+        );
+        Self {
+            receipt_id,
+            run_id: status.run_id.clone(),
+            task_id: status.task_id.clone(),
+            task_class: status.task_class.clone(),
+            route_task_class: status.route_task_class.clone(),
+            active_node: status.active_node.clone(),
+            next_node: status.next_node.clone(),
+            status: status.status.clone(),
+            lifecycle_stage: status.lifecycle_stage.clone(),
+            policy_gate: status.policy_gate.clone(),
+            handoff_state: status.handoff_state.clone(),
+            resume_target: status.resume_target.clone(),
+            transition_kind: transition_kind.to_string(),
+            recorded_at,
+        }
+    }
+}
+
+fn ensure_run_graph_approval_delegation_receipt_consistency(
+    receipt: &RunGraphApprovalDelegationReceipt,
+) -> Result<(), StateStoreError> {
+    if receipt.receipt_id.trim().is_empty()
+        || receipt.run_id.trim().is_empty()
+        || receipt.task_id.trim().is_empty()
+        || receipt.task_class.trim().is_empty()
+        || receipt.route_task_class.trim().is_empty()
+        || receipt.active_node.trim().is_empty()
+        || receipt.status.trim().is_empty()
+        || receipt.lifecycle_stage.trim().is_empty()
+        || receipt.policy_gate.trim().is_empty()
+        || receipt.handoff_state.trim().is_empty()
+        || receipt.resume_target.trim().is_empty()
+        || receipt.transition_kind.trim().is_empty()
+        || receipt.recorded_at.trim().is_empty()
+    {
+        return Err(StateStoreError::InvalidTaskRecord {
+            reason: format!(
+                "run-graph approval/delegation receipt summary is inconsistent for `{}`: all receipt fields must be non-empty",
+                receipt.run_id
+            ),
+        });
+    }
+
+    let is_route_bound_implementation =
+        receipt.task_class == "implementation" && receipt.route_task_class == "implementation";
+    let approval_wait = receipt.transition_kind == "approval_wait";
+    let approval_complete = receipt.transition_kind == "approval_complete";
+    if !is_route_bound_implementation || (!approval_wait && !approval_complete) {
+        return Err(StateStoreError::InvalidTaskRecord {
+            reason: format!(
+                "run-graph approval/delegation receipt summary is inconsistent for `{}`: transition_kind `{}` must be route-bound to implementation",
+                receipt.run_id, receipt.transition_kind
+            ),
+        });
+    }
+
+    match receipt.transition_kind.as_str() {
+        "approval_wait" => {
+            if receipt.status != "awaiting_approval"
+                || receipt.lifecycle_stage != "approval_wait"
+                || receipt.policy_gate
+                    != crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str()
+                || receipt.handoff_state != "awaiting_approval"
+                || receipt.resume_target != "dispatch.approval"
+                || receipt.next_node.as_deref() != Some("approval")
+            {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "run-graph approval/delegation receipt summary is inconsistent for `{}`: approval_wait receipts must carry the approval route shape",
+                        receipt.run_id
+                    ),
+                });
+            }
+        }
+        "approval_complete" => {
+            if receipt.status != "completed"
+                || receipt.lifecycle_stage != "implementation_complete"
+                || receipt.policy_gate != "not_required"
+                || receipt.handoff_state != "none"
+                || receipt.resume_target != "none"
+                || receipt.next_node.is_some()
+            {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "run-graph approval/delegation receipt summary is inconsistent for `{}`: approval_complete receipts must carry the completion route shape",
+                        receipt.run_id
+                    ),
+                });
+            }
+        }
+        _ => unreachable!("receipt.transition_kind is canonical above"),
+    }
+
+    Ok(())
+}
+
 pub(crate) fn latest_run_graph_dispatch_receipt_matches_status(
     latest_run_graph_status_run_id: Option<&str>,
     latest_run_graph_dispatch_receipt_run_id: Option<&str>,
@@ -5286,11 +5485,6 @@ impl LauncherActivationSnapshot {
         if self.source != "state_store" {
             return Err(StateStoreError::InvalidLauncherActivationSnapshot {
                 reason: format!("unsupported source `{}`", self.source),
-            });
-        }
-        if self.source_config_path.trim().is_empty() {
-            return Err(StateStoreError::InvalidLauncherActivationSnapshot {
-                reason: "source_config_path is empty".to_string(),
             });
         }
         if self.source_config_digest.trim().is_empty() {
@@ -5954,6 +6148,50 @@ hierarchy: framework,contracts
         let bootstrap_document = target.bootstrap_schema_document();
 
         assert!(state_schema_document().contains(&bootstrap_document));
+    }
+
+    #[tokio::test]
+    async fn launcher_activation_snapshot_write_accepts_empty_source_config_path_as_provenance_only(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-launcher-activation-provenance-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let snapshot = LauncherActivationSnapshot {
+            source: "state_store".to_string(),
+            source_config_path: String::new(),
+            source_config_digest: "digest-123".to_string(),
+            captured_at: "2026-03-08T00:00:00Z".to_string(),
+            compiled_bundle: serde_json::json!({
+                "role_selection": {
+                    "fallback_role": "worker",
+                    "mode": "native"
+                },
+                "agent_system": {}
+            }),
+            pack_router_keywords: serde_json::json!({}),
+        };
+
+        store
+            .write_launcher_activation_snapshot(&snapshot)
+            .await
+            .expect("write launcher activation snapshot");
+
+        let read_back = store
+            .read_launcher_activation_snapshot()
+            .await
+            .expect("read launcher activation snapshot");
+        assert_eq!(read_back.source, "state_store");
+        assert_eq!(read_back.source_config_path, "");
+        assert_eq!(read_back.source_config_digest, "digest-123");
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -6925,6 +7163,79 @@ hierarchy: framework,contracts
             resume_target: "dispatch.writer_lane".to_string(),
             recovery_ready: true,
         }
+    }
+
+    #[tokio::test]
+    async fn record_run_graph_status_persists_route_bound_approval_delegation_receipt() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-approval-delegation-receipt-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let mut awaiting_approval = sample_run_graph_status();
+        awaiting_approval.task_class = "implementation".to_string();
+        awaiting_approval.route_task_class = "implementation".to_string();
+        awaiting_approval.active_node = "verification".to_string();
+        awaiting_approval.next_node = Some("approval".to_string());
+        awaiting_approval.status = "awaiting_approval".to_string();
+        awaiting_approval.lifecycle_stage = "approval_wait".to_string();
+        awaiting_approval.policy_gate = crate::release1_contracts::ApprovalStatus::ApprovalRequired
+            .as_str()
+            .to_string();
+        awaiting_approval.handoff_state = "awaiting_approval".to_string();
+        awaiting_approval.resume_target = "dispatch.approval".to_string();
+
+        store
+            .record_run_graph_status(&awaiting_approval)
+            .await
+            .expect("persist approval wait run graph status");
+
+        let receipt = store
+            .run_graph_approval_delegation_receipt("run-vida-a")
+            .await
+            .expect("load approval wait receipt")
+            .expect("approval wait receipt should exist");
+        assert_eq!(receipt.transition_kind, "approval_wait");
+        assert_eq!(receipt.status, "awaiting_approval");
+        assert_eq!(receipt.lifecycle_stage, "approval_wait");
+        assert_eq!(receipt.policy_gate, "approval_required");
+        assert_eq!(receipt.handoff_state, "awaiting_approval");
+        assert_eq!(receipt.resume_target, "dispatch.approval");
+        assert_eq!(receipt.next_node.as_deref(), Some("approval"));
+
+        let mut completed = awaiting_approval;
+        completed.status = "completed".to_string();
+        completed.next_node = None;
+        completed.lifecycle_stage = "implementation_complete".to_string();
+        completed.policy_gate = "not_required".to_string();
+        completed.handoff_state = "none".to_string();
+        completed.resume_target = "none".to_string();
+
+        store
+            .record_run_graph_status(&completed)
+            .await
+            .expect("persist approval complete run graph status");
+
+        let receipt = store
+            .run_graph_approval_delegation_receipt("run-vida-a")
+            .await
+            .expect("load approval complete receipt")
+            .expect("approval complete receipt should exist");
+        assert_eq!(receipt.transition_kind, "approval_complete");
+        assert_eq!(receipt.status, "completed");
+        assert_eq!(receipt.lifecycle_stage, "implementation_complete");
+        assert_eq!(receipt.policy_gate, "not_required");
+        assert_eq!(receipt.handoff_state, "none");
+        assert_eq!(receipt.resume_target, "none");
+        assert!(receipt.next_node.is_none());
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
@@ -10241,6 +10552,109 @@ hierarchy: framework,contracts
         assert_eq!(receipts[0].task_count, 2);
         assert_eq!(receipts[0].dependency_count, 1);
         assert_eq!(receipts[0].stale_removed_count, 0);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_task_reconciliation_summary_synthesizes_runtime_consumption_final_receipt() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-task-reconciliation-final-summary-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let snapshot_path = root
+            .join("runtime-consumption")
+            .join("final-2026-03-08T00-00-00Z.json");
+        fs::create_dir_all(snapshot_path.parent().expect("snapshot parent should exist"))
+            .expect("create runtime-consumption directory");
+        fs::write(
+            &snapshot_path,
+            r#"{"surface":"vida taskflow consume final","status":"pass","operator_contracts":{"status":"pass"},"payload":{"closure_admission":{"status":"pass","admitted":true,"blockers":[],"proof_surfaces":[]}}}"#,
+        )
+        .expect("write final snapshot");
+
+        let summary = store
+            .record_runtime_consumption_final_task_reconciliation_summary(Some(
+                snapshot_path.display().to_string(),
+            ))
+            .await
+            .expect("synthetic reconciliation summary should persist");
+        let snapshot_path_string = snapshot_path.display().to_string();
+        assert_eq!(summary.operation, "consume_final");
+        assert_eq!(summary.source_kind, "runtime_consumption_final_snapshot");
+        assert_eq!(summary.source_path.as_deref(), Some(snapshot_path_string.as_str()));
+        assert_eq!(summary.task_count, 0);
+        assert_eq!(summary.dependency_count, 0);
+        assert_eq!(summary.stale_removed_count, 0);
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load")
+            .expect("latest reconciliation receipt should exist");
+        assert_eq!(latest.receipt_id, summary.receipt_id);
+        assert_eq!(latest.operation, "consume_final");
+        assert_eq!(latest.source_kind, "runtime_consumption_final_snapshot");
+        assert_eq!(latest.source_path.as_deref(), Some(snapshot_path_string.as_str()));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn task_reconciliation_rollup_synthesizes_runtime_consumption_final_receipt() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-task-reconciliation-final-rollup-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let snapshot_path = root
+            .join("runtime-consumption")
+            .join("final-2026-03-08T00-00-01Z.json");
+        fs::create_dir_all(snapshot_path.parent().expect("snapshot parent should exist"))
+            .expect("create runtime-consumption directory");
+        fs::write(
+            &snapshot_path,
+            r#"{"surface":"vida taskflow consume final","status":"pass","operator_contracts":{"status":"pass"},"payload":{"closure_admission":{"status":"pass","admitted":true,"blockers":[],"proof_surfaces":[]}}}"#,
+        )
+        .expect("write final snapshot");
+
+        store
+            .record_runtime_consumption_final_task_reconciliation_summary(Some(
+                snapshot_path.display().to_string(),
+            ))
+            .await
+            .expect("synthetic reconciliation summary should persist");
+        let snapshot_path_string = snapshot_path.display().to_string();
+
+        let rollup = store
+            .task_reconciliation_rollup()
+            .await
+            .expect("reconciliation rollup should load");
+        assert_eq!(rollup.total_receipts, 1);
+        assert_eq!(rollup.total_task_rows, 0);
+        assert_eq!(rollup.total_dependency_rows, 0);
+        assert_eq!(rollup.total_stale_removed, 0);
+        assert_eq!(rollup.by_operation.get("consume_final"), Some(&1));
+        assert_eq!(
+            rollup
+                .by_source_kind
+                .get("runtime_consumption_final_snapshot"),
+            Some(&1)
+        );
+        assert_eq!(rollup.latest_source_path.as_deref(), Some(snapshot_path_string.as_str()));
 
         let _ = fs::remove_dir_all(&root);
     }

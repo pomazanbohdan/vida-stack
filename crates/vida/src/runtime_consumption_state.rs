@@ -34,6 +34,37 @@ impl RuntimeConsumptionSummary {
     }
 }
 
+pub(crate) const RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX: &str =
+    "runtime_consumption_snapshot_index";
+
+pub(crate) fn latest_admissible_retrieval_trust_signal(
+    runtime_consumption: &RuntimeConsumptionSummary,
+    latest_final_snapshot_path: Option<&str>,
+    protocol_binding_latest_receipt_id: Option<&str>,
+) -> Option<serde_json::Value> {
+    let citation = latest_final_snapshot_path?.trim();
+    let latest_snapshot_path = runtime_consumption.latest_snapshot_path.as_deref()?.trim();
+    let latest_kind = runtime_consumption.latest_kind.as_deref()?.trim();
+    let acl = protocol_binding_latest_receipt_id?.trim();
+
+    if citation.is_empty()
+        || latest_snapshot_path.is_empty()
+        || latest_kind.is_empty()
+        || acl.is_empty()
+        || latest_kind != "final"
+        || latest_snapshot_path != citation
+    {
+        return None;
+    }
+
+    Some(serde_json::json!({
+        "source": RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
+        "citation": citation,
+        "freshness": latest_kind,
+        "acl": acl,
+    }))
+}
+
 pub(crate) fn write_runtime_consumption_snapshot(
     state_root: &Path,
     prefix: &str,
@@ -214,7 +245,24 @@ pub(crate) fn runtime_consumption_snapshot_has_release_admission_evidence(
         .is_some();
     let release_admission = snapshot
         .get("release_admission")
-        .and_then(serde_json::Value::as_object);
+        .and_then(serde_json::Value::as_object)
+        .or_else(|| {
+            snapshot
+                .get("closure_admission")
+                .and_then(serde_json::Value::as_object)
+        })
+        .or_else(|| {
+            snapshot
+                .get("payload")
+                .and_then(|payload| payload.get("closure_admission"))
+                .and_then(serde_json::Value::as_object)
+        })
+        .or_else(|| {
+            snapshot
+                .get("payload")
+                .and_then(|payload| payload.get("release_admission"))
+                .and_then(serde_json::Value::as_object)
+        });
 
     status_ok && operator_status_ok && release_admission.is_some()
 }
@@ -222,10 +270,155 @@ pub(crate) fn runtime_consumption_snapshot_has_release_admission_evidence(
 pub(crate) fn latest_final_runtime_consumption_snapshot_path(
     state_root: &Path,
 ) -> Result<Option<String>, String> {
-    let summary = runtime_consumption_summary(state_root)?;
-    if summary.latest_kind.as_deref() == Some("final") {
-        Ok(summary.latest_snapshot_path)
-    } else {
-        Ok(None)
+    let snapshot_dir = state_root.join("runtime-consumption");
+    latest_runtime_consumption_snapshot_path_matching(&snapshot_dir, |file_name, snapshot| {
+        file_name.starts_with("final-")
+            && runtime_consumption_snapshot_has_release_admission_evidence(snapshot)
+    })
+}
+
+pub(crate) fn latest_recorded_final_runtime_consumption_snapshot_path(
+    state_root: &Path,
+) -> Result<Option<String>, String> {
+    let snapshot_dir = state_root.join("runtime-consumption");
+    latest_runtime_consumption_snapshot_path_matching(&snapshot_dir, |file_name, _| {
+        file_name.starts_with("final-")
+    })
+}
+
+fn latest_runtime_consumption_snapshot_path_matching<F>(
+    snapshot_dir: &Path,
+    mut include: F,
+) -> Result<Option<String>, String>
+where
+    F: FnMut(&str, &serde_json::Value) -> bool,
+{
+    if !snapshot_dir.exists() {
+        return Ok(None);
+    }
+
+    let mut latest_valid: Option<(SystemTime, String)> = None;
+    for entry in std::fs::read_dir(&snapshot_dir)
+        .map_err(|error| format!("Failed to read runtime-consumption directory: {error}"))?
+    {
+        let entry = entry
+            .map_err(|error| format!("Failed to inspect runtime-consumption entry: {error}"))?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if !file_name.starts_with("final-") {
+            continue;
+        }
+
+        let payload = match std::fs::read_to_string(&path) {
+            Ok(payload) => payload,
+            Err(_) => continue,
+        };
+        let snapshot = match serde_json::from_str::<serde_json::Value>(&payload) {
+            Ok(snapshot) => snapshot,
+            Err(_) => continue,
+        };
+        if !include(file_name, &snapshot) {
+            continue;
+        }
+
+        let modified = entry
+            .metadata()
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let path_display = path.display().to_string();
+        match &latest_valid {
+            Some((latest_modified, _)) if modified <= *latest_modified => {}
+            _ => latest_valid = Some((modified, path_display)),
+        }
+    }
+
+    Ok(latest_valid.map(|(_, path)| path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        latest_admissible_retrieval_trust_signal,
+        RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
+        RuntimeConsumptionSummary,
+    };
+
+    fn sample_runtime_consumption_summary(
+        latest_kind: Option<&str>,
+        latest_snapshot_path: Option<&str>,
+    ) -> RuntimeConsumptionSummary {
+        RuntimeConsumptionSummary {
+            total_snapshots: 2,
+            bundle_snapshots: 1,
+            bundle_check_snapshots: 0,
+            final_snapshots: 1,
+            latest_kind: latest_kind.map(str::to_string),
+            latest_snapshot_path: latest_snapshot_path.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn latest_admissible_retrieval_trust_signal_accepts_latest_final_snapshot() {
+        let runtime_consumption = sample_runtime_consumption_summary(
+            Some("final"),
+            Some("/tmp/project/runtime-consumption/final-2.json"),
+        );
+
+        let signal = latest_admissible_retrieval_trust_signal(
+            &runtime_consumption,
+            Some("/tmp/project/runtime-consumption/final-2.json"),
+            Some("protocol-binding-receipt-2"),
+        )
+        .expect("latest admissible evidence should produce a retrieval trust signal");
+
+        assert_eq!(
+            signal["source"],
+            RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX
+        );
+        assert_eq!(
+            signal["citation"],
+            "/tmp/project/runtime-consumption/final-2.json"
+        );
+        assert_eq!(signal["freshness"], "final");
+        assert_eq!(signal["acl"], "protocol-binding-receipt-2");
+    }
+
+    #[test]
+    fn latest_admissible_retrieval_trust_signal_blocks_stale_or_non_final_evidence() {
+        let non_final_runtime_consumption = sample_runtime_consumption_summary(
+            Some("bundle"),
+            Some("/tmp/project/runtime-consumption/bundle-3.json"),
+        );
+        assert!(latest_admissible_retrieval_trust_signal(
+            &non_final_runtime_consumption,
+            Some("/tmp/project/runtime-consumption/final-2.json"),
+            Some("protocol-binding-receipt-2"),
+        )
+        .is_none());
+
+        let stale_final_runtime_consumption = sample_runtime_consumption_summary(
+            Some("final"),
+            Some("/tmp/project/runtime-consumption/final-2.json"),
+        );
+        assert!(latest_admissible_retrieval_trust_signal(
+            &stale_final_runtime_consumption,
+            Some("/tmp/project/runtime-consumption/final-1.json"),
+            Some("protocol-binding-receipt-2"),
+        )
+        .is_none());
+
+        assert!(latest_admissible_retrieval_trust_signal(
+            &stale_final_runtime_consumption,
+            Some("/tmp/project/runtime-consumption/final-2.json"),
+            None,
+        )
+        .is_none());
     }
 }

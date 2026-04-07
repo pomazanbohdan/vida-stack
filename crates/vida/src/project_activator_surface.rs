@@ -1936,6 +1936,25 @@ pub(crate) fn canonical_project_activation_status_truth(
     }
 }
 
+fn db_first_activation_truth_read_back_error(
+    expected: &crate::state_store::LauncherActivationSnapshot,
+    read_back: &crate::state_store::LauncherActivationSnapshot,
+) -> Option<String> {
+    if read_back.source != expected.source {
+        return Some(
+            "DB-first activation truth read-back mismatch in authoritative state store: source drift detected."
+                .to_string(),
+        );
+    }
+    if read_back.source_config_digest != expected.source_config_digest {
+        return Some(
+            "DB-first activation truth read-back mismatch in authoritative state store: source_config_digest drift detected."
+                .to_string(),
+        );
+    }
+    None
+}
+
 pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> ExitCode {
     let project_root = match std::env::current_dir() {
         Ok(path) => path,
@@ -2114,13 +2133,10 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
                         return ExitCode::from(1);
                     }
                 };
-                if read_back.source != snapshot.source
-                    || read_back.source_config_path != snapshot.source_config_path
-                    || read_back.source_config_digest != snapshot.source_config_digest
+                if let Some(error) =
+                    db_first_activation_truth_read_back_error(&snapshot, &read_back)
                 {
-                    eprintln!(
-                        "Project activation failed closed after mutation: DB-first activation truth read-back mismatch in authoritative state store."
-                    );
+                    eprintln!("Project activation failed closed after mutation: {error}");
                     return ExitCode::from(1);
                 }
                 if read_back.source != "state_store" {
@@ -2129,9 +2145,7 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
                     );
                     return ExitCode::from(1);
                 }
-                if read_back.source_config_path.trim().is_empty()
-                    || read_back.source_config_digest.trim().is_empty()
-                {
+                if read_back.source_config_digest.trim().is_empty() {
                     eprintln!(
                         "Project activation failed closed after mutation: DB-first activation truth metadata is incomplete in authoritative state store."
                     );
@@ -2791,7 +2805,9 @@ pub(crate) fn write_project_activation_receipt(
 #[cfg(test)]
 mod tests {
     use super::activation_status::canonical_activation_status;
+    use super::db_first_activation_truth_read_back_error;
     use super::merge_project_activation_into_init_view;
+    use crate::state_store::LauncherActivationSnapshot;
     use serde_json::json;
 
     #[test]
@@ -2880,6 +2896,43 @@ mod tests {
         assert_eq!(
             merged["project_activation"]["activation_pending"],
             project_activation_view["activation_pending"]
+        );
+    }
+
+    #[test]
+    fn db_first_activation_truth_read_back_allows_source_config_path_as_provenance_only() {
+        let expected = LauncherActivationSnapshot {
+            source: "state_store".to_string(),
+            source_config_path: "/tmp/project/vida.config.yaml".to_string(),
+            source_config_digest: "digest-123".to_string(),
+            captured_at: "2026-03-08T00:00:00Z".to_string(),
+            compiled_bundle: serde_json::json!({
+                "role_selection": {
+                    "fallback_role": "worker",
+                    "mode": "native"
+                },
+                "agent_system": {}
+            }),
+            pack_router_keywords: serde_json::json!({}),
+        };
+        let read_back = LauncherActivationSnapshot {
+            source: "state_store".to_string(),
+            source_config_path: String::new(),
+            source_config_digest: "digest-123".to_string(),
+            captured_at: "2026-03-08T00:00:00Z".to_string(),
+            compiled_bundle: serde_json::json!({
+                "role_selection": {
+                    "fallback_role": "worker",
+                    "mode": "native"
+                },
+                "agent_system": {}
+            }),
+            pack_router_keywords: serde_json::json!({}),
+        };
+
+        assert_eq!(
+            db_first_activation_truth_read_back_error(&expected, &read_back),
+            None
         );
     }
 }

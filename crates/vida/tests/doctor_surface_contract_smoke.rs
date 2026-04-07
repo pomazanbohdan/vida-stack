@@ -359,6 +359,10 @@ fn taskflow_consume_continue_fails_closed_when_developer_handoff_packet_is_pendi
         "final-developer-handoff-pending.json",
         serde_json::json!({
             "surface": "vida taskflow consume final",
+            "status": "blocked",
+            "blocker_codes": [],
+            "next_actions": [],
+            "artifact_refs": {},
             "operator_contracts": {
                 "contract_id": "release-1-operator-contracts",
                 "schema_version": "release-1-v1",
@@ -693,4 +697,101 @@ fn canonical_operator_contract_status_is_shared_across_surfaces() {
         .as_str()
         .expect("status operator_contracts.status should exist");
     assert!(is_canonical_operator_status(status_operator_status));
+}
+
+#[test]
+fn doctor_json_prefers_latest_final_snapshot_guard_when_latest_snapshot_is_bundle_check() {
+    let state_dir = unique_state_dir();
+
+    let boot = vida()
+        .arg("boot")
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("boot should run");
+    assert!(boot.status.success());
+
+    let runtime_consumption_dir = format!("{state_dir}/runtime-consumption");
+    let dispatch_packets_dir = format!("{runtime_consumption_dir}/dispatch-packets");
+    std::fs::create_dir_all(&dispatch_packets_dir).expect("dispatch packet dir should exist");
+
+    let dispatch_packet_path = format!("{dispatch_packets_dir}/guard-packet.json");
+    std::fs::write(
+        &dispatch_packet_path,
+        serde_json::json!({
+            "root_session_write_guard": {
+                "status": "blocked_by_default",
+                "root_session_role": "orchestrator",
+                "local_write_requires_exception_path": true,
+                "required_exception_evidence": "exception_path_receipt_id",
+                "pre_write_checkpoint_required": true
+            }
+        })
+        .to_string(),
+    )
+    .expect("dispatch packet should write");
+
+    let final_snapshot_path = format!("{runtime_consumption_dir}/final-2026-03-19T00-00-01Z.json");
+    write_final_snapshot(
+        &state_dir,
+        "final-2026-03-19T00-00-01Z.json",
+        serde_json::json!({
+            "surface": "vida taskflow consume continue",
+            "status": "pass",
+            "blocker_codes": [],
+            "next_actions": [],
+            "operator_contracts": {
+                "contract_id": "release-1-operator-contracts",
+                "schema_version": "release-1-v1",
+                "status": "pass",
+                "blocker_codes": [],
+                "next_actions": [],
+                "artifact_refs": {
+                    "runtime_consumption_latest_snapshot_path": final_snapshot_path,
+                }
+            },
+            "payload": {
+                "closure_admission": {
+                    "status": "admit",
+                    "admitted": true,
+                    "blockers": [],
+                    "proof_surfaces": [
+                        "vida taskflow consume bundle check"
+                    ]
+                }
+            },
+            "source_dispatch_packet_path": dispatch_packet_path,
+            "artifact_refs": {
+                "runtime_consumption_latest_snapshot_path": final_snapshot_path,
+            }
+        }),
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(15));
+    std::fs::write(
+        format!("{runtime_consumption_dir}/bundle-check-2026-03-19T00-00-02Z.json"),
+        serde_json::json!({
+            "surface": "vida taskflow consume bundle check",
+            "check": { "ok": true }
+        })
+        .to_string(),
+    )
+    .expect("bundle-check snapshot should write");
+
+    let doctor = vida()
+        .args(["doctor", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("doctor should run");
+    assert!(doctor.status.success());
+    let doctor_json: serde_json::Value =
+        serde_json::from_slice(&doctor.stdout).expect("doctor json should parse");
+
+    assert_eq!(
+        doctor_json["root_session_write_guard"]["status"],
+        "blocked_by_default"
+    );
+    assert_eq!(
+        doctor_json["artifact_refs"]["runtime_consumption_latest_snapshot_path"],
+        serde_json::json!(final_snapshot_path)
+    );
 }

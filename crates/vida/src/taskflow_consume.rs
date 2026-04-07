@@ -187,9 +187,11 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         let retrieval_policy_gate =
                             build_retrieval_policy_decision_gate(&bundle_check);
                         let approval_delegation_gate = build_approval_delegation_evidence_gate(
+                            &store,
                             &role_selection,
                             &run_graph_bootstrap,
-                        );
+                        )
+                        .await;
                         if let Some(blocker_code) = execution_preparation_gate.blocker_code() {
                             if !closure_admission
                                 .blockers
@@ -398,6 +400,16 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 eprintln!("{error}");
                                 return ExitCode::from(1);
                             }
+                            if let Err(error) =
+                                ensure_runtime_consumption_final_task_reconciliation_summary(
+                                    &store,
+                                    None,
+                                )
+                                .await
+                            {
+                                eprintln!("{error}");
+                                return ExitCode::from(1);
+                            }
                         } else {
                             let snapshot = serde_json::json!({
                                 "surface": "vida taskflow consume final",
@@ -414,6 +426,16 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     return ExitCode::from(1);
                                 }
                             };
+                            if let Err(error) =
+                                ensure_runtime_consumption_final_task_reconciliation_summary(
+                                    &store,
+                                    Some(snapshot_path.clone()),
+                                )
+                                .await
+                            {
+                                eprintln!("{error}");
+                                return ExitCode::from(1);
+                            }
                             super::print_surface_header(
                                 super::RenderMode::Plain,
                                 "vida taskflow consume final",
@@ -639,6 +661,44 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
     }
 }
 
+async fn ensure_runtime_consumption_final_task_reconciliation_summary(
+    store: &super::StateStore,
+    snapshot_path_hint: Option<String>,
+) -> Result<(), String> {
+    if store
+        .latest_task_reconciliation_summary()
+        .await
+        .map_err(|error| format!("Failed to load latest task reconciliation summary: {error}"))?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    let snapshot_path = match snapshot_path_hint {
+        Some(snapshot_path) => snapshot_path,
+        None => super::runtime_consumption_state::latest_final_runtime_consumption_snapshot_path(
+            store.root(),
+        )
+        .map_err(|error| {
+            format!("Failed to locate runtime consumption final snapshot path: {error}")
+        })?
+        .ok_or_else(|| {
+            "Failed to locate runtime consumption final snapshot path after consume final"
+                .to_string()
+        })?,
+    };
+
+    let _ = store
+        .record_runtime_consumption_final_task_reconciliation_summary(Some(snapshot_path))
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to record runtime consumption final task reconciliation summary: {error}"
+            )
+        })?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ExecutionPreparationEvidenceGate {
     missing_evidence_or_handoff_packet: bool,
@@ -735,7 +795,8 @@ fn build_execution_preparation_evidence_gate(
     }
 }
 
-fn build_approval_delegation_evidence_gate(
+async fn build_approval_delegation_evidence_gate(
+    store: &super::StateStore,
     role_selection: &super::RuntimeConsumptionLaneSelection,
     run_graph_bootstrap: &serde_json::Value,
 ) -> ApprovalDelegationEvidenceGate {
@@ -748,41 +809,93 @@ fn build_approval_delegation_evidence_gate(
         };
     }
 
-    let latest_status = &run_graph_bootstrap["latest_status"];
-    let handoff_state = latest_status["handoff_state"].as_str().unwrap_or_default();
-    let policy_gate = latest_status["policy_gate"].as_str().unwrap_or_default();
-    let lifecycle_stage = latest_status["lifecycle_stage"]
-        .as_str()
-        .unwrap_or_default();
-    let combined = format!(
-        "{} {} {}",
-        handoff_state.to_ascii_lowercase(),
-        policy_gate.to_ascii_lowercase(),
-        lifecycle_stage.to_ascii_lowercase()
-    );
-    let approval_or_delegation_wait = combined.contains("approval") || combined.contains("delegat");
-    if !approval_or_delegation_wait {
+    let Some(latest_status) = run_graph_bootstrap.get("latest_status") else {
+        return ApprovalDelegationEvidenceGate {
+            missing_approval_or_delegation_evidence: false,
+        };
+    };
+    if !approval_delegation_latest_status_requires_receipt(latest_status) {
         return ApprovalDelegationEvidenceGate {
             missing_approval_or_delegation_evidence: false,
         };
     }
+    let Some(run_id) = latest_status
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return ApprovalDelegationEvidenceGate {
+            missing_approval_or_delegation_evidence: true,
+        };
+    };
 
-    let evidence_ready = super::json_bool(
-        run_graph_bootstrap.get("approval_delegation_evidence_ready"),
-        false,
-    ) || super::json_bool(
-        latest_status.get("approval_delegation_evidence_ready"),
-        false,
-    ) || run_graph_bootstrap["evidence"]["approval_delegation"]["status"]
-        .as_str()
-        == Some("ready")
-        || run_graph_bootstrap["evidence"]["approval_delegation"]["ready"]
-            .as_bool()
-            .unwrap_or(false);
+    let receipt = match store.run_graph_approval_delegation_receipt(run_id).await {
+        Ok(Some(receipt)) => receipt,
+        Ok(None) => {
+            return ApprovalDelegationEvidenceGate {
+                missing_approval_or_delegation_evidence: true,
+            };
+        }
+        Err(_) => {
+            return ApprovalDelegationEvidenceGate {
+                missing_approval_or_delegation_evidence: true,
+            };
+        }
+    };
 
     ApprovalDelegationEvidenceGate {
-        missing_approval_or_delegation_evidence: !evidence_ready,
+        missing_approval_or_delegation_evidence: !approval_delegation_receipt_matches_latest_status(
+            &receipt,
+            latest_status,
+        ),
     }
+}
+
+fn approval_delegation_latest_status_requires_receipt(latest_status: &serde_json::Value) -> bool {
+    let status_field = |key: &str| latest_status.get(key).and_then(serde_json::Value::as_str);
+    let status = status_field("status");
+    let lifecycle_stage = status_field("lifecycle_stage");
+    let policy_gate = status_field("policy_gate");
+    let handoff_state = status_field("handoff_state");
+    let resume_target = status_field("resume_target");
+    let next_node = status_field("next_node");
+
+    matches!(status, Some("awaiting_approval"))
+        || matches!(lifecycle_stage, Some("approval_wait") | Some("implementation_review_wait"))
+        || matches!(policy_gate, Some("approval_required"))
+        || matches!(
+            handoff_state,
+            Some("awaiting_approval") | Some("awaiting_delegation")
+        )
+        || matches!(resume_target, Some("dispatch.approval"))
+        || matches!(next_node, Some("approval"))
+        || (matches!(status, Some("completed"))
+            && matches!(lifecycle_stage, Some("implementation_complete"))
+            && matches!(policy_gate, Some("not_required"))
+            && matches!(handoff_state, Some("none"))
+            && matches!(resume_target, Some("none"))
+            && next_node.is_none())
+}
+
+fn approval_delegation_receipt_matches_latest_status(
+    receipt: &super::state_store::RunGraphApprovalDelegationReceipt,
+    latest_status: &serde_json::Value,
+) -> bool {
+    if receipt.transition_kind != "approval_complete" {
+        return false;
+    }
+
+    let status_field = |key: &str| latest_status.get(key).and_then(serde_json::Value::as_str);
+    receipt.run_id == status_field("run_id").unwrap_or_default()
+        && receipt.task_id == status_field("task_id").unwrap_or_default()
+        && receipt.task_class == status_field("task_class").unwrap_or_default()
+        && receipt.route_task_class == status_field("route_task_class").unwrap_or_default()
+        && receipt.active_node == status_field("active_node").unwrap_or_default()
+        && receipt.status == status_field("status").unwrap_or_default()
+        && receipt.lifecycle_stage == status_field("lifecycle_stage").unwrap_or_default()
+        && receipt.policy_gate == status_field("policy_gate").unwrap_or_default()
+        && receipt.handoff_state == status_field("handoff_state").unwrap_or_default()
+        && receipt.resume_target == status_field("resume_target").unwrap_or_default()
 }
 
 fn build_retrieval_policy_decision_gate(
@@ -1110,8 +1223,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn approval_delegation_gate_blocks_when_wait_branch_lacks_evidence() {
+    #[tokio::test]
+    async fn approval_delegation_gate_blocks_when_wait_branch_lacks_structured_receipt() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-approval-delegation-gate-block-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = crate::StateStore::open(root.clone()).await.expect("open store");
         let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -1135,21 +1258,45 @@ mod tests {
         };
         let run_graph_bootstrap = serde_json::json!({
             "latest_status": {
+                "run_id": "run-approval-delegation",
                 "handoff_state": "awaiting_approval",
                 "policy_gate": "approval_required",
-                "lifecycle_stage": "implementation_review_wait"
+                "lifecycle_stage": "implementation_review_wait",
+                "status": "awaiting_approval",
+                "task_id": "run-approval-delegation",
+                "task_class": "implementation",
+                "route_task_class": "implementation",
+                "active_node": "verification",
+                "resume_target": "dispatch.approval"
             }
         });
 
-        let gate = build_approval_delegation_evidence_gate(&role_selection, &run_graph_bootstrap);
+        let gate = build_approval_delegation_evidence_gate(
+            &store,
+            &role_selection,
+            &run_graph_bootstrap,
+        )
+        .await;
         assert_eq!(
             gate.blocker_code(),
             Some("pending_approval_delegation_evidence")
         );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn approval_delegation_gate_passes_when_wait_branch_has_evidence() {
+    #[tokio::test]
+    async fn approval_delegation_gate_passes_when_latest_status_is_absent_for_fresh_consume_final_bootstrap() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-approval-delegation-gate-fresh-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = crate::StateStore::open(root.clone()).await.expect("open store");
         let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -1172,21 +1319,114 @@ mod tests {
             reason: "test".to_string(),
         };
         let run_graph_bootstrap = serde_json::json!({
-            "approval_delegation_evidence_ready": true,
-            "latest_status": {
-                "handoff_state": "awaiting_delegation",
-                "policy_gate": "delegation_evidence_required",
-                "lifecycle_stage": "delegation_wait",
-            }
+            "seed": {
+                "run_id": "run-fresh-bootstrap"
+            },
+            "status": "seeded",
+            "handoff_ready": true
         });
 
-        let gate = build_approval_delegation_evidence_gate(&role_selection, &run_graph_bootstrap);
+        let gate = build_approval_delegation_evidence_gate(
+            &store,
+            &role_selection,
+            &run_graph_bootstrap,
+        )
+        .await;
         assert_eq!(
             gate,
             ApprovalDelegationEvidenceGate {
                 missing_approval_or_delegation_evidence: false
             }
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn approval_delegation_gate_passes_when_completion_receipt_is_route_bound() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-approval-delegation-gate-pass-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = crate::StateStore::open(root.clone()).await.expect("open store");
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "implementation".to_string(),
+            selected_role: "orchestrator".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "orchestration_contract": {
+                    "mode": "delegated_orchestration_cycle"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let status = crate::state_store::RunGraphStatus {
+            run_id: "run-approval-delegation".to_string(),
+            task_id: "run-approval-delegation".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "verification".to_string(),
+            next_node: None,
+            status: "completed".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "codex".to_string(),
+            lane_id: "verification_lane".to_string(),
+            lifecycle_stage: "implementation_complete".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist completion receipt");
+
+        let run_graph_bootstrap = serde_json::json!({
+            "latest_status": {
+                "run_id": status.run_id,
+                "task_id": status.task_id,
+                "task_class": status.task_class,
+                "route_task_class": status.route_task_class,
+                "active_node": status.active_node,
+                "status": status.status,
+                "lifecycle_stage": status.lifecycle_stage,
+                "policy_gate": status.policy_gate,
+                "handoff_state": status.handoff_state,
+                "resume_target": status.resume_target,
+            }
+        });
+
+        let gate = build_approval_delegation_evidence_gate(
+            &store,
+            &role_selection,
+            &run_graph_bootstrap,
+        )
+        .await;
+        assert_eq!(
+            gate,
+            ApprovalDelegationEvidenceGate {
+                missing_approval_or_delegation_evidence: false
+            }
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

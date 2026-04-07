@@ -254,18 +254,23 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
         Ok(payload) => {
             let check = super::taskflow_consume_bundle_check(&payload);
             let mut effective_blockers = check.blockers.clone();
+            let (registry, docflow_check, readiness, proof, _) =
+                super::build_docflow_runtime_evidence();
+            let docflow_verdict = super::build_docflow_runtime_verdict(
+                &registry,
+                &docflow_check,
+                &readiness,
+                &proof,
+            );
             let seam_closure_admission_receipt_check =
-                taskflow_docflow_seam_receipt_backed_check(&payload);
-            if !seam_closure_admission_receipt_check["receipt_backed"]
-                .as_bool()
-                .unwrap_or(false)
+                taskflow_docflow_seam_receipt_backed_check(&payload, &docflow_verdict);
+            for blocker in seam_closure_admission_receipt_check["blocker_codes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
             {
-                effective_blockers.push(
-                    crate::release1_contracts::blocker_code_str(
-                        crate::release1_contracts::BlockerCode::MissingProtocolBindingReceipt,
-                    )
-                    .to_string(),
-                );
+                push_unique_string(&mut effective_blockers, blocker);
             }
             let db_first_activation_truth = match super::read_or_sync_launcher_activation_snapshot(
                 &store,
@@ -277,7 +282,7 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                         if let Some(code) = crate::release1_contracts::blocker_code_value(
                                 crate::release1_contracts::BlockerCode::MissingLauncherActivationSnapshot,
                             ) {
-                                effective_blockers.push(code);
+                                push_unique_string(&mut effective_blockers, &code);
                             }
                         serde_json::json!({
                             "ok": false,
@@ -299,7 +304,7 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                     if let Some(code) = crate::release1_contracts::blocker_code_value(
                         crate::release1_contracts::BlockerCode::MissingLauncherActivationSnapshot,
                     ) {
-                        effective_blockers.push(code);
+                        push_unique_string(&mut effective_blockers, &code);
                     }
                     serde_json::json!({
                         "ok": false,
@@ -453,6 +458,20 @@ fn consume_bundle_check_next_actions(blockers: &[String]) -> Vec<String> {
         return vec![];
     }
     let mut next_actions = Vec::new();
+    if blockers.iter().any(|code| {
+        matches!(
+            code.as_str(),
+            "missing_readiness_verdict"
+                | "missing_proof_verdict"
+                | "missing_closure_proof"
+                | "restore_reconcile_not_green"
+        )
+    }) {
+        next_actions.push(
+            "Run `vida docflow readiness-check --profile active-canon` and `vida docflow proofcheck --profile active-canon`, then clear DocFlow closure blockers."
+                .to_string(),
+        );
+    }
     if blockers
         .iter()
         .any(|code| code == "missing_protocol_binding_receipt")
@@ -561,9 +580,6 @@ fn db_first_activation_snapshot_validation_error(
             snapshot.source
         ));
     }
-    if snapshot.source_config_path.trim().is_empty() {
-        return Some("authoritative launcher activation source_config_path is empty".to_string());
-    }
     if snapshot.source_config_digest.trim().is_empty() {
         return Some("authoritative launcher activation source_config_digest is empty".to_string());
     }
@@ -572,6 +588,7 @@ fn db_first_activation_snapshot_validation_error(
 
 fn taskflow_docflow_seam_receipt_backed_check(
     payload: &super::TaskflowConsumeBundlePayload,
+    docflow_verdict: &super::RuntimeConsumptionDocflowVerdict,
 ) -> serde_json::Value {
     let receipt_id = payload.protocol_binding_registry["receipt_id"]
         .as_str()
@@ -590,13 +607,65 @@ fn taskflow_docflow_seam_receipt_backed_check(
     } else {
         0
     };
+    let has_readiness_surface = docflow_verdict
+        .proof_surfaces
+        .iter()
+        .any(|surface| surface.contains("readiness-check"));
+    let has_proof_surface = docflow_verdict
+        .proof_surfaces
+        .iter()
+        .any(|surface| surface.contains("proofcheck"));
+    let blocker_codes = taskflow_docflow_closure_input_blocker_codes(
+        docflow_verdict,
+        has_readiness_surface,
+        has_proof_surface,
+    );
+    let closure_inputs_ready = blocker_codes.is_empty();
     serde_json::json!({
-        "status": crate::release1_contracts::release1_contract_status_str(total_receipts > 0),
+        "status": crate::release1_contracts::release1_contract_status_str(closure_inputs_ready),
         "receipt_backed": total_receipts > 0,
         "total_receipts": total_receipts,
-        "surface": "vida taskflow protocol-binding status --json",
-        "notes": "TaskFlow->DocFlow seam closure admission requires receipt-backed protocol-binding evidence.",
+        "docflow_status": crate::release1_contracts::release1_contract_status_str(closure_inputs_ready),
+        "closure_inputs_ready": closure_inputs_ready,
+        "blocker_codes": blocker_codes,
+        "docflow_blocker_codes": docflow_verdict.blockers.clone(),
+        "docflow_proof_surfaces": docflow_verdict.proof_surfaces.clone(),
+        "has_readiness_surface": has_readiness_surface,
+        "has_proof_surface": has_proof_surface,
+        "surface": "vida docflow readiness-check --profile active-canon | vida docflow proofcheck --profile active-canon",
+        "notes": "TaskFlow->DocFlow seam closure admission requires DocFlow readiness and proof verdict evidence; protocol-binding receipt metadata is informational only.",
     })
+}
+
+fn taskflow_docflow_closure_input_blocker_codes(
+    docflow_verdict: &super::RuntimeConsumptionDocflowVerdict,
+    has_readiness_surface: bool,
+    has_proof_surface: bool,
+) -> Vec<String> {
+    let mut blockers = docflow_verdict.blockers.clone();
+    if !has_proof_surface {
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::MissingClosureProof,
+        ) {
+            blockers.push(code);
+        }
+    }
+    if !(has_readiness_surface && has_proof_surface) {
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::RestoreReconcileNotGreen,
+        ) {
+            blockers.push(code);
+        }
+    }
+    blockers.sort();
+    blockers.dedup();
+    blockers
+}
+
+fn push_unique_string(target: &mut Vec<String>, value: &str) {
+    if !target.iter().any(|entry| entry == value) {
+        target.push(value.to_string());
+    }
 }
 
 fn build_taskflow_agent_system_snapshot(
@@ -698,12 +767,13 @@ mod tests {
     use super::{
         build_taskflow_agent_system_snapshot, bundle_check_operator_contracts_consistency_error,
         consume_bundle_check_next_actions, consume_bundle_operator_contract_status,
-        fail_fast_with_timeout, normalize_agent_system_max_parallel_agents,
-        normalize_consume_bundle_blocker_codes, taskflow_docflow_seam_receipt_backed_check,
+        db_first_activation_snapshot_validation_error, fail_fast_with_timeout,
+        normalize_agent_system_max_parallel_agents, normalize_consume_bundle_blocker_codes,
+        push_unique_string, taskflow_docflow_seam_receipt_backed_check,
     };
     use crate::{
         release1_contracts::release1_contract_status_str, DoctorLauncherSummary,
-        TaskflowConsumeBundlePayload,
+        RuntimeConsumptionDocflowVerdict, TaskflowConsumeBundlePayload,
     };
 
     fn minimal_payload_for_operator_contract_status_checks() -> TaskflowConsumeBundlePayload {
@@ -734,7 +804,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_system_snapshot_accepts_legacy_codex_multi_agent_alias() {
+    fn agent_system_snapshot_uses_canonical_carrier_runtime_when_legacy_alias_is_present() {
         let activation_bundle = serde_json::json!({
             "agent_system": {
                 "mode": "native",
@@ -743,6 +813,32 @@ mod tests {
             },
             "autonomous_execution": {
                 "enabled": true
+            },
+            "carrier_runtime": {
+                "roles": [
+                    {
+                        "role_id": "canonical",
+                        "tier": "canonical",
+                        "rate": 1,
+                        "runtime_roles": ["worker"],
+                        "task_classes": ["implementation"],
+                        "default_runtime_role": "worker",
+                        "reasoning_band": "low",
+                        "model_reasoning_effort": "low"
+                    }
+                ],
+                "worker_strategy": {
+                    "selection_policy": {
+                        "rule": "capability_first_then_score_guard_then_cheapest_tier"
+                    },
+                    "agents": {},
+                    "store_path": ".vida/data/state/agents.json",
+                    "scorecards_path": ".vida/data/state/agent-scorecards.json"
+                },
+                "dispatch_aliases": {
+                    "role_id": "canonical",
+                    "default_runtime_role": "worker"
+                }
             },
             "codex_multi_agent": {
                 "roles": [
@@ -770,7 +866,8 @@ mod tests {
         });
 
         let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
-        assert_eq!(snapshot["carriers"][0]["carrier_id"], "legacy");
+        assert_eq!(snapshot["carriers"][0]["carrier_id"], "canonical");
+        assert_eq!(snapshot["dispatch_aliases"]["role_id"], "canonical");
     }
 
     #[test]
@@ -797,6 +894,23 @@ mod tests {
         assert_eq!(
             normalize_agent_system_max_parallel_agents(&missing_value),
             1
+        );
+    }
+
+    #[test]
+    fn db_first_activation_snapshot_validation_accepts_empty_source_config_path() {
+        let snapshot = crate::state_store::LauncherActivationSnapshot {
+            source: "state_store".to_string(),
+            source_config_path: String::new(),
+            source_config_digest: "digest-123".to_string(),
+            captured_at: "2026-03-08T00:00:00Z".to_string(),
+            compiled_bundle: serde_json::json!({}),
+            pack_router_keywords: serde_json::json!({}),
+        };
+
+        assert_eq!(
+            db_first_activation_snapshot_validation_error(&snapshot),
+            None
         );
     }
 
@@ -1329,10 +1443,110 @@ mod tests {
     #[test]
     fn taskflow_docflow_seam_receipt_backed_check_uses_canonical_blocked_status() {
         let payload = minimal_payload_for_operator_contract_status_checks();
-        let seam = taskflow_docflow_seam_receipt_backed_check(&payload);
+        let docflow_verdict = RuntimeConsumptionDocflowVerdict {
+            status: "block".to_string(),
+            ready: false,
+            blockers: vec!["missing_readiness_verdict".to_string()],
+            proof_surfaces: vec!["vida docflow check --profile active-canon".to_string()],
+        };
+        let seam = taskflow_docflow_seam_receipt_backed_check(&payload, &docflow_verdict);
 
         assert_eq!(seam["status"], "blocked");
         assert_eq!(seam["receipt_backed"], false);
+        assert_eq!(seam["closure_inputs_ready"], false);
+        assert_eq!(seam["docflow_status"], "blocked");
+        assert_eq!(
+            seam["blocker_codes"],
+            serde_json::json!([
+                "missing_closure_proof",
+                "missing_readiness_verdict",
+                "restore_reconcile_not_green"
+            ])
+        );
+        assert_eq!(
+            seam["docflow_blocker_codes"],
+            serde_json::json!(["missing_readiness_verdict"])
+        );
+        assert_eq!(seam["has_readiness_surface"], false);
+        assert_eq!(seam["has_proof_surface"], false);
+    }
+
+    #[test]
+    fn taskflow_docflow_seam_receipt_backed_check_does_not_require_receipt_when_docflow_inputs_are_ready(
+    ) {
+        let payload = minimal_payload_for_operator_contract_status_checks();
+        let docflow_verdict = RuntimeConsumptionDocflowVerdict {
+            status: "pass".to_string(),
+            ready: true,
+            blockers: vec![],
+            proof_surfaces: vec![
+                "vida docflow readiness-check --profile active-canon".to_string(),
+                "vida docflow proofcheck --profile active-canon".to_string(),
+            ],
+        };
+
+        let seam = taskflow_docflow_seam_receipt_backed_check(&payload, &docflow_verdict);
+
+        assert_eq!(seam["status"], "pass");
+        assert_eq!(seam["receipt_backed"], false);
+        assert_eq!(seam["closure_inputs_ready"], true);
+        assert_eq!(seam["docflow_status"], "pass");
+        assert_eq!(seam["blocker_codes"], serde_json::json!([]));
+        assert_eq!(seam["has_readiness_surface"], true);
+        assert_eq!(seam["has_proof_surface"], true);
+    }
+
+    #[test]
+    fn taskflow_docflow_seam_receipt_backed_check_adds_closure_surface_blockers() {
+        let payload = minimal_payload_for_operator_contract_status_checks();
+        let docflow_verdict = RuntimeConsumptionDocflowVerdict {
+            status: "pass".to_string(),
+            ready: true,
+            blockers: vec![],
+            proof_surfaces: vec!["vida docflow readiness-check --profile active-canon".to_string()],
+        };
+
+        let seam = taskflow_docflow_seam_receipt_backed_check(&payload, &docflow_verdict);
+
+        assert_eq!(seam["status"], "blocked");
+        assert_eq!(seam["closure_inputs_ready"], false);
+        assert_eq!(
+            seam["blocker_codes"],
+            serde_json::json!(["missing_closure_proof", "restore_reconcile_not_green"])
+        );
+        assert_eq!(seam["has_readiness_surface"], true);
+        assert_eq!(seam["has_proof_surface"], false);
+    }
+
+    #[test]
+    fn consume_bundle_next_actions_include_docflow_guidance_for_closure_seam_blockers() {
+        let actions = consume_bundle_check_next_actions(&[
+            "missing_proof_verdict".to_string(),
+            "restore_reconcile_not_green".to_string(),
+        ]);
+
+        assert_eq!(
+            actions,
+            vec![
+                "Run `vida docflow readiness-check --profile active-canon` and `vida docflow proofcheck --profile active-canon`, then clear DocFlow closure blockers.".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn push_unique_string_deduplicates_effective_blockers() {
+        let mut blockers = vec!["missing_readiness_verdict".to_string()];
+
+        push_unique_string(&mut blockers, "missing_readiness_verdict");
+        push_unique_string(&mut blockers, "missing_proof_verdict");
+
+        assert_eq!(
+            blockers,
+            vec![
+                "missing_readiness_verdict".to_string(),
+                "missing_proof_verdict".to_string()
+            ]
+        );
     }
 
     #[test]

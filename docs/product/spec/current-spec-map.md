@@ -201,6 +201,12 @@ Companion rule:
 25. [clarify-enforce-immediate-project-agent-first-design.md](clarify-enforce-immediate-project-agent-first-design.md)
    Config families: bounded clarification and enforcement for project agent-first delegated execution, anti-pause continuation law, valid release-admission snapshot selection, and packet-minimum fail-closed runtime behavior
    Registered path: `docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md`
+26. [fix-release-admission-evidence-detection-artifac-design.md](fix-release-admission-evidence-detection-artifac-design.md)
+   Config families: bounded release-admission evidence detection, admissible final-snapshot precedence, operator artifact-ref parity, and effective-bundle receipt citation stability
+   Registered path: `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
+27. [clarify-enforce-immediate-continuation-shell-saf-design.md](clarify-enforce-immediate-continuation-shell-saf-design.md)
+   Config families: bounded continuation recovery law, shell-safe backlog note recording, and help/prompt alignment for active continued-development sessions
+   Registered path: `docs/product/spec/clarify-enforce-immediate-continuation-shell-saf-design.md`
 
 ### Support
 

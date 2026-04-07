@@ -1032,6 +1032,36 @@ fn implementation_verification_outcome(status: &str) -> ImplementationVerificati
         .unwrap_or(ImplementationVerificationOutcome::UnexpectedStatus)
 }
 
+pub(crate) fn approval_delegation_transition_kind(status: &RunGraphStatus) -> Option<&'static str> {
+    let route_bound_implementation =
+        status.task_class == "implementation" && status.route_task_class == "implementation";
+
+    if route_bound_implementation
+        && status.status == "awaiting_approval"
+        && status.lifecycle_stage == "approval_wait"
+        && status.policy_gate
+            == crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str()
+        && matches!(status.next_node.as_deref(), Some("approval"))
+        && status.handoff_state == "awaiting_approval"
+        && status.resume_target == "dispatch.approval"
+    {
+        return Some("approval_wait");
+    }
+
+    if route_bound_implementation
+        && status.status == "completed"
+        && status.lifecycle_stage == "implementation_complete"
+        && status.policy_gate == "not_required"
+        && status.next_node.is_none()
+        && status.handoff_state == "none"
+        && status.resume_target == "none"
+    {
+        return Some("approval_complete");
+    }
+
+    None
+}
+
 pub(crate) async fn derive_seeded_run_graph_status(
     store: &StateStore,
     task_id: &str,
@@ -2018,6 +2048,45 @@ mod tests {
             implementation_verification_outcome("paused"),
             ImplementationVerificationOutcome::UnexpectedStatus
         );
+    }
+
+    #[test]
+    fn approval_delegation_transition_kind_requires_route_bound_receipt_shape() {
+        let mut awaiting_approval =
+            default_run_graph_status("run-1", "implementation", "implementation");
+        awaiting_approval.status = "awaiting_approval".to_string();
+        awaiting_approval.active_node = "verification".to_string();
+        awaiting_approval.next_node = Some("approval".to_string());
+        awaiting_approval.lifecycle_stage = "approval_wait".to_string();
+        awaiting_approval.policy_gate = crate::release1_contracts::ApprovalStatus::ApprovalRequired
+            .as_str()
+            .to_string();
+        awaiting_approval.handoff_state = "awaiting_approval".to_string();
+        awaiting_approval.resume_target = "dispatch.approval".to_string();
+
+        assert_eq!(
+            approval_delegation_transition_kind(&awaiting_approval),
+            Some("approval_wait")
+        );
+
+        let mut completed =
+            default_run_graph_status("run-1", "implementation", "implementation");
+        completed.active_node = "verification".to_string();
+        completed.status = "completed".to_string();
+        completed.next_node = None;
+        completed.lifecycle_stage = "implementation_complete".to_string();
+        completed.policy_gate = "not_required".to_string();
+        completed.handoff_state = "none".to_string();
+        completed.resume_target = "none".to_string();
+
+        assert_eq!(
+            approval_delegation_transition_kind(&completed),
+            Some("approval_complete")
+        );
+
+        let mut unstructured = completed;
+        unstructured.status = "approved".to_string();
+        assert_eq!(approval_delegation_transition_kind(&unstructured), None);
     }
 
     #[test]

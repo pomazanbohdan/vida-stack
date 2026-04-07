@@ -1450,6 +1450,87 @@ mod runtime_dispatch_packet_context_tests {
         assert_eq!(ctx.receipt.run_id, "run-test");
         assert_eq!(ctx.role_selection.request, "req");
     }
+
+    #[test]
+    fn downstream_packet_uses_next_lane_activation_for_dev_pack_handoff() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Continue bounded Release-1 work for task r1-04-a".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("pbi_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec!["task".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: json!({
+                "tracked_flow_bootstrap": {},
+                "orchestration_contract": {},
+                "development_flow": {
+                    "dispatch_contract": {
+                        "implementer_activation": {
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-dev-pack".to_string(),
+            dispatch_target: "dev-pack".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida task ensure".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some("/tmp/dev-pack.json".to_string()),
+            dispatch_result_path: Some("/tmp/dev-pack-result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("implementer".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some(
+                "after the dev packet is created, activate the selected implementer lane for bounded execution"
+                    .to_string(),
+            ),
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("executed".to_string()),
+            downstream_dispatch_result_path: Some("/tmp/dev-pack-result.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 1,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: Some("dev-pack".to_string()),
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("taskflow_state_store".to_string()),
+            recorded_at: "2026-04-06T06:47:13Z".to_string(),
+        };
+
+        let packet = downstream_dispatch_packet_body(
+            &role_selection,
+            &json!({ "run_id": "run-dev-pack" }),
+            &receipt,
+            None,
+        );
+
+        assert_eq!(packet["packet_template_kind"], "delivery_task_packet");
+        assert_eq!(packet["activation_agent_type"], "junior");
+        assert_eq!(packet["activation_runtime_role"], "worker");
+        assert_eq!(packet["selected_backend"], "junior");
+        assert_eq!(
+            packet["delivery_task_packet"]["handoff_runtime_role"],
+            "worker"
+        );
+    }
 }
 
 pub(crate) fn write_runtime_dispatch_packet(
@@ -2033,9 +2114,24 @@ fn downstream_dispatch_packet_body(
         .downstream_dispatch_target
         .as_deref()
         .unwrap_or_default();
-    let handoff_runtime_role = receipt
-        .activation_runtime_role
+    let (
+        downstream_dispatch_kind,
+        _downstream_dispatch_surface,
+        activation_agent_type,
+        activation_runtime_role,
+    ) = if downstream_target.is_empty() {
+        (
+            receipt.dispatch_kind.clone(),
+            receipt.dispatch_surface.clone(),
+            receipt.activation_agent_type.clone(),
+            receipt.activation_runtime_role.clone(),
+        )
+    } else {
+        downstream_activation_fields(role_selection, downstream_target)
+    };
+    let handoff_runtime_role = activation_runtime_role
         .as_deref()
+        .or(receipt.activation_runtime_role.as_deref())
         .unwrap_or(role_selection.selected_role.as_str());
     let packet_template_kind = if downstream_target.is_empty() {
         "delivery_task_packet".to_string()
@@ -2043,14 +2139,7 @@ fn downstream_dispatch_packet_body(
         runtime_dispatch_packet_kind(
             &role_selection.execution_plan,
             downstream_target,
-            if matches!(
-                downstream_target,
-                "spec-pack" | "work-pool-pack" | "dev-pack"
-            ) {
-                "taskflow_pack"
-            } else {
-                "agent_lane"
-            },
+            &downstream_dispatch_kind,
         )
     };
     let activation_command = packet_path
@@ -2154,9 +2243,9 @@ fn downstream_dispatch_packet_body(
         "downstream_exception_path_receipt_id": receipt.exception_path_receipt_id,
         "downstream_dispatch_result_path": receipt.downstream_dispatch_result_path,
         "downstream_dispatch_active_target": receipt.downstream_dispatch_active_target,
-        "activation_agent_type": receipt.activation_agent_type,
-        "activation_runtime_role": receipt.activation_runtime_role,
-        "selected_backend": receipt.selected_backend,
+        "activation_agent_type": activation_agent_type.clone(),
+        "activation_runtime_role": activation_runtime_role.clone(),
+        "selected_backend": activation_agent_type.or_else(|| receipt.selected_backend.clone()),
         "host_runtime": runtime_host_execution_contract_for_root(&project_root),
         "role_selection_full": role_selection,
         "run_graph_bootstrap": run_graph_bootstrap,

@@ -1516,6 +1516,16 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
     packet_path: &str,
     downstream: bool,
 ) -> Result<serde_json::Value, String> {
+    let instruction_source_root =
+        PathBuf::from(super::state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT);
+    let framework_memory_source_root =
+        PathBuf::from(super::state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
+    super::ensure_launcher_bootstrap(
+        store,
+        &instruction_source_root,
+        &framework_memory_source_root,
+    )
+    .await?;
     let bundle = build_taskflow_consume_bundle_payload(store).await?;
     let packet = super::taskflow_consume_resume::read_dispatch_packet(packet_path)?;
     let selected_role = packet

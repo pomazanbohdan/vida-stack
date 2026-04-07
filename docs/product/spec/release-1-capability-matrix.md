@@ -33,9 +33,9 @@ Matrix reading rule:
 |---|---|---|
 | Slice 1: Operational Spine | `release-1-plan.md`; `taskflow-v1-runtime-modernization-plan.md`; current Rust `vida` shell and `taskflow-*` crates | thin-shell closure, carrier/runtime neutrality, and full operator-surface completion are still open; recovery/checkpoint truth remains shell-heavy |
 | Slice 2: Project Activation Surface | `project-activation-and-configurator-model.md`; `operational-state-and-synchronization-model.md`; current `.vida/**` direction | DB-first activation/configurator closure still shares authority with `vida.config.yaml`, launcher-captured snapshots, codex-first bootstrap defaults, and filesystem projection bridges |
-| Slice 3: Compiled Runtime Bundles | `compiled-runtime-bundle-contract.md`; `taskflow-protocol-runtime-binding-model.md`; `runtime-paths-and-derived-cache-model.md` | bundle/protocol-binding law is clear, but compiled-control closure still emits codex-era contracts and has no generic configured-backend execution path |
-| Slice 4: Planning, Execution, Artifact, And Approval Loop | `user-facing-runtime-flow-and-operating-loop-model.md`; `execution-preparation-and-developer-handoff-model.md`; `release-1-plan.md` | durable loop components are real (`taskflow consume`, run-graph, approval wait), but shared workflow/risk contracts, generic dispatch execution, and stable `lane` / `approval` surfaces remain incomplete |
-| Slice 5: Release-1 Closure And Hardening | `compiled-autonomous-delivery-runtime-architecture.md`; `checkpoint-commit-and-replay-model.md`; `vida1-development-conditions.md` | seam proof, replay/checkpoint integrity, append-evidence transition history, and closure admission remain partly real but still concentrated in launcher-owned code |
+| Slice 3: Compiled Runtime Bundles | `compiled-runtime-bundle-contract.md`; `taskflow-protocol-runtime-binding-model.md`; `runtime-paths-and-derived-cache-model.md` | bundle/protocol-binding law is clear and configured backend execution is real, but alias-compatibility reads and launcher-owned bundle closure still prevent owner-complete closure |
+| Slice 4: Planning, Execution, Artifact, And Approval Loop | `user-facing-runtime-flow-and-operating-loop-model.md`; `execution-preparation-and-developer-handoff-model.md`; `release-1-plan.md` | durable loop components are real (`taskflow consume`, run-graph, approval wait, recovery, and delegated execution), but full workflow/risk classification coverage and stable root `lane` / `approval` surfaces remain incomplete |
+| Slice 5: Release-1 Closure And Hardening | `compiled-autonomous-delivery-runtime-architecture.md`; `checkpoint-commit-and-replay-model.md`; `vida1-development-conditions.md` | P0 production-baseline control tracks and closure-facing runtime proofs are now evidence-backed, but final matrix refresh, DocFlow seam hardening, release-candidate build, and explicit closure admission remain open |
 
 Interpretation rule:
 
@@ -49,11 +49,11 @@ The Airtable `Vida` spec backlog refreshed on `2026-03-16` adds these Release-1-
 
 | Track | Priority | Minimum Release-1 requirement | Current posture |
 |---|---|---|---|
-| Trace, Telemetry, And Evidence Foundation | P0 | root trace, step/tool spans, side-effect evidence linkage, audit export, replay for at least one workflow per major class | 🟡 |
-| Tool Contract And Side-Effect Control | P0 | normalized tool contract with side-effect class, auth mode, retry/idempotency, policy hook, and approval-sensitive failure boundaries | ⚪ |
-| Retrieval, Freshness, And Citation Reliability | P0 | source registry, ACL-aware retrieval, freshness posture, citation linkage, delete/ACL propagation | ⚪ |
-| Identity, Delegation, And Approval Enforcement | P0 | principal model, chain-of-delegation, approval lifecycle, just-in-time elevation, denied/approved audit evidence | 🟡 |
-| Runtime SLO, Failure Recovery, And Rollback | P0 | workflow SLI/SLO registry, failure taxonomy, rollback/fallback path, incident evidence bundle | 🟡 |
+| Trace, Telemetry, And Evidence Foundation | P0 | root trace, step/tool spans, side-effect evidence linkage, audit export, replay for at least one workflow per major class | ✅ |
+| Tool Contract And Side-Effect Control | P0 | normalized tool contract with side-effect class, auth mode, retry/idempotency, policy hook, and approval-sensitive failure boundaries | ✅ |
+| Retrieval, Freshness, And Citation Reliability | P0 | source registry, ACL-aware retrieval, freshness posture, citation linkage, delete/ACL propagation | ✅ |
+| Identity, Delegation, And Approval Enforcement | P0 | principal model, chain-of-delegation, approval lifecycle, just-in-time elevation, denied/approved audit evidence | ✅ |
+| Runtime SLO, Failure Recovery, And Rollback | P0 | workflow SLI/SLO registry, failure taxonomy, rollback/fallback path, incident evidence bundle | ✅ |
 | Prompt Lifecycle And Controlled Rollout | P1 | prompt registry, benchmark-backed promotion, canary, rollback target, regression gate | ⚪ |
 | Process Evaluation And Feedback Loop | P1 | process metrics, feedback ingestion, defect clustering, online/offline evaluator linkage | 🟡 |
 | Memory Governance Operationalization | P1 | memory class/risk handling, consent/TTL, correction/deletion, approval for sensitive writes | 🟡 |
@@ -463,7 +463,7 @@ Close Release 1 as one coherent CLI-first runtime with restore/reconcile discipl
 
 ### 8.10 Current Gap
 
-1. hardening and explicit seam closure are still under active modernization and proof gathering, and checkpoint/replay/projection contracts remain too shell-heavy to claim Release-1 closure.
+1. production-baseline control tracks and closure-facing runtime proofs are now evidence-backed, but final matrix refresh, DocFlow seam hardening, release-candidate build, and explicit closure admission still remain before Release 1 can close.
 
 ### 8.11 Standalone Value
 
@@ -483,10 +483,10 @@ Release 1 is closed only when all are true:
 artifact_path: product/spec/release-1-capability-matrix
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-04-03'
+artifact_revision: 2026-04-06
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-capability-matrix.md
 created_at: '2026-03-13T13:20:00+02:00'
-updated_at: 2026-04-03T18:40:00+03:00
+updated_at: 2026-04-06T14:21:10.330280046Z
 changelog_ref: release-1-capability-matrix.changelog.jsonl

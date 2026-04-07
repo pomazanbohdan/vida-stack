@@ -283,5 +283,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/spec/clarify-enforce-immediate-project-agent-first-design.md
 created_at: 2026-04-04T17:55:40.339798941Z
-updated_at: 2026-04-05T06:19:10.119452599Z
+updated_at: 2026-04-07T18:19:15.954007245Z
 changelog_ref: clarify-enforce-immediate-project-agent-first-design.changelog.jsonl

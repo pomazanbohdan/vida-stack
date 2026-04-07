@@ -1,6 +1,6 @@
 # Clarify Enforce Immediate Continuation Shell Saf Design
 
-Status: approved
+Status: implemented
 
 Use this template for one bounded feature/change design before implementation.
 
@@ -8,7 +8,7 @@ Use this template for one bounded feature/change design before implementation.
 - Feature / change: clarify and enforce immediate continuation after non-gating reports, and add a shell-safe path for backlog progress recording.
 - Owner layer: mixed
 - Runtime surface: launcher | taskflow | project process docs
-- Status: approved
+- Status: implemented
 
 ## Current Context
 - Existing system overview

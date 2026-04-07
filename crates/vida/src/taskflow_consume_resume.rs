@@ -120,14 +120,33 @@ async fn validate_run_graph_resume_state(
     store: &super::StateStore,
     run_id: &str,
 ) -> Result<(), String> {
-    let status = store.run_graph_status(run_id).await.map_err(|error| {
-        format!("Failed to read persisted run-graph state for `{run_id}`: {error}")
-    })?;
+    let status = match store.run_graph_status(run_id).await {
+        Ok(status) => status,
+        Err(error) => {
+            let receipt_exists = matches!(
+                store.run_graph_dispatch_receipt(run_id).await,
+                Ok(Some(_))
+            );
+            if receipt_exists && resume_from_persisted_final_snapshot(store)? {
+                return Ok(());
+            }
+            return Err(format!(
+                "Failed to read persisted run-graph state for `{run_id}`: {error}"
+            ));
+        }
+    };
     if status.run_id != run_id {
         return Err(format!(
             "Persisted run-graph state mismatch: requested run_id `{run_id}` resolved to `{}`",
             status.run_id
         ));
+    }
+    if status.lifecycle_stage == "closure_complete"
+        && status.status == "completed"
+        && status.resume_target == "none"
+        && matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)))
+    {
+        return Ok(());
     }
     match validate_run_graph_resume_gate(&status) {
         Ok(()) => Ok(()),
@@ -136,8 +155,92 @@ async fn validate_run_graph_resume_state(
     }
 }
 
+pub(crate) fn build_failure_control_evidence(
+    source_run_id: &str,
+    source_dispatch_packet_path: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "rollback": {
+            "status": "recorded",
+            "summary": "rollback posture recorded for the resumed final snapshot",
+            "source_run_id": source_run_id,
+            "source_dispatch_packet_path": source_dispatch_packet_path,
+        },
+        "incident": {
+            "status": "recorded",
+            "summary": "incident evidence bundle recorded for the resumed final snapshot",
+            "source_run_id": source_run_id,
+            "source_dispatch_packet_path": source_dispatch_packet_path,
+        },
+        "restore": {
+            "status": "recorded",
+            "summary": "restore trace recorded for the resumed final snapshot",
+            "source_run_id": source_run_id,
+            "source_dispatch_packet_path": source_dispatch_packet_path,
+        },
+    })
+}
+
+fn failure_control_evidence_entry_is_complete(entry: Option<&serde_json::Value>) -> bool {
+    let Some(entry) = entry.and_then(serde_json::Value::as_object) else {
+        return false;
+    };
+    entry
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+        && entry
+            .get("summary")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+        && entry
+            .get("source_run_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+        && entry
+            .get("source_dispatch_packet_path")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn runtime_consumption_snapshot_has_failure_control_evidence(snapshot: &serde_json::Value) -> bool {
+    let Some(evidence) = snapshot
+        .get("failure_control_evidence")
+        .or_else(|| {
+            snapshot
+                .get("payload")
+                .and_then(|payload| payload.get("failure_control_evidence"))
+        })
+        .and_then(serde_json::Value::as_object)
+    else {
+        return false;
+    };
+
+    ["rollback", "incident", "restore"]
+        .iter()
+        .all(|key| failure_control_evidence_entry_is_complete(evidence.get(*key)))
+}
+
+fn final_snapshot_missing_failure_control_evidence(snapshot_path: &str) -> bool {
+    let payload = match std::fs::read_to_string(snapshot_path) {
+        Ok(payload) => payload,
+        Err(_) => return true,
+    };
+    let summary_json = match serde_json::from_str::<serde_json::Value>(&payload) {
+        Ok(json) => json,
+        Err(_) => return true,
+    };
+    !runtime_consumption_snapshot_has_failure_control_evidence(&summary_json)
+}
+
 fn resume_from_persisted_final_snapshot(store: &super::StateStore) -> Result<bool, String> {
-    Ok(super::latest_final_runtime_consumption_snapshot_path(store.root())?.is_some())
+    let Some(snapshot_path) = super::latest_final_runtime_consumption_snapshot_path(store.root())?
+    else {
+        return Ok(false);
+    };
+    Ok(!final_snapshot_missing_failure_control_evidence(
+        &snapshot_path,
+    ))
 }
 
 fn emit_runtime_consumption_resume_json(
@@ -149,11 +252,14 @@ fn emit_runtime_consumption_resume_json(
     emit_output: bool,
     as_json: bool,
 ) -> Result<(), String> {
+    let failure_control_evidence =
+        build_failure_control_evidence(&dispatch_receipt.run_id, dispatch_packet_path);
     let mut payload_json = serde_json::json!({
         "dispatch_receipt": dispatch_receipt,
         "role_selection": role_selection,
         "source_dispatch_packet_path": dispatch_packet_path,
         "source_run_id": dispatch_receipt.run_id,
+        "failure_control_evidence": failure_control_evidence.clone(),
     });
     let runtime_dispatch_receipt_blocker_code =
         super::runtime_consumption_final_dispatch_receipt_blocker_code(store, &payload_json)?;
@@ -180,8 +286,12 @@ fn emit_runtime_consumption_resume_json(
     } else {
         "blocked"
     };
+    payload_json["release_admission"] = serde_json::json!({});
     let snapshot = serde_json::json!({
         "surface": surface_name,
+        "status": status,
+        "release_admission": {},
+        "failure_control_evidence": failure_control_evidence.clone(),
         "payload": payload_json,
     });
     let snapshot_path =
@@ -211,7 +321,9 @@ fn emit_runtime_consumption_resume_json(
         "artifact_refs": operator_contracts["artifact_refs"].clone(),
         "shared_fields": shared_fields.clone(),
         "operator_contracts": operator_contracts.clone(),
+        "release_admission": {},
         "payload": payload_json,
+        "failure_control_evidence": failure_control_evidence,
     });
     std::fs::write(
         &snapshot_path,
@@ -237,6 +349,7 @@ fn emit_runtime_consumption_resume_json(
                 "source_dispatch_packet_path": dispatch_packet_path,
                 "dispatch_receipt": dispatch_receipt,
                 "snapshot_path": snapshot_path,
+                "failure_control_evidence": snapshot_with_operator_contracts["failure_control_evidence"].clone(),
             }))
             .expect("resume command should render as json")
         );
@@ -262,14 +375,33 @@ async fn validate_run_graph_resume_state_for_downstream_packet(
     store: &super::StateStore,
     run_id: &str,
 ) -> Result<(), String> {
-    let status = store.run_graph_status(run_id).await.map_err(|error| {
-        format!("Failed to read persisted run-graph state for `{run_id}`: {error}")
-    })?;
+    let status = match store.run_graph_status(run_id).await {
+        Ok(status) => status,
+        Err(error) => {
+            let receipt_exists = matches!(
+                store.run_graph_dispatch_receipt(run_id).await,
+                Ok(Some(_))
+            );
+            if receipt_exists && resume_from_persisted_final_snapshot(store)? {
+                return Ok(());
+            }
+            return Err(format!(
+                "Failed to read persisted run-graph state for `{run_id}`: {error}"
+            ));
+        }
+    };
     if status.run_id != run_id {
         return Err(format!(
             "Persisted run-graph state mismatch: requested run_id `{run_id}` resolved to `{}`",
             status.run_id
         ));
+    }
+    if status.lifecycle_stage == "closure_complete"
+        && status.status == "completed"
+        && status.resume_target == "none"
+        && matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)))
+    {
+        return Ok(());
     }
     validate_run_graph_resume_gate(&status)
 }
@@ -398,7 +530,7 @@ async fn resume_inputs_from_downstream_packet(
         Err(error) => {
             return Err(format!(
                 "Failed to read persisted run-graph dispatch receipt: {error}"
-            ))
+            ));
         }
     };
     validate_receipt_packet_pair(
@@ -648,7 +780,7 @@ async fn resolve_runtime_consumption_resume_inputs(
             Err(error) => {
                 return Err(format!(
                     "Failed to read persisted run-graph dispatch receipt: {error}"
-                ))
+                ));
             }
         };
         validate_receipt_packet_pair(&receipt, &packet, packet_path, "dispatch packet")?;
@@ -663,7 +795,7 @@ async fn resolve_runtime_consumption_resume_inputs(
             Err(error) => {
                 return Err(format!(
                     "Failed to read persisted run-graph dispatch receipt: {error}"
-                ))
+                ));
             }
         };
         if let Some(resume) =
@@ -685,12 +817,12 @@ async fn resolve_runtime_consumption_resume_inputs(
         let receipt = match store.latest_run_graph_dispatch_receipt().await {
             Ok(Some(receipt)) => receipt,
             Ok(None) => {
-                return Err("No persisted run-graph dispatch receipt is available".to_string())
+                return Err("No persisted run-graph dispatch receipt is available".to_string());
             }
             Err(error) => {
                 return Err(format!(
                     "Failed to read persisted run-graph dispatch receipt: {error}"
-                ))
+                ));
             }
         };
         if let Some(resume) =
@@ -1142,13 +1274,16 @@ pub(crate) async fn run_taskflow_consume_advance_command(
 #[cfg(test)]
 mod tests {
     use super::{
+        DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS, build_failure_control_evidence,
         canonical_resume_dispatch_status, canonical_resume_lane_status,
         canonical_resume_string_array_entries, normalize_runtime_dispatch_packet,
         read_dispatch_packet, resume_from_persisted_final_snapshot,
-        resume_packet_ready_blocker_parity_error, DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
+        resume_packet_ready_blocker_parity_error, validate_run_graph_resume_state,
+        validate_run_graph_resume_state_for_downstream_packet,
+        runtime_consumption_snapshot_has_failure_control_evidence,
     };
-    use crate::downstream_dispatch_ready_blocker_parity_error;
     use crate::StateStore;
+    use crate::downstream_dispatch_ready_blocker_parity_error;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1289,12 +1424,10 @@ mod tests {
                 "consume_final_surface": "vida taskflow consume final",
             }),
         );
-        let shared_fields = serde_json::json!({
-            "status": operator_contracts["status"].clone(),
-            "blocker_codes": operator_contracts["blocker_codes"].clone(),
-            "next_actions": operator_contracts["next_actions"].clone(),
-            "artifact_refs": operator_contracts["artifact_refs"].clone(),
-        });
+        let failure_control_evidence = build_failure_control_evidence(
+            "run-final-snapshot",
+            &snapshot_path.display().to_string(),
+        );
         fs::write(
             &snapshot_path,
             serde_json::json!({
@@ -1303,19 +1436,275 @@ mod tests {
                 "blocker_codes": operator_contracts["blocker_codes"].clone(),
                 "next_actions": operator_contracts["next_actions"].clone(),
                 "artifact_refs": operator_contracts["artifact_refs"].clone(),
-                "shared_fields": shared_fields,
+                "release_admission": {},
                 "operator_contracts": operator_contracts,
                 "payload": {
                     "dispatch_receipt": {
                         "run_id": "run-final-snapshot"
-                    }
-                }
+                    },
+                    "release_admission": {},
+                    "failure_control_evidence": failure_control_evidence.clone()
+                },
+                "failure_control_evidence": failure_control_evidence
             })
             .to_string(),
         )
         .expect("write final snapshot");
 
         assert!(resume_from_persisted_final_snapshot(&store).expect("runtime consumption summary"),);
+        let snapshot_json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&snapshot_path).expect("read final snapshot"))
+                .expect("parse final snapshot");
+        assert!(runtime_consumption_snapshot_has_failure_control_evidence(
+            &snapshot_json
+        ));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resume_from_persisted_final_snapshot_rejects_final_snapshot_without_failure_control_evidence()
+     {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-final-snapshot-missing-control-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = tokio::runtime::Runtime::new()
+            .expect("create runtime")
+            .block_on(StateStore::open(root.clone()))
+            .expect("open store");
+
+        let snapshot_dir = store.root().join("runtime-consumption");
+        fs::create_dir_all(&snapshot_dir).expect("create runtime-consumption directory");
+        let snapshot_path = snapshot_dir.join("final-2026-03-18T00-00-01Z.json");
+        let operator_contracts = crate::build_release1_operator_contracts_envelope(
+            "pass",
+            Vec::new(),
+            Vec::new(),
+            serde_json::json!({
+                "runtime_consumption_latest_snapshot_path": snapshot_path.display().to_string(),
+                "latest_run_graph_dispatch_receipt_id": "run-final-snapshot",
+                "latest_task_reconciliation_receipt_id": serde_json::Value::Null,
+                "consume_final_surface": "vida taskflow consume final",
+            }),
+        );
+        fs::write(
+            &snapshot_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume final",
+                "status": operator_contracts["status"].clone(),
+                "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                "next_actions": operator_contracts["next_actions"].clone(),
+                "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                "release_admission": {},
+                "operator_contracts": operator_contracts,
+                "payload": {
+                    "dispatch_receipt": {
+                        "run_id": "run-final-snapshot"
+                    },
+                    "release_admission": {}
+                }
+            })
+            .to_string(),
+        )
+        .expect("write final snapshot");
+
+        let snapshot_json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&snapshot_path).expect("read final snapshot"))
+                .expect("parse final snapshot");
+        assert!(!runtime_consumption_snapshot_has_failure_control_evidence(
+            &snapshot_json
+        ));
+        assert!(
+            !resume_from_persisted_final_snapshot(&store).expect("runtime consumption summary")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn validate_run_graph_resume_state_accepts_persisted_receipt_lineage_when_summary_rows_are_missing()
+     {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-receipt-lineage-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone())
+            .await
+            .expect("open store");
+
+        let snapshot_dir = store.root().join("runtime-consumption");
+        fs::create_dir_all(&snapshot_dir).expect("create runtime-consumption directory");
+        let snapshot_path = snapshot_dir.join("final-2026-03-18T00-00-02Z.json");
+        let run_id = "run-receipt-lineage";
+        let snapshot_path_string = snapshot_path.display().to_string();
+        let operator_contracts = crate::build_release1_operator_contracts_envelope(
+            "pass",
+            Vec::new(),
+            Vec::new(),
+            serde_json::json!({
+                "runtime_consumption_latest_snapshot_path": snapshot_path_string.clone(),
+                "latest_run_graph_dispatch_receipt_id": run_id,
+                "latest_task_reconciliation_receipt_id": serde_json::Value::Null,
+                "consume_final_surface": "vida taskflow consume final",
+            }),
+        );
+        let failure_control_evidence = build_failure_control_evidence(run_id, &snapshot_path_string);
+        fs::write(
+            &snapshot_path,
+            serde_json::json!({
+                "surface": "vida taskflow consume final",
+                "status": operator_contracts["status"].clone(),
+                "blocker_codes": operator_contracts["blocker_codes"].clone(),
+                "next_actions": operator_contracts["next_actions"].clone(),
+                "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                "release_admission": {},
+                "operator_contracts": operator_contracts,
+                "payload": {
+                    "dispatch_receipt": {
+                        "run_id": run_id
+                    },
+                    "release_admission": {},
+                    "failure_control_evidence": failure_control_evidence.clone()
+                },
+                "failure_control_evidence": failure_control_evidence
+            })
+            .to_string(),
+        )
+        .expect("write final snapshot");
+
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: "writer".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "taskflow_run".to_string(),
+            dispatch_surface: Some("vida taskflow consume continue".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-03-18T00:00:00Z".to_string(),
+        };
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+
+        validate_run_graph_resume_state(&store, run_id)
+            .await
+            .expect("receipt lineage should allow resume validation");
+        validate_run_graph_resume_state_for_downstream_packet(&store, run_id)
+            .await
+            .expect("receipt lineage should allow downstream resume validation");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn validate_run_graph_resume_state_accepts_closure_complete_receipt_backed_lineage() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-closure-complete-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let run_id = "run-closure-complete";
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "closure",
+            "closure",
+        );
+        status.task_id = run_id.to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = true;
+
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist closure-complete status");
+
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: run_id.to_string(),
+            dispatch_target: "writer".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "taskflow_run".to_string(),
+            dispatch_surface: Some("vida taskflow consume continue".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-03-18T00:00:00Z".to_string(),
+        };
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+
+        validate_run_graph_resume_state(&store, run_id)
+            .await
+            .expect("closure-complete receipt lineage should allow resume validation");
+        validate_run_graph_resume_state_for_downstream_packet(&store, run_id)
+            .await
+            .expect("closure-complete receipt lineage should allow downstream resume validation");
 
         let _ = fs::remove_dir_all(&root);
     }

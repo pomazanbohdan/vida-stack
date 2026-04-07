@@ -5,6 +5,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::{
     build_project_activator_view, doctor_launcher_summary_for_root,
     merge_project_activation_into_init_view, read_or_sync_launcher_activation_snapshot,
+    runtime_consumption_state::latest_admissible_retrieval_trust_signal,
     DoctorLauncherSummary, StateStore, TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload,
     TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
 };
@@ -43,18 +44,24 @@ const RETRIEVAL_OPTIONAL_CONTEXT_BOUNDARY_REQUIRED: [&str; 3] = [
     "broad_repo_manual_scan",
 ];
 
+fn runtime_bundle_retrieval_trust_evidence(
+    runtime_consumption: &crate::runtime_consumption_state::RuntimeConsumptionSummary,
+    protocol_binding_receipt_id: Option<&str>,
+) -> serde_json::Value {
+    latest_admissible_retrieval_trust_signal(
+        runtime_consumption,
+        runtime_consumption.latest_snapshot_path.as_deref(),
+        protocol_binding_receipt_id,
+    )
+    .unwrap_or_else(|| serde_json::json!({}))
+}
+
 pub(crate) async fn build_taskflow_consume_bundle_payload(
     store: &StateStore,
 ) -> Result<TaskflowConsumeBundlePayload, String> {
     let activation_snapshot = read_or_sync_launcher_activation_snapshot(store).await?;
-    let config_path = PathBuf::from(&activation_snapshot.source_config_path);
-    let vida_root = config_path.parent().ok_or_else(|| {
-        format!(
-            "Launcher activation snapshot config path has no parent: {}",
-            activation_snapshot.source_config_path
-        )
-    })?;
-    let launcher_runtime_paths = doctor_launcher_summary_for_root(vida_root)
+    let vida_root = bundle_project_root(store.root())?;
+    let launcher_runtime_paths = doctor_launcher_summary_for_root(&vida_root)
         .map_err(|error| format!("Failed to resolve launcher/runtime paths: {error}"))?;
     let root_artifact_id = store
         .active_instruction_root()
@@ -86,6 +93,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .run_graph_summary()
         .await
         .map_err(|error| format!("Failed to read run graph summary: {error}"))?;
+    let runtime_consumption = crate::runtime_consumption_summary(store.root())?;
     let protocol_binding_receipt = store
         .latest_protocol_binding_receipt()
         .await
@@ -146,8 +154,8 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         "receipt_id": effective_instruction_bundle.receipt_id,
         "artifact_count": effective_instruction_bundle.projected_artifacts.len(),
     });
-    let project_protocol_projections = build_project_protocol_projections(vida_root);
-    let project_activation_view = build_project_activator_view(vida_root);
+    let project_protocol_projections = build_project_protocol_projections(&vida_root);
+    let project_activation_view = build_project_activator_view(&vida_root);
     let mut activation_bundle = activation_snapshot.compiled_bundle.clone();
     if let serde_json::Value::Object(bundle) = &mut activation_bundle {
         bundle.insert(
@@ -181,6 +189,12 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .get("artifact_revision")
         .cloned()
         .unwrap_or(serde_json::Value::String(String::new()));
+    let retrieval_trust_evidence = runtime_bundle_retrieval_trust_evidence(
+        &runtime_consumption,
+        protocol_binding_receipt
+            .as_ref()
+            .map(|receipt| receipt.receipt_id.as_str()),
+    );
     let cache_delivery_contract = serde_json::json!({
         "always_on_core": control_core["mandatory_chain_order"],
         "project_startup_bundle": ["activation_bundle.project_protocol_projections.startup_bundle"],
@@ -208,15 +222,15 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             "startup_bundle_revision": startup_bundle_revision,
         },
         "retrieval_trust_evidence": {
-            "source": "taskflow_runtime_bundle",
-            "citation": activation_snapshot.source_config_path,
-            "freshness": metadata["compiled_at"],
-            "acl": protocol_binding_registry["receipt_id"],
+            "source": retrieval_trust_evidence["source"].clone(),
+            "citation": retrieval_trust_evidence["citation"].clone(),
+            "freshness": retrieval_trust_evidence["freshness"].clone(),
+            "acl": retrieval_trust_evidence["acl"].clone(),
         },
     });
     let orchestrator_init_view = merge_project_activation_into_init_view(
         build_orchestrator_init_view(
-            vida_root,
+            &vida_root,
             &control_core,
             &project_protocol_projections,
             &protocol_binding_registry,
@@ -228,7 +242,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
     );
     let agent_init_view = merge_project_activation_into_init_view(
         build_agent_init_view(
-            vida_root,
+            &vida_root,
             &activation_bundle,
             &project_protocol_projections,
             &protocol_binding_registry,
@@ -245,7 +259,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             .format(&Rfc3339)
             .expect("rfc3339 timestamp should render"),
         vida_root: vida_root.display().to_string(),
-        config_path: activation_snapshot.source_config_path.clone(),
+        config_path: expected_config_path(&vida_root.display().to_string()),
         activation_source: activation_snapshot.source.clone(),
         launcher_runtime_paths,
         metadata,
@@ -639,6 +653,19 @@ fn runtime_roots_equivalent(left: &str, right: &str) -> bool {
         (Ok(left_canonical), Ok(right_canonical)) => left_canonical == right_canonical,
         _ => false,
     }
+}
+
+fn bundle_project_root(state_root: &Path) -> Result<PathBuf, String> {
+    if let Some(project_root) =
+        crate::taskflow_task_bridge::infer_project_root_from_state_root(state_root)
+    {
+        return Ok(project_root);
+    }
+
+    Err(format!(
+        "Authoritative state root is not project-bound and no DB-backed project root is available: {}",
+        state_root.display()
+    ))
 }
 
 fn cache_contract_consistency_blockers(payload: &TaskflowConsumeBundlePayload) -> Vec<String> {
@@ -1556,14 +1583,117 @@ fn non_orchestrator_roles(activation_bundle: &serde_json::Value) -> Vec<String> 
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::{
-        activation_status_is_pending, activation_truth_project_root,
+        activation_status_is_pending, activation_truth_project_root, bundle_project_root,
         cache_contract_consistency_blockers, canonical_project_protocol_projection_status,
-        init_view_activation_is_pending, retrieval_optional_context_boundary_blockers,
-        retrieval_trust_evidence_blockers, taskflow_consume_bundle_check,
-        TaskflowConsumeBundlePayload,
+        build_project_protocol_projections, init_view_activation_is_pending,
+        retrieval_optional_context_boundary_blockers, retrieval_trust_evidence_blockers,
+        runtime_bundle_retrieval_trust_evidence,
+        taskflow_consume_bundle_check, TaskflowConsumeBundlePayload,
     };
     use crate::TASKFLOW_PROTOCOL_BINDING_AUTHORITY;
+
+    static PROJECTION_FIXTURE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn unique_projection_fixture_root() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let counter = PROJECTION_FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "vida-runtime-bundle-projection-{}-{}-{}",
+            std::process::id(),
+            nanos,
+            counter
+        ))
+    }
+
+    fn write_project_protocol_projection_fixture(
+        root: &Path,
+        relative_path: &str,
+        artifact_path: &str,
+        artifact_revision: &str,
+    ) {
+        let path = root.join(relative_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("fixture parent should exist");
+        }
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n-----\nartifact_path: {artifact_path}\nartifact_type: product_spec\nartifact_revision: {artifact_revision}\nstatus: canonical\n",
+                path.file_stem()
+                    .expect("fixture should have a file stem")
+                    .to_string_lossy()
+            ),
+        )
+        .expect("fixture projection file should write");
+    }
+
+    fn cache_alignment_payload(startup_bundle_revision: &str) -> TaskflowConsumeBundlePayload {
+        let mut payload = minimal_payload_for_cache_checks();
+        payload.metadata = serde_json::json!({
+            "bundle_id": "bundle-1",
+            "bundle_schema_version": "release-1-v1",
+            "framework_revision": "framework-1",
+            "project_activation_revision": "pa-1",
+            "protocol_binding_revision": "pb-1",
+            "protocol_binding_cache_token": "token-protocol-binding-1",
+            "compiled_at": "2026-03-17T00:00:00Z",
+            "binding_status": "bound",
+        });
+        payload.control_core = serde_json::json!({
+            "root_artifact_id": "framework-agent-definition",
+            "mandatory_chain_order": ["framework-agent-definition"],
+            "source_version_tuple": ["framework-1"],
+            "receipt_id": "receipt-1",
+            "artifact_count": 1,
+        });
+        payload.protocol_binding_registry = serde_json::json!({
+            "primary_state_authority": TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
+            "receipt_id": "protocol-binding-1",
+            "binding_status": "bound",
+        });
+        payload.cache_delivery_contract = serde_json::json!({
+            "always_on_core": ["framework-agent-definition"],
+            "project_startup_bundle": ["activation_bundle.project_protocol_projections.startup_bundle"],
+            "project_runtime_capsules": ["activation_bundle.project_protocol_projections.startup_capsules"],
+            "lane_bundle": ["activation_bundle"],
+            "triggered_domain_bundle": ["protocol_binding_registry"],
+            "task_specific_dynamic_context": ["task_store", "run_graph"],
+            "invalidation_tuple": {
+                "framework_revision": "framework-1",
+                "project_activation_revision": "pa-1",
+                "protocol_binding_revision": "pb-1",
+                "protocol_binding_cache_token": "token-protocol-binding-1",
+                "startup_bundle_revision": startup_bundle_revision,
+            },
+            "retrieval_only_optional_context_boundary": [
+                "full_project_owner_protocols",
+                "non_promoted_project_docs",
+                "broad_repo_manual_scan"
+            ],
+            "cache_key_inputs": {
+                "source_version_tuple": ["framework-1"],
+                "project_activation_revision": "pa-1",
+                "protocol_binding_revision": "pb-1",
+                "protocol_binding_cache_token": "token-protocol-binding-1",
+                "startup_bundle_revision": startup_bundle_revision,
+            },
+            "retrieval_trust_evidence": {
+                "source": "runtime_consumption_snapshot_index",
+                "citation": "/tmp/project/runtime-consumption/final.json",
+                "freshness": "final",
+                "acl": "protocol-binding-1",
+            },
+        });
+        payload
+    }
 
     #[test]
     fn retrieval_optional_boundary_requires_all_canonical_entries() {
@@ -1842,6 +1972,96 @@ mod tests {
     }
 
     #[test]
+    fn startup_bundle_revision_tracks_projection_drift_and_invalidates_stale_cache_tuples() {
+        let root = unique_projection_fixture_root();
+        let startup_bundle_path = "docs/process/project-orchestrator-startup-bundle.md";
+        let runtime_capsule_paths = [
+            (
+                "docs/process/project-packet-and-lane-runtime-capsule.md",
+                "project-packet-and-lane-runtime-capsule",
+                "capsule-1",
+            ),
+            (
+                "docs/process/project-start-readiness-runtime-capsule.md",
+                "project-start-readiness-runtime-capsule",
+                "capsule-2",
+            ),
+            (
+                "docs/process/project-packet-rendering-runtime-capsule.md",
+                "project-packet-rendering-runtime-capsule",
+                "capsule-3",
+            ),
+        ];
+
+        write_project_protocol_projection_fixture(
+            &root,
+            startup_bundle_path,
+            "project-orchestrator-startup-bundle",
+            "startup-2026-04-06",
+        );
+        for (relative_path, artifact_path, artifact_revision) in runtime_capsule_paths {
+            write_project_protocol_projection_fixture(
+                &root,
+                relative_path,
+                artifact_path,
+                artifact_revision,
+            );
+        }
+
+        let projections_v1 = build_project_protocol_projections(&root);
+        assert_eq!(projections_v1["status"], "compiled");
+        assert_eq!(
+            projections_v1["startup_bundle"]["artifact_revision"],
+            "startup-2026-04-06"
+        );
+        assert_eq!(
+            projections_v1["startup_bundle"]["promotion_state"]["stage"],
+            "executable"
+        );
+        assert_eq!(
+            projections_v1["compiled_executable_project_protocols"]
+                .as_array()
+                .expect("compiled protocols should be an array")
+                .len(),
+            4
+        );
+
+        let startup_bundle_revision_v1 = projections_v1["startup_bundle"]["artifact_revision"]
+            .as_str()
+            .expect("startup bundle revision should be a string")
+            .to_string();
+        let payload_v1 = cache_alignment_payload(&startup_bundle_revision_v1);
+        assert!(cache_contract_consistency_blockers(&payload_v1).is_empty());
+
+        write_project_protocol_projection_fixture(
+            &root,
+            startup_bundle_path,
+            "project-orchestrator-startup-bundle",
+            "startup-2026-04-07",
+        );
+
+        let projections_v2 = build_project_protocol_projections(&root);
+        let startup_bundle_revision_v2 = projections_v2["startup_bundle"]["artifact_revision"]
+            .as_str()
+            .expect("updated startup bundle revision should be a string");
+        assert_eq!(startup_bundle_revision_v2, "startup-2026-04-07");
+        assert_ne!(startup_bundle_revision_v1, startup_bundle_revision_v2);
+        assert_ne!(
+            startup_bundle_revision_v2,
+            projections_v2["startup_capsules"][0]["artifact_revision"]
+        );
+        assert_eq!(
+            projections_v2["startup_capsules"][0]["artifact_revision"],
+            "capsule-1"
+        );
+
+        let refreshed_payload = cache_alignment_payload(startup_bundle_revision_v2);
+        assert!(cache_contract_consistency_blockers(&refreshed_payload).is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn protocol_binding_registry_whitespace_only_receipt_id_fails_closed() {
         let mut payload = minimal_payload_for_cache_checks();
         payload.protocol_binding_registry = serde_json::json!({
@@ -1915,6 +2135,36 @@ mod tests {
         assert!(blockers
             .iter()
             .any(|row| row == "missing_retrieval_trust_evidence_field:source"));
+    }
+
+    #[test]
+    fn runtime_bundle_retrieval_trust_evidence_uses_final_runtime_consumption_snapshot_signal() {
+        let runtime_consumption = crate::runtime_consumption_state::RuntimeConsumptionSummary {
+            total_snapshots: 3,
+            bundle_snapshots: 1,
+            bundle_check_snapshots: 1,
+            final_snapshots: 1,
+            latest_kind: Some("final".to_string()),
+            latest_snapshot_path: Some(
+                "/tmp/project/.vida/data/state/runtime-consumption/final-2.json".to_string(),
+            ),
+        };
+
+        let evidence = runtime_bundle_retrieval_trust_evidence(
+            &runtime_consumption,
+            Some("protocol-binding-receipt-2"),
+        );
+
+        assert_eq!(
+            evidence["source"],
+            serde_json::json!("runtime_consumption_snapshot_index")
+        );
+        assert_eq!(
+            evidence["citation"],
+            serde_json::json!("/tmp/project/.vida/data/state/runtime-consumption/final-2.json")
+        );
+        assert_eq!(evidence["freshness"], serde_json::json!("final"));
+        assert_eq!(evidence["acl"], serde_json::json!("protocol-binding-receipt-2"));
     }
 
     #[test]
@@ -2044,5 +2294,24 @@ mod tests {
         let payload = minimal_payload_for_cache_checks();
         let selected = activation_truth_project_root(&payload, Some("/tmp/project".to_string()));
         assert_eq!(selected, "/tmp/project");
+    }
+
+    #[test]
+    fn bundle_project_root_prefers_authoritative_state_root_over_config_parent() {
+        let state_root = std::env::current_dir()
+            .expect("current dir should resolve")
+            .join(".vida/data/state");
+        let selected = bundle_project_root(&state_root)
+            .expect("project root should resolve from authoritative state root");
+        let expected = crate::taskflow_task_bridge::infer_project_root_from_state_root(&state_root)
+            .expect("authoritative state root should map back to the project root");
+        assert_eq!(selected, expected);
+    }
+
+    #[test]
+    fn bundle_project_root_blocks_non_project_bound_state_root_without_db_first_fallback() {
+        let error = bundle_project_root(Path::new("/tmp/not-a-project/.vida/data/state"))
+        .expect_err("non-project-bound state root without DB-backed authority should fail closed");
+        assert!(error.contains("no DB-backed project root is available"));
     }
 }

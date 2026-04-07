@@ -17,7 +17,10 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!(
                 "  Runtime store: vida task and vida taskflow task over the authoritative state store."
             );
-            println!("  Snapshot export only: .vida/exports/tasks.snapshot.jsonl");
+            println!("  Canonical snapshot artifact: .vida/exports/tasks.snapshot.jsonl");
+            println!(
+                "  `vida task replace-jsonl` authoritatively replaces the store from that snapshot artifact."
+            );
             println!();
             println!("Dependency semantics:");
             println!("  Parent-child edges preserve epic/task structure.");
@@ -45,6 +48,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!("  vida task close <task-id> --reason \"...\" --json");
             println!("  vida task import-jsonl .vida/exports/tasks.snapshot.jsonl --json");
+            println!("  vida task replace-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             println!("  vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             println!();
             println!("Failure modes:");
@@ -69,6 +73,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  Reuse-or-create one tracked handoff task idempotently: vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels <label> --json");
             println!("  Record real progress after a proven step: vida task update <task-id> --status <status> --notes-file <path> --json");
             println!("  Import one bounded backlog snapshot when explicitly needed: vida task import-jsonl .vida/exports/tasks.snapshot.jsonl --json");
+            println!("  Authoritatively replace the current backlog snapshot when needed: vida task replace-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             println!("  Export the current runtime snapshot when needed: vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             return;
         }
@@ -451,6 +456,20 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         };
     }
 
+    if (normalized.contains("replace") && normalized.contains("snapshot"))
+        || normalized.contains("apply snapshot")
+        || normalized.contains("authoritative replace")
+        || normalized.contains("snapshot replace")
+        || normalized.contains("restore snapshot")
+    {
+        return TaskflowQueryAnswer {
+            intent: "replace-backlog-snapshot",
+            why: "Authoritative backlog replacement should use the canonical snapshot artifact and the store's replace path instead of additive import-only wiring.",
+            command: "vida task replace-jsonl <path> --json",
+            failure_modes: "Replacement mutates the live backlog by removing stale tasks absent from the snapshot; inspect the artifact first if identity or completeness is uncertain.",
+        };
+    }
+
     if normalized.contains("export") || normalized.contains("jsonl") {
         return TaskflowQueryAnswer {
             intent: "export-runtime-store",
@@ -528,10 +547,11 @@ fn print_taskflow_query_help() {
     println!("  vida taskflow query \"what should I run next?\"");
     println!("  vida taskflow query \"how do I inspect one task?\"");
     println!("  vida taskflow query \"how do I create a new task under this epic?\"");
+    println!("  vida taskflow query \"how do I replace the current backlog snapshot?\"");
     println!("  vida taskflow query \"how do I check resumability?\"");
     println!();
     println!("Current intents:");
-    println!("  next/ready, inspect/show, create/new, update/progress, close/done, display-id, export/jsonl, resume/run-graph, doctor/health, final/consume, protocol-binding");
+    println!("  next/ready, inspect/show, create/new, update/progress, close/done, display-id, export/jsonl, replace/snapshot, resume/run-graph, doctor/health, final/consume, protocol-binding");
     println!();
     println!("Failure modes:");
     println!("  Vague queries fall back to `vida taskflow help`.");
@@ -566,5 +586,20 @@ pub(crate) fn run_taskflow_query(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         _ => ExitCode::from(2),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::taskflow_query_answer;
+
+    #[test]
+    fn taskflow_query_answer_routes_replace_snapshot_requests() {
+        let answer = taskflow_query_answer("replace snapshot artifact");
+        assert_eq!(answer.intent, "replace-backlog-snapshot");
+        assert_eq!(answer.command, "vida task replace-jsonl <path> --json");
+        let why = answer.why.to_lowercase();
+        assert!(why.contains("backlog replacement"));
+        assert!(why.contains("canonical snapshot artifact"));
     }
 }

@@ -22,25 +22,18 @@ const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER: &str =
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
     "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.";
 
+const MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
+    "Run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence.";
+const MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
+    "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal.";
+const MISSING_RETRIEVAL_TRUST_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
+    "Run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence.";
+
 fn is_unsupported_architecture_reserved_workflow_boundary(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
         "unsupported" | "architecture_reserved" | "unsupported_architecture_reserved"
     )
-}
-
-fn retrieval_trust_signal(
-    source: Option<&str>,
-    citation: Option<&str>,
-    freshness: Option<&str>,
-    acl: Option<&str>,
-) -> Option<serde_json::Value> {
-    Some(serde_json::json!({
-        "source": source?,
-        "citation": citation?,
-        "freshness": freshness?,
-        "acl": acl?,
-    }))
 }
 
 fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> bool {
@@ -52,7 +45,152 @@ fn final_snapshot_missing_release_admission_evidence(snapshot_path: &str) -> boo
         Ok(json) => json,
         Err(_) => return true,
     };
+    if shared_operator_output_contract_parity_error(&summary_json).is_some() {
+        return true;
+    }
     !super::runtime_consumption_snapshot_has_release_admission_evidence(&summary_json)
+}
+
+fn trace_evidence_next_action() -> String {
+    "Refresh task reconciliation, runtime consumption, run-graph dispatch receipt, protocol binding, and effective instruction bundle evidence before rerunning `vida doctor`.".to_string()
+}
+
+fn selected_effective_bundle_receipt_id(
+    effective_instruction_bundle: &crate::state_store::EffectiveInstructionBundle,
+    latest_effective_bundle_receipt: Option<&crate::state_store::EffectiveBundleReceiptSummary>,
+) -> String {
+    latest_effective_bundle_receipt
+        .and_then(|receipt| {
+            let receipt_id = receipt.receipt_id.trim();
+            (!receipt_id.is_empty()).then(|| receipt_id.to_string())
+        })
+        .unwrap_or_else(|| effective_instruction_bundle.receipt_id.clone())
+}
+
+fn trace_evidence_blocker_codes(
+    latest_task_reconciliation: Option<&crate::state_store::TaskReconciliationSummary>,
+    runtime_consumption: &crate::runtime_consumption_state::RuntimeConsumptionSummary,
+    latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    protocol_binding: &crate::state_store::ProtocolBindingSummary,
+    effective_instruction_bundle: &crate::state_store::EffectiveInstructionBundle,
+    effective_bundle_receipt_id: &str,
+) -> Vec<String> {
+    let mut blocker_codes = Vec::new();
+
+    if latest_task_reconciliation.is_none()
+        || runtime_consumption.total_snapshots == 0
+        || latest_run_graph_dispatch_receipt.is_none()
+        || protocol_binding.total_receipts == 0
+    {
+        blocker_codes.push(blocker_code_str(BlockerCode::TraceMissing).to_string());
+    }
+
+    if runtime_consumption.total_snapshots > 0 && runtime_consumption.latest_snapshot_path.is_none()
+    {
+        blocker_codes.push(blocker_code_str(BlockerCode::TraceIncomplete).to_string());
+    }
+    if protocol_binding.total_receipts > 0 && protocol_binding.latest_receipt_id.is_none() {
+        blocker_codes.push(blocker_code_str(BlockerCode::TraceIncomplete).to_string());
+    }
+    if effective_bundle_receipt_id.trim().is_empty()
+        || effective_instruction_bundle.projected_artifacts.is_empty()
+        || effective_instruction_bundle.mandatory_chain_order.is_empty()
+    {
+        blocker_codes.push(blocker_code_str(BlockerCode::TraceIncomplete).to_string());
+    }
+
+    canonical_blocker_code_list(blocker_codes.iter().map(String::as_str))
+}
+
+fn build_trace_evidence_summary(
+    latest_task_reconciliation: Option<&crate::state_store::TaskReconciliationSummary>,
+    runtime_consumption: &crate::runtime_consumption_state::RuntimeConsumptionSummary,
+    latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    protocol_binding: &crate::state_store::ProtocolBindingSummary,
+    effective_instruction_bundle: &crate::state_store::EffectiveInstructionBundle,
+    effective_bundle_receipt_id: &str,
+) -> (serde_json::Value, Vec<String>, Vec<String>) {
+    let blocker_codes = trace_evidence_blocker_codes(
+        latest_task_reconciliation,
+        runtime_consumption,
+        latest_run_graph_dispatch_receipt,
+        protocol_binding,
+        effective_instruction_bundle,
+        effective_bundle_receipt_id,
+    );
+    let next_actions = if blocker_codes.is_empty() {
+        Vec::new()
+    } else {
+        vec![trace_evidence_next_action()]
+    };
+    let trace_evidence = serde_json::json!({
+        "contract_id": "release-1-trace-evidence",
+        "schema_version": "release-1-v1",
+        "status": if blocker_codes.is_empty() { "pass" } else { "blocked" },
+        "blocker_codes": blocker_codes,
+        "next_actions": next_actions,
+        "root_trace": {
+            "trace_id": serde_json::Value::Null,
+            "latest_task_reconciliation_receipt_id": latest_task_reconciliation
+                .map(|receipt| serde_json::Value::String(receipt.receipt_id.clone()))
+                .unwrap_or(serde_json::Value::Null),
+            "runtime_consumption_latest_snapshot_path": runtime_consumption
+                .latest_snapshot_path
+                .as_ref()
+                .map(|path| serde_json::Value::String(path.clone()))
+                .unwrap_or(serde_json::Value::Null),
+            "latest_run_graph_dispatch_receipt_id": latest_run_graph_dispatch_receipt
+                .map(|receipt| serde_json::Value::String(receipt.run_id.clone()))
+                .unwrap_or(serde_json::Value::Null),
+            "protocol_binding_latest_receipt_id": protocol_binding
+                .latest_receipt_id
+                .as_ref()
+                .map(|receipt_id| serde_json::Value::String(receipt_id.clone()))
+                .unwrap_or(serde_json::Value::Null),
+            "effective_instruction_bundle_receipt_id": effective_bundle_receipt_id,
+        },
+        "lane_receipts": {
+            "latest_task_reconciliation": latest_task_reconciliation,
+            "latest_run_graph_dispatch_receipt": latest_run_graph_dispatch_receipt,
+        },
+        "side_effect_evidence": {
+            "runtime_consumption": runtime_consumption,
+            "protocol_binding": protocol_binding,
+        },
+        "evaluation_evidence": {
+            "effective_instruction_bundle": {
+                "root_artifact_id": effective_instruction_bundle.root_artifact_id,
+                "mandatory_chain_order": effective_instruction_bundle.mandatory_chain_order,
+                "source_version_tuple": effective_instruction_bundle.source_version_tuple,
+                "receipt_id": effective_bundle_receipt_id,
+                "artifact_count": effective_instruction_bundle.projected_artifacts.len(),
+            }
+        }
+    });
+    (trace_evidence, blocker_codes, next_actions)
+}
+
+fn trace_evidence_display(trace_evidence: &serde_json::Value) -> String {
+    let status = trace_evidence["status"].as_str().unwrap_or("unknown");
+    let task_reconciliation = trace_evidence["root_trace"]["latest_task_reconciliation_receipt_id"]
+        .as_str()
+        .unwrap_or("none");
+    let dispatch_receipt = trace_evidence["root_trace"]["latest_run_graph_dispatch_receipt_id"]
+        .as_str()
+        .unwrap_or("none");
+    let runtime_consumption = trace_evidence["root_trace"]["runtime_consumption_latest_snapshot_path"]
+        .as_str()
+        .unwrap_or("none");
+    let protocol_binding = trace_evidence["root_trace"]["protocol_binding_latest_receipt_id"]
+        .as_str()
+        .unwrap_or("none");
+    let evaluation_bundle = trace_evidence["root_trace"]["effective_instruction_bundle_receipt_id"]
+        .as_str()
+        .unwrap_or("none");
+
+    format!(
+        "{status} (task_reconciliation={task_reconciliation}, dispatch_receipt={dispatch_receipt}, runtime_consumption={runtime_consumption}, protocol_binding={protocol_binding}, evaluation_bundle={evaluation_bundle})"
+    )
 }
 
 pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
@@ -183,6 +321,14 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+            let latest_recorded_final_snapshot_path =
+                match super::runtime_consumption_state::latest_recorded_final_runtime_consumption_snapshot_path(store.root()) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("runtime consumption: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                };
             let root_session_write_guard =
                 super::status_surface::root_session_write_guard_summary_from_snapshot_path(
                     latest_final_snapshot_path
@@ -247,8 +393,29 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 Err(error) => {
                     eprintln!("active instruction root: failed ({error})");
                     return ExitCode::from(1);
-                }
-            };
+                    }
+                };
+            let latest_effective_bundle_receipt =
+                match store.latest_effective_bundle_receipt_summary().await {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("latest effective bundle receipt: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                };
+            let effective_bundle_receipt_id = selected_effective_bundle_receipt_id(
+                &effective_instruction_bundle,
+                latest_effective_bundle_receipt.as_ref(),
+            );
+            let (trace_evidence, trace_evidence_blocker_codes, trace_evidence_next_actions) =
+                build_trace_evidence_summary(
+                    latest_task_reconciliation.as_ref(),
+                    &runtime_consumption,
+                    latest_run_graph_dispatch_receipt.as_ref(),
+                    &protocol_binding,
+                    &effective_instruction_bundle,
+                    effective_bundle_receipt_id.as_str(),
+                );
 
             if as_json {
                 let mut operator_blocker_codes: Vec<String> = Vec::new();
@@ -299,37 +466,27 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 let evidence_snapshot_path = latest_final_snapshot_path
                     .as_deref()
                     .or(runtime_consumption.latest_snapshot_path.as_deref());
-                let evidence_snapshot_kind = latest_final_snapshot_path
-                    .as_ref()
-                    .map(|_| "final")
-                    .or(runtime_consumption.latest_kind.as_deref());
-                let retrieval_trust_source =
-                    evidence_snapshot_path.map(|_| "runtime_consumption_snapshot_index");
-                let retrieval_trust_signal = retrieval_trust_signal(
-                    retrieval_trust_source,
-                    evidence_snapshot_path,
-                    evidence_snapshot_kind,
+                let retrieval_trust_signal = super::runtime_consumption_state::latest_admissible_retrieval_trust_signal(
+                    &runtime_consumption,
+                    latest_final_snapshot_path.as_deref(),
                     protocol_binding.latest_receipt_id.as_deref(),
                 );
-                if retrieval_trust_source.is_none() {
+                if retrieval_trust_signal.is_none() {
                     operator_blocker_codes.push(
                         blocker_code_str(BlockerCode::MissingRetrievalTrustSourceOperatorEvidence)
                             .to_string(),
                     );
-                }
-                if retrieval_trust_signal.is_none() {
                     operator_blocker_codes.push(
                         blocker_code_str(BlockerCode::MissingRetrievalTrustSignalOperatorEvidence)
                             .to_string(),
                     );
-                }
-                if evidence_snapshot_path.is_none() {
                     operator_blocker_codes.push(
                         blocker_code_str(BlockerCode::MissingRetrievalTrustOperatorEvidence)
                             .to_string(),
                     );
                 }
-                if evidence_snapshot_path
+                if latest_recorded_final_snapshot_path
+                    .as_deref()
                     .is_some_and(final_snapshot_missing_release_admission_evidence)
                 {
                     operator_blocker_codes.push(
@@ -367,6 +524,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER.to_string(),
                     );
                 }
+                operator_blocker_codes.extend(trace_evidence_blocker_codes);
                 operator_blocker_codes =
                     canonical_blocker_code_list(operator_blocker_codes.iter().map(String::as_str));
                 let operator_status = if operator_blocker_codes.is_empty() {
@@ -427,30 +585,27 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 }
                 if operator_blocker_codes.iter().any(|code| {
                     code == blocker_code_str(
-                        BlockerCode::MissingRetrievalTrustSignalOperatorEvidence,
-                    )
-                }) {
-                    operator_next_actions.push(
-                        "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal."
-                            .to_string(),
-                    );
-                }
-                if operator_blocker_codes.iter().any(|code| {
-                    code == blocker_code_str(
                         BlockerCode::MissingRetrievalTrustSourceOperatorEvidence,
                     )
                 }) {
                     operator_next_actions.push(
-                        "Run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence."
-                            .to_string(),
+                        MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION.to_string(),
+                    );
+                }
+                if operator_blocker_codes.iter().any(|code| {
+                    code == blocker_code_str(
+                        BlockerCode::MissingRetrievalTrustSignalOperatorEvidence,
+                    )
+                }) {
+                    operator_next_actions.push(
+                        MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION.to_string(),
                     );
                 }
                 if operator_blocker_codes.iter().any(|code| {
                     code == blocker_code_str(BlockerCode::MissingRetrievalTrustOperatorEvidence)
                 }) {
                     operator_next_actions.push(
-                        "Run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence."
-                            .to_string(),
+                        MISSING_RETRIEVAL_TRUST_OPERATOR_EVIDENCE_NEXT_ACTION.to_string(),
                     );
                 }
                 if operator_blocker_codes
@@ -497,6 +652,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                             .to_string(),
                     );
                 }
+                operator_next_actions.extend(trace_evidence_next_actions);
                 if let Some(error) = release1_operator_contracts_consistency_error(
                     operator_status,
                     &operator_blocker_codes,
@@ -506,9 +662,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     return ExitCode::from(1);
                 }
                 let operator_artifact_refs = serde_json::json!({
-                    "runtime_consumption_latest_snapshot_path": latest_final_snapshot_path
-                        .as_ref()
-                        .or(runtime_consumption.latest_snapshot_path.as_ref()),
+                    "runtime_consumption_latest_snapshot_path": evidence_snapshot_path,
                     "latest_run_graph_dispatch_receipt_id": latest_run_graph_dispatch_receipt
                         .as_ref()
                         .map(|receipt| receipt.run_id.clone()),
@@ -517,7 +671,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     "latest_task_reconciliation_receipt_id": latest_task_reconciliation
                         .as_ref()
                         .map(|receipt| receipt.receipt_id.clone()),
-                    "effective_instruction_bundle_receipt_id": effective_instruction_bundle.receipt_id,
+                    "effective_instruction_bundle_receipt_id": effective_bundle_receipt_id,
                     "root_session_write_guard_status": root_session_write_guard["status"].clone(),
                 });
                 let operator_contracts = super::build_release1_operator_contracts_envelope(
@@ -560,11 +714,12 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         "runtime_consumption": runtime_consumption,
                         "root_session_write_guard": root_session_write_guard,
                         "protocol_binding": protocol_binding,
+                        "trace_evidence": trace_evidence.clone(),
                         "latest_run_graph_recovery": latest_run_graph_recovery,
                         "latest_run_graph_gate": latest_run_graph_gate,
                         "effective_instruction_bundle": {
                             "root_artifact_id": effective_instruction_bundle.root_artifact_id,
-                            "receipt_id": effective_instruction_bundle.receipt_id,
+                            "receipt_id": effective_bundle_receipt_id,
                             "artifact_count": effective_instruction_bundle.projected_artifacts.len(),
                         },
                     })
@@ -649,6 +804,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         "runtime_consumption": runtime_consumption,
                         "root_session_write_guard": root_session_write_guard,
                         "protocol_binding": protocol_binding,
+                        "trace_evidence": trace_evidence.clone(),
                         "latest_run_graph_status": latest_run_graph_status,
                         "latest_run_graph_delegation_gate": latest_run_graph_status.as_ref().map(|status| status.delegation_gate()),
                         "latest_run_graph_recovery": latest_run_graph_recovery,
@@ -659,7 +815,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                             "root_artifact_id": effective_instruction_bundle.root_artifact_id,
                             "mandatory_chain_order": effective_instruction_bundle.mandatory_chain_order,
                             "source_version_tuple": effective_instruction_bundle.source_version_tuple,
-                            "receipt_id": effective_instruction_bundle.receipt_id,
+                            "receipt_id": effective_bundle_receipt_id,
                             "artifact_count": effective_instruction_bundle.projected_artifacts.len(),
                         },
                         "storage_metadata_display": storage_metadata_display,
@@ -768,6 +924,11 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 },
             );
             super::print_surface_ok(render, "protocol binding", &protocol_binding.as_display());
+            super::print_surface_ok(
+                render,
+                "trace evidence",
+                &trace_evidence_display(&trace_evidence),
+            );
             match latest_run_graph_status {
                 Some(status) => {
                     super::print_surface_ok(
@@ -837,8 +998,10 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
 mod tests {
     use super::{
         final_snapshot_missing_release_admission_evidence,
+        build_trace_evidence_summary,
         release1_operator_contracts_consistency_error,
         shared_operator_output_contract_parity_error,
+        selected_effective_bundle_receipt_id,
     };
     use crate::operator_contracts::canonical_release1_operator_contract_status;
 
@@ -989,6 +1152,221 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(snapshot_path);
+    }
+
+    fn sample_trace_evidence_inputs() -> (
+        Option<crate::state_store::TaskReconciliationSummary>,
+        crate::runtime_consumption_state::RuntimeConsumptionSummary,
+        Option<crate::state_store::RunGraphDispatchReceiptSummary>,
+        crate::state_store::ProtocolBindingSummary,
+        crate::state_store::EffectiveInstructionBundle,
+    ) {
+        let task_reconciliation = crate::state_store::TaskReconciliationSummary {
+            receipt_id: "task-reconciliation-1".to_string(),
+            operation: "replace_snapshot".to_string(),
+            source_kind: "canonical_snapshot_file".to_string(),
+            source_path: Some("/tmp/project/tasks.snapshot.jsonl".to_string()),
+            task_count: 3,
+            dependency_count: 2,
+            stale_removed_count: 1,
+            recorded_at: "2026-03-08T00:00:00Z".to_string(),
+        };
+        let runtime_consumption = crate::runtime_consumption_state::RuntimeConsumptionSummary {
+            total_snapshots: 2,
+            bundle_snapshots: 1,
+            bundle_check_snapshots: 0,
+            final_snapshots: 1,
+            latest_kind: Some("final".to_string()),
+            latest_snapshot_path: Some(
+                "/tmp/project/.vida/data/state/runtime-consumption/final-1.json".to_string(),
+            ),
+        };
+        let run_graph_dispatch_receipt = crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: "run-1".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida task ensure".to_string()),
+            dispatch_command: Some("vida task ensure".to_string()),
+            dispatch_packet_path: Some("/tmp/project/packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/project/result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("verification".to_string()),
+            downstream_dispatch_command: Some("vida taskflow run-graph advance".to_string()),
+            downstream_dispatch_note: Some("continue".to_string()),
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: vec![],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: Some("/tmp/project/downstream-result.json".to_string()),
+            downstream_dispatch_trace_path: Some("/tmp/project/downstream-trace.json".to_string()),
+            downstream_dispatch_executed_count: 1,
+            downstream_dispatch_active_target: Some("verification".to_string()),
+            downstream_dispatch_last_target: Some("verification".to_string()),
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("taskflow_state_store".to_string()),
+            recorded_at: "2026-03-08T00:00:00Z".to_string(),
+        };
+        let protocol_binding = crate::state_store::ProtocolBindingSummary {
+            total_receipts: 1,
+            total_bindings: 1,
+            active_bindings: 1,
+            script_bound_count: 0,
+            rust_bound_count: 1,
+            fully_runtime_bound_count: 1,
+            unbound_count: 0,
+            blocking_issue_count: 0,
+            latest_receipt_id: Some("protocol-binding-receipt-1".to_string()),
+            latest_scenario: Some("runtime_assurance".to_string()),
+            latest_recorded_at: Some("2026-03-08T00:00:00Z".to_string()),
+            primary_state_authority: Some("state_store".to_string()),
+        };
+        let effective_instruction_bundle = crate::state_store::EffectiveInstructionBundle {
+            root_artifact_id: "root-artifact".to_string(),
+            mandatory_chain_order: vec!["prepare".to_string(), "verify".to_string()],
+            source_version_tuple: vec!["1".to_string(), "0".to_string()],
+            projected_artifacts: vec![crate::state_store::EffectiveInstructionArtifact {
+                artifact_id: "artifact-1".to_string(),
+                version: 1,
+                source_hash: "source-hash".to_string(),
+                projected_hash: "projected-hash".to_string(),
+                body: "body".to_string(),
+            }],
+            receipt_id: "effective-bundle-receipt-1".to_string(),
+        };
+
+        (
+            Some(task_reconciliation),
+            runtime_consumption,
+            Some(run_graph_dispatch_receipt),
+            protocol_binding,
+            effective_instruction_bundle,
+        )
+    }
+
+    #[test]
+    fn trace_evidence_links_available_sources_and_passes() {
+        let (
+            latest_task_reconciliation,
+            runtime_consumption,
+            latest_run_graph_dispatch_receipt,
+            protocol_binding,
+            effective_instruction_bundle,
+        ) = sample_trace_evidence_inputs();
+        let effective_bundle_receipt_id = selected_effective_bundle_receipt_id(
+            &effective_instruction_bundle,
+            None,
+        );
+
+        let (trace_evidence, blocker_codes, next_actions) = build_trace_evidence_summary(
+            latest_task_reconciliation.as_ref(),
+            &runtime_consumption,
+            latest_run_graph_dispatch_receipt.as_ref(),
+            &protocol_binding,
+            &effective_instruction_bundle,
+            effective_bundle_receipt_id.as_str(),
+        );
+
+        assert_eq!(trace_evidence["status"], "pass");
+        assert!(blocker_codes.is_empty());
+        assert!(next_actions.is_empty());
+        assert_eq!(
+            trace_evidence["root_trace"]["latest_task_reconciliation_receipt_id"],
+            "task-reconciliation-1"
+        );
+        assert_eq!(
+            trace_evidence["root_trace"]["latest_run_graph_dispatch_receipt_id"],
+            "run-1"
+        );
+        assert_eq!(
+            trace_evidence["root_trace"]["runtime_consumption_latest_snapshot_path"],
+            "/tmp/project/.vida/data/state/runtime-consumption/final-1.json"
+        );
+        assert_eq!(
+            trace_evidence["root_trace"]["protocol_binding_latest_receipt_id"],
+            "protocol-binding-receipt-1"
+        );
+        assert_eq!(
+            trace_evidence["evaluation_evidence"]["effective_instruction_bundle"]["receipt_id"],
+            "effective-bundle-receipt-1"
+        );
+    }
+
+    #[test]
+    fn trace_evidence_prefers_persisted_effective_bundle_receipt_id_when_available() {
+        let (
+            latest_task_reconciliation,
+            runtime_consumption,
+            latest_run_graph_dispatch_receipt,
+            protocol_binding,
+            effective_instruction_bundle,
+        ) = sample_trace_evidence_inputs();
+        let latest_effective_bundle_receipt = crate::state_store::EffectiveBundleReceiptSummary {
+            receipt_id: "effective-bundle-receipt-persisted".to_string(),
+            root_artifact_id: "root-artifact".to_string(),
+            artifact_count: 1,
+        };
+        let effective_bundle_receipt_id = selected_effective_bundle_receipt_id(
+            &effective_instruction_bundle,
+            Some(&latest_effective_bundle_receipt),
+        );
+
+        let (trace_evidence, blocker_codes, next_actions) = build_trace_evidence_summary(
+            latest_task_reconciliation.as_ref(),
+            &runtime_consumption,
+            latest_run_graph_dispatch_receipt.as_ref(),
+            &protocol_binding,
+            &effective_instruction_bundle,
+            effective_bundle_receipt_id.as_str(),
+        );
+
+        assert_eq!(trace_evidence["status"], "pass");
+        assert!(blocker_codes.is_empty());
+        assert!(next_actions.is_empty());
+        assert_eq!(
+            trace_evidence["root_trace"]["effective_instruction_bundle_receipt_id"],
+            "effective-bundle-receipt-persisted"
+        );
+        assert_eq!(
+            trace_evidence["evaluation_evidence"]["effective_instruction_bundle"]["receipt_id"],
+            "effective-bundle-receipt-persisted"
+        );
+    }
+
+    #[test]
+    fn trace_evidence_blocks_when_lane_receipt_is_missing() {
+        let (
+            latest_task_reconciliation,
+            runtime_consumption,
+            _latest_run_graph_dispatch_receipt,
+            protocol_binding,
+            effective_instruction_bundle,
+        ) = sample_trace_evidence_inputs();
+        let effective_bundle_receipt_id = selected_effective_bundle_receipt_id(
+            &effective_instruction_bundle,
+            None,
+        );
+
+        let (trace_evidence, blocker_codes, next_actions) = build_trace_evidence_summary(
+            latest_task_reconciliation.as_ref(),
+            &runtime_consumption,
+            None,
+            &protocol_binding,
+            &effective_instruction_bundle,
+            effective_bundle_receipt_id.as_str(),
+        );
+
+        assert_eq!(trace_evidence["status"], "blocked");
+        assert!(blocker_codes.iter().any(|code| code == "trace_missing"));
+        assert!(!next_actions.is_empty());
+        assert_eq!(
+            trace_evidence["lane_receipts"]["latest_run_graph_dispatch_receipt"],
+            serde_json::Value::Null
+        );
     }
 
     #[test]
