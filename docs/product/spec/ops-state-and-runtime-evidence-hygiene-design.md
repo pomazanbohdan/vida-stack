@@ -24,6 +24,7 @@ Use this template for one bounded feature/change design before implementation.
   - The project has no explicit operator law for which parts of `.vida/data/state/**` are durable authority, which parts are disposable generated evidence, and when it is safe to clean or replace them.
   - Manual cleanup of backing-store directories can leave the local project in a non-bootable proof state even though the product logic is correct.
   - Fresh temp-state proofs and long-lived local state are both valid use cases, but the repo lacks one canonical workflow that distinguishes them clearly.
+  - Some runtime surfaces require a project-bound state root, so a raw temp root that has only run `vida boot` is not sufficient for every proof path.
   - Git-visible runtime noise from `.vida/data/state/**` makes audit and review harder than necessary.
 
 ## Goal
@@ -166,6 +167,7 @@ Will implement / choose:
 - Runtime-family handoffs
   - taskflow/direct-runtime-consumption outputs become status/doctor evidence under the selected state root.
   - project activation/bootstrap must remain explicit about when a state root is project-bound and reusable.
+  - temp-state audits that exercise `taskflow consume bundle check` or similar project-bound runtime surfaces must include the matching activation/bootstrap path, not only `vida boot`.
 - Cross-document / cross-protocol dependencies
   - Release-1 conformance and seam maps now treat functional closure as green, with datastore hygiene called out as the main operational caveat.
 
@@ -277,5 +279,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md
 created_at: 2026-04-08T15:30:00+03:00
-updated_at: 2026-04-08T06:39:47.618764527Z
+updated_at: 2026-04-08T06:53:51.194762855Z
 changelog_ref: ops-state-and-runtime-evidence-hygiene-design.changelog.jsonl

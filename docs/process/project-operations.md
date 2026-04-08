@@ -32,8 +32,9 @@ Default feature-delivery flow:
    - `vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] [--json]` to let the bounded scheduler progress ready steps automatically
 20. Treat the default `.vida/data/state/` root as long-lived local operator state, not as disposable scratch output.
 21. For repeatable audits, release-proof checks, or scenario probes, prefer a fresh temp root via `VIDA_STATE_DIR=<temp-dir>` instead of cleaning pieces out of the long-lived project state.
-22. Do not manually prune backing-store subdirectories such as `manifest/`, `wal/`, `vlog/`, `sstables/`, or `runtime-consumption/` from a long-lived state root; if that state root is broken, use an explicit reset/reinit workflow instead of partial deletion.
-23. Treat generated files under `.vida/data/state/**` as runtime operational artifacts rather than reviewable product changes unless a bounded task explicitly targets state-store fixtures or runtime-state debugging.
+22. When a probe needs project-bound runtime surfaces such as `vida taskflow consume bundle check --json`, do not assume that `vida boot` alone is sufficient on a raw temp root; bind the temp state through the matching project activation/bootstrap workflow first.
+23. Do not manually prune backing-store subdirectories such as `manifest/`, `wal/`, `vlog/`, `sstables/`, or `runtime-consumption/` from a long-lived state root; if that state root is broken, use an explicit reset/reinit workflow instead of partial deletion.
+24. Treat generated files under `.vida/data/state/**` as runtime operational artifacts rather than reviewable product changes unless a bounded task explicitly targets state-store fixtures or runtime-state debugging.
 
 -----
 artifact_path: process/project-operations
@@ -44,5 +45,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/project-operations.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-04-08T06:45:45.668602224Z
+updated_at: 2026-04-08T06:53:51.14572422Z
 changelog_ref: project-operations.changelog.jsonl
