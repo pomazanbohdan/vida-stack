@@ -52,6 +52,10 @@ pub(crate) enum Command {
     Status(StatusArgs),
     #[command(about = "run bounded runtime integrity checks")]
     Doctor(DoctorArgs),
+    #[command(about = "thin root alias to the TaskFlow consume family")]
+    Consume(ProxyArgs),
+    #[command(about = "thin root alias to the TaskFlow recovery family")]
+    Recovery(ProxyArgs),
     #[command(about = "delegate to the TaskFlow runtime family")]
     Taskflow(ProxyArgs),
     #[command(about = "delegate to the DocFlow runtime family")]

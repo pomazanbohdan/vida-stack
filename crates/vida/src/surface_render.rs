@@ -66,6 +66,8 @@ pub(crate) fn print_root_help() {
     println!("  memory    inspect the effective instruction bundle");
     println!("  status    inspect backend, state spine, and latest receipts");
     println!("  doctor    run bounded runtime integrity checks");
+    println!("  consume   thin root alias to the TaskFlow consume family");
+    println!("  recovery  thin root alias to the TaskFlow recovery family");
     println!("  taskflow  delegate to the TaskFlow runtime family");
     println!("  docflow   delegate to the DocFlow runtime family");
     println!();

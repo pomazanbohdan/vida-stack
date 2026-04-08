@@ -959,6 +959,10 @@ fn root_help_succeeds() {
     assert!(stdout.contains("memory"));
     assert!(stdout.contains("status"));
     assert!(stdout.contains("doctor"));
+    assert!(stdout.contains("consume"));
+    assert!(stdout.contains("recovery"));
+    assert!(stdout.contains("thin root alias to the TaskFlow consume family"));
+    assert!(stdout.contains("thin root alias to the TaskFlow recovery family"));
     assert!(stdout.contains("taskflow"));
     assert!(stdout.contains("docflow"));
 }
@@ -1437,6 +1441,44 @@ fn taskflow_proxy_help_supports_consume_topic() {
     assert!(stdout.contains(
         "Bundle inspection, final intake, continuation, and bounded advance are launcher-owned and in-process"
     ));
+}
+
+#[test]
+fn root_consume_bundle_check_alias_matches_taskflow_surface() {
+    let state_dir = unique_state_dir();
+
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+
+    let output = vida()
+        .args(["consume", "bundle", "check", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("root consume bundle check alias should run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Authoritative state root is not project-bound"));
+}
+
+#[test]
+fn root_recovery_latest_alias_matches_taskflow_surface() {
+    let state_dir = unique_state_dir();
+
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+
+    let output = vida()
+        .args(["recovery", "latest", "--json"])
+        .env("VIDA_STATE_DIR", &state_dir)
+        .output()
+        .expect("root recovery latest alias should run");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("root recovery latest json should parse");
+    assert_eq!(parsed["surface"], "vida taskflow recovery latest");
 }
 
 #[test]

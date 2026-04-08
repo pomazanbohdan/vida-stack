@@ -33,6 +33,16 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
         Some(Command::Memory(args)) => memory_surface::run_memory(args).await,
         Some(Command::Status(args)) => status_surface::run_status(args).await,
         Some(Command::Doctor(args)) => doctor_surface::run_doctor(args).await,
+        Some(Command::Consume(args)) => {
+            let mut prefixed = vec!["consume".to_string()];
+            prefixed.extend(args.args);
+            run_taskflow_proxy(super::ProxyArgs { args: prefixed }).await
+        }
+        Some(Command::Recovery(args)) => {
+            let mut prefixed = vec!["recovery".to_string()];
+            prefixed.extend(args.args);
+            run_taskflow_proxy(super::ProxyArgs { args: prefixed }).await
+        }
         Some(Command::Taskflow(args)) => run_taskflow_proxy(args).await,
         Some(Command::Docflow(args)) => docflow_proxy::run_docflow_proxy(args),
         Some(Command::External(args)) => run_unknown(&args),
