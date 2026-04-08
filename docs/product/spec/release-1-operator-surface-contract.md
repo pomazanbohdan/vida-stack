@@ -49,9 +49,9 @@ Release 1 must expose the root surfaces above directly on `vida`.
 
 Temporary compatibility rule:
 
-1. `vida taskflow consume` may exist as a compatibility alias while `vida consume` is being closed,
-2. `vida taskflow recovery` may exist as a compatibility alias while `vida recovery` is being closed,
-3. absence of `vida lane` or `vida approval` as canonical root surfaces remains a Release-1 conformance gap,
+1. `vida taskflow consume` may exist as a compatibility alias behind the canonical root `vida consume` surface,
+2. `vida taskflow recovery` may exist as a compatibility alias behind the canonical root `vida recovery` surface,
+3. absence of `vida lane` or `vida approval` as canonical root surfaces remains a Release-1 post-closure conformance gap,
 4. unsupported root surfaces must fail closed with an explicit machine-readable unsupported envelope rather than being omitted from the operator model.
 
 ## 4. Surface Contracts
@@ -150,10 +150,10 @@ Must expose:
 artifact_path: product/spec/release-1-operator-surface-contract
 artifact_type: product_spec
 artifact_version: 1
-artifact_revision: 2026-04-03
+artifact_revision: 2026-04-08
 schema_version: 1
 status: canonical
 source_path: docs/product/spec/release-1-operator-surface-contract.md
 created_at: 2026-03-16T11:45:00Z
-updated_at: 2026-04-03T18:55:00+03:00
+updated_at: 2026-04-08T07:14:07.782282022Z
 changelog_ref: release-1-operator-surface-contract.changelog.jsonl
