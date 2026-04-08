@@ -10761,6 +10761,7 @@ fn memory_surface_fails_closed_on_uninitialized_state_dir() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("authoritative state directory is missing"));
+    assert!(stderr.contains("VIDA_STATE_DIR=<temp-dir>"));
 }
 
 #[test]
@@ -10869,6 +10870,7 @@ fn status_surface_fails_closed_on_uninitialized_state_dir() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("authoritative state directory is missing"));
+    assert!(stderr.contains("VIDA_STATE_DIR=<temp-dir>"));
 }
 
 #[test]
@@ -11369,6 +11371,7 @@ fn doctor_surface_fails_closed_on_uninitialized_state_dir() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("authoritative state directory is missing"));
+    assert!(stderr.contains("VIDA_STATE_DIR=<temp-dir>"));
 }
 
 #[test]

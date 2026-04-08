@@ -35,6 +35,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 const DEFAULT_STATE_DIR: &str = ".vida/data/state";
+const STATE_STORE_RECOVERY_HINT: &str = "hint: use VIDA_STATE_DIR=<temp-dir> for a fresh proof run, or reinitialize the long-lived local state root instead of deleting datastore subdirectories by hand";
 pub const STATE_NAMESPACE: &str = "vida";
 pub const STATE_DATABASE: &str = "primary";
 pub const DEFAULT_INSTRUCTION_SOURCE_ROOT: &str =
@@ -64,6 +65,16 @@ DEFINE TABLE run_graph_approval_delegation_receipt SCHEMALESS;
 fn state_schema_document() -> String {
     let storage_schema = SurrealStoreTarget::new(DEFAULT_STATE_DIR).bootstrap_schema_document();
     format!("{storage_schema}\n\n{INSTRUCTION_STATE_SCHEMA}")
+}
+
+fn state_store_recovery_hint_for_message(message: &str) -> Option<&'static str> {
+    if message.contains("Failed to load manifest")
+        || message.contains("authoritative state spine manifest")
+        || message.contains("No such file or directory")
+    {
+        return Some(STATE_STORE_RECOVERY_HINT);
+    }
+    None
 }
 
 #[derive(Debug)]
@@ -5390,12 +5401,20 @@ impl std::fmt::Display for StateStoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(error) => write!(f, "{error}"),
-            Self::Db(error) => write!(f, "{error}"),
+            Self::Db(error) => {
+                let message = error.to_string();
+                write!(f, "{message}")?;
+                if let Some(hint) = state_store_recovery_hint_for_message(&message) {
+                    write!(f, "; {hint}")?;
+                }
+                Ok(())
+            }
             Self::MissingStateDir(path) => {
                 write!(
                     f,
-                    "authoritative state directory is missing: {}",
-                    path.display()
+                    "authoritative state directory is missing: {}; {}",
+                    path.display(),
+                    STATE_STORE_RECOVERY_HINT
                 )
             }
             Self::InvalidSourcePath(path) => {
@@ -5416,10 +5435,18 @@ impl std::fmt::Display for StateStoreError {
                 write!(f, "storage metadata record is invalid: {reason}")
             }
             Self::MissingStateSpineManifest => {
-                write!(f, "authoritative state spine manifest is missing")
+                write!(
+                    f,
+                    "authoritative state spine manifest is missing; {}",
+                    STATE_STORE_RECOVERY_HINT
+                )
             }
             Self::InvalidStateSpineManifest { reason } => {
-                write!(f, "authoritative state spine manifest is invalid: {reason}")
+                write!(
+                    f,
+                    "authoritative state spine manifest is invalid: {reason}; {}",
+                    STATE_STORE_RECOVERY_HINT
+                )
             }
             Self::InvalidCanonicalTaskflowExport { reason } => {
                 write!(f, "canonical taskflow export is invalid: {reason}")
@@ -6744,6 +6771,22 @@ hierarchy: framework,contracts
         assert!(matches!(error, StateStoreError::MissingStateSpineManifest));
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_state_dir_error_includes_recovery_hint() {
+        let error = StateStoreError::MissingStateDir(PathBuf::from("/tmp/vida-missing"));
+        let rendered = error.to_string();
+        assert!(rendered.contains("authoritative state directory is missing"));
+        assert!(rendered.contains("VIDA_STATE_DIR=<temp-dir>"));
+        assert!(rendered.contains("reinitialize the long-lived local state root"));
+    }
+
+    #[test]
+    fn missing_state_spine_manifest_error_includes_recovery_hint() {
+        let rendered = StateStoreError::MissingStateSpineManifest.to_string();
+        assert!(rendered.contains("authoritative state spine manifest is missing"));
+        assert!(rendered.contains("VIDA_STATE_DIR=<temp-dir>"));
     }
 
     #[tokio::test]
