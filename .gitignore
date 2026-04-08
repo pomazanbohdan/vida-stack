@@ -3,7 +3,7 @@ __pycache__/
 .code/agents
 _vida/scripts-nim/vida-legacy
 _vida/
-**/.vida/data/state/LOCK
+**/.vida/data/state/**
 target
 _temp
 .venv

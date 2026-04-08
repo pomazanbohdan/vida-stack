@@ -2,7 +2,7 @@
 
 Status: active canonical map
 
-Revision: `2026-04-03`
+Revision: `2026-04-08`
 
 Purpose: define the current product-spec home, provide a short active registry of product-law artifacts, and route detailed source lineage to the provenance companion map.
 
@@ -207,6 +207,9 @@ Companion rule:
 27. [clarify-enforce-immediate-continuation-shell-saf-design.md](clarify-enforce-immediate-continuation-shell-saf-design.md)
    Config families: bounded continuation recovery law, shell-safe backlog note recording, and help/prompt alignment for active continued-development sessions
    Registered path: `docs/product/spec/clarify-enforce-immediate-continuation-shell-saf-design.md`
+28. [ops-state-and-runtime-evidence-hygiene-design.md](ops-state-and-runtime-evidence-hygiene-design.md)
+   Config families: bounded post-release ops policy for authoritative state roots, runtime-consumption evidence hygiene, temp-state proof workflows, and generated-state working-tree posture
+   Registered path: `docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md`
 
 ### Support
 
@@ -257,10 +260,10 @@ Activation rule:
 artifact_path: product/spec/current-spec-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-04-05
+artifact_revision: 2026-04-08
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-04-05T06:19:10.123753657Z
+updated_at: 2026-04-08T06:39:58.42012708Z
 changelog_ref: current-spec-map.changelog.jsonl

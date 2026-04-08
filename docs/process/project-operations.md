@@ -30,15 +30,19 @@ Default feature-delivery flow:
    - `vida taskflow consume final "<request>" --json` to materialize the routed intake, dispatch receipt, and first lawful packet
    - `vida taskflow consume continue [--run-id <run-id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]` to resume one persisted chain entry; legacy runtime packets may be normalized to the canonical packet-minimum path scope before fail-closed validation
    - `vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] [--json]` to let the bounded scheduler progress ready steps automatically
+20. Treat the default `.vida/data/state/` root as long-lived local operator state, not as disposable scratch output.
+21. For repeatable audits, release-proof checks, or scenario probes, prefer a fresh temp root via `VIDA_STATE_DIR=<temp-dir>` instead of cleaning pieces out of the long-lived project state.
+22. Do not manually prune backing-store subdirectories such as `manifest/`, `wal/`, `vlog/`, `sstables/`, or `runtime-consumption/` from a long-lived state root; if that state root is broken, use an explicit reset/reinit workflow instead of partial deletion.
+23. Treat generated files under `.vida/data/state/**` as runtime operational artifacts rather than reviewable product changes unless a bounded task explicitly targets state-store fixtures or runtime-state debugging.
 
 -----
 artifact_path: process/project-operations
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-04-04'
+artifact_revision: '2026-04-08'
 schema_version: '1'
 status: canonical
 source_path: docs/process/project-operations.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-04-05T06:19:10.12986476Z
+updated_at: 2026-04-08T06:45:45.668602224Z
 changelog_ref: project-operations.changelog.jsonl

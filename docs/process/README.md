@@ -55,27 +55,29 @@ Canonical entrypoints:
    - project-owned bounded validation sequence that proves a development orchestration session is boot-ready before first dispatch
 21. `docs/process/project-operations.md`
    - current canonical process surface for feature-delivery flow, delegated execution posture, and launcher-owned progression commands
-22. `instruction-contracts/meta.protocol-naming-grammar-protocol.md`
+22. `docs/process/environments.md`
+   - current canonical process surface for local environment assumptions, long-lived state roots, and temp-state proof posture
+23. `instruction-contracts/meta.protocol-naming-grammar-protocol.md`
    - canonical framework naming law and sequential rename-wave protocol for instruction artifacts
-23. `docs/process/framework-source-lineage-index.md`
+24. `docs/process/framework-source-lineage-index.md`
    - project-owned provenance index for deleted framework-formation plans/research documents and their promoted canonical homes
-24. `docs/process/framework-three-layer-refactoring-audit.md`
+25. `docs/process/framework-three-layer-refactoring-audit.md`
    - unified-format consolidated report for the first three refactored framework layers: `core`, orchestration shell, and runtime-family execution
-25. `docs/process/release-formatting-protocol.md`
+26. `docs/process/release-formatting-protocol.md`
    - canonical project process for rendering clean public GitHub release pages from canonical release-note artifacts
-26. `docs/product/spec/feature-design-and-adr-model.md`
+27. `docs/product/spec/feature-design-and-adr-model.md`
    - product-law owner for the split between structured feature/change design documents and linked ADRs
-27. `docs/framework/templates/feature-design-document.template.md`
+28. `docs/framework/templates/feature-design-document.template.md`
    - framework-owned reusable feature/change design template with stable sections and bounded variable fields
 
 -----
 artifact_path: process/readme
 artifact_type: process_doc
 artifact_version: '1'
-artifact_revision: '2026-03-14'
+artifact_revision: '2026-04-08'
 schema_version: '1'
 status: canonical
 source_path: docs/process/README.md
 created_at: '2026-03-10T00:00:00+02:00'
-updated_at: 2026-04-04T20:12:10.23219126Z
+updated_at: 2026-04-08T06:45:45.797525211Z
 changelog_ref: README.changelog.jsonl
