@@ -668,28 +668,6 @@ fn retry_backoff_delay(attempt: usize) -> Duration {
     })
 }
 
-fn wait_for_memory_governance_readiness(state_dir: &str, run_id: &str) -> std::process::Output {
-    run_with_retry_until(
-        || {
-            vida()
-                .args(["doctor", "--json"])
-                .env("VIDA_STATE_DIR", state_dir)
-                .output()
-                .expect("doctor should run")
-        },
-        |output| {
-            if !output.status.success() || is_state_lock_error(output) {
-                return false;
-            }
-
-            let parsed = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
-            parsed
-                .as_ref()
-                .is_some_and(|json| json["latest_run_graph_status"]["run_id"] == run_id)
-        },
-    )
-}
-
 fn memory_output_with_timeout_retry(state_dir: &str) -> std::process::Output {
     bounded_vida_output(&["-k", "2s", "8s"], "memory should run", |command| {
         command.arg("memory").env("VIDA_STATE_DIR", state_dir);
@@ -960,8 +938,15 @@ fn root_help_succeeds() {
     assert!(stdout.contains("status"));
     assert!(stdout.contains("doctor"));
     assert!(stdout.contains("consume"));
+    assert!(stdout.contains("lane"));
+    assert!(stdout.contains("approval"));
     assert!(stdout.contains("recovery"));
     assert!(stdout.contains("thin root alias to the TaskFlow consume family"));
+    assert!(stdout
+        .contains("reserved root operator surface for lane inspection; currently fail-closed"));
+    assert!(stdout.contains(
+        "reserved root operator surface for approval inspection/mutation; currently fail-closed"
+    ));
     assert!(stdout.contains("thin root alias to the TaskFlow recovery family"));
     assert!(stdout.contains("taskflow"));
     assert!(stdout.contains("docflow"));
@@ -1229,8 +1214,14 @@ fn root_task_help_routes_backlog_subcommand_topics_to_canonical_task_help() {
 
 #[test]
 fn taskflow_next_reports_aggregate_next_step_surface() {
+    let state_dir = unique_state_dir();
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+
     let output = vida()
-        .args(["taskflow", "next", "--json"])
+        .args(["taskflow", "next", "--state-dir"])
+        .arg(&state_dir)
+        .args(["--json"])
         .output()
         .expect("taskflow next should run");
 
@@ -1248,8 +1239,37 @@ fn taskflow_next_reports_aggregate_next_step_surface() {
 
 #[test]
 fn taskflow_next_accepts_scope_for_subtree_planning() {
+    let state_dir = unique_state_dir();
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+    let create_scope = vida()
+        .args([
+            "task",
+            "create",
+            "r1-01-commands",
+            "Commands",
+            "--state-dir",
+        ])
+        .arg(&state_dir)
+        .args(["--json"])
+        .output()
+        .expect("scope task create should run");
+    assert!(
+        create_scope.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create_scope.stderr)
+    );
+
     let output = vida()
-        .args(["taskflow", "next", "--scope", "r1-01-commands", "--json"])
+        .args([
+            "taskflow",
+            "next",
+            "--scope",
+            "r1-01-commands",
+            "--state-dir",
+        ])
+        .arg(&state_dir)
+        .args(["--json"])
         .output()
         .expect("scoped taskflow next should run");
 
@@ -1286,8 +1306,31 @@ fn taskflow_next_accepts_explicit_state_dir_override() {
 
 #[test]
 fn task_root_next_alias_routes_to_taskflow_next_surface() {
+    let state_dir = unique_state_dir();
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+    let create_scope = vida()
+        .args([
+            "task",
+            "create",
+            "r1-01-commands",
+            "Commands",
+            "--state-dir",
+        ])
+        .arg(&state_dir)
+        .args(["--json"])
+        .output()
+        .expect("scope task create should run");
+    assert!(
+        create_scope.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create_scope.stderr)
+    );
+
     let output = vida()
-        .args(["task", "next", "--scope", "r1-01-commands", "--json"])
+        .args(["task", "next", "--scope", "r1-01-commands", "--state-dir"])
+        .arg(&state_dir)
+        .args(["--json"])
         .output()
         .expect("root task next alias should run");
 
@@ -1479,6 +1522,54 @@ fn root_recovery_latest_alias_matches_taskflow_surface() {
     let parsed: serde_json::Value =
         serde_json::from_str(&stdout).expect("root recovery latest json should parse");
     assert_eq!(parsed["surface"], "vida taskflow recovery latest");
+}
+
+#[test]
+fn root_lane_surface_fails_closed_with_canonical_json_envelope() {
+    let output = vida()
+        .args(["lane", "--json"])
+        .output()
+        .expect("root lane surface should run");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("root lane json should parse");
+    assert_eq!(parsed["surface"], "vida lane");
+    assert_eq!(parsed["status"], "blocked");
+    assert_eq!(parsed["trace_id"], serde_json::Value::Null);
+    assert_eq!(parsed["workflow_class"], serde_json::Value::Null);
+    assert_eq!(parsed["risk_tier"], serde_json::Value::Null);
+    assert_eq!(parsed["artifact_refs"], serde_json::json!([]));
+    assert_eq!(
+        parsed["blocker_codes"],
+        serde_json::json!(["unsupported_blocker_code"])
+    );
+    assert!(parsed["next_actions"].is_array());
+}
+
+#[test]
+fn root_approval_surface_fails_closed_with_canonical_json_envelope() {
+    let output = vida()
+        .args(["approval", "--json"])
+        .output()
+        .expect("root approval surface should run");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("root approval json should parse");
+    assert_eq!(parsed["surface"], "vida approval");
+    assert_eq!(parsed["status"], "blocked");
+    assert_eq!(parsed["trace_id"], serde_json::Value::Null);
+    assert_eq!(parsed["workflow_class"], serde_json::Value::Null);
+    assert_eq!(parsed["risk_tier"], serde_json::Value::Null);
+    assert_eq!(parsed["artifact_refs"], serde_json::json!([]));
+    assert_eq!(
+        parsed["blocker_codes"],
+        serde_json::json!(["unsupported_blocker_code"])
+    );
+    assert!(parsed["next_actions"].is_array());
 }
 
 #[test]
@@ -2043,8 +2134,11 @@ fn agent_init_dispatch_packet_reports_view_only_activation_semantics() {
         "Agent Init View Only Activation",
     );
 
-    let initial =
-        project_bound_taskflow_consume_final_with_timeout(&project_root, &state_dir, "probe closure");
+    let initial = project_bound_taskflow_consume_final_with_timeout(
+        &project_root,
+        &state_dir,
+        "probe closure",
+    );
     assert!(
         !initial.stdout.is_empty(),
         "{}",
@@ -2553,8 +2647,11 @@ fn taskflow_consume_final_renders_direct_runtime_consumption_snapshot() {
     let (project_root, state_dir) =
         bootstrap_project_runtime("consume-final-direct", "Consume Final Direct");
 
-    let output =
-        project_bound_taskflow_consume_final_with_timeout(&project_root, &state_dir, "probe closure");
+    let output = project_bound_taskflow_consume_final_with_timeout(
+        &project_root,
+        &state_dir,
+        "probe closure",
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         !stdout.trim().is_empty(),
@@ -2838,8 +2935,11 @@ fn taskflow_consume_final_executes_ready_downstream_closure_step() {
 fn taskflow_consume_continue_resumes_from_persisted_final_snapshot() {
     let (project_root, state_dir) =
         bootstrap_project_runtime("continue-from-final", "Continue From Final");
-    let initial =
-        project_bound_taskflow_consume_final_with_timeout(&project_root, &state_dir, "probe closure");
+    let initial = project_bound_taskflow_consume_final_with_timeout(
+        &project_root,
+        &state_dir,
+        "probe closure",
+    );
     assert!(
         !initial.stdout.is_empty(),
         "{}",
@@ -2918,8 +3018,11 @@ fn taskflow_consume_continue_resumes_from_persisted_final_snapshot() {
 fn taskflow_consume_continue_accepts_explicit_dispatch_packet_path() {
     let (project_root, state_dir) =
         bootstrap_project_runtime("continue-explicit-packet", "Continue Explicit Packet");
-    let initial =
-        project_bound_taskflow_consume_final_with_timeout(&project_root, &state_dir, "probe closure");
+    let initial = project_bound_taskflow_consume_final_with_timeout(
+        &project_root,
+        &state_dir,
+        "probe closure",
+    );
     assert!(
         !initial.stdout.is_empty(),
         "{}",
@@ -2996,10 +3099,8 @@ fn taskflow_consume_continue_accepts_explicit_dispatch_packet_path() {
 
 #[test]
 fn agent_init_fails_closed_for_dispatch_packet_missing_template_required_fields() {
-    let (project_root, state_dir) = bootstrap_project_runtime(
-        "dispatch-packet-validation",
-        "Dispatch Packet Validation",
-    );
+    let (project_root, state_dir) =
+        bootstrap_project_runtime("dispatch-packet-validation", "Dispatch Packet Validation");
 
     let initial = project_bound_taskflow_consume_final_with_timeout(
         &project_root,
@@ -3064,11 +3165,16 @@ fn agent_init_fails_closed_for_dispatch_packet_missing_template_required_fields(
 
 #[test]
 fn taskflow_consume_continue_prefers_latest_final_snapshot_after_bundle_check() {
-    let (project_root, state_dir) =
-        bootstrap_project_runtime("continue-prefers-latest-final", "Continue Prefers Latest Final");
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "continue-prefers-latest-final",
+        "Continue Prefers Latest Final",
+    );
 
-    let initial =
-        project_bound_taskflow_consume_final_with_timeout(&project_root, &state_dir, "probe closure");
+    let initial = project_bound_taskflow_consume_final_with_timeout(
+        &project_root,
+        &state_dir,
+        "probe closure",
+    );
     assert!(
         !initial.stdout.is_empty(),
         "{}",
@@ -3077,7 +3183,8 @@ fn taskflow_consume_continue_prefers_latest_final_snapshot_after_bundle_check() 
 
     let initial_json: serde_json::Value =
         serde_json::from_slice(&initial.stdout).expect("initial consume final json should parse");
-    let source_dispatch_packet_path = initial_json["payload"]["dispatch_receipt"]["dispatch_packet_path"]
+    let source_dispatch_packet_path = initial_json["payload"]["dispatch_receipt"]
+        ["dispatch_packet_path"]
         .as_str()
         .expect("dispatch packet path should be present")
         .to_string();
@@ -3193,8 +3300,11 @@ fn taskflow_consume_continue_accepts_explicit_run_id() {
     let (project_root, state_dir) =
         bootstrap_project_runtime("continue-explicit-run-id", "Continue Explicit Run Id");
 
-    let initial =
-        project_bound_taskflow_consume_final_with_timeout(&project_root, &state_dir, "probe closure");
+    let initial = project_bound_taskflow_consume_final_with_timeout(
+        &project_root,
+        &state_dir,
+        "probe closure",
+    );
     assert!(
         !initial.stdout.is_empty(),
         "{}",
@@ -3212,7 +3322,10 @@ fn taskflow_consume_continue_accepts_explicit_run_id() {
         &state_dir,
         &["--run-id", run_id, "--json"],
     );
-    assert!(!resumed.status.success(), "consume continue should fail closed");
+    assert!(
+        !resumed.status.success(),
+        "consume continue should fail closed"
+    );
     let stderr = String::from_utf8_lossy(&resumed.stderr);
     assert!(stderr.contains("Run-graph resume gate denied"));
     assert!(stderr.contains(run_id));
@@ -3286,7 +3399,11 @@ fn taskflow_consume_continue_accepts_explicit_downstream_packet_path() {
     let resumed = project_bound_taskflow_consume_continue_with_timeout(
         &project_root,
         &state_dir,
-        &["--downstream-packet", downstream_dispatch_packet_path, "--json"],
+        &[
+            "--downstream-packet",
+            downstream_dispatch_packet_path,
+            "--json",
+        ],
     );
     assert!(
         resumed.status.success(),
@@ -3303,28 +3420,28 @@ fn taskflow_consume_continue_accepts_explicit_downstream_packet_path() {
         resumed_json["source_dispatch_packet_path"],
         downstream_dispatch_packet_path
     );
-    assert!(
-        resumed_json["dispatch_receipt"]["dispatch_target"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
-    assert!(
-        resumed_json["dispatch_receipt"]["dispatch_status"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert!(resumed_json["dispatch_receipt"]["dispatch_target"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    assert!(resumed_json["dispatch_receipt"]["dispatch_status"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
 
 #[test]
-fn taskflow_consume_continue_rejects_executed_completed_downstream_packet_when_recovery_is_not_ready() {
+fn taskflow_consume_continue_rejects_executed_completed_downstream_packet_when_recovery_is_not_ready(
+) {
     let (project_root, state_dir) = bootstrap_project_runtime(
         "continue-executed-completed-semantics",
         "Continue Executed Completed Semantics",
     );
 
-    let initial =
-        project_bound_taskflow_consume_final_with_timeout(&project_root, &state_dir, "probe closure");
+    let initial = project_bound_taskflow_consume_final_with_timeout(
+        &project_root,
+        &state_dir,
+        "probe closure",
+    );
     assert!(
         !initial.stdout.is_empty(),
         "{}",
@@ -3356,14 +3473,15 @@ fn taskflow_consume_continue_rejects_executed_completed_downstream_packet_when_r
     let resumed = project_bound_taskflow_consume_continue_with_timeout(
         &project_root,
         &state_dir,
-        &["--downstream-packet", downstream_dispatch_packet_path, "--json"],
+        &[
+            "--downstream-packet",
+            downstream_dispatch_packet_path,
+            "--json",
+        ],
     );
     assert!(!resumed.status.success());
     let stderr = String::from_utf8_lossy(&resumed.stderr);
-    assert!(
-        stderr.contains("Run-graph resume gate denied"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("Run-graph resume gate denied"), "{stderr}");
     assert!(stderr.contains("recovery_ready is false"), "{stderr}");
 }
 
@@ -3410,14 +3528,15 @@ fn taskflow_consume_continue_rejects_packet_ready_downstream_packet_when_recover
     let resumed = project_bound_taskflow_consume_continue_with_timeout(
         &project_root,
         &state_dir,
-        &["--downstream-packet", downstream_dispatch_packet_path, "--json"],
+        &[
+            "--downstream-packet",
+            downstream_dispatch_packet_path,
+            "--json",
+        ],
     );
     assert!(!resumed.status.success());
     let stderr = String::from_utf8_lossy(&resumed.stderr);
-    assert!(
-        stderr.contains("Run-graph resume gate denied"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("Run-graph resume gate denied"), "{stderr}");
     assert!(stderr.contains("recovery_ready is false"), "{stderr}");
 }
 
@@ -3428,8 +3547,11 @@ fn taskflow_consume_continue_rejects_mismatched_run_id_and_dispatch_packet() {
         "Continue Mismatched Run Id Dispatch",
     );
 
-    let initial =
-        project_bound_taskflow_consume_final_with_timeout(&project_root, &state_dir, "probe closure");
+    let initial = project_bound_taskflow_consume_final_with_timeout(
+        &project_root,
+        &state_dir,
+        "probe closure",
+    );
     assert!(
         !initial.stdout.is_empty(),
         "{}",
@@ -3477,8 +3599,11 @@ fn taskflow_consume_continue_rejects_mismatched_run_id_and_downstream_packet() {
         "Continue Mismatched Run Id Downstream",
     );
 
-    let initial =
-        project_bound_taskflow_consume_final_with_timeout(&project_root, &state_dir, "probe closure");
+    let initial = project_bound_taskflow_consume_final_with_timeout(
+        &project_root,
+        &state_dir,
+        "probe closure",
+    );
     assert!(
         !initial.stdout.is_empty(),
         "{}",
@@ -3528,8 +3653,11 @@ fn taskflow_consume_continue_auto_picks_ready_downstream_packet() {
         "Continue Auto Picks Ready Downstream",
     );
 
-    let initial =
-        project_bound_taskflow_consume_final_with_timeout(&project_root, &state_dir, "probe closure");
+    let initial = project_bound_taskflow_consume_final_with_timeout(
+        &project_root,
+        &state_dir,
+        "probe closure",
+    );
     assert!(
         !initial.stdout.is_empty(),
         "{}",
@@ -3583,12 +3711,13 @@ fn taskflow_consume_continue_auto_picks_ready_downstream_packet() {
         resumed_json["source_dispatch_packet_path"],
         downstream_dispatch_packet_path
     );
-    assert_eq!(resumed_json["dispatch_receipt"]["dispatch_target"], "closure");
-    assert!(
-        resumed_json["dispatch_receipt"]["dispatch_status"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
+    assert_eq!(
+        resumed_json["dispatch_receipt"]["dispatch_target"],
+        "closure"
     );
+    assert!(resumed_json["dispatch_receipt"]["dispatch_status"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
 
@@ -3743,16 +3872,12 @@ fn taskflow_consume_continue_auto_executes_ready_downstream_taskflow_packet() {
         resumed_json["source_dispatch_packet_path"],
         downstream_dispatch_packet_path
     );
-    assert!(
-        resumed_json["dispatch_receipt"]["dispatch_target"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
-    assert!(
-        resumed_json["dispatch_receipt"]["dispatch_status"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert!(resumed_json["dispatch_receipt"]["dispatch_target"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    assert!(resumed_json["dispatch_receipt"]["dispatch_status"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
     assert!(resumed_json["dispatch_receipt"]["dispatch_result_path"].is_null());
     assert_eq!(
         resumed_json["dispatch_receipt"]["downstream_dispatch_target"],
@@ -4193,8 +4318,11 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
     let (project_root, state_dir) =
         bootstrap_project_runtime("scope-discussion-routing", "Scope Discussion Routing");
 
-    let output =
-        project_bound_taskflow_consume_final_with_timeout(&project_root, &state_dir, "clarify spec scope");
+    let output = project_bound_taskflow_consume_final_with_timeout(
+        &project_root,
+        &state_dir,
+        "clarify spec scope",
+    );
     assert!(!output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -4257,6 +4385,10 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
         "spec_first_handoff_required"
     );
     assert_eq!(
+        parsed["payload"]["taskflow_handoff_plan"]["design_packet_activation_source"],
+        "runtime_assignment"
+    );
+    assert_eq!(
         parsed["payload"]["dispatch_receipt"]["dispatch_target"],
         "business_analyst"
     );
@@ -4302,10 +4434,8 @@ fn taskflow_consume_final_selects_scope_discussion_role_for_spec_queries() {
 
 #[test]
 fn taskflow_consume_final_routes_mixed_feature_delivery_requests_to_spec_first() {
-    let (project_root, state_dir) = bootstrap_project_runtime(
-        "mixed-feature-spec-first",
-        "Mixed Feature Spec First",
-    );
+    let (project_root, state_dir) =
+        bootstrap_project_runtime("mixed-feature-spec-first", "Mixed Feature Spec First");
 
     let output = project_bound_taskflow_consume_final_with_timeout(
         &project_root,
@@ -4475,10 +4605,8 @@ fn taskflow_consume_final_routes_mixed_feature_delivery_requests_to_spec_first()
 
 #[test]
 fn taskflow_consume_final_plain_prefers_bootstrap_spec_over_manual_design_steps() {
-    let (project_root, state_dir) = bootstrap_project_runtime(
-        "plain-bootstrap-spec",
-        "Plain Bootstrap Spec",
-    );
+    let (project_root, state_dir) =
+        bootstrap_project_runtime("plain-bootstrap-spec", "Plain Bootstrap Spec");
 
     let output = vida()
         .args([
@@ -4499,7 +4627,7 @@ fn taskflow_consume_final_plain_prefers_bootstrap_spec_over_manual_design_steps(
     assert!(stdout.contains("execution mode: delegated_orchestration_cycle"));
     assert!(stdout.contains("first step: publish a concise execution plan"));
     assert!(stdout.contains("next tracked command: vida taskflow bootstrap-spec "));
-    assert!(stdout.contains("delegated lanes: specification, implementation"));
+    assert!(stdout.contains("delegated lanes: specification, implementer"));
     assert!(!stdout.contains("next epic command:"));
     assert!(!stdout.contains("next design command:"));
     fs::remove_dir_all(project_root).expect("temp root should be removed");
@@ -5309,10 +5437,8 @@ fn agent_feedback_fails_closed_when_notes_exceed_bounded_ingestion_contract() {
 
 #[test]
 fn taskflow_consume_final_selects_pbi_discussion_role_for_backlog_queries() {
-    let (project_root, state_dir) = bootstrap_project_runtime(
-        "pbi-discussion-routing",
-        "PBI Discussion Routing",
-    );
+    let (project_root, state_dir) =
+        bootstrap_project_runtime("pbi-discussion-routing", "PBI Discussion Routing");
 
     let output = project_bound_taskflow_consume_final_with_timeout(
         &project_root,
@@ -5389,11 +5515,8 @@ fn taskflow_consume_final_does_not_match_short_substring_false_positive() {
         "Short Substring False Positive Probe",
     );
 
-    let output = project_bound_taskflow_consume_final_with_timeout(
-        &project_root,
-        &state_dir,
-        "trace cache",
-    );
+    let output =
+        project_bound_taskflow_consume_final_with_timeout(&project_root, &state_dir, "trace cache");
     assert!(!output.status.success());
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -5418,17 +5541,18 @@ fn taskflow_consume_final_does_not_match_short_substring_false_positive() {
             .len(),
         0
     );
-    assert_eq!(parsed["payload"]["role_selection"]["selection_mode"], "auto");
+    assert_eq!(
+        parsed["payload"]["role_selection"]["selection_mode"],
+        "auto"
+    );
     assert_eq!(parsed["payload"]["closure_admission"]["status"], "blocked");
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
 
 #[test]
 fn taskflow_consume_final_does_not_match_ac_inside_incidental_words() {
-    let (project_root, state_dir) = bootstrap_project_runtime(
-        "ac-false-positive-probe",
-        "AC False Positive Probe",
-    );
+    let (project_root, state_dir) =
+        bootstrap_project_runtime("ac-false-positive-probe", "AC False Positive Probe");
 
     let output = project_bound_taskflow_consume_final_with_timeout(
         &project_root,
@@ -5456,17 +5580,18 @@ fn taskflow_consume_final_does_not_match_ac_inside_incidental_words() {
         parsed["payload"]["role_selection"]["matched_terms"],
         serde_json::json!([])
     );
-    assert_eq!(parsed["payload"]["role_selection"]["selection_mode"], "auto");
+    assert_eq!(
+        parsed["payload"]["role_selection"]["selection_mode"],
+        "auto"
+    );
     assert_eq!(parsed["payload"]["closure_admission"]["status"], "blocked");
     fs::remove_dir_all(project_root).expect("temp root should be removed");
 }
 
 #[test]
 fn taskflow_consume_final_does_not_match_aspect_incidental_word() {
-    let (project_root, state_dir) = bootstrap_project_runtime(
-        "aspect-false-positive-probe",
-        "Aspect False Positive Probe",
-    );
+    let (project_root, state_dir) =
+        bootstrap_project_runtime("aspect-false-positive-probe", "Aspect False Positive Probe");
 
     let output = project_bound_taskflow_consume_final_with_timeout(
         &project_root,
@@ -9361,8 +9486,10 @@ fn taskflow_task_bridge_keeps_missing_in_process_commands_off_delegated_runtime_
 
 #[test]
 fn taskflow_consume_final_fails_closed_when_required_registry_is_missing() {
-    let (project_root, state_dir) =
-        bootstrap_project_runtime("missing-registry-fail-closed", "Missing Registry Fail Closed");
+    let (project_root, state_dir) = bootstrap_project_runtime(
+        "missing-registry-fail-closed",
+        "Missing Registry Fail Closed",
+    );
     write_file(
         &format!("{project_root}/vida.config.yaml"),
         r#"project:
@@ -9472,7 +9599,11 @@ agent_system:
         .env("VIDA_STATE_DIR", &state_dir)
         .output()
         .expect("boot should rerun");
-    assert!(boot.status.success(), "{}", String::from_utf8_lossy(&boot.stderr));
+    assert!(
+        boot.status.success(),
+        "{}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
     sync_protocol_binding(&state_dir);
 
     let output = Command::new(env!("CARGO_BIN_EXE_vida"))
@@ -10823,8 +10954,6 @@ fn memory_surface_fails_closed_when_governance_linkage_missing() {
         "awaiting_coach",
         "sealed",
     );
-    let _ = wait_for_memory_governance_readiness(&state_dir, "run-memory-guard");
-
     let output = memory_output_with_timeout_retry(&state_dir);
     assert!(!output.status.success());
 
