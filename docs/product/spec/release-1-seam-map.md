@@ -47,9 +47,9 @@ Status markers:
 
 | Seam segment | Upstream owner | Downstream owner | Trigger | Required inputs | Required outputs | Law status | Implementation status | Proof status | Current blocker |
 |---|---|---|---|---|---|---|---|---|---|
-| Segment 1: Runtime trust handoff | `TaskFlow` Layer 9 | `DocFlow` Layers 7-8 | `TaskFlow` enters direct runtime consumption or final closure path | runtime state, compiled control/bundle state, active canonical inventory, explicit readiness branch activation, bounded seam handoff packet, restore/reconcile context when trust is being re-established | readiness verdict, blocking reasons, proof-ready documentation branch, seam receipt refs | ✅ | 🟡 | 🟡 | native Rust seam still converges while both runtime families are under active modernization |
-| Segment 2: Readiness/proof return | `DocFlow` Layers 7-8 | `TaskFlow` Layer 9 closure path | `DocFlow` finishes bounded readiness/proof evaluation for the requested closure scope | canonical inventory, validation state, relation/readiness artifacts, projection parity where declared, explicit seam request packet | explicit pass/block verdict consumable by `TaskFlow`; readiness/proof receipts; no hidden shared state | ✅ | 🟡 | 🟡 | final `docflow-rs` Layer-8-ready seam is not yet closure-proven end-to-end |
-| Segment 3: Product closure admission | `TaskFlow` final closure authority | `Release 1` closure proof | `TaskFlow` receives green downstream readiness/proof and bounded restore/reconcile state | executable runtime state, downstream proof receipts, restore/reconcile discipline, replay/checkpoint lineage artifacts, operator closure evidence | Release-1 closure admission or fail-closed blocker | ✅ | 🟡 | 🟡 | production-baseline control tracks are now proof-backed, but final matrix refresh, DocFlow readiness/proof hardening, release-candidate build, and explicit closure verdict still gate closure |
+| Segment 1: Runtime trust handoff | `TaskFlow` Layer 9 | `DocFlow` Layers 7-8 | `TaskFlow` enters direct runtime consumption or final closure path | runtime state, compiled control/bundle state, active canonical inventory, explicit readiness branch activation, bounded seam handoff packet, restore/reconcile context when trust is being re-established | readiness verdict, blocking reasons, proof-ready documentation branch, seam receipt refs | ✅ | ✅ | ✅ | no blocking seam gap for Release 1; remaining work is post-release runtime-family hardening |
+| Segment 2: Readiness/proof return | `DocFlow` Layers 7-8 | `TaskFlow` Layer 9 closure path | `DocFlow` finishes bounded readiness/proof evaluation for the requested closure scope | canonical inventory, validation state, relation/readiness artifacts, projection parity where declared, explicit seam request packet | explicit pass/block verdict consumable by `TaskFlow`; readiness/proof receipts; no hidden shared state | ✅ | ✅ | ✅ | no blocking seam gap for Release 1; remaining work is post-release DocFlow hardening rather than closure debt |
+| Segment 3: Product closure admission | `TaskFlow` final closure authority | `Release 1` closure proof | `TaskFlow` receives green downstream readiness/proof and bounded restore/reconcile state | executable runtime state, downstream proof receipts, restore/reconcile discipline, replay/checkpoint lineage artifacts, operator closure evidence | Release-1 closure admission or fail-closed blocker | ✅ | ✅ | ✅ | closure is proven; only operational caveat is that manual local datastore cleanup can invalidate live probes until state is reinitialized |
 
 Matrix reading rule:
 
@@ -218,10 +218,10 @@ Release 1 is not closure-ready unless all are true:
 artifact_path: product/spec/release-1-seam-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-04-06
+artifact_revision: 2026-04-07
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-seam-map.md
 created_at: '2026-03-13T13:42:00+02:00'
-updated_at: 2026-04-06T14:21:10.330519471Z
+updated_at: 2026-04-07T20:22:57.879429565Z
 changelog_ref: release-1-seam-map.changelog.jsonl

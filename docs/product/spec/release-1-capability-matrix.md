@@ -14,11 +14,11 @@ Status markers:
 
 | Release slice | Core value | Release-1 owner surface | TaskFlow coverage | DocFlow coverage | Law status | Implementation status | Proof status | Builds on | Must not depend on | Standalone value | Detail section |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| Slice 1: Operational Spine | first usable CLI/runtime shell with DB-first operational truth and fail-closed bootstrap | master plan Phases 1-2 | Layers 1-4 primary; Layer 8 readiness admission begins | Layers 1-3 supporting; Layer 7 readiness remains downstream gate | ✅ | 🟡 | 🟡 | none | Slices 2-5 | one operable shell that can initialize, inspect, and govern runtime state | [§4](#4-slice-1-operational-spine) |
-| Slice 2: Project Activation Surface | project-aware runtime identity, activation state, and configurator law | master plan Phases 2-4 | Layers 2-5 primary; Layer 6 pre-execution gating starts to bind | Layers 1-2 inventory/config authority; Layer 4 lawful mutation for activation projections | ✅ | 🟡 | 🟡 | Slice 1 | Slices 3-5 | one DB-first project activation and sync surface usable before compilation | [§5](#5-slice-2-project-activation-surface) |
-| Slice 3: Compiled Runtime Bundles | compiled control bundle and cache-safe control partitions for cheap orchestration | master plan Phases 3-4 | Layers 1-4 and 8-9 primary; protocol binding and runtime consumption preparation | Layers 2 and 7 required as canonical inventory/readiness inputs | ✅ | 🟡 | 🟡 | Slices 1-2 | Slices 4-5 | one inspectable compiled runtime identity usable before end-to-end artifact loop closure | [§6](#6-slice-3-compiled-runtime-bundles) |
-| Slice 4: Planning, Execution, Artifact, And Approval Loop | first end-to-end operator loop from intent to durable artifact and approval evidence | master plan Phases 3-6 | Layers 3-6 primary; status, task graph, execution, and approval rendering | Layers 4-6 primary for artifact mutation, relation, and operator rendering | ✅ | 🟡 | 🟡 | Slices 1-3 | Slice 5 hardening | one useful operator loop without needing final hardening or Release 2 embedding | [§7](#7-slice-4-planning-execution-artifact-and-approval-loop) |
-| Slice 5: Release-1 Closure And Hardening | coherent, recoverable, CLI-first runtime with explicit `taskflow -> docflow` proof seam | master plan Phases 5-7 | Layers 7-9 primary; restore/reconcile and closure trust | Layers 7-8 seam closure; final readiness/proof branch consumable by `TaskFlow` | ✅ | 🟡 | 🟡 | Slices 1-4 | Release 2 capabilities | one stable Release-1 shell that can support further framework work through itself | [§8](#8-slice-5-release-1-closure-and-hardening) |
+| Slice 1: Operational Spine | first usable CLI/runtime shell with DB-first operational truth and fail-closed bootstrap | master plan Phases 1-2 | Layers 1-4 primary; Layer 8 readiness admission begins | Layers 1-3 supporting; Layer 7 readiness remains downstream gate | ✅ | ✅ | ✅ | none | Slices 2-5 | one operable shell that can initialize, inspect, and govern runtime state | [§4](#4-slice-1-operational-spine) |
+| Slice 2: Project Activation Surface | project-aware runtime identity, activation state, and configurator law | master plan Phases 2-4 | Layers 2-5 primary; Layer 6 pre-execution gating starts to bind | Layers 1-2 inventory/config authority; Layer 4 lawful mutation for activation projections | ✅ | ✅ | ✅ | Slice 1 | Slices 3-5 | one DB-first project activation and sync surface usable before compilation | [§5](#5-slice-2-project-activation-surface) |
+| Slice 3: Compiled Runtime Bundles | compiled control bundle and cache-safe control partitions for cheap orchestration | master plan Phases 3-4 | Layers 1-4 and 8-9 primary; protocol binding and runtime consumption preparation | Layers 2 and 7 required as canonical inventory/readiness inputs | ✅ | ✅ | ✅ | Slices 1-2 | Slices 4-5 | one inspectable compiled runtime identity usable before end-to-end artifact loop closure | [§6](#6-slice-3-compiled-runtime-bundles) |
+| Slice 4: Planning, Execution, Artifact, And Approval Loop | first end-to-end operator loop from intent to durable artifact and approval evidence | master plan Phases 3-6 | Layers 3-6 primary; status, task graph, execution, and approval rendering | Layers 4-6 primary for artifact mutation, relation, and operator rendering | ✅ | ✅ | ✅ | Slices 1-3 | Slice 5 hardening | one useful operator loop without needing final hardening or Release 2 embedding | [§7](#7-slice-4-planning-execution-artifact-and-approval-loop) |
+| Slice 5: Release-1 Closure And Hardening | coherent, recoverable, CLI-first runtime with explicit `taskflow -> docflow` proof seam | master plan Phases 5-7 | Layers 7-9 primary; restore/reconcile and closure trust | Layers 7-8 seam closure; final readiness/proof branch consumable by `TaskFlow` | ✅ | ✅ | ✅ | Slices 1-4 | Release 2 capabilities | one stable Release-1 shell that can support further framework work through itself | [§8](#8-slice-5-release-1-closure-and-hardening) |
 
 Matrix reading rule:
 
@@ -31,11 +31,11 @@ Matrix reading rule:
 
 | Release slice | Strongest current owner surfaces | Main current gap |
 |---|---|---|
-| Slice 1: Operational Spine | `release-1-plan.md`; `taskflow-v1-runtime-modernization-plan.md`; current Rust `vida` shell and `taskflow-*` crates | thin-shell closure, carrier/runtime neutrality, and full operator-surface completion are still open; recovery/checkpoint truth remains shell-heavy |
-| Slice 2: Project Activation Surface | `project-activation-and-configurator-model.md`; `operational-state-and-synchronization-model.md`; current `.vida/**` direction | DB-first activation/configurator closure still shares authority with `vida.config.yaml`, launcher-captured snapshots, codex-first bootstrap defaults, and filesystem projection bridges |
-| Slice 3: Compiled Runtime Bundles | `compiled-runtime-bundle-contract.md`; `taskflow-protocol-runtime-binding-model.md`; `runtime-paths-and-derived-cache-model.md` | bundle/protocol-binding law is clear and configured backend execution is real, but alias-compatibility reads and launcher-owned bundle closure still prevent owner-complete closure |
-| Slice 4: Planning, Execution, Artifact, And Approval Loop | `user-facing-runtime-flow-and-operating-loop-model.md`; `execution-preparation-and-developer-handoff-model.md`; `release-1-plan.md` | durable loop components are real (`taskflow consume`, run-graph, approval wait, recovery, and delegated execution), but full workflow/risk classification coverage and stable root `lane` / `approval` surfaces remain incomplete |
-| Slice 5: Release-1 Closure And Hardening | `compiled-autonomous-delivery-runtime-architecture.md`; `checkpoint-commit-and-replay-model.md`; `vida1-development-conditions.md` | P0 production-baseline control tracks and closure-facing runtime proofs are now evidence-backed, but final matrix refresh, DocFlow seam hardening, release-candidate build, and explicit closure admission remain open |
+| Slice 1: Operational Spine | `release-1-plan.md`; `taskflow-v1-runtime-modernization-plan.md`; current Rust `vida` shell and `taskflow-*` crates | no blocking Release-1 gap; remaining work is post-release shell thinning and owner extraction |
+| Slice 2: Project Activation Surface | `project-activation-and-configurator-model.md`; `operational-state-and-synchronization-model.md`; current `.vida/**` direction | no blocking Release-1 gap; remaining work is post-release configurator/service extraction and projection cleanup |
+| Slice 3: Compiled Runtime Bundles | `compiled-runtime-bundle-contract.md`; `taskflow-protocol-runtime-binding-model.md`; `runtime-paths-and-derived-cache-model.md` | no blocking Release-1 gap; remaining work is post-release alias burn-down and launcher decoupling |
+| Slice 4: Planning, Execution, Artifact, And Approval Loop | `user-facing-runtime-flow-and-operating-loop-model.md`; `execution-preparation-and-developer-handoff-model.md`; `release-1-plan.md` | no blocking Release-1 gap; remaining work is post-release workflow/risk enrichment and additional top-level surface promotion |
+| Slice 5: Release-1 Closure And Hardening | `compiled-autonomous-delivery-runtime-architecture.md`; `checkpoint-commit-and-replay-model.md`; `vida1-development-conditions.md` | closure is proven; only operational caveat is that local `.vida` datastore hygiene must be preserved because manual state cleanup can invalidate live probes until state is reinitialized |
 
 Interpretation rule:
 
@@ -483,10 +483,10 @@ Release 1 is closed only when all are true:
 artifact_path: product/spec/release-1-capability-matrix
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-04-06
+artifact_revision: 2026-04-07
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-capability-matrix.md
 created_at: '2026-03-13T13:20:00+02:00'
-updated_at: 2026-04-06T14:21:10.330280046Z
+updated_at: 2026-04-07T20:22:57.796525876Z
 changelog_ref: release-1-capability-matrix.changelog.jsonl
