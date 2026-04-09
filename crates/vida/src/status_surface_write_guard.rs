@@ -1,15 +1,14 @@
 use std::path::{Path, PathBuf};
 
-use crate::release1_contracts::{blocker_code_str, BlockerCode};
+use crate::release1_contracts::{BlockerCode, blocker_code_str};
 
 fn looks_like_runtime_root_session_write_guard_candidate(value: &serde_json::Value) -> bool {
     matches!(
         value["status"].as_str(),
         Some("blocked_by_default" | "exception_takeover_active")
-    )
-        && value["root_session_role"]
-            .as_str()
-            .is_some_and(|role| !role.trim().is_empty())
+    ) && value["root_session_role"]
+        .as_str()
+        .is_some_and(|role| !role.trim().is_empty())
 }
 
 fn has_runtime_root_session_write_guard(value: &serde_json::Value) -> bool {
@@ -42,35 +41,35 @@ fn has_nonempty_value(value: Option<&str>) -> bool {
     value.is_some_and(|value| !value.trim().is_empty())
 }
 
-fn exception_takeover_blocker_allows_local_write(blocker_code: Option<&str>) -> bool {
-    matches!(
-        blocker_code.map(str::trim),
-        Some("configured_backend_dispatch_failed" | "internal_activation_view_only")
-    )
+fn exception_takeover_state_label(
+    latest_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    latest_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+) -> Option<&'static str> {
+    let Some(receipt) = latest_receipt else {
+        return None;
+    };
+    if !has_nonempty_value(receipt.exception_path_receipt_id.as_deref()) {
+        return None;
+    }
+    let takeover_state = crate::release1_contracts::exception_takeover_state(
+        receipt.exception_path_receipt_id.as_deref(),
+        receipt.supersedes_receipt_id.as_deref(),
+        latest_recovery.map(|recovery| recovery.delegation_gate.local_exception_takeover_gate.as_str()),
+    );
+    if receipt.lane_status == "lane_exception_takeover" && takeover_state.is_active() {
+        return Some("active");
+    }
+    if takeover_state.is_active() {
+        return Some("admissible_not_active");
+    }
+    Some("receipt_recorded")
 }
 
 fn exception_takeover_is_lawfully_active(
     latest_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     latest_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
 ) -> bool {
-    let Some(receipt) = latest_receipt else {
-        return false;
-    };
-    if !has_nonempty_value(receipt.exception_path_receipt_id.as_deref()) {
-        return false;
-    }
-    if receipt.lane_status != "lane_exception_takeover" {
-        return false;
-    }
-    if latest_recovery.is_some_and(|recovery| {
-        recovery.delegation_gate.local_exception_takeover_gate != "blocked_open_delegated_cycle"
-    }) {
-        return true;
-    }
-    if has_nonempty_value(receipt.supersedes_receipt_id.as_deref()) {
-        return true;
-    }
-    exception_takeover_blocker_allows_local_write(receipt.blocker_code.as_deref())
+    exception_takeover_state_label(latest_receipt, latest_recovery) == Some("active")
 }
 
 pub(crate) fn root_session_write_guard_summary_from_snapshot_path(
@@ -175,7 +174,10 @@ pub(crate) fn merge_live_exception_takeover_write_guard(
         latest_recovery
             .map(|recovery| {
                 serde_json::Value::String(
-                    recovery.delegation_gate.local_exception_takeover_gate.clone(),
+                    recovery
+                        .delegation_gate
+                        .local_exception_takeover_gate
+                        .clone(),
                 )
             })
             .unwrap_or(serde_json::Value::Null),
@@ -187,14 +189,23 @@ pub(crate) fn merge_live_exception_takeover_write_guard(
             .map(serde_json::Value::String)
             .unwrap_or(serde_json::Value::Null),
     );
+    guard_obj.insert(
+        "local_exception_takeover_state".to_string(),
+        exception_takeover_state_label(latest_receipt, latest_recovery)
+            .map(|state| serde_json::Value::String(state.to_string()))
+            .unwrap_or(serde_json::Value::Null),
+    );
     if exception_takeover_is_lawfully_active(latest_receipt, latest_recovery) {
         guard_obj.insert(
             "status".to_string(),
             serde_json::Value::String("exception_takeover_active".to_string()),
         );
-        guard_obj.insert("root_local_write_allowed".to_string(), serde_json::Value::Bool(true));
-        if let Some(receipt_id) = latest_receipt
-            .and_then(|receipt| receipt.exception_path_receipt_id.as_deref())
+        guard_obj.insert(
+            "root_local_write_allowed".to_string(),
+            serde_json::Value::Bool(true),
+        );
+        if let Some(receipt_id) =
+            latest_receipt.and_then(|receipt| receipt.exception_path_receipt_id.as_deref())
         {
             guard_obj.insert(
                 "required_exception_evidence".to_string(),
@@ -213,8 +224,8 @@ fn runtime_root_session_write_guard_from_snapshot(
     if looks_like_runtime_root_session_write_guard_candidate(direct_guard) {
         return Some(direct_guard.clone());
     }
-    let execution_plan_contract_guard = &snapshot["payload"]["role_selection"]["execution_plan"]
-        ["orchestration_contract"]["root_session_write_guard"];
+    let execution_plan_contract_guard = &snapshot["payload"]["role_selection"]["execution_plan"]["orchestration_contract"]
+        ["root_session_write_guard"];
     if looks_like_runtime_root_session_write_guard_candidate(execution_plan_contract_guard) {
         return Some(execution_plan_contract_guard.clone());
     }
@@ -289,7 +300,7 @@ mod tests {
             run_id: "run-1".to_string(),
             dispatch_target: "spec-pack".to_string(),
             dispatch_status: "executed".to_string(),
-            lane_status: "lane_exception_takeover".to_string(),
+            lane_status: "lane_exception_recorded".to_string(),
             supersedes_receipt_id: None,
             exception_path_receipt_id: Some("receipt-1".to_string()),
             dispatch_kind: "taskflow_pack".to_string(),
@@ -344,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_live_exception_takeover_write_guard_marks_takeover_active_for_hard_blocker() {
+    fn merge_live_exception_takeover_write_guard_keeps_recorded_receipts_blocked() {
         let guard = canonical_root_session_write_guard_defaults();
         let merged = merge_live_exception_takeover_write_guard(
             guard,
@@ -352,8 +363,40 @@ mod tests {
             Some(&sample_recovery("blocked_open_delegated_cycle")),
         );
 
+        assert_eq!(merged["status"], "blocked_by_default");
+        assert_eq!(merged["root_local_write_allowed"], false);
+        assert_eq!(merged["local_exception_takeover_state"], "receipt_recorded");
+    }
+
+    #[test]
+    fn merge_live_exception_takeover_write_guard_exposes_admissible_but_inactive_state() {
+        let guard = canonical_root_session_write_guard_defaults();
+        let merged = merge_live_exception_takeover_write_guard(
+            guard,
+            Some(&sample_receipt()),
+            Some(&sample_recovery("delegated_cycle_clear")),
+        );
+
+        assert_eq!(merged["status"], "blocked_by_default");
+        assert_eq!(merged["root_local_write_allowed"], false);
+        assert_eq!(merged["local_exception_takeover_state"], "admissible_not_active");
+    }
+
+    #[test]
+    fn merge_live_exception_takeover_write_guard_marks_explicit_takeover_active() {
+        let guard = canonical_root_session_write_guard_defaults();
+        let mut receipt = sample_receipt();
+        receipt.lane_status = "lane_exception_takeover".to_string();
+
+        let merged = merge_live_exception_takeover_write_guard(
+            guard,
+            Some(&receipt),
+            Some(&sample_recovery("delegated_cycle_clear")),
+        );
+
         assert_eq!(merged["status"], "exception_takeover_active");
         assert_eq!(merged["root_local_write_allowed"], true);
         assert_eq!(merged["required_exception_evidence"], "receipt-1");
+        assert_eq!(merged["local_exception_takeover_state"], "active");
     }
 }

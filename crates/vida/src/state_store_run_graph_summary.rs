@@ -1,4 +1,5 @@
 use super::*;
+use crate::release1_contracts::lane_status_has_required_evidence;
 
 pub(super) fn reconcile_run_graph_status_with_dispatch_receipt(
     mut status: RunGraphStatus,
@@ -264,9 +265,12 @@ impl RunGraphDispatchReceiptSummary {
             .as_str()
             .to_string()
         } else {
-            canonical_lane_status_str(&receipt.lane_status)
-                .unwrap_or(receipt.lane_status.as_str())
-                .to_string()
+            normalize_run_graph_lane_status(
+                Some(receipt.lane_status.as_str()),
+                &receipt.dispatch_status,
+                receipt.supersedes_receipt_id.as_deref(),
+                receipt.exception_path_receipt_id.as_deref(),
+            )
         };
         let blocker_code = receipt
             .blocker_code
@@ -324,7 +328,9 @@ impl RunGraphDispatchReceiptSummary {
             self.dispatch_packet_path.as_deref().unwrap_or("none"),
             self.dispatch_result_path.as_deref().unwrap_or("none"),
             self.downstream_dispatch_target.as_deref().unwrap_or("none"),
-            self.downstream_dispatch_command.as_deref().unwrap_or("none"),
+            self.downstream_dispatch_command
+                .as_deref()
+                .unwrap_or("none"),
             self.downstream_dispatch_note.as_deref().unwrap_or("none"),
             self.downstream_dispatch_ready,
             if self.downstream_dispatch_blockers.is_empty() {
@@ -332,12 +338,20 @@ impl RunGraphDispatchReceiptSummary {
             } else {
                 self.downstream_dispatch_blockers.join("|")
             },
-            self.downstream_dispatch_packet_path.as_deref().unwrap_or("none"),
+            self.downstream_dispatch_packet_path
+                .as_deref()
+                .unwrap_or("none"),
             self.downstream_dispatch_status.as_deref().unwrap_or("none"),
-            self.downstream_dispatch_result_path.as_deref().unwrap_or("none"),
-            self.downstream_dispatch_trace_path.as_deref().unwrap_or("none"),
+            self.downstream_dispatch_result_path
+                .as_deref()
+                .unwrap_or("none"),
+            self.downstream_dispatch_trace_path
+                .as_deref()
+                .unwrap_or("none"),
             self.downstream_dispatch_executed_count,
-            self.downstream_dispatch_last_target.as_deref().unwrap_or("none"),
+            self.downstream_dispatch_last_target
+                .as_deref()
+                .unwrap_or("none"),
             self.activation_agent_type.as_deref().unwrap_or("none"),
             self.activation_runtime_role.as_deref().unwrap_or("none"),
             self.selected_backend.as_deref().unwrap_or("none"),
@@ -503,12 +517,12 @@ pub(crate) fn latest_run_graph_dispatch_receipt_signal_is_ambiguous(
         receipt.dispatch_status.as_str(),
         "packet_ready" | "routed" | "executed" | "blocked"
     ) && receipt.lane_status.as_str()
-        != derive_lane_status(
+        != normalize_run_graph_lane_status(
+            Some(receipt.lane_status.as_str()),
             &receipt.dispatch_status,
             receipt.supersedes_receipt_id.as_deref(),
             receipt.exception_path_receipt_id.as_deref(),
         )
-        .as_str()
         || !matches!(
             receipt.dispatch_status.as_str(),
             "packet_ready" | "routed" | "executed" | "blocked"
@@ -558,12 +572,20 @@ pub(crate) fn normalize_run_graph_lane_status(
     .to_string();
     match value {
         Some(raw) if !raw.trim().is_empty() => {
-            let canonical_lane_status = canonical_lane_status_str(raw).unwrap_or(raw);
+            let canonical_lane_status = canonical_lane_status_str(raw).unwrap_or(raw).trim();
             if canonical_lane_status == derived_lane_status {
-                canonical_lane_status.to_string()
-            } else {
-                derived_lane_status
+                return canonical_lane_status.to_string();
             }
+            if let Some(parsed_lane_status) = LaneStatus::from_str(canonical_lane_status) {
+                if lane_status_has_required_evidence(
+                    parsed_lane_status,
+                    supersedes_receipt_id,
+                    exception_path_receipt_id,
+                ) {
+                    return canonical_lane_status.to_string();
+                }
+            }
+            derived_lane_status
         }
         _ => derived_lane_status,
     }

@@ -22,9 +22,9 @@ mod host_agent_state;
 mod host_runtime_materialization;
 mod host_runtime_registry;
 mod init_surfaces;
+mod lane_surface;
 mod launcher_activation_snapshot;
 mod launcher_task_commands;
-mod lane_surface;
 mod memory_surface;
 mod operator_contracts;
 mod project_activator_activation_summary;
@@ -86,10 +86,10 @@ use std::{
 };
 
 use crate::contract_profile_adapter::{
-    blocker_code as blocker_code_value, blocker_code_str, BlockerCode,
+    BlockerCode, blocker_code as blocker_code_value, blocker_code_str,
 };
 use agent_extension_bundle_validation::{
-    extend_agent_extension_bundle_validation_errors, AgentExtensionBundleValidationInput,
+    AgentExtensionBundleValidationInput, extend_agent_extension_bundle_validation_errors,
 };
 use agent_extension_catalog_projection::build_agent_extension_catalog_projection;
 use agent_extension_registry_projection::build_agent_extension_registry_projection;
@@ -113,10 +113,10 @@ pub(crate) use docflow_runtime_verdict::{
     blocking_docflow_activation, build_docflow_runtime_verdict,
 };
 pub(crate) use host_agent_state::{
-    append_host_agent_observability_event, host_agent_observability_state_path,
-    load_or_initialize_host_agent_observability_state, load_or_initialize_worker_scorecards,
-    read_json_file_if_present, refresh_worker_strategy, worker_scorecards_state_path,
-    worker_strategy_state_path, HostAgentFeedbackInput,
+    HostAgentFeedbackInput, append_host_agent_observability_event,
+    host_agent_observability_state_path, load_or_initialize_host_agent_observability_state,
+    load_or_initialize_worker_scorecards, read_json_file_if_present, refresh_worker_strategy,
+    worker_scorecards_state_path, worker_strategy_state_path,
 };
 pub(crate) use init_surfaces::resolve_init_bootstrap_source_root;
 #[cfg(test)]
@@ -129,15 +129,15 @@ use launcher_task_commands::{
     build_task_close_command, build_task_create_command, build_task_ensure_command,
     build_task_show_command, infer_feature_request_slug, infer_feature_request_title, shell_quote,
 };
+pub(crate) use project_activator_surface::ProjectActivationAnswers;
 pub(crate) use project_activator_surface::build_project_activator_view;
 pub(crate) use project_activator_surface::merge_project_activation_into_init_view;
-pub(crate) use project_activator_surface::ProjectActivationAnswers;
 pub(crate) use project_root_paths::{
     ensure_dir, looks_like_project_root, resolve_repo_root, resolve_runtime_project_root,
     resolve_status_project_root,
 };
 use release1_contracts::{
-    derive_lane_status, missing_downstream_lane_evidence_blocker, LaneStatus,
+    LaneStatus, derive_lane_status, missing_downstream_lane_evidence_blocker,
 };
 use root_command_router::run_root_command;
 use runtime_assignment_builder::{
@@ -267,8 +267,7 @@ const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_NEXT_ACTI
     "Refresh the latest run-graph dispatch receipt summary before rerunning consume-final.";
 const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_BLOCKER: &str =
     "run_graph_latest_dispatch_receipt_checkpoint_leakage";
-const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_NEXT_ACTION: &str =
-    "Refresh the latest checkpoint evidence before rerunning consume-final so the latest status and checkpoint rows share the same run_id.";
+const RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_CHECKPOINT_LEAKAGE_NEXT_ACTION: &str = "Refresh the latest checkpoint evidence before rerunning consume-final so the latest status and checkpoint rows share the same run_id.";
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -1465,39 +1464,53 @@ mod tests {
         assert!(harness.path().join("README.md").is_file());
         assert!(harness.path().join(DEFAULT_PROJECT_ROOT_MAP).is_file());
         assert!(harness.path().join(DEFAULT_PROJECT_PRODUCT_INDEX).is_file());
-        assert!(harness
-            .path()
-            .join(DEFAULT_PROJECT_PRODUCT_SPEC_README)
-            .is_file());
-        assert!(harness
-            .path()
-            .join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE)
-            .is_file());
-        assert!(harness
-            .path()
-            .join(DEFAULT_PROJECT_PROCESS_README)
-            .is_file());
-        assert!(harness
-            .path()
-            .join(DEFAULT_PROJECT_RESEARCH_README)
-            .is_file());
+        assert!(
+            harness
+                .path()
+                .join(DEFAULT_PROJECT_PRODUCT_SPEC_README)
+                .is_file()
+        );
+        assert!(
+            harness
+                .path()
+                .join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE)
+                .is_file()
+        );
+        assert!(
+            harness
+                .path()
+                .join(DEFAULT_PROJECT_PROCESS_README)
+                .is_file()
+        );
+        assert!(
+            harness
+                .path()
+                .join(DEFAULT_PROJECT_RESEARCH_README)
+                .is_file()
+        );
         assert!(harness.path().join(".vida/config").is_dir());
         assert!(harness.path().join(".vida/db").is_dir());
         assert!(harness.path().join(".vida/cache").is_dir());
         assert!(harness.path().join(".vida/framework").is_dir());
         assert!(harness.path().join(".vida/project").is_dir());
-        assert!(harness
-            .path()
-            .join(".vida/project/agent-extensions/README.md")
-            .is_file());
-        assert!(harness
-            .path()
-            .join(".vida/project/agent-extensions/roles.yaml")
-            .is_file());
-        assert!(harness
-            .path()
-            .join(".vida/project/agent-extensions/roles.sidecar.yaml")
-            .is_file());
+        assert!(
+            harness
+                .path()
+                .join(".vida/project/agent-extensions/README.md")
+                .is_file()
+        );
+        assert!(
+            harness
+                .path()
+                .join(".vida/project/agent-extensions/roles.yaml")
+                .is_file()
+        );
+        assert!(
+            harness
+                .path()
+                .join(".vida/project/agent-extensions/roles.sidecar.yaml")
+                .is_file()
+        );
         assert!(harness.path().join(".vida/receipts").is_dir());
         assert!(harness.path().join(".vida/runtime").is_dir());
         assert!(harness.path().join(".vida/scratchpad").is_dir());
@@ -2053,12 +2066,16 @@ mod tests {
             view["normal_work_defaults"]["local_host_agent_guide"],
             DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC
         );
-        assert!(view["normal_work_defaults"]
-            .get("local_codex_guide")
-            .is_none());
-        assert!(view["normal_work_defaults"]
-            .get("codex_tier_rates")
-            .is_none());
+        assert!(
+            view["normal_work_defaults"]
+                .get("local_codex_guide")
+                .is_none()
+        );
+        assert!(
+            view["normal_work_defaults"]
+                .get("codex_tier_rates")
+                .is_none()
+        );
     }
 
     #[test]
@@ -2105,22 +2122,30 @@ mod tests {
             view["normal_work_defaults"]["carrier_tier_rates"]["qwen"],
             4
         );
-        assert!(view["normal_work_defaults"]
-            .get("local_codex_guide")
-            .is_none());
-        assert!(view["normal_work_defaults"]
-            .get("codex_tier_rates")
-            .is_none());
-        assert!(view["host_environment"]["supported_cli_systems"]
-            .as_array()
-            .expect("supported cli systems should render")
-            .iter()
-            .any(|value| value.as_str() == Some("qwen")));
-        assert!(view["host_environment"]["supported_cli_systems"]
-            .as_array()
-            .expect("supported cli systems should render")
-            .iter()
-            .any(|value| value.as_str() == Some("codex")));
+        assert!(
+            view["normal_work_defaults"]
+                .get("local_codex_guide")
+                .is_none()
+        );
+        assert!(
+            view["normal_work_defaults"]
+                .get("codex_tier_rates")
+                .is_none()
+        );
+        assert!(
+            view["host_environment"]["supported_cli_systems"]
+                .as_array()
+                .expect("supported cli systems should render")
+                .iter()
+                .any(|value| value.as_str() == Some("qwen"))
+        );
+        assert!(
+            view["host_environment"]["supported_cli_systems"]
+                .as_array()
+                .expect("supported cli systems should render")
+                .iter()
+                .any(|value| value.as_str() == Some("codex"))
+        );
     }
 
     #[test]
@@ -2169,20 +2194,26 @@ mod tests {
         assert_eq!(view["host_environment"]["selection_required"], true);
         assert_eq!(view["host_environment"]["template_materialized"], false);
         assert_eq!(view["host_environment"]["runtime_template_root"], ".codex");
-        assert!(view["host_environment"]["supported_cli_systems"]
-            .as_array()
-            .expect("supported cli systems should render")
-            .iter()
-            .any(|value| value.as_str() == Some("codex")));
-        assert!(view["host_environment"]["supported_cli_systems"]
-            .as_array()
-            .expect("supported cli systems should render")
-            .iter()
-            .any(|value| value.as_str() == Some("qwen")));
-        assert!(view["host_environment"]["template_source_root"]
-            .as_str()
-            .expect("template source root should render")
-            .ends_with("/.codex"));
+        assert!(
+            view["host_environment"]["supported_cli_systems"]
+                .as_array()
+                .expect("supported cli systems should render")
+                .iter()
+                .any(|value| value.as_str() == Some("codex"))
+        );
+        assert!(
+            view["host_environment"]["supported_cli_systems"]
+                .as_array()
+                .expect("supported cli systems should render")
+                .iter()
+                .any(|value| value.as_str() == Some("qwen"))
+        );
+        assert!(
+            view["host_environment"]["template_source_root"]
+                .as_str()
+                .expect("template source root should render")
+                .ends_with("/.codex")
+        );
     }
 
     #[test]
@@ -2248,18 +2279,24 @@ mod tests {
         assert!(config.contains("cli_system: codex"));
         assert!(harness.path().join("docs/project-root-map.md").is_file());
         assert!(harness.path().join("docs/product/spec/README.md").is_file());
-        assert!(harness
-            .path()
-            .join("docs/product/spec/templates/feature-design-document.template.md")
-            .is_file());
-        assert!(harness
-            .path()
-            .join("docs/process/documentation-tooling-map.md")
-            .is_file());
-        assert!(harness
-            .path()
-            .join("docs/process/codex-agent-configuration-guide.md")
-            .is_file());
+        assert!(
+            harness
+                .path()
+                .join("docs/product/spec/templates/feature-design-document.template.md")
+                .is_file()
+        );
+        assert!(
+            harness
+                .path()
+                .join("docs/process/documentation-tooling-map.md")
+                .is_file()
+        );
+        assert!(
+            harness
+                .path()
+                .join("docs/process/codex-agent-configuration-guide.md")
+                .is_file()
+        );
         assert!(harness.path().join(".codex/config.toml").is_file());
         assert!(harness.path().join(WORKER_SCORECARDS_STATE).is_file());
         assert!(harness.path().join(WORKER_STRATEGY_STATE).is_file());
@@ -2397,22 +2434,30 @@ mod tests {
             "vida_task_classes = \"architecture,execution_preparation,hard_escalation,meta_analysis\""
         ));
 
-        assert!(!harness
-            .path()
-            .join(".codex/agents/development_implementer.toml")
-            .exists());
-        assert!(!harness
-            .path()
-            .join(".codex/agents/development_coach.toml")
-            .exists());
-        assert!(!harness
-            .path()
-            .join(".codex/agents/development_verifier.toml")
-            .exists());
-        assert!(!harness
-            .path()
-            .join(".codex/agents/development_escalation.toml")
-            .exists());
+        assert!(
+            !harness
+                .path()
+                .join(".codex/agents/development_implementer.toml")
+                .exists()
+        );
+        assert!(
+            !harness
+                .path()
+                .join(".codex/agents/development_coach.toml")
+                .exists()
+        );
+        assert!(
+            !harness
+                .path()
+                .join(".codex/agents/development_verifier.toml")
+                .exists()
+        );
+        assert!(
+            !harness
+                .path()
+                .join(".codex/agents/development_escalation.toml")
+                .exists()
+        );
     }
 
     #[test]
@@ -2764,8 +2809,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_consumption_bootstrap_fails_closed_with_blocked_fallback_when_seed_derivation_fails(
-    ) {
+    async fn runtime_consumption_bootstrap_fails_closed_with_blocked_fallback_when_seed_derivation_fails()
+     {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -2807,9 +2852,11 @@ mod tests {
             build_runtime_consumption_run_graph_bootstrap(&store, &role_selection).await;
         assert_eq!(bootstrap["status"], "blocked");
         assert_eq!(bootstrap["handoff_ready"], false);
-        assert!(bootstrap["fallback_reason"]
-            .as_str()
-            .is_some_and(|value| value.contains("seed_failed")));
+        assert!(
+            bootstrap["fallback_reason"]
+                .as_str()
+                .is_some_and(|value| value.contains("seed_failed"))
+        );
 
         let latest_status = store
             .latest_run_graph_status()
@@ -3083,10 +3130,11 @@ mod tests {
             active_downstream_dispatch_target(&receipt).as_deref(),
             Some("specification")
         );
-        assert!(note
-            .as_deref()
-            .unwrap_or_default()
-            .contains("wait for bounded evidence return"));
+        assert!(
+            note.as_deref()
+                .unwrap_or_default()
+                .contains("wait for bounded evidence return")
+        );
     }
 
     #[test]
@@ -3406,10 +3454,12 @@ mod tests {
         );
         assert!(receipt.downstream_dispatch_ready);
         assert!(receipt.downstream_dispatch_blockers.is_empty());
-        assert!(receipt
-            .downstream_dispatch_packet_path
-            .as_deref()
-            .is_some_and(|path| !path.trim().is_empty()));
+        assert!(
+            receipt
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty())
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -3484,8 +3534,7 @@ mod tests {
         assert!(plan.get("codex_runtime_assignment").is_none());
         assert!(runtime_assignment.get("internal_named_lane_id").is_none());
         assert_eq!(
-            plan["development_flow"]["dispatch_contract"]["implementer_activation"]
-                ["activation_agent_type"],
+            plan["development_flow"]["dispatch_contract"]["implementer_activation"]["activation_agent_type"],
             "junior"
         );
         assert!(
@@ -4211,15 +4260,290 @@ mod tests {
             "external"
         );
         assert_eq!(result["backend_dispatch"]["backend_id"], "qwen_cli");
-        assert!(result["activation_command"]
-            .as_str()
-            .expect("activation command should render")
-            .contains("sh"));
-        assert!(result["provider_output"]
-            .as_str()
-            .expect("provider output should render")
-            .contains("external-dispatch:Read and execute the VIDA dispatch packet"));
+        assert!(
+            result["activation_command"]
+                .as_str()
+                .expect("activation command should render")
+                .contains("sh")
+        );
+        assert!(
+            result["provider_output"]
+                .as_str()
+                .expect("provider output should render")
+                .contains("external-dispatch:Read and execute the VIDA dispatch packet")
+        );
         assert_eq!(result["role_selection"]["selected_role"], "worker");
+    }
+
+    #[test]
+    fn execute_runtime_dispatch_handoff_allows_internal_host_to_route_to_external_backend() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+
+        let config_path = harness.path().join("vida.config.yaml");
+        install_external_cli_test_subagents(&config_path);
+        let config = fs::read_to_string(&config_path).expect("config should exist");
+        let updated = config.replace(
+            "command: qwen\n        static_args:\n          - -y\n          - -o\n          - text",
+            "command: sh\n        static_args:\n          - -lc\n          - \"printf 'external-dispatch:%s' \\\"$1\\\"\"\n          - vida-dispatch",
+        );
+        fs::write(&config_path, updated).expect("config should update");
+
+        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let store = runtime
+            .block_on(StateStore::open(state_root.clone()))
+            .expect("state store should open");
+        let dispatch_packet_path = harness.path().join("hybrid-external-agent-dispatch.json");
+        fs::write(
+            &dispatch_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": runtime_delivery_task_packet(
+                    "run-hybrid-external-dispatch",
+                    "implementer",
+                    "worker",
+                    "implementation",
+                    "implementation",
+                    "continue development"
+                ),
+                "dispatch_target": "implementer",
+                "request_text": "continue development",
+                "activation_runtime_role": "worker",
+                "role_selection": {
+                    "selected_role": "worker"
+                }
+            }))
+            .expect("dispatch packet json should encode"),
+        )
+        .expect("dispatch packet should write");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-hybrid-external-dispatch".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(dispatch_packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("qwen-primary".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("qwen_cli".to_string()),
+            recorded_at: "2026-03-17T00:00:00Z".to_string(),
+        };
+
+        let result = runtime
+            .block_on(execute_runtime_dispatch_handoff(
+                &state_root,
+                &store,
+                &role_selection,
+                &receipt,
+            ))
+            .expect("hybrid internal-host external-backend dispatch should execute");
+
+        assert_eq!(result["surface"], "external_cli:qwen_cli");
+        assert_eq!(result["status"], "pass");
+        assert_eq!(result["execution_state"], "executed");
+        assert_eq!(result["host_runtime"]["selected_cli_system"], "codex");
+        assert_eq!(
+            result["host_runtime"]["selected_cli_execution_class"],
+            "internal"
+        );
+        assert_eq!(result["backend_dispatch"]["backend_id"], "qwen_cli");
+        assert!(
+            result["activation_command"]
+                .as_str()
+                .expect("activation command should render")
+                .contains("sh")
+        );
+        assert!(
+            result["provider_output"]
+                .as_str()
+                .expect("provider output should render")
+                .contains("external-dispatch:Read and execute the VIDA dispatch packet")
+        );
+    }
+
+    #[test]
+    fn execute_runtime_dispatch_handoff_keeps_external_host_internal_backend_on_agent_init() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "qwen",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+        install_external_cli_test_subagents(&harness.path().join("vida.config.yaml"));
+
+        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let store = runtime
+            .block_on(StateStore::open(state_root.clone()))
+            .expect("state store should open");
+        let dispatch_packet_path = harness.path().join("hybrid-internal-agent-dispatch.json");
+        fs::write(
+            &dispatch_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": runtime_delivery_task_packet(
+                    "run-hybrid-internal-dispatch",
+                    "implementer",
+                    "worker",
+                    "implementation",
+                    "implementation",
+                    "continue development"
+                ),
+                "dispatch_target": "implementer",
+                "request_text": "continue development",
+                "activation_runtime_role": "worker",
+                "role_selection": {
+                    "selected_role": "worker"
+                }
+            }))
+            .expect("dispatch packet json should encode"),
+        )
+        .expect("dispatch packet should write");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-hybrid-internal-dispatch".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(dispatch_packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-03-17T00:00:00Z".to_string(),
+        };
+
+        let result = runtime
+            .block_on(execute_runtime_dispatch_handoff(
+                &state_root,
+                &store,
+                &role_selection,
+                &receipt,
+            ))
+            .expect("hybrid external-host internal-backend dispatch should stay on agent-init");
+
+        assert_eq!(result["surface"], "vida agent-init");
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["host_runtime"]["selected_cli_system"], "qwen");
+        assert_eq!(
+            result["host_runtime"]["selected_cli_execution_class"],
+            "external"
+        );
+        assert_eq!(result["backend_dispatch"]["backend_class"], "internal");
+        assert_eq!(
+            result["backend_dispatch"]["backend_id"],
+            "internal_subagents"
+        );
+        assert_eq!(
+            result["backend_dispatch"]["policy_selected_internal_backend"],
+            true
+        );
+        assert_eq!(result["blocker_code"], "internal_activation_view_only");
     }
 
     #[test]
@@ -4355,7 +4679,10 @@ mod tests {
             "external"
         );
         assert_eq!(dispatch.backend_dispatch["backend_class"], "internal");
-        assert_eq!(dispatch.backend_dispatch["backend_id"], "internal_subagents");
+        assert_eq!(
+            dispatch.backend_dispatch["backend_id"],
+            "internal_subagents"
+        );
         assert_eq!(
             dispatch.backend_dispatch["policy_selected_internal_backend"],
             true
@@ -4831,6 +5158,16 @@ mod tests {
     fn downstream_lane_exception_takeover_guard_remains_unchanged() {
         let blocker = missing_downstream_lane_evidence_blocker(
             Some(LaneStatus::LaneExceptionTakeover),
+            None,
+            None,
+        );
+        assert_eq!(blocker, Some(BlockerCode::ExceptionPathMissing));
+    }
+
+    #[test]
+    fn downstream_lane_exception_recorded_guard_requires_exception_receipt_evidence() {
+        let blocker = missing_downstream_lane_evidence_blocker(
+            Some(LaneStatus::LaneExceptionRecorded),
             None,
             None,
         );

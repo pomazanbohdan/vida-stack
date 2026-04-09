@@ -17,7 +17,7 @@ Current implementation drifts from that law in one critical way:
 1. `vida lane` is still a fail-closed reserved surface,
 2. `vida taskflow run-graph update` mutates `RunGraphStatus` only and cannot write dispatch-receipt evidence,
 3. `RunGraphDispatchReceipt` already supports `exception_path_receipt_id`,
-4. summary derivation already knows how to map that field into `lane_exception_takeover`,
+4. summary derivation currently collapses that field directly into active takeover semantics instead of separating recorded evidence from active authority,
 5. no canonical operator mutation path exists to record the required takeover evidence.
 
 This creates a Release 1 execution deadlock:
@@ -36,7 +36,8 @@ The bounded target is:
 2. operator can inspect lane state through `vida lane show`,
 3. operator can record bounded exception takeover through `vida lane exception-takeover`,
 4. dispatch-receipt evidence remains the authoritative takeover source,
-5. `vida status`, `vida doctor`, and resume/continue surfaces consume the same evidence consistently.
+5. `vida status`, `vida doctor`, and resume/continue surfaces consume the same evidence consistently,
+6. receipt recording, admissibility, and active takeover remain distinct machine-readable states.
 
 ## 3. Non-Goals
 
@@ -86,7 +87,8 @@ Expected shape:
 3. optional structured reason fields may be accepted now or added later in backward-compatible form,
 4. surface writes the exception-path evidence into the authoritative dispatch receipt,
 5. response returns the updated lane envelope,
-6. derived `lane_status` must report `lane_exception_takeover`.
+6. derived `lane_status` must report `lane_exception_recorded` while takeover is still blocked,
+7. derived `lane_status` may report `lane_exception_takeover` only after takeover law is explicitly active.
 
 ## 5. Exception Receipt Contract
 
@@ -120,11 +122,12 @@ Therefore the operator surface must not silently permit takeover when the delega
 
 Allowed outcomes:
 
-1. if the delegated cycle remains open with no supersession or hard-blocker evidence, fail closed,
-2. if explicit supersession or redirection is already recorded, allow exception takeover,
-3. if hard-blocker evidence proves the delegated lane cannot continue lawfully, allow exception takeover,
-4. if higher-precedence route law explicitly allows takeover, allow exception takeover,
-5. in all allowed cases, persist the exception receipt before the first local mutation.
+1. if the delegated cycle remains open with no supersession, fail closed for local write but still persist the exception receipt as recorded evidence,
+2. if explicit supersession or redirection is already recorded, takeover may become admissible,
+3. blocker codes such as `internal_activation_view_only` or `configured_backend_dispatch_failed` are diagnosis evidence only and must not auto-activate local write by themselves,
+4. if higher-precedence route law explicitly allows takeover, takeover may become admissible,
+5. in all admissible cases, persist the exception receipt before the first local mutation,
+6. active local write authority still requires an explicit active takeover state rather than implicit promotion from receipt existence alone.
 
 ## 7. State Model
 
@@ -137,7 +140,9 @@ Implementation rule:
 3. set `exception_path_receipt_id`,
 4. optionally append structured exception metadata if the bounded implementation stores it now,
 5. re-record the receipt through the authoritative state store,
-6. rely on existing summary derivation to surface `lane_exception_takeover`.
+6. derive `lane_exception_recorded` by default from exception evidence,
+7. preserve `lane_exception_takeover` only when active takeover authority has been explicitly recorded,
+8. never let receipt presence alone imply active local write.
 
 Important constraint:
 
@@ -157,7 +162,8 @@ Minimum required behavior:
 3. status and doctor must still fail closed when exception-path evidence is absent,
 4. operator output must distinguish:
    - no exception evidence,
-   - exception evidence present but delegated cycle still blocks takeover,
+   - exception evidence recorded but delegated cycle still blocks takeover,
+   - exception evidence admissible but not yet active,
    - exception evidence present and takeover lawfully active.
 
 ## 9. Consume / Recovery Continuity
@@ -169,8 +175,8 @@ This change must make that path usable end-to-end.
 Required result:
 
 1. when `exception_path_receipt_id` is persisted,
-2. and delegated-cycle law is satisfied,
-3. resume and continue logic accepts `lane_exception_takeover` as lawful evidence instead of failing with missing exception-path evidence.
+2. and delegated-cycle law is not yet satisfied, resume and continue logic must still accept `lane_exception_recorded` as lawful receipt evidence without confusing it with active local write,
+3. and delegated-cycle law is satisfied plus takeover is explicitly activated, resume and continue logic accepts `lane_exception_takeover` as lawful active evidence instead of failing with missing exception-path evidence.
 
 ## 10. Code Map
 
@@ -201,15 +207,16 @@ Bounded implementation slice:
 
 1. `vida lane show` returns canonical root operator envelope,
 2. `vida lane exception-takeover` persists `exception_path_receipt_id`,
-3. receipt summary derives `lane_exception_takeover`,
-4. status surface reports exception evidence consistently,
+3. receipt summary derives `lane_exception_recorded` until takeover activation is explicit,
+4. status surface reports `receipt_recorded`, `admissible_not_active`, and `active` consistently,
 5. doctor surface reports takeover posture consistently.
 
 ### Negative Proof
 
 1. open delegated cycle without exception receipt stays blocked,
 2. exception receipt without delegated-cycle clearance stays blocked,
-3. root surface must not silently fall back to `taskflow run-graph update`.
+3. exception receipt plus diagnosis blocker alone must not auto-activate local write,
+4. root surface must not silently fall back to `taskflow run-graph update`.
 
 ### Runtime Proof
 

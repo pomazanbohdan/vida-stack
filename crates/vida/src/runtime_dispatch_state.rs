@@ -1859,9 +1859,12 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
                     missing_agent_lane_dispatch_packet_error(&receipt.dispatch_target)
                 })?;
             let host_runtime = runtime_host_execution_contract_for_root(&project_root);
-            if json_string(host_runtime.get("selected_cli_execution_class")).as_deref()
-                == Some("external")
-            {
+            let lane_dispatch = runtime_agent_lane_dispatch_for_root(
+                &project_root,
+                dispatch_packet_path,
+                receipt.selected_backend.as_deref(),
+            );
+            if lane_dispatch.surface != "vida agent-init" {
                 return execute_external_agent_lane_dispatch(
                     store,
                     &project_root,

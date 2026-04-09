@@ -172,6 +172,7 @@ pub(crate) enum LaneStatus {
     LaneBlocked,
     LaneCompleted,
     LaneSuperseded,
+    LaneExceptionRecorded,
     LaneExceptionTakeover,
 }
 
@@ -184,6 +185,7 @@ impl LaneStatus {
             Self::LaneBlocked => "lane_blocked",
             Self::LaneCompleted => "lane_completed",
             Self::LaneSuperseded => "lane_superseded",
+            Self::LaneExceptionRecorded => "lane_exception_recorded",
             Self::LaneExceptionTakeover => "lane_exception_takeover",
         }
     }
@@ -196,6 +198,7 @@ impl LaneStatus {
             "lane_blocked" => Some(Self::LaneBlocked),
             "lane_completed" => Some(Self::LaneCompleted),
             "lane_superseded" => Some(Self::LaneSuperseded),
+            "lane_exception_recorded" => Some(Self::LaneExceptionRecorded),
             "lane_exception_takeover" => Some(Self::LaneExceptionTakeover),
             _ => None,
         }
@@ -319,11 +322,7 @@ impl Release1ContractStatus {
     }
 
     pub(crate) const fn from_bool(ok: bool) -> Self {
-        if ok {
-            Self::Pass
-        } else {
-            Self::Blocked
-        }
+        if ok { Self::Pass } else { Self::Blocked }
     }
 
     pub(crate) fn from_str(value: &str) -> Option<Self> {
@@ -356,13 +355,58 @@ pub(crate) fn has_evidence_id(value: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExceptionTakeoverState {
+    NotRecorded,
+    ReceiptRecorded,
+    ActiveTakeover,
+}
+
+impl ExceptionTakeoverState {
+    pub(crate) const fn is_active(self) -> bool {
+        matches!(self, Self::ActiveTakeover)
+    }
+}
+
+pub(crate) fn exception_takeover_state(
+    exception_path_receipt_id: Option<&str>,
+    supersedes_receipt_id: Option<&str>,
+    local_exception_takeover_gate: Option<&str>,
+) -> ExceptionTakeoverState {
+    if !has_evidence_id(exception_path_receipt_id) {
+        return ExceptionTakeoverState::NotRecorded;
+    }
+    if has_evidence_id(supersedes_receipt_id) {
+        return ExceptionTakeoverState::ActiveTakeover;
+    }
+    if local_exception_takeover_gate.is_some_and(|gate| gate.trim() != "blocked_open_delegated_cycle")
+    {
+        return ExceptionTakeoverState::ActiveTakeover;
+    }
+    ExceptionTakeoverState::ReceiptRecorded
+}
+
+pub(crate) fn lane_status_has_required_evidence(
+    lane_status: LaneStatus,
+    supersedes_receipt_id: Option<&str>,
+    exception_path_receipt_id: Option<&str>,
+) -> bool {
+    match lane_status {
+        LaneStatus::LaneSuperseded => has_evidence_id(supersedes_receipt_id),
+        LaneStatus::LaneExceptionRecorded | LaneStatus::LaneExceptionTakeover => {
+            has_evidence_id(exception_path_receipt_id)
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn derive_lane_status(
     dispatch_status: &str,
     supersedes_receipt_id: Option<&str>,
     exception_path_receipt_id: Option<&str>,
 ) -> LaneStatus {
     if has_evidence_id(exception_path_receipt_id) {
-        return LaneStatus::LaneExceptionTakeover;
+        return LaneStatus::LaneExceptionRecorded;
     }
     if has_evidence_id(supersedes_receipt_id) {
         return LaneStatus::LaneSuperseded;
@@ -1165,7 +1209,7 @@ pub(crate) fn missing_downstream_lane_evidence_blocker(
 ) -> Option<BlockerCode> {
     if matches!(
         parsed_downstream_lane_status,
-        Some(LaneStatus::LaneExceptionTakeover)
+        Some(LaneStatus::LaneExceptionRecorded | LaneStatus::LaneExceptionTakeover)
     ) && !has_evidence_id(exception_path_receipt_id)
     {
         return Some(BlockerCode::ExceptionPathMissing);
@@ -1185,16 +1229,17 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        blocker_code_str, blocker_code_value, canonical_approval_status_str,
-        canonical_blocker_code_list, canonical_compatibility_class_str, canonical_gate_level_str,
+        ApprovalStatus, BlockerCode, CompatibilityBoundary, CompatibilityClass, GateLevel,
+        ExceptionTakeoverState, LaneStatus, Release1ContractStatus, Release1ContractType,
+        Release1SchemaVersion, RiskTier, WorkflowClass, blocker_code_str, blocker_code_value,
+        canonical_approval_status_str, canonical_blocker_code_list,
+        canonical_compatibility_class_str, canonical_gate_level_str,
         canonical_release1_contract_status_str, canonical_release1_contract_type_str,
         canonical_release1_schema_version_str, canonical_risk_tier_str,
         canonical_workflow_class_str, classify_compatibility_boundary,
         cli_probe_tool_contract_summary, evaluate_policy_gate_protocol_binding,
-        missing_downstream_lane_evidence_blocker, release1_contract_status_str, ApprovalStatus,
-        BlockerCode, CompatibilityBoundary, CompatibilityClass, GateLevel, LaneStatus,
-        Release1ContractStatus, Release1ContractType, Release1SchemaVersion, RiskTier,
-        WorkflowClass,
+        exception_takeover_state, missing_downstream_lane_evidence_blocker,
+        release1_contract_status_str,
     };
 
     #[test]
@@ -1263,6 +1308,36 @@ mod tests {
             None,
         );
         assert_eq!(blocker, Some(BlockerCode::ExceptionPathMissing));
+    }
+
+    #[test]
+    fn lane_exception_recorded_requires_exception_receipt_evidence() {
+        let blocker = missing_downstream_lane_evidence_blocker(
+            Some(LaneStatus::LaneExceptionRecorded),
+            None,
+            None,
+        );
+        assert_eq!(blocker, Some(BlockerCode::ExceptionPathMissing));
+    }
+
+    #[test]
+    fn derive_lane_status_marks_exception_receipts_as_recorded_until_takeover_is_explicit() {
+        assert_eq!(
+            super::derive_lane_status("executed", None, Some("receipt-1")),
+            LaneStatus::LaneExceptionRecorded
+        );
+    }
+
+    #[test]
+    fn exception_takeover_state_distinguishes_recorded_and_active_authority() {
+        assert_eq!(
+            exception_takeover_state(Some("receipt-1"), None, Some("blocked_open_delegated_cycle")),
+            ExceptionTakeoverState::ReceiptRecorded
+        );
+        assert_eq!(
+            exception_takeover_state(Some("receipt-1"), None, Some("delegated_cycle_clear")),
+            ExceptionTakeoverState::ActiveTakeover
+        );
     }
 
     #[test]

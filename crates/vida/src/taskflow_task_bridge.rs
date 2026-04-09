@@ -1,15 +1,25 @@
 use std::path::{Path, PathBuf};
 
 use crate::release1_contracts::{
-    blocker_code_str, canonical_release1_contract_status_str, BlockerCode,
+    BlockerCode, blocker_code_str, canonical_release1_contract_status_str,
 };
 use crate::state_store::TaskRecord;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_PROXY_STATE_DIR_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 pub(crate) fn taskflow_native_state_root(project_root: &Path) -> PathBuf {
     project_root.join(crate::state_store::default_state_dir())
 }
 
 pub(crate) fn proxy_state_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(path) = TEST_PROXY_STATE_DIR_OVERRIDE.with_borrow(|path| path.clone()) {
+        return path;
+    }
     std::env::var_os("VIDA_STATE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -17,6 +27,13 @@ pub(crate) fn proxy_state_dir() -> PathBuf {
                 .map(|project_root| taskflow_native_state_root(&project_root))
                 .unwrap_or_else(|_| crate::state_store::default_state_dir())
         })
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_proxy_state_dir_override(path: Option<PathBuf>) {
+    TEST_PROXY_STATE_DIR_OVERRIDE.with_borrow_mut(|current| {
+        *current = path;
+    });
 }
 
 pub(crate) fn infer_project_root_from_state_root(state_root: &Path) -> Option<PathBuf> {
