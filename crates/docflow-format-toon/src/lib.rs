@@ -1,5 +1,5 @@
 pub fn render_summary(title: &str, body: &str) -> String {
-    format!("{title}\n  {body}")
+    common_format_toon::render_compact_block(title, body)
 }
 
 #[cfg(test)]

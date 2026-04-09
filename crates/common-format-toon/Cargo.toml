@@ -1,0 +1,8 @@
+[package]
+name = "common-format-toon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+toon-format.workspace = true

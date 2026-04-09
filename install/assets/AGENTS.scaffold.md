@@ -16,6 +16,8 @@ Core rule:
 7. For normal write-producing development work, "agent mode" means the project runtime's delegated lane flow through `vida agent-init`; host-tool-specific subagent APIs are optional carrier/executor details and do not replace the canonical VIDA/TaskFlow delegation path.
 8. Host-local write capability, shell access, or direct patch tools do not authorize root-lane implementation; while the root-session write guard is active, lawful write ownership still routes through `vida agent-init` unless an explicit exception-path receipt exists.
 9. If the user explicitly orders agent-first or parallel-agent execution, that routing intent is sticky; root must restore, reclaim, or re-dispatch delegated lanes before considering any local exception path and must not silently substitute root-session implementation.
+10. If `vida agent-init` or runtime dispatch returns an activation/view-only handoff without execution evidence, treat that result as a non-executing bridge blocker, not as delegated work completion and not as permission for root-session implementation; if a bounded read-only diagnostic path remains, continue to a code-level blocker or next bounded fix before asking the user to choose a route.
+11. Before any root-session write-producing mutation, require one of: receipt-backed delegated execution evidence for the active packet, or an explicit exception-path receipt; `activation_view_only`, `internal_activation_view_only`, packet location discovery, or a ready patch idea are all insufficient.
 
 Canonical bootstrap routes:
 1. Main/root lane: `vida orchestrator-init`
@@ -36,6 +38,7 @@ Normal feature-delivery rule:
 5. When normal write-producing work is lawful, shape and dispatch the next bounded packet through `vida agent-init` rather than waiting for or substituting any host-local subagent primitive.
 6. The mere ability to edit files locally from the host tool is not a lane-change receipt and must not be treated as permission to bypass delegated execution.
 7. Agent/thread saturation, stale lane handles, or `not_found` carrier errors require saturation recovery first: inspect active lanes, synthesize any completed returns, reclaim closeable lanes, and retry lawful `vida agent-init` dispatch before any local fallback is even considered.
+8. If the active runtime snapshot/status still reports root-local write as forbidden, remain in shaping/diagnosis/reroute only; do not convert a bounded read-only diagnosis into a local fix without a newly recorded lawful receipt.
 
 Host CLI rule:
 1. Host agent templates are activated through `vida project-activator`, not `vida init`.

@@ -2069,8 +2069,7 @@ mod tests {
             Some("approval_wait")
         );
 
-        let mut completed =
-            default_run_graph_status("run-1", "implementation", "implementation");
+        let mut completed = default_run_graph_status("run-1", "implementation", "implementation");
         completed.active_node = "verification".to_string();
         completed.status = "completed".to_string();
         completed.next_node = None;

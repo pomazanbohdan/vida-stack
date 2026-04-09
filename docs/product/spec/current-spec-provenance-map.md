@@ -2,7 +2,7 @@
 
 Status: active canonical companion map
 
-Revision: `2026-03-16`
+Revision: `2026-04-08`
 
 Purpose: define the detailed source lineage and absorbed historical inputs for the active product-spec canon while the short registry surface lives in `current-spec-map.md`.
 
@@ -171,6 +171,8 @@ Companion rule:
    Sources: `docs/product/spec/release-1-plan.md`, `docs/product/spec/status-families-and-query-surface-model.md`, `docs/product/spec/release-1-operator-surface-contract.md`, current launcher task surface code in `crates/vida/src/{cli,task_surface,taskflow_task_bridge,taskflow_layer4,taskflow_proxy}.rs`, and the active DB-backed Release-1 TaskFlow program tasks `r1-01-a` and `r1-01-d`
 22. [release-1-carrier-neutral-runtime-and-host-materialization-design.md](release-1-carrier-neutral-runtime-and-host-materialization-design.md)
    Sources: `docs/product/spec/release-1-plan.md`, `docs/product/spec/release-1-current-state.md`, `docs/product/spec/release-1-conformance-matrix.md`, `docs/product/spec/compiled-runtime-bundle-contract.md`, `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`, `docs/product/spec/host-agent-layer-status-matrix.md`, current launcher/runtime code in `crates/vida/src/{main,project_activator_surface,status_surface,taskflow_consume_bundle,taskflow_routing}.rs`, and the active Release-1 TaskFlow program tasks `r1-05-a`, `r1-05-b`, and `r1-08-a`
+23. [launcher-decomposition-and-code-hygiene-design.md](launcher-decomposition-and-code-hygiene-design.md)
+   Sources: `docs/product/spec/release-1-current-state.md`, `docs/product/spec/release-1-conformance-matrix.md`, current launcher code in `crates/vida/src/{main,state_store,project_activator_surface,runtime_dispatch_state,taskflow_routing}.rs`, extracted helper modules in `crates/vida/src/{launcher_task_commands,project_root_paths,state_store_patching,state_store_taskflow_snapshot_codec,state_store_source_scan,state_store_run_graph_summary}.rs`, format helper crates under `crates/{taskflow,docflow}-format-*`, and the current need to reduce launcher concentration without widening runtime behavior
 
 ## Routing Pointers
 
@@ -221,5 +223,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-provenance-map.md
 created_at: '2026-03-16T09:05:00+02:00'
-updated_at: 2026-04-03T09:58:30+00:00
+updated_at: 2026-04-08T09:37:14Z
 changelog_ref: current-spec-provenance-map.changelog.jsonl

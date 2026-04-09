@@ -3,7 +3,13 @@ use std::path::{Path, PathBuf};
 
 use time::format_description::well_known::Rfc3339;
 
-use super::{json_lookup, WORKER_SCORECARDS_STATE, WORKER_STRATEGY_STATE};
+use crate::carrier_runtime_metadata::{
+    selection_policy_rule, selection_policy_u64, DEFAULT_CONSECUTIVE_FAILURE_LIMIT,
+    DEFAULT_DEMOTION_SCORE, DEFAULT_PROBATION_TASK_RUNS, DEFAULT_PROMOTION_SCORE,
+    DEFAULT_RETIREMENT_FAILURE_LIMIT,
+};
+
+use super::{WORKER_SCORECARDS_STATE, WORKER_STRATEGY_STATE};
 
 pub(crate) const HOST_AGENT_OBSERVABILITY_STATE: &str = ".vida/state/host-agent-observability.json";
 
@@ -280,14 +286,26 @@ pub(crate) fn refresh_worker_strategy(
     scoring_policy: &serde_json::Value,
 ) -> serde_json::Value {
     let scorecards = load_or_initialize_worker_scorecards(project_root, carrier_roles);
-    let promotion_score = json_u64(json_lookup(scoring_policy, &["promotion_score"])).unwrap_or(75);
-    let demotion_score = json_u64(json_lookup(scoring_policy, &["demotion_score"])).unwrap_or(45);
-    let consecutive_failure_limit =
-        json_u64(json_lookup(scoring_policy, &["consecutive_failure_limit"])).unwrap_or(3);
-    let probation_task_runs =
-        json_u64(json_lookup(scoring_policy, &["probation_task_runs"])).unwrap_or(2);
-    let retirement_failure_limit =
-        json_u64(json_lookup(scoring_policy, &["retirement_failure_limit"])).unwrap_or(8);
+    let selection_rule = selection_policy_rule(scoring_policy);
+    let promotion_score =
+        selection_policy_u64(scoring_policy, "promotion_score", DEFAULT_PROMOTION_SCORE);
+    let demotion_score =
+        selection_policy_u64(scoring_policy, "demotion_score", DEFAULT_DEMOTION_SCORE);
+    let consecutive_failure_limit = selection_policy_u64(
+        scoring_policy,
+        "consecutive_failure_limit",
+        DEFAULT_CONSECUTIVE_FAILURE_LIMIT,
+    );
+    let probation_task_runs = selection_policy_u64(
+        scoring_policy,
+        "probation_task_runs",
+        DEFAULT_PROBATION_TASK_RUNS,
+    );
+    let retirement_failure_limit = selection_policy_u64(
+        scoring_policy,
+        "retirement_failure_limit",
+        DEFAULT_RETIREMENT_FAILURE_LIMIT,
+    );
 
     let mut agents = serde_json::Map::new();
     for row in carrier_roles {
@@ -373,7 +391,7 @@ pub(crate) fn refresh_worker_strategy(
         "store_path": WORKER_STRATEGY_STATE,
         "scorecards_path": WORKER_SCORECARDS_STATE,
         "selection_policy": {
-            "rule": "capability_first_then_score_guard_then_cheapest_tier",
+            "rule": selection_rule,
             "promotion_score": promotion_score,
             "demotion_score": demotion_score,
             "consecutive_failure_limit": consecutive_failure_limit,
@@ -393,6 +411,7 @@ pub(crate) fn refresh_worker_strategy(
 pub(crate) fn build_carrier_pricing_policy(
     carrier_roles: &[serde_json::Value],
     worker_strategy: &serde_json::Value,
+    vendor_basis: &serde_json::Value,
 ) -> serde_json::Value {
     let mut tiers = carrier_roles.to_vec();
     tiers.sort_by(|left, right| {
@@ -408,13 +427,11 @@ pub(crate) fn build_carrier_pricing_policy(
         }
     }
     serde_json::json!({
-        "selection_rule": "choose the cheapest configured agent that satisfies runtime-role admissibility, task-class fit, and the local score guard; escalate only when the cheaper candidate is degraded or score-insufficient",
+        "selection_rule": crate::carrier_runtime_metadata::selection_policy_rule(
+            &worker_strategy["selection_policy"],
+        ),
         "rates": rate_map,
-        "vendor_basis": {
-            "openai": "structured role configs and reasoning-effort tuning in Codex project config; prefer explicit task/runtime settings over implicit chat heuristics",
-            "anthropic": "structured prompt templates, explicit sections, and evaluation-backed refinement loops",
-            "microsoft": "record one bounded decision/design artifact per change and route on explicit cost-quality tradeoffs instead of ad hoc escalation"
-        },
+        "vendor_basis": vendor_basis,
         "local_strategy_store": worker_strategy["store_path"],
         "local_scorecards_store": worker_strategy["scorecards_path"],
         "tiers": tiers

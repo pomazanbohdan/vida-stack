@@ -26,10 +26,10 @@ Structured-template rule:
   - stateful agent-lane completion and exception-path governance
   - explicit execution-preparation enforcement for code-shaped work
   - broader platform-level contracts and registries beyond shell-local runtime behavior
-  - launcher concentration in `crates/vida/src/main.rs` and `crates/vida/src/state_store.rs`
-  - config-driven multi-system carrier law is now live for host-system execution posture and readiness, and neutral runtime fields already exist as `carrier_runtime` plus `runtime_assignment`, but runtime execution still mirrors `codex_multi_agent` / `codex_runtime_assignment` as compatibility aliases and still routes worker dispatch through `vida agent-init`
+  - launcher concentration in `crates/vida/src/main.rs` and `crates/vida/src/state_store.rs`, with helper seams already extracted into `launcher_task_commands.rs`, `project_root_paths.rs`, `state_store_patching.rs`, `state_store_taskflow_snapshot_codec.rs`, `state_store_source_scan.rs`, and `state_store_run_graph_summary.rs`
+  - config-driven multi-system carrier law is now live for host-system execution posture and readiness, canonical write paths already emit `carrier_runtime` plus `runtime_assignment`, compiled bundles no longer emit `codex_multi_agent`, launcher routing no longer reads `codex_runtime_assignment`, and the remaining carrier-neutral debt is codex-heavy materialization/proof residue plus worker dispatch still routing through `vida agent-init`
   - DB-first activation truth is persisted as a launcher-captured snapshot rather than owned by one DB-native configurator service
-  - top-level `consume` / `lane` / `approval` / `recovery` contracts and the full shared enum/value layer remain incomplete
+  - top-level `consume` and `recovery` contracts are now promoted, and `lane` / `approval` root ids now fail closed explicitly as reserved surfaces, but family-owned `lane` / `approval` implementations and the remaining shared enum/value emission coverage remain incomplete
   - final `TaskFlow -> DocFlow -> Release 1 closure` seam hardening
   - current seam proof is shell-assembled and replay/checkpoint law is resumability-heavy rather than lineage-complete
   - codex-era fixtures and smoke proofs still pin runtime contracts that must become carrier-neutral
@@ -925,10 +925,10 @@ Will implement / choose:
 artifact_path: product/spec/release-1-plan
 artifact_type: product_spec
 artifact_version: 1
-artifact_revision: 2026-04-03
+artifact_revision: 2026-04-08
 schema_version: 1
 status: canonical
 source_path: docs/product/spec/release-1-plan.md
 created_at: 2026-03-16T07:39:24.117630799Z
-updated_at: 2026-04-03T12:53:27+03:00
+updated_at: 2026-04-08T09:37:14Z
 changelog_ref: release-1-plan.changelog.jsonl

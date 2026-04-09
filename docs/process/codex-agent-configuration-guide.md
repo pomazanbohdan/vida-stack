@@ -160,14 +160,16 @@ Normalization rule:
 3. canonical delegated execution still routes through `vida agent-init`; host-tool-specific Codex subagent APIs are executor details and are not the primary project delegation surface,
 4. before any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`; an active root-session write guard still means orchestration-only,
 5. if delegation temporarily fails because of thread or lane saturation, attempt lawful reuse or recorded saturation recovery before accepting local-only continuation as the active posture.
-6. generic implementation intent is not a lane-change receipt and must not by itself authorize root-session coding.
-7. finding the patch location or reproducing a runtime defect is still read-only packet shaping evidence, not permission for root-session completion of the same write scope.
-8. recorded saturation recovery must explicitly check whether any delegated Codex lanes already completed or were superseded and can now be closed/reclaimed before "agent limits" remains a valid blocker.
-9. worker wait timeout or empty poll result does not authorize replacing the packet cycle with one generic internal development lane.
-10. under continued-development intent, stay in commentary/progress mode and continue routing; do not emit final closure wording while a next lawful continuation item is already known.
-11. do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.
-12. if closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.
-13. when recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
+6. if the internal Codex path returns only an activation view without execution evidence, treat that as a bridge blocker and reroute/fix the runtime path instead of assuming an agent already ran.
+7. if that bridge blocker still leaves a bounded read-only diagnostic path, continue diagnosis to a code-level blocker or next bounded fix before asking the user to choose a route.
+8. generic implementation intent is not a lane-change receipt and must not by itself authorize root-session coding.
+9. finding the patch location or reproducing a runtime defect is still read-only packet shaping evidence, not permission for root-session completion of the same write scope.
+10. recorded saturation recovery must explicitly check whether any delegated Codex lanes already completed or were superseded and can now be closed/reclaimed before "agent limits" remains a valid blocker.
+11. worker wait timeout or empty poll result does not authorize replacing the packet cycle with one generic internal development lane.
+12. under continued-development intent, stay in commentary/progress mode and continue routing; do not emit final closure wording while a next lawful continuation item is already known.
+13. do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.
+14. if closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.
+15. when recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
 
 Coach separation rule:
 

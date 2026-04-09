@@ -4,7 +4,13 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use super::activation_status::canonical_activation_status;
+#[path = "project_activator_codex_materialization.rs"]
+mod project_activator_codex_materialization;
 use super::*;
+pub(crate) use project_activator_codex_materialization::{
+    host_cli_entry_carrier_catalog, materialize_codex_dispatch_alias_catalog,
+    overlay_codex_agent_catalog, overlay_codex_dispatch_alias_catalog, read_codex_agent_catalog,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ProjectActivationAnswers {
@@ -23,7 +29,7 @@ pub(crate) struct ProjectActivationStatusTruth {
     pub(crate) next_steps: Vec<String>,
 }
 
-const HOST_CLI_PLACEHOLDER: &str = "__HOST_CLI_SYSTEM__";
+pub(crate) const HOST_CLI_PLACEHOLDER: &str = "__HOST_CLI_SYSTEM__";
 
 fn yaml_scalar(value: &str) -> String {
     if value
@@ -98,18 +104,6 @@ fn set_yaml_bool_in_top_level_section(
     )
 }
 
-fn csv_string_list(value: Option<&String>) -> Vec<String> {
-    value
-        .map(|raw| {
-            raw.split(',')
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
-}
-
 pub(crate) fn render_project_sidecar(project_title: &str) -> String {
     format!(
         "# Project Docs Map\n\n\
@@ -181,7 +175,7 @@ pub(crate) fn normalize_host_cli_system(value: &str) -> Option<String> {
     Some(trimmed.to_ascii_lowercase())
 }
 
-fn host_cli_display_name(system: &str) -> String {
+pub(crate) fn host_cli_display_name(system: &str) -> String {
     if system.eq_ignore_ascii_case("codex") {
         "Codex".to_string()
     } else {
@@ -205,48 +199,10 @@ fn host_cli_system_registry(config: &serde_yaml::Value) -> HashMap<String, serde
     registry
 }
 
-fn builtin_host_cli_execution_class(system: &str) -> &'static str {
-    if system.eq_ignore_ascii_case("codex") {
-        "internal"
-    } else {
-        "external"
-    }
-}
-
-fn builtin_host_cli_materialization_mode(system: &str) -> &'static str {
-    if system.eq_ignore_ascii_case("codex") {
-        "codex_toml_catalog_render"
-    } else {
-        "copy_tree_only"
-    }
-}
-
-fn default_builtin_host_cli_entry(system: &str) -> serde_yaml::Value {
-    serde_yaml::from_str(&format!(
-        "enabled: true\nexecution_class: {}\ntemplate_root: .{system}\nruntime_root: .{system}\nmaterialization_mode: {}\n",
-        builtin_host_cli_execution_class(system),
-        builtin_host_cli_materialization_mode(system),
-    ))
-    .unwrap_or(serde_yaml::Value::Null)
-}
-
-fn builtin_host_cli_system_registry() -> HashMap<String, serde_yaml::Value> {
-    let mut registry = HashMap::new();
-    registry.insert("codex".to_string(), default_builtin_host_cli_entry("codex"));
-    registry.insert("qwen".to_string(), default_builtin_host_cli_entry("qwen"));
-    registry
-}
-
 pub(crate) fn host_cli_system_registry_with_fallback(
     config: Option<&serde_yaml::Value>,
 ) -> HashMap<String, serde_yaml::Value> {
-    let mut registry = builtin_host_cli_system_registry();
-    if let Some(configured) = config.map(host_cli_system_registry) {
-        for (key, value) in configured {
-            registry.insert(key, value);
-        }
-    }
-    registry
+    config.map(host_cli_system_registry).unwrap_or_default()
 }
 
 fn load_host_cli_system_registry_from_root(root: &Path) -> HashMap<String, serde_yaml::Value> {
@@ -254,11 +210,11 @@ fn load_host_cli_system_registry_from_root(root: &Path) -> HashMap<String, serde
     read_yaml_file_checked(&config_path)
         .ok()
         .as_ref()
-        .map(|config| host_cli_system_registry_with_fallback(Some(config)))
-        .unwrap_or_else(|| host_cli_system_registry_with_fallback(None))
+        .map(host_cli_system_registry)
+        .unwrap_or_default()
 }
 
-fn host_cli_system_enabled(entry: &serde_yaml::Value) -> bool {
+pub(crate) fn host_cli_system_enabled(entry: &serde_yaml::Value) -> bool {
     yaml_bool(yaml_lookup(entry, &["enabled"]), true)
 }
 
@@ -266,34 +222,35 @@ fn host_cli_system_template_root(entry: &serde_yaml::Value) -> Option<String> {
     yaml_string(yaml_lookup(entry, &["template_root"]))
 }
 
-fn host_cli_system_runtime_root(entry: &serde_yaml::Value, system: &str, root: &Path) -> PathBuf {
+pub(crate) fn host_cli_system_runtime_root(
+    entry: &serde_yaml::Value,
+    _system: &str,
+    root: &Path,
+) -> PathBuf {
     resolve_overlay_path(
         root,
-        &yaml_string(yaml_lookup(entry, &["runtime_root"])).unwrap_or_else(|| format!(".{system}")),
+        &yaml_string(yaml_lookup(entry, &["runtime_root"])).unwrap_or_default(),
     )
 }
 
-fn host_cli_system_runtime_surface(entry: &serde_yaml::Value, system: &str) -> String {
-    yaml_string(yaml_lookup(entry, &["runtime_root"])).unwrap_or_else(|| format!(".{system}"))
+pub(crate) fn host_cli_system_runtime_surface(entry: &serde_yaml::Value, _system: &str) -> String {
+    yaml_string(yaml_lookup(entry, &["runtime_root"])).unwrap_or_default()
 }
 
-fn host_cli_system_materialization_mode(entry: &serde_yaml::Value, system: &str) -> String {
+pub(crate) fn host_cli_system_materialization_mode(
+    entry: &serde_yaml::Value,
+    _system: &str,
+) -> String {
     yaml_string(yaml_lookup(entry, &["materialization_mode"]))
-        .unwrap_or_else(|| builtin_host_cli_materialization_mode(system).to_string())
+        .unwrap_or_default()
         .to_ascii_lowercase()
 }
 
-pub(crate) fn host_cli_system_execution_class(entry: &serde_yaml::Value, system: &str) -> String {
+pub(crate) fn host_cli_system_execution_class(entry: &serde_yaml::Value, _system: &str) -> String {
     yaml_string(yaml_lookup(entry, &["execution_class"]))
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| {
-            if system == "codex" {
-                "internal".to_string()
-            } else {
-                "external".to_string()
-            }
-        })
+        .unwrap_or_default()
 }
 
 fn host_cli_system_agent_only_defaults_enabled(entry: &serde_yaml::Value, system: &str) -> bool {
@@ -449,14 +406,8 @@ pub(crate) fn resolve_host_cli_template_source(
     cli_system: &str,
     registry_entry: Option<&serde_yaml::Value>,
 ) -> Result<PathBuf, String> {
-    let default_entry = builtin_host_cli_system_registry().remove(cli_system);
     let template_relative = registry_entry
         .and_then(host_cli_system_template_root)
-        .or_else(|| {
-            default_entry
-                .as_ref()
-                .and_then(host_cli_system_template_root)
-        })
         .ok_or_else(|| format!("No template_root configured for host CLI `{cli_system}`"))?;
     let primary_root = resolve_init_bootstrap_source_root();
     let fallback_root = super::repo_runtime_root();
@@ -517,8 +468,9 @@ pub(crate) fn apply_host_cli_selection(
             contents.trim_end()
         )
     };
-    let builtin_entry = builtin_host_cli_system_registry().remove(cli_system);
-    if builtin_entry
+    let registry = load_host_cli_system_registry_from_root(project_root);
+    if registry
+        .get(&normalize_host_cli_system(cli_system).unwrap_or_default())
         .as_ref()
         .is_some_and(|entry| host_cli_system_agent_only_defaults_enabled(entry, cli_system))
     {
@@ -556,12 +508,9 @@ pub(crate) fn materialize_host_cli_template(
     cli_system: &str,
     registry_entry: Option<&serde_yaml::Value>,
 ) -> Result<PathBuf, String> {
-    let entry_value = match registry_entry.cloned() {
-        Some(entry) => entry,
-        None => builtin_host_cli_system_registry()
-            .remove(cli_system)
-            .ok_or_else(|| format!("Registry entry required for host CLI `{cli_system}`"))?,
-    };
+    let entry_value = registry_entry
+        .cloned()
+        .ok_or_else(|| format!("Registry entry required for host CLI `{cli_system}`"))?;
     let entry_ref = entry_value;
     let source = resolve_host_cli_template_source(cli_system, Some(&entry_ref))?;
     let runtime_root = host_cli_system_runtime_root(&entry_ref, cli_system, project_root);
@@ -581,17 +530,24 @@ pub(crate) fn materialize_host_cli_template(
             let rendered_catalog_root =
                 project_root.join(host_cli_system_runtime_surface(&entry_ref, cli_system));
             let carrier_roles = {
-                let overlay_roles = overlay_codex_agent_catalog(&overlay);
+                let overlay_roles =
+                    project_activator_codex_materialization::overlay_codex_agent_catalog(&overlay);
                 if overlay_roles.is_empty() {
-                    read_codex_agent_catalog(&rendered_catalog_root)
+                    project_activator_codex_materialization::read_codex_agent_catalog(
+                        &rendered_catalog_root,
+                    )
                 } else {
                     overlay_roles
                 }
             };
             let carrier_dispatch_aliases =
-                codex_dispatch_alias_catalog_for_root(&overlay, project_root, &carrier_roles)?;
+                project_activator_codex_materialization::codex_dispatch_alias_catalog_for_root(
+                    &overlay,
+                    project_root,
+                    &carrier_roles,
+                )?;
             if !carrier_roles.is_empty() {
-                render_codex_template_from_catalog(
+                project_activator_codex_materialization::render_codex_template_from_catalog(
                     project_root,
                     &source,
                     &carrier_roles,
@@ -650,497 +606,6 @@ fn copy_tree_recursive(source_root: &Path, target_root: &Path) -> Result<(), Str
     Ok(())
 }
 
-fn escape_toml_basic_string(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-fn rendered_codex_agent_catalog(
-    agent_catalog: &[serde_json::Value],
-    _named_lane_catalog: &[serde_json::Value],
-) -> Vec<serde_json::Value> {
-    agent_catalog.to_vec()
-}
-
-fn render_codex_config_toml(
-    template_root: &Path,
-    agent_catalog: &[serde_json::Value],
-    named_lane_catalog: &[serde_json::Value],
-) -> String {
-    let template_config = read_simple_toml_sections(&template_root.join("config.toml"));
-    let max_threads = template_config
-        .get("agents")
-        .and_then(|section| section.get("max_threads"))
-        .cloned()
-        .unwrap_or_else(|| "4".to_string());
-    let max_depth = template_config
-        .get("agents")
-        .and_then(|section| section.get("max_depth"))
-        .cloned()
-        .unwrap_or_else(|| "2".to_string());
-    let mut lines = vec![
-        "[features]".to_string(),
-        "multi_agent = true".to_string(),
-        String::new(),
-        "[agents]".to_string(),
-        format!("max_threads = {max_threads}"),
-        format!("max_depth = {max_depth}"),
-        String::new(),
-    ];
-    for row in rendered_codex_agent_catalog(agent_catalog, named_lane_catalog) {
-        let Some(role_id) = row["role_id"].as_str() else {
-            continue;
-        };
-        let description = row["description"]
-            .as_str()
-            .filter(|value| !value.trim().is_empty())
-            .map(escape_toml_basic_string)
-            .unwrap_or_else(|| {
-                escape_toml_basic_string(&format!(
-                    "Rendered Codex executor lane for VIDA tier `{}`. Rate: {}.",
-                    row["tier"].as_str().unwrap_or(role_id),
-                    row["rate"].as_u64().unwrap_or(0)
-                ))
-            });
-        lines.push(format!("[agents.{role_id}]"));
-        lines.push(format!("description = \"{description}\""));
-        lines.push(format!("config_file = \"agents/{role_id}.toml\""));
-        lines.push(String::new());
-    }
-    format!("{}\n", lines.join("\n"))
-}
-
-fn set_toml_scalar_line(contents: &str, key: &str, rendered_value: &str) -> String {
-    let replacement = format!("{key} = {rendered_value}");
-    let mut lines = Vec::new();
-    let mut replaced = false;
-    for line in contents.lines() {
-        if line.trim_start().starts_with(&format!("{key} =")) && !replaced {
-            lines.push(replacement.clone());
-            replaced = true;
-        } else {
-            lines.push(line.to_string());
-        }
-    }
-    if !replaced {
-        lines.push(replacement);
-    }
-    format!("{}\n", lines.join("\n"))
-}
-
-fn extract_toml_multiline_string(contents: &str, key: &str) -> Option<String> {
-    let marker = format!("{key} = \"\"\"");
-    let mut lines = contents.lines();
-    while let Some(line) = lines.next() {
-        if !line.trim_start().starts_with(&marker) {
-            continue;
-        }
-        let mut body = Vec::new();
-        for next_line in &mut lines {
-            if next_line.trim() == "\"\"\"" {
-                return Some(body.join("\n"));
-            }
-            body.push(next_line.to_string());
-        }
-        return Some(body.join("\n"));
-    }
-    None
-}
-
-fn set_toml_multiline_string(contents: &str, key: &str, body: &str) -> String {
-    let marker = format!("{key} = \"\"\"");
-    let mut lines = Vec::new();
-    let mut replaced = false;
-    let mut source = contents.lines();
-
-    while let Some(line) = source.next() {
-        if line.trim_start().starts_with(&marker) && !replaced {
-            lines.push(marker.clone());
-            lines.extend(body.lines().map(ToString::to_string));
-            lines.push("\"\"\"".to_string());
-            replaced = true;
-            for next_line in &mut source {
-                if next_line.trim() == "\"\"\"" {
-                    break;
-                }
-            }
-            continue;
-        }
-        lines.push(line.to_string());
-    }
-
-    if !replaced {
-        if !lines.is_empty() && !lines.last().is_some_and(|line| line.is_empty()) {
-            lines.push(String::new());
-        }
-        lines.push(marker);
-        lines.extend(body.lines().map(ToString::to_string));
-        lines.push("\"\"\"".to_string());
-    }
-
-    format!("{}\n", lines.join("\n"))
-}
-
-fn compose_codex_lane_developer_instructions(
-    base_instructions: Option<&str>,
-    lane_override: Option<&str>,
-) -> Option<String> {
-    match (
-        base_instructions.map(str::trim).filter(|value| !value.is_empty()),
-        lane_override.map(str::trim).filter(|value| !value.is_empty()),
-    ) {
-        (Some(base), Some(overlay)) => Some(format!(
-            "{base}\n\nLane activation overlay:\n{overlay}\n\nFollow both layers: keep the carrier-tier posture and boundaries, then apply the lane-specific mission as the active role for this packet."
-        )),
-        (Some(base), None) => Some(base.to_string()),
-        (None, Some(overlay)) => Some(overlay.to_string()),
-        (None, None) => None,
-    }
-}
-
-fn render_codex_agent_toml(
-    row: &serde_json::Value,
-    template_contents: Option<&str>,
-) -> Option<String> {
-    let role_id = row["role_id"].as_str()?;
-    let model = row["model"].as_str().unwrap_or("gpt-5.4");
-    let reasoning_effort = row["model_reasoning_effort"].as_str().unwrap_or("medium");
-    let sandbox_mode = row["sandbox_mode"].as_str().unwrap_or("workspace-write");
-    let tier = row["tier"].as_str().unwrap_or(role_id);
-    let rate = row["rate"].as_u64().unwrap_or(0);
-    let reasoning_band = row["reasoning_band"].as_str().unwrap_or_default();
-    let default_runtime_role = row["default_runtime_role"].as_str().unwrap_or_default();
-    let runtime_roles = row["runtime_roles"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .collect::<Vec<_>>()
-        .join(",");
-    let task_classes = row["task_classes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .collect::<Vec<_>>()
-        .join(",");
-    let developer_instructions_override = row["developer_instructions"]
-        .as_str()
-        .filter(|value| !value.trim().is_empty());
-    if let Some(template) = template_contents.filter(|value| !value.trim().is_empty()) {
-        let patched = set_toml_scalar_line(template, "model", &format!("\"{model}\""));
-        let patched = set_toml_scalar_line(
-            &patched,
-            "model_reasoning_effort",
-            &format!("\"{reasoning_effort}\""),
-        );
-        let patched =
-            set_toml_scalar_line(&patched, "sandbox_mode", &format!("\"{sandbox_mode}\""));
-        let patched = set_toml_scalar_line(&patched, "vida_tier", &format!("\"{tier}\""));
-        let patched = set_toml_scalar_line(&patched, "vida_rate", &format!("\"{rate}\""));
-        let patched = set_toml_scalar_line(
-            &patched,
-            "vida_reasoning_band",
-            &format!("\"{reasoning_band}\""),
-        );
-        let patched = set_toml_scalar_line(
-            &patched,
-            "vida_default_runtime_role",
-            &format!("\"{default_runtime_role}\""),
-        );
-        let patched = set_toml_scalar_line(
-            &patched,
-            "vida_runtime_roles",
-            &format!("\"{runtime_roles}\""),
-        );
-        let patched = set_toml_scalar_line(
-            &patched,
-            "vida_task_classes",
-            &format!("\"{task_classes}\""),
-        );
-        let patched = if let Some(instructions) = compose_codex_lane_developer_instructions(
-            extract_toml_multiline_string(template, "developer_instructions").as_deref(),
-            developer_instructions_override,
-        ) {
-            set_toml_multiline_string(&patched, "developer_instructions", &instructions)
-        } else {
-            patched
-        };
-        return Some(patched);
-    }
-
-    if let Some(instructions) =
-        compose_codex_lane_developer_instructions(None, developer_instructions_override)
-    {
-        return Some(format!(
-            "model = \"{model}\"\nmodel_reasoning_effort = \"{reasoning_effort}\"\nsandbox_mode = \"{sandbox_mode}\"\nvida_tier = \"{tier}\"\nvida_rate = \"{rate}\"\nvida_reasoning_band = \"{reasoning_band}\"\nvida_default_runtime_role = \"{default_runtime_role}\"\nvida_runtime_roles = \"{runtime_roles}\"\nvida_task_classes = \"{task_classes}\"\ndeveloper_instructions = \"\"\"\n{instructions}\n\"\"\"\n"
-        ));
-    }
-
-    Some(format!(
-        "model = \"{model}\"\nmodel_reasoning_effort = \"{reasoning_effort}\"\nsandbox_mode = \"{sandbox_mode}\"\nvida_tier = \"{tier}\"\nvida_rate = \"{rate}\"\nvida_reasoning_band = \"{reasoning_band}\"\nvida_default_runtime_role = \"{default_runtime_role}\"\nvida_runtime_roles = \"{runtime_roles}\"\nvida_task_classes = \"{task_classes}\"\n"
-    ))
-}
-
-fn render_codex_template_from_catalog(
-    project_root: &Path,
-    template_root: &Path,
-    agent_catalog: &[serde_json::Value],
-    named_lane_catalog: &[serde_json::Value],
-) -> Result<(), String> {
-    let codex_root = project_root.join(".codex");
-    let agents_root = codex_root.join("agents");
-    fs::create_dir_all(&agents_root)
-        .map_err(|error| format!("Failed to create {}: {error}", agents_root.display()))?;
-
-    let template_agents = read_codex_agent_catalog(template_root)
-        .into_iter()
-        .filter_map(|row| {
-            Some((
-                row["role_id"].as_str()?.to_string(),
-                row["config_file"].as_str()?.to_string(),
-            ))
-        })
-        .collect::<HashMap<_, _>>();
-
-    for entry in fs::read_dir(&agents_root)
-        .map_err(|error| format!("Failed to read {}: {error}", agents_root.display()))?
-    {
-        let path = entry
-            .map_err(|error| format!("Failed to inspect {}: {error}", agents_root.display()))?
-            .path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("toml") {
-            fs::remove_file(&path)
-                .map_err(|error| format!("Failed to remove {}: {error}", path.display()))?;
-        }
-    }
-
-    let config_body = render_codex_config_toml(template_root, agent_catalog, named_lane_catalog);
-    fs::write(codex_root.join("config.toml"), config_body).map_err(|error| {
-        format!(
-            "Failed to write {}: {error}",
-            codex_root.join("config.toml").display()
-        )
-    })?;
-
-    for row in rendered_codex_agent_catalog(agent_catalog, named_lane_catalog) {
-        let Some(role_id) = row["role_id"].as_str() else {
-            continue;
-        };
-        let template_role_id = row["template_role_id"].as_str().unwrap_or(role_id);
-        let template_contents = template_agents
-            .get(template_role_id)
-            .and_then(|config_file| fs::read_to_string(template_root.join(config_file)).ok());
-        let Some(body) = render_codex_agent_toml(&row, template_contents.as_deref()) else {
-            continue;
-        };
-        fs::write(agents_root.join(format!("{role_id}.toml")), body).map_err(|error| {
-            format!(
-                "Failed to write {}: {error}",
-                agents_root.join(format!("{role_id}.toml")).display()
-            )
-        })?;
-    }
-
-    Ok(())
-}
-
-pub(crate) fn read_codex_agent_catalog(codex_root: &Path) -> Vec<serde_json::Value> {
-    let codex_config = read_simple_toml_sections(&codex_root.join("config.toml"));
-    let mut roles = codex_config
-        .iter()
-        .filter_map(|(section, values)| {
-            let role_id = section.strip_prefix("agents.")?;
-            if role_id.is_empty() || role_id == "development" {
-                return None;
-            }
-            let config_file = values.get("config_file").cloned().unwrap_or_default();
-            let role_config = if config_file.is_empty() {
-                HashMap::new()
-            } else {
-                read_simple_toml_sections(&codex_root.join(&config_file))
-                    .remove("")
-                    .unwrap_or_default()
-            };
-            let tier = role_config
-                .get("vida_tier")
-                .cloned()
-                .unwrap_or_else(|| role_id.to_string());
-            Some(serde_json::json!({
-                "role_id": role_id,
-                "description": values.get("description").cloned().unwrap_or_default(),
-                "config_file": config_file,
-                "model": role_config.get("model").cloned().unwrap_or_default(),
-                "model_reasoning_effort": role_config.get("model_reasoning_effort").cloned().unwrap_or_default(),
-                "sandbox_mode": role_config.get("sandbox_mode").cloned().unwrap_or_default(),
-                "tier": tier,
-                "rate": role_config
-                    .get("vida_rate")
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .unwrap_or(0),
-                "reasoning_band": role_config
-                    .get("vida_reasoning_band")
-                    .cloned()
-                    .unwrap_or_else(|| role_config.get("model_reasoning_effort").cloned().unwrap_or_default()),
-                "default_runtime_role": role_config.get("vida_default_runtime_role").cloned().unwrap_or_default(),
-                "runtime_roles": csv_string_list(role_config.get("vida_runtime_roles")),
-                "task_classes": csv_string_list(role_config.get("vida_task_classes")),
-            }))
-        })
-        .collect::<Vec<_>>();
-    roles.sort_by(|left, right| {
-        left["rate"]
-            .as_u64()
-            .unwrap_or(u64::MAX)
-            .cmp(&right["rate"].as_u64().unwrap_or(u64::MAX))
-            .then_with(|| {
-                left["role_id"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .cmp(right["role_id"].as_str().unwrap_or_default())
-            })
-    });
-    roles
-}
-
-pub(crate) fn overlay_codex_agent_catalog(config: &serde_yaml::Value) -> Vec<serde_json::Value> {
-    let Some(serde_yaml::Value::Mapping(agents)) =
-        yaml_lookup(config, &["host_environment", "codex", "agents"])
-    else {
-        return Vec::new();
-    };
-    let mut rows = agents
-        .iter()
-        .filter_map(|(agent_id, value)| {
-            let role_id = match agent_id {
-                serde_yaml::Value::String(text) if !text.trim().is_empty() => text.trim(),
-                _ => return None,
-            };
-            Some(serde_json::json!({
-                "role_id": role_id,
-                "description": yaml_string(yaml_lookup(value, &["description"])).unwrap_or_default(),
-                "config_file": format!("agents/{role_id}.toml"),
-                "model": yaml_string(yaml_lookup(value, &["model"])).unwrap_or_default(),
-                "model_reasoning_effort": yaml_string(yaml_lookup(value, &["model_reasoning_effort"])).unwrap_or_default(),
-                "sandbox_mode": yaml_string(yaml_lookup(value, &["sandbox_mode"])).unwrap_or_default(),
-                "tier": yaml_string(yaml_lookup(value, &["tier"])).unwrap_or_else(|| role_id.to_string()),
-                "rate": yaml_string(yaml_lookup(value, &["rate"]))
-                    .and_then(|raw| raw.parse::<u64>().ok())
-                    .unwrap_or(0),
-                "reasoning_band": yaml_string(yaml_lookup(value, &["reasoning_band"])).unwrap_or_default(),
-                "default_runtime_role": yaml_string(yaml_lookup(value, &["default_runtime_role"])).unwrap_or_default(),
-                "runtime_roles": yaml_string_list(yaml_lookup(value, &["runtime_roles"])),
-                "task_classes": yaml_string_list(yaml_lookup(value, &["task_classes"])),
-            }))
-        })
-        .collect::<Vec<_>>();
-    rows.sort_by(|left, right| {
-        left["rate"]
-            .as_u64()
-            .unwrap_or(u64::MAX)
-            .cmp(&right["rate"].as_u64().unwrap_or(u64::MAX))
-            .then_with(|| {
-                left["role_id"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .cmp(right["role_id"].as_str().unwrap_or_default())
-            })
-    });
-    rows
-}
-
-fn host_cli_entry_carrier_catalog(entry: Option<&serde_yaml::Value>) -> Vec<serde_json::Value> {
-    let Some(serde_yaml::Value::Mapping(carriers)) =
-        entry.and_then(|value| yaml_lookup(value, &["carriers"]))
-    else {
-        return Vec::new();
-    };
-    let mut rows = carriers
-        .iter()
-        .filter_map(|(carrier_id, value)| {
-            let role_id = match carrier_id {
-                serde_yaml::Value::String(text) if !text.trim().is_empty() => text.trim(),
-                _ => return None,
-            };
-            Some(serde_json::json!({
-                "role_id": role_id,
-                "description": yaml_string(yaml_lookup(value, &["description"])).unwrap_or_default(),
-                "config_file": "",
-                "model": yaml_string(yaml_lookup(value, &["model"])).unwrap_or_default(),
-                "model_reasoning_effort": yaml_string(yaml_lookup(value, &["model_reasoning_effort"])).unwrap_or_default(),
-                "sandbox_mode": yaml_string(yaml_lookup(value, &["sandbox_mode"])).unwrap_or_default(),
-                "tier": yaml_string(yaml_lookup(value, &["tier"])).unwrap_or_else(|| role_id.to_string()),
-                "rate": yaml_string(yaml_lookup(value, &["rate"]))
-                    .and_then(|raw| raw.parse::<u64>().ok())
-                    .unwrap_or(0),
-                "reasoning_band": yaml_string(yaml_lookup(value, &["reasoning_band"])).unwrap_or_default(),
-                "default_runtime_role": yaml_string(yaml_lookup(value, &["default_runtime_role"])).unwrap_or_default(),
-                "runtime_roles": yaml_string_list(yaml_lookup(value, &["runtime_roles"])),
-                "task_classes": yaml_string_list(yaml_lookup(value, &["task_classes"])),
-            }))
-        })
-        .collect::<Vec<_>>();
-    rows.sort_by(|left, right| {
-        left["rate"]
-            .as_u64()
-            .unwrap_or(u64::MAX)
-            .cmp(&right["rate"].as_u64().unwrap_or(u64::MAX))
-            .then_with(|| {
-                left["role_id"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .cmp(right["role_id"].as_str().unwrap_or_default())
-            })
-    });
-    rows
-}
-
-pub(crate) fn synthesized_host_cli_carrier_catalog(system: &str) -> Vec<serde_json::Value> {
-    if system.trim().is_empty() || system.eq_ignore_ascii_case("codex") {
-        return Vec::new();
-    }
-    vec![serde_json::json!({
-        "role_id": format!("{system}-primary"),
-        "description": format!("Placeholder carrier for the {system} host system."),
-        "config_file": "",
-        "model": "",
-        "model_reasoning_effort": "",
-        "sandbox_mode": "",
-        "tier": system,
-        "rate": 4,
-        "reasoning_band": "medium",
-        "default_runtime_role": "worker",
-        "runtime_roles": ["worker"],
-        "task_classes": ["implementation", "research"],
-    })]
-}
-
-fn host_cli_uses_rendered_carrier_catalog(entry: Option<&serde_yaml::Value>, system: &str) -> bool {
-    let null = serde_yaml::Value::Null;
-    let entry = entry.unwrap_or(&null);
-    host_cli_system_materialization_mode(entry, system) == "codex_toml_catalog_render"
-}
-
-fn resolve_host_cli_fallback_carrier_catalog(
-    system: &str,
-    entry: Option<&serde_yaml::Value>,
-    overlay: Option<&serde_yaml::Value>,
-    carrier_catalog_root: Option<&Path>,
-) -> Vec<serde_json::Value> {
-    if !host_cli_uses_rendered_carrier_catalog(entry, system) {
-        return synthesized_host_cli_carrier_catalog(system);
-    }
-
-    overlay
-        .map(overlay_codex_agent_catalog)
-        .filter(|rows| !rows.is_empty())
-        .or_else(|| {
-            carrier_catalog_root
-                .map(read_codex_agent_catalog)
-                .filter(|rows| !rows.is_empty())
-        })
-        .unwrap_or_default()
-}
-
 pub(crate) fn resolved_host_cli_agent_catalog_for_root(
     project_root: &Path,
     overlay: &serde_yaml::Value,
@@ -1153,179 +618,35 @@ pub(crate) fn resolved_host_cli_agent_catalog_for_root(
         })?;
     let registry = host_cli_system_registry_with_fallback(Some(overlay));
     let catalog_entry = registry.get(&selected_host_cli_system);
-    let mut host_cli_agent_catalog = host_cli_entry_carrier_catalog(catalog_entry);
+    let mut host_cli_agent_catalog =
+        project_activator_codex_materialization::host_cli_entry_carrier_catalog(catalog_entry);
     if host_cli_agent_catalog.is_empty() {
-        let carrier_catalog_root = project_root.join(host_cli_system_runtime_surface(
-            catalog_entry.unwrap_or(&serde_yaml::Value::Null),
-            &selected_host_cli_system,
-        ));
-        host_cli_agent_catalog = resolve_host_cli_fallback_carrier_catalog(
-            &selected_host_cli_system,
-            catalog_entry,
-            Some(overlay),
-            Some(carrier_catalog_root.as_path()),
-        );
-    }
-    Ok((selected_host_cli_system, host_cli_agent_catalog))
-}
-
-pub(crate) fn materialize_codex_dispatch_alias_catalog(
-    configured_aliases: &[serde_json::Value],
-    agent_catalog: &[serde_json::Value],
-) -> Vec<serde_json::Value> {
-    let carrier_rows = agent_catalog
-        .iter()
-        .filter_map(|row| Some((row["tier"].as_str()?.to_string(), row.clone())))
-        .collect::<std::collections::HashMap<_, _>>();
-    let mut rows = configured_aliases
-        .iter()
-        .filter_map(|value| {
-            let lane_id = value["alias_id"].as_str()?.trim();
-            let carrier_tier = value["carrier_tier"].as_str()?.trim();
-            let mut row = carrier_rows.get(carrier_tier)?.clone();
-            let runtime_role = json_string(value.get("runtime_role"))
-                .or_else(|| json_string(value.get("default_runtime_role")))
-                .unwrap_or_default();
-            let runtime_roles = value["runtime_roles"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::to_string)
-                .collect::<Vec<_>>();
-            let task_classes = value["task_classes"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::to_string)
-                .collect::<Vec<_>>();
-            row["role_id"] = serde_json::Value::String(lane_id.to_string());
-            row["description"] = value
-                .get("description")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            row["config_file"] = serde_json::Value::String(format!("agents/{lane_id}.toml"));
-            row["default_runtime_role"] = serde_json::Value::String(runtime_role.clone());
-            row["runtime_roles"] =
-                serde_json::json!(if runtime_roles.is_empty() && !runtime_role.is_empty() {
-                    vec![runtime_role]
-                } else {
-                    runtime_roles
-                });
-            row["task_classes"] = serde_json::json!(task_classes);
-            row["template_role_id"] = serde_json::Value::String(carrier_tier.to_string());
-            row["carrier_tier"] = row["tier"].clone();
-            row["developer_instructions"] = value
-                .get("developer_instructions")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            Some(row)
-        })
-        .collect::<Vec<_>>();
-    rows.sort_by(|left, right| {
-        left["role_id"]
-            .as_str()
-            .unwrap_or_default()
-            .cmp(right["role_id"].as_str().unwrap_or_default())
-    });
-    rows
-}
-
-pub(crate) fn overlay_codex_dispatch_alias_catalog(
-    config: &serde_yaml::Value,
-    agent_catalog: &[serde_json::Value],
-) -> Vec<serde_json::Value> {
-    let Some(serde_yaml::Value::Mapping(configured_aliases)) =
-        yaml_lookup(config, &["host_environment", "codex", "dispatch_aliases"])
-    else {
-        return Vec::new();
-    };
-    let carrier_rows = agent_catalog
-        .iter()
-        .filter_map(|row| Some((row["tier"].as_str()?.to_string(), row.clone())))
-        .collect::<std::collections::HashMap<_, _>>();
-    let mut rows = configured_aliases
-        .iter()
-        .filter_map(|(lane_id, value)| {
-            let lane_id = match lane_id {
-                serde_yaml::Value::String(text) if !text.trim().is_empty() => text.trim(),
-                _ => return None,
-            };
-            let carrier_tier = yaml_string(yaml_lookup(value, &["carrier_tier"]))?;
-            let mut row = carrier_rows.get(&carrier_tier)?.clone();
-            let runtime_role = yaml_string(yaml_lookup(value, &["runtime_role"]))
-                .or_else(|| yaml_string(yaml_lookup(value, &["default_runtime_role"])))
-                .unwrap_or_default();
-            let runtime_roles = {
-                let rows = yaml_string_list(yaml_lookup(value, &["runtime_roles"]));
-                if rows.is_empty() && !runtime_role.is_empty() {
-                    vec![runtime_role.clone()]
-                } else {
-                    rows
-                }
-            };
-            row["role_id"] = serde_json::Value::String(lane_id.to_string());
-            row["description"] = serde_json::Value::String(
-                yaml_string(yaml_lookup(value, &["description"])).unwrap_or_default(),
-            );
-            row["config_file"] = serde_json::Value::String(format!("agents/{lane_id}.toml"));
-            row["default_runtime_role"] = serde_json::Value::String(runtime_role);
-            row["runtime_roles"] = serde_json::json!(runtime_roles);
-            row["task_classes"] =
-                serde_json::json!(yaml_string_list(yaml_lookup(value, &["task_classes"])));
-            row["template_role_id"] = serde_json::Value::String(carrier_tier);
-            row["carrier_tier"] = row["tier"].clone();
-            row["developer_instructions"] = serde_json::Value::String(
-                yaml_string(yaml_lookup(value, &["developer_instructions"])).unwrap_or_default(),
-            );
-            Some(row)
-        })
-        .collect::<Vec<_>>();
-    rows.sort_by(|left, right| {
-        left["role_id"]
-            .as_str()
-            .unwrap_or_default()
-            .cmp(right["role_id"].as_str().unwrap_or_default())
-    });
-    rows
-}
-
-pub(crate) fn codex_dispatch_alias_catalog_for_root(
-    config: &serde_yaml::Value,
-    root: &Path,
-    agent_catalog: &[serde_json::Value],
-) -> Result<Vec<serde_json::Value>, String> {
-    let require_registry_files = yaml_bool(
-        yaml_lookup(
-            config,
-            &["agent_extensions", "validation", "require_registry_files"],
-        ),
-        false,
-    );
-    let configured_path = yaml_string(yaml_lookup(
-        config,
-        &["agent_extensions", "registries", "dispatch_aliases"],
-    ));
-    if let Some(path) = configured_path.as_deref() {
-        let registry = load_registry_projection(
-            root,
-            Some(path),
-            "dispatch_aliases",
-            "alias_id",
-            "dispatch_aliases",
-            require_registry_files,
-        )
-        .map_err(|error| format!("failed to load dispatch aliases registry `{path}`: {error}"))?;
-        let rows = registry_rows_by_key(&registry, "dispatch_aliases", "alias_id", &[]);
-        if !rows.is_empty() {
-            return Ok(materialize_codex_dispatch_alias_catalog(
-                &rows,
-                agent_catalog,
+        if catalog_entry
+            .map(|entry| host_cli_system_materialization_mode(entry, &selected_host_cli_system))
+            .as_deref()
+            == Some("codex_toml_catalog_render")
+        {
+            let carrier_catalog_root = project_root.join(host_cli_system_runtime_surface(
+                catalog_entry.unwrap_or(&serde_yaml::Value::Null),
+                &selected_host_cli_system,
             ));
+            let overlay_rows =
+                project_activator_codex_materialization::overlay_codex_agent_catalog(overlay);
+            host_cli_agent_catalog = if overlay_rows.is_empty() {
+                project_activator_codex_materialization::read_codex_agent_catalog(
+                    carrier_catalog_root.as_path(),
+                )
+            } else {
+                overlay_rows
+            };
         }
     }
-    Ok(overlay_codex_dispatch_alias_catalog(config, agent_catalog))
+    if host_cli_agent_catalog.is_empty() {
+        return Err(format!(
+            "Host CLI `{selected_host_cli_system}` does not define any carriers in vida.config.yaml or the rendered runtime catalog."
+        ));
+    }
+    Ok((selected_host_cli_system, host_cli_agent_catalog))
 }
 
 pub(crate) fn file_contains_placeholder(path: &Path) -> bool {
@@ -1446,21 +767,15 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
         None
     };
     let host_cli_system_registry = host_cli_system_registry_with_fallback(project_overlay.as_ref());
-    let mut supported_host_cli_systems = host_cli_system_registry
-        .iter()
-        .filter(|(_, entry)| host_cli_system_enabled(entry))
-        .map(|(id, _)| id.clone())
-        .collect::<Vec<_>>();
-    supported_host_cli_systems.sort();
-    let host_cli_suggested_system = supported_host_cli_systems
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "codex".to_string());
-    let host_cli_supported_list = if supported_host_cli_systems.is_empty() {
-        "codex".to_string()
-    } else {
-        supported_host_cli_systems.join(", ")
-    };
+    let host_cli_summary =
+        crate::project_activator_host_cli_summary::build_project_activator_host_cli_summary(
+            project_root,
+            project_overlay.as_ref(),
+            &host_cli_system_registry,
+        );
+    let supported_host_cli_systems = host_cli_summary.supported_host_cli_systems;
+    let host_cli_suggested_system = host_cli_summary.host_cli_suggested_system;
+    let host_cli_supported_list = host_cli_summary.host_cli_supported_list;
     let current_project_id = project_overlay
         .as_ref()
         .and_then(|config| yaml_string(yaml_lookup(config, &["project", "id"])));
@@ -1479,115 +794,23 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     let current_todo_protocol_language = project_overlay
         .as_ref()
         .and_then(|config| yaml_string(yaml_lookup(config, &["language_policy", "todo_protocol"])));
-    let selected_host_cli_system = project_overlay
-        .as_ref()
-        .and_then(|config| yaml_lookup(config, &["host_environment", "cli_system"]))
-        .and_then(serde_yaml::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && *value != HOST_CLI_PLACEHOLDER)
-        .and_then(|value| normalize_host_cli_system(value));
-    let host_cli_system_entry = selected_host_cli_system
-        .as_deref()
-        .and_then(|system| host_cli_system_registry.get(system));
-    let host_cli_selection_required = selected_host_cli_system.is_none()
-        || host_cli_system_entry.is_none()
-        || !host_cli_system_entry
-            .map(|entry| host_cli_system_enabled(entry))
-            .unwrap_or(false);
-    let host_cli_runtime_root = selected_host_cli_system.as_deref().and_then(|system| {
-        host_cli_system_entry.map(|entry| host_cli_system_runtime_root(entry, system, project_root))
-    });
-    let host_cli_runtime_template_root = host_cli_runtime_root
-        .as_ref()
-        .and_then(|_| {
-            selected_host_cli_system.as_deref().and_then(|system| {
-                host_cli_system_entry.map(|entry| host_cli_system_runtime_surface(entry, system))
-            })
-        })
-        .or_else(|| {
-            supported_host_cli_systems.first().and_then(|system| {
-                host_cli_system_registry
-                    .get(system)
-                    .map(|entry| host_cli_system_runtime_surface(entry, system))
-            })
-        })
-        .unwrap_or_else(|| ".codex".to_string());
-    let host_cli_materialization_mode = selected_host_cli_system.as_deref().and_then(|system| {
-        host_cli_system_entry.map(|entry| host_cli_system_materialization_mode(entry, system))
-    });
-    let host_cli_execution_class = selected_host_cli_system.as_deref().and_then(|system| {
-        host_cli_system_entry.map(|entry| host_cli_system_execution_class(entry, system))
-    });
-    let host_cli_template_materialized = match (
-        host_cli_runtime_root.as_deref(),
-        host_cli_materialization_mode.as_deref(),
-    ) {
-        (Some(root), Some("codex_toml_catalog_render")) => {
-            root.join("config.toml").is_file() && root.join("agents").is_dir()
-        }
-        (Some(root), Some("copy_tree_only")) => root.exists(),
-        _ => false,
-    };
-    let host_cli_materialization_required =
-        !host_cli_selection_required && !host_cli_template_materialized;
-    let host_cli_template_source_root = selected_host_cli_system
-        .as_deref()
-        .and_then(|system| resolve_host_cli_template_source(system, host_cli_system_entry).ok())
-        .or_else(|| {
-            supported_host_cli_systems.first().and_then(|system| {
-                host_cli_system_registry
-                    .get(system)
-                    .and_then(|entry| resolve_host_cli_template_source(system, Some(entry)).ok())
-            })
-        });
-    let catalog_system = selected_host_cli_system
-        .clone()
-        .unwrap_or_else(|| host_cli_suggested_system.clone());
-    let catalog_entry = selected_host_cli_system
-        .as_deref()
-        .and_then(|system| host_cli_system_registry.get(system))
-        .or_else(|| host_cli_system_registry.get(&catalog_system));
-    let default_host_agent_templates = host_cli_template_source_root
-        .as_deref()
-        .map(list_host_cli_agent_templates)
-        .unwrap_or_default();
-    let host_cli_agent_catalog = host_cli_entry_carrier_catalog(catalog_entry);
-    let host_cli_agent_catalog = if host_cli_agent_catalog.is_empty() {
-        resolve_host_cli_fallback_carrier_catalog(
-            &catalog_system,
-            catalog_entry,
-            project_overlay.as_ref(),
-            host_cli_template_source_root.as_deref(),
-        )
-    } else {
-        host_cli_agent_catalog
-    };
-    let default_agent_topology = host_cli_agent_catalog
-        .iter()
-        .filter_map(|row| row["role_id"].as_str().map(ToString::to_string))
-        .collect::<Vec<_>>();
-    let mut carrier_tier_rates = serde_json::Map::new();
-    for row in &host_cli_agent_catalog {
-        if let (Some(tier), Some(rate)) = (row["tier"].as_str(), row["rate"].as_u64()) {
-            carrier_tier_rates.insert(tier.to_string(), serde_json::Value::Number(rate.into()));
-        }
-    }
-    let agent_extensions_enabled = project_overlay
-        .as_ref()
-        .map(|config| yaml_bool(yaml_lookup(config, &["agent_extensions", "enabled"]), false))
-        .unwrap_or(false);
-    let agent_extension_bundle = project_overlay
-        .as_ref()
-        .filter(|_| agent_extensions_enabled)
-        .map(|config| build_compiled_agent_extension_bundle_for_root(config, project_root));
-    let agent_extensions_ready = agent_extension_bundle
-        .as_ref()
-        .map(|result| result.is_ok())
-        .unwrap_or(true);
-    let agent_extension_validation_error = agent_extension_bundle
-        .as_ref()
-        .and_then(|result| result.as_ref().err())
-        .cloned();
+    let selected_host_cli_system = host_cli_summary.selected_host_cli_system;
+    let host_cli_selection_required = host_cli_summary.host_cli_selection_required;
+    let host_cli_runtime_template_root = host_cli_summary.host_cli_runtime_template_root;
+    let host_cli_execution_class = host_cli_summary.host_cli_execution_class;
+    let host_cli_template_materialized = host_cli_summary.host_cli_template_materialized;
+    let host_cli_materialization_required = host_cli_summary.host_cli_materialization_required;
+    let host_cli_template_source_root = host_cli_summary.host_cli_template_source_root;
+    let default_host_agent_templates = host_cli_summary.default_host_agent_templates;
+    let default_agent_topology = host_cli_summary.default_agent_topology;
+    let carrier_tier_rates = host_cli_summary.carrier_tier_rates;
+    let agent_extensions_summary = crate::project_activator_agent_extensions_summary::
+        build_project_activator_agent_extensions_summary(project_root, project_overlay.as_ref());
+    let agent_extensions_enabled = agent_extensions_summary.agent_extensions_enabled;
+    let agent_extensions_ready = agent_extensions_summary.agent_extensions_ready;
+    let agent_extension_validation_error =
+        agent_extensions_summary.agent_extension_validation_error;
+    let execution_carrier_model = agent_extensions_summary.execution_carrier_model;
 
     let runtime_agent_extensions_missing = [
         &runtime_agent_extensions_readme,
@@ -1605,161 +828,38 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
     .iter()
     .any(|path| !path.exists());
 
-    let sidecar_or_project_docs_too_thin =
-        sidecar_missing || sidecar_has_placeholders || docs_missing;
-    let execution_posture_ambiguous = bootstrap_missing
-        || sidecar_missing
-        || config_has_placeholders
-        || host_cli_selection_required
-        || host_cli_materialization_required
-        || sidecar_has_placeholders
-        || docs_missing
-        || !agent_extensions_ready;
-    let activation_pending = bootstrap_missing
-        || sidecar_missing
-        || config_has_placeholders
-        || host_cli_selection_required
-        || host_cli_materialization_required
-        || sidecar_has_placeholders
-        || docs_missing
-        || (agent_extensions_enabled
-            && (runtime_agent_extensions_missing || !agent_extensions_ready));
-    let project_id_missing =
-        is_missing_or_placeholder(current_project_id.as_deref(), PROJECT_ID_PLACEHOLDER);
-    let user_communication_language_missing = is_missing_or_placeholder(
-        current_user_communication_language.as_deref(),
-        USER_COMMUNICATION_PLACEHOLDER,
-    );
-    let reasoning_language_missing = is_missing_or_placeholder(
-        current_reasoning_language.as_deref(),
-        REASONING_LANGUAGE_PLACEHOLDER,
-    );
-    let documentation_language_missing = is_missing_or_placeholder(
-        current_documentation_language.as_deref(),
-        DOCUMENTATION_LANGUAGE_PLACEHOLDER,
-    );
-    let todo_protocol_language_missing = is_missing_or_placeholder(
-        current_todo_protocol_language.as_deref(),
-        TODO_PROTOCOL_LANGUAGE_PLACEHOLDER,
-    );
-    let inferred_project_id = inferred_project_id_candidate(project_root);
-    let mut required_inputs = Vec::new();
-    if project_id_missing {
-        required_inputs.push(serde_json::json!({
-            "id": "project_id",
-            "prompt": "What project id should VIDA record for this repository?",
-            "flag": "--project-id",
-            "suggested_value": inferred_project_id,
-            "required": true
-        }));
-    }
-    if user_communication_language_missing
-        || reasoning_language_missing
-        || documentation_language_missing
-        || todo_protocol_language_missing
-    {
-        required_inputs.push(serde_json::json!({
-            "id": "language",
-            "prompt": "Which language should VIDA use by default for user communication, reasoning, documentation, and todo protocol?",
-            "flag": "--language",
-            "suggested_value": current_user_communication_language
-                .clone()
-                .filter(|value| !is_missing_or_placeholder(Some(value.as_str()), USER_COMMUNICATION_PLACEHOLDER))
-                .unwrap_or_else(|| "english".to_string()),
-            "required": true,
-            "covers": [
-                "language_policy.user_communication",
-                "language_policy.reasoning",
-                "language_policy.documentation",
-                "language_policy.todo_protocol"
-            ]
-        }));
-    }
-    if host_cli_selection_required {
-        required_inputs.push(serde_json::json!({
-            "id": "host_cli_system",
-            "prompt": "Which supported host CLI system should VIDA activate for agents in this project?",
-            "flag": "--host-cli-system",
-            "suggested_value": host_cli_suggested_system,
-            "supported_values": supported_host_cli_systems.clone(),
-            "required": true
-        }));
-    }
-    let mut one_shot_example_parts = vec!["vida project-activator".to_string()];
-    if project_id_missing {
-        one_shot_example_parts.push("--project-id <project-id>".to_string());
-    }
-    if user_communication_language_missing
-        || reasoning_language_missing
-        || documentation_language_missing
-        || todo_protocol_language_missing
-    {
-        one_shot_example_parts.push("--language <language>".to_string());
-    }
-    if host_cli_selection_required {
-        one_shot_example_parts.push(format!("--host-cli-system {host_cli_suggested_system}"));
-    }
-    one_shot_example_parts.push("--json".to_string());
-    let one_shot_example = one_shot_example_parts.join(" ");
-
-    let mut next_steps: Vec<String> = Vec::new();
-    if bootstrap_missing || sidecar_missing {
-        next_steps.push(
-            "run `vida init` in the project root to materialize bootstrap carriers".to_string(),
+    let activation_summary =
+        crate::project_activator_activation_summary::build_project_activator_activation_summary(
+            crate::project_activator_activation_summary::ProjectActivatorActivationInputs {
+                project_root,
+                bootstrap_missing,
+                sidecar_missing,
+                sidecar_has_placeholders,
+                docs_missing,
+                config_has_placeholders,
+                current_project_id: current_project_id.as_deref(),
+                current_user_communication_language: current_user_communication_language.as_deref(),
+                current_reasoning_language: current_reasoning_language.as_deref(),
+                current_documentation_language: current_documentation_language.as_deref(),
+                current_todo_protocol_language: current_todo_protocol_language.as_deref(),
+                host_cli_selection_required,
+                host_cli_materialization_required,
+                host_cli_suggested_system: &host_cli_suggested_system,
+                host_cli_supported_list: &host_cli_supported_list,
+                supported_host_cli_systems: &supported_host_cli_systems,
+                selected_host_cli_system: selected_host_cli_system.as_deref(),
+                agent_extensions_enabled,
+                runtime_agent_extensions_missing,
+                agent_extensions_ready,
+                agent_extension_validation_error: agent_extension_validation_error.as_deref(),
+            },
         );
-    }
-    if config_has_placeholders {
-        next_steps.push(
-            "run `vida project-activator` with the bounded activation interview inputs to record project identity, language policy, docs roots, and host CLI setup before normal work"
-                .to_string(),
-        );
-    }
-    if host_cli_selection_required {
-        next_steps.push(format!(
-            "choose the host CLI system from the supported host CLI list ({}) and run the one-shot `vida project-activator` activation command; project activation is not complete until the host agent template is selected",
-            host_cli_supported_list
-        ));
-    } else if host_cli_materialization_required {
-        if let Some(selected_system) = selected_host_cli_system.as_deref() {
-            let display_name = host_cli_display_name(selected_system);
-            next_steps.push(format!(
-                "materialize the selected host CLI template with `vida project-activator --host-cli-system {selected_system}`, then close and restart {display_name} so agent configuration becomes visible to the runtime environment",
-            ));
-        } else {
-            next_steps.push(
-                "materialize the selected host CLI template with `vida project-activator --host-cli-system <host>` and restart the host CLI so the activated agent template becomes visible to the runtime environment"
-                    .to_string(),
-            );
-        }
-    }
-    if sidecar_has_placeholders {
-        next_steps.push(
-            "replace placeholder project-doc pointers in `AGENTS.sidecar.md` before normal project work"
-                .to_string(),
-        );
-    }
-    if docs_missing {
-        next_steps.push(
-            "materialize the minimum project-doc roots (`docs/project-root-map.md`, `docs/product/index.md`, `docs/process/README.md`, `docs/process/documentation-tooling-map.md`) or record an explicit activation override"
-                .to_string(),
-        );
-    }
-    if agent_extensions_enabled && runtime_agent_extensions_missing {
-        next_steps.push(
-            "repair `.vida/project/agent-extensions/**` with `vida init` so runtime-owned role/skill/profile/flow projections and sidecars exist".to_string(),
-        );
-    }
-    if let Some(error) = agent_extension_validation_error.as_deref() {
-        next_steps.push(format!(
-            "resolve agent-extension validation drift under `.vida/project/agent-extensions/**`: {error}"
-        ));
-    }
-    if next_steps.is_empty() {
-        next_steps.push(
-            "activation looks ready enough for normal orchestrator and worker initialization"
-                .to_string(),
-        );
-    }
+    let activation_pending = activation_summary.activation_pending;
+    let execution_posture_ambiguous = activation_summary.execution_posture_ambiguous;
+    let sidecar_or_project_docs_too_thin = activation_summary.sidecar_or_project_docs_too_thin;
+    let required_inputs = activation_summary.required_inputs;
+    let one_shot_example = activation_summary.one_shot_example;
+    let next_steps = activation_summary.next_steps;
 
     serde_json::json!({
         "surface": "vida project-activator",
@@ -1817,73 +917,23 @@ pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::V
             "bundle_ready": agent_extensions_ready,
             "validation_error": agent_extension_validation_error,
         },
-        "host_environment": {
-            "supported_cli_systems": supported_host_cli_systems,
-            "selected_cli_system": selected_host_cli_system,
-            "selected_cli_execution_class": host_cli_execution_class,
-            "selection_required": host_cli_selection_required,
-            "template_materialized": host_cli_template_materialized,
-            "materialization_required": host_cli_materialization_required,
-            "runtime_template_root": host_cli_runtime_template_root,
-            "template_source_root": host_cli_template_source_root.map(|path| path.display().to_string()),
-            "default_host_agent_templates": default_host_agent_templates,
-            "configuration_protocols": [
-                "runtime-instructions/work.host-cli-agent-setup-protocol"
-            ],
-        },
-        "activation_algorithm": {
-            "mode": "bounded_interview_then_materialize",
-            "taskflow_admitted_while_pending": false,
-            "non_canonical_taskflow_surfaces_forbidden_while_pending": [
-                "vida taskflow",
-                "external_taskflow_runtime"
-            ],
-            "docflow_first": true,
-            "docflow_surface": "vida docflow",
-            "allowed_activation_surfaces": [
-                "vida project-activator",
-                "vida docflow",
-                "vida protocol view bootstrap/router",
-                "vida protocol view runtime-instructions/work.host-cli-agent-setup-protocol"
-            ],
-            "activation_receipt_glob": ".vida/receipts/project-activation*.json"
-        },
-        "normal_work_defaults": {
-            "documentation_first_for_feature_requests": true,
-            "intake_runtime": "vida taskflow consume final <request> --json",
-            "local_feature_design_template": DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE,
-            "local_product_spec_guide": DEFAULT_PROJECT_PRODUCT_SPEC_README,
-            "local_documentation_tooling_map": DEFAULT_PROJECT_DOC_TOOLING_DOC,
-            "local_host_agent_guide": DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC,
-            "default_agent_topology": default_agent_topology,
-            "carrier_tier_rates": carrier_tier_rates,
-            "local_agent_score_state": {
-                "strategy_store": WORKER_STRATEGY_STATE,
-                "scorecards_store": WORKER_SCORECARDS_STATE
-            },
-            "execution_carrier_model": {
-                "agent_identity": "execution_carrier",
-                "runtime_role_identity": "activation_state",
-                "selection_rule": "capability_first_then_score_guard_then_cheapest_tier",
-                "carrier_catalog_owner": "vida.config.yaml -> configured host-system carrier surfaces",
-                "strategy_store": WORKER_STRATEGY_STATE,
-                "scorecards_store": WORKER_SCORECARDS_STATE,
-                "inspect_commands": {
-                    "snapshot": "vida taskflow consume agent-system --json",
-                    "carrier_catalog": "vida taskflow consume agent-system --json | jq '.snapshot.carriers'",
-                    "runtime_roles": "vida taskflow consume agent-system --json | jq '.snapshot.runtime_roles'",
-                    "scores": "vida taskflow consume agent-system --json | jq '.snapshot.worker_strategy.agents'",
-                    "selection_preview": "vida taskflow consume final \"<request>\" --json | jq '.payload.taskflow_handoff_plan.runtime_assignment'"
-                }
-            },
-            "recommended_flow": [
-                "create or update one bounded design document before code execution when the request asks for research/specification/planning and implementation together",
-                "open one feature epic and one spec-pack task in vida taskflow before delegated implementation begins",
-                "use vida docflow to initialize, finalize, and validate the design document",
-                "close the spec-pack task and shape the execution packet from the bounded file set and proof targets recorded in the design document",
-                "delegate normal write-producing work through the default carrier tier ladder and let runtime pick the cheapest capable tier with a healthy local score instead of collapsing directly into root-session coding"
-            ]
-        },
+        "host_environment": crate::project_activator_runtime_surface::build_project_activator_host_environment(
+            supported_host_cli_systems,
+            selected_host_cli_system,
+            host_cli_execution_class,
+            host_cli_selection_required,
+            host_cli_template_materialized,
+            host_cli_materialization_required,
+            host_cli_runtime_template_root,
+            host_cli_template_source_root,
+            default_host_agent_templates,
+        ),
+        "activation_algorithm": crate::project_activator_runtime_surface::build_project_activator_activation_algorithm(),
+        "normal_work_defaults": crate::project_activator_normal_work_defaults::build_project_activator_normal_work_defaults(
+            default_agent_topology,
+            carrier_tier_rates,
+            execution_carrier_model,
+        ),
         "interview": {
             "required_inputs": required_inputs,
             "safe_defaults": {

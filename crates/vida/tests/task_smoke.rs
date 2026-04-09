@@ -32,8 +32,11 @@ fn project_bound_state_dir() -> (String, String) {
     let state_dir = format!("{project_root}/.vida/data/state");
     fs::create_dir_all(&state_dir).expect("create project-bound state dir");
     fs::write(format!("{project_root}/AGENTS.md"), "project").expect("write AGENTS.md");
-    fs::write(format!("{project_root}/vida.config.yaml"), "project:\n  id: test\n")
-        .expect("write vida.config.yaml");
+    fs::write(
+        format!("{project_root}/vida.config.yaml"),
+        "project:\n  id: test\n",
+    )
+    .expect("write vida.config.yaml");
     for relative in [".vida/config", ".vida/db", ".vida/project"] {
         fs::create_dir_all(format!("{project_root}/{relative}"))
             .expect("runtime project marker dir should exist");
@@ -1514,7 +1517,10 @@ fn consume_bundle_check_exposes_shared_operator_contract_fields() {
         String::from_utf8_lossy(&sync.stderr)
     );
 
-    let output = run_command_capture(&["taskflow", "consume", "bundle", "check", "--json"], &state_dir);
+    let output = run_command_capture(
+        &["taskflow", "consume", "bundle", "check", "--json"],
+        &state_dir,
+    );
     let parsed: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("consume bundle check json should parse");
 
@@ -1998,8 +2004,7 @@ fn consume_final_blocks_when_approval_or_delegation_wait_lacks_evidence() {
     let approval_or_delegation_wait = combined.contains("approval") || combined.contains("delegat");
     if approval_or_delegation_wait {
         assert_eq!(
-            latest_status["status"],
-            "awaiting_approval",
+            latest_status["status"], "awaiting_approval",
             "approval/delegation wait branch should surface the structured approval wait status"
         );
         assert_eq!(latest_status["lifecycle_stage"], "approval_wait");
@@ -2720,7 +2725,10 @@ fn consume_continue_fails_closed_on_lane_governance_status_evidence_conflict() {
         serde_json::from_slice(&final_output.stdout).expect("consume final json should parse");
     assert_eq!(final_parsed["surface"], "vida taskflow consume final");
     assert!(
-        matches!(final_parsed["status"].as_str(), Some("pass") | Some("blocked")),
+        matches!(
+            final_parsed["status"].as_str(),
+            Some("pass") | Some("blocked")
+        ),
         "consume final status must remain within the canonical enum"
     );
 

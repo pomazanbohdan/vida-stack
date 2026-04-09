@@ -24,6 +24,7 @@ mod host_runtime_registry;
 mod init_surfaces;
 mod launcher_activation_snapshot;
 mod launcher_task_commands;
+mod lane_surface;
 mod memory_surface;
 mod operator_contracts;
 mod project_activator_activation_summary;

@@ -5,8 +5,8 @@ use time::format_description::well_known::Rfc3339;
 use crate::{
     build_project_activator_view, doctor_launcher_summary_for_root,
     merge_project_activation_into_init_view, read_or_sync_launcher_activation_snapshot,
-    runtime_consumption_state::latest_admissible_retrieval_trust_signal,
-    DoctorLauncherSummary, StateStore, TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload,
+    runtime_consumption_state::latest_admissible_retrieval_trust_signal, DoctorLauncherSummary,
+    StateStore, TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload,
     TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
 };
 
@@ -1588,11 +1588,11 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        activation_status_is_pending, activation_truth_project_root, bundle_project_root,
+        activation_status_is_pending, activation_truth_project_root,
+        build_project_protocol_projections, bundle_project_root,
         cache_contract_consistency_blockers, canonical_project_protocol_projection_status,
-        build_project_protocol_projections, init_view_activation_is_pending,
-        retrieval_optional_context_boundary_blockers, retrieval_trust_evidence_blockers,
-        runtime_bundle_retrieval_trust_evidence,
+        init_view_activation_is_pending, retrieval_optional_context_boundary_blockers,
+        retrieval_trust_evidence_blockers, runtime_bundle_retrieval_trust_evidence,
         taskflow_consume_bundle_check, TaskflowConsumeBundlePayload,
     };
     use crate::TASKFLOW_PROTOCOL_BINDING_AUTHORITY;
@@ -2164,7 +2164,10 @@ mod tests {
             serde_json::json!("/tmp/project/.vida/data/state/runtime-consumption/final-2.json")
         );
         assert_eq!(evidence["freshness"], serde_json::json!("final"));
-        assert_eq!(evidence["acl"], serde_json::json!("protocol-binding-receipt-2"));
+        assert_eq!(
+            evidence["acl"],
+            serde_json::json!("protocol-binding-receipt-2")
+        );
     }
 
     #[test]
@@ -2311,7 +2314,9 @@ mod tests {
     #[test]
     fn bundle_project_root_blocks_non_project_bound_state_root_without_db_first_fallback() {
         let error = bundle_project_root(Path::new("/tmp/not-a-project/.vida/data/state"))
-        .expect_err("non-project-bound state root without DB-backed authority should fail closed");
+            .expect_err(
+                "non-project-bound state root without DB-backed authority should fail closed",
+            );
         assert!(error.contains("no DB-backed project root is available"));
     }
 }

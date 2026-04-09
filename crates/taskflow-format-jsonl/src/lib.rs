@@ -1,11 +1,11 @@
 use serde::{Serialize, de::DeserializeOwned};
 
 pub fn encode_line<T: Serialize>(value: &T) -> serde_json::Result<String> {
-    serde_json::to_string(value)
+    common_format_jsonl::encode_line(value)
 }
 
 pub fn decode_line<T: DeserializeOwned>(line: &str) -> serde_json::Result<T> {
-    serde_json::from_str(line)
+    common_format_jsonl::decode_line(line)
 }
 
 #[cfg(test)]

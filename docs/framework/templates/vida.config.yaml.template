@@ -114,15 +114,15 @@ host_environment:
           task_classes:
             - implementation
             - research
-    kilo:
+    hermes:
       enabled: true
       execution_class: external
       materialization_mode: copy_tree_only
-      template_root: .kilo
-      runtime_root: .kilo
+      template_root: .hermes
+      runtime_root: .hermes
       carriers:
-        kilo-primary:
-          tier: kilo
+        hermes-primary:
+          tier: hermes
           rate: 4
           reasoning_band: medium
           default_runtime_role: worker

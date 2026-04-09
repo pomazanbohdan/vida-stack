@@ -256,12 +256,8 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
             let mut effective_blockers = check.blockers.clone();
             let (registry, docflow_check, readiness, proof, _) =
                 super::build_docflow_runtime_evidence();
-            let docflow_verdict = super::build_docflow_runtime_verdict(
-                &registry,
-                &docflow_check,
-                &readiness,
-                &proof,
-            );
+            let docflow_verdict =
+                super::build_docflow_runtime_verdict(&registry, &docflow_check, &readiness, &proof);
             let seam_closure_admission_receipt_check =
                 taskflow_docflow_seam_receipt_backed_check(&payload, &docflow_verdict);
             for blocker in seam_closure_admission_receipt_check["blocker_codes"]
@@ -279,11 +275,11 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
             {
                 Ok(snapshot) => {
                     if let Some(error) = db_first_activation_snapshot_validation_error(&snapshot) {
-                        if let Some(code) = crate::release1_contracts::blocker_code_value(
-                                crate::release1_contracts::BlockerCode::MissingLauncherActivationSnapshot,
-                            ) {
-                                push_unique_string(&mut effective_blockers, &code);
-                            }
+                        if let Some(code) = crate::release_contract_adapters::blocker_code(
+                            crate::release1_contracts::BlockerCode::MissingLauncherActivationSnapshot,
+                        ) {
+                            push_unique_string(&mut effective_blockers, &code);
+                        }
                         serde_json::json!({
                             "ok": false,
                             "error": error,
@@ -301,7 +297,7 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
                     }
                 }
                 Err(error) => {
-                    if let Some(code) = crate::release1_contracts::blocker_code_value(
+                    if let Some(code) = crate::release_contract_adapters::blocker_code(
                         crate::release1_contracts::BlockerCode::MissingLauncherActivationSnapshot,
                     ) {
                         push_unique_string(&mut effective_blockers, &code);
@@ -507,20 +503,20 @@ fn consume_bundle_check_next_actions(blockers: &[String]) -> Vec<String> {
 }
 
 fn normalize_consume_bundle_blocker_codes(blockers: &[String]) -> Vec<String> {
-    let canonical =
-        crate::release1_contracts::canonical_blocker_code_list(blockers.iter().map(String::as_str));
-    if canonical.is_empty() && !blockers.is_empty() {
-        return crate::release1_contracts::blocker_code_value(
+    crate::operator_contracts::normalize_blocker_codes(
+        blockers,
+        crate::release_contract_adapters::canonical_blocker_codes,
+        crate::release_contract_adapters::blocker_code(
             crate::release1_contracts::BlockerCode::Unsupported,
-        )
-        .into_iter()
-        .collect();
-    }
-    canonical
+        ),
+    )
 }
 
 fn consume_bundle_operator_contract_status(blockers: &[String]) -> &'static str {
-    crate::release1_contracts::release1_contract_status_str(blockers.is_empty())
+    crate::operator_contracts::operator_contract_status_for_blockers(
+        &crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC,
+        blockers,
+    )
 }
 
 fn bundle_check_operator_contracts_consistency_error(
@@ -528,47 +524,12 @@ fn bundle_check_operator_contracts_consistency_error(
     blocker_codes: &[String],
     next_actions: &[String],
 ) -> Option<String> {
-    let Some(canonical_status) =
-        crate::release1_contracts::canonical_release1_contract_status_str(status)
-    else {
-        return Some(
-            "operator contract inconsistency: status must be canonical release-1 pass/blocked"
-                .to_string(),
-        );
-    };
-    let string_is_canonical_nonempty = |value: &String| {
-        let trimmed = value.trim();
-        !trimmed.is_empty() && trimmed == value
-    };
-
-    if !blocker_codes.iter().all(string_is_canonical_nonempty)
-        || !next_actions.iter().all(string_is_canonical_nonempty)
-    {
-        return Some(
-            "operator contract inconsistency: shared string arrays must contain only canonical nonempty entries"
-                .to_string(),
-        );
-    }
-
-    match canonical_status {
-        "pass" if !blocker_codes.is_empty() => Some(
-            "operator contract inconsistency: status=pass must not include blocker_codes"
-                .to_string(),
-        ),
-        "pass" if !next_actions.is_empty() => Some(
-            "operator contract inconsistency: status=pass must not include next_actions"
-                .to_string(),
-        ),
-        "pass" => None,
-        "blocked" if blocker_codes.is_empty() => Some(
-            "operator contract inconsistency: status=blocked requires blocker_codes".to_string(),
-        ),
-        "blocked" if next_actions.is_empty() => Some(
-            "operator contract inconsistency: status=blocked requires next_actions".to_string(),
-        ),
-        "blocked" => None,
-        _ => unreachable!("canonical release-1 contract status should be pass or blocked"),
-    }
+    crate::operator_contracts::operator_contracts_consistency_error(
+        &crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC,
+        status,
+        blocker_codes,
+        next_actions,
+    )
 }
 
 fn db_first_activation_snapshot_validation_error(
@@ -622,10 +583,10 @@ fn taskflow_docflow_seam_receipt_backed_check(
     );
     let closure_inputs_ready = blocker_codes.is_empty();
     serde_json::json!({
-        "status": crate::release1_contracts::release1_contract_status_str(closure_inputs_ready),
+        "status": crate::release_contract_adapters::release_contract_status(closure_inputs_ready),
         "receipt_backed": total_receipts > 0,
         "total_receipts": total_receipts,
-        "docflow_status": crate::release1_contracts::release1_contract_status_str(closure_inputs_ready),
+        "docflow_status": crate::release_contract_adapters::release_contract_status(closure_inputs_ready),
         "closure_inputs_ready": closure_inputs_ready,
         "blocker_codes": blocker_codes,
         "docflow_blocker_codes": docflow_verdict.blockers.clone(),
@@ -644,14 +605,14 @@ fn taskflow_docflow_closure_input_blocker_codes(
 ) -> Vec<String> {
     let mut blockers = docflow_verdict.blockers.clone();
     if !has_proof_surface {
-        if let Some(code) = crate::release1_contracts::blocker_code_value(
+        if let Some(code) = crate::release_contract_adapters::blocker_code(
             crate::release1_contracts::BlockerCode::MissingClosureProof,
         ) {
             blockers.push(code);
         }
     }
     if !(has_readiness_surface && has_proof_surface) {
-        if let Some(code) = crate::release1_contracts::blocker_code_value(
+        if let Some(code) = crate::release_contract_adapters::blocker_code(
             crate::release1_contracts::BlockerCode::RestoreReconcileNotGreen,
         ) {
             blockers.push(code);
@@ -719,22 +680,29 @@ fn build_taskflow_agent_system_snapshot(
         .collect::<Vec<_>>();
     runtime_roles.sort();
 
-    let selection_rule = carrier_runtime["worker_strategy"]["selection_policy"]["rule"]
-        .as_str()
-        .unwrap_or("capability_first_then_score_guard_then_cheapest_tier");
+    let selection_rule = crate::carrier_runtime_metadata::snapshot_selection_rule(carrier_runtime);
     let max_parallel_agents =
         normalize_agent_system_max_parallel_agents(&activation_bundle["agent_system"]);
+    let materialization_mode =
+        crate::carrier_runtime_metadata::snapshot_materialization_mode(carrier_runtime);
+    let carrier_catalog_owner =
+        crate::carrier_runtime_metadata::snapshot_carrier_catalog_owner(carrier_runtime);
+    let dispatch_alias_owner =
+        crate::carrier_runtime_metadata::snapshot_dispatch_alias_owner(carrier_runtime);
+    let agent_identity = crate::carrier_runtime_metadata::snapshot_agent_identity(carrier_runtime);
+    let runtime_role_identity =
+        crate::carrier_runtime_metadata::snapshot_runtime_role_identity(carrier_runtime);
 
     serde_json::json!({
-        "materialization_mode": "config_materialized_runtime_projection",
+        "materialization_mode": materialization_mode,
         "source_of_truth": {
-            "carrier_catalog_owner": "vida.config.yaml -> configured host-system carrier surfaces",
-            "dispatch_alias_owner": "vida.config.yaml -> agent_extensions.registries.dispatch_aliases",
+            "carrier_catalog_owner": carrier_catalog_owner,
+            "dispatch_alias_owner": dispatch_alias_owner,
             "runtime_config_path": config_path,
         },
         "agent_model": {
-            "agent_identity": "execution_carrier",
-            "runtime_role_identity": "activation_state",
+            "agent_identity": agent_identity,
+            "runtime_role_identity": runtime_role_identity,
             "selection_rule": selection_rule,
         },
         "agent_system": {
@@ -772,7 +740,7 @@ mod tests {
         push_unique_string, taskflow_docflow_seam_receipt_backed_check,
     };
     use crate::{
-        release1_contracts::release1_contract_status_str, DoctorLauncherSummary,
+        release_contract_adapters::release_contract_status, DoctorLauncherSummary,
         RuntimeConsumptionDocflowVerdict, TaskflowConsumeBundlePayload,
     };
 
@@ -804,7 +772,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_system_snapshot_uses_canonical_carrier_runtime_when_legacy_alias_is_present() {
+    fn agent_system_snapshot_ignores_legacy_codex_multi_agent_alias() {
         let activation_bundle = serde_json::json!({
             "agent_system": {
                 "mode": "native",
@@ -841,27 +809,7 @@ mod tests {
                 }
             },
             "codex_multi_agent": {
-                "roles": [
-                    {
-                        "role_id": "legacy",
-                        "tier": "legacy",
-                        "rate": 4,
-                        "runtime_roles": ["worker"],
-                        "task_classes": ["implementation"],
-                        "default_runtime_role": "worker",
-                        "reasoning_band": "medium",
-                        "model_reasoning_effort": "medium"
-                    }
-                ],
-                "worker_strategy": {
-                    "selection_policy": {
-                        "rule": "capability_first_then_score_guard_then_cheapest_tier"
-                    },
-                    "agents": {},
-                    "store_path": ".vida/data/state/agents.json",
-                    "scorecards_path": ".vida/data/state/agent-scorecards.json"
-                },
-                "dispatch_aliases": {}
+                "legacy": true
             }
         });
 
@@ -1028,6 +976,64 @@ mod tests {
         );
         assert_eq!(snapshot["carriers"][0]["carrier_id"], "middle");
         assert_eq!(snapshot["dispatch_aliases"][0]["role_id"], "specification");
+    }
+
+    #[test]
+    fn agent_system_snapshot_prefers_runtime_owned_metadata_when_present() {
+        let activation_bundle = serde_json::json!({
+            "agent_system": {
+                "mode": "native",
+                "state_owner": "orchestrator_only",
+                "max_parallel_agents": 3
+            },
+            "autonomous_execution": {
+                "enabled": true
+            },
+            "carrier_runtime": {
+                "materialization_mode": "copy_tree_only",
+                "source_of_truth": {
+                    "carrier_catalog_owner": "vida.config.yaml -> host_environment.systems.qwen.carriers",
+                    "dispatch_alias_owner": "vida.config.yaml -> agent_extensions.registries.dispatch_aliases (.vida/project/agent-extensions/dispatch-aliases.yaml)"
+                },
+                "agent_model": {
+                    "agent_identity": "configured_carrier",
+                    "runtime_role_identity": "configured_runtime_role"
+                },
+                "roles": [],
+                "worker_strategy": {
+                    "selection_policy": {
+                        "rule": "cheapest_healthy_capable_carrier"
+                    },
+                    "agents": {},
+                    "store_path": ".vida/data/state/agents.json",
+                    "scorecards_path": ".vida/data/state/agent-scorecards.json"
+                },
+                "dispatch_aliases": {}
+            }
+        });
+
+        let snapshot = build_taskflow_agent_system_snapshot("vida.config.yaml", &activation_bundle);
+        assert_eq!(snapshot["materialization_mode"], "copy_tree_only");
+        assert_eq!(
+            snapshot["source_of_truth"]["carrier_catalog_owner"],
+            "vida.config.yaml -> host_environment.systems.qwen.carriers"
+        );
+        assert_eq!(
+            snapshot["source_of_truth"]["dispatch_alias_owner"],
+            "vida.config.yaml -> agent_extensions.registries.dispatch_aliases (.vida/project/agent-extensions/dispatch-aliases.yaml)"
+        );
+        assert_eq!(
+            snapshot["agent_model"]["agent_identity"],
+            "configured_carrier"
+        );
+        assert_eq!(
+            snapshot["agent_model"]["runtime_role_identity"],
+            "configured_runtime_role"
+        );
+        assert_eq!(
+            snapshot["agent_model"]["selection_rule"],
+            "cheapest_healthy_capable_carrier"
+        );
     }
 
     #[test]
@@ -1396,13 +1402,13 @@ mod tests {
     fn consume_bundle_operator_contract_status_uses_canonical_release1_vocabulary() {
         assert_eq!(
             consume_bundle_operator_contract_status(&[]),
-            release1_contract_status_str(true)
+            release_contract_status(true)
         );
         assert_eq!(
             consume_bundle_operator_contract_status(&[
                 "missing_protocol_binding_receipt".to_string()
             ]),
-            release1_contract_status_str(false)
+            release_contract_status(false)
         );
     }
 

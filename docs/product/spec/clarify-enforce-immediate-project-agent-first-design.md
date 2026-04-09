@@ -30,6 +30,7 @@ Use this template for one bounded feature/change design before implementation.
 - Runtime prompts and generated guidance still left one operator loophole: they warned against final closure wording, but did not state strongly enough that commentary or “I have explained the result” is not a lawful pause boundary.
 - Runtime prompts, bootstrap carrier law, and root-session write guard also left one recovery loophole: explicit user-ordered agent-first or parallel-agent routing could still be misread as optional when agent/thread saturation, stale lane ids, or `not_found` carrier failures appeared.
   - Runtime dispatch packets still rely on prose/template alignment rather than one compiled template-specific packet-minimum validator, so `vida taskflow consume final`, persisted dispatch packets, resume, and `vida agent-init` can drift if packet-family requirements are not enforced from shared code.
+  - Internal-host dispatch can still render an activation view that looks like a live delegated lane even when no real execution happened, which leaves a machine-readable loophole around the otherwise-correct root-session write guard.
 
 ## Goal
 - What this change should achieve
@@ -59,6 +60,7 @@ Use this template for one bounded feature/change design before implementation.
 - Must require saturation recovery for thread-limit, stale-lane, and `not_found` carrier failures before any local fallback path can be considered.
 - Must ensure release-admission and continuation gates prefer the newest valid `final` runtime-consumption snapshot over newer non-final helper snapshots such as `bundle-check`.
 - Must enforce one shared template-specific packet validator for persisted/runtime dispatch packets so packet-ready handoff cannot bypass the canonical project packet minimum.
+- Must fail closed when an internal host backend yields only an activation view without execution evidence, rather than representing that state as a running delegated lane.
 
 ### Non-Functional Requirements
 - Performance

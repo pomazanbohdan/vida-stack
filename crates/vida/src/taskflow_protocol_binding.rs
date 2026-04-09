@@ -3,10 +3,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use super::state_store::{ProtocolBindingState, ProtocolBindingSummary, StateStore};
-use crate::operator_contracts::{
-    canonical_release1_blocker_code_entries, shared_operator_output_contract_parity_error,
+use crate::contract_profile_adapter::{
+    blocker_code, canonical_blocker_code_list, evaluate_policy_gate_protocol_binding,
+    release_contract_status, BlockerCode,
 };
-use crate::release1_contracts::release1_contract_status_str;
+use crate::operator_contracts::shared_operator_output_contract_parity_error;
 
 #[derive(Clone, serde::Serialize)]
 struct ProtocolBindingDecisionGateStatus {
@@ -177,68 +178,52 @@ pub(crate) async fn protocol_binding_compiled_payload_import_evidence(
         .unwrap_or_default();
 
     if source.is_empty() {
-        if let Some(code) = crate::release1_contracts::blocker_code_value(
-            crate::release1_contracts::BlockerCode::MissingLauncherActivationSnapshot,
-        ) {
+        if let Some(code) = blocker_code(BlockerCode::MissingLauncherActivationSnapshot) {
             blockers.push(code);
         }
     } else if source != "state_store" {
-        if let Some(code) = crate::release1_contracts::blocker_code_value(
-            crate::release1_contracts::BlockerCode::SourceUnregistered,
-        ) {
+        if let Some(code) = blocker_code(BlockerCode::SourceUnregistered) {
             blockers.push(code);
         }
     }
     if let Some(snapshot) = activation_snapshot.as_ref() {
         if !has_non_empty_string_field(&snapshot.compiled_bundle, &["role_selection", "mode"]) {
-            if let Some(code) = crate::release1_contracts::blocker_code_value(
-                crate::release1_contracts::BlockerCode::InvalidCompiledBundleRoleSelectionMode,
-            ) {
+            if let Some(code) = blocker_code(BlockerCode::InvalidCompiledBundleRoleSelectionMode) {
                 blockers.push(code);
             }
         }
         if !has_non_empty_string_field(&snapshot.compiled_bundle, &["agent_system", "mode"]) {
-            if let Some(code) = crate::release1_contracts::blocker_code_value(
-                crate::release1_contracts::BlockerCode::InvalidCompiledBundleAgentSystemMode,
-            ) {
+            if let Some(code) = blocker_code(BlockerCode::InvalidCompiledBundleAgentSystemMode) {
                 blockers.push(code);
             }
         }
         if !has_non_empty_string_field(&snapshot.compiled_bundle, &["agent_system", "state_owner"])
         {
-            if let Some(code) = crate::release1_contracts::blocker_code_value(
-                crate::release1_contracts::BlockerCode::InvalidCompiledBundleAgentSystemStateOwner,
-            ) {
+            if let Some(code) =
+                blocker_code(BlockerCode::InvalidCompiledBundleAgentSystemStateOwner)
+            {
                 blockers.push(code);
             }
         }
     }
     if let Some(receipt) = effective_bundle_receipt.as_ref() {
         if receipt.receipt_id.trim().is_empty() {
-            if let Some(code) = crate::release1_contracts::blocker_code_value(
-                crate::release1_contracts::BlockerCode::MissingEffectiveBundleReceiptId,
-            ) {
+            if let Some(code) = blocker_code(BlockerCode::MissingEffectiveBundleReceiptId) {
                 blockers.push(code);
             }
         }
         if receipt.root_artifact_id.trim().is_empty() {
-            if let Some(code) = crate::release1_contracts::blocker_code_value(
-                crate::release1_contracts::BlockerCode::MissingEffectiveBundleRootArtifactId,
-            ) {
+            if let Some(code) = blocker_code(BlockerCode::MissingEffectiveBundleRootArtifactId) {
                 blockers.push(code);
             }
         }
         if receipt.artifact_count == 0 {
-            if let Some(code) = crate::release1_contracts::blocker_code_value(
-                crate::release1_contracts::BlockerCode::EmptyEffectiveBundleArtifactCount,
-            ) {
+            if let Some(code) = blocker_code(BlockerCode::EmptyEffectiveBundleArtifactCount) {
                 blockers.push(code);
             }
         }
     } else {
-        if let Some(code) = crate::release1_contracts::blocker_code_value(
-            crate::release1_contracts::BlockerCode::MissingEffectiveBundleReceipt,
-        ) {
+        if let Some(code) = blocker_code(BlockerCode::MissingEffectiveBundleReceipt) {
             blockers.push(code);
         }
     }
@@ -318,16 +303,12 @@ fn build_taskflow_protocol_binding_rows(
         let source = repo_root.join(seed.source_path);
         let mut blockers = Vec::new();
         if !source.exists() {
-            if let Some(code) = crate::release1_contracts::blocker_code_value(
-                crate::release1_contracts::BlockerCode::SchemaContractMissing,
-            ) {
+            if let Some(code) = blocker_code(BlockerCode::SchemaContractMissing) {
                 blockers.push(code);
             }
         }
         if !protocol_index.contains(&format!("`{}`", seed.protocol_id)) {
-            if let Some(code) = crate::release1_contracts::blocker_code_value(
-                crate::release1_contracts::BlockerCode::SchemaContractMissing,
-            ) {
+            if let Some(code) = blocker_code(BlockerCode::SchemaContractMissing) {
                 blockers.push(code);
             }
         }
@@ -391,20 +372,16 @@ fn protocol_binding_decision_gate_status(
         && summary.unbound_count == 0
         && summary.blocking_issue_count == 0
         && summary.fully_runtime_bound_count == taskflow_protocol_binding_seeds().len();
-    let blocker = super::release1_contracts::evaluate_policy_gate_protocol_binding(
-        policy_gate,
-        receipt_hint,
-        runtime_ready,
-    );
-    let blocker_code = blocker.and_then(super::release1_contracts::blocker_code_value);
-    let canonical_blocker_code = blocker_code.as_ref().map(|code| {
-        canonical_release1_blocker_code_entries(&serde_json::json!([code]))
-            .and_then(|mut codes| codes.pop())
+    let blocker = evaluate_policy_gate_protocol_binding(policy_gate, receipt_hint, runtime_ready);
+    let canonical_blocker_code = blocker.as_ref().map(|code: &String| {
+        canonical_blocker_code_list([code.as_str()])
+            .into_iter()
+            .next()
             .unwrap_or_else(|| code.clone())
     });
     ProtocolBindingDecisionGateStatus {
         policy_gate: policy_gate.to_string(),
-        ready: blocker_code.is_none(),
+        ready: blocker.is_none(),
         blocker_code: canonical_blocker_code,
     }
 }
@@ -454,7 +431,7 @@ fn protocol_binding_operator_contract_payload(
     decision_gate: &ProtocolBindingDecisionGateStatus,
     ok: bool,
 ) -> Result<ProtocolBindingOperatorContractPayload, String> {
-    let status = release1_contract_status_str(ok);
+    let status = release_contract_status(ok);
     let blocker_codes = decision_gate
         .blocker_code
         .as_ref()
@@ -894,7 +871,7 @@ pub(crate) async fn sync_taskflow_protocol_binding_snapshot(
 #[cfg(test)]
 mod tests {
     use super::{protocol_binding_check_ok, ProtocolBindingCompiledPayloadImportEvidence};
-    use crate::release1_contracts::release1_contract_status_str;
+    use crate::contract_profile_adapter::release_contract_status;
     use crate::state_store::{ProtocolBindingState, ProtocolBindingSummary};
 
     fn sample_evidence(
@@ -965,7 +942,7 @@ mod tests {
 
         assert!(protocol_binding_check_ok(&summary, &rows, &evidence));
         assert_eq!(
-            release1_contract_status_str(protocol_binding_check_ok(&summary, &rows, &evidence)),
+            release_contract_status(protocol_binding_check_ok(&summary, &rows, &evidence)),
             "pass"
         );
     }
@@ -978,7 +955,7 @@ mod tests {
 
         assert!(!protocol_binding_check_ok(&summary, &rows, &evidence));
         assert_eq!(
-            release1_contract_status_str(protocol_binding_check_ok(&summary, &rows, &evidence)),
+            release_contract_status(protocol_binding_check_ok(&summary, &rows, &evidence)),
             "blocked"
         );
     }
@@ -992,7 +969,7 @@ mod tests {
 
         assert!(!protocol_binding_check_ok(&summary, &rows, &evidence));
         assert_eq!(
-            release1_contract_status_str(protocol_binding_check_ok(&summary, &rows, &evidence)),
+            release_contract_status(protocol_binding_check_ok(&summary, &rows, &evidence)),
             "blocked"
         );
     }

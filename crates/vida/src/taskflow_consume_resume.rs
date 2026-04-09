@@ -123,10 +123,8 @@ async fn validate_run_graph_resume_state(
     let status = match store.run_graph_status(run_id).await {
         Ok(status) => status,
         Err(error) => {
-            let receipt_exists = matches!(
-                store.run_graph_dispatch_receipt(run_id).await,
-                Ok(Some(_))
-            );
+            let receipt_exists =
+                matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)));
             if receipt_exists && resume_from_persisted_final_snapshot(store)? {
                 return Ok(());
             }
@@ -378,10 +376,8 @@ async fn validate_run_graph_resume_state_for_downstream_packet(
     let status = match store.run_graph_status(run_id).await {
         Ok(status) => status,
         Err(error) => {
-            let receipt_exists = matches!(
-                store.run_graph_dispatch_receipt(run_id).await,
-                Ok(Some(_))
-            );
+            let receipt_exists =
+                matches!(store.run_graph_dispatch_receipt(run_id).await, Ok(Some(_)));
             if receipt_exists && resume_from_persisted_final_snapshot(store)? {
                 return Ok(());
             }
@@ -1274,16 +1270,16 @@ pub(crate) async fn run_taskflow_consume_advance_command(
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS, build_failure_control_evidence,
-        canonical_resume_dispatch_status, canonical_resume_lane_status,
-        canonical_resume_string_array_entries, normalize_runtime_dispatch_packet,
-        read_dispatch_packet, resume_from_persisted_final_snapshot,
-        resume_packet_ready_blocker_parity_error, validate_run_graph_resume_state,
+        build_failure_control_evidence, canonical_resume_dispatch_status,
+        canonical_resume_lane_status, canonical_resume_string_array_entries,
+        normalize_runtime_dispatch_packet, read_dispatch_packet,
+        resume_from_persisted_final_snapshot, resume_packet_ready_blocker_parity_error,
+        runtime_consumption_snapshot_has_failure_control_evidence, validate_run_graph_resume_state,
         validate_run_graph_resume_state_for_downstream_packet,
-        runtime_consumption_snapshot_has_failure_control_evidence,
+        DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
-    use crate::StateStore;
     use crate::downstream_dispatch_ready_blocker_parity_error;
+    use crate::StateStore;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1463,8 +1459,8 @@ mod tests {
     }
 
     #[test]
-    fn resume_from_persisted_final_snapshot_rejects_final_snapshot_without_failure_control_evidence()
-     {
+    fn resume_from_persisted_final_snapshot_rejects_final_snapshot_without_failure_control_evidence(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1520,16 +1516,14 @@ mod tests {
         assert!(!runtime_consumption_snapshot_has_failure_control_evidence(
             &snapshot_json
         ));
-        assert!(
-            !resume_from_persisted_final_snapshot(&store).expect("runtime consumption summary")
-        );
+        assert!(!resume_from_persisted_final_snapshot(&store).expect("runtime consumption summary"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn validate_run_graph_resume_state_accepts_persisted_receipt_lineage_when_summary_rows_are_missing()
-     {
+    async fn validate_run_graph_resume_state_accepts_persisted_receipt_lineage_when_summary_rows_are_missing(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1539,9 +1533,7 @@ mod tests {
             std::process::id(),
             nanos
         ));
-        let store = StateStore::open(root.clone())
-            .await
-            .expect("open store");
+        let store = StateStore::open(root.clone()).await.expect("open store");
 
         let snapshot_dir = store.root().join("runtime-consumption");
         fs::create_dir_all(&snapshot_dir).expect("create runtime-consumption directory");
@@ -1559,7 +1551,8 @@ mod tests {
                 "consume_final_surface": "vida taskflow consume final",
             }),
         );
-        let failure_control_evidence = build_failure_control_evidence(run_id, &snapshot_path_string);
+        let failure_control_evidence =
+            build_failure_control_evidence(run_id, &snapshot_path_string);
         fs::write(
             &snapshot_path,
             serde_json::json!({
@@ -1642,11 +1635,8 @@ mod tests {
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         let run_id = "run-closure-complete";
-        let mut status = crate::taskflow_run_graph::default_run_graph_status(
-            run_id,
-            "closure",
-            "closure",
-        );
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "closure", "closure");
         status.task_id = run_id.to_string();
         status.active_node = "closure".to_string();
         status.next_node = None;

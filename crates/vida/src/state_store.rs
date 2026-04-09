@@ -4,6 +4,15 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[path = "state_store_patching.rs"]
+mod state_store_patching;
+#[path = "state_store_run_graph_summary.rs"]
+mod state_store_run_graph_summary;
+#[path = "state_store_source_scan.rs"]
+mod state_store_source_scan;
+#[path = "state_store_taskflow_snapshot_codec.rs"]
+mod state_store_taskflow_snapshot_codec;
+
 use crate::release1_contracts::{
     canonical_blocker_code_str, canonical_compatibility_class_str, canonical_lane_status_str,
     canonical_release1_contract_type_str, canonical_release1_schema_version_str,
@@ -14,6 +23,35 @@ use crate::taskflow_run_graph::{
     approval_delegation_transition_kind, is_dispatch_resume_handoff_complete,
 };
 use serde_json::Deserializer;
+use state_store_patching::{
+    apply_patch_operation, collect_patch_ids, join_lines, split_lines, validate_patch_bindings,
+    validate_patch_conflicts,
+};
+use state_store_run_graph_summary::reconcile_run_graph_status_with_dispatch_receipt;
+pub(crate) use state_store_run_graph_summary::{
+    default_run_graph_lane_status, deserialize_run_graph_lane_status,
+    ensure_run_graph_approval_delegation_receipt_consistency, handoff_state_links_consent_ttl,
+    latest_run_graph_dispatch_receipt_matches_status,
+    latest_run_graph_dispatch_receipt_signal_is_ambiguous,
+    latest_run_graph_dispatch_receipt_summary_is_inconsistent,
+    latest_run_graph_evidence_snapshot_is_consistent, normalize_run_graph_lane_status,
+    requires_memory_governance_enforcement, RunGraphApprovalDelegationReceipt,
+    RunGraphCheckpointSummary, RunGraphDelegationGateSummary, RunGraphDispatchReceiptSummary,
+    RunGraphGateSummary, RunGraphRecoverySummary,
+};
+use state_store_source_scan::{
+    artifact_id_from_path, collect_markdown_files, hierarchy_from_path, infer_artifact_kind,
+    infer_mutability_class, infer_ownership_class, normalize_path, parse_source_metadata,
+    record_id_for_slice_source,
+};
+#[cfg(test)]
+use state_store_taskflow_snapshot_codec::{
+    canonical_issue_type_label, canonical_task_status_label, canonical_timestamp_label,
+};
+use state_store_taskflow_snapshot_codec::{
+    task_dependency_to_canonical_edge, task_record_to_canonical_snapshot_row,
+    task_records_from_canonical_snapshot, task_records_from_canonical_snapshot_for_additive_import,
+};
 use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::types::SurrealValue;
 use surrealdb::Surreal;
@@ -76,6 +114,15 @@ fn state_store_recovery_hint_for_message(message: &str) -> Option<&'static str> 
     }
     None
 }
+
+#[path = "state_store_task_reconciliation.rs"]
+mod state_store_task_reconciliation;
+
+pub(crate) use state_store_task_reconciliation::{
+    count_snapshot_bridge_rows, TaskReconciliationRollup, TaskReconciliationRollupRow,
+    TaskReconciliationSummary, TaskReconciliationSummaryInput, TaskReconciliationSummaryRow,
+    TaskflowSnapshotBridgeSummary,
+};
 
 #[derive(Debug)]
 pub struct StateStore {
@@ -3002,7 +3049,6 @@ UPSERT instruction_ingest_receipt:framework-bundle-seed CONTENT {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub async fn project_instruction_artifact(
         &self,
         artifact_id: &str,
@@ -3011,7 +3057,6 @@ UPSERT instruction_ingest_receipt:framework-bundle-seed CONTENT {
             .await
     }
 
-    #[allow(dead_code)]
     pub async fn inspect_instruction_artifact(
         &self,
         artifact_id: &str,
@@ -3174,7 +3219,6 @@ UPSERT instruction_ingest_receipt:framework-bundle-seed CONTENT {
         Ok(projected_hash)
     }
 
-    #[allow(dead_code)]
     pub async fn resolve_effective_instruction_bundle(
         &self,
         root_artifact_id: &str,
@@ -3183,7 +3227,6 @@ UPSERT instruction_ingest_receipt:framework-bundle-seed CONTENT {
             .await
     }
 
-    #[allow(dead_code)]
     pub async fn inspect_effective_instruction_bundle(
         &self,
         root_artifact_id: &str,
@@ -4056,28 +4099,6 @@ impl MigrationReceiptSummary {
 }
 
 #[derive(Debug)]
-struct TaskReconciliationSummaryInput {
-    operation: String,
-    source_kind: String,
-    source_path: Option<String>,
-    task_count: usize,
-    dependency_count: usize,
-    stale_removed_count: usize,
-}
-
-#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
-struct TaskReconciliationSummaryRow {
-    receipt_id: String,
-    operation: String,
-    source_kind: String,
-    source_path: Option<String>,
-    task_count: usize,
-    dependency_count: usize,
-    stale_removed_count: usize,
-    recorded_at: String,
-}
-
-#[derive(Debug)]
 pub struct TaskStoreSummary {
     pub total_count: usize,
     pub open_count: usize,
@@ -4395,764 +4416,6 @@ impl RunGraphStatus {
     }
 }
 
-fn reconcile_run_graph_status_with_dispatch_receipt(
-    mut status: RunGraphStatus,
-    receipt: Option<&RunGraphDispatchReceiptStored>,
-) -> Result<RunGraphStatus, StateStoreError> {
-    let Some(receipt) = receipt else {
-        return Ok(status);
-    };
-    let receipt = StateStore::validate_run_graph_dispatch_receipt_contract(receipt.clone())?;
-    let closure_candidate = receipt.downstream_dispatch_target.as_deref() == Some("closure")
-        && receipt.downstream_dispatch_ready
-        && receipt.downstream_dispatch_blockers.is_empty()
-        && matches!(
-            receipt.downstream_dispatch_status.as_deref(),
-            Some("packet_ready") | Some("executed")
-        );
-    if !closure_candidate {
-        return Ok(status);
-    }
-
-    if let Some(last_target) = receipt.downstream_dispatch_last_target.as_deref() {
-        if !last_target.trim().is_empty() {
-            status.active_node = last_target.to_string();
-        }
-    }
-    status.next_node = None;
-    status.status = "completed".to_string();
-    status.lifecycle_stage = "implementation_complete".to_string();
-    status.policy_gate = "not_required".to_string();
-    status.handoff_state = "none".to_string();
-    status.resume_target = "none".to_string();
-    status.recovery_ready = false;
-    Ok(status)
-}
-
-fn requires_memory_governance_enforcement(policy_gate: &str) -> bool {
-    let normalized = policy_gate.trim().to_ascii_lowercase();
-    normalized.contains("consent")
-        || normalized.contains("ttl")
-        || normalized.contains("correction")
-        || normalized.contains("delete")
-        || normalized.contains("deletion")
-}
-
-fn handoff_state_links_consent_ttl(handoff_state: &str) -> bool {
-    let normalized = handoff_state.trim().to_ascii_lowercase();
-    normalized.contains("consent") && normalized.contains("ttl")
-}
-
-#[derive(Debug, serde::Serialize, PartialEq, Eq, Clone)]
-pub struct RunGraphDelegationGateSummary {
-    pub active_node: String,
-    pub lifecycle_stage: String,
-    pub delegated_cycle_open: bool,
-    pub delegated_cycle_state: String,
-    pub local_exception_takeover_gate: String,
-    pub blocker_code: Option<String>,
-    pub reporting_pause_gate: String,
-    pub continuation_signal: String,
-}
-
-impl RunGraphDelegationGateSummary {
-    fn from_status(status: &RunGraphStatus) -> Self {
-        let handoff_pending = status.next_node.is_some()
-            || status.handoff_state != "none"
-            || status.resume_target != "none";
-        let delegated_lane_active = !handoff_pending
-            && status.status != "completed"
-            && status.active_node != "planning"
-            && status.lifecycle_stage.ends_with("_active");
-        let (delegated_cycle_open, delegated_cycle_state) = if handoff_pending {
-            (true, "handoff_pending".to_string())
-        } else if delegated_lane_active {
-            (true, "delegated_lane_active".to_string())
-        } else {
-            (false, "clear".to_string())
-        };
-        let local_exception_takeover_gate = if delegated_cycle_open {
-            "blocked_open_delegated_cycle".to_string()
-        } else {
-            "delegated_cycle_clear".to_string()
-        };
-        let blocker_code = if local_exception_takeover_gate == "blocked_open_delegated_cycle" {
-            Some(
-                canonical_blocker_code_str(BlockerCode::OpenDelegatedCycle.as_str())
-                    .unwrap_or(BlockerCode::OpenDelegatedCycle.as_str())
-                    .to_string(),
-            )
-        } else {
-            None
-        };
-        let reporting_pause_gate = if delegated_cycle_open {
-            "non_blocking_only".to_string()
-        } else if status.status == "completed" {
-            "closure_candidate".to_string()
-        } else {
-            "continuation_check_required".to_string()
-        };
-        let continuation_signal = if delegated_cycle_open {
-            "continue_routing_non_blocking".to_string()
-        } else if status.status == "completed" {
-            "continue_after_reports".to_string()
-        } else {
-            "continuation_check_required".to_string()
-        };
-
-        Self {
-            active_node: status.active_node.clone(),
-            lifecycle_stage: status.lifecycle_stage.clone(),
-            delegated_cycle_open,
-            delegated_cycle_state,
-            local_exception_takeover_gate,
-            blocker_code,
-            reporting_pause_gate,
-            continuation_signal,
-        }
-    }
-
-    pub fn as_display(&self) -> String {
-        format!(
-            "node={} lifecycle={} delegated_cycle_open={} delegated_cycle_state={} local_exception_takeover_gate={} blocker_code={} reporting_pause_gate={} continuation_signal={}",
-            self.active_node,
-            self.lifecycle_stage,
-            self.delegated_cycle_open,
-            self.delegated_cycle_state,
-            self.local_exception_takeover_gate,
-            self.blocker_code.as_deref().unwrap_or("none"),
-            self.reporting_pause_gate,
-            self.continuation_signal
-        )
-    }
-}
-
-#[derive(Debug, serde::Serialize, PartialEq, Eq)]
-pub struct RunGraphRecoverySummary {
-    pub run_id: String,
-    pub task_id: String,
-    pub active_node: String,
-    pub lifecycle_stage: String,
-    pub resume_node: Option<String>,
-    pub resume_status: String,
-    pub checkpoint_kind: String,
-    pub resume_target: String,
-    pub policy_gate: String,
-    pub handoff_state: String,
-    pub recovery_ready: bool,
-    pub delegation_gate: RunGraphDelegationGateSummary,
-}
-
-impl RunGraphRecoverySummary {
-    fn from_status(status: RunGraphStatus) -> Self {
-        let delegation_gate = status.delegation_gate();
-        Self {
-            run_id: status.run_id,
-            task_id: status.task_id,
-            active_node: status.active_node,
-            lifecycle_stage: status.lifecycle_stage,
-            resume_node: status.next_node,
-            resume_status: status.status,
-            checkpoint_kind: status.checkpoint_kind,
-            resume_target: status.resume_target,
-            policy_gate: status.policy_gate,
-            handoff_state: status.handoff_state,
-            recovery_ready: status.recovery_ready,
-            delegation_gate,
-        }
-    }
-
-    pub fn as_display(&self) -> String {
-        format!(
-            "run={} task={} active_node={} lifecycle={} resume_node={} resume_status={} checkpoint={} resume_target={} gate={} handoff={} recovery_ready={} takeover_gate={} report_pause_gate={} continuation_signal={}",
-            self.run_id,
-            self.task_id,
-            self.active_node,
-            self.lifecycle_stage,
-            self.resume_node.as_deref().unwrap_or("none"),
-            self.resume_status,
-            self.checkpoint_kind,
-            self.resume_target,
-            self.policy_gate,
-            self.handoff_state,
-            self.recovery_ready,
-            self.delegation_gate.local_exception_takeover_gate,
-            self.delegation_gate.reporting_pause_gate,
-            self.delegation_gate.continuation_signal
-        )
-    }
-}
-
-#[derive(Debug, serde::Serialize, PartialEq, Eq)]
-pub struct RunGraphCheckpointSummary {
-    pub run_id: String,
-    pub task_id: String,
-    pub checkpoint_kind: String,
-    pub resume_target: String,
-    pub recovery_ready: bool,
-}
-
-impl RunGraphCheckpointSummary {
-    fn from_status(status: RunGraphStatus) -> Self {
-        Self {
-            run_id: status.run_id,
-            task_id: status.task_id,
-            checkpoint_kind: status.checkpoint_kind,
-            resume_target: status.resume_target,
-            recovery_ready: status.recovery_ready,
-        }
-    }
-
-    pub fn as_display(&self) -> String {
-        format!(
-            "run={} task={} checkpoint={} resume_target={} recovery_ready={}",
-            self.run_id,
-            self.task_id,
-            self.checkpoint_kind,
-            self.resume_target,
-            self.recovery_ready
-        )
-    }
-}
-
-#[derive(Debug, serde::Serialize, PartialEq, Eq)]
-pub struct RunGraphDispatchReceiptSummary {
-    pub run_id: String,
-    pub dispatch_target: String,
-    pub dispatch_status: String,
-    pub lane_status: String,
-    pub supersedes_receipt_id: Option<String>,
-    pub exception_path_receipt_id: Option<String>,
-    pub dispatch_kind: String,
-    pub dispatch_surface: Option<String>,
-    pub dispatch_command: Option<String>,
-    pub dispatch_packet_path: Option<String>,
-    pub dispatch_result_path: Option<String>,
-    pub blocker_code: Option<String>,
-    pub downstream_dispatch_target: Option<String>,
-    pub downstream_dispatch_command: Option<String>,
-    pub downstream_dispatch_note: Option<String>,
-    pub downstream_dispatch_ready: bool,
-    pub downstream_dispatch_blockers: Vec<String>,
-    pub downstream_dispatch_packet_path: Option<String>,
-    pub downstream_dispatch_status: Option<String>,
-    pub downstream_dispatch_result_path: Option<String>,
-    pub downstream_dispatch_trace_path: Option<String>,
-    pub downstream_dispatch_executed_count: u32,
-    pub downstream_dispatch_active_target: Option<String>,
-    pub downstream_dispatch_last_target: Option<String>,
-    pub activation_agent_type: Option<String>,
-    pub activation_runtime_role: Option<String>,
-    pub selected_backend: Option<String>,
-    pub recorded_at: String,
-}
-
-#[allow(dead_code)]
-impl RunGraphDispatchReceiptSummary {
-    fn from_receipt(receipt: RunGraphDispatchReceipt) -> Self {
-        let lane_status = if receipt.lane_status.trim().is_empty() {
-            derive_lane_status(
-                &receipt.dispatch_status,
-                receipt.supersedes_receipt_id.as_deref(),
-                receipt.exception_path_receipt_id.as_deref(),
-            )
-            .as_str()
-            .to_string()
-        } else {
-            canonical_lane_status_str(&receipt.lane_status)
-                .unwrap_or(receipt.lane_status.as_str())
-                .to_string()
-        };
-        let blocker_code = receipt
-            .blocker_code
-            .as_deref()
-            .and_then(canonical_blocker_code_str)
-            .map(str::to_string)
-            .or(receipt.blocker_code.clone());
-        let mut downstream_dispatch_blockers = receipt.downstream_dispatch_blockers;
-        downstream_dispatch_blockers.sort_unstable();
-        Self {
-            run_id: receipt.run_id,
-            dispatch_target: receipt.dispatch_target,
-            dispatch_status: receipt.dispatch_status,
-            lane_status,
-            supersedes_receipt_id: receipt.supersedes_receipt_id,
-            exception_path_receipt_id: receipt.exception_path_receipt_id,
-            dispatch_kind: receipt.dispatch_kind,
-            dispatch_surface: receipt.dispatch_surface,
-            dispatch_command: receipt.dispatch_command,
-            dispatch_packet_path: receipt.dispatch_packet_path,
-            dispatch_result_path: receipt.dispatch_result_path,
-            blocker_code,
-            downstream_dispatch_target: receipt.downstream_dispatch_target,
-            downstream_dispatch_command: receipt.downstream_dispatch_command,
-            downstream_dispatch_note: receipt.downstream_dispatch_note,
-            downstream_dispatch_ready: receipt.downstream_dispatch_ready,
-            downstream_dispatch_blockers,
-            downstream_dispatch_packet_path: receipt.downstream_dispatch_packet_path,
-            downstream_dispatch_status: receipt.downstream_dispatch_status,
-            downstream_dispatch_result_path: receipt.downstream_dispatch_result_path,
-            downstream_dispatch_trace_path: receipt.downstream_dispatch_trace_path,
-            downstream_dispatch_executed_count: receipt.downstream_dispatch_executed_count,
-            downstream_dispatch_active_target: receipt.downstream_dispatch_active_target,
-            downstream_dispatch_last_target: receipt.downstream_dispatch_last_target,
-            activation_agent_type: receipt.activation_agent_type,
-            activation_runtime_role: receipt.activation_runtime_role,
-            selected_backend: receipt.selected_backend,
-            recorded_at: receipt.recorded_at,
-        }
-    }
-
-    pub fn as_display(&self) -> String {
-        format!(
-            "run={} target={} status={} lane_status={} supersedes_receipt_id={} exception_path_receipt_id={} blocker_code={} kind={} surface={} command={} packet={} result={} next_target={} next_command={} next_note={} next_ready={} next_blockers={} next_packet={} next_status={} next_result={} next_trace={} next_count={} next_last_target={} agent={} runtime_role={} backend={} recorded_at={}",
-            self.run_id,
-            self.dispatch_target,
-            self.dispatch_status,
-            self.lane_status,
-            self.supersedes_receipt_id.as_deref().unwrap_or("none"),
-            self.exception_path_receipt_id.as_deref().unwrap_or("none"),
-            self.blocker_code.as_deref().unwrap_or("none"),
-            self.dispatch_kind,
-            self.dispatch_surface.as_deref().unwrap_or("none"),
-            self.dispatch_command.as_deref().unwrap_or("none"),
-            self.dispatch_packet_path.as_deref().unwrap_or("none"),
-            self.dispatch_result_path.as_deref().unwrap_or("none"),
-            self.downstream_dispatch_target.as_deref().unwrap_or("none"),
-            self.downstream_dispatch_command.as_deref().unwrap_or("none"),
-            self.downstream_dispatch_note.as_deref().unwrap_or("none"),
-            self.downstream_dispatch_ready,
-            if self.downstream_dispatch_blockers.is_empty() {
-                "none".to_string()
-            } else {
-                self.downstream_dispatch_blockers.join("|")
-            },
-            self.downstream_dispatch_packet_path.as_deref().unwrap_or("none"),
-            self.downstream_dispatch_status.as_deref().unwrap_or("none"),
-            self.downstream_dispatch_result_path.as_deref().unwrap_or("none"),
-            self.downstream_dispatch_trace_path.as_deref().unwrap_or("none"),
-            self.downstream_dispatch_executed_count,
-            self.downstream_dispatch_last_target.as_deref().unwrap_or("none"),
-            self.activation_agent_type.as_deref().unwrap_or("none"),
-            self.activation_runtime_role.as_deref().unwrap_or("none"),
-            self.selected_backend.as_deref().unwrap_or("none"),
-            self.recorded_at
-        )
-    }
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, PartialEq, Eq, Clone)]
-pub struct RunGraphApprovalDelegationReceipt {
-    pub receipt_id: String,
-    pub run_id: String,
-    pub task_id: String,
-    pub task_class: String,
-    pub route_task_class: String,
-    pub active_node: String,
-    pub next_node: Option<String>,
-    pub status: String,
-    pub lifecycle_stage: String,
-    pub policy_gate: String,
-    pub handoff_state: String,
-    pub resume_target: String,
-    pub transition_kind: String,
-    pub recorded_at: String,
-}
-
-#[allow(dead_code)]
-impl RunGraphApprovalDelegationReceipt {
-    fn from_status(status: &RunGraphStatus, transition_kind: &str, recorded_at: String) -> Self {
-        let receipt_id = format!(
-            "run-graph-approval-delegation-{run_id}-{recorded_at}",
-            run_id = status.run_id
-        );
-        Self {
-            receipt_id,
-            run_id: status.run_id.clone(),
-            task_id: status.task_id.clone(),
-            task_class: status.task_class.clone(),
-            route_task_class: status.route_task_class.clone(),
-            active_node: status.active_node.clone(),
-            next_node: status.next_node.clone(),
-            status: status.status.clone(),
-            lifecycle_stage: status.lifecycle_stage.clone(),
-            policy_gate: status.policy_gate.clone(),
-            handoff_state: status.handoff_state.clone(),
-            resume_target: status.resume_target.clone(),
-            transition_kind: transition_kind.to_string(),
-            recorded_at,
-        }
-    }
-}
-
-fn ensure_run_graph_approval_delegation_receipt_consistency(
-    receipt: &RunGraphApprovalDelegationReceipt,
-) -> Result<(), StateStoreError> {
-    if receipt.receipt_id.trim().is_empty()
-        || receipt.run_id.trim().is_empty()
-        || receipt.task_id.trim().is_empty()
-        || receipt.task_class.trim().is_empty()
-        || receipt.route_task_class.trim().is_empty()
-        || receipt.active_node.trim().is_empty()
-        || receipt.status.trim().is_empty()
-        || receipt.lifecycle_stage.trim().is_empty()
-        || receipt.policy_gate.trim().is_empty()
-        || receipt.handoff_state.trim().is_empty()
-        || receipt.resume_target.trim().is_empty()
-        || receipt.transition_kind.trim().is_empty()
-        || receipt.recorded_at.trim().is_empty()
-    {
-        return Err(StateStoreError::InvalidTaskRecord {
-            reason: format!(
-                "run-graph approval/delegation receipt summary is inconsistent for `{}`: all receipt fields must be non-empty",
-                receipt.run_id
-            ),
-        });
-    }
-
-    let is_route_bound_implementation =
-        receipt.task_class == "implementation" && receipt.route_task_class == "implementation";
-    let approval_wait = receipt.transition_kind == "approval_wait";
-    let approval_complete = receipt.transition_kind == "approval_complete";
-    if !is_route_bound_implementation || (!approval_wait && !approval_complete) {
-        return Err(StateStoreError::InvalidTaskRecord {
-            reason: format!(
-                "run-graph approval/delegation receipt summary is inconsistent for `{}`: transition_kind `{}` must be route-bound to implementation",
-                receipt.run_id, receipt.transition_kind
-            ),
-        });
-    }
-
-    match receipt.transition_kind.as_str() {
-        "approval_wait" => {
-            if receipt.status != "awaiting_approval"
-                || receipt.lifecycle_stage != "approval_wait"
-                || receipt.policy_gate
-                    != crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str()
-                || receipt.handoff_state != "awaiting_approval"
-                || receipt.resume_target != "dispatch.approval"
-                || receipt.next_node.as_deref() != Some("approval")
-            {
-                return Err(StateStoreError::InvalidTaskRecord {
-                    reason: format!(
-                        "run-graph approval/delegation receipt summary is inconsistent for `{}`: approval_wait receipts must carry the approval route shape",
-                        receipt.run_id
-                    ),
-                });
-            }
-        }
-        "approval_complete" => {
-            if receipt.status != "completed"
-                || receipt.lifecycle_stage != "implementation_complete"
-                || receipt.policy_gate != "not_required"
-                || receipt.handoff_state != "none"
-                || receipt.resume_target != "none"
-                || receipt.next_node.is_some()
-            {
-                return Err(StateStoreError::InvalidTaskRecord {
-                    reason: format!(
-                        "run-graph approval/delegation receipt summary is inconsistent for `{}`: approval_complete receipts must carry the completion route shape",
-                        receipt.run_id
-                    ),
-                });
-            }
-        }
-        _ => unreachable!("receipt.transition_kind is canonical above"),
-    }
-
-    Ok(())
-}
-
-pub(crate) fn latest_run_graph_dispatch_receipt_matches_status(
-    latest_run_graph_status_run_id: Option<&str>,
-    latest_run_graph_dispatch_receipt_run_id: Option<&str>,
-) -> bool {
-    matches!(
-        (
-            latest_run_graph_status_run_id,
-            latest_run_graph_dispatch_receipt_run_id
-        ),
-        (Some(status_run_id), Some(receipt_run_id)) if status_run_id == receipt_run_id
-    )
-}
-
-pub(crate) fn latest_run_graph_dispatch_receipt_summary_is_inconsistent(
-    latest_run_graph_status_run_id: Option<&str>,
-    latest_run_graph_dispatch_receipt_run_id: Option<&str>,
-) -> bool {
-    latest_run_graph_status_run_id.is_some()
-        && !latest_run_graph_dispatch_receipt_matches_status(
-            latest_run_graph_status_run_id,
-            latest_run_graph_dispatch_receipt_run_id,
-        )
-}
-
-pub(crate) fn latest_run_graph_dispatch_receipt_signal_is_ambiguous(
-    receipt: &RunGraphDispatchReceiptSummary,
-) -> bool {
-    matches!(
-        receipt.dispatch_status.as_str(),
-        "packet_ready" | "routed" | "executed" | "blocked"
-    ) && receipt.lane_status.as_str()
-        != derive_lane_status(
-            &receipt.dispatch_status,
-            receipt.supersedes_receipt_id.as_deref(),
-            receipt.exception_path_receipt_id.as_deref(),
-        )
-        .as_str()
-        || !matches!(
-            receipt.dispatch_status.as_str(),
-            "packet_ready" | "routed" | "executed" | "blocked"
-        )
-}
-
-pub(crate) fn latest_run_graph_evidence_snapshot_is_consistent(
-    latest_run_graph_status_run_id: Option<&str>,
-    latest_run_graph_recovery_run_id: Option<&str>,
-    latest_run_graph_checkpoint_run_id: Option<&str>,
-    latest_run_graph_gate_run_id: Option<&str>,
-    latest_run_graph_dispatch_receipt_run_id: Option<&str>,
-) -> bool {
-    let Some(latest_run_graph_status_run_id) = latest_run_graph_status_run_id else {
-        return latest_run_graph_recovery_run_id.is_none()
-            && latest_run_graph_checkpoint_run_id.is_none()
-            && latest_run_graph_gate_run_id.is_none()
-            && latest_run_graph_dispatch_receipt_run_id.is_none();
-    };
-    [
-        latest_run_graph_recovery_run_id,
-        latest_run_graph_checkpoint_run_id,
-        latest_run_graph_gate_run_id,
-        latest_run_graph_dispatch_receipt_run_id,
-    ]
-    .into_iter()
-    .flatten()
-    .all(|run_id| run_id == latest_run_graph_status_run_id)
-}
-
-fn default_run_graph_lane_status() -> String {
-    LaneStatus::LaneOpen.as_str().to_string()
-}
-
-fn normalize_run_graph_lane_status(
-    value: Option<&str>,
-    dispatch_status: &str,
-    supersedes_receipt_id: Option<&str>,
-    exception_path_receipt_id: Option<&str>,
-) -> String {
-    let derived_lane_status = derive_lane_status(
-        dispatch_status,
-        supersedes_receipt_id,
-        exception_path_receipt_id,
-    )
-    .as_str()
-    .to_string();
-    match value {
-        Some(raw) if !raw.trim().is_empty() => {
-            let canonical_lane_status = canonical_lane_status_str(raw).unwrap_or(raw);
-            if canonical_lane_status == derived_lane_status {
-                canonical_lane_status.to_string()
-            } else {
-                derived_lane_status
-            }
-        }
-        _ => derived_lane_status,
-    }
-}
-
-fn deserialize_run_graph_lane_status<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = <Option<String> as serde::Deserialize>::deserialize(deserializer)?;
-    match value.as_deref() {
-        Some(raw) if !raw.trim().is_empty() => {
-            Ok(canonical_lane_status_str(raw).unwrap_or(raw).to_string())
-        }
-        _ => Ok(default_run_graph_lane_status()),
-    }
-}
-
-#[derive(Debug, serde::Serialize, PartialEq, Eq)]
-pub struct RunGraphGateSummary {
-    pub run_id: String,
-    pub task_id: String,
-    pub active_node: String,
-    pub lifecycle_stage: String,
-    pub policy_gate: String,
-    pub handoff_state: String,
-    pub context_state: String,
-    pub delegation_gate: RunGraphDelegationGateSummary,
-}
-
-impl RunGraphGateSummary {
-    fn from_status(status: RunGraphStatus) -> Self {
-        let delegation_gate = status.delegation_gate();
-        Self {
-            run_id: status.run_id,
-            task_id: status.task_id,
-            active_node: status.active_node,
-            lifecycle_stage: status.lifecycle_stage,
-            policy_gate: status.policy_gate,
-            handoff_state: status.handoff_state,
-            context_state: status.context_state,
-            delegation_gate,
-        }
-    }
-
-    pub fn as_display(&self) -> String {
-        format!(
-            "run={} task={} active_node={} lifecycle={} gate={} handoff={} context={} takeover_gate={} report_pause_gate={} continuation_signal={}",
-            self.run_id,
-            self.task_id,
-            self.active_node,
-            self.lifecycle_stage,
-            self.policy_gate,
-            self.handoff_state,
-            self.context_state,
-            self.delegation_gate.local_exception_takeover_gate,
-            self.delegation_gate.reporting_pause_gate,
-            self.delegation_gate.continuation_signal
-        )
-    }
-}
-
-#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
-pub struct TaskReconciliationSummary {
-    pub receipt_id: String,
-    pub operation: String,
-    pub source_kind: String,
-    pub source_path: Option<String>,
-    pub task_count: usize,
-    pub dependency_count: usize,
-    pub stale_removed_count: usize,
-    pub recorded_at: String,
-}
-
-impl TaskReconciliationSummary {
-    pub fn as_display(&self) -> String {
-        let source_path = self.source_path.as_deref().unwrap_or("none");
-        format!(
-            "{} via {} (tasks={}, dependencies={}, stale_removed={}, source_path={})",
-            self.operation,
-            self.source_kind,
-            self.task_count,
-            self.dependency_count,
-            self.stale_removed_count,
-            source_path
-        )
-    }
-}
-
-#[derive(Debug, serde::Deserialize, SurrealValue)]
-struct TaskReconciliationRollupRow {
-    operation: String,
-    source_kind: String,
-    source_path: Option<String>,
-    task_count: usize,
-    dependency_count: usize,
-    stale_removed_count: usize,
-    recorded_at: String,
-}
-
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
-pub struct TaskReconciliationRollup {
-    pub total_receipts: usize,
-    pub latest_recorded_at: Option<String>,
-    pub latest_source_path: Option<String>,
-    pub total_task_rows: usize,
-    pub total_dependency_rows: usize,
-    pub total_stale_removed: usize,
-    pub by_operation: BTreeMap<String, usize>,
-    pub by_source_kind: BTreeMap<String, usize>,
-    #[serde(skip)]
-    rows: Vec<TaskReconciliationRollupRow>,
-}
-
-impl TaskReconciliationRollup {
-    pub fn as_display(&self) -> String {
-        if self.total_receipts == 0 {
-            return "0 receipts".to_string();
-        }
-
-        let operations = self
-            .by_operation
-            .iter()
-            .map(|(key, value)| format!("{key}={value}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let source_kinds = self
-            .by_source_kind
-            .iter()
-            .map(|(key, value)| format!("{key}={value}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let latest_recorded_at = self.latest_recorded_at.as_deref().unwrap_or("none");
-        let latest_source_path = self.latest_source_path.as_deref().unwrap_or("none");
-
-        format!(
-            "{} receipts (tasks={}, dependencies={}, stale_removed={}, operations: {}; source_kinds: {}; latest_recorded_at={}; latest_source_path={})",
-            self.total_receipts,
-            self.total_task_rows,
-            self.total_dependency_rows,
-            self.total_stale_removed,
-            operations,
-            source_kinds,
-            latest_recorded_at,
-            latest_source_path
-        )
-    }
-}
-
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
-pub struct TaskflowSnapshotBridgeSummary {
-    pub total_receipts: usize,
-    pub export_receipts: usize,
-    pub import_receipts: usize,
-    pub replace_receipts: usize,
-    pub object_export_receipts: usize,
-    pub memory_export_receipts: usize,
-    pub memory_import_receipts: usize,
-    pub memory_replace_receipts: usize,
-    pub file_export_receipts: usize,
-    pub file_import_receipts: usize,
-    pub file_replace_receipts: usize,
-    pub total_task_rows: usize,
-    pub total_dependency_rows: usize,
-    pub total_stale_removed: usize,
-    pub latest_operation: Option<String>,
-    pub latest_source_kind: Option<String>,
-    pub latest_source_path: Option<String>,
-    pub latest_recorded_at: Option<String>,
-}
-
-impl TaskflowSnapshotBridgeSummary {
-    pub fn as_display(&self) -> String {
-        if self.total_receipts == 0 {
-            return "idle (no snapshot bridge receipts)".to_string();
-        }
-
-        format!(
-            "receipts={} export={} import={} replace={} object={} memory={} file={} tasks={} dependencies={} stale_removed={} latest={} via {} source_path={}",
-            self.total_receipts,
-            self.export_receipts,
-            self.import_receipts,
-            self.replace_receipts,
-            self.object_export_receipts,
-            self.memory_export_receipts
-                + self.memory_import_receipts
-                + self.memory_replace_receipts,
-            self.file_export_receipts + self.file_import_receipts + self.file_replace_receipts,
-            self.total_task_rows,
-            self.total_dependency_rows,
-            self.total_stale_removed,
-            self.latest_operation.as_deref().unwrap_or("none"),
-            self.latest_source_kind.as_deref().unwrap_or("none"),
-            self.latest_source_path.as_deref().unwrap_or("none"),
-        )
-    }
-}
-
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
 struct ProtocolBindingStateRow {
     protocol_id: String,
@@ -5305,25 +4568,6 @@ impl ProtocolBindingSummary {
 #[derive(Debug, serde::Deserialize, SurrealValue)]
 struct CountRow {
     total: usize,
-}
-
-fn count_snapshot_bridge_rows(
-    rows: &[TaskReconciliationRollupRow],
-    operation: Option<&str>,
-    source_kind: Option<&str>,
-) -> usize {
-    rows.iter()
-        .filter(|row| {
-            operation
-                .map(|expected| row.operation == expected)
-                .unwrap_or(true)
-        })
-        .filter(|row| {
-            source_kind
-                .map(|expected| row.source_kind == expected)
-                .unwrap_or(true)
-        })
-        .count()
 }
 
 impl InstructionIngestSummary {
@@ -5554,33 +4798,6 @@ impl LauncherActivationSnapshot {
     }
 }
 
-fn collect_markdown_files(root: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    collect_markdown_files_inner(root, &mut files)?;
-    files.sort();
-    Ok(files)
-}
-
-fn collect_markdown_files_inner(root: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_markdown_files_inner(&path, files)?;
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("md") {
-            files.push(path);
-        }
-    }
-    Ok(())
-}
-
-fn artifact_id_from_path(relative: &Path) -> String {
-    relative
-        .with_extension("")
-        .to_string_lossy()
-        .replace(['/', '\\'], "-")
-}
-
 fn escape_surql_literal(value: &str) -> String {
     value.replace('\\', "\\\\").replace('\'', "\\'")
 }
@@ -5596,223 +4813,6 @@ fn sanitize_record_id(value: &str) -> String {
             }
         })
         .collect()
-}
-
-#[allow(dead_code)]
-fn parse_canonical_timestamp(value: &str) -> Result<CanonicalTimestamp, StateStoreError> {
-    if let Ok(parsed) = OffsetDateTime::parse(value, &Rfc3339) {
-        return Ok(CanonicalTimestamp(parsed));
-    }
-
-    let nanos =
-        value
-            .parse::<i128>()
-            .map_err(|_| StateStoreError::InvalidCanonicalTaskflowExport {
-                reason: format!("updated_at is not RFC3339 or unix nanos: {value}"),
-            })?;
-    let parsed = OffsetDateTime::from_unix_timestamp_nanos(nanos).map_err(|error| {
-        StateStoreError::InvalidCanonicalTaskflowExport {
-            reason: format!("updated_at unix nanos is invalid ({value}): {error}"),
-        }
-    })?;
-    Ok(CanonicalTimestamp(parsed))
-}
-
-#[allow(dead_code)]
-fn parse_canonical_task_status(value: &str) -> Result<CanonicalTaskStatus, StateStoreError> {
-    match value {
-        "open" => Ok(CanonicalTaskStatus::Open),
-        "in_progress" => Ok(CanonicalTaskStatus::InProgress),
-        "closed" => Ok(CanonicalTaskStatus::Closed),
-        "blocked" => Ok(CanonicalTaskStatus::Blocked),
-        other => Err(StateStoreError::InvalidCanonicalTaskflowExport {
-            reason: format!("unsupported taskflow-core status mapping: {other}"),
-        }),
-    }
-}
-
-#[allow(dead_code)]
-fn parse_canonical_issue_type(value: &str) -> Result<CanonicalIssueType, StateStoreError> {
-    match value {
-        "epic" => Ok(CanonicalIssueType::Epic),
-        "task" => Ok(CanonicalIssueType::Task),
-        "bug" => Ok(CanonicalIssueType::Bug),
-        "spike" => Ok(CanonicalIssueType::Spike),
-        other => Err(StateStoreError::InvalidCanonicalTaskflowExport {
-            reason: format!("unsupported taskflow-core issue_type mapping: {other}"),
-        }),
-    }
-}
-
-#[allow(dead_code)]
-fn task_dependency_to_canonical_edge(dependency: &TaskDependencyRecord) -> CanonicalDependencyEdge {
-    CanonicalDependencyEdge {
-        issue_id: CanonicalTaskId::new(&dependency.issue_id),
-        depends_on_id: CanonicalTaskId::new(&dependency.depends_on_id),
-        dependency_type: dependency.edge_type.clone(),
-    }
-}
-
-#[allow(dead_code)]
-fn task_record_to_canonical_snapshot_row(
-    task: &TaskRecord,
-) -> Result<CanonicalTaskRecord, StateStoreError> {
-    Ok(CanonicalTaskRecord {
-        id: CanonicalTaskId::new(&task.id),
-        title: task.title.clone(),
-        status: parse_canonical_task_status(&task.status)?,
-        issue_type: parse_canonical_issue_type(&task.issue_type)?,
-        updated_at: parse_canonical_timestamp(&task.updated_at)?,
-    })
-}
-
-fn canonical_task_status_label(status: CanonicalTaskStatus) -> &'static str {
-    match status {
-        CanonicalTaskStatus::Open => "open",
-        CanonicalTaskStatus::InProgress => "in_progress",
-        CanonicalTaskStatus::Closed => "closed",
-        CanonicalTaskStatus::Blocked => "blocked",
-    }
-}
-
-fn canonical_issue_type_label(issue_type: CanonicalIssueType) -> &'static str {
-    match issue_type {
-        CanonicalIssueType::Epic => "epic",
-        CanonicalIssueType::Task => "task",
-        CanonicalIssueType::Bug => "bug",
-        CanonicalIssueType::Spike => "spike",
-    }
-}
-
-fn canonical_timestamp_label(timestamp: &CanonicalTimestamp) -> String {
-    timestamp
-        .0
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| timestamp.0.unix_timestamp_nanos().to_string())
-}
-
-fn canonical_edge_to_task_dependency_record(
-    dependency: &CanonicalDependencyEdge,
-) -> TaskDependencyRecord {
-    TaskDependencyRecord {
-        issue_id: dependency.issue_id.0.clone(),
-        depends_on_id: dependency.depends_on_id.0.clone(),
-        edge_type: dependency.dependency_type.clone(),
-        created_at: "canonical-taskflow-snapshot".to_string(),
-        created_by: "taskflow-state-fs".to_string(),
-        metadata: "{}".to_string(),
-        thread_id: String::new(),
-    }
-}
-
-fn canonical_snapshot_row_to_task_record(
-    task: &CanonicalTaskRecord,
-) -> Result<TaskRecord, StateStoreError> {
-    let task_id = task.id.0.trim().to_string();
-    if task_id.is_empty() {
-        return Err(StateStoreError::InvalidCanonicalTaskflowExport {
-            reason: "canonical taskflow snapshot task id is empty".to_string(),
-        });
-    }
-
-    let updated_at = canonical_timestamp_label(&task.updated_at);
-    let status = canonical_task_status_label(task.status).to_string();
-    let (closed_at, close_reason) = if matches!(task.status, CanonicalTaskStatus::Closed) {
-        (
-            Some(updated_at.clone()),
-            Some("imported_from_canonical_taskflow_snapshot".to_string()),
-        )
-    } else {
-        (None, None)
-    };
-    Ok(TaskRecord {
-        id: task_id,
-        display_id: None,
-        title: task.title.clone(),
-        description: String::new(),
-        status,
-        priority: 0,
-        issue_type: canonical_issue_type_label(task.issue_type).to_string(),
-        created_at: updated_at.clone(),
-        created_by: "taskflow-state-fs".to_string(),
-        updated_at,
-        closed_at,
-        close_reason,
-        source_repo: "taskflow-state-fs".to_string(),
-        compaction_level: 0,
-        original_size: 0,
-        notes: None,
-        labels: Vec::new(),
-        dependencies: Vec::new(),
-    })
-}
-
-fn task_records_from_canonical_snapshot(
-    snapshot: &TaskSnapshot,
-) -> Result<Vec<TaskRecord>, StateStoreError> {
-    let task_records = task_records_from_canonical_snapshot_rows(snapshot)?;
-    let issues = StateStore::validate_task_graph_rows(&task_records);
-    if let Some(first) = issues.first() {
-        return Err(StateStoreError::InvalidCanonicalTaskflowExport {
-            reason: format!(
-                "snapshot graph is invalid: {} on {}",
-                first.issue_type, first.issue_id
-            ),
-        });
-    }
-
-    Ok(task_records)
-}
-
-fn task_records_from_canonical_snapshot_for_additive_import(
-    snapshot: &TaskSnapshot,
-    existing_tasks: &[TaskRecord],
-) -> Result<Vec<TaskRecord>, StateStoreError> {
-    let imported_tasks = task_records_from_canonical_snapshot_rows(snapshot)?;
-    let mut merged_tasks = existing_tasks
-        .iter()
-        .cloned()
-        .map(|task| (task.id.clone(), task))
-        .collect::<BTreeMap<_, _>>();
-    for task in &imported_tasks {
-        merged_tasks.insert(task.id.clone(), task.clone());
-    }
-
-    let merged_rows = merged_tasks.into_values().collect::<Vec<_>>();
-    let issues = StateStore::validate_task_graph_rows(&merged_rows);
-    if let Some(first) = issues.first() {
-        return Err(StateStoreError::InvalidCanonicalTaskflowExport {
-            reason: format!(
-                "snapshot graph is invalid after additive merge: {} on {}",
-                first.issue_type, first.issue_id
-            ),
-        });
-    }
-
-    Ok(imported_tasks)
-}
-
-fn task_records_from_canonical_snapshot_rows(
-    snapshot: &TaskSnapshot,
-) -> Result<Vec<TaskRecord>, StateStoreError> {
-    let mut dependencies_by_issue = BTreeMap::<String, Vec<TaskDependencyRecord>>::new();
-    for dependency in &snapshot.dependencies {
-        dependencies_by_issue
-            .entry(dependency.issue_id.0.clone())
-            .or_default()
-            .push(canonical_edge_to_task_dependency_record(dependency));
-    }
-
-    let mut task_records = Vec::with_capacity(snapshot.tasks.len());
-    for task in &snapshot.tasks {
-        let mut task_record = canonical_snapshot_row_to_task_record(task)?;
-        if let Some(dependencies) = dependencies_by_issue.remove(&task.id.0) {
-            task_record.dependencies = dependencies;
-        }
-        task_records.push(task_record);
-    }
-
-    Ok(task_records)
 }
 
 fn task_sort_key(left: &TaskRecord, right: &TaskRecord) -> std::cmp::Ordering {
@@ -5844,111 +4844,6 @@ fn compare_task_paths(left: &[String], right: &[String]) -> std::cmp::Ordering {
         .then_with(|| left.join("->").cmp(&right.join("->")))
 }
 
-#[derive(Default)]
-struct SourceMetadata {
-    artifact_id: Option<String>,
-    artifact_kind: Option<String>,
-    version: Option<u32>,
-    ownership_class: Option<String>,
-    mutability_class: Option<String>,
-    activation_class: Option<String>,
-    required_follow_on: Vec<String>,
-    hierarchy: Vec<String>,
-}
-
-fn parse_source_metadata(body: &str) -> SourceMetadata {
-    let mut metadata = SourceMetadata::default();
-    for line in body.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        let value = value.trim().to_string();
-        match key.trim() {
-            "artifact_id" => metadata.artifact_id = Some(value),
-            "artifact_kind" => metadata.artifact_kind = Some(value),
-            "version" => metadata.version = value.parse::<u32>().ok(),
-            "ownership_class" => metadata.ownership_class = Some(value),
-            "mutability_class" => metadata.mutability_class = Some(value),
-            "activation_class" => metadata.activation_class = Some(value),
-            "required_follow_on" => {
-                metadata.required_follow_on = value
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|item| !item.is_empty())
-                    .map(ToString::to_string)
-                    .collect();
-            }
-            "hierarchy" => {
-                metadata.hierarchy = value
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|item| !item.is_empty())
-                    .map(ToString::to_string)
-                    .collect();
-            }
-            _ => {}
-        }
-    }
-    metadata
-}
-
-fn infer_artifact_kind(slice: &str, relative: &Path) -> String {
-    if slice == "framework_memory" {
-        return "framework_memory_entry".to_string();
-    }
-
-    let normalized = relative.with_extension("").to_string_lossy().to_string();
-    if normalized.ends_with("agent-definition") {
-        "agent_definition".to_string()
-    } else if normalized.ends_with("instruction-contract") {
-        "instruction_contract".to_string()
-    } else if normalized.ends_with("prompt-template-config") {
-        "prompt_template_configuration".to_string()
-    } else {
-        "instruction_source".to_string()
-    }
-}
-
-fn infer_ownership_class(slice: &str) -> &'static str {
-    match slice {
-        "framework_memory" => "framework",
-        "instruction_memory" => "framework",
-        _ => "project",
-    }
-}
-
-fn infer_mutability_class(slice: &str) -> &'static str {
-    match slice {
-        "instruction_memory" => "immutable",
-        "framework_memory" => "mutable",
-        _ => "mutable",
-    }
-}
-
-fn record_id_for_slice_source(slice: &str, relative: &Path) -> String {
-    format!("{}-{}-source", slice, artifact_id_from_path(relative))
-}
-
-fn hierarchy_from_path(relative: &Path) -> Vec<String> {
-    relative
-        .parent()
-        .map(|parent| {
-            parent
-                .iter()
-                .map(|part| part.to_string_lossy().to_string())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn normalize_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
 pub fn default_state_dir() -> PathBuf {
     PathBuf::from(DEFAULT_STATE_DIR)
 }
@@ -5969,165 +4864,6 @@ fn unix_timestamp_nanos() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(0)
-}
-
-#[allow(dead_code)]
-fn split_lines(body: &str) -> Vec<String> {
-    body.lines().map(|line| line.to_string()).collect()
-}
-
-#[allow(dead_code)]
-fn join_lines(lines: &[String]) -> String {
-    if lines.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", lines.join("\n"))
-    }
-}
-
-#[allow(dead_code)]
-fn apply_patch_operation(
-    lines: &mut Vec<String>,
-    operation: &InstructionPatchOperation,
-) -> Result<(), StateStoreError> {
-    let index = resolve_operation_target(lines, operation)?;
-
-    match operation.op.as_str() {
-        "replace_range" => {
-            lines.splice(index..=index, operation.with_lines.clone());
-        }
-        "replace_with_many" => {
-            lines.splice(index..=index, operation.with_lines.clone());
-        }
-        "delete_range" => {
-            lines.remove(index);
-        }
-        "insert_before" => {
-            lines.splice(index..index, operation.with_lines.clone());
-        }
-        "insert_after" => {
-            lines.splice(index + 1..index + 1, operation.with_lines.clone());
-        }
-        "append_block" => {
-            lines.extend(operation.with_lines.clone());
-        }
-        other => {
-            return Err(StateStoreError::InvalidPatchOperation {
-                reason: format!("unsupported op: {other}"),
-            });
-        }
-    }
-
-    Ok(())
-}
-
-fn resolve_operation_target(
-    lines: &[String],
-    operation: &InstructionPatchOperation,
-) -> Result<usize, StateStoreError> {
-    match operation.target_mode.as_str() {
-        "exact_text" => lines
-            .iter()
-            .position(|line| line == &operation.target)
-            .ok_or_else(|| StateStoreError::InvalidPatchOperation {
-                reason: format!(
-                    "anchor not found for op {}: {}",
-                    operation.op, operation.target
-                ),
-            }),
-        "line_span" => {
-            let line_number = operation.target.parse::<usize>().map_err(|_| {
-                StateStoreError::InvalidPatchOperation {
-                    reason: format!("invalid line_span target: {}", operation.target),
-                }
-            })?;
-            if line_number == 0 || line_number > lines.len() {
-                return Err(StateStoreError::InvalidPatchOperation {
-                    reason: format!("line_span out of bounds: {}", operation.target),
-                });
-            }
-            Ok(line_number - 1)
-        }
-        "anchor_hash" => {
-            let target_hash = operation.target.strip_prefix("blake3:").ok_or_else(|| {
-                StateStoreError::InvalidPatchOperation {
-                    reason: format!("invalid anchor_hash target format: {}", operation.target),
-                }
-            })?;
-
-            lines
-                .iter()
-                .position(|line| blake3::hash(line.as_bytes()).to_hex().as_str() == target_hash)
-                .ok_or_else(|| StateStoreError::InvalidPatchOperation {
-                    reason: format!("anchor hash not found for op {}", operation.op),
-                })
-        }
-        other => Err(StateStoreError::InvalidPatchOperation {
-            reason: format!("unsupported target_mode: {other}"),
-        }),
-    }
-}
-
-fn validate_patch_conflicts(patches: &[InstructionDiffPatchRow]) -> Result<(), StateStoreError> {
-    use std::collections::HashMap;
-
-    let mut claimed: HashMap<(String, String), (u32, String)> = HashMap::new();
-
-    for patch in patches {
-        for operation in &patch.operations {
-            if matches!(
-                operation.op.as_str(),
-                "replace_range" | "replace_with_many" | "delete_range"
-            ) {
-                let key = (operation.target_mode.clone(), operation.target.clone());
-                if let Some((existing_precedence, existing_patch_id)) = claimed.get(&key) {
-                    if *existing_precedence == patch.patch_precedence {
-                        return Err(StateStoreError::PatchConflict {
-                            reason: format!(
-                                "patches {} and {} target the same anchor with equal precedence",
-                                existing_patch_id, patch.patch_id
-                            ),
-                        });
-                    }
-                } else {
-                    claimed.insert(key, (patch.patch_precedence, patch.patch_id.clone()));
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_patch_bindings(
-    base: &InstructionArtifactRow,
-    patches: &[InstructionDiffPatchRow],
-) -> Result<(), StateStoreError> {
-    for patch in patches {
-        if patch.target_artifact_version != base.version {
-            return Err(StateStoreError::InvalidPatchOperation {
-                reason: format!(
-                    "patch {} targets artifact version {} but base version is {}",
-                    patch.patch_id, patch.target_artifact_version, base.version
-                ),
-            });
-        }
-
-        if patch.target_artifact_hash != base.source_hash {
-            return Err(StateStoreError::InvalidPatchOperation {
-                reason: format!(
-                    "patch {} targets artifact hash {} but base hash is {}",
-                    patch.patch_id, patch.target_artifact_hash, base.source_hash
-                ),
-            });
-        }
-    }
-
-    Ok(())
-}
-
-fn collect_patch_ids(patches: &[InstructionDiffPatchRow]) -> Vec<String> {
-    patches.iter().map(|patch| patch.patch_id.clone()).collect()
 }
 
 #[cfg(test)]
@@ -10615,8 +9351,12 @@ hierarchy: framework,contracts
         let snapshot_path = root
             .join("runtime-consumption")
             .join("final-2026-03-08T00-00-00Z.json");
-        fs::create_dir_all(snapshot_path.parent().expect("snapshot parent should exist"))
-            .expect("create runtime-consumption directory");
+        fs::create_dir_all(
+            snapshot_path
+                .parent()
+                .expect("snapshot parent should exist"),
+        )
+        .expect("create runtime-consumption directory");
         fs::write(
             &snapshot_path,
             r#"{"surface":"vida taskflow consume final","status":"pass","operator_contracts":{"status":"pass"},"payload":{"closure_admission":{"status":"pass","admitted":true,"blockers":[],"proof_surfaces":[]}}}"#,
@@ -10632,7 +9372,10 @@ hierarchy: framework,contracts
         let snapshot_path_string = snapshot_path.display().to_string();
         assert_eq!(summary.operation, "consume_final");
         assert_eq!(summary.source_kind, "runtime_consumption_final_snapshot");
-        assert_eq!(summary.source_path.as_deref(), Some(snapshot_path_string.as_str()));
+        assert_eq!(
+            summary.source_path.as_deref(),
+            Some(snapshot_path_string.as_str())
+        );
         assert_eq!(summary.task_count, 0);
         assert_eq!(summary.dependency_count, 0);
         assert_eq!(summary.stale_removed_count, 0);
@@ -10645,7 +9388,10 @@ hierarchy: framework,contracts
         assert_eq!(latest.receipt_id, summary.receipt_id);
         assert_eq!(latest.operation, "consume_final");
         assert_eq!(latest.source_kind, "runtime_consumption_final_snapshot");
-        assert_eq!(latest.source_path.as_deref(), Some(snapshot_path_string.as_str()));
+        assert_eq!(
+            latest.source_path.as_deref(),
+            Some(snapshot_path_string.as_str())
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -10666,8 +9412,12 @@ hierarchy: framework,contracts
         let snapshot_path = root
             .join("runtime-consumption")
             .join("final-2026-03-08T00-00-01Z.json");
-        fs::create_dir_all(snapshot_path.parent().expect("snapshot parent should exist"))
-            .expect("create runtime-consumption directory");
+        fs::create_dir_all(
+            snapshot_path
+                .parent()
+                .expect("snapshot parent should exist"),
+        )
+        .expect("create runtime-consumption directory");
         fs::write(
             &snapshot_path,
             r#"{"surface":"vida taskflow consume final","status":"pass","operator_contracts":{"status":"pass"},"payload":{"closure_admission":{"status":"pass","admitted":true,"blockers":[],"proof_surfaces":[]}}}"#,
@@ -10697,7 +9447,10 @@ hierarchy: framework,contracts
                 .get("runtime_consumption_final_snapshot"),
             Some(&1)
         );
-        assert_eq!(rollup.latest_source_path.as_deref(), Some(snapshot_path_string.as_str()));
+        assert_eq!(
+            rollup.latest_source_path.as_deref(),
+            Some(snapshot_path_string.as_str())
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

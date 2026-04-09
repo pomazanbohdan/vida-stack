@@ -395,7 +395,7 @@ Close the first end-to-end Release-1 operator loop from intent and planning thro
 
 ### 7.10 Current Gap
 
-1. the full durable operator loop is only partly real in active Rust surfaces: `taskflow consume`, run-graph, and approval wait exist, but shared workflow/risk contracts and stable `consume`/`lane`/`approval` operator surfaces are not yet closed.
+1. the durable operator loop is materially real for Release 1: canonical `consume` and `recovery` root surfaces now exist, run-graph and approval wait are evidence-backed, and shared workflow/risk contracts are partially wired; the remaining gap is post-release conformance debt around `lane` / `approval` root promotion and richer workflow/risk enrichment.
 
 ### 7.11 Standalone Value
 
@@ -463,7 +463,7 @@ Close Release 1 as one coherent CLI-first runtime with restore/reconcile discipl
 
 ### 8.10 Current Gap
 
-1. production-baseline control tracks and closure-facing runtime proofs are now evidence-backed, but final matrix refresh, DocFlow seam hardening, release-candidate build, and explicit closure admission still remain before Release 1 can close.
+1. production-baseline control tracks and closure-facing runtime proofs are evidence-backed, and Release 1 closure is already proven; the remaining caveats are post-release architecture debt and local datastore hygiene during manual cleanup rather than open Release-1 functionality.
 
 ### 8.11 Standalone Value
 
@@ -488,5 +488,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-capability-matrix.md
 created_at: '2026-03-13T13:20:00+02:00'
-updated_at: 2026-04-07T20:22:57.796525876Z
+updated_at: 2026-04-08T07:21:54.392312171Z
 changelog_ref: release-1-capability-matrix.changelog.jsonl

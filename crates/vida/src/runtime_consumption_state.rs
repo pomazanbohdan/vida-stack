@@ -345,9 +345,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        latest_admissible_retrieval_trust_signal,
+        latest_admissible_retrieval_trust_signal, RuntimeConsumptionSummary,
         RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
-        RuntimeConsumptionSummary,
     };
 
     fn sample_runtime_consumption_summary(

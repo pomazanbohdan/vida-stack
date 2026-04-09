@@ -1,0 +1,114 @@
+use crate::contract_profile_adapter::{blocker_code, BlockerCode};
+
+pub(crate) fn build_docflow_runtime_verdict(
+    registry: &crate::RuntimeConsumptionEvidence,
+    check: &crate::RuntimeConsumptionEvidence,
+    readiness: &crate::RuntimeConsumptionEvidence,
+    proof: &crate::RuntimeConsumptionEvidence,
+) -> crate::RuntimeConsumptionDocflowVerdict {
+    let mut blockers = Vec::new();
+    if !registry.ok {
+        if let Some(code) = blocker_code(BlockerCode::MissingDocflowActivation) {
+            blockers.push(code);
+        }
+    }
+    if !check.ok {
+        if let Some(code) = blocker_code(BlockerCode::DocflowCheckBlocking) {
+            blockers.push(code);
+        }
+    }
+    if !readiness.ok {
+        if let Some(code) = blocker_code(BlockerCode::MissingReadinessVerdict) {
+            blockers.push(code);
+        }
+    }
+    if !matches!(readiness.verdict.as_deref(), Some("ready" | "blocked")) {
+        if let Some(code) = blocker_code(BlockerCode::MissingReadinessVerdict) {
+            blockers.push(code);
+        }
+    }
+    if readiness
+        .artifact_path
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(str::is_empty)
+    {
+        if let Some(code) = blocker_code(BlockerCode::MissingInventoryOrProjectionEvidence) {
+            blockers.push(code);
+        }
+    }
+    if !proof.ok {
+        if let Some(code) = blocker_code(BlockerCode::MissingProofVerdict) {
+            blockers.push(code);
+        }
+    }
+    if !matches!(proof.verdict.as_deref(), Some("ready" | "blocked")) {
+        if let Some(code) = blocker_code(BlockerCode::MissingProofVerdict) {
+            blockers.push(code);
+        }
+    }
+
+    crate::RuntimeConsumptionDocflowVerdict {
+        status: if blockers.is_empty() {
+            "pass".to_string()
+        } else {
+            "block".to_string()
+        },
+        ready: blockers.is_empty(),
+        blockers,
+        proof_surfaces: vec![
+            registry.surface.clone(),
+            check.surface.clone(),
+            readiness.surface.clone(),
+            proof.surface.clone(),
+        ],
+    }
+}
+
+pub(crate) fn blocking_docflow_activation(
+    error: &str,
+) -> crate::RuntimeConsumptionDocflowActivation {
+    crate::RuntimeConsumptionDocflowActivation {
+        activated: false,
+        runtime_family: "docflow".to_string(),
+        owner_runtime: "taskflow".to_string(),
+        evidence: serde_json::json!({
+            "error": error,
+            "overview": {
+                "surface": "vida taskflow direct runtime-consumption overview",
+                "ok": false,
+                "registry_rows": 0,
+                "check_rows": 0,
+                "readiness_rows": 0,
+                "proof_blocking": true
+            },
+            "registry": {
+                "surface": "vida docflow registry --root <repo-root>",
+                "ok": false,
+                "row_count": 0,
+                "output": ""
+            },
+            "check": {
+                "surface": "vida docflow check --profile active-canon",
+                "ok": false,
+                "row_count": 0,
+                "output": error
+            },
+            "readiness": {
+                "surface": "vida docflow readiness-check --profile active-canon",
+                "ok": false,
+                "row_count": 0,
+                "verdict": "blocked",
+                "artifact_path": "vida/config/docflow-readiness.current.jsonl",
+                "output": error
+            },
+            "proof": {
+                "surface": "vida docflow proofcheck --profile active-canon",
+                "ok": false,
+                "row_count": 0,
+                "verdict": "blocked",
+                "output": error
+            }
+        }),
+    }
+}

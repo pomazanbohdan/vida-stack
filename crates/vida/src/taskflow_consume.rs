@@ -1,6 +1,9 @@
 use std::process::ExitCode;
 use time::format_description::well_known::Rfc3339;
 
+use crate::display_lane_label;
+use crate::BlockerCode;
+
 pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
     if let Some(exit) = super::taskflow_consume_bundle::run_taskflow_consume_bundle(args).await {
         return exit;
@@ -104,7 +107,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                                 "vida taskflow consume bundle check".to_string(),
                                             ],
                                         };
-                                    normalize_release1_runtime_consumption_statuses(
+                                    normalize_runtime_consumption_statuses(
                                         &mut docflow_verdict,
                                         &mut closure_admission,
                                     );
@@ -165,7 +168,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         let taskflow_handoff_plan =
                             super::build_taskflow_handoff_plan(&role_selection);
                         let run_graph_bootstrap =
-                            super::build_runtime_consumption_run_graph_bootstrap(
+                            crate::runtime_dispatch_bootstrap::build_runtime_consumption_run_graph_bootstrap(
                                 &store,
                                 &role_selection,
                             )
@@ -175,7 +178,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             &docflow_verdict,
                             &role_selection,
                         );
-                        normalize_release1_runtime_consumption_statuses(
+                        normalize_runtime_consumption_statuses(
                             &mut docflow_verdict,
                             &mut closure_admission,
                         );
@@ -402,8 +405,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             }
                             if let Err(error) =
                                 ensure_runtime_consumption_final_task_reconciliation_summary(
-                                    &store,
-                                    None,
+                                    &store, None,
                                 )
                                 .await
                             {
@@ -535,7 +537,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     .into_iter()
                                     .flatten()
                                     .filter_map(serde_json::Value::as_str)
-                                    .map(super::display_lane_label)
+                                    .map(display_lane_label)
                                     .collect::<Vec<_>>()
                                     .join(", ");
                                 if !required_lanes.is_empty() {
@@ -577,16 +579,20 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 status: "blocked".to_string(),
                                 ready: false,
                                 blockers: vec![
-                                    crate::release1_contracts::blocker_code_value(
-                                        crate::release1_contracts::BlockerCode::MissingDocflowActivation,
+                                    crate::release_contract_adapters::blocker_code(
+                                        BlockerCode::MissingDocflowActivation,
                                     )
-                                    .expect("missing docflow activation blocker should be canonical"),
-                                    crate::release1_contracts::blocker_code_value(
-                                        crate::release1_contracts::BlockerCode::MissingReadinessVerdict,
+                                    .expect(
+                                        "missing docflow activation blocker should be canonical",
+                                    ),
+                                    crate::release_contract_adapters::blocker_code(
+                                        BlockerCode::MissingReadinessVerdict,
                                     )
-                                    .expect("missing readiness verdict blocker should be canonical"),
-                                    crate::release1_contracts::blocker_code_value(
-                                        crate::release1_contracts::BlockerCode::MissingProofVerdict,
+                                    .expect(
+                                        "missing readiness verdict blocker should be canonical",
+                                    ),
+                                    crate::release_contract_adapters::blocker_code(
+                                        BlockerCode::MissingProofVerdict,
                                     )
                                     .expect("missing proof verdict blocker should be canonical"),
                                 ],
@@ -599,7 +605,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 &docflow_verdict,
                                 &role_selection,
                             );
-                            normalize_release1_runtime_consumption_statuses(
+                            normalize_runtime_consumption_statuses(
                                 &mut docflow_verdict,
                                 &mut closure_admission,
                             );
@@ -861,7 +867,10 @@ fn approval_delegation_latest_status_requires_receipt(latest_status: &serde_json
     let next_node = status_field("next_node");
 
     matches!(status, Some("awaiting_approval"))
-        || matches!(lifecycle_stage, Some("approval_wait") | Some("implementation_review_wait"))
+        || matches!(
+            lifecycle_stage,
+            Some("approval_wait") | Some("implementation_review_wait")
+        )
         || matches!(policy_gate, Some("approval_required"))
         || matches!(
             handoff_state,
@@ -901,11 +910,11 @@ fn approval_delegation_receipt_matches_latest_status(
 fn build_retrieval_policy_decision_gate(
     bundle_check: &super::TaskflowConsumeBundleCheck,
 ) -> RetrievalPolicyDecisionGate {
-    let missing_protocol_binding_receipt = super::release1_contracts::blocker_code_str(
-        super::release1_contracts::BlockerCode::MissingProtocolBindingReceipt,
+    let missing_protocol_binding_receipt = crate::contract_profile_adapter::blocker_code_str(
+        crate::contract_profile_adapter::BlockerCode::MissingProtocolBindingReceipt,
     );
-    let protocol_binding_not_runtime_ready = super::release1_contracts::blocker_code_str(
-        super::release1_contracts::BlockerCode::ProtocolBindingNotRuntimeReady,
+    let protocol_binding_not_runtime_ready = crate::contract_profile_adapter::blocker_code_str(
+        crate::contract_profile_adapter::BlockerCode::ProtocolBindingNotRuntimeReady,
     );
     let has_protocol_binding_receipt = !bundle_check
         .blockers
@@ -916,7 +925,7 @@ fn build_retrieval_policy_decision_gate(
         .iter()
         .any(|code| code == protocol_binding_not_runtime_ready);
 
-    let blocker_code = super::release1_contracts::evaluate_policy_gate_protocol_binding(
+    let blocker_code = crate::contract_profile_adapter::evaluate_policy_gate_protocol_binding(
         "retrieval_evidence",
         if has_protocol_binding_receipt {
             Some("bundle_check_protocol_binding_receipt")
@@ -924,8 +933,7 @@ fn build_retrieval_policy_decision_gate(
             None
         },
         protocol_binding_runtime_ready,
-    )
-    .and_then(super::release1_contracts::blocker_code_value);
+    );
 
     RetrievalPolicyDecisionGate { blocker_code }
 }
@@ -959,20 +967,16 @@ fn blocked_dispatch_receipt(
     })
 }
 
-fn normalize_release1_runtime_consumption_statuses(
+fn normalize_runtime_consumption_statuses(
     docflow_verdict: &mut super::RuntimeConsumptionDocflowVerdict,
     closure_admission: &mut super::RuntimeConsumptionClosureAdmission,
 ) {
-    docflow_verdict.status = if docflow_verdict.ready {
-        "pass".to_string()
-    } else {
-        "blocked".to_string()
-    };
-    closure_admission.status = if closure_admission.admitted {
-        "pass".to_string()
-    } else {
-        "blocked".to_string()
-    };
+    docflow_verdict.status =
+        crate::release_contract_adapters::release_contract_status(docflow_verdict.ready)
+            .to_string();
+    closure_admission.status =
+        crate::release_contract_adapters::release_contract_status(closure_admission.admitted)
+            .to_string();
 }
 
 fn build_runtime_consumption_dispatch_receipt(
@@ -1104,7 +1108,7 @@ fn build_runtime_consumption_dispatch_receipt(
 mod tests {
     use super::{
         build_approval_delegation_evidence_gate, build_execution_preparation_evidence_gate,
-        build_retrieval_policy_decision_gate, normalize_release1_runtime_consumption_statuses,
+        build_retrieval_policy_decision_gate, normalize_runtime_consumption_statuses,
         ApprovalDelegationEvidenceGate, ExecutionPreparationEvidenceGate,
         RetrievalPolicyDecisionGate,
     };
@@ -1234,7 +1238,9 @@ mod tests {
             std::process::id(),
             nanos
         ));
-        let store = crate::StateStore::open(root.clone()).await.expect("open store");
+        let store = crate::StateStore::open(root.clone())
+            .await
+            .expect("open store");
         let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -1271,12 +1277,9 @@ mod tests {
             }
         });
 
-        let gate = build_approval_delegation_evidence_gate(
-            &store,
-            &role_selection,
-            &run_graph_bootstrap,
-        )
-        .await;
+        let gate =
+            build_approval_delegation_evidence_gate(&store, &role_selection, &run_graph_bootstrap)
+                .await;
         assert_eq!(
             gate.blocker_code(),
             Some("pending_approval_delegation_evidence")
@@ -1286,7 +1289,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn approval_delegation_gate_passes_when_latest_status_is_absent_for_fresh_consume_final_bootstrap() {
+    async fn approval_delegation_gate_passes_when_latest_status_is_absent_for_fresh_consume_final_bootstrap(
+    ) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1296,7 +1300,9 @@ mod tests {
             std::process::id(),
             nanos
         ));
-        let store = crate::StateStore::open(root.clone()).await.expect("open store");
+        let store = crate::StateStore::open(root.clone())
+            .await
+            .expect("open store");
         let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -1326,12 +1332,9 @@ mod tests {
             "handoff_ready": true
         });
 
-        let gate = build_approval_delegation_evidence_gate(
-            &store,
-            &role_selection,
-            &run_graph_bootstrap,
-        )
-        .await;
+        let gate =
+            build_approval_delegation_evidence_gate(&store, &role_selection, &run_graph_bootstrap)
+                .await;
         assert_eq!(
             gate,
             ApprovalDelegationEvidenceGate {
@@ -1353,7 +1356,9 @@ mod tests {
             std::process::id(),
             nanos
         ));
-        let store = crate::StateStore::open(root.clone()).await.expect("open store");
+        let store = crate::StateStore::open(root.clone())
+            .await
+            .expect("open store");
         let role_selection = crate::RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -1413,12 +1418,9 @@ mod tests {
             }
         });
 
-        let gate = build_approval_delegation_evidence_gate(
-            &store,
-            &role_selection,
-            &run_graph_bootstrap,
-        )
-        .await;
+        let gate =
+            build_approval_delegation_evidence_gate(&store, &role_selection, &run_graph_bootstrap)
+                .await;
         assert_eq!(
             gate,
             ApprovalDelegationEvidenceGate {
@@ -1450,19 +1452,13 @@ mod tests {
             proof_surfaces: vec![],
         };
 
-        normalize_release1_runtime_consumption_statuses(
-            &mut docflow_verdict,
-            &mut closure_admission,
-        );
+        normalize_runtime_consumption_statuses(&mut docflow_verdict, &mut closure_admission);
         assert_eq!(docflow_verdict.status, "blocked");
         assert_eq!(closure_admission.status, "blocked");
 
         docflow_verdict.ready = true;
         closure_admission.admitted = true;
-        normalize_release1_runtime_consumption_statuses(
-            &mut docflow_verdict,
-            &mut closure_admission,
-        );
+        normalize_runtime_consumption_statuses(&mut docflow_verdict, &mut closure_admission);
         assert_eq!(docflow_verdict.status, "pass");
         assert_eq!(closure_admission.status, "pass");
     }

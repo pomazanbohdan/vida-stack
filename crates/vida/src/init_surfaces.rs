@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use crate::host_runtime_registry::looks_like_host_runtime_source_root;
 use crate::state_store::StateStore;
 
 use super::{
@@ -71,9 +72,7 @@ pub(crate) fn looks_like_init_bootstrap_source_root(root: &Path) -> bool {
     resolve_init_agents_source(root).is_ok()
         && resolve_init_sidecar_source(root).is_ok()
         && resolve_init_config_template_source(root).is_ok()
-        && [".codex", ".qwen", ".kilo", ".opencode"]
-            .into_iter()
-            .any(|relative| root.join(relative).is_dir())
+        && looks_like_host_runtime_source_root(root)
 }
 
 pub(crate) fn first_existing_path(paths: &[PathBuf]) -> Option<PathBuf> {
@@ -563,8 +562,8 @@ Default feature-delivery flow:\n\n\
 3. Open one feature epic and one spec-pack task in `vida taskflow` before code execution.\n\
 4. Keep the design artifact canonical through `vida docflow init`, `vida docflow finalize-edit`, and `vida docflow check`.\n\
 5. Close the spec-pack task and shape the next work-pool/dev packet in `vida taskflow` after the design document names the bounded file set, proof targets, and rollout.\n\
-6. When `.codex/**` is materialized, use the delegated Codex team surface instead of collapsing the root session directly into coding.\n\
-7. Treat `vida.config.yaml` as the owner of carrier tiers and optional internal Codex aliases; project-visible activation should still use the selected carrier tier plus explicit runtime role.\n\
+6. When the selected host runtime surface is materialized, use the delegated host team surface instead of collapsing the root session directly into coding.\n\
+7. Treat `vida.config.yaml` as the owner of carrier tiers, host-system inventory, and any optional internal aliases; project-visible activation should still use the selected carrier tier plus explicit runtime role.\n\
 8. Let runtime map the current packet role into the cheapest capable carrier tier with a healthy local score from `.vida/state/worker-strategy.json`.\n\
 9. For normal write-producing work, treat project agent-first execution as the delegated lane flow through `vida agent-init`; host-tool-specific subagent APIs are optional executor details and not the canonical project control surface.\n\
 10. Keep the root session in orchestration posture unless an explicit exception path is recorded.\n\
@@ -572,12 +571,13 @@ Default feature-delivery flow:\n\n\
 12. Host-local shell/edit capability is not a lane-change receipt and does not authorize root-session coding.\n\
 13. If the user explicitly orders agent-first or parallel-agent execution, keep that routing intent sticky; do not silently substitute root-session coding.\n\
 14. Finding the patch location, reproducing a runtime defect, hitting a worker timeout, or tripping a thread-limit/`not_found` lane failure does not authorize root-session coding; recover delegated lanes, wait, reroute, or record the exception path first.\n\
-15. Saturation recovery means: inspect active lanes, synthesize completed returns, reclaim closeable lanes, and retry lawful `vida agent-init` dispatch before any local fallback is considered.\n\
-16. Under continued-development intent, stay in commentary/progress mode until the user explicitly asks to stop; do not emit final closure wording while a next lawful TaskFlow continuation item is already known.\n\
-17. Do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\n\
-18. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.\n\
-19. After any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.\n\
-20. When recording progress into the backlog from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n",
+15. If delegated execution returns only an activation view without execution evidence and a bounded read-only diagnostic path still exists, continue diagnosis to a code-level blocker or next bounded fix before asking the user to choose a route.\n\
+16. Saturation recovery means: inspect active lanes, synthesize completed returns, reclaim closeable lanes, and retry lawful `vida agent-init` dispatch before any local fallback is considered.\n\
+17. Under continued-development intent, stay in commentary/progress mode until the user explicitly asks to stop; do not emit final closure wording while a next lawful TaskFlow continuation item is already known.\n\
+18. Do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\n\
+19. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.\n\
+20. After any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.\n\
+21. When recording progress into the backlog from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n",
         super::DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE
         ),
         "process/project-operations",
@@ -588,7 +588,7 @@ Default feature-delivery flow:\n\n\
 
 pub(crate) fn render_project_agent_system_doc() -> String {
     with_scaffold_footer(
-        "# Agent System\n\nProject activation owns host CLI agent-template selection and runtime admission.\n\n- default framework host templates become available only after the selected host CLI template is materialized\n- supported host CLI systems are config-driven under `vida.config.yaml -> host_environment.systems`\n- built-in template roots currently include `.codex/**`, `.qwen/**`, `.kilo/**`, and `.opencode/**`\n- carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers` (Codex additionally keeps `vida.config.yaml -> host_environment.codex.agents` as the rendered tier-catalog source)\n- dispatch aliases are owned by the configured registry path under `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` and are not the primary project-visible agent model\n- the selected runtime surface is rendered under the configured runtime root and is not the owner of tier/rate/task-class policy\n- project activation materializes the selected host template using the configured `materialization_mode`; Codex renders `.codex/config.toml` and `.codex/agents/*.toml`, while external CLI systems use their own runtime root\n- runtime chooses the cheapest capable configured carrier tier that still satisfies the local score guard from `.vida/state/worker-strategy.json`\n- project-local agent extensions remain under `.vida/project/agent-extensions/`\n- research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists\n- project \"agent-first\" development means the delegated lane flow through `vida agent-init`; host-tool-specific subagent APIs are optional carrier mechanics and not the canonical execution contract\n- host-local shell/edit capability is an executor affordance only and must not be interpreted as lawful root-session write ownership\n- when the selected host execution class is internal, optional external CLI subagents remain auxiliary carrier details and do not make the whole session externally gated by default\n- patch localization, runtime-defect diagnosis, or other read-only findings feed the next delegated packet and do not transfer write ownership back to the root session\n",
+        "# Agent System\n\nProject activation owns host CLI agent-template selection and runtime admission.\n\n- default framework host templates become available only after the selected host CLI template is materialized\n- supported and active host CLI systems are config-driven under `vida.config.yaml -> host_environment.systems`\n- framework template inventory may be broader than the enabled active list in project config\n- carrier metadata is owned by `vida.config.yaml -> host_environment.systems.<system>.carriers` (Codex additionally keeps `vida.config.yaml -> host_environment.codex.agents` as the rendered tier-catalog source)\n- dispatch aliases are owned by the configured registry path under `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` and are not the primary project-visible agent model\n- the selected runtime surface is rendered under the configured runtime root and is not the owner of tier/rate/task-class policy\n- project activation materializes the selected host template using the configured `materialization_mode`; Codex renders the configured TOML catalog root, while external CLI systems use their configured runtime roots\n- runtime chooses the cheapest capable configured carrier tier that still satisfies the local score guard from `.vida/state/worker-strategy.json`\n- project-local agent extensions remain under `.vida/project/agent-extensions/`\n- research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists\n- project \"agent-first\" development means the delegated lane flow through `vida agent-init`; host-tool-specific subagent APIs are optional carrier mechanics and not the canonical execution contract\n- host-local shell/edit capability is an executor affordance only and must not be interpreted as lawful root-session write ownership\n- when the selected host execution class is internal, optional external CLI subagents remain auxiliary carrier details and do not make the whole session externally gated by default\n- patch localization, runtime-defect diagnosis, or other read-only findings feed the next delegated packet and do not transfer write ownership back to the root session\n",
         "process/agent-system",
         "process_doc",
         "docs/process/agent-system.md",
@@ -1488,7 +1488,7 @@ fn agent_init_activation_semantics(selection: &serde_json::Value) -> serde_json:
             "complete only the tracked-flow/task-shaping handoff; this activation does not itself execute implementation and does not authorize root-session writing"
         }
         "dispatch_packet" | "downstream_packet" => {
-            "use this activation view to execute only the bounded packet owned by the selected lane; completion still requires receipt-backed evidence and does not transfer root-session write authority"
+            "use this activation view to execute only the bounded packet owned by the selected lane; completion still requires receipt-backed evidence and does not transfer root-session write authority; if execution evidence is still missing, continue bounded diagnosis/reroute rather than treating this view as completion"
         }
         "explicit_role" => {
             "use this bounded startup view to initialize the selected non-orchestrator lane; execution still requires a lawful packet or bounded worker request"

@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+common-format-jsonl = { path = "../common-format-jsonl" }
 serde.workspace = true
 serde_json.workspace = true
 

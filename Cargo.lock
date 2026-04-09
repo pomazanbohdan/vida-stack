@@ -753,6 +753,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "common-format-jsonl"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "common-format-toon"
+version = "0.1.0"
+dependencies = [
+ "toon-format",
+]
+
+[[package]]
 name = "compact_str"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1186,6 +1201,7 @@ dependencies = [
 name = "docflow-format-jsonl"
 version = "0.1.0"
 dependencies = [
+ "common-format-jsonl",
  "docflow-contracts",
  "docflow-core",
  "serde",
@@ -1196,6 +1212,7 @@ dependencies = [
 name = "docflow-format-toon"
 version = "0.1.0"
 dependencies = [
+ "common-format-toon",
  "toon-format",
 ]
 
@@ -4990,6 +5007,7 @@ dependencies = [
 name = "taskflow-format-jsonl"
 version = "0.1.0"
 dependencies = [
+ "common-format-jsonl",
  "serde",
  "serde_json",
  "taskflow-contracts",
@@ -5000,6 +5018,7 @@ dependencies = [
 name = "taskflow-format-toon"
 version = "0.1.0"
 dependencies = [
+ "common-format-toon",
  "toon-format",
 ]
 

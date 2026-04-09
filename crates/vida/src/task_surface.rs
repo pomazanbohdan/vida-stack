@@ -1,11 +1,7 @@
 use super::*;
 
-fn canonical_release1_task_status(status: &str) -> &'static str {
-    match status.trim().to_ascii_lowercase().as_str() {
-        "pass" | "ok" => "pass",
-        "blocked" => "blocked",
-        _ => "blocked",
-    }
+fn task_json_success_status() -> &'static str {
+    crate::contract_profile_adapter::release_contract_status(true)
 }
 
 fn canonical_json_string_array_entries(value: &serde_json::Value) -> Option<Vec<String>> {
@@ -263,7 +259,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     Ok(summary) => {
                         if command.json {
                             let mut summary_json = serde_json::json!({
-                                "status": canonical_release1_task_status("ok"),
+                                "status": task_json_success_status(),
                                 "source_path": summary.source_path,
                                 "imported_count": summary.imported_count,
                                 "unchanged_count": summary.unchanged_count,
@@ -310,7 +306,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         let source_path = command.path.display().to_string();
                         if command.json {
                             crate::print_json_pretty(&serde_json::json!({
-                                "status": canonical_release1_task_status("ok"),
+                                "status": task_json_success_status(),
                                 "operation": "replace_snapshot",
                                 "source_path": source_path,
                             }));
@@ -872,35 +868,19 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_json_string_array_entries, canonical_release1_task_status,
-        normalize_task_json_contract_arrays,
+        canonical_json_string_array_entries, normalize_task_json_contract_arrays,
+        task_json_success_status,
     };
 
     #[test]
-    fn canonical_release1_task_status_preserves_release1_vocabulary() {
-        assert_eq!(canonical_release1_task_status("pass"), "pass");
-        assert_eq!(canonical_release1_task_status("ok"), "pass");
-        assert_eq!(canonical_release1_task_status("blocked"), "blocked");
-    }
-
-    #[test]
-    fn canonical_release1_task_status_fails_closed_for_unknown_or_drifted_values() {
-        assert_eq!(canonical_release1_task_status("block"), "blocked");
-        assert_eq!(canonical_release1_task_status("unknown"), "blocked");
-        assert_eq!(canonical_release1_task_status(" ok "), "pass");
-    }
-
-    #[test]
-    fn canonical_release1_task_status_normalizes_case_and_whitespace_drift() {
-        assert_eq!(canonical_release1_task_status(" PASS "), "pass");
-        assert_eq!(canonical_release1_task_status(" BLOCKED "), "blocked");
-        assert_eq!(canonical_release1_task_status(" Ok "), "pass");
+    fn task_json_success_status_defaults_to_release_contract_vocabulary() {
+        assert_eq!(task_json_success_status(), "pass");
     }
 
     #[test]
     fn normalize_task_json_contract_arrays_fail_closed_for_whitespace_only_entries() {
         let mut summary_json = serde_json::json!({
-            "status": "pass",
+            "status": task_json_success_status(),
             "blocker_codes": ["   "],
             "next_actions": ["Run `vida task import-jsonl --json`"],
         });

@@ -51,6 +51,9 @@ For normal write-producing work:
 Read-only findings feed the next packet; they do not transfer root-session write ownership.
 The canonical delegated execution surface is the runtime lane flow through `vida agent-init`; host subagent APIs may exist under the selected carrier system, but they do not replace the project runtime contract.
 Host-local shell or patch capability is not a receipt and does not transfer write ownership back to the root session.
+An activation/view-only internal-host handoff without execution evidence is a blocker/reroute condition, not an executing delegated lane.
+If that blocker still leaves a bounded read-only diagnostic path, continue diagnosis to a code-level blocker or next bounded fix before asking the user to choose a route.
+That bounded fix does not itself unlock local mutation; root-session write remains forbidden until an explicit exception-path receipt or receipt-backed delegated execution evidence is present for the active packet.
 
 ## Local-Work Boundary
 

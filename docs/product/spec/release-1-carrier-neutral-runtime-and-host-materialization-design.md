@@ -19,19 +19,19 @@ Structured-template rule:
 ## Current Context
 - Existing system overview:
   - `vida.config.yaml` already models `host_environment.systems.*`, configured carriers, and agent-system posture.
-  - runtime execution and bundle identity still center on `codex_multi_agent`, `codex_runtime_assignment`, and `.codex`, although host-system execution posture and status parity now have bounded config-driven neutral paths.
+  - host-system execution posture and status parity already have bounded config-driven neutral paths, compiled bundles no longer emit `codex_multi_agent`, canonical write paths already center on `carrier_runtime` plus `runtime_assignment`, and launcher routing no longer reads `codex_runtime_assignment`; the remaining debt is codex-heavy adapter branches, codex-era proof fixtures, and `.codex`-shaped materialization assumptions.
 - Key components and relationships:
   - [`crates/vida/src/project_activator_surface.rs`](/home/unnamed/project/vida-stack/crates/vida/src/project_activator_surface.rs) owns host-system registry, materialization, and template rendering; execution class is now config-driven there, but codex-specific adapter branches still remain.
   - [`crates/vida/src/status_surface.rs`](/home/unnamed/project/vida-stack/crates/vida/src/status_surface.rs) now resolves selected systems without codex-only fallback and reads external/internal posture from config, but still loads `.codex` and keeps compat-heavy launcher fallbacks.
-  - [`crates/vida/src/main.rs`](/home/unnamed/project/vida-stack/crates/vida/src/main.rs) still owns `codex_*` runtime-assignment logic, pricing policy, and bundle field names, although local worker score/state stores are already neutralized.
-  - [`crates/vida/src/taskflow_consume_bundle.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_consume_bundle.rs) publishes bundle snapshots from `activation_bundle["codex_multi_agent"]`.
-  - [`crates/vida/src/taskflow_routing.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_routing.rs) derives routing from codex-shaped assignment payloads.
+  - [`crates/vida/src/main.rs`](/home/unnamed/project/vida-stack/crates/vida/src/main.rs) still owns compatibility-sensitive runtime-assignment tests, pricing policy, and bundle assembly around the now-canonical neutral fields.
+  - [`crates/vida/src/taskflow_consume_bundle.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_consume_bundle.rs) still carries codex-era fixture coverage, but live compiled bundles are asserted not to emit `codex_multi_agent`.
+  - [`crates/vida/src/taskflow_routing.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_routing.rs) now resolves only canonical runtime-assignment fields, but launcher-owned routing and backend-selection law still sits above the family boundary.
   - [`crates/vida/src/taskflow_run_graph.rs`](/home/unnamed/project/vida-stack/crates/vida/src/taskflow_run_graph.rs) still carries route/backend fallback logic that reads legacy runtime-assignment aliases directly.
   - [`crates/vida/tests/boot_smoke.rs`](/home/unnamed/project/vida-stack/crates/vida/tests/boot_smoke.rs) and bundle-oriented proof paths still prove codex-era names, while [`crates/vida/tests/task_smoke.rs`](/home/unnamed/project/vida-stack/crates/vida/tests/task_smoke.rs) now includes bounded non-codex status parity coverage.
 - Current pain point or gap:
   - launcher still owns carrier truth instead of activation + compiled bundle + routing contracts
-  - bundle truth and adapter materialization remain codex-heavy even though host-system execution posture is now config-driven
-  - bundle, boot, and protocol-facing proof fixtures still pin codex-era names, which blocks safe contract neutralization
+  - adapter materialization and some proof fixtures remain codex-heavy even though canonical bundle/runtime writes are already neutral
+  - codex-era proof fixtures and materialization assumptions still block full contract neutralization
   - Release-1 plan already has `r1-05-a`, `r1-05-b`, and `r1-08-*`, but this bounded implementation pack is not yet written down as one canonical design
 
 ## Goal
@@ -286,10 +286,10 @@ Will implement / choose:
 artifact_path: product/spec/release-1-carrier-neutral-runtime-and-host-materialization-design
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-04-03'
+artifact_revision: '2026-04-08'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-carrier-neutral-runtime-and-host-materialization-design.md
 created_at: '2026-04-03T14:10:00+03:00'
-updated_at: '2026-04-03T14:10:00+03:00'
+updated_at: '2026-04-08T13:00:00+03:00'
 changelog_ref: release-1-carrier-neutral-runtime-and-host-materialization-design.changelog.jsonl

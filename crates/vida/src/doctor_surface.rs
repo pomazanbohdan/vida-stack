@@ -1,11 +1,10 @@
 use std::process::ExitCode;
 
-use crate::operator_contracts::{
-    release1_operator_contracts_consistency_error, shared_operator_output_contract_parity_error,
-};
-use crate::release1_contracts::{
+use crate::contract_profile_adapter::{
     blocker_code_str, canonical_blocker_code_list, canonical_compatibility_class_str,
-    classify_compatibility_boundary, BlockerCode, CompatibilityBoundary, CompatibilityClass,
+    classify_compatibility_boundary, operator_contracts_consistency_error,
+    render_operator_contract_envelope, shared_operator_output_contract_parity_error, BlockerCode,
+    CompatibilityBoundary, CompatibilityClass,
 };
 
 fn migration_requires_action(migration_state: &str) -> bool {
@@ -13,8 +12,7 @@ fn migration_requires_action(migration_state: &str) -> bool {
 }
 
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER: &str =
-    crate::release1_contracts::BlockerCode::UnsupportedArchitectureReservedWorkflowBoundary
-        .as_str();
+    BlockerCode::UnsupportedArchitectureReservedWorkflowBoundary.as_str();
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION: &str =
     "Clear unsupported/architecture-reserved workflow boundary state in run-graph policy/context before operator handoff.";
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER: &str =
@@ -94,7 +92,9 @@ fn trace_evidence_blocker_codes(
     }
     if effective_bundle_receipt_id.trim().is_empty()
         || effective_instruction_bundle.projected_artifacts.is_empty()
-        || effective_instruction_bundle.mandatory_chain_order.is_empty()
+        || effective_instruction_bundle
+            .mandatory_chain_order
+            .is_empty()
     {
         blocker_codes.push(blocker_code_str(BlockerCode::TraceIncomplete).to_string());
     }
@@ -178,7 +178,8 @@ fn trace_evidence_display(trace_evidence: &serde_json::Value) -> String {
     let dispatch_receipt = trace_evidence["root_trace"]["latest_run_graph_dispatch_receipt_id"]
         .as_str()
         .unwrap_or("none");
-    let runtime_consumption = trace_evidence["root_trace"]["runtime_consumption_latest_snapshot_path"]
+    let runtime_consumption = trace_evidence["root_trace"]
+        ["runtime_consumption_latest_snapshot_path"]
         .as_str()
         .unwrap_or("none");
     let protocol_binding = trace_evidence["root_trace"]["protocol_binding_latest_receipt_id"]
@@ -191,6 +192,235 @@ fn trace_evidence_display(trace_evidence: &serde_json::Value) -> String {
     format!(
         "{status} (task_reconciliation={task_reconciliation}, dispatch_receipt={dispatch_receipt}, runtime_consumption={runtime_consumption}, protocol_binding={protocol_binding}, evaluation_bundle={evaluation_bundle})"
     )
+}
+
+fn doctor_operator_blocker_codes(
+    dependency_graph_issues: &[crate::state_store::TaskGraphIssue],
+    boot_compatibility: &crate::state_store::BootCompatibilitySummary,
+    migration_preflight: &crate::state_store::MigrationPreflightSummary,
+    protocol_binding: &crate::state_store::ProtocolBindingSummary,
+    latest_final_snapshot_path: Option<&str>,
+    runtime_consumption: &crate::runtime_consumption_state::RuntimeConsumptionSummary,
+    latest_recorded_final_snapshot_path: Option<&str>,
+    root_session_write_guard: &serde_json::Value,
+    latest_run_graph_recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+    latest_run_graph_gate: Option<&crate::state_store::RunGraphGateSummary>,
+    latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+    trace_evidence_blocker_codes: Vec<String>,
+) -> Vec<String> {
+    let mut operator_blocker_codes: Vec<String> = Vec::new();
+
+    if !dependency_graph_issues.is_empty() {
+        operator_blocker_codes
+            .push(blocker_code_str(BlockerCode::DependencyGraphIssues).to_string());
+    }
+    match classify_compatibility_boundary(&boot_compatibility.classification) {
+        CompatibilityBoundary::Compatible => {}
+        CompatibilityBoundary::BlockingSupported => {
+            operator_blocker_codes
+                .push(blocker_code_str(BlockerCode::BootCompatibilityNotCompatible).to_string());
+        }
+        CompatibilityBoundary::Unsupported => {
+            operator_blocker_codes.push(
+                blocker_code_str(BlockerCode::BootCompatibilityUnsupportedBoundary).to_string(),
+            );
+        }
+    }
+    match classify_compatibility_boundary(&migration_preflight.compatibility_classification) {
+        CompatibilityBoundary::Compatible => {}
+        CompatibilityBoundary::BlockingSupported => {
+            operator_blocker_codes
+                .push(blocker_code_str(BlockerCode::MigrationPreflightNotReady).to_string());
+        }
+        CompatibilityBoundary::Unsupported => {
+            operator_blocker_codes.push(
+                blocker_code_str(BlockerCode::MigrationPreflightUnsupportedBoundary).to_string(),
+            );
+        }
+    }
+    if migration_requires_action(&migration_preflight.migration_state) {
+        operator_blocker_codes.push(blocker_code_str(BlockerCode::MigrationRequired).to_string());
+    }
+    if protocol_binding.blocking_issue_count > 0 {
+        operator_blocker_codes
+            .push(blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues).to_string());
+    }
+    let retrieval_trust_signal =
+        super::runtime_consumption_state::latest_admissible_retrieval_trust_signal(
+            runtime_consumption,
+            latest_final_snapshot_path,
+            protocol_binding.latest_receipt_id.as_deref(),
+        );
+    if retrieval_trust_signal.is_none() {
+        operator_blocker_codes.push(
+            blocker_code_str(BlockerCode::MissingRetrievalTrustSourceOperatorEvidence).to_string(),
+        );
+        operator_blocker_codes.push(
+            blocker_code_str(BlockerCode::MissingRetrievalTrustSignalOperatorEvidence).to_string(),
+        );
+        operator_blocker_codes
+            .push(blocker_code_str(BlockerCode::MissingRetrievalTrustOperatorEvidence).to_string());
+    }
+    if latest_recorded_final_snapshot_path
+        .is_some_and(final_snapshot_missing_release_admission_evidence)
+    {
+        operator_blocker_codes.push(
+            blocker_code_str(BlockerCode::IncompleteReleaseAdmissionOperatorEvidence).to_string(),
+        );
+    }
+    if root_session_write_guard["activation_view_only_dispatch_blocker_active"].as_bool()
+        == Some(true)
+    {
+        operator_blocker_codes
+            .push(blocker_code_str(BlockerCode::LocalTakeoverForbidden).to_string());
+    }
+    if !matches!(
+        root_session_write_guard["status"].as_str(),
+        Some("blocked_by_default" | "exception_takeover_active")
+    ) {
+        operator_blocker_codes
+            .push(blocker_code_str(BlockerCode::MissingRootSessionWriteGuard).to_string());
+    }
+    if latest_run_graph_recovery
+        .as_ref()
+        .is_some_and(|summary| !summary.recovery_ready)
+    {
+        operator_blocker_codes
+            .push(blocker_code_str(BlockerCode::RecoveryReadinessBlocked).to_string());
+    }
+    if latest_run_graph_gate.as_ref().is_some_and(|summary| {
+        is_unsupported_architecture_reserved_workflow_boundary(&summary.policy_gate)
+            || is_unsupported_architecture_reserved_workflow_boundary(&summary.context_state)
+    }) {
+        operator_blocker_codes.push(
+            blocker_code_str(BlockerCode::UnsupportedArchitectureReservedWorkflowBoundary)
+                .to_string(),
+        );
+    }
+    if latest_run_graph_gate.is_some() && latest_run_graph_dispatch_receipt.is_none() {
+        operator_blocker_codes
+            .push(MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER.to_string());
+    }
+    operator_blocker_codes.extend(trace_evidence_blocker_codes);
+    canonical_blocker_code_list(operator_blocker_codes.iter().map(String::as_str))
+}
+
+fn doctor_operator_next_actions(
+    operator_blocker_codes: &[String],
+    boot_compatibility: &crate::state_store::BootCompatibilitySummary,
+    migration_preflight: &crate::state_store::MigrationPreflightSummary,
+) -> Vec<String> {
+    let mut operator_next_actions: Vec<String> = Vec::new();
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == blocker_code_str(BlockerCode::DependencyGraphIssues))
+    {
+        operator_next_actions
+            .push("Run `vida task validate-graph --json` and resolve graph issues.".to_string());
+    }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == "boot_incompatible")
+    {
+        operator_next_actions.push(boot_compatibility.next_step.clone());
+    }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == blocker_code_str(BlockerCode::BootCompatibilityUnsupportedBoundary))
+    {
+        operator_next_actions.push(
+            "Normalize boot compatibility classification to release-1 values: backward_compatible|reader_upgrade_required.".to_string(),
+        );
+    }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == "migration_not_ready")
+    {
+        operator_next_actions.push(migration_preflight.next_step.clone());
+    }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == blocker_code_str(BlockerCode::MigrationPreflightUnsupportedBoundary))
+    {
+        operator_next_actions.push(
+            "Normalize migration preflight compatibility classification to release-1 values: backward_compatible|reader_upgrade_required.".to_string(),
+        );
+    }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == blocker_code_str(BlockerCode::MigrationRequired))
+    {
+        operator_next_actions
+            .push("Complete required migration before normal operation.".to_string());
+    }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues))
+    {
+        operator_next_actions.push(
+            "Run `vida taskflow protocol-binding check --json` and clear blockers.".to_string(),
+        );
+    }
+    if operator_blocker_codes.iter().any(|code| {
+        code == blocker_code_str(BlockerCode::MissingRetrievalTrustSourceOperatorEvidence)
+    }) {
+        operator_next_actions
+            .push(MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION.to_string());
+    }
+    if operator_blocker_codes.iter().any(|code| {
+        code == blocker_code_str(BlockerCode::MissingRetrievalTrustSignalOperatorEvidence)
+    }) {
+        operator_next_actions
+            .push(MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION.to_string());
+    }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == blocker_code_str(BlockerCode::MissingRetrievalTrustOperatorEvidence))
+    {
+        operator_next_actions
+            .push(MISSING_RETRIEVAL_TRUST_OPERATOR_EVIDENCE_NEXT_ACTION.to_string());
+    }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == blocker_code_str(BlockerCode::MissingRootSessionWriteGuard))
+    {
+        operator_next_actions.push(
+            "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard."
+                .to_string(),
+        );
+    }
+    if operator_blocker_codes.iter().any(|code| {
+        code == blocker_code_str(BlockerCode::IncompleteReleaseAdmissionOperatorEvidence)
+    }) {
+        operator_next_actions.push(
+            "Regenerate consume-final evidence so canonical risk/register, closure/readiness, and release-1 operator-contract fields are complete."
+                .to_string(),
+        );
+    }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == blocker_code_str(BlockerCode::RecoveryReadinessBlocked))
+    {
+        operator_next_actions.push(
+            "Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff."
+                .to_string(),
+        );
+    }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER)
+    {
+        operator_next_actions
+            .push(UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION.to_string());
+    }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER)
+    {
+        operator_next_actions
+            .push(MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION.to_string());
+    }
+    operator_next_actions
 }
 
 pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
@@ -329,17 +559,11 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-            let root_session_write_guard =
-                super::status_surface::root_session_write_guard_summary_from_snapshot_path(
-                    latest_final_snapshot_path
-                        .as_deref()
-                        .or(runtime_consumption.latest_snapshot_path.as_deref()),
-                );
-            let protocol_binding = match store.protocol_binding_summary().await {
-                Ok(summary) => summary,
-                Err(error) => {
-                    eprintln!("protocol binding: failed ({error})");
-                    return ExitCode::from(1);
+                let protocol_binding = match store.protocol_binding_summary().await {
+                    Ok(summary) => summary,
+                    Err(error) => {
+                        eprintln!("protocol binding: failed ({error})");
+                        return ExitCode::from(1);
                 }
             };
             let latest_run_graph_status = match store.latest_run_graph_status().await {
@@ -379,6 +603,18 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
+            let mut root_session_write_guard =
+                crate::status_surface_write_guard::root_session_write_guard_summary_from_snapshot_path(
+                    latest_final_snapshot_path
+                        .as_deref()
+                        .or(runtime_consumption.latest_snapshot_path.as_deref()),
+                );
+            root_session_write_guard =
+                crate::status_surface_write_guard::merge_live_exception_takeover_write_guard(
+                    root_session_write_guard,
+                    latest_run_graph_dispatch_receipt.as_ref(),
+                    latest_run_graph_recovery.as_ref(),
+                );
             let effective_instruction_bundle = match store.active_instruction_root().await {
                 Ok(root_artifact_id) => match store
                     .inspect_effective_instruction_bundle(&root_artifact_id)
@@ -393,8 +629,8 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                 Err(error) => {
                     eprintln!("active instruction root: failed ({error})");
                     return ExitCode::from(1);
-                    }
-                };
+                }
+            };
             let latest_effective_bundle_receipt =
                 match store.latest_effective_bundle_receipt_summary().await {
                     Ok(summary) => summary,
@@ -416,244 +652,43 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     &effective_instruction_bundle,
                     effective_bundle_receipt_id.as_str(),
                 );
-
-            if as_json {
-                let mut operator_blocker_codes: Vec<String> = Vec::new();
-                if !dependency_graph.is_empty() {
-                    operator_blocker_codes
-                        .push(blocker_code_str(BlockerCode::DependencyGraphIssues).to_string());
-                }
-                match classify_compatibility_boundary(&boot_compatibility.classification) {
-                    CompatibilityBoundary::Compatible => {}
-                    CompatibilityBoundary::BlockingSupported => {
-                        operator_blocker_codes.push(
-                            blocker_code_str(BlockerCode::BootCompatibilityNotCompatible)
-                                .to_string(),
-                        );
-                    }
-                    CompatibilityBoundary::Unsupported => {
-                        operator_blocker_codes.push(
-                            blocker_code_str(BlockerCode::BootCompatibilityUnsupportedBoundary)
-                                .to_string(),
-                        );
-                    }
-                }
-                match classify_compatibility_boundary(
-                    &migration_preflight.compatibility_classification,
-                ) {
-                    CompatibilityBoundary::Compatible => {}
-                    CompatibilityBoundary::BlockingSupported => {
-                        operator_blocker_codes.push(
-                            blocker_code_str(BlockerCode::MigrationPreflightNotReady).to_string(),
-                        );
-                    }
-                    CompatibilityBoundary::Unsupported => {
-                        operator_blocker_codes.push(
-                            blocker_code_str(BlockerCode::MigrationPreflightUnsupportedBoundary)
-                                .to_string(),
-                        );
-                    }
-                }
-                if migration_requires_action(&migration_preflight.migration_state) {
-                    operator_blocker_codes
-                        .push(blocker_code_str(BlockerCode::MigrationRequired).to_string());
-                }
-                if protocol_binding.blocking_issue_count > 0 {
-                    operator_blocker_codes.push(
-                        blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues).to_string(),
-                    );
-                }
-                let evidence_snapshot_path = latest_final_snapshot_path
-                    .as_deref()
-                    .or(runtime_consumption.latest_snapshot_path.as_deref());
-                let retrieval_trust_signal = super::runtime_consumption_state::latest_admissible_retrieval_trust_signal(
+            let retrieval_trust_signal =
+                super::runtime_consumption_state::latest_admissible_retrieval_trust_signal(
                     &runtime_consumption,
                     latest_final_snapshot_path.as_deref(),
                     protocol_binding.latest_receipt_id.as_deref(),
                 );
-                if retrieval_trust_signal.is_none() {
-                    operator_blocker_codes.push(
-                        blocker_code_str(BlockerCode::MissingRetrievalTrustSourceOperatorEvidence)
-                            .to_string(),
-                    );
-                    operator_blocker_codes.push(
-                        blocker_code_str(BlockerCode::MissingRetrievalTrustSignalOperatorEvidence)
-                            .to_string(),
-                    );
-                    operator_blocker_codes.push(
-                        blocker_code_str(BlockerCode::MissingRetrievalTrustOperatorEvidence)
-                            .to_string(),
-                    );
-                }
-                if latest_recorded_final_snapshot_path
+
+            if as_json {
+                let evidence_snapshot_path = latest_final_snapshot_path
                     .as_deref()
-                    .is_some_and(final_snapshot_missing_release_admission_evidence)
-                {
-                    operator_blocker_codes.push(
-                        blocker_code_str(BlockerCode::IncompleteReleaseAdmissionOperatorEvidence)
-                            .to_string(),
-                    );
-                }
-                if root_session_write_guard["status"].as_str() != Some("blocked_by_default") {
-                    operator_blocker_codes.push(
-                        blocker_code_str(BlockerCode::MissingRootSessionWriteGuard).to_string(),
-                    );
-                }
-                if latest_run_graph_recovery
-                    .as_ref()
-                    .is_some_and(|summary| !summary.recovery_ready)
-                {
-                    operator_blocker_codes
-                        .push(blocker_code_str(BlockerCode::RecoveryReadinessBlocked).to_string());
-                }
-                if latest_run_graph_gate.as_ref().is_some_and(|summary| {
-                    is_unsupported_architecture_reserved_workflow_boundary(&summary.policy_gate)
-                        || is_unsupported_architecture_reserved_workflow_boundary(
-                            &summary.context_state,
-                        )
-                }) {
-                    operator_blocker_codes.push(
-                        blocker_code_str(
-                            BlockerCode::UnsupportedArchitectureReservedWorkflowBoundary,
-                        )
-                        .to_string(),
-                    );
-                }
-                if latest_run_graph_gate.is_some() && latest_run_graph_dispatch_receipt.is_none() {
-                    operator_blocker_codes.push(
-                        MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER.to_string(),
-                    );
-                }
-                operator_blocker_codes.extend(trace_evidence_blocker_codes);
-                operator_blocker_codes =
-                    canonical_blocker_code_list(operator_blocker_codes.iter().map(String::as_str));
+                    .or(runtime_consumption.latest_snapshot_path.as_deref());
+                let operator_blocker_codes = doctor_operator_blocker_codes(
+                    &dependency_graph,
+                    &boot_compatibility,
+                    &migration_preflight,
+                    &protocol_binding,
+                    latest_final_snapshot_path.as_deref(),
+                    &runtime_consumption,
+                    latest_recorded_final_snapshot_path.as_deref(),
+                    &root_session_write_guard,
+                    latest_run_graph_recovery.as_ref(),
+                    latest_run_graph_gate.as_ref(),
+                    latest_run_graph_dispatch_receipt.as_ref(),
+                    trace_evidence_blocker_codes,
+                );
                 let operator_status = if operator_blocker_codes.is_empty() {
                     "pass"
                 } else {
                     "blocked"
                 };
-                let mut operator_next_actions: Vec<String> = Vec::new();
-                if operator_blocker_codes
-                    .iter()
-                    .any(|code| code == blocker_code_str(BlockerCode::DependencyGraphIssues))
-                {
-                    operator_next_actions.push(
-                        "Run `vida task validate-graph --json` and resolve graph issues."
-                            .to_string(),
-                    );
-                }
-                if operator_blocker_codes
-                    .iter()
-                    .any(|code| code == "boot_incompatible")
-                {
-                    operator_next_actions.push(boot_compatibility.next_step.clone());
-                }
-                if operator_blocker_codes.iter().any(|code| {
-                    code == blocker_code_str(BlockerCode::BootCompatibilityUnsupportedBoundary)
-                }) {
-                    operator_next_actions.push(
-                        "Normalize boot compatibility classification to release-1 values: backward_compatible|reader_upgrade_required.".to_string(),
-                    );
-                }
-                if operator_blocker_codes
-                    .iter()
-                    .any(|code| code == "migration_not_ready")
-                {
-                    operator_next_actions.push(migration_preflight.next_step.clone());
-                }
-                if operator_blocker_codes.iter().any(|code| {
-                    code == blocker_code_str(BlockerCode::MigrationPreflightUnsupportedBoundary)
-                }) {
-                    operator_next_actions.push(
-                        "Normalize migration preflight compatibility classification to release-1 values: backward_compatible|reader_upgrade_required.".to_string(),
-                    );
-                }
-                if operator_blocker_codes
-                    .iter()
-                    .any(|code| code == blocker_code_str(BlockerCode::MigrationRequired))
-                {
-                    operator_next_actions
-                        .push("Complete required migration before normal operation.".to_string());
-                }
-                if operator_blocker_codes.iter().any(|code| {
-                    code == blocker_code_str(BlockerCode::ProtocolBindingBlockingIssues)
-                }) {
-                    operator_next_actions.push(
-                        "Run `vida taskflow protocol-binding check --json` and clear blockers."
-                            .to_string(),
-                    );
-                }
-                if operator_blocker_codes.iter().any(|code| {
-                    code == blocker_code_str(
-                        BlockerCode::MissingRetrievalTrustSourceOperatorEvidence,
-                    )
-                }) {
-                    operator_next_actions.push(
-                        MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION.to_string(),
-                    );
-                }
-                if operator_blocker_codes.iter().any(|code| {
-                    code == blocker_code_str(
-                        BlockerCode::MissingRetrievalTrustSignalOperatorEvidence,
-                    )
-                }) {
-                    operator_next_actions.push(
-                        MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION.to_string(),
-                    );
-                }
-                if operator_blocker_codes.iter().any(|code| {
-                    code == blocker_code_str(BlockerCode::MissingRetrievalTrustOperatorEvidence)
-                }) {
-                    operator_next_actions.push(
-                        MISSING_RETRIEVAL_TRUST_OPERATOR_EVIDENCE_NEXT_ACTION.to_string(),
-                    );
-                }
-                if operator_blocker_codes
-                    .iter()
-                    .any(|code| code == blocker_code_str(BlockerCode::MissingRootSessionWriteGuard))
-                {
-                    operator_next_actions.push(
-                        "Run `vida taskflow recovery latest --json` and `vida taskflow consume continue --json` to confirm runtime artifacts expose the canonical root-session pre-write guard."
-                            .to_string(),
-                    );
-                }
-                if operator_blocker_codes.iter().any(|code| {
-                    code == blocker_code_str(
-                        BlockerCode::IncompleteReleaseAdmissionOperatorEvidence,
-                    )
-                }) {
-                    operator_next_actions.push(
-                        "Regenerate consume-final evidence so canonical risk/register, closure/readiness, and release-1 operator-contract fields are complete."
-                            .to_string(),
-                    );
-                }
-                if operator_blocker_codes
-                    .iter()
-                    .any(|code| code == blocker_code_str(BlockerCode::RecoveryReadinessBlocked))
-                {
-                    operator_next_actions.push(
-                        "Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff."
-                            .to_string(),
-                    );
-                }
-                if operator_blocker_codes
-                    .iter()
-                    .any(|code| code == UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER)
-                {
-                    operator_next_actions.push(
-                        UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION.to_string(),
-                    );
-                }
-                if operator_blocker_codes.iter().any(|code| {
-                    code == MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER
-                }) {
-                    operator_next_actions.push(
-                        MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION
-                            .to_string(),
-                    );
-                }
+                let mut operator_next_actions = doctor_operator_next_actions(
+                    &operator_blocker_codes,
+                    &boot_compatibility,
+                    &migration_preflight,
+                );
                 operator_next_actions.extend(trace_evidence_next_actions);
-                if let Some(error) = release1_operator_contracts_consistency_error(
+                if let Some(error) = operator_contracts_consistency_error(
                     operator_status,
                     &operator_blocker_codes,
                     &operator_next_actions,
@@ -674,7 +709,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     "effective_instruction_bundle_receipt_id": effective_bundle_receipt_id,
                     "root_session_write_guard_status": root_session_write_guard["status"].clone(),
                 });
-                let operator_contracts = super::build_release1_operator_contracts_envelope(
+                let operator_contracts = render_operator_contract_envelope(
                     operator_status,
                     operator_blocker_codes,
                     operator_next_actions,
@@ -997,11 +1032,12 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::{
-        final_snapshot_missing_release_admission_evidence,
-        build_trace_evidence_summary,
-        release1_operator_contracts_consistency_error,
-        shared_operator_output_contract_parity_error,
+        build_trace_evidence_summary, final_snapshot_missing_release_admission_evidence,
         selected_effective_bundle_receipt_id,
+    };
+    use crate::contract_profile_adapter::{
+        operator_contracts_consistency_error as release1_operator_contracts_consistency_error,
+        shared_operator_output_contract_parity_error,
     };
     use crate::operator_contracts::canonical_release1_operator_contract_status;
 
@@ -1201,7 +1237,9 @@ mod tests {
             downstream_dispatch_blockers: vec![],
             downstream_dispatch_packet_path: None,
             downstream_dispatch_status: Some("packet_ready".to_string()),
-            downstream_dispatch_result_path: Some("/tmp/project/downstream-result.json".to_string()),
+            downstream_dispatch_result_path: Some(
+                "/tmp/project/downstream-result.json".to_string(),
+            ),
             downstream_dispatch_trace_path: Some("/tmp/project/downstream-trace.json".to_string()),
             downstream_dispatch_executed_count: 1,
             downstream_dispatch_active_target: Some("verification".to_string()),
@@ -1257,10 +1295,8 @@ mod tests {
             protocol_binding,
             effective_instruction_bundle,
         ) = sample_trace_evidence_inputs();
-        let effective_bundle_receipt_id = selected_effective_bundle_receipt_id(
-            &effective_instruction_bundle,
-            None,
-        );
+        let effective_bundle_receipt_id =
+            selected_effective_bundle_receipt_id(&effective_instruction_bundle, None);
 
         let (trace_evidence, blocker_codes, next_actions) = build_trace_evidence_summary(
             latest_task_reconciliation.as_ref(),
@@ -1346,10 +1382,8 @@ mod tests {
             protocol_binding,
             effective_instruction_bundle,
         ) = sample_trace_evidence_inputs();
-        let effective_bundle_receipt_id = selected_effective_bundle_receipt_id(
-            &effective_instruction_bundle,
-            None,
-        );
+        let effective_bundle_receipt_id =
+            selected_effective_bundle_receipt_id(&effective_instruction_bundle, None);
 
         let (trace_evidence, blocker_codes, next_actions) = build_trace_evidence_summary(
             latest_task_reconciliation.as_ref(),

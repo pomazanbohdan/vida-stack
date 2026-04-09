@@ -210,6 +210,12 @@ Companion rule:
 28. [ops-state-and-runtime-evidence-hygiene-design.md](ops-state-and-runtime-evidence-hygiene-design.md)
    Config families: bounded post-release ops policy for authoritative state roots, runtime-consumption evidence hygiene, temp-state proof workflows, and generated-state working-tree posture
    Registered path: `docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md`
+29. [launcher-decomposition-and-code-hygiene-design.md](launcher-decomposition-and-code-hygiene-design.md)
+   Config families: bounded launcher decomposition seams, large-file concentration reduction, dead-code and duplication validation, and proof-safe extraction planning for `crates/vida/**`
+   Registered path: `docs/product/spec/launcher-decomposition-and-code-hygiene-design.md`
+30. [internal-codex-agent-execution-fail-closed-design.md](internal-codex-agent-execution-fail-closed-design.md)
+   Config families: bounded internal-host activation-view fail-closed semantics, truthful agent-lane execution state, root-session anti-bypass guidance, and runtime dispatch bridge hardening for Codex/internal execution
+   Registered path: `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
 
 ### Support
 
@@ -265,5 +271,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-04-08T06:39:58.42012708Z
+updated_at: 2026-04-08T07:57:44.922704395Z
 changelog_ref: current-spec-map.changelog.jsonl

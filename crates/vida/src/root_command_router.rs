@@ -1,11 +1,70 @@
 use std::process::ExitCode;
 
+use serde::Serialize;
+
 use super::{
-    agent_feedback_surface, docflow_proxy, doctor_surface, init_surfaces, memory_surface,
+    agent_feedback_surface, docflow_proxy, doctor_surface, init_surfaces, lane_surface,
+    memory_surface,
     print_root_help, project_activator_surface, protocol_surface, resolve_runtime_project_root,
     run_taskflow_proxy, state_store, status_surface, task_surface, Cli, Command, TaskArgs,
     TaskCommand,
 };
+
+#[derive(Serialize)]
+struct UnsupportedRootSurfaceEnvelope<'a> {
+    surface: &'a str,
+    status: &'a str,
+    trace_id: Option<&'a str>,
+    workflow_class: Option<&'a str>,
+    risk_tier: Option<&'a str>,
+    artifact_refs: Vec<String>,
+    next_actions: Vec<String>,
+    blocker_codes: Vec<String>,
+    reason: String,
+}
+
+fn run_reserved_root_surface(surface: &'static str, args: &[String]) -> ExitCode {
+    let as_json = args.iter().any(|arg| arg == "--json");
+    let envelope = UnsupportedRootSurfaceEnvelope {
+        surface,
+        status: "blocked",
+        trace_id: None,
+        workflow_class: None,
+        risk_tier: None,
+        artifact_refs: Vec::new(),
+        next_actions: match surface {
+            "vida approval" => vec![
+                "Use `vida taskflow query \"approval\"` to discover the bounded approval command, then apply the run-graph update explicitly.".to_string(),
+            ],
+            _ => vec!["Use the bounded TaskFlow family surface until the root surface is implemented.".to_string()],
+        },
+        blocker_codes: vec!["unsupported_blocker_code".to_string()],
+        reason: format!(
+            "{surface} is a reserved Release-1 root surface but does not yet have a family-owned implementation; the runtime fails closed instead of silently falling back."
+        ),
+    };
+
+    if crate::surface_render::print_surface_json(
+        &envelope,
+        as_json,
+        "reserved root surface envelope should serialize",
+    ) {
+        return ExitCode::from(2);
+    }
+
+    crate::print_surface_header(crate::RenderMode::Plain, surface);
+    crate::print_surface_line(crate::RenderMode::Plain, "status", envelope.status);
+    crate::print_surface_line(
+        crate::RenderMode::Plain,
+        "blocker_codes",
+        &envelope.blocker_codes.join(", "),
+    );
+    crate::print_surface_line(crate::RenderMode::Plain, "reason", &envelope.reason);
+    if let Some(next_action) = envelope.next_actions.first() {
+        crate::print_surface_line(crate::RenderMode::Plain, "next_action", next_action);
+    }
+    ExitCode::from(2)
+}
 
 pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
     if let Some(error) = prepare_runtime_state_dir(&cli.command) {
@@ -38,6 +97,8 @@ pub(crate) async fn run_root_command(cli: Cli) -> ExitCode {
             prefixed.extend(args.args);
             run_taskflow_proxy(super::ProxyArgs { args: prefixed }).await
         }
+        Some(Command::Lane(args)) => lane_surface::run_lane(args).await,
+        Some(Command::Approval(args)) => run_reserved_root_surface("vida approval", &args.args),
         Some(Command::Recovery(args)) => {
             let mut prefixed = vec!["recovery".to_string()];
             prefixed.extend(args.args);

@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "crates/common-format-jsonl",
+    "crates/common-format-toon",
     "crates/docflow-config",
     "crates/docflow-contracts",
     "crates/docflow-core",

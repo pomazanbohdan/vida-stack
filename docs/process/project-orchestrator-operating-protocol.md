@@ -171,6 +171,9 @@ Clarification:
 3. local shell access, `apply_patch`, or any other host-tool write affordance is not by itself a legality signal for root-session implementation.
 4. `vida agent-init` is an activation/view surface; reading or rendering that surface is not by itself evidence that the selected lane already executed the packet.
 5. if `vida agent-init --dispatch-packet ...` activates only a `tracked_flow_packet` or other shaping-only handoff, the orchestrator must continue shaping/rerouting until a concrete bounded write-producing packet exists or an explicit blocker is recorded.
+6. if an internal host backend returns only an activation view and no execution evidence, treat that state as a bridge blocker rather than a live delegated execution lane.
+7. if that bridge blocker still leaves a bounded read-only diagnostic path, continue to a code-level blocker or next bounded fix before pausing for user clarification.
+8. that bounded fix remains diagnosis/shaping output only until runtime evidence changes; do not convert it into local root-session mutation unless a new explicit exception-path receipt or receipt-backed delegated execution evidence is recorded first.
 
 Lane-identity rule:
 

@@ -1,6 +1,6 @@
 # Release 1 Current State
 
-Status: active product execution report (runtime checkpoint refreshed `2026-04-05`)
+Status: active product execution report (runtime checkpoint refreshed `2026-04-08`)
 
 Purpose: record the bounded implementation-reality checkpoint for `Release 1` across `TaskFlow`, `DocFlow`, and the current `vida` launcher shell so execution planning can be based on actual code and proven runtime surfaces rather than architectural intent alone.
 
@@ -57,17 +57,17 @@ Interpretation:
 1. Release 1 is no longer accurately described as runtime-refactor-only work.
 2. Release 1 must now be judged against production trust/control readiness as well as architectural cleanup.
 
-## 1.3 Local Audit Delta Checkpoint (`2026-04-05`)
+## 1.3 Local Audit Delta Checkpoint (`2026-04-08`)
 
 A fresh code/spec pass for the current workspace sharpens the checkpoint in these bounded ways:
 
-1. root CLI still exposes `status`, `doctor`, `project-activator`, `orchestrator-init`, and `agent-init`, but Release-1 operator surfaces `consume`, `lane`, `approval`, and `recovery` are still routed under `vida taskflow ...` rather than promoted as stable top-level root surfaces.
+1. root CLI now exposes canonical top-level `consume` and `recovery` surfaces plus explicit fail-closed reserved `lane` and `approval` root surfaces alongside `status`, `doctor`, `project-activator`, `orchestrator-init`, and `agent-init`; the remaining gap is that `lane` and `approval` still lack family-owned implementation beneath those reserved root ids.
 2. `crates/vida/src/release1_contracts.rs` now canonicalizes `workflow_class`, `risk_tier`, `lane_status`, `approval_status`, `gate_level`, `compatibility_class`, and registry-backed blocker values, but live workflow classification remains only partially wired into operator surfaces and currently lands as explicit `null` placeholders where no bounded classifier exists yet.
-3. `crates/taskflow-state/src/lib.rs` and `crates/taskflow-contracts/src/lib.rs` remain intentionally thin while most persisted runtime truth, checkpoint, recovery, and projection logic still lives in `crates/vida/src/state_store.rs`; this confirms the shell-carve-out finding rather than weakening it.
+3. `crates/taskflow-state/src/lib.rs` and `crates/taskflow-contracts/src/lib.rs` remain intentionally thin while most persisted runtime truth, checkpoint, recovery, and projection logic still lives in `crates/vida/src/state_store.rs`; `state_store_source_scan.rs` and `state_store_run_graph_summary.rs` now hold two split-off helper seams, which confirms the shell-carve-out finding rather than weakening it.
 4. activation materialization and filesystem projection are real in `project_activator_surface.rs` and `init_surfaces.rs`, but they still bridge through `vida.config.yaml` and `.vida/project/agent-extensions/**` rather than closing on one clearly family-owned activation/configurator service.
 5. no SierraDB/event-spine adapter or `domain_event` / `projection_checkpoint_record` contract exists in the workspace today; if event-state is introduced it must remain adapter-backed, feature-gated, and subordinate to the current `SurrealDB`-first activation/projection posture.
 6. local proof execution through `cargo run --bin vida -- orchestrator-init` is currently blocked in this environment because the system linker `cc` is missing, so this audit relies on static code/spec inspection plus the checked-in smoke evidence.
-7. the active `vida.config.yaml` already models `host_environment.systems.*`, `host_environment.systems.<system>.execution_class`, and `agent_system.subagents.*`; status/activator surfaces now honor config-driven internal vs external posture, and neutral runtime fields `carrier_runtime` plus `runtime_assignment` are already emitted, but runtime execution still mirrors `codex_multi_agent` / `codex_runtime_assignment` as compatibility aliases and still routes worker dispatch through `vida agent-init`.
+7. the active `vida.config.yaml` already models `host_environment.systems.*`, `host_environment.systems.<system>.execution_class`, and `agent_system.subagents.*`; status/activator surfaces now honor config-driven internal vs external posture, canonical write paths emit neutral `carrier_runtime` plus `runtime_assignment`, compiled bundles no longer emit `codex_multi_agent`, routing no longer reads `codex_runtime_assignment` as a compatibility fallback, and the remaining neutrality debt is codex-heavy materialization/proof residue plus delegated worker dispatch still routing through `vida agent-init`.
 8. scaffold/template/init/activator surfaces are closer to the multi-system carrier law than before because the template now materializes `host_environment.systems` and execution class, but bundle identity, codex adapter branches, and generated docs still keep codex-heavy assumptions.
 9. activation truth is DB-persisted and read-back verified, but the stored truth is still a launcher-captured snapshot of `vida.config.yaml`, compiled bundle, and pack-router keywords rather than one DB-native configurator authority.
 10. the `TaskFlow -> DocFlow` seam is still assembled in the launcher by in-process `docflow_cli` calls and shell-derived verdict shaping; the current “receipt-backed seam” check proves protocol-binding receipt presence only.
@@ -104,13 +104,14 @@ Current Rust workspace members:
 
 Concentration findings:
 
-1. `crates/vida/src/state_store.rs` is `11912` lines
-2. `crates/vida/src/main.rs` is `8490` lines
-3. `crates/vida/src/project_activator_surface.rs` is `2686` lines
+1. `crates/vida/src/state_store.rs` is `11510` lines
+2. `crates/vida/src/main.rs` is `7370` lines
+3. `crates/vida/src/project_activator_surface.rs` is `2938` lines
 4. `crates/vida/src/taskflow_run_graph.rs` is `2231` lines
-5. the `DocFlow` family is already decomposed into many bounded crates,
-6. the `TaskFlow` family has strong kernel/state foundations, but much runtime behavior still lives in the launcher shell,
-7. `taskflow-state` and `taskflow-contracts` are still too thin to be considered the primary owners of the runtime truth currently implemented in the launcher.
+5. `crates/vida/src/state_store_source_scan.rs` and `crates/vida/src/state_store_run_graph_summary.rs` now hold the extracted source-scan and run-graph summary seams, so the largest launcher-owned cluster is smaller but still concentrated
+6. the `DocFlow` family is already decomposed into many bounded crates,
+7. the `TaskFlow` family has strong kernel/state foundations, but much runtime behavior still lives in the launcher shell,
+8. `taskflow-state` and `taskflow-contracts` are still too thin to be considered the primary owners of the runtime truth currently implemented in the launcher.
 
 ## 3. Readiness Scale
 
@@ -299,10 +300,10 @@ Reason:
 artifact_path: product/spec/release-1-current-state
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-04-03'
+artifact_revision: '2026-04-08'
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/release-1-current-state.md
 created_at: '2026-03-13T14:12:00+02:00'
-updated_at: 2026-04-03T18:40:00+03:00
+updated_at: 2026-04-08T09:37:14Z
 changelog_ref: release-1-current-state.changelog.jsonl

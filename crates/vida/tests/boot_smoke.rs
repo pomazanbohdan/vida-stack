@@ -942,8 +942,7 @@ fn root_help_succeeds() {
     assert!(stdout.contains("approval"));
     assert!(stdout.contains("recovery"));
     assert!(stdout.contains("thin root alias to the TaskFlow consume family"));
-    assert!(stdout
-        .contains("reserved root operator surface for lane inspection; currently fail-closed"));
+    assert!(stdout.contains("inspect or mutate canonical lane/takeover operator state"));
     assert!(stdout.contains(
         "reserved root operator surface for approval inspection/mutation; currently fail-closed"
     ));
@@ -6187,7 +6186,7 @@ fn taskflow_run_graph_seed_builds_scope_discussion_state_from_configured_agent_s
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["selected_backend"],
-        "middle"
+        "qwen_cli"
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["lane_id"],
@@ -6273,7 +6272,7 @@ fn taskflow_run_graph_seed_builds_pbi_discussion_state_from_configured_agent_sys
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["selected_backend"],
-        "middle"
+        "qwen_cli"
     );
     assert_eq!(seed_parsed["payload"]["status"]["lane_id"], "pm_lane");
     assert_eq!(
@@ -6352,7 +6351,7 @@ fn taskflow_run_graph_seed_builds_implementation_dispatch_state_for_default_rout
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["selected_backend"],
-        "junior"
+        "qwen_cli"
     );
     assert_eq!(seed_parsed["payload"]["status"]["lane_id"], "analysis_lane");
     assert_eq!(
