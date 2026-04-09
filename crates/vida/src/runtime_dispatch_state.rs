@@ -716,6 +716,128 @@ agent_system:
             Some("internal")
         );
     }
+
+    #[test]
+    fn internal_host_can_dispatch_explicit_external_backend_when_policy_selects_it() {
+        let overlay = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      runtime_root: .codex
+agent_system:
+  subagents:
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+"#,
+        )
+        .expect("overlay should parse");
+
+        let dispatch = runtime_agent_lane_dispatch_from_overlay(
+            Some(&overlay),
+            "codex",
+            "internal",
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            Some("qwen_cli"),
+        );
+
+        assert_eq!(dispatch.surface, "external_cli:qwen_cli");
+        assert_eq!(dispatch.backend_dispatch["selected_cli_system"], "codex");
+        assert_eq!(
+            dispatch.backend_dispatch["selected_execution_class"],
+            "internal"
+        );
+        assert_eq!(dispatch.backend_dispatch["backend_id"], "qwen_cli");
+    }
+
+    #[test]
+    fn external_host_keeps_policy_selected_internal_backend_on_agent_init() {
+        let overlay = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: qwen
+  systems:
+    qwen:
+      enabled: true
+      execution_class: external
+      runtime_root: .qwen
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("overlay should parse");
+
+        let dispatch = runtime_agent_lane_dispatch_from_overlay(
+            Some(&overlay),
+            "qwen",
+            "external",
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            Some("internal_subagents"),
+        );
+
+        assert_eq!(dispatch.surface, "vida agent-init");
+        assert_eq!(dispatch.backend_dispatch["selected_cli_system"], "qwen");
+        assert_eq!(
+            dispatch.backend_dispatch["selected_execution_class"],
+            "external"
+        );
+        assert_eq!(dispatch.backend_dispatch["backend_class"], "internal");
+        assert_eq!(dispatch.backend_dispatch["backend_id"], "internal_subagents");
+        assert_eq!(
+            dispatch.backend_dispatch["policy_selected_internal_backend"],
+            true
+        );
+    }
+
+    #[test]
+    fn internal_host_without_preferred_backend_stays_on_agent_init() {
+        let overlay = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      runtime_root: .codex
+agent_system:
+  subagents:
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+"#,
+        )
+        .expect("overlay should parse");
+
+        let dispatch = runtime_agent_lane_dispatch_from_overlay(
+            Some(&overlay),
+            "codex",
+            "internal",
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            None,
+        );
+
+        assert_eq!(dispatch.surface, "vida agent-init");
+        assert_eq!(dispatch.backend_dispatch["selected_cli_system"], "codex");
+        assert_eq!(
+            dispatch.backend_dispatch["selected_execution_class"],
+            "internal"
+        );
+        assert_eq!(
+            dispatch.backend_dispatch["backend_id"],
+            serde_json::Value::Null
+        );
+    }
 }
 
 fn runtime_agent_lane_dispatch_from_overlay(
@@ -749,7 +871,7 @@ fn runtime_agent_lane_dispatch_from_overlay(
             };
         }
     }
-    if selected_execution_class != "external" {
+    if selected_execution_class != "external" && preferred_backend.is_none() {
         return RuntimeAgentLaneDispatch {
             surface: "vida agent-init".to_string(),
             activation_command: agent_init_command,

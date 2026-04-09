@@ -23,7 +23,7 @@ language_policy:
   todo_protocol: rust
 
 host_environment:
-  cli_system: opencode
+  cli_system: codex
   codex:
     agents: &codex_agent_catalog
       junior:

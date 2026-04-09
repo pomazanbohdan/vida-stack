@@ -46,3 +46,9 @@ source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
 updated_at: 2026-04-05T06:19:10.127047794Z
 changelog_ref: README.changelog.jsonl
+- `docs/product/spec/mempalace-against-vida-specs-project-design-design.md`
+- `docs/product/spec/config-driven-host-system-runtime-keep-design.md`
+- `docs/product/spec/specify-config-driven-host-system-inventory-design.md`
+- `docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md`
+- `docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
+- `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
