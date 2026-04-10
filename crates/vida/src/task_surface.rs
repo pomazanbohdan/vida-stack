@@ -593,6 +593,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.close_task(&command.task_id, &command.reason).await {
                     Ok(task) => {
+                        if let Err(error) = crate::runtime_dispatch_state::maybe_bridge_closed_implementer_task_into_latest_receipt(&store, &command.task_id).await {
+                            eprintln!("Failed to bridge closed task into latest run-graph dispatch receipt: {error}");
+                            return ExitCode::from(1);
+                        }
                         let task_value = serde_json::to_value(&task)
                             .expect("task close payload should serialize");
                         let telemetry = match project_root.as_deref() {

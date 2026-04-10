@@ -46,6 +46,11 @@ enum LaneCommand<'a> {
         run_id: &'a str,
         as_json: bool,
     },
+    Complete {
+        run_id: &'a str,
+        receipt_id: &'a str,
+        as_json: bool,
+    },
     ExceptionTakeover {
         run_id: &'a str,
         receipt_id: &'a str,
@@ -54,7 +59,7 @@ enum LaneCommand<'a> {
 }
 
 fn lane_usage() -> &'static str {
-    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> [--json]"
+    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane complete <run-id> --receipt-id <id> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> [--json]"
 }
 
 fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
@@ -89,6 +94,35 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
                 return Err(lane_usage().to_string());
             };
             Ok(LaneCommand::ShowRun { run_id, as_json })
+        }
+        [head, run_id, rest @ ..] if head == "complete" => {
+            let mut as_json = false;
+            let mut receipt_id = None;
+            let mut index = 0;
+            while index < rest.len() {
+                match rest[index].as_str() {
+                    "--json" => {
+                        as_json = true;
+                        index += 1;
+                    }
+                    "--receipt-id" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        receipt_id = Some(value.as_str());
+                        index += 2;
+                    }
+                    _ => return Err(lane_usage().to_string()),
+                }
+            }
+            let Some(receipt_id) = receipt_id else {
+                return Err(lane_usage().to_string());
+            };
+            Ok(LaneCommand::Complete {
+                run_id,
+                receipt_id,
+                as_json,
+            })
         }
         [head, run_id, rest @ ..] if head == "exception-takeover" => {
             let mut as_json = false;
@@ -151,6 +185,8 @@ fn build_lane_envelope(
     let run_id = summary.run_id.clone();
     let dispatch_packet_path = summary.dispatch_packet_path.clone();
     let dispatch_result_path = summary.dispatch_result_path.clone();
+    let downstream_dispatch_packet_path = summary.downstream_dispatch_packet_path.clone();
+    let downstream_dispatch_result_path = summary.downstream_dispatch_result_path.clone();
     let exception_path_receipt_id = summary.exception_path_receipt_id.clone();
     let supersedes_receipt_id = summary.supersedes_receipt_id.clone();
     let lane_status = summary.lane_status.clone();
@@ -170,6 +206,8 @@ fn build_lane_envelope(
             "exception_path_receipt_id": exception_path_receipt_id.clone(),
             "dispatch_packet_path": dispatch_packet_path.clone(),
             "dispatch_result_path": dispatch_result_path.clone(),
+            "downstream_dispatch_packet_path": downstream_dispatch_packet_path.clone(),
+            "downstream_dispatch_result_path": downstream_dispatch_result_path.clone(),
         }),
         next_actions,
         blocker_codes: blocker_code
@@ -268,6 +306,20 @@ fn emit_blocked_lane_envelope(as_json: bool) -> ExitCode {
     ExitCode::from(2)
 }
 
+fn read_lane_packet(path: &str) -> Result<serde_json::Value, String> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|error| format!("Failed to read persisted lane packet `{path}`: {error}"))?;
+    serde_json::from_str(&raw)
+        .map_err(|error| format!("Failed to decode persisted lane packet `{path}`: {error}"))
+}
+
+fn write_lane_packet(path: &str, packet: &serde_json::Value) -> Result<(), String> {
+    let encoded = serde_json::to_string_pretty(packet)
+        .map_err(|error| format!("Failed to encode persisted lane packet `{path}`: {error}"))?;
+    std::fs::write(path, encoded)
+        .map_err(|error| format!("Failed to write persisted lane packet `{path}`: {error}"))
+}
+
 pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
     if args.args.is_empty() || args.args.iter().all(|arg| arg.starts_with('-')) {
         return emit_blocked_lane_envelope(args.args.iter().any(|arg| arg == "--json"));
@@ -325,6 +377,85 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 Err(_) => None,
             };
             let envelope = build_lane_envelope(summary, status, false, None, Vec::new());
+            emit_lane_envelope(&envelope, as_json)
+        }
+        LaneCommand::Complete {
+            run_id,
+            receipt_id,
+            as_json,
+        } => {
+            let Some(mut receipt) = (match store.run_graph_dispatch_receipt(run_id).await {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    eprintln!("Failed to read lane receipt `{run_id}`: {error}");
+                    return ExitCode::from(1);
+                }
+            }) else {
+                eprintln!("Missing lane receipt for `{run_id}`.");
+                return ExitCode::from(2);
+            };
+            let Some(packet_path) = receipt.downstream_dispatch_packet_path.clone() else {
+                eprintln!(
+                    "Lane `{run_id}` has no persisted downstream dispatch packet for bounded completion evidence."
+                );
+                return ExitCode::from(2);
+            };
+            let mut packet = match read_lane_packet(&packet_path) {
+                Ok(packet) => packet,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(1);
+                }
+            };
+            let completed_target = packet
+                .get("downstream_dispatch_active_target")
+                .and_then(serde_json::Value::as_str)
+                .or(receipt.downstream_dispatch_active_target.as_deref())
+                .or(receipt.downstream_dispatch_last_target.as_deref())
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(receipt.dispatch_target.as_str())
+                .to_string();
+            let completion_result_path =
+                match crate::runtime_dispatch_state::write_runtime_lane_completion_result(
+                    store.root(),
+                    run_id,
+                    &completed_target,
+                    receipt_id,
+                    &packet_path,
+                ) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
+                };
+            packet["downstream_dispatch_ready"] = serde_json::json!(true);
+            packet["downstream_dispatch_blockers"] = serde_json::json!([]);
+            packet["downstream_dispatch_status"] = serde_json::json!("packet_ready");
+            packet["downstream_dispatch_result_path"] =
+                serde_json::json!(completion_result_path.clone());
+            packet["downstream_lane_status"] = serde_json::json!("packet_ready");
+            packet["downstream_dispatch_active_target"] = serde_json::json!(completed_target);
+            if let Err(error) = write_lane_packet(&packet_path, &packet) {
+                eprintln!("{error}");
+                return ExitCode::from(1);
+            }
+
+            receipt.downstream_dispatch_ready = true;
+            receipt.downstream_dispatch_blockers.clear();
+            receipt.downstream_dispatch_status = Some("packet_ready".to_string());
+            receipt.downstream_dispatch_result_path = Some(completion_result_path);
+            receipt.downstream_dispatch_active_target = Some(completed_target.clone());
+            receipt.downstream_dispatch_last_target = Some(completed_target);
+            if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
+                eprintln!("Failed to persist lane completion evidence: {error}");
+                return ExitCode::from(1);
+            }
+
+            let updated_summary =
+                crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+            let status = store.run_graph_status(run_id).await.ok();
+            let envelope = build_lane_envelope(updated_summary, status, false, None, Vec::new());
             emit_lane_envelope(&envelope, as_json)
         }
         LaneCommand::ExceptionTakeover {
@@ -470,6 +601,26 @@ mod tests {
         ];
         let command = parse_lane_args(&args).expect("lane show latest should parse");
         assert!(matches!(command, LaneCommand::ShowLatest { as_json: true }));
+    }
+
+    #[test]
+    fn parse_lane_complete_supports_receipt_id_and_json() {
+        let args = vec![
+            "complete".to_string(),
+            "run-1".to_string(),
+            "--receipt-id".to_string(),
+            "receipt-1".to_string(),
+            "--json".to_string(),
+        ];
+        let command = parse_lane_args(&args).expect("lane complete should parse");
+        assert!(matches!(
+            command,
+            LaneCommand::Complete {
+                run_id: "run-1",
+                receipt_id: "receipt-1",
+                as_json: true
+            }
+        ));
     }
 
     #[test]
@@ -627,6 +778,117 @@ mod tests {
             Some("receipt-clear-1")
         );
         assert_eq!(after.lane_status, "lane_exception_takeover");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_complete_records_receipt_backed_downstream_completion_evidence() {
+        let _guard = lane_surface_test_lock()
+            .lock()
+            .expect("lane surface test lock should acquire");
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-complete-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-lane-complete";
+        let packet_path =
+            root.join("runtime-consumption/downstream-dispatch-packets/run-lane-complete.json");
+        std::fs::create_dir_all(
+            packet_path
+                .parent()
+                .expect("downstream packet path should have parent"),
+        )
+        .expect("create downstream packet dir");
+        std::fs::write(
+            &packet_path,
+            serde_json::json!({
+                "run_id": run_id,
+                "downstream_dispatch_target": "coach",
+                "downstream_dispatch_active_target": "implementer",
+                "downstream_dispatch_ready": false,
+                "downstream_dispatch_blockers": ["pending_implementation_evidence"],
+                "downstream_dispatch_status": "blocked",
+                "downstream_lane_status": "lane_blocked"
+            })
+            .to_string(),
+        )
+        .expect("write downstream packet");
+
+        let mut receipt = sample_receipt("executed");
+        receipt.run_id = run_id.to_string();
+        receipt.dispatch_target = "implementer".to_string();
+        receipt.dispatch_kind = "agent_lane".to_string();
+        receipt.dispatch_surface = Some("vida agent-init".to_string());
+        receipt.dispatch_command = Some("vida agent-init".to_string());
+        receipt.downstream_dispatch_target = Some("coach".to_string());
+        receipt.downstream_dispatch_command = Some("vida agent-init".to_string());
+        receipt.downstream_dispatch_note =
+            Some("after `implementer` evidence is recorded, activate `coach`".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers = vec!["pending_implementation_evidence".to_string()];
+        receipt.downstream_dispatch_packet_path = Some(packet_path.display().to_string());
+        receipt.downstream_dispatch_status = Some("blocked".to_string());
+        receipt.downstream_dispatch_active_target = Some("implementer".to_string());
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist dispatch receipt");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let args = ProxyArgs {
+            args: vec![
+                "complete".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                "completion-1".to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store after lane command");
+        let after = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read receipt after")
+            .expect("receipt should exist");
+        assert!(after.downstream_dispatch_ready);
+        assert!(after.downstream_dispatch_blockers.is_empty());
+        assert_eq!(
+            after.downstream_dispatch_status.as_deref(),
+            Some("packet_ready")
+        );
+        let result_path = after
+            .downstream_dispatch_result_path
+            .clone()
+            .expect("completion result path should be recorded");
+        let result = std::fs::read_to_string(&result_path).expect("read completion result");
+        let result_json: serde_json::Value =
+            serde_json::from_str(&result).expect("completion result should be json");
+        assert_eq!(
+            result_json["artifact_kind"],
+            "runtime_lane_completion_result"
+        );
+        assert_eq!(result_json["completion_receipt_id"], "completion-1");
+
+        let packet = std::fs::read_to_string(&packet_path).expect("read updated packet");
+        let packet_json: serde_json::Value =
+            serde_json::from_str(&packet).expect("updated packet should be json");
+        assert_eq!(packet_json["downstream_dispatch_ready"], true);
+        assert_eq!(packet_json["downstream_dispatch_status"], "packet_ready");
+        assert_eq!(packet_json["downstream_lane_status"], "packet_ready");
+        assert_eq!(packet_json["downstream_dispatch_result_path"], result_path);
 
         let _ = std::fs::remove_dir_all(&root);
     }

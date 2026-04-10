@@ -1265,11 +1265,12 @@ async fn run_graph_dispatch_init(
         &dispatch_receipt.dispatch_target,
     );
     crate::refresh_downstream_dispatch_preview(
-        store.root(),
+        store,
         &role_selection,
         &run_graph_bootstrap,
         &mut dispatch_receipt,
-    )?;
+    )
+    .await?;
     let ctx = crate::RuntimeDispatchPacketContext::new(
         store.root(),
         &role_selection,

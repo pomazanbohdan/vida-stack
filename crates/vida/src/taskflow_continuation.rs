@@ -51,7 +51,9 @@ pub(crate) fn build_run_graph_continuation_binding(
     } else if active_bounded_unit["kind"] == "downstream_dispatch_target" {
         format!(
             "Explicit continuation binding records downstream target `{}` as the next lawful bounded unit for run `{}`.",
-            active_bounded_unit["dispatch_target"].as_str().unwrap_or("unknown"),
+            active_bounded_unit["dispatch_target"]
+                .as_str()
+                .unwrap_or("unknown"),
             status.run_id
         )
     } else {

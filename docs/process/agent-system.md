@@ -30,6 +30,8 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - for hybrid runtimes, `vida status --json` must report the effective mixed posture honestly instead of implying that external execution is impossible from an internal host
 - for external CLI setups, `vida status --json` reports `host_agents.external_cli_preflight`; when sandbox is active and network is unavailable, preflight fails closed with actionable next steps
 - external CLI readiness must distinguish transport/tool-contract pass from carrier-specific auth/model readiness; when project config declares dispatch-level model pinning, ambient carrier-local model drift must not silently redefine execution
+- for `qwen_cli`, the canonical headless launch shape is positional prompt plus explicit auth/output flags; prefer `qwen --auth-type qwen-oauth -y -o json <prompt>` and treat deprecated prompt-flag forms as non-canonical
+- when `host_agents.external_cli_preflight.blocked_primary_backends` includes the route-primary backend, runtime must fail closed away from that carrier and rebind to the explicit `fallback_executor_backend` instead of launching a known-blocked external carrier again
 
 -----
 artifact_path: process/agent-system
@@ -40,5 +42,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/process/agent-system.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-04-09T05:43:45.435083526Z
+updated_at: 2026-04-10T15:24:32Z
 changelog_ref: agent-system.changelog.jsonl

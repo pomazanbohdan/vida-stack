@@ -16,7 +16,7 @@ pub(crate) enum RenderMode {
     name = "vida",
     disable_help_subcommand = true,
     about = "VIDA Binary Foundation",
-    long_about = "VIDA Binary Foundation\n\nRoot commands stay fail-closed. TaskFlow remains execution authority; DocFlow remains the documentation/readiness surface.",
+    long_about = "VIDA Binary Foundation\n\nTaskFlow remains execution authority; DocFlow remains the documentation/readiness surface. Root `lane` and `approval` are family-owned operator surfaces over the delegated runtime law.",
     after_help = "Runtime-family help paths:\n  vida taskflow help\n  vida docflow help"
 )]
 pub(crate) struct Cli {
@@ -57,7 +57,7 @@ pub(crate) enum Command {
     #[command(about = "inspect or mutate canonical lane/takeover operator state")]
     Lane(ProxyArgs),
     #[command(
-        about = "reserved root operator surface for approval inspection/mutation; currently fail-closed"
+        about = "family-owned root operator surface for approval inspection over the run-graph approval law"
     )]
     Approval(ProxyArgs),
     #[command(about = "thin root alias to the TaskFlow recovery family")]

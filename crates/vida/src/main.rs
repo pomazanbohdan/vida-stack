@@ -3,6 +3,7 @@ mod agent_extension_bundle_validation;
 mod agent_extension_catalog_projection;
 mod agent_extension_registry_projection;
 mod agent_feedback_surface;
+mod approval_surface;
 mod bootstrap_value_utils;
 mod carrier_runtime_catalog;
 mod carrier_runtime_metadata;
@@ -2216,8 +2217,16 @@ mod tests {
             recorded_at: "2026-03-15T00:00:00Z".to_string(),
         };
 
-        let (target, command, _note, ready, blockers) =
-            derive_downstream_dispatch_preview(&role_selection, &receipt);
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let store = runtime
+            .block_on(crate::StateStore::open(
+                harness.path().join(crate::state_store::default_state_dir()),
+            ))
+            .expect("state store should initialize");
+        let (target, command, _note, ready, blockers) = runtime.block_on(
+            derive_downstream_dispatch_preview(&store, &role_selection, &receipt),
+        );
         assert_eq!(target.as_deref(), Some("specification"));
         assert_eq!(command.as_deref(), Some("vida agent-init"));
         assert!(ready);
@@ -2293,8 +2302,16 @@ mod tests {
             recorded_at: "2026-03-15T00:00:00Z".to_string(),
         };
 
-        let (target, command, note, ready, blockers) =
-            derive_downstream_dispatch_preview(&role_selection, &receipt);
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let store = runtime
+            .block_on(crate::StateStore::open(
+                harness.path().join(crate::state_store::default_state_dir()),
+            ))
+            .expect("state store should initialize");
+        let (target, command, note, ready, blockers) = runtime.block_on(
+            derive_downstream_dispatch_preview(&store, &role_selection, &receipt),
+        );
         assert_eq!(target.as_deref(), Some("work-pool-pack"));
         assert_eq!(
             command.as_deref(),
@@ -2439,8 +2456,16 @@ mod tests {
             recorded_at: "2026-03-17T00:00:00Z".to_string(),
         };
 
-        let (target, _command, _note, ready, blockers) =
-            derive_downstream_dispatch_preview(&role_selection, &receipt);
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let store = runtime
+            .block_on(crate::StateStore::open(
+                harness.path().join(crate::state_store::default_state_dir()),
+            ))
+            .expect("state store should initialize");
+        let (target, _command, _note, ready, blockers) = runtime.block_on(
+            derive_downstream_dispatch_preview(&store, &role_selection, &receipt),
+        );
         assert_eq!(target.as_deref(), Some("coach"));
         assert!(ready);
         assert!(blockers.is_empty());
@@ -2518,8 +2543,16 @@ mod tests {
         };
 
         assert!(!dispatch_receipt_has_execution_evidence(&receipt));
-        let (target, _command, _note, ready, blockers) =
-            derive_downstream_dispatch_preview(&role_selection, &receipt);
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let store = runtime
+            .block_on(crate::StateStore::open(
+                harness.path().join(crate::state_store::default_state_dir()),
+            ))
+            .expect("state store should initialize");
+        let (target, _command, _note, ready, blockers) = runtime.block_on(
+            derive_downstream_dispatch_preview(&store, &role_selection, &receipt),
+        );
         assert_eq!(target.as_deref(), Some("coach"));
         assert!(!ready);
         assert_eq!(
@@ -2615,13 +2648,20 @@ mod tests {
             recorded_at: "2026-03-15T00:00:00Z".to_string(),
         };
 
-        refresh_downstream_dispatch_preview(
-            &root,
-            &role_selection,
-            &run_graph_bootstrap,
-            &mut receipt,
-        )
-        .expect("refresh should succeed");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let store = runtime
+            .block_on(crate::StateStore::open(
+                root.join(crate::state_store::default_state_dir()),
+            ))
+            .expect("state store should initialize");
+        runtime
+            .block_on(refresh_downstream_dispatch_preview(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+            ))
+            .expect("refresh should succeed");
 
         assert_eq!(
             receipt.downstream_dispatch_target.as_deref(),
@@ -2637,6 +2677,287 @@ mod tests {
             .downstream_dispatch_packet_path
             .as_deref()
             .is_some_and(|path| !path.trim().is_empty()));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "covered by runtime_dispatch_state bridge tests"]
+    async fn bounded_implementer_task_close_bridges_downstream_receipt_to_coach_ready() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-implementer-bridge-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        let runtime_dir = root.join("runtime-consumption");
+        fs::create_dir_all(&runtime_dir).expect("runtime-consumption dir should exist");
+        let store = crate::StateStore::open(root.clone())
+            .await
+            .expect("state store should open");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "feature-bridge-dev",
+                title: "Bridge dev task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 2,
+                parent_id: None,
+                labels: &[String::from("dev-pack")],
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("task should be created");
+        store
+            .close_task("feature-bridge-dev", "implemented and proven")
+            .await
+            .expect("task should close");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "tracked_flow_bootstrap": {
+                    "dev_task": {
+                        "task_id": "feature-bridge-dev",
+                        "ensure_command": "vida task ensure feature-bridge-dev \"Bridge dev task\" --type task --status open --json"
+                    }
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["implementer", "coach"],
+                        "lane_catalog": {
+                            "implementer": {
+                                "dispatch_target": "implementer",
+                                "completion_blocker": "pending_implementation_evidence",
+                                "activation": {
+                                    "activation_agent_type": "junior",
+                                    "activation_runtime_role": "worker"
+                                }
+                            },
+                            "coach": {
+                                "dispatch_target": "coach",
+                                "completion_blocker": "pending_review_clean_evidence",
+                                "activation": {
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "coach"
+                                }
+                            }
+                        }
+                    }
+                },
+                "orchestration_contract": {},
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-bridge",
+        });
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-bridge".to_string(),
+            dispatch_target: "work-pool-pack".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida task ensure".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some("/tmp/work-pool-dispatch.json".to_string()),
+            dispatch_result_path: Some("/tmp/work-pool-result.json".to_string()),
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            downstream_dispatch_target: Some("coach".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some(
+                "after `implementer` evidence is recorded, activate `coach` for the next bounded lane"
+                    .to_string(),
+            ),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_implementation_evidence".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("blocked".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 1,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: Some("implementer".to_string()),
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-04-10T00:00:00Z".to_string(),
+        };
+
+        assert!(
+            try_bridge_bounded_implementer_completion_to_downstream_receipt(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+            )
+            .await
+            .expect("bridge should succeed")
+        );
+        assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("coach"));
+        assert!(receipt.downstream_dispatch_ready);
+        assert!(receipt.downstream_dispatch_blockers.is_empty());
+        assert!(receipt.blocker_code.is_none());
+        assert!(receipt
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty()));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "covered by runtime_dispatch_state bridge tests"]
+    async fn bounded_implementer_bridge_stays_blocked_while_dev_task_is_open() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-implementer-bridge-open-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be monotonic enough for test ids")
+                .as_nanos()
+        ));
+        let runtime_dir = root.join("runtime-consumption");
+        fs::create_dir_all(&runtime_dir).expect("runtime-consumption dir should exist");
+        let store = crate::StateStore::open(root.clone())
+            .await
+            .expect("state store should open");
+        store
+            .create_task(crate::state_store::CreateTaskRequest {
+                task_id: "feature-bridge-open-dev",
+                title: "Open bridge dev task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 2,
+                parent_id: None,
+                labels: &[String::from("dev-pack")],
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("task should be created");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: true,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "tracked_flow_bootstrap": {
+                    "dev_task": {
+                        "task_id": "feature-bridge-open-dev",
+                        "ensure_command": "vida task ensure feature-bridge-open-dev \"Open bridge dev task\" --type task --status open --json"
+                    }
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["implementer", "coach"],
+                        "lane_catalog": {
+                            "implementer": {
+                                "dispatch_target": "implementer",
+                                "completion_blocker": "pending_implementation_evidence",
+                                "activation": {
+                                    "activation_agent_type": "junior",
+                                    "activation_runtime_role": "worker"
+                                }
+                            },
+                            "coach": {
+                                "dispatch_target": "coach",
+                                "completion_blocker": "pending_review_clean_evidence",
+                                "activation": {
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "coach"
+                                }
+                            }
+                        }
+                    }
+                },
+                "orchestration_contract": {},
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-bridge-open",
+        });
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-bridge-open".to_string(),
+            dispatch_target: "work-pool-pack".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida task ensure".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some("/tmp/work-pool-dispatch.json".to_string()),
+            dispatch_result_path: Some("/tmp/work-pool-result.json".to_string()),
+            blocker_code: Some("configured_backend_dispatch_failed".to_string()),
+            downstream_dispatch_target: Some("coach".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some(
+                "after `implementer` evidence is recorded, activate `coach` for the next bounded lane"
+                    .to_string(),
+            ),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_implementation_evidence".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("blocked".to_string()),
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 1,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: Some("implementer".to_string()),
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-04-10T00:00:00Z".to_string(),
+        };
+
+        assert!(
+            !try_bridge_bounded_implementer_completion_to_downstream_receipt(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+            )
+            .await
+            .expect("bridge should evaluate cleanly")
+        );
+        assert!(!receipt.downstream_dispatch_ready);
+        assert_eq!(
+            receipt.downstream_dispatch_blockers,
+            vec!["pending_implementation_evidence".to_string()]
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -3433,6 +3754,7 @@ mod tests {
         assert_eq!(result["surface"], "external_cli:qwen_cli");
         assert_eq!(result["status"], "pass");
         assert_eq!(result["execution_state"], "executed");
+        assert!(result["blocker_code"].is_null());
         assert_eq!(
             result["host_runtime"]["selected_cli_execution_class"],
             "external"
@@ -3570,6 +3892,7 @@ mod tests {
         assert_eq!(result["surface"], "external_cli:qwen_cli");
         assert_eq!(result["status"], "pass");
         assert_eq!(result["execution_state"], "executed");
+        assert!(result["blocker_code"].is_null());
         assert_eq!(result["host_runtime"]["selected_cli_system"], "codex");
         assert_eq!(
             result["host_runtime"]["selected_cli_execution_class"],
@@ -3584,6 +3907,143 @@ mod tests {
             .as_str()
             .expect("provider output should render")
             .contains("external-dispatch:Read and execute the VIDA dispatch packet"));
+    }
+
+    #[test]
+    fn execute_runtime_dispatch_handoff_times_out_configured_external_backend() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "qwen",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+
+        let config_path = harness.path().join("vida.config.yaml");
+        install_external_cli_test_subagents(&config_path);
+        let config = fs::read_to_string(&config_path).expect("config should exist");
+        let updated = config
+            .replace(
+                "command: qwen\n        static_args:\n          - -y\n          - -o\n          - text",
+                "command: sh\n        static_args:\n          - -lc\n          - \"sleep 2\"\n          - vida-dispatch",
+            )
+            .replace(
+                "        prompt_mode: positional\n",
+                "        prompt_mode: positional\n        no_output_timeout_seconds: 1\n",
+            );
+        fs::write(&config_path, updated).expect("config should update");
+
+        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let store = runtime
+            .block_on(StateStore::open(state_root.clone()))
+            .expect("state store should open");
+        let dispatch_packet_path = harness.path().join("external-agent-timeout-dispatch.json");
+        fs::write(
+            &dispatch_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": runtime_delivery_task_packet(
+                    "run-external-dispatch-timeout",
+                    "implementer",
+                    "worker",
+                    "implementation",
+                    "implementation",
+                    "continue development"
+                ),
+                "dispatch_target": "implementer",
+                "request_text": "continue development",
+                "activation_runtime_role": "worker",
+                "role_selection": {
+                    "selected_role": "worker"
+                }
+            }))
+            .expect("dispatch packet json should encode"),
+        )
+        .expect("dispatch packet should write");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-external-dispatch-timeout".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(dispatch_packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("qwen-primary".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("qwen_cli".to_string()),
+            recorded_at: "2026-03-17T00:00:00Z".to_string(),
+        };
+
+        let result = runtime
+            .block_on(execute_runtime_dispatch_handoff(
+                &state_root,
+                &store,
+                &role_selection,
+                &receipt,
+            ))
+            .expect("external timeout dispatch should render");
+
+        assert_eq!(result["surface"], "external_cli:qwen_cli");
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(
+            result["blocker_code"],
+            "timeout_without_takeover_authority"
+        );
+        assert!(result["provider_error"]
+            .as_str()
+            .expect("provider error should render")
+            .contains("timed out after 1s"));
+        assert_eq!(result["exit_code"], 124);
     }
 
     #[test]

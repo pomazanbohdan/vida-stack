@@ -203,9 +203,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             Ok(binding) => binding,
                             Err(error) => {
                                 eprintln!(
-                                "Failed to read explicit continuation binding for `{}`: {error}",
-                                status.run_id
-                            );
+                                    "Failed to read explicit continuation binding for `{}`: {error}",
+                                    status.run_id
+                                );
                                 return ExitCode::from(1);
                             }
                         }

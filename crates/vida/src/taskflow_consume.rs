@@ -286,11 +286,13 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 &dispatch_receipt.dispatch_target,
                             );
                         if let Err(error) = super::refresh_downstream_dispatch_preview(
-                            store.root(),
+                            &store,
                             &role_selection,
                             &run_graph_bootstrap,
                             &mut dispatch_receipt,
-                        ) {
+                        )
+                        .await
+                        {
                             eprintln!(
                                 "Failed to write downstream runtime dispatch packet: {error}"
                             );
@@ -312,6 +314,21 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             }
                         };
                         dispatch_receipt.dispatch_packet_path = Some(dispatch_packet_path);
+                        if let Some(project_root) =
+                            super::taskflow_task_bridge::infer_project_root_from_state_root(
+                                store.root(),
+                            )
+                        {
+                            if let Some(fallback_backend) =
+                                super::fallback_backend_for_blocked_primary_dispatch_receipt(
+                                    &project_root,
+                                    &role_selection,
+                                    &dispatch_receipt,
+                                )
+                            {
+                                dispatch_receipt.selected_backend = Some(fallback_backend);
+                            }
+                        }
                         let allow_taskflow_pack_execution = dispatch_receipt.dispatch_kind
                             != "taskflow_pack"
                             || super::taskflow_task_bridge::infer_project_root_from_state_root(
@@ -1033,28 +1050,13 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
                 })
         }
     });
-    let selected_backend = activation_agent_type
-        .clone()
-        .or_else(|| {
-            if role_selection.conversational_mode.is_some() {
-                role_selection.execution_plan["default_route"]["selected_agent_id"]
-                    .as_str()
-                    .map(str::to_string)
-            } else {
-                super::dispatch_contract_lane(&role_selection.execution_plan, &dispatch_target)
-                    .and_then(|route| route.get("selected_agent_id"))
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_string)
-                    .or_else(|| {
-                        super::runtime_assignment_from_execution_plan(
-                            &role_selection.execution_plan,
-                        )["selected_agent_id"]
-                            .as_str()
-                            .map(str::to_string)
-                    })
-            }
-        })
-        .filter(|value| !value.is_empty());
+    let selected_backend = super::downstream_selected_backend(
+        role_selection,
+        &dispatch_target,
+        activation_agent_type.as_deref(),
+        None,
+    )
+    .filter(|value| !value.is_empty());
     let dispatch_command = super::json_string(latest_status.get("dispatch_command"));
     let dispatch_blockers = super::json_string_list(latest_status.get("dispatch_blockers"));
     let dispatch_ready = super::json_bool(
@@ -1108,10 +1110,64 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
 mod tests {
     use super::{
         build_approval_delegation_evidence_gate, build_execution_preparation_evidence_gate,
-        build_retrieval_policy_decision_gate, normalize_runtime_consumption_statuses,
-        ApprovalDelegationEvidenceGate, ExecutionPreparationEvidenceGate,
-        RetrievalPolicyDecisionGate,
+        build_retrieval_policy_decision_gate, build_runtime_consumption_dispatch_receipt,
+        normalize_runtime_consumption_statuses, ApprovalDelegationEvidenceGate,
+        ExecutionPreparationEvidenceGate, RetrievalPolicyDecisionGate,
     };
+
+    #[test]
+    fn runtime_consumption_dispatch_receipt_prefers_route_executor_backend() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string(), "development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "qwen_cli",
+                        "subagents": "legacy_hint_should_not_win"
+                    },
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["implementer", "coach", "verification"],
+                        "coach_activation": {
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "coach",
+                            "selected_agent_id": "middle"
+                        }
+                    }
+                },
+                "runtime_assignment": {
+                    "selected_tier": "middle",
+                    "activation_agent_type": "middle"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-coach",
+            "latest_status": {
+                "next_node": "coach"
+            }
+        });
+
+        let receipt =
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+
+        assert_eq!(receipt.dispatch_target, "coach");
+        assert_eq!(receipt.activation_agent_type.as_deref(), Some("middle"));
+        assert_eq!(receipt.activation_runtime_role.as_deref(), Some("coach"));
+        assert_eq!(receipt.selected_backend.as_deref(), Some("qwen_cli"));
+    }
 
     #[test]
     fn execution_preparation_gate_blocks_when_required_and_handoff_or_evidence_missing() {

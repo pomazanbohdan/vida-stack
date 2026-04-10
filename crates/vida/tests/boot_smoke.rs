@@ -178,6 +178,23 @@ fn write_file(path: &str, body: &str) {
     fs::write(path, body).expect("file should be written");
 }
 
+fn write_runtime_lane_completion_result_fixture(path: &str, run_id: &str, completed_target: &str) {
+    write_file(
+        path,
+        &serde_json::json!({
+            "artifact_kind": "runtime_lane_completion_result",
+            "status": "pass",
+            "execution_state": "executed",
+            "run_id": run_id,
+            "completed_target": completed_target,
+            "completion_receipt_id": format!("{run_id}-{completed_target}-receipt"),
+            "source_dispatch_packet_path": "test-fixture",
+            "recorded_at": "2026-04-10T00:00:00Z"
+        })
+        .to_string(),
+    );
+}
+
 fn seed_runtime_consumption_final_snapshot(state_dir: &str) -> String {
     let snapshot_path = format!("{state_dir}/runtime-consumption/final-test.json");
     write_file(
@@ -944,7 +961,7 @@ fn root_help_succeeds() {
     assert!(stdout.contains("thin root alias to the TaskFlow consume family"));
     assert!(stdout.contains("inspect or mutate canonical lane/takeover operator state"));
     assert!(stdout.contains(
-        "reserved root operator surface for approval inspection/mutation; currently fail-closed"
+        "approval           family-owned root operator surface for approval inspection over the run-graph approval law"
     ));
     assert!(stdout.contains("thin root alias to the TaskFlow recovery family"));
     assert!(stdout.contains("taskflow"));
@@ -1548,7 +1565,7 @@ fn root_lane_surface_fails_closed_with_canonical_json_envelope() {
 }
 
 #[test]
-fn root_approval_surface_fails_closed_with_canonical_json_envelope() {
+fn root_approval_surface_emits_blocked_canonical_json_envelope() {
     let output = vida()
         .args(["approval", "--json"])
         .output()
@@ -1568,7 +1585,14 @@ fn root_approval_surface_fails_closed_with_canonical_json_envelope() {
         parsed["blocker_codes"],
         serde_json::json!(["unsupported_blocker_code"])
     );
-    assert!(parsed["next_actions"].is_array());
+    assert!(parsed["reason"]
+        .as_str()
+        .expect("approval reason should be a string")
+        .contains("root surface blocks missing or invalid approval requests"));
+    assert_eq!(
+        parsed["next_actions"][0],
+        "Use `vida approval show --latest --json` or `vida approval show <run-id> --json` once approval evidence exists."
+    );
 }
 
 #[test]
@@ -3366,10 +3390,14 @@ fn taskflow_consume_continue_accepts_explicit_downstream_packet_path() {
         .as_str()
         .expect("downstream dispatch packet run_id should be present");
     let mut downstream_packet_body: serde_json::Value = downstream_dispatch_packet_json.clone();
+    let completion_result_path = format!("{project_root}/runtime-completion-result-1.json");
+    write_runtime_lane_completion_result_fixture(&completion_result_path, run_id, "implementer");
     downstream_packet_body["downstream_dispatch_target"] = serde_json::json!("business_analyst");
     downstream_packet_body["downstream_dispatch_ready"] = serde_json::json!(true);
     downstream_packet_body["downstream_dispatch_blockers"] = serde_json::json!([]);
     downstream_packet_body["downstream_dispatch_status"] = serde_json::json!("packet_ready");
+    downstream_packet_body["downstream_dispatch_result_path"] =
+        serde_json::json!(completion_result_path);
     downstream_packet_body["downstream_lane_status"] = serde_json::json!("packet_ready");
     downstream_packet_body["dispatch_status"] = serde_json::json!("packet_ready");
     downstream_packet_body["lane_status"] = serde_json::json!("packet_ready");
@@ -3514,8 +3542,18 @@ fn taskflow_consume_continue_rejects_packet_ready_downstream_packet_when_recover
             .expect("downstream dispatch packet should read"),
     )
     .expect("downstream dispatch packet should parse");
+    let completion_result_path = format!("{project_root}/runtime-completion-result-2.json");
+    write_runtime_lane_completion_result_fixture(
+        &completion_result_path,
+        initial_json["payload"]["dispatch_receipt"]["run_id"]
+            .as_str()
+            .unwrap_or("packet-ready-semantics"),
+        "implementer",
+    );
     downstream_packet_body["downstream_dispatch_ready"] = serde_json::json!(false);
     downstream_packet_body["downstream_dispatch_status"] = serde_json::json!("packet_ready");
+    downstream_packet_body["downstream_dispatch_result_path"] =
+        serde_json::json!(completion_result_path);
     downstream_packet_body["downstream_lane_status"] = serde_json::json!("lane_running");
     downstream_packet_body["downstream_dispatch_blockers"] = serde_json::json!([]);
     atomic_write_file(
@@ -3679,9 +3717,13 @@ fn taskflow_consume_continue_auto_picks_ready_downstream_packet() {
         .as_str()
         .expect("downstream dispatch packet run id should be present");
     mark_project_run_graph_closure_complete(&project_root, &state_dir, run_id);
+    let completion_result_path = format!("{project_root}/runtime-completion-result-3.json");
+    write_runtime_lane_completion_result_fixture(&completion_result_path, run_id, "implementer");
     downstream_packet_body["downstream_dispatch_ready"] = serde_json::json!(true);
     downstream_packet_body["downstream_dispatch_blockers"] = serde_json::json!([]);
     downstream_packet_body["downstream_dispatch_status"] = serde_json::json!("packet_ready");
+    downstream_packet_body["downstream_dispatch_result_path"] =
+        serde_json::json!(completion_result_path);
     downstream_packet_body["downstream_lane_status"] = serde_json::json!("packet_ready");
     downstream_packet_body["dispatch_status"] = serde_json::json!("packet_ready");
     downstream_packet_body["lane_status"] = serde_json::json!("packet_ready");
@@ -3833,8 +3875,16 @@ fn taskflow_consume_continue_auto_executes_ready_downstream_taskflow_packet() {
             .expect("downstream dispatch packet should read"),
     )
     .expect("downstream dispatch packet should parse");
+    let completion_result_path = format!("{project_root}/runtime-completion-result-4.json");
+    write_runtime_lane_completion_result_fixture(
+        &completion_result_path,
+        "continue-auto-executes-ready-downstream-taskflow-packet",
+        "implementer",
+    );
     downstream_packet_body["downstream_dispatch_ready"] = serde_json::json!(true);
     downstream_packet_body["downstream_dispatch_blockers"] = serde_json::json!([]);
+    downstream_packet_body["downstream_dispatch_result_path"] =
+        serde_json::json!(completion_result_path);
     atomic_write_file(
         downstream_dispatch_packet_path,
         &serde_json::to_string_pretty(&downstream_packet_body)
@@ -3992,9 +4042,17 @@ fn taskflow_consume_advance_auto_progresses_ready_chain() {
             .expect("downstream dispatch packet should read"),
     )
     .expect("downstream dispatch packet should parse");
+    let completion_result_path = format!("{project_root}/runtime-completion-result-5.json");
+    write_runtime_lane_completion_result_fixture(
+        &completion_result_path,
+        "consume-advance-ready-downstream-taskflow-packet",
+        "implementer",
+    );
     downstream_packet_body["downstream_dispatch_ready"] = serde_json::json!(true);
     downstream_packet_body["downstream_dispatch_blockers"] = serde_json::json!([]);
     downstream_packet_body["downstream_dispatch_status"] = serde_json::json!("packet_ready");
+    downstream_packet_body["downstream_dispatch_result_path"] =
+        serde_json::json!(completion_result_path);
     downstream_packet_body["downstream_lane_status"] = serde_json::json!("packet_ready");
     downstream_packet_body["dispatch_status"] = serde_json::json!("packet_ready");
     downstream_packet_body["lane_status"] = serde_json::json!("packet_ready");

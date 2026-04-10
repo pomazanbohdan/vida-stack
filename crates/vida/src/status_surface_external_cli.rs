@@ -73,6 +73,41 @@ fn latest_dir_file_contains(path: &str, needle: &str, max_age_seconds: Option<u6
         .unwrap_or(false)
 }
 
+fn recent_dir_contains_any(path: &str, needle: &str, max_age_seconds: Option<u64>) -> bool {
+    if needle.trim().is_empty() {
+        return false;
+    }
+    let dir = expand_user_path(path);
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
+            Some((entry.path(), metadata))
+        })
+        .any(|(path, metadata)| {
+            if let Some(max_age_seconds) = max_age_seconds {
+                let Ok(modified) = metadata.modified() else {
+                    return false;
+                };
+                let Ok(age) = std::time::SystemTime::now().duration_since(modified) else {
+                    return false;
+                };
+                if age.as_secs() > max_age_seconds {
+                    return false;
+                }
+            }
+            std::fs::read_to_string(path)
+                .map(|text| text.contains(needle))
+                .unwrap_or(false)
+        })
+}
+
 fn model_ref_from_json_state(mode: &str, path: &str) -> Option<String> {
     let value = read_json_file(path)?;
     match mode {
@@ -237,7 +272,7 @@ fn external_cli_carrier_readiness(
             .and_then(serde_yaml::Value::as_str)
             .map(str::trim)
             .unwrap_or("");
-    let provider_auth_failed = match provider_failure_mode {
+    let provider_failure_detected = match provider_failure_mode {
         "file_contains" => crate::yaml_lookup(readiness, &["provider_failure", "path"])
             .and_then(serde_yaml::Value::as_str)
             .is_some_and(|path| file_contains(path, provider_failure_substring)),
@@ -251,19 +286,52 @@ fn external_cli_carrier_readiness(
                     latest_dir_file_contains(path, provider_failure_substring, max_age_seconds)
                 })
         }
+        "recent_dir_contains_any" => {
+            let max_age_seconds =
+                crate::yaml_lookup(readiness, &["provider_failure", "max_age_seconds"])
+                    .and_then(serde_yaml::Value::as_u64);
+            crate::yaml_lookup(readiness, &["provider_failure", "path"])
+                .and_then(serde_yaml::Value::as_str)
+                .is_some_and(|path| {
+                    recent_dir_contains_any(path, provider_failure_substring, max_age_seconds)
+                })
+        }
         _ => false,
     };
-    if provider_auth_failed {
+    if provider_failure_detected {
+        let provider_failure_status = crate::yaml_lookup(readiness, &["provider_failure", "status"])
+            .and_then(serde_yaml::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("provider_auth_failed");
+        let provider_failure_blocker_code =
+            crate::yaml_lookup(readiness, &["provider_failure", "blocker_code"])
+                .and_then(serde_yaml::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| {
+                    crate::release1_contracts::blocker_code_str(
+                        crate::release1_contracts::BlockerCode::ProviderAuthFailed,
+                    )
+                });
+        let provider_failure_next_actions =
+            crate::yaml_string_list(crate::yaml_lookup(readiness, &["provider_failure", "next_actions"]));
+        let next_actions = if provider_failure_next_actions.is_empty() {
+            vec![
+                "Repair the provider credential or provider-specific auth path, then rerun `vida status --json`."
+                    .to_string(),
+            ]
+        } else {
+            provider_failure_next_actions
+        };
         return serde_json::json!({
             "backend_id": backend_id,
-            "status": "provider_auth_failed",
+            "status": provider_failure_status,
             "blocked": true,
-            "blocker_code": crate::release1_contracts::blocker_code_str(
-                crate::release1_contracts::BlockerCode::ProviderAuthFailed
-            ),
+            "blocker_code": provider_failure_blocker_code,
             "current_model_ref": current_model_ref,
             "expected_model_ref": expected_model_ref,
-            "next_actions": ["Repair the provider credential or provider-specific auth path, then rerun `vida status --json`."],
+            "next_actions": next_actions,
         });
     }
 
@@ -321,6 +389,46 @@ fn external_cli_readiness_summaries(overlay: &serde_yaml::Value) -> serde_json::
         "blocked_count": blocked_count,
         "carriers": carrier_rows,
     })
+}
+
+fn route_primary_external_backends(overlay: &serde_yaml::Value) -> Vec<String> {
+    fn collect_executor_backends_from_mapping(
+        routes: &serde_yaml::Mapping,
+        backends: &mut Vec<String>,
+    ) {
+        for route in routes.values() {
+            if let Some(executor_backend) = crate::yaml_lookup(route, &["executor_backend"])
+                .and_then(serde_yaml::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                backends.push(executor_backend.to_string());
+                continue;
+            }
+            if let Some(nested_routes) = crate::yaml_lookup(route, &["development_flow"])
+                .and_then(serde_yaml::Value::as_mapping)
+            {
+                collect_executor_backends_from_mapping(nested_routes, backends);
+            }
+        }
+    }
+
+    let mut backends = Vec::new();
+    for path in [
+        ["agent_system", "routing", "development_flow"].as_slice(),
+        ["agent_system", "routing"].as_slice(),
+        ["routing", "development_flow"].as_slice(),
+        ["routing"].as_slice(),
+        ["development_flow"].as_slice(),
+    ] {
+        if let Some(routes) = crate::yaml_lookup(overlay, path).and_then(serde_yaml::Value::as_mapping)
+        {
+            collect_executor_backends_from_mapping(routes, &mut backends);
+        }
+    }
+    backends.sort();
+    backends.dedup();
+    backends
 }
 
 pub(crate) fn is_sandbox_active_from_env() -> bool {
@@ -421,6 +529,26 @@ pub(crate) fn external_cli_preflight_summary(
     );
     let tool_contract_blocked = tool_contract["status"].as_str() == Some("blocked");
     let carrier_readiness = external_cli_readiness_summaries(overlay);
+    let route_primary_backends = route_primary_external_backends(overlay);
+    let blocked_primary_backends = carrier_readiness["carriers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|carrier| carrier["blocked"].as_bool() == Some(true))
+        .filter_map(|carrier| carrier["backend_id"].as_str())
+        .filter(|backend_id| route_primary_backends.iter().any(|backend| backend == backend_id))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let primary_blocker_next_actions = if blocked_primary_backends.is_empty() {
+        serde_json::json!([])
+    } else {
+        serde_json::json!([
+            format!(
+                "One or more route-primary external backends are currently blocked: {}. Reroute, wait for recovery, or switch those routes to another carrier before relying on them.",
+                blocked_primary_backends.join(", ")
+            )
+        ])
+    };
 
     if tool_contract_blocked {
         return serde_json::json!({
@@ -431,6 +559,8 @@ pub(crate) fn external_cli_preflight_summary(
             "selected_execution_class": selected_execution_class,
             "tool_contract": tool_contract,
             "carrier_readiness": carrier_readiness,
+            "route_primary_external_backends": route_primary_backends,
+            "blocked_primary_backends": blocked_primary_backends,
             "sandbox_active": sandbox_active,
             "network_reachable": network_reachable,
             "blocker_code": tool_contract["blocker_code"].clone(),
@@ -450,6 +580,8 @@ pub(crate) fn external_cli_preflight_summary(
             "selected_execution_class": selected_execution_class,
             "tool_contract": tool_contract,
             "carrier_readiness": carrier_readiness,
+            "route_primary_external_backends": route_primary_backends,
+            "blocked_primary_backends": blocked_primary_backends,
             "sandbox_active": true,
             "network_reachable": false,
             "blocker_code": crate::release1_contracts::blocker_code_str(
@@ -484,6 +616,8 @@ pub(crate) fn external_cli_preflight_summary(
             "selected_execution_class": selected_execution_class,
             "tool_contract": tool_contract,
             "carrier_readiness": carrier_readiness,
+            "route_primary_external_backends": route_primary_backends,
+            "blocked_primary_backends": blocked_primary_backends,
             "sandbox_active": sandbox_active,
             "network_reachable": network_reachable,
             "blocker_code": first_blocker,
@@ -502,10 +636,12 @@ pub(crate) fn external_cli_preflight_summary(
         "selected_execution_class": selected_execution_class,
         "tool_contract": tool_contract,
         "carrier_readiness": carrier_readiness,
+        "route_primary_external_backends": route_primary_backends,
+        "blocked_primary_backends": blocked_primary_backends,
         "sandbox_active": sandbox_active,
         "network_reachable": network_reachable,
         "blocker_code": serde_json::Value::Null,
-        "next_actions": []
+        "next_actions": primary_blocker_next_actions
     })
 }
 
@@ -739,6 +875,197 @@ agent_system:
         assert_eq!(
             summary["carrier_readiness"]["carriers"][0]["status"],
             "provider_auth_failed"
+        );
+    }
+
+    #[test]
+    fn external_cli_preflight_reports_configured_provider_failure_blocker() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vida-external-cli-provider-quota-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_root);
+        let log_dir = temp_root.join("logs");
+        fs::create_dir_all(&log_dir).expect("log dir should exist");
+        fs::write(
+            log_dir.join("latest.log"),
+            "ERROR 429 You exceeded your current quota",
+        )
+        .expect("log file should write");
+
+        let overlay: serde_yaml::Value = serde_yaml::from_str(&format!(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      runtime_root: .codex
+agent_system:
+  subagents:
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      readiness:
+        provider_failure:
+          mode: recent_dir_contains
+          path: {}
+          substring: exceeded your current quota
+          max_age_seconds: 3600
+          status: provider_failure_detected
+          blocker_code: tool_execution_failed
+          next_actions:
+            - Wait for provider quota reset or switch qwen to API-key auth.
+"#,
+            log_dir.display()
+        ))
+        .expect("overlay yaml should parse");
+
+        let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
+        let summary = external_cli_preflight_summary(&overlay, "codex", entry);
+        assert_eq!(summary["status"], "blocked");
+        assert_eq!(summary["blocker_code"], "tool_execution_failed");
+        assert_eq!(
+            summary["carrier_readiness"]["carriers"][0]["status"],
+            "provider_failure_detected"
+        );
+        assert_eq!(
+            summary["carrier_readiness"]["carriers"][0]["next_actions"][0],
+            "Wait for provider quota reset or switch qwen to API-key auth."
+        );
+    }
+
+    #[test]
+    fn external_cli_preflight_scans_any_recent_provider_failure_file() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vida-external-cli-provider-any-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_root);
+        let log_dir = temp_root.join("logs");
+        fs::create_dir_all(&log_dir).expect("log dir should exist");
+        fs::write(
+            log_dir.join("older-quota.log"),
+            "ERROR 429 You exceeded your current quota",
+        )
+        .expect("older quota log should write");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(log_dir.join("latest-success.log"), "INFO all good")
+            .expect("latest success log should write");
+
+        let overlay: serde_yaml::Value = serde_yaml::from_str(&format!(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      runtime_root: .codex
+agent_system:
+  subagents:
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      readiness:
+        provider_failure:
+          mode: recent_dir_contains_any
+          path: {}
+          substring: exceeded your current quota
+          max_age_seconds: 3600
+          status: provider_failure_detected
+          blocker_code: tool_execution_failed
+"#,
+            log_dir.display()
+        ))
+        .expect("overlay yaml should parse");
+
+        let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
+        let summary = external_cli_preflight_summary(&overlay, "codex", entry);
+        assert_eq!(summary["status"], "blocked");
+        assert_eq!(summary["blocker_code"], "tool_execution_failed");
+        assert_eq!(
+            summary["carrier_readiness"]["carriers"][0]["status"],
+            "provider_failure_detected"
+        );
+    }
+
+    #[test]
+    fn external_cli_preflight_surfaces_blocked_route_primary_backends() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "vida-external-cli-primary-blocked-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp_root);
+        let log_dir = temp_root.join("logs");
+        fs::create_dir_all(&log_dir).expect("log dir should exist");
+        fs::write(
+            log_dir.join("quota.log"),
+            "ERROR 429 You exceeded your current quota",
+        )
+        .expect("quota log should write");
+
+        let overlay: serde_yaml::Value = serde_yaml::from_str(&format!(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      runtime_root: .codex
+routing:
+  development_flow:
+    coach:
+      executor_backend: qwen_cli
+agent_system:
+  subagents:
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      readiness:
+        provider_failure:
+          mode: recent_dir_contains_any
+          path: {}
+          substring: exceeded your current quota
+          max_age_seconds: 3600
+          status: provider_failure_detected
+          blocker_code: tool_execution_failed
+    hermes_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+"#,
+            log_dir.display()
+        ))
+        .expect("overlay yaml should parse");
+
+        let entry = crate::yaml_lookup(&overlay, &["host_environment", "systems", "codex"]);
+        let summary = external_cli_preflight_summary(&overlay, "codex", entry);
+        assert_eq!(summary["status"], "pass");
+        assert_eq!(summary["blocked_primary_backends"][0], "qwen_cli");
+        assert_eq!(summary["route_primary_external_backends"][0], "qwen_cli");
+        assert!(summary["next_actions"][0]
+            .as_str()
+            .expect("next action should render")
+            .contains("route-primary external backends are currently blocked"));
+    }
+
+    #[test]
+    fn route_primary_external_backends_discovers_real_project_shape() {
+        let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("vida.config.yaml");
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            &std::fs::read_to_string(&config_path).expect("project config should read"),
+        )
+        .expect("project config should parse");
+
+        let backends = super::route_primary_external_backends(&overlay);
+        assert!(
+            backends.iter().any(|backend| backend == "qwen_cli"),
+            "expected qwen_cli in route_primary_external_backends, got {backends:?}"
         );
     }
 }

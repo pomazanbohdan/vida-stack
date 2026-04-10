@@ -68,7 +68,7 @@ pub(crate) fn print_root_help() {
     println!("  doctor    run bounded runtime integrity checks");
     println!("  consume   thin root alias to the TaskFlow consume family");
     println!("  lane      inspect or mutate canonical lane/takeover operator state");
-    println!("  approval  reserved root operator surface; currently fail-closed");
+    println!("  approval  inspect approval wait/complete state over run-graph approval law");
     println!("  recovery  thin root alias to the TaskFlow recovery family");
     println!("  taskflow  delegate to the TaskFlow runtime family");
     println!("  docflow   delegate to the DocFlow runtime family");

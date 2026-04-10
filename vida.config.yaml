@@ -420,9 +420,11 @@ agent_system:
       dispatch:
         command: qwen
         static_args:
+          - --auth-type
+          - qwen-oauth
           - -y
           - -o
-          - text
+          - json
         model_flag: --model
         env:
           HOME: /home/unnamed/project/vida-stack/.vida/data/qwen-home
@@ -433,6 +435,16 @@ agent_system:
         no_output_timeout_seconds: 240
         progress_idle_timeout_seconds: 120
         max_runtime_extension_seconds: 90
+      readiness:
+        provider_failure:
+          mode: recent_dir_contains_any
+          path: /home/unnamed/project/vida-stack/.vida/data/qwen-home/.qwen/debug
+          substring: exceeded your current quota
+          max_age_seconds: 1800
+          status: provider_failure_detected
+          blocker_code: tool_execution_failed
+          next_actions:
+            - Wait for Qwen provider quota reset or switch qwen dispatch to API-key auth, then rerun `vida status --json`.
     hermes_cli:
       enabled: true
       subagent_backend_class: external_cli
