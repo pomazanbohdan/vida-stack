@@ -525,7 +525,9 @@ mod tests {
         });
         assert_eq!(
             shared_operator_output_contract_parity_error(&summary_json),
-            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+            Some(
+                "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch"
+            )
         );
     }
 }

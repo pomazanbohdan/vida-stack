@@ -2,8 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[path = "state_store_core_utils.rs"]
+mod state_store_core_utils;
 #[path = "state_store_patching.rs"]
 mod state_store_patching;
 #[path = "state_store_run_graph_summary.rs"]
@@ -14,30 +17,35 @@ mod state_store_source_scan;
 mod state_store_taskflow_snapshot_codec;
 
 use crate::release1_contracts::{
-    BlockerCode, CompatibilityClass, LaneStatus, Release1ContractType, Release1SchemaVersion,
     canonical_blocker_code_str, canonical_compatibility_class_str, canonical_lane_status_str,
     canonical_release1_contract_type_str, canonical_release1_schema_version_str,
-    derive_lane_status,
+    derive_lane_status, BlockerCode, CompatibilityClass, LaneStatus, Release1ContractType,
+    Release1SchemaVersion,
 };
 use crate::taskflow_run_graph::{
     approval_delegation_transition_kind, is_dispatch_resume_handoff_complete,
 };
 use serde_json::Deserializer;
+use state_store_core_utils::{
+    compare_task_paths, escape_surql_literal, sanitize_record_id, task_ready_sort_key,
+    task_sort_key, unix_timestamp, unix_timestamp_nanos,
+};
+pub use state_store_core_utils::{default_state_dir, repo_root};
 use state_store_patching::{
     apply_patch_operation, collect_patch_ids, join_lines, split_lines, validate_patch_bindings,
     validate_patch_conflicts,
 };
 use state_store_run_graph_summary::reconcile_run_graph_status_with_dispatch_receipt;
 pub(crate) use state_store_run_graph_summary::{
-    RunGraphApprovalDelegationReceipt, RunGraphCheckpointSummary, RunGraphDelegationGateSummary,
-    RunGraphDispatchReceiptSummary, RunGraphGateSummary, RunGraphRecoverySummary,
     default_run_graph_lane_status, deserialize_run_graph_lane_status,
     ensure_run_graph_approval_delegation_receipt_consistency, handoff_state_links_consent_ttl,
     latest_run_graph_dispatch_receipt_matches_status,
     latest_run_graph_dispatch_receipt_signal_is_ambiguous,
     latest_run_graph_dispatch_receipt_summary_is_inconsistent,
     latest_run_graph_evidence_snapshot_is_consistent, normalize_run_graph_lane_status,
-    requires_memory_governance_enforcement,
+    requires_memory_governance_enforcement, RunGraphApprovalDelegationReceipt,
+    RunGraphCheckpointSummary, RunGraphDelegationGateSummary, RunGraphDispatchReceiptSummary,
+    RunGraphGateSummary, RunGraphRecoverySummary,
 };
 use state_store_source_scan::{
     artifact_id_from_path, collect_markdown_files, hierarchy_from_path, infer_artifact_kind,
@@ -52,9 +60,9 @@ use state_store_taskflow_snapshot_codec::{
     task_dependency_to_canonical_edge, task_record_to_canonical_snapshot_row,
     task_records_from_canonical_snapshot, task_records_from_canonical_snapshot_for_additive_import,
 };
-use surrealdb::Surreal;
 use surrealdb::engine::local::{Db, SurrealKv};
 use surrealdb::types::SurrealValue;
+use surrealdb::Surreal;
 use taskflow_contracts::{
     DependencyEdge as CanonicalDependencyEdge, TaskRecord as CanonicalTaskRecord,
 };
@@ -64,13 +72,13 @@ use taskflow_core::{
 };
 use taskflow_state::InMemoryTaskStore;
 use taskflow_state_fs::{
-    TaskSnapshot, read_snapshot_into_memory as read_canonical_snapshot_into_memory,
+    read_snapshot_into_memory as read_canonical_snapshot_into_memory,
     restore_in_memory_store as restore_canonical_in_memory_store,
-    write_snapshot as write_canonical_snapshot,
+    write_snapshot as write_canonical_snapshot, TaskSnapshot,
 };
 use taskflow_state_surreal::{StateSpineManifestContract, SurrealStoreTarget};
-use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 const DEFAULT_STATE_DIR: &str = ".vida/data/state";
 const STATE_STORE_RECOVERY_HINT: &str = "hint: use VIDA_STATE_DIR=<temp-dir> for a fresh proof run, or reinitialize the long-lived local state root instead of deleting datastore subdirectories by hand";
@@ -98,6 +106,8 @@ DEFINE TABLE protocol_binding_state SCHEMALESS;
 DEFINE TABLE protocol_binding_receipt SCHEMALESS;
 DEFINE TABLE launcher_activation_snapshot SCHEMALESS;
 DEFINE TABLE run_graph_approval_delegation_receipt SCHEMALESS;
+DEFINE TABLE run_graph_continuation_binding SCHEMALESS;
+DEFINE TABLE run_graph_dispatch_context SCHEMALESS;
 "#;
 
 fn state_schema_document() -> String {
@@ -119,9 +129,9 @@ fn state_store_recovery_hint_for_message(message: &str) -> Option<&'static str> 
 mod state_store_task_reconciliation;
 
 pub(crate) use state_store_task_reconciliation::{
-    TaskReconciliationRollup, TaskReconciliationRollupRow, TaskReconciliationSummary,
-    TaskReconciliationSummaryInput, TaskReconciliationSummaryRow, TaskflowSnapshotBridgeSummary,
-    count_snapshot_bridge_rows,
+    count_snapshot_bridge_rows, TaskReconciliationRollup, TaskReconciliationRollupRow,
+    TaskReconciliationSummary, TaskReconciliationSummaryInput, TaskReconciliationSummaryRow,
+    TaskflowSnapshotBridgeSummary,
 };
 
 #[derive(Debug)]
@@ -1910,6 +1920,66 @@ impl StateStore {
             .content(receipt)
             .await?;
         Ok(())
+    }
+
+    pub async fn record_run_graph_continuation_binding(
+        &self,
+        binding: &RunGraphContinuationBinding,
+    ) -> Result<(), StateStoreError> {
+        binding.validate()?;
+        let _: Option<RunGraphContinuationBinding> = self
+            .db
+            .upsert(("run_graph_continuation_binding", binding.run_id.as_str()))
+            .content(binding.clone())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn run_graph_continuation_binding(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<RunGraphContinuationBinding>, StateStoreError> {
+        let binding: Option<RunGraphContinuationBinding> = self
+            .db
+            .select(("run_graph_continuation_binding", run_id))
+            .await?;
+        match binding {
+            Some(binding) => {
+                binding.validate()?;
+                Ok(Some(binding))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub async fn record_run_graph_dispatch_context(
+        &self,
+        context: &RunGraphDispatchContext,
+    ) -> Result<(), StateStoreError> {
+        context.validate()?;
+        let _: Option<RunGraphDispatchContext> = self
+            .db
+            .upsert(("run_graph_dispatch_context", context.run_id.as_str()))
+            .content(context.clone())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn run_graph_dispatch_context(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<RunGraphDispatchContext>, StateStoreError> {
+        let context: Option<RunGraphDispatchContext> = self
+            .db
+            .select(("run_graph_dispatch_context", run_id))
+            .await?;
+        match context {
+            Some(context) => {
+                context.validate()?;
+                Ok(Some(context))
+            }
+            None => Ok(None),
+        }
     }
 
     #[allow(dead_code)]
@@ -4240,6 +4310,148 @@ pub struct RunGraphDispatchReceipt {
     pub recorded_at: String,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub struct RunGraphContinuationBinding {
+    pub run_id: String,
+    pub task_id: String,
+    pub status: String,
+    pub active_bounded_unit: serde_json::Value,
+    pub binding_source: String,
+    pub why_this_unit: String,
+    pub primary_path: String,
+    pub sequential_vs_parallel_posture: String,
+    pub request_text: Option<String>,
+    pub recorded_at: String,
+}
+
+impl RunGraphContinuationBinding {
+    fn validate(&self) -> Result<(), StateStoreError> {
+        if self.run_id.trim().is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: "run-graph continuation binding run_id must be non-empty".to_string(),
+            });
+        }
+        if self.task_id.trim().is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph continuation binding for `{}` must have non-empty task_id",
+                    self.run_id
+                ),
+            });
+        }
+        if self.status != "bound" {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph continuation binding for `{}` must have status `bound`, got `{}`",
+                    self.run_id, self.status
+                ),
+            });
+        }
+        if !self.active_bounded_unit.is_object() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph continuation binding for `{}` must have object active_bounded_unit",
+                    self.run_id
+                ),
+            });
+        }
+        for (field, value) in [
+            ("binding_source", self.binding_source.as_str()),
+            ("why_this_unit", self.why_this_unit.as_str()),
+            ("primary_path", self.primary_path.as_str()),
+            (
+                "sequential_vs_parallel_posture",
+                self.sequential_vs_parallel_posture.as_str(),
+            ),
+            ("recorded_at", self.recorded_at.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(StateStoreError::InvalidTaskRecord {
+                    reason: format!(
+                        "run-graph continuation binding for `{}` has empty field `{field}`",
+                        self.run_id
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub struct RunGraphDispatchContext {
+    pub run_id: String,
+    pub task_id: String,
+    pub request_text: String,
+    pub role_selection: serde_json::Value,
+    pub recorded_at: String,
+}
+
+impl RunGraphDispatchContext {
+    fn validate(&self) -> Result<(), StateStoreError> {
+        if self.run_id.trim().is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: "run-graph dispatch context run_id must be non-empty".to_string(),
+            });
+        }
+        if self.task_id.trim().is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch context for `{}` must have non-empty task_id",
+                    self.run_id
+                ),
+            });
+        }
+        if self.request_text.trim().is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch context for `{}` must have non-empty request_text",
+                    self.run_id
+                ),
+            });
+        }
+        if self.recorded_at.trim().is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch context for `{}` must have non-empty recorded_at",
+                    self.run_id
+                ),
+            });
+        }
+        if !self.role_selection.is_object() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch context for `{}` must have object role_selection",
+                    self.run_id
+                ),
+            });
+        }
+        serde_json::from_value::<crate::RuntimeConsumptionLaneSelection>(
+            self.role_selection.clone(),
+        )
+        .map_err(|error| StateStoreError::InvalidTaskRecord {
+            reason: format!(
+                "run-graph dispatch context for `{}` has invalid role_selection: {error}",
+                self.run_id
+            ),
+        })?;
+        Ok(())
+    }
+
+    pub fn role_selection(
+        &self,
+    ) -> Result<crate::RuntimeConsumptionLaneSelection, StateStoreError> {
+        serde_json::from_value(self.role_selection.clone()).map_err(|error| {
+            StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch context for `{}` has invalid role_selection: {error}",
+                    self.run_id
+                ),
+            }
+        })
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
 struct RunGraphDispatchReceiptStored {
@@ -4355,7 +4567,7 @@ impl From<RunGraphDispatchReceipt> for RunGraphDispatchReceiptStored {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct RunGraphStatus {
     pub run_id: String,
     pub task_id: String,
@@ -4809,74 +5021,6 @@ impl LauncherActivationSnapshot {
     }
 }
 
-fn escape_surql_literal(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('\'', "\\'")
-}
-
-fn sanitize_record_id(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect()
-}
-
-fn task_sort_key(left: &TaskRecord, right: &TaskRecord) -> std::cmp::Ordering {
-    left.priority
-        .cmp(&right.priority)
-        .then_with(|| left.id.cmp(&right.id))
-}
-
-fn task_ready_sort_key(left: &TaskRecord, right: &TaskRecord) -> std::cmp::Ordering {
-    let left_rank = if left.status == "in_progress" {
-        0u8
-    } else {
-        1u8
-    };
-    let right_rank = if right.status == "in_progress" {
-        0u8
-    } else {
-        1u8
-    };
-    left_rank
-        .cmp(&right_rank)
-        .then_with(|| left.priority.cmp(&right.priority))
-        .then_with(|| left.id.cmp(&right.id))
-}
-
-fn compare_task_paths(left: &[String], right: &[String]) -> std::cmp::Ordering {
-    left.len()
-        .cmp(&right.len())
-        .then_with(|| left.join("->").cmp(&right.join("->")))
-}
-
-pub fn default_state_dir() -> PathBuf {
-    PathBuf::from(DEFAULT_STATE_DIR)
-}
-
-pub fn repo_root() -> PathBuf {
-    PathBuf::from(REPO_ROOT)
-}
-
-fn unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
-}
-
-fn unix_timestamp_nanos() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4925,8 +5069,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn launcher_activation_snapshot_write_accepts_empty_source_config_path_as_provenance_only()
-     {
+    async fn launcher_activation_snapshot_write_accepts_empty_source_config_path_as_provenance_only(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -4964,6 +5108,94 @@ hierarchy: framework,contracts
         assert_eq!(read_back.source, "state_store");
         assert_eq!(read_back.source_config_path, "");
         assert_eq!(read_back.source_config_digest, "digest-123");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_continuation_binding_and_dispatch_context_round_trip() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-binding-roundtrip-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let binding = RunGraphContinuationBinding {
+            run_id: "run-1".to_string(),
+            task_id: "task-1".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "run_graph_task",
+                "task_id": "task-1",
+                "run_id": "run-1",
+                "active_node": "pm",
+            }),
+            binding_source: "test".to_string(),
+            why_this_unit: "because".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only".to_string(),
+            request_text: Some("req".to_string()),
+            recorded_at: "2026-04-10T10:00:00Z".to_string(),
+        };
+        let context = RunGraphDispatchContext {
+            run_id: "run-1".to_string(),
+            task_id: "task-1".to_string(),
+            request_text: "req".to_string(),
+            role_selection: serde_json::json!({
+                "ok": true,
+                "activation_source": "test",
+                "selection_mode": "fixed",
+                "fallback_role": "worker",
+                "request": "req",
+                "selected_role": "worker",
+                "conversational_mode": null,
+                "single_task_only": false,
+                "tracked_flow_entry": null,
+                "allow_freeform_chat": false,
+                "confidence": "high",
+                "matched_terms": [],
+                "compiled_bundle": null,
+                "execution_plan": {},
+                "reason": "test"
+            }),
+            recorded_at: "2026-04-10T10:00:00Z".to_string(),
+        };
+
+        store
+            .record_run_graph_continuation_binding(&binding)
+            .await
+            .expect("record binding");
+        store
+            .record_run_graph_dispatch_context(&context)
+            .await
+            .expect("record context");
+
+        let stored_binding = store
+            .run_graph_continuation_binding("run-1")
+            .await
+            .expect("read binding")
+            .expect("binding present");
+        let stored_context = store
+            .run_graph_dispatch_context("run-1")
+            .await
+            .expect("read context")
+            .expect("context present");
+
+        assert_eq!(stored_binding.binding_source, "test");
+        assert_eq!(stored_binding.active_bounded_unit["active_node"], "pm");
+        assert_eq!(stored_context.request_text, "req");
+        assert_eq!(
+            stored_context
+                .role_selection()
+                .expect("role selection should decode")
+                .selected_role,
+            "worker"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -5598,12 +5830,10 @@ hierarchy: framework,contracts
             compatibility.classification,
             CompatibilityClass::ReaderUpgradeRequired.as_str()
         );
-        assert!(
-            compatibility
-                .reasons
-                .iter()
-                .any(|reason| reason.contains("instruction runtime state missing"))
-        );
+        assert!(compatibility
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("instruction runtime state missing")));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -5651,18 +5881,14 @@ hierarchy: framework,contracts
             compatibility.classification,
             CompatibilityClass::ReaderUpgradeRequired.as_str()
         );
-        assert!(
-            compatibility
-                .reasons
-                .iter()
-                .any(|reason| reason.contains("storage metadata record is invalid"))
-        );
-        assert!(
-            compatibility
-                .reasons
-                .iter()
-                .any(|reason| reason.contains("backend=sqlite"))
-        );
+        assert!(compatibility
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("storage metadata record is invalid")));
+        assert!(compatibility
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("backend=sqlite")));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -6055,11 +6281,9 @@ hierarchy: framework,contracts
             .record_run_graph_status(&status)
             .await
             .expect_err("unsealed evidence context should fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("memory governance evidence shaping required")
-        );
+        assert!(error
+            .to_string()
+            .contains("memory governance evidence shaping required"));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -6086,11 +6310,9 @@ hierarchy: framework,contracts
             .record_run_graph_status(&status)
             .await
             .expect_err("missing consent/ttl linkage should fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("memory governance linkage required")
-        );
+        assert!(error
+            .to_string()
+            .contains("memory governance linkage required"));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -6130,11 +6352,9 @@ hierarchy: framework,contracts
             .run_graph_status("run-vida-a")
             .await
             .expect_err("persisted invalid governance state should fail closed on read");
-        assert!(
-            error
-                .to_string()
-                .contains("memory governance evidence shaping required")
-        );
+        assert!(error
+            .to_string()
+            .contains("memory governance evidence shaping required"));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -6197,8 +6417,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn latest_run_graph_recovery_checkpoint_and_gate_summaries_fail_closed_when_latest_checkpoint_row_is_reordered_by_timestamp_drift()
-     {
+    async fn latest_run_graph_recovery_checkpoint_and_gate_summaries_fail_closed_when_latest_checkpoint_row_is_reordered_by_timestamp_drift(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6238,11 +6458,9 @@ hierarchy: framework,contracts
             .latest_run_graph_recovery_summary()
             .await
             .expect_err("timestamp drifted checkpoint row should fail closed for recovery summary");
-        assert!(
-            recovery_error
-                .to_string()
-                .contains("latest checkpoint evidence must share the same run_id")
-        );
+        assert!(recovery_error
+            .to_string()
+            .contains("latest checkpoint evidence must share the same run_id"));
 
         let checkpoint_error = store
             .latest_run_graph_checkpoint_summary()
@@ -6250,28 +6468,24 @@ hierarchy: framework,contracts
             .expect_err(
                 "timestamp drifted checkpoint row should fail closed for checkpoint summary",
             );
-        assert!(
-            checkpoint_error
-                .to_string()
-                .contains("latest checkpoint evidence must share the same run_id")
-        );
+        assert!(checkpoint_error
+            .to_string()
+            .contains("latest checkpoint evidence must share the same run_id"));
 
         let gate_error = store
             .latest_run_graph_gate_summary()
             .await
             .expect_err("timestamp drifted checkpoint row should fail closed for gate summary");
-        assert!(
-            gate_error
-                .to_string()
-                .contains("latest checkpoint evidence must share the same run_id")
-        );
+        assert!(gate_error
+            .to_string()
+            .contains("latest checkpoint evidence must share the same run_id"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn latest_run_graph_recovery_and_gate_summary_fail_closed_on_partial_governance_corruption()
-     {
+    async fn latest_run_graph_recovery_and_gate_summary_fail_closed_on_partial_governance_corruption(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6315,28 +6529,24 @@ hierarchy: framework,contracts
             .latest_run_graph_recovery_summary()
             .await
             .expect_err("partial governance corruption should fail closed for recovery summary");
-        assert!(
-            recovery_error
-                .to_string()
-                .contains("run-graph recovery/gate summary is inconsistent")
-        );
+        assert!(recovery_error
+            .to_string()
+            .contains("run-graph recovery/gate summary is inconsistent"));
 
         let gate_error = store
             .latest_run_graph_gate_summary()
             .await
             .expect_err("partial governance corruption should fail closed for gate summary");
-        assert!(
-            gate_error
-                .to_string()
-                .contains("run-graph recovery/gate summary is inconsistent")
-        );
+        assert!(gate_error
+            .to_string()
+            .contains("run-graph recovery/gate summary is inconsistent"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn latest_run_graph_recovery_checkpoint_and_gate_summaries_fail_closed_when_one_surface_row_is_missing_and_an_older_row_exists()
-     {
+    async fn latest_run_graph_recovery_checkpoint_and_gate_summaries_fail_closed_when_one_surface_row_is_missing_and_an_older_row_exists(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6383,31 +6593,25 @@ hierarchy: framework,contracts
             .latest_run_graph_recovery_summary()
             .await
             .expect_err("missing latest governance row should fail closed for recovery summary");
-        assert!(
-            recovery_error
-                .to_string()
-                .contains("recovery/checkpoint summary is inconsistent")
-        );
+        assert!(recovery_error
+            .to_string()
+            .contains("recovery/checkpoint summary is inconsistent"));
 
         let checkpoint_error = store
             .latest_run_graph_checkpoint_summary()
             .await
             .expect_err("missing latest governance row should fail closed for checkpoint summary");
-        assert!(
-            checkpoint_error
-                .to_string()
-                .contains("recovery/checkpoint summary is inconsistent")
-        );
+        assert!(checkpoint_error
+            .to_string()
+            .contains("recovery/checkpoint summary is inconsistent"));
 
         let gate_error = store
             .latest_run_graph_gate_summary()
             .await
             .expect_err("missing latest governance row should fail closed for gate summary");
-        assert!(
-            gate_error
-                .to_string()
-                .contains("recovery/checkpoint summary is inconsistent")
-        );
+        assert!(gate_error
+            .to_string()
+            .contains("recovery/checkpoint summary is inconsistent"));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -6555,8 +6759,8 @@ hierarchy: framework,contracts
     }
 
     #[test]
-    fn run_graph_dispatch_receipt_summary_uses_recorded_exception_lane_status_until_takeover_is_explicit()
-    {
+    fn run_graph_dispatch_receipt_summary_uses_recorded_exception_lane_status_until_takeover_is_explicit(
+    ) {
         let mut receipt = sample_dispatch_receipt_with_status("executed");
         receipt.exception_path_receipt_id = Some("receipt-exception-1".to_string());
         receipt.supersedes_receipt_id = Some("receipt-superseded-1".to_string());
@@ -6717,8 +6921,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn record_run_graph_dispatch_receipt_rejects_noncanonical_downstream_blockers_before_persist()
-     {
+    async fn record_run_graph_dispatch_receipt_rejects_noncanonical_downstream_blockers_before_persist(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6771,8 +6975,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_tracks_latest_status_and_derives_stale_lane_status()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_tracks_latest_status_and_derives_stale_lane_status(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6897,18 +7101,16 @@ hierarchy: framework,contracts
             .latest_run_graph_dispatch_receipt_summary()
             .await
             .expect_err("drifted downstream lane signal should fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("run-graph dispatch receipt summary is inconsistent")
-        );
+        assert!(error
+            .to_string()
+            .contains("run-graph dispatch receipt summary is inconsistent"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_whitespace_only_downstream_blockers()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_whitespace_only_downstream_blockers(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -6990,8 +7192,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_mixed_canonical_and_whitespace_downstream_blockers()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_mixed_canonical_and_whitespace_downstream_blockers(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7071,18 +7273,16 @@ hierarchy: framework,contracts
             .latest_run_graph_dispatch_receipt_summary()
             .await
             .expect_err("mixed canonical and whitespace downstream blockers should fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("without whitespace, case, internal spacing, or unicode drift")
-        );
+        assert!(error
+            .to_string()
+            .contains("without whitespace, case, internal spacing, or unicode drift"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_empty_string_and_canonical_downstream_blockers()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_empty_string_and_canonical_downstream_blockers(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7165,18 +7365,16 @@ hierarchy: framework,contracts
             .latest_run_graph_dispatch_receipt_summary()
             .await
             .expect_err("empty-string downstream blockers should fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("non-empty ASCII lowercase canonical entries")
-        );
+        assert!(error
+            .to_string()
+            .contains("non-empty ASCII lowercase canonical entries"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_tab_and_newline_downstream_blockers()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_tab_and_newline_downstream_blockers(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7259,18 +7457,16 @@ hierarchy: framework,contracts
             .latest_run_graph_dispatch_receipt_summary()
             .await
             .expect_err("tab/newline downstream blockers should fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("non-empty ASCII lowercase canonical entries")
-        );
+        assert!(error
+            .to_string()
+            .contains("non-empty ASCII lowercase canonical entries"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_trailing_empty_downstream_blockers()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_trailing_empty_downstream_blockers(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7360,8 +7556,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_duplicate_canonical_and_whitespace_downstream_blockers()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_duplicate_canonical_and_whitespace_downstream_blockers(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7444,18 +7640,16 @@ hierarchy: framework,contracts
             .expect_err(
                 "duplicate canonical and whitespace downstream blockers should fail closed",
             );
-        assert!(
-            error
-                .to_string()
-                .contains("without whitespace, case, internal spacing, or unicode drift")
-        );
+        assert!(error
+            .to_string()
+            .contains("without whitespace, case, internal spacing, or unicode drift"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_repeated_canonical_downstream_blockers()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_repeated_canonical_downstream_blockers(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7539,18 +7733,16 @@ hierarchy: framework,contracts
             .latest_run_graph_dispatch_receipt_summary()
             .await
             .expect_err("repeated canonical downstream blockers should fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("duplicate canonical entries after lowercase canonicalization")
-        );
+        assert!(error
+            .to_string()
+            .contains("duplicate canonical entries after lowercase canonicalization"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_large_repeated_canonical_downstream_blockers()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_large_repeated_canonical_downstream_blockers(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7632,18 +7824,16 @@ hierarchy: framework,contracts
             .latest_run_graph_dispatch_receipt_summary()
             .await
             .expect_err("large repeated canonical downstream blockers should fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("duplicate canonical entries after lowercase canonicalization")
-        );
+        assert!(error
+            .to_string()
+            .contains("duplicate canonical entries after lowercase canonicalization"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_mixed_case_duplicate_downstream_blockers()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_mixed_case_duplicate_downstream_blockers(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7723,18 +7913,16 @@ hierarchy: framework,contracts
             .latest_run_graph_dispatch_receipt_summary()
             .await
             .expect_err("mixed-case duplicate downstream blockers should fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("without whitespace, case, internal spacing, or unicode drift")
-        );
+        assert!(error
+            .to_string()
+            .contains("without whitespace, case, internal spacing, or unicode drift"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_internal_repeated_space_downstream_blockers()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_internal_repeated_space_downstream_blockers(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7817,18 +8005,16 @@ hierarchy: framework,contracts
             .latest_run_graph_dispatch_receipt_summary()
             .await
             .expect_err("internal repeated spaces in downstream blockers should fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("without whitespace, case, internal spacing, or unicode drift")
-        );
+        assert!(error
+            .to_string()
+            .contains("without whitespace, case, internal spacing, or unicode drift"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_unicode_zero_width_downstream_blockers()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_unicode_zero_width_downstream_blockers(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7917,8 +8103,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_missing_downstream_blockers_fallback()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_missing_downstream_blockers_fallback(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -7995,18 +8181,16 @@ hierarchy: framework,contracts
             .latest_run_graph_dispatch_receipt_summary()
             .await
             .expect_err("missing downstream blockers fallback should fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("downstream_dispatch_blockers must be present and non-empty")
-        );
+        assert!(error
+            .to_string()
+            .contains("downstream_dispatch_blockers must be present and non-empty"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_normalizes_canonical_downstream_blocker_order()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_normalizes_canonical_downstream_blocker_order(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -8099,8 +8283,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_when_latest_checkpoint_row_leaks_from_older_run()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_when_latest_checkpoint_row_leaks_from_older_run(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -8149,18 +8333,16 @@ hierarchy: framework,contracts
             .expect_err(
                 "checkpoint leakage should fail closed for latest dispatch receipt summary",
             );
-        assert!(
-            error
-                .to_string()
-                .contains("latest checkpoint evidence must share the same run_id")
-        );
+        assert!(error
+            .to_string()
+            .contains("latest checkpoint evidence must share the same run_id"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_whitespace_only_critical_fields()
-     {
+    async fn latest_run_graph_dispatch_receipt_summary_fails_closed_on_whitespace_only_critical_fields(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -8222,11 +8404,9 @@ hierarchy: framework,contracts
             .latest_run_graph_dispatch_receipt_summary()
             .await
             .expect_err("whitespace-only dispatch_status should fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("dispatch_status must be non-empty")
-        );
+        assert!(error
+            .to_string()
+            .contains("dispatch_status must be non-empty"));
 
         let _: Option<RunGraphDispatchReceiptStored> = store
             .db
@@ -8361,12 +8541,10 @@ hierarchy: framework,contracts
             "reader_upgrade_required"
         );
         assert_eq!(summary.migration_state, "migration_blocked");
-        assert!(
-            summary
-                .blockers
-                .iter()
-                .any(|blocker| blocker.contains("instruction runtime root unresolved"))
-        );
+        assert!(summary
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("instruction runtime root unresolved")));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -8418,18 +8596,14 @@ hierarchy: framework,contracts
             "reader_upgrade_required"
         );
         assert_eq!(summary.migration_state, "migration_blocked");
-        assert!(
-            summary
-                .blockers
-                .iter()
-                .any(|blocker| blocker.contains("authoritative state spine manifest is invalid"))
-        );
-        assert!(
-            summary
-                .blockers
-                .iter()
-                .any(|blocker| blocker.contains("authoritative_mutation_root=legacy task"))
-        );
+        assert!(summary
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("authoritative state spine manifest is invalid")));
+        assert!(summary
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("authoritative_mutation_root=legacy task")));
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -8647,16 +8821,12 @@ hierarchy: framework,contracts
 
         assert_eq!(projection.artifact_id, "framework-instruction-contract");
         assert_eq!(projection.applied_patch_ids, vec!["test-projection-patch"]);
-        assert!(
-            projection
-                .body
-                .contains("artifact_kind: instruction_contract_patched")
-        );
-        assert!(
-            projection
-                .body
-                .contains("clarification: sidecar-added-line")
-        );
+        assert!(projection
+            .body
+            .contains("artifact_kind: instruction_contract_patched"));
+        assert!(projection
+            .body
+            .contains("clarification: sidecar-added-line"));
         assert!(!projection.body.contains("hierarchy: framework"));
         assert!(projection.body.contains("appendix: extra guidance"));
         assert!(!projection.projected_hash.is_empty());
@@ -8946,11 +9116,9 @@ hierarchy: framework,contracts
             bundle.projected_artifacts[0].artifact_id,
             "framework-agent-definition"
         );
-        assert!(
-            bundle
-                .receipt_id
-                .starts_with("effective-bundle-framework-agent-definition-")
-        );
+        assert!(bundle
+            .receipt_id
+            .starts_with("effective-bundle-framework-agent-definition-"));
 
         let mut receipt_query = store
             .db
@@ -9777,11 +9945,9 @@ hierarchy: framework,contracts
         assert_eq!(latest.source_kind, "canonical_snapshot_memory");
         assert_eq!(latest.task_count, 1);
         assert_eq!(latest.stale_removed_count, 1);
-        assert!(
-            latest
-                .as_display()
-                .contains("replace_snapshot via canonical_snapshot_memory")
-        );
+        assert!(latest
+            .as_display()
+            .contains("replace_snapshot via canonical_snapshot_memory"));
 
         let rollup = store
             .task_reconciliation_rollup()
@@ -9891,8 +10057,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn import_taskflow_snapshot_replaces_dependencies_for_updated_tasks_without_removing_unrelated_tasks()
-     {
+    async fn import_taskflow_snapshot_replaces_dependencies_for_updated_tasks_without_removing_unrelated_tasks(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10003,8 +10169,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn import_taskflow_snapshot_allows_dependencies_on_existing_authoritative_tasks_outside_payload()
-     {
+    async fn import_taskflow_snapshot_allows_dependencies_on_existing_authoritative_tasks_outside_payload(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10202,8 +10368,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn import_taskflow_snapshot_file_allows_dependencies_on_existing_authoritative_tasks_outside_payload()
-     {
+    async fn import_taskflow_snapshot_file_allows_dependencies_on_existing_authoritative_tasks_outside_payload(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -10303,8 +10469,8 @@ hierarchy: framework,contracts
     }
 
     #[tokio::test]
-    async fn import_taskflow_snapshot_file_fails_closed_before_mutation_on_post_merge_parent_conflict()
-     {
+    async fn import_taskflow_snapshot_file_fails_closed_before_mutation_on_post_merge_parent_conflict(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())

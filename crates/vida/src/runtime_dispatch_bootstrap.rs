@@ -25,6 +25,37 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
                     "reason": format!("record_seed_failed: {error}"),
                 });
             }
+            if let Err(error) = store
+                .record_run_graph_dispatch_context(
+                    &crate::taskflow_run_graph::run_graph_dispatch_context_from_seed_payload(
+                        &seed_payload,
+                    ),
+                )
+                .await
+            {
+                return serde_json::json!({
+                    "status": "blocked",
+                    "handoff_ready": false,
+                    "run_id": run_id,
+                    "seed": seed_payload_json,
+                    "reason": format!("record_seed_context_failed: {error}"),
+                });
+            }
+            if let Err(error) = crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                store,
+                &seed_payload.status,
+                "runtime_consumption_seed",
+            )
+            .await
+            {
+                return serde_json::json!({
+                    "status": "blocked",
+                    "handoff_ready": false,
+                    "run_id": run_id,
+                    "seed": seed_payload_json,
+                    "reason": format!("record_seed_binding_failed: {error}"),
+                });
+            }
             let mut latest_status = seed_status_json.clone();
             let mut advanced_payload = serde_json::Value::Null;
 
@@ -36,6 +67,7 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
                 .await
                 {
                     Ok(payload) => {
+                        let advanced_status = payload.status.clone();
                         let advanced_status_json = serde_json::to_value(&payload.status)
                             .unwrap_or(serde_json::Value::Null);
                         if let Err(error) = store.record_run_graph_status(&payload.status).await {
@@ -65,6 +97,22 @@ pub(crate) async fn build_runtime_consumption_run_graph_bootstrap(
                         advanced_payload =
                             serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
                         latest_status = advanced_status_json;
+                        if let Err(error) =
+                            crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                                store,
+                                &advanced_status,
+                                "runtime_consumption_advance",
+                            )
+                            .await
+                        {
+                            return serde_json::json!({
+                                "status": "blocked",
+                                "handoff_ready": false,
+                                "run_id": run_id,
+                                "seed": seed_payload_json,
+                                "reason": format!("record_advance_binding_failed: {error}"),
+                            });
+                        }
                     }
                     Err(error) => {
                         return serde_json::json!({

@@ -75,6 +75,7 @@ Local write work still requires an explicit exception-path receipt and remains b
 5. when one packet closes, immediately rebuild the parent bounded unit and continue to the next lawful packet unless a real blocker or escalation receipt exists.
 6. if closure-style wording/reporting is emitted by mistake under active continuation intent, the recovery action is to return to commentary mode and bind the already-known next lawful packet immediately.
 7. when recording task progress from shell during orchestration, prefer file-backed text arguments such as `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
+8. packet closure does not by itself authorize binding a different sibling bounded unit; if the next lawful unit is not explicitly evidenced, continuation must fail closed to ambiguity instead of widening by inertia.
 
 ## Routing
 

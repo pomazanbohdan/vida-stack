@@ -926,6 +926,14 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
         return taskflow_protocol_binding::run_taskflow_protocol_binding(&args.args).await;
     }
 
+    if matches!(args.args.first().map(String::as_str), Some("continuation")) {
+        return crate::taskflow_continuation::run_taskflow_continuation(&args.args).await;
+    }
+
+    if matches!(args.args.first().map(String::as_str), Some("packet")) {
+        return crate::taskflow_packet::run_taskflow_packet(&args.args).await;
+    }
+
     if matches!(args.args.first().map(String::as_str), Some("consume")) {
         let consume_subcommand = args.args.get(1).map(String::as_str);
         if matches!(consume_subcommand, Some("continue" | "advance")) {
@@ -957,7 +965,7 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
         }
         if matches!(
             args.args.get(1).map(String::as_str),
-            Some("seed" | "advance" | "init" | "update")
+            Some("seed" | "advance" | "dispatch-init" | "init" | "update")
         ) {
             return run_taskflow_run_graph_mutation(&args.args).await;
         }

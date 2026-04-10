@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::release1_contracts::{
-    BlockerCode, blocker_code_str, canonical_release1_contract_status_str,
+    blocker_code_str, canonical_release1_contract_status_str, BlockerCode,
 };
 use crate::state_store::TaskRecord;
 

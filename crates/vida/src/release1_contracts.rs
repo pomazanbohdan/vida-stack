@@ -322,7 +322,11 @@ impl Release1ContractStatus {
     }
 
     pub(crate) const fn from_bool(ok: bool) -> Self {
-        if ok { Self::Pass } else { Self::Blocked }
+        if ok {
+            Self::Pass
+        } else {
+            Self::Blocked
+        }
     }
 
     pub(crate) fn from_str(value: &str) -> Option<Self> {
@@ -379,7 +383,8 @@ pub(crate) fn exception_takeover_state(
     if has_evidence_id(supersedes_receipt_id) {
         return ExceptionTakeoverState::ActiveTakeover;
     }
-    if local_exception_takeover_gate.is_some_and(|gate| gate.trim() != "blocked_open_delegated_cycle")
+    if local_exception_takeover_gate
+        .is_some_and(|gate| gate.trim() != "blocked_open_delegated_cycle")
     {
         return ExceptionTakeoverState::ActiveTakeover;
     }
@@ -436,6 +441,10 @@ pub(crate) enum BlockerCode {
     DelegationChainBroken,
     ToolContractMissing,
     ToolContractIncomplete,
+    ExternalCliNetworkAccessUnavailableUnderSandbox,
+    InteractiveAuthRequired,
+    ProviderAuthFailed,
+    ModelNotPinned,
     ToolExecutionFailed,
     ToolResultUnusable,
     CitationMissing,
@@ -476,6 +485,7 @@ pub(crate) enum BlockerCode {
     MissingRootSessionWriteGuard,
     MigrationRequired,
     ProtocolBindingBlockingIssues,
+    ContinuationBindingAmbiguous,
     MissingRunGraphDispatchReceiptOperatorEvidence,
     RunGraphLatestSnapshotInconsistent,
     RunGraphLatestDispatchReceiptSignalAmbiguous,
@@ -553,6 +563,12 @@ impl BlockerCode {
             Self::DelegationChainBroken => "delegation_chain_broken",
             Self::ToolContractMissing => "tool_contract_missing",
             Self::ToolContractIncomplete => "tool_contract_incomplete",
+            Self::ExternalCliNetworkAccessUnavailableUnderSandbox => {
+                "external_cli_network_access_unavailable_under_sandbox"
+            }
+            Self::InteractiveAuthRequired => "interactive_auth_required",
+            Self::ProviderAuthFailed => "provider_auth_failed",
+            Self::ModelNotPinned => "model_not_pinned",
             Self::ToolExecutionFailed => "tool_execution_failed",
             Self::ToolResultUnusable => "tool_result_unusable",
             Self::CitationMissing => "citation_missing",
@@ -599,6 +615,7 @@ impl BlockerCode {
             Self::MissingRootSessionWriteGuard => "missing_root_session_write_guard",
             Self::MigrationRequired => "migration_required",
             Self::ProtocolBindingBlockingIssues => "protocol_binding_blocking_issues",
+            Self::ContinuationBindingAmbiguous => "continuation_binding_ambiguous",
             Self::MissingRunGraphDispatchReceiptOperatorEvidence => {
                 "missing_run_graph_dispatch_receipt_operator_evidence"
             }
@@ -710,6 +727,12 @@ impl BlockerCode {
             "delegation_chain_broken" => Some(Self::DelegationChainBroken),
             "tool_contract_missing" => Some(Self::ToolContractMissing),
             "tool_contract_incomplete" => Some(Self::ToolContractIncomplete),
+            "external_cli_network_access_unavailable_under_sandbox" => {
+                Some(Self::ExternalCliNetworkAccessUnavailableUnderSandbox)
+            }
+            "interactive_auth_required" => Some(Self::InteractiveAuthRequired),
+            "provider_auth_failed" => Some(Self::ProviderAuthFailed),
+            "model_not_pinned" => Some(Self::ModelNotPinned),
             "tool_execution_failed" => Some(Self::ToolExecutionFailed),
             "tool_result_unusable" => Some(Self::ToolResultUnusable),
             "citation_missing" => Some(Self::CitationMissing),
@@ -756,6 +779,7 @@ impl BlockerCode {
             "missing_root_session_write_guard" => Some(Self::MissingRootSessionWriteGuard),
             "migration_required" => Some(Self::MigrationRequired),
             "protocol_binding_blocking_issues" => Some(Self::ProtocolBindingBlockingIssues),
+            "continuation_binding_ambiguous" => Some(Self::ContinuationBindingAmbiguous),
             "missing_run_graph_dispatch_receipt_operator_evidence" => {
                 Some(Self::MissingRunGraphDispatchReceiptOperatorEvidence)
             }
@@ -1229,17 +1253,16 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        ApprovalStatus, BlockerCode, CompatibilityBoundary, CompatibilityClass, GateLevel,
-        ExceptionTakeoverState, LaneStatus, Release1ContractStatus, Release1ContractType,
-        Release1SchemaVersion, RiskTier, WorkflowClass, blocker_code_str, blocker_code_value,
-        canonical_approval_status_str, canonical_blocker_code_list,
-        canonical_compatibility_class_str, canonical_gate_level_str,
+        blocker_code_str, blocker_code_value, canonical_approval_status_str,
+        canonical_blocker_code_list, canonical_compatibility_class_str, canonical_gate_level_str,
         canonical_release1_contract_status_str, canonical_release1_contract_type_str,
         canonical_release1_schema_version_str, canonical_risk_tier_str,
         canonical_workflow_class_str, classify_compatibility_boundary,
         cli_probe_tool_contract_summary, evaluate_policy_gate_protocol_binding,
         exception_takeover_state, missing_downstream_lane_evidence_blocker,
-        release1_contract_status_str,
+        release1_contract_status_str, ApprovalStatus, BlockerCode, CompatibilityBoundary,
+        CompatibilityClass, ExceptionTakeoverState, GateLevel, LaneStatus, Release1ContractStatus,
+        Release1ContractType, Release1SchemaVersion, RiskTier, WorkflowClass,
     };
 
     #[test]
@@ -1331,7 +1354,11 @@ mod tests {
     #[test]
     fn exception_takeover_state_distinguishes_recorded_and_active_authority() {
         assert_eq!(
-            exception_takeover_state(Some("receipt-1"), None, Some("blocked_open_delegated_cycle")),
+            exception_takeover_state(
+                Some("receipt-1"),
+                None,
+                Some("blocked_open_delegated_cycle")
+            ),
             ExceptionTakeoverState::ReceiptRecorded
         );
         assert_eq!(

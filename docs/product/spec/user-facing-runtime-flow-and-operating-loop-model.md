@@ -609,6 +609,7 @@ Rules:
 2. additional candidates must be parked or forked explicitly,
 3. no silent explosion from one discussion into many tracked tasks,
 4. broader planning requires explicit operator broadening rather than inertia.
+5. automatic continuation may resume only the already explicit active bounded scope; it must not self-select a neighboring candidate task/PBI by plausibility alone.
 
 ### 8.5 Canonical Intake Flow
 

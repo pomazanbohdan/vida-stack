@@ -17,6 +17,7 @@ pub(crate) struct StatusOperatorContractInputs<'a> {
     pub(crate) latest_run_graph_dispatch_receipt_signal_ambiguous: bool,
     pub(crate) latest_run_graph_dispatch_receipt_summary_inconsistent: bool,
     pub(crate) latest_run_graph_dispatch_receipt_checkpoint_leakage: bool,
+    pub(crate) continuation_binding_ambiguous: bool,
     pub(crate) incomplete_release_admission_operator_evidence: bool,
     pub(crate) activation_truth:
         Option<&'a crate::project_activator_surface::ProjectActivationStatusTruth>,
@@ -101,6 +102,10 @@ pub(crate) fn build_status_operator_contracts(
             blocker_code_str(BlockerCode::RunGraphLatestDispatchReceiptCheckpointLeakage)
                 .to_string(),
         );
+    }
+    if inputs.continuation_binding_ambiguous {
+        operator_blocker_codes
+            .push(blocker_code_str(BlockerCode::ContinuationBindingAmbiguous).to_string());
     }
     if inputs.incomplete_release_admission_operator_evidence {
         operator_blocker_codes.push(
@@ -255,6 +260,14 @@ pub(crate) fn build_status_operator_contracts(
                 .to_string(),
         );
     }
+    if operator_blocker_codes
+        .iter()
+        .any(|code| code == blocker_code_str(BlockerCode::ContinuationBindingAmbiguous))
+    {
+        operator_next_actions.push(
+            crate::status_surface_signals::continuation_binding_ambiguous_next_action().to_string(),
+        );
+    }
     if operator_blocker_codes.iter().any(|code| {
         code == blocker_code_str(BlockerCode::IncompleteReleaseAdmissionOperatorEvidence)
     }) {
@@ -372,6 +385,7 @@ mod tests {
             latest_run_graph_dispatch_receipt_signal_ambiguous: false,
             latest_run_graph_dispatch_receipt_summary_inconsistent: false,
             latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
+            continuation_binding_ambiguous: false,
             incomplete_release_admission_operator_evidence: false,
             activation_truth: Some(&truth),
             project_activation_pending: false,
@@ -406,5 +420,77 @@ mod tests {
             contracts["artifact_refs"]["blocking_dispatch_blocker_code"],
             "internal_activation_view_only"
         );
+    }
+
+    #[test]
+    fn continuation_binding_ambiguous_blocks_operator_contracts() {
+        let runtime_consumption = crate::runtime_consumption_state::RuntimeConsumptionSummary {
+            total_snapshots: 0,
+            bundle_snapshots: 0,
+            bundle_check_snapshots: 0,
+            final_snapshots: 0,
+            latest_kind: None,
+            latest_snapshot_path: None,
+        };
+        let protocol_binding = crate::state_store::ProtocolBindingSummary {
+            active_bindings: 0,
+            blocking_issue_count: 0,
+            fully_runtime_bound_count: 0,
+            latest_receipt_id: None,
+            latest_recorded_at: None,
+            latest_scenario: None,
+            primary_state_authority: None,
+            rust_bound_count: 0,
+            script_bound_count: 0,
+            total_bindings: 0,
+            total_receipts: 0,
+            unbound_count: 0,
+        };
+        let truth = crate::project_activator_surface::ProjectActivationStatusTruth {
+            status: "ready_enough_for_normal_work".to_string(),
+            activation_pending: false,
+            next_steps: vec![],
+        };
+
+        let contracts = build_status_operator_contracts(StatusOperatorContractInputs {
+            boot_compatibility: None,
+            migration_state: None,
+            protocol_binding: &protocol_binding,
+            runtime_consumption: &runtime_consumption,
+            latest_final_snapshot_path: None,
+            latest_run_graph_dispatch_receipt_id: Some("run-1"),
+            latest_run_graph_gate_present: false,
+            latest_run_graph_dispatch_receipt_matches_status: true,
+            latest_run_graph_snapshot_inconsistent: false,
+            latest_run_graph_dispatch_receipt_signal_ambiguous: false,
+            latest_run_graph_dispatch_receipt_summary_inconsistent: false,
+            latest_run_graph_dispatch_receipt_checkpoint_leakage: false,
+            continuation_binding_ambiguous: true,
+            incomplete_release_admission_operator_evidence: false,
+            activation_truth: Some(&truth),
+            project_activation_pending: false,
+            latest_task_reconciliation: None,
+            effective_bundle_receipt: None,
+            root_session_write_guard_status: "blocked_by_default",
+            root_local_write_allowed: false,
+            activation_view_only_dispatch_blocker_active: false,
+            blocking_dispatch_blocker_code: None,
+        })
+        .expect("operator contracts should render");
+
+        let blockers = contracts["blocker_codes"]
+            .as_array()
+            .expect("blocker_codes should be an array");
+        assert!(blockers
+            .iter()
+            .any(|value| value == "continuation_binding_ambiguous"));
+        let next_actions = contracts["next_actions"]
+            .as_array()
+            .expect("next_actions should be an array");
+        assert!(next_actions.iter().any(|value| {
+            value
+                .as_str()
+                .is_some_and(|text| text.contains("Do not continue by heuristic"))
+        }));
     }
 }

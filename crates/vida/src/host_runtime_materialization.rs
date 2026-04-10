@@ -142,8 +142,12 @@ fn compose_host_runtime_lane_developer_instructions(
     lane_override: Option<&str>,
 ) -> Option<String> {
     match (
-        base_instructions.map(str::trim).filter(|value| !value.is_empty()),
-        lane_override.map(str::trim).filter(|value| !value.is_empty()),
+        base_instructions
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+        lane_override
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
     ) {
         (Some(base), Some(overlay)) => Some(format!(
             "{base}\n\nLane activation overlay:\n{overlay}\n\nFollow both layers: keep the carrier-tier posture and boundaries, then apply the lane-specific mission as the active role for this packet."

@@ -41,8 +41,12 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida task tree <task-id> --json");
             println!("  vida task critical-path --json");
             println!("  vida task next-display-id <parent-display-id> --json");
-            println!("  vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json");
-            println!("  vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels <label> --json");
+            println!(
+                "  vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json"
+            );
+            println!(
+                "  vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels <label> --json"
+            );
             println!(
                 "  vida task update <task-id> --status in_progress --notes-file <path> --json"
             );
@@ -53,98 +57,209 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Failure modes:");
             println!("  Missing or ambiguous runtime root fails closed.");
-            println!("  Invalid task ids, illegal status transitions, or unresolved parent/display ids fail closed from the delegated runtime.");
+            println!(
+                "  Invalid task ids, illegal status transitions, or unresolved parent/display ids fail closed from the delegated runtime."
+            );
             println!(
                 "  Export artifacts can drift; verify live state with `task show` or `task list`."
             );
             println!();
             println!("Operator recipes:");
             println!("  Check the next lawful slice: vida task ready --json");
-            println!("  Read the aggregate next operator step: vida task next [--scope <task-id>] [--state-dir <path>] [--json]");
-            println!("  Check the next lawful slice within one subtree: vida task ready --scope <task-id> --json");
+            println!(
+                "  Read the aggregate next operator step: vida task next [--scope <task-id>] [--state-dir <path>] [--json]"
+            );
+            println!(
+                "  Check the next lawful slice within one subtree: vida task ready --scope <task-id> --json"
+            );
             println!("  Inspect one task before mutation: vida task show <task-id> --json");
-            println!("  Inspect direct dependencies before resequencing: vida task deps <task-id> --json");
-            println!("  Inspect reverse dependencies before closure: vida task reverse-deps <task-id> --json");
+            println!(
+                "  Inspect direct dependencies before resequencing: vida task deps <task-id> --json"
+            );
+            println!(
+                "  Inspect reverse dependencies before closure: vida task reverse-deps <task-id> --json"
+            );
             println!("  Inspect the currently blocked set: vida task blocked --json");
-            println!("  Inspect one subtree when sequencing nested work: vida task tree <task-id> --json");
-            println!("  Inspect the current critical path before parallelizing: vida task critical-path --json");
-            println!("  Reserve the next child display id: vida task next-display-id <parent-display-id> --json");
-            println!("  Create one bounded child task: vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json");
-            println!("  Reuse-or-create one tracked handoff task idempotently: vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels <label> --json");
-            println!("  Record real progress after a proven step: vida task update <task-id> --status <status> --notes-file <path> --json");
-            println!("  Import one bounded backlog snapshot when explicitly needed: vida task import-jsonl .vida/exports/tasks.snapshot.jsonl --json");
-            println!("  Authoritatively replace the current backlog snapshot when needed: vida task replace-jsonl .vida/exports/tasks.snapshot.jsonl --json");
-            println!("  Export the current runtime snapshot when needed: vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
+            println!(
+                "  Inspect one subtree when sequencing nested work: vida task tree <task-id> --json"
+            );
+            println!(
+                "  Inspect the current critical path before parallelizing: vida task critical-path --json"
+            );
+            println!(
+                "  Reserve the next child display id: vida task next-display-id <parent-display-id> --json"
+            );
+            println!(
+                "  Create one bounded child task: vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json"
+            );
+            println!(
+                "  Reuse-or-create one tracked handoff task idempotently: vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels <label> --json"
+            );
+            println!(
+                "  Record real progress after a proven step: vida task update <task-id> --status <status> --notes-file <path> --json"
+            );
+            println!(
+                "  Import one bounded backlog snapshot when explicitly needed: vida task import-jsonl .vida/exports/tasks.snapshot.jsonl --json"
+            );
+            println!(
+                "  Authoritatively replace the current backlog snapshot when needed: vida task replace-jsonl .vida/exports/tasks.snapshot.jsonl --json"
+            );
+            println!(
+                "  Export the current runtime snapshot when needed: vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json"
+            );
             return;
         }
         Some("next") => {
             println!("VIDA TaskFlow help: next");
             println!();
             println!("Purpose:");
-            println!("  Aggregate the next lawful operator step from backlog readiness, latest run-graph recovery, and bounded continuation state.");
-            println!("  This is a read-only launcher-owned planning surface over the authoritative TaskFlow state store.");
+            println!(
+                "  Aggregate the next lawful operator step from backlog readiness, latest run-graph recovery, and bounded continuation state."
+            );
+            println!(
+                "  This is a read-only launcher-owned planning surface over the authoritative TaskFlow state store."
+            );
             println!();
             println!("Canonical command:");
             println!("  vida task next [--scope <task-id>] [--state-dir <path>] [--json]");
             println!();
             println!("Returned semantics:");
-            println!("  status, blocker_codes, next_actions, recommended_command, scope_task_id, ready_count, primary_ready_task, latest_run_graph, recovery, gate, dispatch");
+            println!(
+                "  status, blocker_codes, next_actions, recommended_command, scope_task_id, ready_count, primary_ready_task, latest_run_graph, recovery, gate, dispatch"
+            );
             println!();
             println!("Failure modes:");
             println!("  Missing or unreadable authoritative state fails closed.");
             println!("  Unknown scoped task ids fail closed from the authoritative task graph.");
-            println!("  `next` is an inspection/planning surface and must not be treated as a mutation or dispatch command by itself.");
+            println!(
+                "  `next` is an inspection/planning surface and must not be treated as a mutation or dispatch command by itself."
+            );
             return;
         }
         Some("graph-summary") => {
             println!("VIDA TaskFlow help: graph-summary");
             println!();
             println!("Purpose:");
-            println!("  Summarize backlog graph pressure across the ready set, blocked set, and current critical path.");
-            println!("  This is a read-only launcher-owned operator surface over the authoritative TaskFlow state store.");
+            println!(
+                "  Summarize backlog graph pressure across the ready set, blocked set, and current critical path."
+            );
+            println!(
+                "  This is a read-only launcher-owned operator surface over the authoritative TaskFlow state store."
+            );
             println!();
             println!("Canonical command:");
             println!("  vida taskflow graph-summary [--json]");
             println!();
             println!("Returned semantics:");
-            println!("  status, blocker_codes, next_actions, ready_count, blocked_count, critical_path_length, primary_ready_task, primary_blocked_task, waves, critical_path");
+            println!(
+                "  status, blocker_codes, next_actions, ready_count, blocked_count, critical_path_length, primary_ready_task, primary_blocked_task, waves, critical_path"
+            );
             println!();
             println!("Failure modes:");
             println!("  Missing or unreadable authoritative state fails closed.");
-            println!("  Invalid dependency graphs fail closed through the critical-path contract; repair with `vida task validate-graph` first.");
+            println!(
+                "  Invalid dependency graphs fail closed through the critical-path contract; repair with `vida task validate-graph` first."
+            );
             return;
         }
         Some("consume") => {
             println!("VIDA TaskFlow help: consume");
             println!();
             println!("Purpose:");
-            println!("  Inspect the bounded TaskFlow runtime-consumption bundle and drive the scheduler-owned closure handoff seam.");
-            println!("  Bundle inspection, final intake, continuation, and bounded advance are launcher-owned and in-process over authoritative Rust state plus the bounded DocFlow branch.");
+            println!(
+                "  Inspect the bounded TaskFlow runtime-consumption bundle and drive the scheduler-owned closure handoff seam."
+            );
+            println!(
+                "  Bundle inspection, final intake, continuation, and bounded advance are launcher-owned and in-process over authoritative Rust state plus the bounded DocFlow branch."
+            );
             println!();
             println!("Canonical commands:");
             println!("  vida taskflow consume bundle [--json]");
             println!("  vida taskflow consume bundle check [--json]");
             println!("  vida taskflow consume agent-system [--json]");
             println!("  vida taskflow consume final \"<request>\" --json");
-            println!("  vida taskflow consume continue [--run-id <run-id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]");
+            println!(
+                "  vida taskflow consume continue [--run-id <run-id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]"
+            );
             println!(
                 "  vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] [--json]"
             );
             println!("  vida taskflow bootstrap-spec \"<request>\" --json");
             println!();
             println!("Failure modes:");
-            println!("  `bundle` requires a booted authoritative state root and fails closed if runtime bundle surfaces are missing.");
+            println!(
+                "  `bundle` requires a booted authoritative state root and fails closed if runtime bundle surfaces are missing."
+            );
             println!("  `agent-system` fails closed when the activation bundle is unavailable.");
             println!("  Unsupported consume modes fail closed.");
-            println!("  `final` fails closed when the runtime bundle is not ready or the bounded DocFlow evidence branch returns blocking results.");
-            println!("  `continue` and `advance` fail closed when no lawful persisted dispatch receipt or packet can be resolved for the requested run.");
+            println!(
+                "  `final` fails closed when the runtime bundle is not ready or the bounded DocFlow evidence branch returns blocking results."
+            );
+            println!(
+                "  `continue` and `advance` fail closed when no lawful persisted dispatch receipt or packet can be resolved for the requested run."
+            );
             println!();
             println!("Operator recipes:");
-            println!("  Verify the active runtime bundle before closure packaging: vida taskflow consume bundle check --json");
-            println!("  Read one canonical carrier/role/score snapshot: vida taskflow consume agent-system --json");
-            println!("  Materialize one routed intake packet: vida taskflow consume final \"<request>\" --json");
-            println!("  Resume one persisted chain from the latest or selected packet: vida taskflow consume continue [--run-id <run-id>] --json");
-            println!("  Let the bounded scheduler progress ready steps automatically: vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] --json");
+            println!(
+                "  Verify the active runtime bundle before closure packaging: vida taskflow consume bundle check --json"
+            );
+            println!(
+                "  Read one canonical carrier/role/score snapshot: vida taskflow consume agent-system --json"
+            );
+            println!(
+                "  Materialize one routed intake packet: vida taskflow consume final \"<request>\" --json"
+            );
+            println!(
+                "  Resume one persisted chain from the latest or selected packet: vida taskflow consume continue [--run-id <run-id>] --json"
+            );
+            println!(
+                "  Let the bounded scheduler progress ready steps automatically: vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] --json"
+            );
+            return;
+        }
+        Some("continuation") => {
+            println!("VIDA TaskFlow help: continuation");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Record explicit continuation binding for the currently lawful bounded unit."
+            );
+            println!();
+            println!("Canonical commands:");
+            println!("  vida taskflow continuation bind <run-id> [--why <text>] [--json]");
+            println!();
+            println!("Returned semantics:");
+            println!(
+                "  active_bounded_unit, binding_source, why_this_unit, primary_path, sequential_vs_parallel_posture"
+            );
+            println!();
+            println!("Failure modes:");
+            println!(
+                "  Binding fails closed when the run does not expose a bindable active bounded unit."
+            );
+            println!("  Explicit binding does not replace persisted dispatch receipt evidence.");
+            return;
+        }
+        Some("packet") => {
+            println!("VIDA TaskFlow help: packet");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Render persisted dispatch packet evidence and lawful resume inputs for one run."
+            );
+            println!();
+            println!("Canonical commands:");
+            println!("  vida taskflow packet render <run-id> [--json]");
+            println!();
+            println!("Returned semantics:");
+            println!(
+                "  dispatch receipt, dispatch/downstream packet bodies, persisted packet paths, continue command"
+            );
+            println!();
+            println!("Failure modes:");
+            println!(
+                "  Packet rendering fails closed when no persisted dispatch receipt or packet path exists."
+            );
             return;
         }
         Some("run-graph") => {
@@ -155,20 +270,34 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!(
                 "  Run-graph is not a second task queue; it complements task lifecycle state."
             );
-            println!("  The current run-graph surface is launcher-owned and in-process for both mutation and inspection.");
+            println!(
+                "  The current run-graph surface is launcher-owned and in-process for both mutation and inspection."
+            );
             println!();
             println!("Canonical commands:");
             println!("  vida taskflow run-graph seed <task_id> <request_text> [--json]");
             println!("  vida taskflow run-graph advance <task_id> [--json]");
+            println!("  vida taskflow run-graph dispatch-init <task_id> [--json]");
             println!("  vida taskflow run-graph init <task_id> <task_class> [route_task_class]");
-            println!("  vida taskflow run-graph update <task_id> <task_class> <node> <status> [route_task_class] [meta_json]");
+            println!(
+                "  vida taskflow run-graph update <task_id> <task_class> <node> <status> [route_task_class] [meta_json]"
+            );
             println!("  vida taskflow run-graph status <task_id>");
             println!("  vida taskflow run-graph latest [--json]");
             println!();
             println!("Failure modes:");
-            println!("  `seed` fails closed when overlay-driven lane selection or agent-system bundle validation fails.");
-            println!("  `advance` currently fails closed unless the run is a seeded implementation or seeded scope-discussion dispatch.");
-            println!("  Clean implementation review enters an explicit approval wait; mark approval explicitly through `vida taskflow run-graph update <task-id> implementation review_ensemble approved implementation` before the final completion advance.");
+            println!(
+                "  `seed` fails closed when overlay-driven lane selection or agent-system bundle validation fails."
+            );
+            println!(
+                "  `advance` currently fails closed unless the run is a seeded implementation or seeded scope-discussion dispatch."
+            );
+            println!(
+                "  `dispatch-init` fails closed when no persisted seeded dispatch context exists for the selected run."
+            );
+            println!(
+                "  Clean implementation review enters an explicit approval wait; mark approval explicitly through `vida taskflow run-graph update <task-id> implementation review_ensemble approved implementation` before the final completion advance."
+            );
             println!("  Invalid JSON in meta_json fails closed before mutation.");
             println!("  `latest` returns `none`/`null` when no routed run has been recorded yet.");
             println!("  Run-graph state must not be treated as backlog readiness authority.");
@@ -178,7 +307,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("VIDA TaskFlow help: recovery");
             println!();
             println!("Purpose:");
-            println!("  Inspect donor-aligned resumability state derived from the authoritative Rust run-graph contract.");
+            println!(
+                "  Inspect donor-aligned resumability state derived from the authoritative Rust run-graph contract."
+            );
             println!("  Recovery status is a read-only launcher-owned inspection surface.");
             println!();
             println!("Canonical commands:");
@@ -190,7 +321,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida taskflow recovery gate-latest [--json]");
             println!();
             println!("Returned semantics:");
-            println!("  resume_node, resume_status, checkpoint_kind, resume_target, policy_gate, handoff_state, recovery_ready");
+            println!(
+                "  resume_node, resume_status, checkpoint_kind, resume_target, policy_gate, handoff_state, recovery_ready"
+            );
             println!();
             println!("Failure modes:");
             println!("  Missing run ids fail closed from the authoritative state store.");
@@ -202,7 +335,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("VIDA TaskFlow help: doctor");
             println!();
             println!("Purpose:");
-            println!("  Diagnose launcher/runtime health for bootstrap, task-store visibility, and graph integrity.");
+            println!(
+                "  Diagnose launcher/runtime health for bootstrap, task-store visibility, and graph integrity."
+            );
             println!();
             println!("Canonical command:");
             println!("  vida taskflow doctor [--json]");
@@ -220,14 +355,18 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  retrieval-trust and release-admission evidence parity");
             println!();
             println!("Failure modes:");
-            println!("  Broken state roots, incompatible migration posture, or missing runtime artifacts fail closed.");
+            println!(
+                "  Broken state roots, incompatible migration posture, or missing runtime artifacts fail closed."
+            );
             return;
         }
         Some("protocol-binding") => {
             println!("VIDA TaskFlow help: protocol-binding");
             println!();
             println!("Purpose:");
-            println!("  Materialize and inspect the bounded Wave-1 protocol-binding bridge over the authoritative TaskFlow state store.");
+            println!(
+                "  Materialize and inspect the bounded Wave-1 protocol-binding bridge over the authoritative TaskFlow state store."
+            );
             println!(
                 "  Binding truth lives in the DB-backed runtime state, not in detached file logs."
             );
@@ -238,11 +377,15 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida taskflow protocol-binding check [--json]");
             println!();
             println!("Returned semantics:");
-            println!("  scenario, binding status, active protocol count, blockers, primary state authority, latest receipt");
+            println!(
+                "  scenario, binding status, active protocol count, blockers, primary state authority, latest receipt"
+            );
             println!();
             println!("Failure modes:");
             println!("  `sync` fails closed when canonical protocol sources are missing.");
-            println!("  `check` fails closed when no sync receipt exists or the latest receipt still has unbound/blocking rows.");
+            println!(
+                "  `check` fails closed when no sync receipt exists or the latest receipt still has unbound/blocking rows."
+            );
             println!("  Detached JSON export alone is not treated as binding closure.");
             return;
         }
@@ -253,11 +396,15 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!();
     println!("Usage:");
     println!("  vida taskflow <args...>");
-    println!("  vida taskflow help [task|next|graph-summary|status|consume|run-graph|recovery|doctor|protocol-binding|query]");
+    println!(
+        "  vida taskflow help [task|next|graph-summary|status|consume|continuation|packet|run-graph|recovery|doctor|protocol-binding|query]"
+    );
     println!("  vida taskflow <command> --help");
     println!();
     println!("Purpose:");
-    println!("  Enter the TaskFlow runtime family for tracked execution, backlog state, run-graph state, and closure handoff.");
+    println!(
+        "  Enter the TaskFlow runtime family for tracked execution, backlog state, run-graph state, and closure handoff."
+    );
     println!();
     println!("Source of truth notes:");
     println!("  TaskFlow is the execution/runtime authority.");
@@ -267,9 +414,15 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  `.vida/exports/tasks.snapshot.jsonl` is export-only, not the live runtime store.");
     println!();
     println!("Runtime routing:");
-    println!("  In a project tree, vida resolves the root from the current working directory without manual VIDA_ROOT export.");
-    println!("  In repo mode the delegated runtime resolves to the local TaskFlow runtime implementation.");
-    println!("  In installed mode it resolves the sibling taskflow binary from the active vida bin root.");
+    println!(
+        "  In a project tree, vida resolves the root from the current working directory without manual VIDA_ROOT export."
+    );
+    println!(
+        "  In repo mode the delegated runtime resolves to the local TaskFlow runtime implementation."
+    );
+    println!(
+        "  In installed mode it resolves the sibling taskflow binary from the active vida bin root."
+    );
     println!("  Unknown roots or missing binaries fail closed.");
     println!();
     println!("Most-used command homes:");
@@ -277,6 +430,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  next        aggregate next lawful step across backlog and recovery state");
     println!("  graph-summary  ready/blocked pressure plus critical-path summary");
     println!("  status      family-scoped alias to the root operator status surface");
+    println!("  continuation explicit bounded-unit binding");
+    println!("  packet      persisted runtime packet inspection");
     println!("  run-graph   resumability and node-state inspection");
     println!("  consume     explicit TaskFlow -> final closure handoff");
     println!("  query       launcher-owned command-discovery helper");
@@ -292,6 +447,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida taskflow status --summary --json");
     println!("  vida task show <task-id> --json");
     println!("  vida taskflow run-graph status <task-id>");
+    println!("  vida taskflow continuation bind <task-id> --json");
+    println!("  vida taskflow run-graph dispatch-init <task-id> --json");
+    println!("  vida taskflow packet render <task-id> --json");
     println!("  vida taskflow consume final \"proof path\" --json");
     println!("  vida taskflow consume continue --json");
     println!("  vida taskflow consume advance --max-rounds 4 --json");
@@ -303,14 +461,22 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  Inspect TaskFlow-wide operator posture: vida taskflow status --summary --json");
     println!("  Inspect the canonical backlog contract: vida task --help");
     println!("  Ask which surface to use: vida taskflow query \"what should I run next?\"");
+    println!("  Bind the current bounded unit explicitly: vida taskflow help continuation");
+    println!("  Inspect persisted packet evidence: vida taskflow help packet");
     println!("  Inspect resumability state: vida taskflow help run-graph");
     println!("  Review runtime diagnostics: vida taskflow help doctor");
     println!();
     println!("Failure modes:");
-    println!("  Missing runtime family binary, ambiguous root, and unsupported delegated arguments fail closed.");
+    println!(
+        "  Missing runtime family binary, ambiguous root, and unsupported delegated arguments fail closed."
+    );
     println!("  Use topic help to inspect command contracts before mutating runtime state.");
-    println!("  A green test, successful build, or commentary update is not a stop boundary when a next lawful continuation item is already known.");
-    println!("  User-ordered execution takes priority over self-directed cleanup or adjacent development unless the user explicitly authorizes a broader scope.");
+    println!(
+        "  A green test, successful build, or commentary update is not a stop boundary when a next lawful continuation item is already known."
+    );
+    println!(
+        "  User-ordered execution takes priority over self-directed cleanup or adjacent development unless the user explicitly authorizes a broader scope."
+    );
 }
 
 pub(crate) fn taskflow_help_topic(args: &[String]) -> Option<Option<&str>> {
@@ -540,8 +706,12 @@ fn print_taskflow_query_help() {
     println!("VIDA TaskFlow query");
     println!();
     println!("Purpose:");
-    println!("  Answer common operator workflow questions with one bounded recommended TaskFlow command.");
-    println!("  The query surface is deterministic and launcher-owned; it does not call models or external tools.");
+    println!(
+        "  Answer common operator workflow questions with one bounded recommended TaskFlow command."
+    );
+    println!(
+        "  The query surface is deterministic and launcher-owned; it does not call models or external tools."
+    );
     println!();
     println!("Usage:");
     println!("  vida taskflow query \"what should I run next?\"");
@@ -551,11 +721,15 @@ fn print_taskflow_query_help() {
     println!("  vida taskflow query \"how do I check resumability?\"");
     println!();
     println!("Current intents:");
-    println!("  next/ready, inspect/show, create/new, update/progress, close/done, display-id, export/jsonl, replace/snapshot, resume/run-graph, doctor/health, final/consume, protocol-binding");
+    println!(
+        "  next/ready, inspect/show, create/new, update/progress, close/done, display-id, export/jsonl, replace/snapshot, resume/run-graph, doctor/health, final/consume, protocol-binding"
+    );
     println!();
     println!("Failure modes:");
     println!("  Vague queries fall back to `vida taskflow help`.");
-    println!("  Query/help output is advisory only and does not authorize stopping when a next lawful bounded step is already known.");
+    println!(
+        "  Query/help output is advisory only and does not authorize stopping when a next lawful bounded step is already known."
+    );
 }
 
 pub(crate) fn run_taskflow_query(args: &[String]) -> ExitCode {

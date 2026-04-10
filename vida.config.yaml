@@ -102,7 +102,7 @@ host_environment:
       runtime_root: .codex
       carriers: *codex_agent_catalog
     qwen:
-      enabled: false
+      enabled: true
       execution_class: external
       materialization_mode: copy_tree_only
       template_root: .qwen
@@ -423,6 +423,7 @@ agent_system:
           - -y
           - -o
           - text
+        model_flag: --model
         env:
           HOME: /home/unnamed/project/vida-stack/.vida/data/qwen-home
         web_search_mode: provider_configured
@@ -456,6 +457,8 @@ agent_system:
           - chat
           - -Q
           - -q
+        model_flag: --model
+        provider_flag: --provider
         env:
           OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS: "600000"
         output_mode: stdout
@@ -486,6 +489,7 @@ agent_system:
         command: opencode
         static_args:
           - run
+        model_flag: --model
         env:
           OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS: "600000"
         workdir_flag: --dir
@@ -495,6 +499,105 @@ agent_system:
         no_output_timeout_seconds: 180
         progress_idle_timeout_seconds: 105
         max_runtime_extension_seconds: 75
+      readiness:
+        auth:
+          mode: file_present
+          path: ~/.local/share/opencode/auth.json
+        model:
+          mode: json_recent_ref
+          path: ~/.local/state/opencode/model.json
+          expected_ref: opencode/minimax-m2.5-free
+          allow_dispatch_override: true
+        provider_failure:
+          mode: recent_dir_contains
+          path: ~/.local/share/opencode/log
+          substring: Authentication Failed
+          max_age_seconds: 900
+    kilo_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      detect_command: kilo
+      role: free_primary
+      orchestration_tier: external_free
+      cost_priority: highest
+      budget_cost_units: 0
+      models_hint: kilo/x-ai/grok-code-fast-1:optimized:free
+      default_model: kilo/x-ai/grok-code-fast-1:optimized:free
+      capability_band: read_only,review_safe
+      write_scope: none
+      max_runtime_seconds: 180
+      min_output_bytes: 260
+      billing_tier: free
+      speed_tier: fast
+      quality_tier: medium
+      specialties: planning,spec,review
+      dispatch:
+        command: kilo
+        static_args:
+          - run
+          - --auto
+        model_flag: --model
+        workdir_flag: --dir
+        output_mode: stdout
+        prompt_mode: positional
+        startup_timeout_seconds: 60
+        no_output_timeout_seconds: 180
+        progress_idle_timeout_seconds: 105
+        max_runtime_extension_seconds: 75
+      readiness:
+        auth:
+          mode: file_present
+          path: ~/.local/share/kilo/auth.json
+        model:
+          mode: json_code_ref
+          path: ~/.local/state/kilo/model.json
+          expected_ref: kilo/x-ai/grok-code-fast-1:optimized:free
+    vibe_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      detect_command: vibe
+      role: free_primary
+      orchestration_tier: external_free
+      cost_priority: highest
+      budget_cost_units: 0
+      models_hint: vibe/devstral-2
+      default_model: vibe/devstral-2
+      capability_band: read_only,review_safe
+      write_scope: none
+      max_runtime_seconds: 180
+      min_output_bytes: 260
+      billing_tier: free
+      speed_tier: medium
+      quality_tier: medium
+      specialties: planning,spec,review
+      dispatch:
+        command: vibe
+        static_args:
+          - -p
+          - --output
+          - text
+          - --max-turns
+          - "1"
+        workdir_flag: --workdir
+        output_mode: stdout
+        prompt_mode: positional
+        startup_timeout_seconds: 60
+        no_output_timeout_seconds: 180
+        progress_idle_timeout_seconds: 105
+        max_runtime_extension_seconds: 75
+      readiness:
+        auth:
+          mode: file_present
+          path: ~/.vibe/.env
+        model:
+          mode: text_contains
+          path: ~/.vibe/config.toml
+          expected_ref: vibe/devstral-2
+          expected_substring: 'active_model = "devstral-2"'
+        provider_failure:
+          mode: file_contains
+          path: ~/.vibe/logs/vibe.log
+          substring: Invalid API key
   routing:
     default:
       executor_backend: qwen_cli
@@ -525,7 +628,9 @@ agent_system:
         - qwen_cli
         - hermes_cli
         - opencode_cli
-      fanout_subagents: qwen_cli,hermes_cli,opencode_cli
+        - kilo_cli
+        - vibe_cli
+      fanout_subagents: qwen_cli,hermes_cli,opencode_cli,kilo_cli,vibe_cli
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -536,7 +641,7 @@ agent_system:
       deterministic_first: yes
       budget_policy: strict
       max_budget_units: 0
-      max_cli_subagent_calls: 2
+      max_cli_subagent_calls: 5
       max_verification_passes: 0
       max_fallback_hops: 2
       max_total_runtime_seconds: 180

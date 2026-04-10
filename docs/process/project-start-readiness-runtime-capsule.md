@@ -37,6 +37,7 @@ A session is startup-ready only when all are true:
 4. the queue is launch-ready at lawful `delivery_task` depth,
 5. relevant skills are explicit or `no_applicable_skill` is explicit,
 6. the session can name request class, active bounded unit, next leaf, next route, and proof target.
+7. when continuation is requested, the session can also state `why_this_unit`, `primary_path`, and sequential-vs-parallel posture explicitly.
 
 ## Fail-Closed Summary
 
@@ -47,6 +48,7 @@ Do not dispatch when any of these is true:
 3. skill activation is still unknown,
 4. the queue is still epic/milestone shaped or over-split speculatively,
 5. protocol coverage fails.
+6. continued-development intent is active but `why_this_unit` or the sequential-vs-parallel posture is still implicit.
 
 ## Routing
 

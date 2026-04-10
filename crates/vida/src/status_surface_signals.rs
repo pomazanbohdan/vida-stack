@@ -10,6 +10,10 @@ pub(crate) fn run_graph_latest_dispatch_receipt_signal_ambiguous_next_action() -
     "Rebuild the latest run-graph dispatch receipt with `vida taskflow consume continue --json` so lane_status and dispatch_status are canonical and aligned before trusting the operator signal."
 }
 
+pub(crate) fn continuation_binding_ambiguous_next_action() -> &'static str {
+    "Do not continue by heuristic. Either bind the bounded unit explicitly from user intent or refresh runtime evidence with `vida taskflow consume continue --json` and recheck `vida status --json` before further implementation."
+}
+
 pub(crate) fn run_graph_latest_dispatch_receipt_summary_inconsistent_next_action() -> &'static str {
     "Refresh the latest run-graph dispatch receipt summary before rerunning `vida status --json` so the latest status and dispatch receipt share the same run_id."
 }
@@ -18,10 +22,8 @@ pub(crate) fn run_graph_latest_dispatch_receipt_checkpoint_leakage_next_action()
     "Refresh the latest checkpoint evidence for the run graph before rerunning `vida status --json` so checkpoint rows and dispatch receipt evidence share the same run_id."
 }
 
-pub(crate) const MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
-    "Run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence.";
-pub(crate) const MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
-    "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal.";
+pub(crate) const MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence.";
+pub(crate) const MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal.";
 pub(crate) const MISSING_RETRIEVAL_TRUST_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
     "Run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence.";
 

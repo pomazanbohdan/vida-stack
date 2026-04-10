@@ -53,6 +53,7 @@ After the checklist, the orchestrator must be able to state explicitly:
 9. which lawful next slices currently exist and whether the next move is sequential or parallel-safe.
 10. when the user asked for both reporting/diagnosis and continued development, which path is primary: `diagnosis_path` or `normal_delivery_path`.
 11. when continuation is requested, why this bounded unit rather than some other ready candidate is the lawful current binding.
+12. which binding source proves the current bounded unit: explicit user wording, active runtime state, or continuation receipt.
 
 If any of those are missing, the session is not ready for write-producing work.
 
@@ -66,6 +67,7 @@ Task-binding rule:
    - one uniquely evidenced continuation receipt names the next lawful unit,
    - or the user confirms which bounded unit is meant.
 5. do not silently bind "the next task" to `ready_head[0]` or the first canonical backlog candidate merely because TaskFlow ordering makes that choice plausible.
+6. do not silently continue from a completed bounded slice into a neighboring slice unless runtime evidence names that sibling as the explicit next lawful bounded unit.
 
 Launch-readiness gate:
 
@@ -74,6 +76,7 @@ Launch-readiness gate:
 3. after bootstrap, `continue development` means resume orchestrator-led tracked execution rather than local-first implementation,
 4. local root-session writing remains invalid unless an explicit exception path is active and no still-lawful open delegated cycle blocks takeover,
 5. the session is launch-ready at lawful `delivery_task` depth; backlog-wide pre-splitting into `execution_block` is not required.
+6. the session is not launch-ready for continuation if `active_bounded_unit`, `why_this_unit`, `primary_path`, or sequential-vs-parallel posture is still implicit.
 
 ## First Packet Rule
 

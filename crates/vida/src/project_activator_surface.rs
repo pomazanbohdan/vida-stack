@@ -1090,9 +1090,9 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
             Some(value) => value,
             None => {
                 eprintln!(
-                        "Unsupported host CLI system `{requested_host_cli_system}`. Supported values: {}",
-                        supported_values.join(", ")
-                    );
+                    "Unsupported host CLI system `{requested_host_cli_system}`. Supported values: {}",
+                    supported_values.join(", ")
+                );
                 return ExitCode::from(2);
             }
         };

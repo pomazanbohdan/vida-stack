@@ -12,13 +12,16 @@ fn configured_host_runtime_roots(root: &Path) -> Vec<String> {
         let Ok(overlay) = serde_yaml::from_str::<serde_yaml::Value>(&raw) else {
             continue;
         };
-        let registry =
-            crate::project_activator_surface::host_cli_system_registry_with_fallback(Some(&overlay));
+        let registry = crate::project_activator_surface::host_cli_system_registry_with_fallback(
+            Some(&overlay),
+        );
         let mut roots = registry
             .iter()
             .filter_map(|(system, entry)| {
                 let runtime_root =
-                    crate::project_activator_surface::host_cli_system_runtime_surface(entry, system);
+                    crate::project_activator_surface::host_cli_system_runtime_surface(
+                        entry, system,
+                    );
                 let trimmed = runtime_root.trim();
                 if trimmed.is_empty() {
                     None

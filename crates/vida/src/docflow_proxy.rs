@@ -18,7 +18,9 @@ fn print_docflow_proxy_help() {
     println!("VIDA DocFlow runtime family");
     println!();
     println!("Mode-scoped launcher contract:");
-    println!("  repo/dev binary mode: vida routes the active DocFlow command map in-process through the Rust CLI.");
+    println!(
+        "  repo/dev binary mode: vida routes the active DocFlow command map in-process through the Rust CLI."
+    );
     println!("  installed mode: vida keeps the same in-process Rust DocFlow shell.");
     println!(
         "  unsupported commands fail closed instead of silently falling through to donor wrappers."

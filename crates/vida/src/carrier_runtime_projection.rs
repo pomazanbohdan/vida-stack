@@ -46,7 +46,8 @@ pub(crate) fn build_carrier_runtime_projection(
     dispatch_aliases_registry: &serde_yaml::Value,
     dispatch_aliases_path: Option<&str>,
 ) -> CarrierRuntimeProjection {
-    let runtime_root = selected_runtime_root(root, selected_host_cli_system, host_cli_system_registry);
+    let runtime_root =
+        selected_runtime_root(root, selected_host_cli_system, host_cli_system_registry);
     let runtime_config = read_simple_toml_sections(&runtime_root.join("config.toml"));
     let carrier_roles =
         crate::carrier_runtime_catalog::resolved_carrier_roles(config, &runtime_root);

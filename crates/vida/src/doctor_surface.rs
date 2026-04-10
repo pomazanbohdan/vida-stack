@@ -13,17 +13,13 @@ fn migration_requires_action(migration_state: &str) -> bool {
 
 const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_BLOCKER: &str =
     BlockerCode::UnsupportedArchitectureReservedWorkflowBoundary.as_str();
-const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION: &str =
-    "Clear unsupported/architecture-reserved workflow boundary state in run-graph policy/context before operator handoff.";
+const UNSUPPORTED_ARCHITECTURE_RESERVED_WORKFLOW_BOUNDARY_NEXT_ACTION: &str = "Clear unsupported/architecture-reserved workflow boundary state in run-graph policy/context before operator handoff.";
 const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_BLOCKER: &str =
     "missing_run_graph_dispatch_receipt_operator_evidence";
-const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
-    "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.";
+const MISSING_RUN_GRAPH_DISPATCH_RECEIPT_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run `vida taskflow consume continue --json` to materialize or refresh run-graph dispatch receipt evidence before operator handoff.";
 
-const MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
-    "Run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence.";
-const MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
-    "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal.";
+const MISSING_RETRIEVAL_TRUST_SOURCE_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run `vida taskflow consume bundle check --json` so runtime consumption snapshots publish retrieval-trust source evidence.";
+const MISSING_RETRIEVAL_TRUST_SIGNAL_OPERATOR_EVIDENCE_NEXT_ACTION: &str = "Run `vida taskflow protocol-binding sync --json` and `vida taskflow consume bundle check --json` to materialize retrieval-trust citation/freshness/ACL signal.";
 const MISSING_RETRIEVAL_TRUST_OPERATOR_EVIDENCE_NEXT_ACTION: &str =
     "Run `vida taskflow consume bundle check --json` to record retrieval-trust operator evidence.";
 
@@ -559,11 +555,11 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-                let protocol_binding = match store.protocol_binding_summary().await {
-                    Ok(summary) => summary,
-                    Err(error) => {
-                        eprintln!("protocol binding: failed ({error})");
-                        return ExitCode::from(1);
+            let protocol_binding = match store.protocol_binding_summary().await {
+                Ok(summary) => summary,
+                Err(error) => {
+                    eprintln!("protocol binding: failed ({error})");
+                    return ExitCode::from(1);
                 }
             };
             let latest_run_graph_status = match store.latest_run_graph_status().await {
@@ -1445,7 +1441,9 @@ mod tests {
         });
         assert_eq!(
             shared_operator_output_contract_parity_error(&summary_json),
-            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+            Some(
+                "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch"
+            )
         );
     }
 
@@ -1514,7 +1512,9 @@ mod tests {
         });
         assert_eq!(
             shared_operator_output_contract_parity_error(&summary_json),
-            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+            Some(
+                "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch"
+            )
         );
     }
 
@@ -1537,7 +1537,9 @@ mod tests {
         });
         assert_eq!(
             shared_operator_output_contract_parity_error(&summary_json),
-            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+            Some(
+                "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch"
+            )
         );
     }
 
@@ -1561,7 +1563,9 @@ mod tests {
 
         assert_eq!(
             shared_operator_output_contract_parity_error(&summary_json),
-            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+            Some(
+                "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch"
+            )
         );
     }
 }

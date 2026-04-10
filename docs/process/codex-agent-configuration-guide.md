@@ -169,7 +169,9 @@ Normalization rule:
 12. under continued-development intent, stay in commentary/progress mode and continue routing; do not emit final closure wording while a next lawful continuation item is already known.
 13. do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.
 14. if closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.
-15. when recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
+15. sticky continuation intent does not authorize choosing `ready_head[0]`, the first ready task, or an adjacent slice by plausibility; continue only when the active bounded unit is explicit from user wording or runtime evidence.
+16. if `vida status --json` or `vida orchestrator-init --json` does not expose explicit `active_bounded_unit`, `why_this_unit`, `primary_path`, and sequential-vs-parallel posture, fail closed to an ambiguity report instead of continuing implementation.
+17. when recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
 
 Coach separation rule:
 

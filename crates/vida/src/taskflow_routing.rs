@@ -1,10 +1,10 @@
-use crate::{json_string, json_string_list};
 use crate::runtime_contract_vocab::{
     DISPATCH_TARGET_COACH, DISPATCH_TARGET_EXECUTION_PREPARATION, DISPATCH_TARGET_IMPLEMENTER,
     DISPATCH_TARGET_SPECIFICATION, DISPATCH_TARGET_VERIFICATION, RUNTIME_ROLE_BUSINESS_ANALYST,
     RUNTIME_ROLE_COACH, RUNTIME_ROLE_PM, RUNTIME_ROLE_PROVER, RUNTIME_ROLE_SOLUTION_ARCHITECT,
     RUNTIME_ROLE_VERIFIER, RUNTIME_ROLE_WORKER,
 };
+use crate::{json_string, json_string_list};
 
 fn legacy_dispatch_contract_lane<'a>(
     dispatch_contract: &'a serde_json::Value,
@@ -131,11 +131,13 @@ fn carrier_backend_from_assignment(assignment: &serde_json::Value) -> Option<Str
 }
 
 fn route_backend_value(route: &serde_json::Value, key: &str) -> Option<String> {
-    json_string(route.get(key)).filter(|value| !value.trim().is_empty()).or_else(|| {
-        crate::json_string_list(route.get(key))
-            .into_iter()
-            .find(|value| !value.trim().is_empty())
-    })
+    json_string(route.get(key))
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            crate::json_string_list(route.get(key))
+                .into_iter()
+                .find(|value| !value.trim().is_empty())
+        })
 }
 
 pub(crate) fn runtime_assignment_from_route<'a>(
@@ -219,9 +221,7 @@ pub(crate) fn selected_backend_from_execution_plan_route(
 ) -> Option<String> {
     explicit_executor_backend_from_route(route)
         .or_else(|| route_backend_value(route, "fallback_executor_backend"))
-        .or_else(|| {
-            route_backend_value(route, "fanout_executor_backends")
-        })
+        .or_else(|| route_backend_value(route, "fanout_executor_backends"))
         .or_else(|| carrier_backend_from_route(route))
         .or_else(|| {
             carrier_backend_from_assignment(runtime_assignment_from_execution_plan(execution_plan))

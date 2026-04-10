@@ -1169,6 +1169,138 @@ pub(crate) async fn derive_seeded_run_graph_status(
     })
 }
 
+pub(crate) fn run_graph_dispatch_context_from_seed_payload(
+    payload: &TaskflowRunGraphSeedPayload,
+) -> crate::state_store::RunGraphDispatchContext {
+    crate::state_store::RunGraphDispatchContext {
+        run_id: payload.status.run_id.clone(),
+        task_id: payload.status.task_id.clone(),
+        request_text: payload.request_text.clone(),
+        role_selection: serde_json::to_value(&payload.role_selection)
+            .unwrap_or(serde_json::Value::Null),
+        recorded_at: time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("rfc3339 timestamp should render"),
+    }
+}
+
+async fn persist_seed_artifacts(
+    store: &StateStore,
+    payload: &TaskflowRunGraphSeedPayload,
+) -> Result<(), String> {
+    store
+        .record_run_graph_status(&payload.status)
+        .await
+        .map_err(|error| format!("Failed to record seeded run-graph state: {error}"))?;
+    store
+        .record_run_graph_dispatch_context(&run_graph_dispatch_context_from_seed_payload(payload))
+        .await
+        .map_err(|error| format!("Failed to record seeded dispatch context: {error}"))?;
+    crate::taskflow_continuation::sync_run_graph_continuation_binding(
+        store,
+        &payload.status,
+        "run_graph_seed",
+    )
+    .await?;
+    Ok(())
+}
+
+fn run_graph_dispatch_bootstrap_from_status(
+    status: &RunGraphStatus,
+) -> Result<serde_json::Value, String> {
+    validate_run_graph_resume_gate(status)?;
+    let latest_status = serde_json::to_value(status)
+        .map_err(|error| format!("Failed to encode status: {error}"))?;
+    Ok(serde_json::json!({
+        "status": "dispatch_init_ready",
+        "handoff_ready": true,
+        "run_id": status.run_id,
+        "latest_status": latest_status,
+    }))
+}
+
+fn dispatch_command_from_packet_path(packet_path: &str) -> Result<Option<String>, String> {
+    let body = std::fs::read_to_string(packet_path).map_err(|error| {
+        format!("Failed to read rendered dispatch packet `{packet_path}`: {error}")
+    })?;
+    let json: serde_json::Value = serde_json::from_str(&body).map_err(|error| {
+        format!("Failed to decode rendered dispatch packet `{packet_path}`: {error}")
+    })?;
+    Ok(json
+        .get("dispatch_command")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string))
+}
+
+async fn run_graph_dispatch_init(
+    store: &StateStore,
+    run_id: &str,
+) -> Result<serde_json::Value, String> {
+    let status = store
+        .run_graph_status(run_id)
+        .await
+        .map_err(|error| format!("Failed to read run-graph state for `{run_id}`: {error}"))?;
+    let context = store
+        .run_graph_dispatch_context(run_id)
+        .await
+        .map_err(|error| format!("Failed to read persisted seeded dispatch context: {error}"))?
+        .ok_or_else(|| {
+            format!(
+                "No persisted seeded dispatch context exists for run_id `{run_id}`; reseed the run with request text before dispatch-init."
+            )
+        })?;
+    let role_selection = context
+        .role_selection()
+        .map_err(|error| format!("Failed to decode persisted seeded dispatch context: {error}"))?;
+    let run_graph_bootstrap = run_graph_dispatch_bootstrap_from_status(&status)?;
+    let taskflow_handoff_plan = crate::build_taskflow_handoff_plan(&role_selection);
+    let mut dispatch_receipt = crate::taskflow_consume::build_runtime_consumption_dispatch_receipt(
+        &role_selection,
+        &run_graph_bootstrap,
+    );
+    dispatch_receipt.dispatch_command = crate::runtime_dispatch_command_for_target(
+        &role_selection,
+        &dispatch_receipt.dispatch_target,
+    );
+    crate::refresh_downstream_dispatch_preview(
+        store.root(),
+        &role_selection,
+        &run_graph_bootstrap,
+        &mut dispatch_receipt,
+    )?;
+    let ctx = crate::RuntimeDispatchPacketContext::new(
+        store.root(),
+        &role_selection,
+        &dispatch_receipt,
+        &taskflow_handoff_plan,
+        &run_graph_bootstrap,
+    );
+    let dispatch_packet_path = crate::write_runtime_dispatch_packet(&ctx)?;
+    dispatch_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
+    dispatch_receipt.dispatch_command = dispatch_command_from_packet_path(&dispatch_packet_path)?;
+    store
+        .record_run_graph_dispatch_receipt(&dispatch_receipt)
+        .await
+        .map_err(|error| format!("Failed to record seeded dispatch receipt: {error}"))?;
+    crate::taskflow_continuation::sync_run_graph_continuation_binding(
+        store,
+        &status,
+        "run_graph_dispatch_init",
+    )
+    .await?;
+    Ok(serde_json::json!({
+        "surface": "vida taskflow run-graph dispatch-init",
+        "run_id": run_id,
+        "dispatch_receipt": dispatch_receipt,
+        "dispatch_packet_path": dispatch_packet_path,
+        "downstream_dispatch_packet_path": dispatch_receipt.downstream_dispatch_packet_path,
+        "taskflow_handoff_plan": taskflow_handoff_plan,
+        "run_graph_bootstrap": run_graph_bootstrap,
+    }))
+}
+
 pub(crate) async fn derive_advanced_run_graph_status(
     store: &StateStore,
     existing: RunGraphStatus,
@@ -1537,6 +1669,17 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
             };
             match store.record_run_graph_status(&payload.status).await {
                 Ok(()) => {
+                    if let Err(error) =
+                        crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                            &store,
+                            &payload.status,
+                            "run_graph_advance",
+                        )
+                        .await
+                    {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
                     print_surface_header(RenderMode::Plain, "vida taskflow run-graph advance");
                     print_surface_line(RenderMode::Plain, "run", task_id);
                     print_surface_line(
@@ -1623,6 +1766,26 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
             };
             match store.record_run_graph_status(&payload.status).await {
                 Ok(()) => {
+                    if let Err(error) =
+                        crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                            &store,
+                            &payload.status,
+                            "run_graph_advance",
+                        )
+                        .await
+                    {
+                        let message = format!(
+                            "Failed to synchronize continuation binding after advance: {error}"
+                        );
+                        eprintln!("{message}");
+                        print_run_graph_json_error(
+                            "vida taskflow run-graph advance",
+                            task_id,
+                            &message,
+                            None,
+                        );
+                        return ExitCode::from(1);
+                    }
                     let delegation_gate = payload.status.delegation_gate();
                     println!(
                         "{}",
@@ -1674,7 +1837,7 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                     return ExitCode::from(1);
                 }
             };
-            match store.record_run_graph_status(&payload.status).await {
+            match persist_seed_artifacts(&store, &payload).await {
                 Ok(()) => {
                     if as_json {
                         let delegation_gate = payload.status.delegation_gate();
@@ -1716,7 +1879,55 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
-                    eprintln!("Failed to seed run-graph state: {error}");
+                    eprintln!("{error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        [head, subcommand, run_id] if head == "run-graph" && subcommand == "dispatch-init" => {
+            match run_graph_dispatch_init(&store, run_id).await {
+                Ok(payload) => {
+                    print_surface_header(
+                        RenderMode::Plain,
+                        "vida taskflow run-graph dispatch-init",
+                    );
+                    print_surface_line(RenderMode::Plain, "run", run_id);
+                    print_surface_line(
+                        RenderMode::Plain,
+                        "dispatch_packet",
+                        payload["dispatch_packet_path"].as_str().unwrap_or("none"),
+                    );
+                    print_surface_line(
+                        RenderMode::Plain,
+                        "dispatch_target",
+                        payload["dispatch_receipt"]["dispatch_target"]
+                            .as_str()
+                            .unwrap_or("none"),
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        [head, subcommand, run_id, flag]
+            if head == "run-graph" && subcommand == "dispatch-init" && flag == "--json" =>
+        {
+            match run_graph_dispatch_init(&store, run_id).await {
+                Ok(payload) => {
+                    crate::print_json_pretty(&payload);
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    print_run_graph_json_error(
+                        "vida taskflow run-graph dispatch-init",
+                        run_id,
+                        &error,
+                        None,
+                    );
+                    eprintln!("{error}");
                     ExitCode::from(1)
                 }
             }
@@ -1934,6 +2145,10 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
             eprintln!("Usage: vida taskflow run-graph advance <task_id> [--json]");
             ExitCode::from(2)
         }
+        [head, subcommand, ..] if head == "run-graph" && subcommand == "dispatch-init" => {
+            eprintln!("Usage: vida taskflow run-graph dispatch-init <task_id> [--json]");
+            ExitCode::from(2)
+        }
         [head, subcommand, ..] if head == "run-graph" && subcommand == "update" => {
             eprintln!(
                 "Usage: vida taskflow run-graph update <task_id> <task_class> <node> <status> [route_task_class] [meta_json]"
@@ -1947,6 +2162,9 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::temp_state::TempStateHarness;
+    use crate::RuntimeConsumptionLaneSelection;
+    use serde_json::json;
 
     #[test]
     fn governance_handoff_uses_lane_targets_for_execution() {
@@ -2040,6 +2258,112 @@ mod tests {
             implementation_verification_outcome("changed_scope"),
             ImplementationVerificationOutcome::FindingsBlocked
         );
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_materializes_first_persisted_dispatch_receipt() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        let status = RunGraphStatus {
+            run_id: "task-1".to_string(),
+            task_id: "task-1".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "planning".to_string(),
+            next_node: Some("implementer".to_string()),
+            status: "running".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "junior".to_string(),
+            lane_id: "planning_lane".to_string(),
+            lifecycle_stage: "implementation_dispatch_ready".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "awaiting_implementer".to_string(),
+            context_state: "open".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.implementer".to_string(),
+            recovery_ready: true,
+        };
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "worker".to_string(),
+            request: "Implement one bounded patch".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: Vec::new(),
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: json!({
+                "orchestration_contract": {},
+                "runtime_assignment": {
+                    "selected_agent_id": "junior",
+                    "activation_agent_type": "junior",
+                    "activation_runtime_role": "worker"
+                },
+                "development_flow": {
+                    "lane_sequence": ["implementer", "coach", "verification"],
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "implementer": {
+                                "activation": {
+                                    "activation_agent_type": "junior",
+                                    "activation_runtime_role": "worker"
+                                },
+                                "closure_class": "implementation"
+                            },
+                            "coach": {
+                                "activation": {
+                                    "activation_agent_type": "senior",
+                                    "activation_runtime_role": "coach"
+                                },
+                                "closure_class": "review"
+                            },
+                            "verification": {
+                                "activation": {
+                                    "activation_agent_type": "architect",
+                                    "activation_runtime_role": "verifier"
+                                },
+                                "closure_class": "verification"
+                            }
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("record run status");
+        store
+            .record_run_graph_dispatch_context(&crate::state_store::RunGraphDispatchContext {
+                run_id: "task-1".to_string(),
+                task_id: "task-1".to_string(),
+                request_text: role_selection.request.clone(),
+                role_selection: serde_json::to_value(&role_selection)
+                    .expect("role selection should encode"),
+                recorded_at: "2026-04-10T10:00:00Z".to_string(),
+            })
+            .await
+            .expect("record dispatch context");
+
+        let payload = run_graph_dispatch_init(&store, "task-1")
+            .await
+            .expect("dispatch init should succeed");
+        let receipt = store
+            .run_graph_dispatch_receipt("task-1")
+            .await
+            .expect("read receipt")
+            .expect("receipt present");
+
+        assert_eq!(receipt.dispatch_target, "implementer");
+        assert!(receipt.dispatch_packet_path.is_some());
+        assert!(payload["dispatch_packet_path"].as_str().is_some());
     }
 
     #[test]

@@ -104,6 +104,7 @@ In tracked flow:
    - no approval gate requires pause,
    - no validation gate requires pause,
    - no unresolved material research/spec gap remains,
+   - the active bounded unit is explicit rather than inferred heuristically,
    - the user did not explicitly ask to pause,
    - the user did not explicitly ask to discuss the current report.
 
@@ -119,6 +120,7 @@ Automatic continuation after a report is forbidden when any of these are true:
 6. the intake/spec/contract is still incomplete,
 7. the user explicitly requested a pause after the current report,
 8. the user explicitly requested discussion of the current report before continuation.
+9. the runtime cannot prove one uniquely bound active bounded unit for the continuation step.
 
 ## 7. Framework Alignment
 

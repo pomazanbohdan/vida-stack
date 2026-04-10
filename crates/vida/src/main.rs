@@ -3,6 +3,7 @@ mod agent_extension_bundle_validation;
 mod agent_extension_catalog_projection;
 mod agent_extension_registry_projection;
 mod agent_feedback_surface;
+mod bootstrap_value_utils;
 mod carrier_runtime_catalog;
 mod carrier_runtime_metadata;
 mod carrier_runtime_projection;
@@ -11,10 +12,12 @@ mod cli;
 mod compiled_agent_extension_bundle;
 mod config_value_utils;
 mod consume_final_operator_surface;
+mod continuation_binding_summary;
 mod contract_profile_adapter;
 mod contract_profile_registry;
 mod development_flow_glue;
 mod development_flow_orchestration;
+mod development_request_analysis;
 mod docflow_proxy;
 mod docflow_runtime_verdict;
 mod doctor_surface;
@@ -35,12 +38,15 @@ mod project_activator_runtime_surface;
 mod project_activator_surface;
 mod project_root_paths;
 mod protocol_surface;
+mod registry_projection_utils;
 mod release1_contracts;
 mod release_contract_adapters;
 mod root_command_router;
 mod runtime_assignment_builder;
 mod runtime_assignment_policy;
+mod runtime_assignment_projection_utils;
 mod runtime_consumption_state;
+mod runtime_consumption_surface;
 mod runtime_contract_vocab;
 mod runtime_dispatch_bootstrap;
 mod runtime_dispatch_downstream_packets;
@@ -50,6 +56,7 @@ mod runtime_dispatch_packets;
 mod runtime_dispatch_state;
 mod runtime_dispatch_status;
 mod runtime_lane_summary;
+mod shell_runtime_helpers;
 mod state_store;
 mod status_surface;
 mod status_surface_external_cli;
@@ -68,7 +75,9 @@ mod task_surface;
 mod taskflow_consume;
 mod taskflow_consume_bundle;
 mod taskflow_consume_resume;
+mod taskflow_continuation;
 mod taskflow_layer4;
+mod taskflow_packet;
 mod taskflow_protocol_binding;
 mod taskflow_proxy;
 mod taskflow_routing;
@@ -78,21 +87,21 @@ mod taskflow_spec_bootstrap;
 mod taskflow_task_bridge;
 mod temp_state;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
-use std::{
-    collections::{HashMap, HashSet},
-    fs,
-};
 
 use crate::contract_profile_adapter::{
-    BlockerCode, blocker_code as blocker_code_value, blocker_code_str,
+    blocker_code as blocker_code_value, blocker_code_str, BlockerCode,
 };
 use agent_extension_bundle_validation::{
-    AgentExtensionBundleValidationInput, extend_agent_extension_bundle_validation_errors,
+    extend_agent_extension_bundle_validation_errors, AgentExtensionBundleValidationInput,
 };
 use agent_extension_catalog_projection::build_agent_extension_catalog_projection;
 use agent_extension_registry_projection::build_agent_extension_registry_projection;
+pub(crate) use bootstrap_value_utils::{
+    config_file_path, inferred_project_title, is_missing_or_placeholder, normalize_root_arg,
+    slugify_project_id, trimmed_non_empty,
+};
 use carrier_runtime_projection::build_carrier_runtime_projection;
 use clap::Parser;
 pub(crate) use cli::*;
@@ -109,14 +118,18 @@ pub(crate) use consume_final_operator_surface::{
 pub(crate) use development_flow_glue::{
     display_lane_label, execution_plan_agent_only_development_required,
 };
+pub(crate) use development_flow_orchestration::build_design_first_tracked_flow_bootstrap;
+pub(crate) use development_request_analysis::{
+    coach_review_terms, contains_keywords, feature_delivery_design_terms,
+};
 pub(crate) use docflow_runtime_verdict::{
     blocking_docflow_activation, build_docflow_runtime_verdict,
 };
 pub(crate) use host_agent_state::{
-    HostAgentFeedbackInput, append_host_agent_observability_event,
-    host_agent_observability_state_path, load_or_initialize_host_agent_observability_state,
-    load_or_initialize_worker_scorecards, read_json_file_if_present, refresh_worker_strategy,
-    worker_scorecards_state_path, worker_strategy_state_path,
+    append_host_agent_observability_event, host_agent_observability_state_path,
+    load_or_initialize_host_agent_observability_state, load_or_initialize_worker_scorecards,
+    read_json_file_if_present, refresh_worker_strategy, worker_scorecards_state_path,
+    worker_strategy_state_path, HostAgentFeedbackInput,
 };
 pub(crate) use init_surfaces::resolve_init_bootstrap_source_root;
 #[cfg(test)]
@@ -129,15 +142,19 @@ use launcher_task_commands::{
     build_task_close_command, build_task_create_command, build_task_ensure_command,
     build_task_show_command, infer_feature_request_slug, infer_feature_request_title, shell_quote,
 };
-pub(crate) use project_activator_surface::ProjectActivationAnswers;
 pub(crate) use project_activator_surface::build_project_activator_view;
 pub(crate) use project_activator_surface::merge_project_activation_into_init_view;
+pub(crate) use project_activator_surface::ProjectActivationAnswers;
 pub(crate) use project_root_paths::{
     ensure_dir, looks_like_project_root, resolve_repo_root, resolve_runtime_project_root,
     resolve_status_project_root,
 };
+pub(crate) use registry_projection_utils::{
+    effective_enabled_registry_ids, non_empty_yaml_string, read_simple_toml_sections,
+    registry_ids_by_key, registry_row_map_by_id, registry_rows_by_key,
+};
 use release1_contracts::{
-    LaneStatus, derive_lane_status, missing_downstream_lane_evidence_blocker,
+    derive_lane_status, missing_downstream_lane_evidence_blocker, LaneStatus,
 };
 use root_command_router::run_root_command;
 use runtime_assignment_builder::{
@@ -147,6 +164,10 @@ use runtime_assignment_builder::{
 use runtime_assignment_policy::{
     infer_execution_runtime_role, infer_runtime_task_class, role_supports_runtime_role,
     role_supports_task_class, runtime_role_for_task_class, task_complexity_multiplier,
+};
+pub(crate) use runtime_assignment_projection_utils::{
+    carrier_runtime_section, infer_task_class_from_task_payload, json_u64,
+    runtime_assignment_alias_fields, runtime_assignment_from_execution_plan,
 };
 #[cfg(test)]
 use runtime_consumption_state::runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result;
@@ -160,6 +181,12 @@ pub(crate) use runtime_consumption_state::{
     runtime_consumption_snapshot_has_release_admission_evidence, runtime_consumption_summary,
     write_runtime_consumption_snapshot,
 };
+pub(crate) use runtime_consumption_surface::{
+    blocking_lane_selection, build_docflow_runtime_evidence, doctor_launcher_summary_for_root,
+    DoctorLauncherSummary, RuntimeConsumptionClosureAdmission, RuntimeConsumptionDocflowActivation,
+    RuntimeConsumptionDocflowVerdict, RuntimeConsumptionEvidence, TaskflowConsumeBundleCheck,
+    TaskflowConsumeBundlePayload, TaskflowDirectConsumptionPayload,
+};
 #[cfg(test)]
 use runtime_dispatch_bootstrap::build_runtime_consumption_run_graph_bootstrap;
 #[cfg(test)]
@@ -171,6 +198,9 @@ use runtime_dispatch_packets::{
 pub(crate) use runtime_dispatch_state::*;
 #[cfg(test)]
 use runtime_dispatch_status::fallback_runtime_consumption_run_graph_status;
+pub(crate) use shell_runtime_helpers::{
+    block_on_state_store, print_json_pretty, repo_runtime_root,
+};
 use state_store::{StateStore, StateStoreError};
 pub(crate) use surface_render::{
     print_root_help, print_surface_header, print_surface_line, print_surface_ok,
@@ -279,242 +309,6 @@ pub(crate) async fn run(cli: Cli) -> ExitCode {
     run_root_command(cli).await
 }
 
-fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
-fn slugify_project_id(value: &str) -> String {
-    let mut slug = String::new();
-    let mut last_was_dash = false;
-    for ch in value.trim().chars() {
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch.to_ascii_lowercase());
-            last_was_dash = false;
-        } else if !last_was_dash {
-            slug.push('-');
-            last_was_dash = true;
-        }
-    }
-    slug.trim_matches('-').to_string()
-}
-
-fn inferred_project_title(project_id: &str, explicit_name: Option<&str>) -> String {
-    if let Some(name) = trimmed_non_empty(explicit_name) {
-        return name;
-    }
-    project_id.to_string()
-}
-
-pub(crate) fn is_missing_or_placeholder(value: Option<&str>, placeholder: &str) -> bool {
-    match value.map(str::trim) {
-        None => true,
-        Some("") => true,
-        Some(current) if current == placeholder => true,
-        _ => false,
-    }
-}
-
-fn json_u64(value: Option<&serde_json::Value>) -> Option<u64> {
-    value.and_then(|node| match node {
-        serde_json::Value::Number(number) => number.as_u64(),
-        serde_json::Value::String(text) => text.parse::<u64>().ok(),
-        _ => None,
-    })
-}
-
-pub(crate) fn carrier_runtime_section<'a>(
-    compiled_bundle: &'a serde_json::Value,
-) -> &'a serde_json::Value {
-    compiled_bundle
-        .get("carrier_runtime")
-        .unwrap_or(&serde_json::Value::Null)
-}
-
-fn non_empty_yaml_string(config: &serde_yaml::Value, path: &[&str]) -> Option<String> {
-    yaml_string(yaml_lookup(config, path)).filter(|value| !value.trim().is_empty())
-}
-
-fn runtime_assignment_from_execution_plan<'a>(
-    execution_plan: &'a serde_json::Value,
-) -> &'a serde_json::Value {
-    execution_plan
-        .get("runtime_assignment")
-        .or_else(|| execution_plan.get("carrier_runtime_assignment"))
-        .unwrap_or(&serde_json::Value::Null)
-}
-
-fn repo_runtime_root() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .map(Path::to_path_buf)
-        .expect("repo root should exist two levels above crates/vida")
-}
-
-fn block_on_state_store<T>(
-    future: impl std::future::Future<Output = Result<T, StateStoreError>>,
-) -> Result<T, String> {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future))
-            .map_err(|error| error.to_string()),
-        Err(_) => tokio::runtime::Runtime::new()
-            .map_err(|error| format!("Failed to initialize Tokio runtime: {error}"))?
-            .block_on(future)
-            .map_err(|error| error.to_string()),
-    }
-}
-
-fn print_json_pretty(value: &serde_json::Value) {
-    println!(
-        "{}",
-        serde_json::to_string_pretty(value).expect("json payload should render")
-    );
-}
-
-pub(crate) fn runtime_assignment_alias_fields(
-    runtime_assignment: &serde_json::Value,
-) -> serde_json::Map<String, serde_json::Value> {
-    let mut fields = serde_json::Map::new();
-    fields.insert(
-        "carrier_runtime_assignment".to_string(),
-        runtime_assignment.clone(),
-    );
-    fields.insert("runtime_assignment".to_string(), runtime_assignment.clone());
-    fields
-}
-
-fn infer_task_class_from_task_payload(task: &serde_json::Value) -> String {
-    let labels = task["labels"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .map(|value| value.to_ascii_lowercase())
-        .collect::<Vec<_>>();
-    let mut text = String::new();
-    if let Some(title) = task["title"].as_str() {
-        text.push_str(title);
-        text.push(' ');
-    }
-    if let Some(description) = task["description"].as_str() {
-        text.push_str(description);
-    }
-    let normalized = text.to_ascii_lowercase();
-
-    if labels.iter().any(|label| {
-        matches!(
-            label.as_str(),
-            "architecture" | "solution-architect" | "hard-escalation" | "escalation"
-        )
-    }) || !contains_keywords(
-        &normalized,
-        &[
-            "architecture".to_string(),
-            "architect".to_string(),
-            "migration".to_string(),
-            "cross-cutting".to_string(),
-            "cross cutting".to_string(),
-            "hard escalation".to_string(),
-        ],
-    )
-    .is_empty()
-    {
-        return "architecture".to_string();
-    }
-    if labels.iter().any(|label| {
-        matches!(
-            label.as_str(),
-            "verification" | "review" | "proof" | "release-readiness"
-        )
-    }) || !contains_keywords(
-        &normalized,
-        &[
-            "verify".to_string(),
-            "verification".to_string(),
-            "review".to_string(),
-            "audit".to_string(),
-            "proof".to_string(),
-            "release readiness".to_string(),
-        ],
-    )
-    .is_empty()
-    {
-        return "verification".to_string();
-    }
-    if labels
-        .iter()
-        .any(|label| matches!(label.as_str(), "spec-pack" | "documentation" | "planning"))
-        || !contains_keywords(
-            &normalized,
-            &[
-                "spec".to_string(),
-                "design".to_string(),
-                "research".to_string(),
-                "plan".to_string(),
-                "requirements".to_string(),
-            ],
-        )
-        .is_empty()
-    {
-        return "specification".to_string();
-    }
-    "implementation".to_string()
-}
-
-#[derive(Debug, serde::Serialize)]
-struct DoctorLauncherSummary {
-    vida: String,
-    project_root: String,
-    taskflow_surface: String,
-}
-
-fn doctor_launcher_summary_for_root(project_root: &Path) -> Result<DoctorLauncherSummary, String> {
-    let current_exe = std::env::current_exe()
-        .map_err(|error| format!("failed to resolve current executable: {error}"))?;
-    Ok(DoctorLauncherSummary {
-        vida: current_exe.display().to_string(),
-        project_root: project_root.display().to_string(),
-        taskflow_surface: "vida taskflow".to_string(),
-    })
-}
-
-#[derive(Debug, serde::Serialize)]
-struct TaskflowConsumeBundlePayload {
-    artifact_name: String,
-    artifact_type: String,
-    generated_at: String,
-    vida_root: String,
-    config_path: String,
-    activation_source: String,
-    launcher_runtime_paths: DoctorLauncherSummary,
-    metadata: serde_json::Value,
-    control_core: serde_json::Value,
-    activation_bundle: serde_json::Value,
-    protocol_binding_registry: serde_json::Value,
-    cache_delivery_contract: serde_json::Value,
-    orchestrator_init_view: serde_json::Value,
-    agent_init_view: serde_json::Value,
-    boot_compatibility: serde_json::Value,
-    migration_preflight: serde_json::Value,
-    task_store: serde_json::Value,
-    run_graph: serde_json::Value,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct TaskflowConsumeBundleCheck {
-    ok: bool,
-    blockers: Vec<String>,
-    root_artifact_id: String,
-    artifact_count: usize,
-    boot_classification: String,
-    migration_state: String,
-    activation_status: String,
-}
-
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) struct RuntimeConsumptionLaneSelection {
     pub(crate) ok: bool,
@@ -532,175 +326,6 @@ pub(crate) struct RuntimeConsumptionLaneSelection {
     pub(crate) compiled_bundle: serde_json::Value,
     pub(crate) execution_plan: serde_json::Value,
     pub(crate) reason: String,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct RuntimeConsumptionEvidence {
-    surface: String,
-    ok: bool,
-    row_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    verdict: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    artifact_path: Option<String>,
-    output: String,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct RuntimeConsumptionOverview {
-    surface: String,
-    ok: bool,
-    registry_rows: usize,
-    check_rows: usize,
-    readiness_rows: usize,
-    proof_blocking: bool,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct RuntimeConsumptionDocflowActivation {
-    activated: bool,
-    runtime_family: String,
-    owner_runtime: String,
-    evidence: serde_json::Value,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct RuntimeConsumptionDocflowVerdict {
-    status: String,
-    ready: bool,
-    blockers: Vec<String>,
-    proof_surfaces: Vec<String>,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct RuntimeConsumptionClosureAdmission {
-    status: String,
-    admitted: bool,
-    blockers: Vec<String>,
-    proof_surfaces: Vec<String>,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct TaskflowDirectConsumptionPayload {
-    artifact_name: String,
-    artifact_type: String,
-    generated_at: String,
-    closure_authority: String,
-    request_text: String,
-    role_selection: RuntimeConsumptionLaneSelection,
-    runtime_bundle: TaskflowConsumeBundlePayload,
-    bundle_check: TaskflowConsumeBundleCheck,
-    docflow_activation: RuntimeConsumptionDocflowActivation,
-    docflow_verdict: RuntimeConsumptionDocflowVerdict,
-    closure_admission: RuntimeConsumptionClosureAdmission,
-    taskflow_handoff_plan: serde_json::Value,
-    run_graph_bootstrap: serde_json::Value,
-    dispatch_receipt: serde_json::Value,
-    direct_consumption_ready: bool,
-}
-
-pub(crate) fn config_file_path() -> Result<PathBuf, String> {
-    Ok(resolve_runtime_project_root()?.join("vida.config.yaml"))
-}
-
-pub(crate) fn read_simple_toml_sections(path: &Path) -> HashMap<String, HashMap<String, String>> {
-    let Ok(raw) = fs::read_to_string(path) else {
-        return HashMap::new();
-    };
-    let mut sections = HashMap::<String, HashMap<String, String>>::new();
-    let mut current = String::new();
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            current = trimmed
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .trim()
-                .to_string();
-            sections.entry(current.clone()).or_default();
-            continue;
-        }
-        let Some((key, value)) = trimmed.split_once('=') else {
-            continue;
-        };
-        let normalized = value
-            .trim()
-            .trim_matches('"')
-            .trim_matches('\'')
-            .to_string();
-        sections
-            .entry(current.clone())
-            .or_default()
-            .insert(key.trim().to_string(), normalized);
-    }
-    sections
-}
-
-pub(crate) fn registry_rows_by_key(
-    registry: &serde_yaml::Value,
-    key: &str,
-    id_field: &str,
-    enabled_ids: &[String],
-) -> Vec<serde_json::Value> {
-    let enabled = enabled_ids.iter().cloned().collect::<HashSet<_>>();
-    match yaml_lookup(registry, &[key]) {
-        Some(serde_yaml::Value::Sequence(rows)) => rows
-            .iter()
-            .filter_map(|row| {
-                let row_id = yaml_string(yaml_lookup(row, &[id_field]))?;
-                if !enabled.is_empty() && !enabled.contains(&row_id) {
-                    return None;
-                }
-                serde_json::to_value(row).ok()
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn registry_all_ids_by_key(registry: &serde_yaml::Value, key: &str, id_field: &str) -> Vec<String> {
-    match yaml_lookup(registry, &[key]) {
-        Some(serde_yaml::Value::Sequence(rows)) => rows
-            .iter()
-            .filter_map(|row| yaml_string(yaml_lookup(row, &[id_field])))
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-pub(crate) fn effective_enabled_registry_ids(
-    config: &serde_yaml::Value,
-    config_path: &[&str],
-    registry: &serde_yaml::Value,
-    registry_key: &str,
-    id_field: &str,
-) -> Vec<String> {
-    if yaml_lookup(config, config_path).is_some() {
-        return yaml_string_list(yaml_lookup(config, config_path));
-    }
-    registry_all_ids_by_key(registry, registry_key, id_field)
-}
-
-pub(crate) fn registry_row_map_by_id(
-    rows: &[serde_json::Value],
-    id_field: &str,
-) -> HashMap<String, serde_json::Value> {
-    rows.iter()
-        .filter_map(|row| Some((row[id_field].as_str()?.to_string(), row.clone())))
-        .collect()
-}
-
-fn registry_ids_by_key(registry: &serde_yaml::Value, key: &str, id_field: &str) -> HashSet<String> {
-    match yaml_lookup(registry, &[key]) {
-        Some(serde_yaml::Value::Sequence(rows)) => rows
-            .iter()
-            .filter_map(|row| yaml_string(yaml_lookup(row, &[id_field])))
-            .collect(),
-        _ => HashSet::new(),
-    }
 }
 
 #[cfg(test)]
@@ -723,188 +348,6 @@ pub(crate) async fn build_runtime_lane_selection_with_store(
     request: &str,
 ) -> Result<RuntimeConsumptionLaneSelection, String> {
     crate::runtime_lane_summary::build_runtime_lane_selection_with_store(store, request).await
-}
-
-fn coach_review_terms(normalized_request: &str) -> Vec<String> {
-    contains_keywords(
-        normalized_request,
-        &[
-            "acceptance criteria".to_string(),
-            "against the spec".to_string(),
-            "against spec".to_string(),
-            "definition of done".to_string(),
-            "implementation drift".to_string(),
-            "implemented result".to_string(),
-            "matches the spec".to_string(),
-            "rework".to_string(),
-            "spec compliance".to_string(),
-            "spec conformance".to_string(),
-        ],
-    )
-}
-
-fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_json::Value {
-    let feature_slug = infer_feature_request_slug(request)
-        .trim()
-        .trim_matches('-')
-        .to_string();
-    let feature_slug = if feature_slug.is_empty() {
-        "feature-request".to_string()
-    } else {
-        feature_slug
-    };
-    let feature_title = infer_feature_request_title(request);
-    let design_doc_path = format!("docs/product/spec/{feature_slug}-design.md");
-    let artifact_path = format!("product/spec/{feature_slug}-design");
-    let epic_task_id = format!("feature-{feature_slug}");
-    let spec_task_id = format!("{epic_task_id}-spec");
-    let work_pool_task_id = format!("{epic_task_id}-work-pool");
-    let dev_task_id = format!("{epic_task_id}-dev");
-    let epic_title = format!("Feature epic: {feature_title}");
-    let spec_title = format!("Spec pack: {feature_title}");
-    let work_pool_title = format!("Work-pool pack: {feature_title}");
-    let dev_title = format!("Dev pack: {feature_title}");
-    let quoted_request = shell_quote(request);
-
-    serde_json::json!({
-        "required": true,
-        "status": "pending",
-        "bootstrap_command": format!(
-            "vida taskflow bootstrap-spec {} --json",
-            quoted_request,
-        ),
-        "feature_slug": feature_slug,
-        "feature_title": feature_title,
-        "design_doc_path": design_doc_path,
-        "design_artifact_path": artifact_path,
-        "epic": {
-            "required": true,
-            "task_id": epic_task_id,
-            "title": epic_title,
-            "runtime": "vida taskflow",
-            "create_command": build_task_create_command(
-                &epic_task_id,
-                &epic_title,
-                "epic",
-                None,
-                &["feature-request", "spec-first"],
-                Some(&quoted_request),
-            ),
-            "close_command": build_task_close_command(
-                &epic_task_id,
-                "feature delivery closed after proof and runtime handoff",
-            )
-        },
-        "spec_task": {
-            "required": true,
-            "task_id": spec_task_id,
-            "title": spec_title,
-            "runtime": "vida taskflow",
-            "inspect_command": build_task_show_command(&spec_task_id),
-            "ensure_command": build_task_ensure_command(
-                &spec_task_id,
-                &spec_title,
-                "task",
-                Some(&epic_task_id),
-                &["spec-pack", "documentation"],
-                Some(&shell_quote("bounded design/spec packet for the feature request")),
-            ),
-            "create_command": build_task_create_command(
-                &spec_task_id,
-                &spec_title,
-                "task",
-                Some(&epic_task_id),
-                &["spec-pack", "documentation"],
-                Some(&shell_quote("bounded design/spec packet for the feature request")),
-            ),
-            "close_command": build_task_close_command(
-                &spec_task_id,
-                "design packet finalized and handed off into tracked work-pool shaping",
-            )
-        },
-        "work_pool_task": {
-            "required": true,
-            "task_id": work_pool_task_id,
-            "title": work_pool_title,
-            "runtime": "vida taskflow",
-            "inspect_command": build_task_show_command(&work_pool_task_id),
-            "ensure_command": build_task_ensure_command(
-                &work_pool_task_id,
-                &work_pool_title,
-                "task",
-                Some(&epic_task_id),
-                &["work-pool-pack"],
-                None,
-            ),
-            "create_command": build_task_create_command(
-                &work_pool_task_id,
-                &work_pool_title,
-                "task",
-                Some(&epic_task_id),
-                &["work-pool-pack"],
-                None,
-            ),
-            "close_command": build_task_close_command(
-                &work_pool_task_id,
-                "work-pool packet closed after delegated execution packet was shaped",
-            )
-        },
-        "dev_task": {
-            "required": false,
-            "task_id": dev_task_id,
-            "title": dev_title,
-            "runtime": "vida taskflow",
-            "inspect_command": build_task_show_command(&dev_task_id),
-            "ensure_command": build_task_ensure_command(
-                &dev_task_id,
-                &dev_title,
-                "task",
-                Some(&epic_task_id),
-                &["dev-pack"],
-                None,
-            ),
-            "create_command": build_task_create_command(
-                &dev_task_id,
-                &dev_title,
-                "task",
-                Some(&epic_task_id),
-                &["dev-pack"],
-                None,
-            ),
-            "close_command": build_task_close_command(
-                &dev_task_id,
-                "delegated development packet reached proof-ready closure",
-            )
-        },
-        "docflow": {
-            "required": true,
-            "runtime": "vida docflow",
-            "init_command": format!(
-                "vida docflow init {} {} product_spec {}",
-                design_doc_path,
-                artifact_path,
-                shell_quote("initialize bounded feature design"),
-            ),
-            "finalize_command": format!(
-                "vida docflow finalize-edit {} {}",
-                design_doc_path,
-                shell_quote("record bounded feature design"),
-            ),
-            "check_command": format!(
-                "vida docflow check --root . {}",
-                design_doc_path,
-            )
-        },
-        "handoff_sequence": [
-            "create epic",
-            "open spec task",
-            "initialize bounded design document",
-            "finalize and validate bounded design document",
-            "close spec task",
-            "open work-pool shaping task",
-            "shape dev packet in TaskFlow before delegated implementation"
-        ]
-    })
 }
 
 pub(crate) fn build_runtime_execution_plan_from_snapshot(
@@ -936,225 +379,6 @@ fn role_exists_in_lane_bundle(bundle: &serde_json::Value, role_id: &str) -> bool
             .any(|value| value == role_id)
 }
 
-pub(crate) fn contains_keywords(request: &str, keywords: &[String]) -> Vec<String> {
-    fn is_boundary(ch: Option<char>) -> bool {
-        ch.map(|value| !value.is_alphanumeric() && value != '_')
-            .unwrap_or(true)
-    }
-
-    fn bounded_match(request: &str, keyword: &str) -> bool {
-        request.match_indices(keyword).any(|(start, _)| {
-            let before = request[..start].chars().next_back();
-            let after = request[start + keyword.len()..].chars().next();
-            is_boundary(before) && is_boundary(after)
-        })
-    }
-
-    keywords
-        .iter()
-        .filter(|keyword| {
-            let keyword = keyword.as_str();
-            if keyword.chars().count() <= 2 {
-                return bounded_match(request, keyword);
-            }
-            if keyword.contains(' ') || keyword.contains('-') {
-                return bounded_match(request, keyword);
-            }
-            if keyword
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-            {
-                return bounded_match(request, keyword);
-            }
-            request.contains(keyword)
-        })
-        .cloned()
-        .collect()
-}
-
-pub(crate) fn feature_delivery_design_terms(request: &str) -> Vec<String> {
-    let design_keywords = vec![
-        "research".to_string(),
-        "spec".to_string(),
-        "specification".to_string(),
-        "specifications".to_string(),
-        "plan".to_string(),
-        "planning".to_string(),
-        "design".to_string(),
-        "requirements".to_string(),
-    ];
-    let implementation_keywords = vec![
-        "implement".to_string(),
-        "implementation".to_string(),
-        "write code".to_string(),
-        "write the full code".to_string(),
-        "full code".to_string(),
-        "build".to_string(),
-        "develop".to_string(),
-    ];
-
-    let design_matches = contains_keywords(request, &design_keywords);
-    let implementation_matches = contains_keywords(request, &implementation_keywords);
-    if design_matches.is_empty() || implementation_matches.is_empty() {
-        return Vec::new();
-    }
-
-    let mut combined = Vec::new();
-    for term in design_matches
-        .into_iter()
-        .chain(implementation_matches.into_iter())
-    {
-        if !combined.contains(&term) {
-            combined.push(term);
-        }
-    }
-    combined
-}
-
-fn count_nonempty_lines(output: &str) -> usize {
-    output
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .count()
-}
-
-fn build_docflow_runtime_evidence() -> (
-    RuntimeConsumptionEvidence,
-    RuntimeConsumptionEvidence,
-    RuntimeConsumptionEvidence,
-    RuntimeConsumptionEvidence,
-    RuntimeConsumptionOverview,
-) {
-    let registry_root = std::env::current_dir()
-        .ok()
-        .filter(|cwd| looks_like_project_root(cwd))
-        .or_else(|| resolve_repo_root().ok())
-        .expect("docflow registry evidence should resolve the repo root");
-    let registry_root = registry_root.display().to_string();
-    let registry_root_path = std::path::PathBuf::from(&registry_root);
-    let registry_output = crate::taskflow_spec_bootstrap::run_docflow_cli_command(
-        &registry_root_path,
-        &[
-            "registry".to_string(),
-            "--root".to_string(),
-            registry_root.clone(),
-        ],
-    )
-    .expect("docflow registry evidence should render");
-    let check_output = crate::taskflow_spec_bootstrap::run_docflow_cli_command(
-        &registry_root_path,
-        &[
-            "check".to_string(),
-            "--profile".to_string(),
-            "active-canon".to_string(),
-        ],
-    )
-    .expect("docflow check evidence should render");
-    let readiness_output = crate::taskflow_spec_bootstrap::run_docflow_cli_command(
-        &registry_root_path,
-        &[
-            "readiness-check".to_string(),
-            "--profile".to_string(),
-            "active-canon".to_string(),
-        ],
-    )
-    .expect("docflow readiness evidence should render");
-    let proof_output = crate::taskflow_spec_bootstrap::run_docflow_cli_command(
-        &registry_root_path,
-        &[
-            "proofcheck".to_string(),
-            "--profile".to_string(),
-            "active-canon".to_string(),
-        ],
-    )
-    .expect("docflow proof evidence should render");
-
-    let registry_rows = count_nonempty_lines(&registry_output);
-    let check_rows = count_nonempty_lines(&check_output);
-    let readiness_rows = count_nonempty_lines(&readiness_output);
-    let proof_ok = proof_output.contains("✅ OK: proofcheck");
-    let proof_blocking = !proof_ok;
-
-    let registry = RuntimeConsumptionEvidence {
-        surface: format!("vida docflow registry --root {}", registry_root),
-        ok: registry_rows > 0 && !registry_output.contains("\"artifact_type\":\"inventory_error\""),
-        row_count: registry_rows,
-        verdict: None,
-        artifact_path: None,
-        output: registry_output,
-    };
-    let check = RuntimeConsumptionEvidence {
-        surface: "vida docflow check --profile active-canon".to_string(),
-        ok: check_output.trim().is_empty(),
-        row_count: check_rows,
-        verdict: None,
-        artifact_path: None,
-        output: check_output,
-    };
-    let readiness = RuntimeConsumptionEvidence {
-        surface: "vida docflow readiness-check --profile active-canon".to_string(),
-        ok: readiness_output.trim().is_empty(),
-        row_count: readiness_rows,
-        verdict: Some(if readiness_output.trim().is_empty() {
-            "ready".to_string()
-        } else {
-            "blocked".to_string()
-        }),
-        artifact_path: Some("vida/config/docflow-readiness.current.jsonl".to_string()),
-        output: readiness_output,
-    };
-    let proof = RuntimeConsumptionEvidence {
-        surface: "vida docflow proofcheck --profile active-canon".to_string(),
-        ok: proof_ok,
-        row_count: count_nonempty_lines(&proof_output),
-        verdict: Some(if proof_ok {
-            "ready".to_string()
-        } else {
-            "blocked".to_string()
-        }),
-        artifact_path: None,
-        output: proof_output,
-    };
-    let overview = RuntimeConsumptionOverview {
-        surface: "vida taskflow direct runtime-consumption overview".to_string(),
-        ok: registry.ok && check.ok && readiness.ok && proof.ok,
-        registry_rows,
-        check_rows,
-        readiness_rows,
-        proof_blocking,
-    };
-
-    (registry, check, readiness, proof, overview)
-}
-
-fn blocking_lane_selection(request: &str, error: &str) -> RuntimeConsumptionLaneSelection {
-    RuntimeConsumptionLaneSelection {
-        ok: false,
-        activation_source: "state_store".to_string(),
-        selection_mode: "unresolved".to_string(),
-        fallback_role: "orchestrator".to_string(),
-        request: request.to_string(),
-        selected_role: "orchestrator".to_string(),
-        conversational_mode: None,
-        single_task_only: false,
-        tracked_flow_entry: None,
-        allow_freeform_chat: false,
-        confidence: "blocked".to_string(),
-        matched_terms: Vec::new(),
-        compiled_bundle: serde_json::Value::Null,
-        execution_plan: serde_json::json!({
-            "status": "blocked",
-            "reason": error,
-        }),
-        reason: error.to_string(),
-    }
-}
-
-fn normalize_root_arg(path: &Path) -> String {
-    path.to_string_lossy().to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1162,6 +386,8 @@ mod tests {
     use crate::temp_state::TempStateHarness;
     use clap::{CommandFactory, Parser};
     use std::env;
+    use std::fs;
+    use std::path::Path;
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
     struct RecoveringMutex(Mutex<()>);
@@ -1205,7 +431,6 @@ mod tests {
             env::set_current_dir(&self.original).expect("current dir should restore");
         }
     }
-    use std::fs;
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -1253,6 +478,7 @@ mod tests {
                 "          - -y\n",
                 "          - -o\n",
                 "          - text\n",
+                "        model_flag: --model\n",
                 "        prompt_mode: positional\n",
                 "    hermes_cli:\n",
                 "      enabled: true\n",
@@ -1264,6 +490,8 @@ mod tests {
                 "          - chat\n",
                 "          - -Q\n",
                 "          - -q\n",
+                "        model_flag: --model\n",
+                "        provider_flag: --provider\n",
                 "        prompt_mode: positional\n",
                 "  routing: {}\n",
                 "  scoring: {}\n",
@@ -1464,53 +692,39 @@ mod tests {
         assert!(harness.path().join("README.md").is_file());
         assert!(harness.path().join(DEFAULT_PROJECT_ROOT_MAP).is_file());
         assert!(harness.path().join(DEFAULT_PROJECT_PRODUCT_INDEX).is_file());
-        assert!(
-            harness
-                .path()
-                .join(DEFAULT_PROJECT_PRODUCT_SPEC_README)
-                .is_file()
-        );
-        assert!(
-            harness
-                .path()
-                .join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE)
-                .is_file()
-        );
-        assert!(
-            harness
-                .path()
-                .join(DEFAULT_PROJECT_PROCESS_README)
-                .is_file()
-        );
-        assert!(
-            harness
-                .path()
-                .join(DEFAULT_PROJECT_RESEARCH_README)
-                .is_file()
-        );
+        assert!(harness
+            .path()
+            .join(DEFAULT_PROJECT_PRODUCT_SPEC_README)
+            .is_file());
+        assert!(harness
+            .path()
+            .join(DEFAULT_PROJECT_FEATURE_DESIGN_TEMPLATE)
+            .is_file());
+        assert!(harness
+            .path()
+            .join(DEFAULT_PROJECT_PROCESS_README)
+            .is_file());
+        assert!(harness
+            .path()
+            .join(DEFAULT_PROJECT_RESEARCH_README)
+            .is_file());
         assert!(harness.path().join(".vida/config").is_dir());
         assert!(harness.path().join(".vida/db").is_dir());
         assert!(harness.path().join(".vida/cache").is_dir());
         assert!(harness.path().join(".vida/framework").is_dir());
         assert!(harness.path().join(".vida/project").is_dir());
-        assert!(
-            harness
-                .path()
-                .join(".vida/project/agent-extensions/README.md")
-                .is_file()
-        );
-        assert!(
-            harness
-                .path()
-                .join(".vida/project/agent-extensions/roles.yaml")
-                .is_file()
-        );
-        assert!(
-            harness
-                .path()
-                .join(".vida/project/agent-extensions/roles.sidecar.yaml")
-                .is_file()
-        );
+        assert!(harness
+            .path()
+            .join(".vida/project/agent-extensions/README.md")
+            .is_file());
+        assert!(harness
+            .path()
+            .join(".vida/project/agent-extensions/roles.yaml")
+            .is_file());
+        assert!(harness
+            .path()
+            .join(".vida/project/agent-extensions/roles.sidecar.yaml")
+            .is_file());
         assert!(harness.path().join(".vida/receipts").is_dir());
         assert!(harness.path().join(".vida/runtime").is_dir());
         assert!(harness.path().join(".vida/scratchpad").is_dir());
@@ -2066,16 +1280,12 @@ mod tests {
             view["normal_work_defaults"]["local_host_agent_guide"],
             DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC
         );
-        assert!(
-            view["normal_work_defaults"]
-                .get("local_codex_guide")
-                .is_none()
-        );
-        assert!(
-            view["normal_work_defaults"]
-                .get("codex_tier_rates")
-                .is_none()
-        );
+        assert!(view["normal_work_defaults"]
+            .get("local_codex_guide")
+            .is_none());
+        assert!(view["normal_work_defaults"]
+            .get("codex_tier_rates")
+            .is_none());
     }
 
     #[test]
@@ -2122,30 +1332,22 @@ mod tests {
             view["normal_work_defaults"]["carrier_tier_rates"]["qwen"],
             4
         );
-        assert!(
-            view["normal_work_defaults"]
-                .get("local_codex_guide")
-                .is_none()
-        );
-        assert!(
-            view["normal_work_defaults"]
-                .get("codex_tier_rates")
-                .is_none()
-        );
-        assert!(
-            view["host_environment"]["supported_cli_systems"]
-                .as_array()
-                .expect("supported cli systems should render")
-                .iter()
-                .any(|value| value.as_str() == Some("qwen"))
-        );
-        assert!(
-            view["host_environment"]["supported_cli_systems"]
-                .as_array()
-                .expect("supported cli systems should render")
-                .iter()
-                .any(|value| value.as_str() == Some("codex"))
-        );
+        assert!(view["normal_work_defaults"]
+            .get("local_codex_guide")
+            .is_none());
+        assert!(view["normal_work_defaults"]
+            .get("codex_tier_rates")
+            .is_none());
+        assert!(view["host_environment"]["supported_cli_systems"]
+            .as_array()
+            .expect("supported cli systems should render")
+            .iter()
+            .any(|value| value.as_str() == Some("qwen")));
+        assert!(view["host_environment"]["supported_cli_systems"]
+            .as_array()
+            .expect("supported cli systems should render")
+            .iter()
+            .any(|value| value.as_str() == Some("codex")));
     }
 
     #[test]
@@ -2194,26 +1396,20 @@ mod tests {
         assert_eq!(view["host_environment"]["selection_required"], true);
         assert_eq!(view["host_environment"]["template_materialized"], false);
         assert_eq!(view["host_environment"]["runtime_template_root"], ".codex");
-        assert!(
-            view["host_environment"]["supported_cli_systems"]
-                .as_array()
-                .expect("supported cli systems should render")
-                .iter()
-                .any(|value| value.as_str() == Some("codex"))
-        );
-        assert!(
-            view["host_environment"]["supported_cli_systems"]
-                .as_array()
-                .expect("supported cli systems should render")
-                .iter()
-                .any(|value| value.as_str() == Some("qwen"))
-        );
-        assert!(
-            view["host_environment"]["template_source_root"]
-                .as_str()
-                .expect("template source root should render")
-                .ends_with("/.codex")
-        );
+        assert!(view["host_environment"]["supported_cli_systems"]
+            .as_array()
+            .expect("supported cli systems should render")
+            .iter()
+            .any(|value| value.as_str() == Some("codex")));
+        assert!(view["host_environment"]["supported_cli_systems"]
+            .as_array()
+            .expect("supported cli systems should render")
+            .iter()
+            .any(|value| value.as_str() == Some("qwen")));
+        assert!(view["host_environment"]["template_source_root"]
+            .as_str()
+            .expect("template source root should render")
+            .ends_with("/.codex"));
     }
 
     #[test]
@@ -2279,24 +1475,18 @@ mod tests {
         assert!(config.contains("cli_system: codex"));
         assert!(harness.path().join("docs/project-root-map.md").is_file());
         assert!(harness.path().join("docs/product/spec/README.md").is_file());
-        assert!(
-            harness
-                .path()
-                .join("docs/product/spec/templates/feature-design-document.template.md")
-                .is_file()
-        );
-        assert!(
-            harness
-                .path()
-                .join("docs/process/documentation-tooling-map.md")
-                .is_file()
-        );
-        assert!(
-            harness
-                .path()
-                .join("docs/process/codex-agent-configuration-guide.md")
-                .is_file()
-        );
+        assert!(harness
+            .path()
+            .join("docs/product/spec/templates/feature-design-document.template.md")
+            .is_file());
+        assert!(harness
+            .path()
+            .join("docs/process/documentation-tooling-map.md")
+            .is_file());
+        assert!(harness
+            .path()
+            .join("docs/process/codex-agent-configuration-guide.md")
+            .is_file());
         assert!(harness.path().join(".codex/config.toml").is_file());
         assert!(harness.path().join(WORKER_SCORECARDS_STATE).is_file());
         assert!(harness.path().join(WORKER_STRATEGY_STATE).is_file());
@@ -2434,30 +1624,22 @@ mod tests {
             "vida_task_classes = \"architecture,execution_preparation,hard_escalation,meta_analysis\""
         ));
 
-        assert!(
-            !harness
-                .path()
-                .join(".codex/agents/development_implementer.toml")
-                .exists()
-        );
-        assert!(
-            !harness
-                .path()
-                .join(".codex/agents/development_coach.toml")
-                .exists()
-        );
-        assert!(
-            !harness
-                .path()
-                .join(".codex/agents/development_verifier.toml")
-                .exists()
-        );
-        assert!(
-            !harness
-                .path()
-                .join(".codex/agents/development_escalation.toml")
-                .exists()
-        );
+        assert!(!harness
+            .path()
+            .join(".codex/agents/development_implementer.toml")
+            .exists());
+        assert!(!harness
+            .path()
+            .join(".codex/agents/development_coach.toml")
+            .exists());
+        assert!(!harness
+            .path()
+            .join(".codex/agents/development_verifier.toml")
+            .exists());
+        assert!(!harness
+            .path()
+            .join(".codex/agents/development_escalation.toml")
+            .exists());
     }
 
     #[test]
@@ -2809,8 +1991,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_consumption_bootstrap_fails_closed_with_blocked_fallback_when_seed_derivation_fails()
-     {
+    async fn runtime_consumption_bootstrap_fails_closed_with_blocked_fallback_when_seed_derivation_fails(
+    ) {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -2852,11 +2034,9 @@ mod tests {
             build_runtime_consumption_run_graph_bootstrap(&store, &role_selection).await;
         assert_eq!(bootstrap["status"], "blocked");
         assert_eq!(bootstrap["handoff_ready"], false);
-        assert!(
-            bootstrap["fallback_reason"]
-                .as_str()
-                .is_some_and(|value| value.contains("seed_failed"))
-        );
+        assert!(bootstrap["fallback_reason"]
+            .as_str()
+            .is_some_and(|value| value.contains("seed_failed")));
 
         let latest_status = store
             .latest_run_graph_status()
@@ -3130,11 +2310,10 @@ mod tests {
             active_downstream_dispatch_target(&receipt).as_deref(),
             Some("specification")
         );
-        assert!(
-            note.as_deref()
-                .unwrap_or_default()
-                .contains("wait for bounded evidence return")
-        );
+        assert!(note
+            .as_deref()
+            .unwrap_or_default()
+            .contains("wait for bounded evidence return"));
     }
 
     #[test]
@@ -3454,12 +2633,10 @@ mod tests {
         );
         assert!(receipt.downstream_dispatch_ready);
         assert!(receipt.downstream_dispatch_blockers.is_empty());
-        assert!(
-            receipt
-                .downstream_dispatch_packet_path
-                .as_deref()
-                .is_some_and(|path| !path.trim().is_empty())
-        );
+        assert!(receipt
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty()));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -3534,7 +2711,8 @@ mod tests {
         assert!(plan.get("codex_runtime_assignment").is_none());
         assert!(runtime_assignment.get("internal_named_lane_id").is_none());
         assert_eq!(
-            plan["development_flow"]["dispatch_contract"]["implementer_activation"]["activation_agent_type"],
+            plan["development_flow"]["dispatch_contract"]["implementer_activation"]
+                ["activation_agent_type"],
             "junior"
         );
         assert!(
@@ -4260,18 +3438,14 @@ mod tests {
             "external"
         );
         assert_eq!(result["backend_dispatch"]["backend_id"], "qwen_cli");
-        assert!(
-            result["activation_command"]
-                .as_str()
-                .expect("activation command should render")
-                .contains("sh")
-        );
-        assert!(
-            result["provider_output"]
-                .as_str()
-                .expect("provider output should render")
-                .contains("external-dispatch:Read and execute the VIDA dispatch packet")
-        );
+        assert!(result["activation_command"]
+            .as_str()
+            .expect("activation command should render")
+            .contains("sh"));
+        assert!(result["provider_output"]
+            .as_str()
+            .expect("provider output should render")
+            .contains("external-dispatch:Read and execute the VIDA dispatch packet"));
         assert_eq!(result["role_selection"]["selected_role"], "worker");
     }
 
@@ -4402,18 +3576,14 @@ mod tests {
             "internal"
         );
         assert_eq!(result["backend_dispatch"]["backend_id"], "qwen_cli");
-        assert!(
-            result["activation_command"]
-                .as_str()
-                .expect("activation command should render")
-                .contains("sh")
-        );
-        assert!(
-            result["provider_output"]
-                .as_str()
-                .expect("provider output should render")
-                .contains("external-dispatch:Read and execute the VIDA dispatch packet")
-        );
+        assert!(result["activation_command"]
+            .as_str()
+            .expect("activation command should render")
+            .contains("sh"));
+        assert!(result["provider_output"]
+            .as_str()
+            .expect("provider output should render")
+            .contains("external-dispatch:Read and execute the VIDA dispatch packet"));
     }
 
     #[test]
@@ -5046,6 +4216,16 @@ mod tests {
                 "project_runtime_capsules": [],
                 "task_specific_dynamic_context": [],
             }),
+            &serde_json::json!({
+                "status": "ambiguous",
+                "continuation_allowed": false,
+                "active_bounded_unit": serde_json::Value::Null,
+                "binding_source": serde_json::Value::Null,
+                "why_this_unit": serde_json::Value::Null,
+                "primary_path": "diagnosis_path",
+                "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
+                "next_actions": ["bind explicitly"]
+            }),
             "compatible",
             "no_migration_required",
         );
@@ -5072,6 +4252,52 @@ mod tests {
                 .any(|row| row
                     == "vida protocol view instruction-contracts/overlay.step-thinking-runtime-capsule"),
             "orchestrator init should surface the compact thinking bootstrap surface"
+        );
+        assert_eq!(view["continuation_binding"]["status"], "ambiguous");
+        assert_eq!(
+            view["continuation_binding"]["primary_path"],
+            "diagnosis_path"
+        );
+    }
+
+    #[test]
+    fn orchestrator_init_view_exposes_continuation_binding_fail_closed_summary() {
+        let view = crate::taskflow_runtime_bundle::build_orchestrator_init_view(
+            Path::new("/tmp/demo"),
+            &serde_json::json!({"root_artifact_id": "root"}),
+            &serde_json::json!({"startup_bundle": serde_json::Value::Null, "startup_capsules": []}),
+            &serde_json::json!({"binding_status": "bound"}),
+            &serde_json::json!({
+                "always_on_core": [],
+                "project_startup_bundle": [],
+                "project_runtime_capsules": [],
+                "task_specific_dynamic_context": [],
+            }),
+            &serde_json::json!({
+                "status": "bound",
+                "continuation_allowed": true,
+                "active_bounded_unit": {
+                    "kind": "run_graph_task",
+                    "task_id": "task-1"
+                },
+                "binding_source": "latest_run_graph_status",
+                "why_this_unit": "Latest runtime state is active.",
+                "primary_path": "normal_delivery_path",
+                "sequential_vs_parallel_posture": "sequential_only",
+                "next_actions": []
+            }),
+            "compatible",
+            "no_migration_required",
+        );
+
+        assert_eq!(view["continuation_binding"]["status"], "bound");
+        assert_eq!(
+            view["continuation_binding"]["active_bounded_unit"]["task_id"],
+            "task-1"
+        );
+        assert_eq!(
+            view["continuation_binding"]["binding_source"],
+            "latest_run_graph_status"
         );
     }
 

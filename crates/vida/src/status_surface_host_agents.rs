@@ -36,7 +36,8 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
     );
     let external_cli_preflight =
         external_cli_preflight_summary(&overlay, &selected_cli_system, host_cli_entry.as_ref());
-    let hybrid_external_cli_relevant = external_cli_preflight["hybrid_external_cli_relevant"].clone();
+    let hybrid_external_cli_relevant =
+        external_cli_preflight["hybrid_external_cli_relevant"].clone();
 
     let mut payload = serde_json::Map::new();
     payload.insert(
@@ -51,10 +52,7 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
         "runtime_root".to_string(),
         serde_json::Value::String(runtime_root),
     );
-    payload.insert(
-        "external_cli_preflight".to_string(),
-        external_cli_preflight,
-    );
+    payload.insert("external_cli_preflight".to_string(), external_cli_preflight);
     payload.insert(
         "hybrid_external_cli_relevant".to_string(),
         hybrid_external_cli_relevant,
@@ -167,13 +165,80 @@ mod tests {
 
     #[test]
     fn build_host_agent_status_summary_exposes_hybrid_external_cli_relevance() {
-        let summary = build_host_agent_status_summary(Path::new("/home/unnamed/project/vida-stack"))
-            .expect("host agent summary should render");
+        let summary =
+            build_host_agent_status_summary(Path::new("/home/unnamed/project/vida-stack"))
+                .expect("host agent summary should render");
         assert_eq!(summary["host_cli_system"], "codex");
         assert_eq!(summary["hybrid_external_cli_relevant"], true);
         assert_eq!(
             summary["external_cli_preflight"]["hybrid_external_cli_relevant"],
             true
+        );
+    }
+
+    #[test]
+    fn project_config_exposes_four_internal_and_three_external_agent_surfaces() {
+        let project_root = Path::new("/home/unnamed/project/vida-stack");
+        let overlay = crate::project_activator_surface::read_yaml_file_checked(
+            &project_root.join("vida.config.yaml"),
+        )
+        .expect("project config should exist");
+
+        let codex_carriers = crate::yaml_lookup(
+            &overlay,
+            &["host_environment", "systems", "codex", "carriers"],
+        )
+        .and_then(serde_yaml::Value::as_mapping)
+        .expect("codex carriers should be configured");
+        assert_eq!(codex_carriers.len(), 4);
+
+        let enabled_external_systems =
+            crate::yaml_lookup(&overlay, &["host_environment", "systems"])
+                .and_then(serde_yaml::Value::as_mapping)
+                .expect("host systems should be configured")
+                .iter()
+                .filter_map(|(key, entry)| {
+                    let system_id = key.as_str()?;
+                    let enabled = crate::yaml_bool(crate::yaml_lookup(entry, &["enabled"]), false);
+                    let execution_class = crate::yaml_lookup(entry, &["execution_class"])
+                        .and_then(serde_yaml::Value::as_str)
+                        .unwrap_or_default();
+                    if enabled && execution_class == "external" {
+                        Some(system_id.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+        assert_eq!(enabled_external_systems, vec!["qwen", "hermes", "opencode"]);
+
+        let enabled_external_backends =
+            crate::yaml_lookup(&overlay, &["agent_system", "subagents"])
+                .and_then(serde_yaml::Value::as_mapping)
+                .expect("subagents should be configured")
+                .iter()
+                .filter_map(|(key, entry)| {
+                    let backend_id = key.as_str()?;
+                    let enabled = crate::yaml_bool(crate::yaml_lookup(entry, &["enabled"]), false);
+                    let backend_class = crate::yaml_lookup(entry, &["subagent_backend_class"])
+                        .and_then(serde_yaml::Value::as_str)
+                        .unwrap_or_default();
+                    if enabled && backend_class == "external_cli" {
+                        Some(backend_id.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+        assert_eq!(
+            enabled_external_backends,
+            vec![
+                "qwen_cli",
+                "hermes_cli",
+                "opencode_cli",
+                "kilo_cli",
+                "vibe_cli"
+            ]
         );
     }
 }

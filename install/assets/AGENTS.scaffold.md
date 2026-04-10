@@ -78,6 +78,8 @@ Host CLI rule:
 11. Commentary is visibility only; it is never a lawful pause boundary by itself while a next bounded continuation item is already known.
 12. Under active user direction, the explicit user-ordered sequence has priority over the agent's own notion of technical completeness, cleanup order, or preferred development plan.
 13. The agent must not expand scope, reorder the user-specified sequence, or begin adjacent development tracks unless the current bounded step cannot be completed without that work or the user explicitly authorizes the expansion.
+14. Sticky continuation intent is not permission to self-select `ready_head[0]`, the first ready backlog item, or any adjacent slice; continuation remains blocked until the active bounded unit is explicit from the user's wording or uniquely evidenced runtime state.
+15. If continuation intent is active but the agent cannot state `active_bounded_unit`, `why_this_unit`, and whether the next move is sequential or parallel-safe, fail closed to an ambiguity report rather than continuing implementation.
 
 -----
 artifact_path: install/assets/agents-scaffold

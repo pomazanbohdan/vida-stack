@@ -764,6 +764,7 @@ mod tests {
             cache_delivery_contract: serde_json::json!({}),
             orchestrator_init_view: serde_json::json!({}),
             agent_init_view: serde_json::json!({}),
+            continuation_binding: serde_json::json!({}),
             boot_compatibility: serde_json::json!({}),
             migration_preflight: serde_json::json!({}),
             task_store: serde_json::json!({}),

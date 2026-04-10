@@ -3,7 +3,7 @@ use std::process::ExitCode;
 use serde::Serialize;
 
 use crate::taskflow_task_bridge::proxy_state_dir;
-use crate::{ProxyArgs, state_store::StateStore};
+use crate::{state_store::StateStore, ProxyArgs};
 
 #[derive(Serialize)]
 struct LaneEnvelope {
@@ -131,7 +131,12 @@ fn exception_takeover_allowed(
     crate::release1_contracts::exception_takeover_state(
         Some("pending-exception-receipt"),
         receipt.supersedes_receipt_id.as_deref(),
-        recovery.map(|recovery| recovery.delegation_gate.local_exception_takeover_gate.as_str()),
+        recovery.map(|recovery| {
+            recovery
+                .delegation_gate
+                .local_exception_takeover_gate
+                .as_str()
+        }),
     )
     .is_active()
 }
@@ -343,12 +348,17 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 receipt.exception_path_receipt_id.as_deref(),
                 receipt.supersedes_receipt_id.as_deref(),
                 recovery.as_ref().map(|recovery| {
-                    recovery.delegation_gate.local_exception_takeover_gate.as_str()
+                    recovery
+                        .delegation_gate
+                        .local_exception_takeover_gate
+                        .as_str()
                 }),
             )
             .is_active();
             receipt.lane_status = if takeover_active {
-                crate::LaneStatus::LaneExceptionTakeover.as_str().to_string()
+                crate::LaneStatus::LaneExceptionTakeover
+                    .as_str()
+                    .to_string()
             } else {
                 crate::derive_lane_status(
                     &receipt.dispatch_status,

@@ -31,6 +31,7 @@ pub(crate) struct StatusTextReportInputs<'a> {
     pub(crate) latest_run_graph_dispatch_receipt_signal_ambiguous: bool,
     pub(crate) latest_run_graph_dispatch_receipt_summary_inconsistent: bool,
     pub(crate) latest_run_graph_dispatch_receipt_checkpoint_leakage: bool,
+    pub(crate) continuation_binding: &'a serde_json::Value,
     pub(crate) host_agents: Option<&'a serde_json::Value>,
 }
 
@@ -244,6 +245,42 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
                 "none",
             );
         }
+    }
+    crate::surface_render::print_surface_line(
+        inputs.render,
+        "continuation binding",
+        &format!(
+            "status={} primary_path={} posture={}",
+            inputs.continuation_binding["status"]
+                .as_str()
+                .unwrap_or("unknown"),
+            inputs.continuation_binding["primary_path"]
+                .as_str()
+                .unwrap_or("unknown"),
+            inputs.continuation_binding["sequential_vs_parallel_posture"]
+                .as_str()
+                .unwrap_or("unknown"),
+        ),
+    );
+    if let Some(reason) = inputs.continuation_binding["ambiguity_reason"].as_str() {
+        if !reason.trim().is_empty() {
+            crate::surface_render::print_surface_line(
+                inputs.render,
+                "continuation binding ambiguity",
+                reason,
+            );
+        }
+    }
+    if let Some(step) = inputs.continuation_binding["next_actions"]
+        .as_array()
+        .and_then(|steps| steps.first())
+        .and_then(serde_json::Value::as_str)
+    {
+        crate::surface_render::print_surface_line(
+            inputs.render,
+            "continuation binding next action",
+            step,
+        );
     }
     if inputs.latest_run_graph_snapshot_inconsistent {
         crate::surface_render::print_surface_line(

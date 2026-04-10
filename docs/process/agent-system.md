@@ -29,6 +29,7 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - patch localization, runtime-defect diagnosis, or other read-only findings feed the next delegated packet and do not transfer write ownership back to the root session
 - for hybrid runtimes, `vida status --json` must report the effective mixed posture honestly instead of implying that external execution is impossible from an internal host
 - for external CLI setups, `vida status --json` reports `host_agents.external_cli_preflight`; when sandbox is active and network is unavailable, preflight fails closed with actionable next steps
+- external CLI readiness must distinguish transport/tool-contract pass from carrier-specific auth/model readiness; when project config declares dispatch-level model pinning, ambient carrier-local model drift must not silently redefine execution
 
 -----
 artifact_path: process/agent-system

@@ -26,8 +26,8 @@ This design does not cover:
 
 Current file concentration remains high:
 
-1. `crates/vida/src/main.rs` is `7370` lines.
-2. `crates/vida/src/state_store.rs` is `11510` lines.
+1. `crates/vida/src/main.rs` is `4869` lines after the 2026-04-10 request-analysis, runtime-consumption, registry/config, runtime-assignment, bootstrap-value, and shell-runtime-helper extraction slices.
+2. `crates/vida/src/state_store.rs` is `11434` lines.
 
 ### 2.2 Dead-Code And Duplication Validation
 
@@ -114,6 +114,18 @@ Completed in this wave:
 6. `crates/vida/src/state_store_run_graph_summary.rs`
 7. `crates/common-format-jsonl`
 8. `crates/common-format-toon`
+9. `crates/vida/src/development_request_analysis.rs`
+10. `crates/vida/src/main.rs` now re-exports the canonical `development_flow_orchestration::build_design_first_tracked_flow_bootstrap` instead of carrying a duplicate local copy.
+11. `crates/vida/src/runtime_consumption_surface.rs`
+12. `crates/vida/src/main.rs` now re-exports the TaskFlow consume bundle/runtime-consumption surface types and docflow-evidence helpers instead of owning those structs and functions directly.
+13. `crates/vida/src/registry_projection_utils.rs`
+14. `crates/vida/src/main.rs` now re-exports the registry/config helper cluster used by carrier-runtime and agent-extension projection surfaces instead of owning those parsing and registry-selection helpers directly.
+15. `crates/vida/src/runtime_assignment_projection_utils.rs`
+16. `crates/vida/src/main.rs` now re-exports the runtime-assignment projection helpers and task-class inference logic instead of owning those carrier-runtime projection utilities directly.
+17. `crates/vida/src/bootstrap_value_utils.rs`
+18. `crates/vida/src/main.rs` now re-exports the bootstrap/path/value helper cluster used by project activation, launcher activation, and init surfaces instead of owning those value-normalization helpers directly.
+19. `crates/vida/src/shell_runtime_helpers.rs`
+20. `crates/vida/src/main.rs` now re-exports repo-root resolution, state-store blocking, and pretty-json output helpers instead of owning those shell/runtime bridge utilities directly.
 
 ## 5. Proof Targets
 
@@ -142,5 +154,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/launcher-decomposition-and-code-hygiene-design.md
 created_at: '2026-04-08T14:20:00+03:00'
-updated_at: 2026-04-08T09:37:14Z
+updated_at: 2026-04-10T08:58:51.859299985Z
 changelog_ref: launcher-decomposition-and-code-hygiene-design.changelog.jsonl

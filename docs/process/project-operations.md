@@ -25,16 +25,18 @@ Default feature-delivery flow:
 15. Do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.
 16. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.
 17. After any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.
-18. When recording progress into the backlog from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
-19. Prefer the launcher-owned intake/runtime progression surfaces over manual reconstruction:
+18. Sticky continuation intent is not permission to self-select `ready_head[0]`, the first ready backlog item, or any adjacent slice; continue only when the active bounded unit is explicit from user wording or runtime evidence.
+19. If `vida status --json` or `vida orchestrator-init --json` cannot state `active_bounded_unit`, `why_this_unit`, `primary_path`, and sequential-vs-parallel posture, fail closed to ambiguity instead of continuing implementation.
+20. When recording progress into the backlog from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
+21. Prefer the launcher-owned intake/runtime progression surfaces over manual reconstruction:
    - `vida taskflow consume final "<request>" --json` to materialize the routed intake, dispatch receipt, and first lawful packet
    - `vida taskflow consume continue [--run-id <run-id>] [--dispatch-packet <path> | --downstream-packet <path>] [--json]` to resume one persisted chain entry; legacy runtime packets may be normalized to the canonical packet-minimum path scope before fail-closed validation
    - `vida taskflow consume advance [--run-id <run-id>] [--max-rounds <n>] [--json]` to let the bounded scheduler progress ready steps automatically
-20. Treat the default `.vida/data/state/` root as long-lived local operator state, not as disposable scratch output.
-21. For repeatable audits, release-proof checks, or scenario probes, prefer a fresh temp root via `VIDA_STATE_DIR=<temp-dir>` instead of cleaning pieces out of the long-lived project state.
-22. When a probe needs project-bound runtime surfaces such as `vida taskflow consume bundle check --json`, do not assume that `vida boot` alone is sufficient on a raw temp root; bind the temp state through the matching project activation/bootstrap workflow first.
-23. Do not manually prune backing-store subdirectories such as `manifest/`, `wal/`, `vlog/`, `sstables/`, or `runtime-consumption/` from a long-lived state root; if that state root is broken, use an explicit reset/reinit workflow instead of partial deletion.
-24. Treat generated files under `.vida/data/state/**` as runtime operational artifacts rather than reviewable product changes unless a bounded task explicitly targets state-store fixtures or runtime-state debugging.
+22. Treat the default `.vida/data/state/` root as long-lived local operator state, not as disposable scratch output.
+23. For repeatable audits, release-proof checks, or scenario probes, prefer a fresh temp root via `VIDA_STATE_DIR=<temp-dir>` instead of cleaning pieces out of the long-lived project state.
+24. When a probe needs project-bound runtime surfaces such as `vida taskflow consume bundle check --json`, do not assume that `vida boot` alone is sufficient on a raw temp root; bind the temp state through the matching project activation/bootstrap workflow first.
+25. Do not manually prune backing-store subdirectories such as `manifest/`, `wal/`, `vlog/`, `sstables/`, or `runtime-consumption/` from a long-lived state root; if that state root is broken, use an explicit reset/reinit workflow instead of partial deletion.
+26. Treat generated files under `.vida/data/state/**` as runtime operational artifacts rather than reviewable product changes unless a bounded task explicitly targets state-store fixtures or runtime-state debugging.
 
 -----
 artifact_path: process/project-operations

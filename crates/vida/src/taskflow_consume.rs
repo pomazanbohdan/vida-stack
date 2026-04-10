@@ -979,7 +979,7 @@ fn normalize_runtime_consumption_statuses(
             .to_string();
 }
 
-fn build_runtime_consumption_dispatch_receipt(
+pub(crate) fn build_runtime_consumption_dispatch_receipt(
     role_selection: &super::RuntimeConsumptionLaneSelection,
     run_graph_bootstrap: &serde_json::Value,
 ) -> crate::state_store::RunGraphDispatchReceipt {

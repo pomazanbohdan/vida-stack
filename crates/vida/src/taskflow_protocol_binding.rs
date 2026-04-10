@@ -29,8 +29,7 @@ fn taskflow_protocol_binding_seeds() -> &'static [TaskflowProtocolBindingSeed] {
     &[
         TaskflowProtocolBindingSeed {
             protocol_id: "instruction-contracts/bridge.instruction-activation-protocol",
-            source_path:
-                "vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md",
+            source_path: "vida/config/instructions/instruction-contracts/bridge.instruction-activation-protocol.md",
             activation_class: "always_on",
             runtime_owner: "vida::taskflow::protocol_binding::activation_bridge",
             enforcement_type: "activation-resolution",
@@ -38,8 +37,7 @@ fn taskflow_protocol_binding_seeds() -> &'static [TaskflowProtocolBindingSeed] {
         },
         TaskflowProtocolBindingSeed {
             protocol_id: "runtime-instructions/work.taskflow-protocol",
-            source_path:
-                "vida/config/instructions/runtime-instructions/work.taskflow-protocol.md",
+            source_path: "vida/config/instructions/runtime-instructions/work.taskflow-protocol.md",
             activation_class: "triggered_domain",
             runtime_owner: "vida::taskflow::protocol_binding::taskflow_surface",
             enforcement_type: "execution-discipline",
@@ -47,8 +45,7 @@ fn taskflow_protocol_binding_seeds() -> &'static [TaskflowProtocolBindingSeed] {
         },
         TaskflowProtocolBindingSeed {
             protocol_id: "runtime-instructions/runtime.task-state-telemetry-protocol",
-            source_path:
-                "vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md",
+            source_path: "vida/config/instructions/runtime-instructions/runtime.task-state-telemetry-protocol.md",
             activation_class: "triggered_domain",
             runtime_owner: "vida::state_store::task_state_telemetry",
             enforcement_type: "state-telemetry",
@@ -56,8 +53,7 @@ fn taskflow_protocol_binding_seeds() -> &'static [TaskflowProtocolBindingSeed] {
         },
         TaskflowProtocolBindingSeed {
             protocol_id: "runtime-instructions/work.execution-health-check-protocol",
-            source_path:
-                "vida/config/instructions/runtime-instructions/work.execution-health-check-protocol.md",
+            source_path: "vida/config/instructions/runtime-instructions/work.execution-health-check-protocol.md",
             activation_class: "triggered_domain",
             runtime_owner: "vida::doctor::execution_health",
             enforcement_type: "health-gate",
@@ -65,8 +61,7 @@ fn taskflow_protocol_binding_seeds() -> &'static [TaskflowProtocolBindingSeed] {
         },
         TaskflowProtocolBindingSeed {
             protocol_id: "runtime-instructions/work.task-state-reconciliation-protocol",
-            source_path:
-                "vida/config/instructions/runtime-instructions/work.task-state-reconciliation-protocol.md",
+            source_path: "vida/config/instructions/runtime-instructions/work.task-state-reconciliation-protocol.md",
             activation_class: "closure_reflection",
             runtime_owner: "vida::state_store::task_reconciliation",
             enforcement_type: "state-reconciliation",

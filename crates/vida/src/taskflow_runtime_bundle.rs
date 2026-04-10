@@ -93,6 +93,45 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .run_graph_summary()
         .await
         .map_err(|error| format!("Failed to read run graph summary: {error}"))?;
+    let latest_run_graph_status = store
+        .latest_run_graph_status()
+        .await
+        .map_err(|error| format!("Failed to read latest run graph status: {error}"))?;
+    let latest_run_graph_recovery = store
+        .latest_run_graph_recovery_summary()
+        .await
+        .map_err(|error| format!("Failed to read latest run graph recovery summary: {error}"))?;
+    let explicit_continuation_binding = match latest_run_graph_status.as_ref() {
+        Some(status) => store
+            .run_graph_continuation_binding(&status.run_id)
+            .await
+            .map_err(|error| format!("Failed to read explicit continuation binding: {error}"))?,
+        None => None,
+    };
+    let latest_run_graph_dispatch_receipt =
+        match store.latest_run_graph_dispatch_receipt_summary().await {
+            Ok(summary) => summary,
+            Err(_) => None,
+        };
+    let continuation_binding_evidence_ambiguous = latest_run_graph_dispatch_receipt
+        .as_ref()
+        .is_some_and(|receipt| {
+            crate::state_store::latest_run_graph_dispatch_receipt_signal_is_ambiguous(receipt)
+                || crate::state_store::latest_run_graph_dispatch_receipt_summary_is_inconsistent(
+                    latest_run_graph_status
+                        .as_ref()
+                        .map(|status| status.run_id.as_str()),
+                    Some(receipt.run_id.as_str()),
+                )
+        });
+    let continuation_binding =
+        crate::continuation_binding_summary::build_continuation_binding_summary(
+            explicit_continuation_binding.as_ref(),
+            latest_run_graph_status.as_ref(),
+            latest_run_graph_recovery.as_ref(),
+            latest_run_graph_dispatch_receipt.as_ref(),
+            continuation_binding_evidence_ambiguous,
+        );
     let runtime_consumption = crate::runtime_consumption_summary(store.root())?;
     let protocol_binding_receipt = store
         .latest_protocol_binding_receipt()
@@ -235,6 +274,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
             &project_protocol_projections,
             &protocol_binding_registry,
             &cache_delivery_contract,
+            &continuation_binding,
             &boot_compatibility.classification,
             &migration_preflight.migration_state,
         ),
@@ -269,6 +309,7 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         cache_delivery_contract,
         orchestrator_init_view,
         agent_init_view,
+        continuation_binding,
         boot_compatibility: serde_json::json!({
             "classification": super::release1_contracts::canonical_compatibility_class_str(
                 &boot_compatibility.classification
@@ -1262,6 +1303,12 @@ pub(crate) fn blocking_runtime_bundle(error: &str) -> TaskflowConsumeBundlePaylo
             "status": "blocked",
             "error": error,
         }),
+        continuation_binding: serde_json::json!({
+            "status": "ambiguous",
+            "continuation_allowed": false,
+            "ambiguity_reason": "runtime_bundle_blocked",
+            "next_actions": [error],
+        }),
         boot_compatibility: serde_json::json!({
             "classification": super::release1_contracts::CompatibilityClass::ReaderUpgradeRequired.as_str(),
             "reasons": [error],
@@ -1404,6 +1451,7 @@ pub(crate) fn build_orchestrator_init_view(
     project_protocol_projections: &serde_json::Value,
     protocol_binding_registry: &serde_json::Value,
     cache_delivery_contract: &serde_json::Value,
+    continuation_binding: &serde_json::Value,
     boot_classification: &str,
     migration_state: &str,
 ) -> serde_json::Value {
@@ -1447,6 +1495,7 @@ pub(crate) fn build_orchestrator_init_view(
         ],
         "project_startup_bundle": project_protocol_projections["startup_bundle"],
         "project_startup_capsules": project_protocol_projections["startup_capsules"],
+        "continuation_binding": continuation_binding,
         "required_cache_partitions": {
             "always_on_core": cache_delivery_contract["always_on_core"],
             "project_startup_bundle": cache_delivery_contract["project_startup_bundle"],
@@ -2277,6 +2326,7 @@ mod tests {
             cache_delivery_contract: serde_json::json!({}),
             orchestrator_init_view: serde_json::json!({}),
             agent_init_view: serde_json::json!({}),
+            continuation_binding: serde_json::json!({}),
             boot_compatibility: serde_json::json!({}),
             migration_preflight: serde_json::json!({}),
             task_store: serde_json::json!({}),

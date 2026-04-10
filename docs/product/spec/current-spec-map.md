@@ -2,7 +2,7 @@
 
 Status: active canonical map
 
-Revision: `2026-04-08`
+Revision: `2026-04-10`
 
 Purpose: define the current product-spec home, provide a short active registry of product-law artifacts, and route detailed source lineage to the provenance companion map.
 
@@ -216,6 +216,15 @@ Companion rule:
 30. [internal-codex-agent-execution-fail-closed-design.md](internal-codex-agent-execution-fail-closed-design.md)
    Config families: bounded internal-host activation-view fail-closed semantics, truthful agent-lane execution state, root-session anti-bypass guidance, and runtime dispatch bridge hardening for Codex/internal execution
    Registered path: `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
+31. [external-cli-carrier-hardening-design.md](external-cli-carrier-hardening-design.md)
+   Config families: bounded external CLI carrier dispatch pinning, carrier readiness/status classification, normalized opencode/kilo/vibe project profiles, and operator-visible smoke-proof routing for sandbox/auth/model activation
+   Registered path: `docs/product/spec/external-cli-carrier-hardening-design.md`
+32. [continuation-binding-fail-closed-hardening-design.md](continuation-binding-fail-closed-hardening-design.md)
+   Config families: bounded continuation-binding fail-closed enforcement, explicit active-bounded-unit init/status surfaces, ambiguity blocker vocabulary, and generated host guidance against self-selecting adjacent work
+   Registered path: `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
+33. [continuation-and-seeded-dispatch-bridge-design.md](continuation-and-seeded-dispatch-bridge-design.md)
+   Config families: bounded explicit continuation binding records, seeded run dispatch-init bridges, persisted dispatch-context rows, and packet render/inspect operator surfaces for lawful resume inputs
+   Registered path: `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
 
 ### Support
 

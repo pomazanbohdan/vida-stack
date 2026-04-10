@@ -588,6 +588,21 @@ fn build_runtime_orchestration_contract(
             "checkpoints": replanning_checkpoints,
             "trigger_rule": "replan after each bounded gate or delegated evidence return before the next write-producing step"
         },
+        "continuation_binding": {
+            "required_for_continue_development": true,
+            "fail_closed_without_explicit_binding": true,
+            "required_fields": [
+                "active_bounded_unit",
+                "why_this_unit",
+                "primary_path",
+                "sequential_vs_parallel_posture"
+            ],
+            "forbidden_fallbacks": [
+                "ready_head[0]",
+                "first_ready_backlog_candidate",
+                "adjacent_sibling_slice"
+            ]
+        },
         "active_cycle": active_cycle
     })
 }

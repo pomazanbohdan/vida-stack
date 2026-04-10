@@ -76,6 +76,7 @@ Intent-binding clarification:
 2. `continue the next task` or equivalent ordinal wording does not by itself authorize choosing the first ready TaskFlow/backlog candidate,
 3. if the user did not name the bounded unit and the runtime does not show one uniquely evidenced active continuation unit, fail closed to clarification or explicit ambiguity report before shaping/dispatch,
 4. `продовжи агентами`, `continue by agents`, and equivalent delegated-continuation wording sets sticky orchestration intent for the active session until the user explicitly requests stop/final closure.
+5. sticky continuation intent does not weaken rules 1-3 and never authorizes binding by plausibility, backlog ordering, or local intuition alone.
 
 Loop binding rule:
 
@@ -88,6 +89,7 @@ Loop binding rule:
    - `active delegated agents == 0`,
    - delegated handoff state is resolved,
    - no ready continuation item exists in TaskFlow unless the user explicitly requests stop/closure.
+7. “immediately bind the next lawful continuation item” applies only inside the same already-bound bounded unit; crossing into a new sibling slice requires a fresh explicit binding or uniquely evidenced continuation receipt.
 7. if any pre-response gate check fails, continue orchestration and reporting through commentary updates only.
 8. after any green proof/build/test result, finished delegated lane, or intermediate report, the orchestrator must immediately bind the next lawful continuation item in the same cycle when one is already evidenced.
 9. “report now, continue later” is forbidden when the next lawful item is already known from TaskFlow, recovery state, delegated evidence, or the just-finished proof result.

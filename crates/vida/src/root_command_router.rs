@@ -4,10 +4,9 @@ use serde::Serialize;
 
 use super::{
     agent_feedback_surface, docflow_proxy, doctor_surface, init_surfaces, lane_surface,
-    memory_surface,
-    print_root_help, project_activator_surface, protocol_surface, resolve_runtime_project_root,
-    run_taskflow_proxy, state_store, status_surface, task_surface, Cli, Command, TaskArgs,
-    TaskCommand,
+    memory_surface, print_root_help, project_activator_surface, protocol_surface,
+    resolve_runtime_project_root, run_taskflow_proxy, state_store, status_surface, task_surface,
+    Cli, Command, TaskArgs, TaskCommand,
 };
 
 #[derive(Serialize)]

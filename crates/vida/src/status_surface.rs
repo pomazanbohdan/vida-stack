@@ -197,6 +197,34 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 receipt,
                             )
                         });
+                let explicit_continuation_binding = match latest_run_graph_status.as_ref() {
+                    Some(status) => {
+                        match store.run_graph_continuation_binding(&status.run_id).await {
+                            Ok(binding) => binding,
+                            Err(error) => {
+                                eprintln!(
+                                "Failed to read explicit continuation binding for `{}`: {error}",
+                                status.run_id
+                            );
+                                return ExitCode::from(1);
+                            }
+                        }
+                    }
+                    None => None,
+                };
+                let continuation_binding =
+                    crate::continuation_binding_summary::build_continuation_binding_summary(
+                        explicit_continuation_binding.as_ref(),
+                        latest_run_graph_status.as_ref(),
+                        latest_run_graph_recovery.as_ref(),
+                        latest_run_graph_dispatch_receipt.as_ref(),
+                        latest_run_graph_snapshot_inconsistent
+                            || latest_run_graph_dispatch_receipt_signal_ambiguous
+                            || latest_run_graph_dispatch_receipt_summary_inconsistent
+                            || latest_run_graph_dispatch_receipt_checkpoint_leakage,
+                    );
+                let continuation_binding_ambiguous =
+                    continuation_binding["status"].as_str() == Some("ambiguous");
                 let status_truth_inputs = build_status_truth_inputs(
                     store.root(),
                     runtime_consumption.latest_snapshot_path.as_deref(),
@@ -246,6 +274,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                             latest_run_graph_dispatch_receipt_signal_ambiguous,
                             latest_run_graph_dispatch_receipt_summary_inconsistent,
                             latest_run_graph_dispatch_receipt_checkpoint_leakage,
+                            continuation_binding_ambiguous,
                             incomplete_release_admission_operator_evidence,
                             activation_truth: activation_truth.as_ref(),
                             project_activation_pending,
@@ -319,6 +348,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         project_activation_pending,
                         host_agents: host_agents.as_ref(),
                         root_session_write_guard: &root_session_write_guard,
+                        continuation_binding: &continuation_binding,
                         latest_run_graph_status: latest_run_graph_status.as_ref(),
                         latest_run_graph_recovery: latest_run_graph_recovery.as_ref(),
                         latest_run_graph_checkpoint: latest_run_graph_checkpoint.as_ref(),
@@ -365,6 +395,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     latest_run_graph_dispatch_receipt_signal_ambiguous,
                     latest_run_graph_dispatch_receipt_summary_inconsistent,
                     latest_run_graph_dispatch_receipt_checkpoint_leakage,
+                    continuation_binding: &continuation_binding,
                     host_agents: host_agents.as_ref(),
                 });
             }
@@ -606,7 +637,8 @@ agent_system:
     }
 
     #[test]
-    fn external_cli_preflight_requires_external_cli_for_external_host_with_configured_runtime_root() {
+    fn external_cli_preflight_requires_external_cli_for_external_host_with_configured_runtime_root()
+    {
         let overlay: serde_yaml::Value = serde_yaml::from_str(
             r#"
 host_environment:
@@ -881,7 +913,9 @@ host_environment:
         });
         assert_eq!(
             shared_operator_output_contract_parity_error(&summary_json),
-            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+            Some(
+                "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch"
+            )
         );
     }
 
@@ -904,7 +938,9 @@ host_environment:
         });
         assert_eq!(
             shared_operator_output_contract_parity_error(&summary_json),
-            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+            Some(
+                "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch"
+            )
         );
     }
 
@@ -927,7 +963,9 @@ host_environment:
         });
         assert_eq!(
             shared_operator_output_contract_parity_error(&summary_json),
-            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+            Some(
+                "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch"
+            )
         );
     }
 
@@ -950,7 +988,9 @@ host_environment:
         });
         assert_eq!(
             shared_operator_output_contract_parity_error(&summary_json),
-            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+            Some(
+                "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch"
+            )
         );
     }
 
@@ -974,7 +1014,9 @@ host_environment:
 
         assert_eq!(
             shared_operator_output_contract_parity_error(&summary_json),
-            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+            Some(
+                "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch"
+            )
         );
     }
 
@@ -998,7 +1040,9 @@ host_environment:
 
         assert_eq!(
             shared_operator_output_contract_parity_error(&summary_json),
-            Some("top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch")
+            Some(
+                "top-level/operator_contracts/shared_fields status/blocker_codes/next_actions mirror mismatch"
+            )
         );
     }
 

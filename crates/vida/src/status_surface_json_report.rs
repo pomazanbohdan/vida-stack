@@ -24,6 +24,7 @@ pub(crate) struct StatusJsonReportInputs<'a> {
     pub(crate) project_activation_pending: bool,
     pub(crate) host_agents: Option<&'a serde_json::Value>,
     pub(crate) root_session_write_guard: &'a serde_json::Value,
+    pub(crate) continuation_binding: &'a serde_json::Value,
     pub(crate) latest_run_graph_status: Option<&'a crate::state_store::RunGraphStatus>,
     pub(crate) latest_run_graph_recovery: Option<&'a crate::state_store::RunGraphRecoverySummary>,
     pub(crate) latest_run_graph_checkpoint:
@@ -85,6 +86,7 @@ pub(crate) fn build_status_json_report(
             "project_activation": project_activation,
             "protocol_binding": inputs.protocol_binding,
             "root_session_write_guard": inputs.root_session_write_guard,
+            "continuation_binding": inputs.continuation_binding,
             "latest_run_graph_status": inputs.latest_run_graph_status,
             "latest_run_graph_recovery": inputs.latest_run_graph_recovery,
             "latest_run_graph_gate": inputs.latest_run_graph_gate,
@@ -156,6 +158,7 @@ pub(crate) fn build_status_json_report(
             "project_activation": project_activation,
             "host_agents": host_agents_json_value(inputs.host_agents),
             "root_session_write_guard": inputs.root_session_write_guard,
+            "continuation_binding": inputs.continuation_binding,
             "latest_run_graph_status": inputs.latest_run_graph_status,
             "latest_run_graph_delegation_gate": inputs.latest_run_graph_status.map(|status| status.delegation_gate()),
             "latest_run_graph_recovery": inputs.latest_run_graph_recovery,

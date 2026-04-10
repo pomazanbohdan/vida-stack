@@ -510,6 +510,53 @@ fn configured_external_activation_prompt(
         .unwrap_or_else(|| external_cli_activation_prompt(packet_path))
 }
 
+fn configured_external_dispatch_pin_args(backend_entry: &serde_yaml::Value) -> Vec<String> {
+    let mut args = Vec::new();
+    let dispatch = match yaml_lookup(backend_entry, &["dispatch"]) {
+        Some(value) => value,
+        None => return args,
+    };
+
+    if let Some(provider_flag) = yaml_string(yaml_lookup(dispatch, &["provider_flag"])) {
+        let provider_value = yaml_string(yaml_lookup(dispatch, &["provider_value"]))
+            .or_else(|| {
+                yaml_string(yaml_lookup(backend_entry, &["default_model"])).and_then(|value| {
+                    if value.contains("provider-configured") {
+                        return None;
+                    }
+                    value
+                        .split_once('/')
+                        .map(|(provider, _)| provider.trim().to_string())
+                })
+            })
+            .filter(|value| !value.is_empty() && !value.contains("provider-configured"));
+        if let Some(provider_value) = provider_value {
+            args.push(provider_flag);
+            args.push(provider_value);
+        }
+    }
+
+    if let Some(model_flag) = yaml_string(yaml_lookup(dispatch, &["model_flag"])) {
+        let default_model = yaml_string(yaml_lookup(backend_entry, &["default_model"]))
+            .filter(|value| !value.is_empty() && !value.contains("provider-configured"));
+        if let Some(default_model) = default_model {
+            args.push(model_flag);
+            args.push(default_model);
+        }
+    }
+
+    if let Some(variant_flag) = yaml_string(yaml_lookup(dispatch, &["variant_flag"])) {
+        if let Some(variant_value) =
+            yaml_string(yaml_lookup(dispatch, &["variant_value"])).filter(|value| !value.is_empty())
+        {
+            args.push(variant_flag);
+            args.push(variant_value);
+        }
+    }
+
+    args
+}
+
 fn configured_external_activation_command(
     backend_entry: &serde_yaml::Value,
     project_root: &Path,
@@ -534,6 +581,7 @@ fn configured_external_activation_command(
     }
     parts.push(command);
     parts.extend(yaml_string_list(yaml_lookup(dispatch, &["static_args"])));
+    parts.extend(configured_external_dispatch_pin_args(backend_entry));
     if let Some(workdir_flag) = yaml_string(yaml_lookup(dispatch, &["workdir_flag"])) {
         parts.push(workdir_flag);
         parts.push(project_root.display().to_string());
@@ -575,6 +623,7 @@ pub(crate) fn configured_external_activation_parts(
             "Configured external backend is missing non-empty `dispatch.command`".to_string()
         })?;
     let mut args = yaml_string_list(yaml_lookup(dispatch, &["static_args"]));
+    args.extend(configured_external_dispatch_pin_args(backend_entry));
     if let Some(workdir_flag) = yaml_string(yaml_lookup(dispatch, &["workdir_flag"])) {
         args.push(workdir_flag);
         args.push(project_root.display().to_string());
@@ -589,7 +638,7 @@ pub(crate) fn configured_external_activation_parts(
         other => {
             return Err(format!(
                 "Configured external backend uses unsupported prompt_mode `{other}`"
-            ))
+            ));
         }
     }
     Ok((command, args))
@@ -660,6 +709,80 @@ dispatch:
             vec![
                 "run".to_string(),
                 "Process packet /tmp/project/.vida/dispatch.json exactly once.".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn configured_external_activation_parts_injects_provider_and_model_flags() {
+        let backend_entry = serde_yaml::from_str(
+            r#"
+default_model: opencode/minimax-m2.5-free
+dispatch:
+  command: opencode
+  static_args: ["run"]
+  provider_flag: --provider
+  provider_value: opencode
+  model_flag: --model
+  workdir_flag: --dir
+  prompt_mode: positional
+"#,
+        )
+        .expect("backend entry should parse");
+
+        let (command, args) = configured_external_activation_parts(
+            &backend_entry,
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+        )
+        .expect("dispatch parts should render");
+
+        assert_eq!(command, "opencode");
+        assert_eq!(
+            args,
+            vec![
+                "run".to_string(),
+                "--provider".to_string(),
+                "opencode".to_string(),
+                "--model".to_string(),
+                "opencode/minimax-m2.5-free".to_string(),
+                "--dir".to_string(),
+                "/tmp/project".to_string(),
+                external_cli_activation_prompt("/tmp/project/.vida/dispatch.json"),
+            ]
+        );
+    }
+
+    #[test]
+    fn configured_external_activation_parts_skips_provider_configured_model_placeholders() {
+        let backend_entry = serde_yaml::from_str(
+            r#"
+default_model: hermes/provider-configured
+dispatch:
+  command: hermes
+  static_args: ["chat", "-Q", "-q"]
+  model_flag: --model
+  provider_flag: --provider
+  prompt_mode: positional
+"#,
+        )
+        .expect("backend entry should parse");
+
+        let (command, args) = configured_external_activation_parts(
+            &backend_entry,
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+        )
+        .expect("dispatch parts should render");
+
+        assert_eq!(command, "hermes");
+        assert_eq!(
+            args,
+            vec![
+                "chat".to_string(),
+                "-Q".to_string(),
+                "-q".to_string(),
+                external_cli_activation_prompt("/tmp/project/.vida/dispatch.json"),
             ]
         );
     }
@@ -791,7 +914,10 @@ agent_system:
             "external"
         );
         assert_eq!(dispatch.backend_dispatch["backend_class"], "internal");
-        assert_eq!(dispatch.backend_dispatch["backend_id"], "internal_subagents");
+        assert_eq!(
+            dispatch.backend_dispatch["backend_id"],
+            "internal_subagents"
+        );
         assert_eq!(
             dispatch.backend_dispatch["policy_selected_internal_backend"],
             true
@@ -1460,7 +1586,7 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
         other => {
             return Err(format!(
                 "Persisted dispatch packet has unsupported packet_template_kind `{other}`"
-            ))
+            ));
         }
     };
     if missing.is_empty() {
@@ -1967,6 +2093,17 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
                     .map_err(|error| {
                         format!("Failed to record executed run-graph status: {error}")
                     })?;
+                crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                    store,
+                    &executed_status,
+                    "dispatch_execution",
+                )
+                .await
+                .map_err(|error| {
+                    format!(
+                        "Failed to synchronize continuation binding after dispatch execution: {error}"
+                    )
+                })?;
             }
         }
     }

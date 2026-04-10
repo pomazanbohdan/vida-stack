@@ -1279,16 +1279,16 @@ pub(crate) async fn run_taskflow_consume_advance_command(
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS, build_failure_control_evidence,
-        canonical_resume_dispatch_status, canonical_resume_lane_status,
-        canonical_resume_string_array_entries, normalize_runtime_dispatch_packet,
-        read_dispatch_packet, resume_from_persisted_final_snapshot,
-        resume_packet_ready_blocker_parity_error,
+        build_failure_control_evidence, canonical_resume_dispatch_status,
+        canonical_resume_lane_status, canonical_resume_string_array_entries,
+        normalize_runtime_dispatch_packet, read_dispatch_packet,
+        resume_from_persisted_final_snapshot, resume_packet_ready_blocker_parity_error,
         runtime_consumption_snapshot_has_failure_control_evidence, validate_run_graph_resume_state,
         validate_run_graph_resume_state_for_downstream_packet,
+        DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
-    use crate::StateStore;
     use crate::downstream_dispatch_ready_blocker_parity_error;
+    use crate::StateStore;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1468,8 +1468,8 @@ mod tests {
     }
 
     #[test]
-    fn resume_from_persisted_final_snapshot_rejects_final_snapshot_without_failure_control_evidence()
-     {
+    fn resume_from_persisted_final_snapshot_rejects_final_snapshot_without_failure_control_evidence(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1525,16 +1525,14 @@ mod tests {
         assert!(!runtime_consumption_snapshot_has_failure_control_evidence(
             &snapshot_json
         ));
-        assert!(
-            !resume_from_persisted_final_snapshot(&store).expect("runtime consumption summary")
-        );
+        assert!(!resume_from_persisted_final_snapshot(&store).expect("runtime consumption summary"));
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
-    async fn validate_run_graph_resume_state_accepts_persisted_receipt_lineage_when_summary_rows_are_missing()
-     {
+    async fn validate_run_graph_resume_state_accepts_persisted_receipt_lineage_when_summary_rows_are_missing(
+    ) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
