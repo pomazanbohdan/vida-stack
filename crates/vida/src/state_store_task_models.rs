@@ -1,0 +1,376 @@
+use super::*;
+
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct TaskJsonlRecord {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    #[serde(default)]
+    pub(crate) display_id: Option<String>,
+    #[serde(default)]
+    pub(crate) description: String,
+    #[serde(default)]
+    pub(crate) status: String,
+    #[serde(default)]
+    pub(crate) priority: u32,
+    #[serde(default)]
+    pub(crate) issue_type: String,
+    #[serde(default)]
+    pub(crate) created_at: String,
+    #[serde(default)]
+    pub(crate) created_by: String,
+    #[serde(default)]
+    pub(crate) updated_at: String,
+    #[serde(default)]
+    pub(crate) closed_at: Option<String>,
+    #[serde(default)]
+    pub(crate) close_reason: Option<String>,
+    #[serde(default)]
+    pub(crate) source_repo: String,
+    #[serde(default)]
+    pub(crate) compaction_level: u32,
+    #[serde(default)]
+    pub(crate) original_size: u32,
+    #[serde(default)]
+    pub(crate) notes: Option<String>,
+    #[serde(default)]
+    pub(crate) labels: Vec<String>,
+    #[serde(default)]
+    pub(crate) dependencies: Vec<TaskDependencyJsonlRecord>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct TaskDependencyJsonlRecord {
+    pub(crate) issue_id: String,
+    pub(crate) depends_on_id: String,
+    #[serde(rename = "type")]
+    pub(crate) edge_type: String,
+    #[serde(default)]
+    pub(crate) created_at: String,
+    #[serde(default)]
+    pub(crate) created_by: String,
+    #[serde(default)]
+    pub(crate) metadata: String,
+    #[serde(default)]
+    pub(crate) thread_id: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, Clone)]
+pub(crate) struct TaskContent {
+    pub(crate) task_id: String,
+    pub(crate) display_id: Option<String>,
+    pub(crate) title: String,
+    pub(crate) description: String,
+    pub(crate) status: String,
+    pub(crate) priority: u32,
+    pub(crate) issue_type: String,
+    pub(crate) created_at: String,
+    pub(crate) created_by: String,
+    pub(crate) updated_at: String,
+    pub(crate) closed_at: Option<String>,
+    pub(crate) close_reason: Option<String>,
+    pub(crate) source_repo: String,
+    pub(crate) compaction_level: u32,
+    pub(crate) original_size: u32,
+    pub(crate) notes: Option<String>,
+    pub(crate) labels: Vec<String>,
+    pub(crate) dependencies: Vec<TaskDependencyRecord>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, Clone, PartialEq, Eq)]
+pub(crate) struct TaskStorageRow {
+    pub(crate) task_id: String,
+    #[serde(default)]
+    pub(crate) display_id: Option<String>,
+    pub(crate) title: String,
+    pub(crate) description: String,
+    pub(crate) status: String,
+    pub(crate) priority: u32,
+    pub(crate) issue_type: String,
+    pub(crate) created_at: String,
+    pub(crate) created_by: String,
+    pub(crate) updated_at: String,
+    pub(crate) closed_at: Option<String>,
+    pub(crate) close_reason: Option<String>,
+    pub(crate) source_repo: String,
+    pub(crate) compaction_level: u32,
+    pub(crate) original_size: u32,
+    pub(crate) notes: Option<String>,
+    pub(crate) labels: Vec<String>,
+    pub(crate) dependencies: Vec<TaskDependencyRecord>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, Clone, PartialEq, Eq)]
+pub struct TaskRecord {
+    pub id: String,
+    #[serde(default)]
+    pub display_id: Option<String>,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub priority: u32,
+    pub issue_type: String,
+    pub created_at: String,
+    pub created_by: String,
+    pub updated_at: String,
+    pub closed_at: Option<String>,
+    pub close_reason: Option<String>,
+    pub source_repo: String,
+    pub compaction_level: u32,
+    pub original_size: u32,
+    pub notes: Option<String>,
+    pub labels: Vec<String>,
+    pub dependencies: Vec<TaskDependencyRecord>,
+}
+
+#[derive(Debug)]
+pub struct CreateTaskRequest<'a> {
+    pub task_id: &'a str,
+    pub title: &'a str,
+    pub display_id: Option<&'a str>,
+    pub description: &'a str,
+    pub issue_type: &'a str,
+    pub status: &'a str,
+    pub priority: u32,
+    pub parent_id: Option<&'a str>,
+    pub labels: &'a [String],
+    pub created_by: &'a str,
+    pub source_repo: &'a str,
+}
+
+#[derive(Debug)]
+pub struct UpdateTaskRequest<'a> {
+    pub task_id: &'a str,
+    pub status: Option<&'a str>,
+    pub notes: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub add_labels: &'a [String],
+    pub remove_labels: &'a [String],
+    pub set_labels: Option<&'a [String]>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskDependencyStatus {
+    pub issue_id: String,
+    pub depends_on_id: String,
+    pub edge_type: String,
+    pub dependency_status: String,
+    pub dependency_issue_type: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct BlockedTaskRecord {
+    pub task: TaskRecord,
+    pub blockers: Vec<TaskDependencyStatus>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskDependencyTreeNode {
+    pub task: TaskRecord,
+    pub dependencies: Vec<TaskDependencyTreeEdge>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskDependencyTreeEdge {
+    pub issue_id: String,
+    pub depends_on_id: String,
+    pub edge_type: String,
+    pub dependency_status: String,
+    pub dependency_issue_type: Option<String>,
+    pub node: Option<Box<TaskDependencyTreeNode>>,
+    pub cycle: bool,
+    pub missing: bool,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TaskGraphIssue {
+    pub issue_type: String,
+    pub issue_id: String,
+    pub depends_on_id: Option<String>,
+    pub edge_type: Option<String>,
+    pub detail: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskCriticalPath {
+    pub length: usize,
+    pub root_task_id: Option<String>,
+    pub terminal_task_id: Option<String>,
+    pub release_1_contract_steps: Vec<TaskRelease1ContractStep>,
+    pub nodes: Vec<TaskCriticalPathNode>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskRelease1ContractStep {
+    pub id: String,
+    pub mode: String,
+    pub blocker_code: String,
+    pub next_action: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskCriticalPathNode {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub issue_type: String,
+    pub priority: u32,
+}
+
+#[derive(Debug)]
+pub struct TaskImportSummary {
+    pub source_path: String,
+    pub imported_count: usize,
+    pub unchanged_count: usize,
+    pub updated_count: usize,
+}
+
+impl TaskImportSummary {
+    pub fn as_display(&self) -> String {
+        format!(
+            "{} imported, {} unchanged, {} updated from {}",
+            self.imported_count, self.unchanged_count, self.updated_count, self.source_path
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct TaskStoreSummary {
+    pub total_count: usize,
+    pub open_count: usize,
+    pub in_progress_count: usize,
+    pub closed_count: usize,
+    pub epic_count: usize,
+    pub ready_count: usize,
+}
+
+impl TaskStoreSummary {
+    pub fn as_display(&self) -> String {
+        format!(
+            "{} total, {} open, {} in_progress, {} closed, {} epics, {} ready",
+            self.total_count,
+            self.open_count,
+            self.in_progress_count,
+            self.closed_count,
+            self.epic_count,
+            self.ready_count
+        )
+    }
+}
+
+impl From<TaskJsonlRecord> for TaskContent {
+    fn from(value: TaskJsonlRecord) -> Self {
+        Self {
+            task_id: value.id,
+            display_id: value.display_id,
+            title: value.title,
+            description: value.description,
+            status: value.status,
+            priority: value.priority,
+            issue_type: value.issue_type,
+            created_at: value.created_at,
+            created_by: value.created_by,
+            updated_at: value.updated_at,
+            closed_at: value.closed_at,
+            close_reason: value.close_reason,
+            source_repo: value.source_repo,
+            compaction_level: value.compaction_level,
+            original_size: value.original_size,
+            notes: value.notes,
+            labels: value.labels,
+            dependencies: value
+                .dependencies
+                .into_iter()
+                .map(TaskDependencyRecord::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<TaskContent> for TaskStorageRow {
+    fn from(value: TaskContent) -> Self {
+        Self {
+            task_id: value.task_id,
+            display_id: value.display_id,
+            title: value.title,
+            description: value.description,
+            status: value.status,
+            priority: value.priority,
+            issue_type: value.issue_type,
+            created_at: value.created_at,
+            created_by: value.created_by,
+            updated_at: value.updated_at,
+            closed_at: value.closed_at,
+            close_reason: value.close_reason,
+            source_repo: value.source_repo,
+            compaction_level: value.compaction_level,
+            original_size: value.original_size,
+            notes: value.notes,
+            labels: value.labels,
+            dependencies: value.dependencies,
+        }
+    }
+}
+
+impl From<TaskStorageRow> for TaskRecord {
+    fn from(value: TaskStorageRow) -> Self {
+        Self {
+            id: value.task_id,
+            display_id: value.display_id,
+            title: value.title,
+            description: value.description,
+            status: value.status,
+            priority: value.priority,
+            issue_type: value.issue_type,
+            created_at: value.created_at,
+            created_by: value.created_by,
+            updated_at: value.updated_at,
+            closed_at: value.closed_at,
+            close_reason: value.close_reason,
+            source_repo: value.source_repo,
+            compaction_level: value.compaction_level,
+            original_size: value.original_size,
+            notes: value.notes,
+            labels: value.labels,
+            dependencies: value.dependencies,
+        }
+    }
+}
+
+impl From<TaskRecord> for TaskStorageRow {
+    fn from(value: TaskRecord) -> Self {
+        Self {
+            task_id: value.id,
+            display_id: value.display_id,
+            title: value.title,
+            description: value.description,
+            status: value.status,
+            priority: value.priority,
+            issue_type: value.issue_type,
+            created_at: value.created_at,
+            created_by: value.created_by,
+            updated_at: value.updated_at,
+            closed_at: value.closed_at,
+            close_reason: value.close_reason,
+            source_repo: value.source_repo,
+            compaction_level: value.compaction_level,
+            original_size: value.original_size,
+            notes: value.notes,
+            labels: value.labels,
+            dependencies: value.dependencies,
+        }
+    }
+}
+
+impl From<TaskDependencyJsonlRecord> for TaskDependencyRecord {
+    fn from(value: TaskDependencyJsonlRecord) -> Self {
+        Self {
+            issue_id: value.issue_id,
+            depends_on_id: value.depends_on_id,
+            edge_type: value.edge_type,
+            created_at: value.created_at,
+            created_by: value.created_by,
+            metadata: value.metadata,
+            thread_id: value.thread_id,
+        }
+    }
+}
