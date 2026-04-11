@@ -14,6 +14,7 @@ use crate::runtime_dispatch_downstream_packets::{
 };
 use crate::runtime_dispatch_execution::{
     agent_lane_dispatch_result, execute_external_agent_lane_dispatch,
+    execute_internal_agent_lane_dispatch,
 };
 use crate::runtime_dispatch_packet_text::{runtime_packet_prompt, runtime_tracked_flow_packet};
 use crate::runtime_dispatch_packets::{
@@ -308,8 +309,10 @@ pub(crate) fn fallback_backend_for_blocked_primary_dispatch_receipt(
     {
         return None;
     }
-    let route =
-        execution_plan_route_for_dispatch_target(&role_selection.execution_plan, &dispatch_receipt.dispatch_target)?;
+    let route = execution_plan_route_for_dispatch_target(
+        &role_selection.execution_plan,
+        &dispatch_receipt.dispatch_target,
+    )?;
     let primary_backend =
         selected_backend_from_execution_plan_route(&role_selection.execution_plan, route)?;
     let fallback_backend = fallback_executor_backend_from_route(route)?;
@@ -451,6 +454,14 @@ fn agent_init_packet_flag_for_path(packet_path: &str) -> &'static str {
 pub(crate) fn agent_init_command_for_packet_path(packet_path: &str) -> String {
     format!(
         "vida agent-init {} {} --json",
+        agent_init_packet_flag_for_path(packet_path),
+        shell_quote(packet_path)
+    )
+}
+
+pub(crate) fn agent_init_execute_command_for_packet_path(packet_path: &str) -> String {
+    format!(
+        "vida agent-init {} {} --execute-dispatch --json",
         agent_init_packet_flag_for_path(packet_path),
         shell_quote(packet_path)
     )
@@ -1111,7 +1122,7 @@ fn runtime_agent_lane_dispatch_from_overlay(
     packet_path: &str,
     preferred_backend: Option<&str>,
 ) -> RuntimeAgentLaneDispatch {
-    let agent_init_command = agent_init_command_for_packet_path(packet_path);
+    let agent_init_command = agent_init_execute_command_for_packet_path(packet_path);
     if let Some((backend_id, backend_class)) = overlay.and_then(|overlay| {
         preferred_backend.and_then(|backend_id| {
             configured_subagent_entry(overlay, backend_id).and_then(|entry| {
@@ -1455,15 +1466,20 @@ pub(crate) async fn try_bridge_bounded_implementer_completion_to_downstream_rece
         return Ok(false);
     }
 
-    receipt.downstream_dispatch_target = next_target;
-    receipt.downstream_dispatch_command = next_command;
-    receipt.downstream_dispatch_note = next_note;
-    receipt.downstream_dispatch_ready = next_ready;
-    receipt.downstream_dispatch_blockers = next_blockers;
-    receipt.downstream_dispatch_status = Some("packet_ready".to_string());
-    receipt.downstream_dispatch_result_path = None;
+    let preview_result_path = receipt
+        .downstream_dispatch_result_path
+        .clone()
+        .or_else(|| receipt.dispatch_result_path.clone());
+    apply_downstream_dispatch_preview_to_receipt(
+        receipt,
+        next_target,
+        next_command,
+        next_note,
+        next_ready,
+        next_blockers,
+        preview_result_path,
+    );
     receipt.downstream_dispatch_trace_path = None;
-    receipt.downstream_dispatch_active_target = active_downstream_dispatch_target(receipt);
     receipt.downstream_dispatch_packet_path = write_runtime_downstream_dispatch_packet(
         store.root(),
         role_selection,
@@ -1472,6 +1488,37 @@ pub(crate) async fn try_bridge_bounded_implementer_completion_to_downstream_rece
     )?;
     receipt.blocker_code = None;
     Ok(true)
+}
+
+fn receipt_backed_downstream_preview_result_path(
+    preview_result_path: Option<String>,
+) -> Option<String> {
+    preview_result_path
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn apply_downstream_dispatch_preview_to_receipt(
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+    downstream_dispatch_target: Option<String>,
+    downstream_dispatch_command: Option<String>,
+    downstream_dispatch_note: Option<String>,
+    downstream_dispatch_ready: bool,
+    downstream_dispatch_blockers: Vec<String>,
+    preview_result_path: Option<String>,
+) {
+    let preview_result_path = receipt_backed_downstream_preview_result_path(preview_result_path);
+    let packet_ready = downstream_dispatch_ready
+        && downstream_dispatch_blockers.is_empty()
+        && preview_result_path.is_some();
+    receipt.downstream_dispatch_target = downstream_dispatch_target;
+    receipt.downstream_dispatch_command = downstream_dispatch_command;
+    receipt.downstream_dispatch_note = downstream_dispatch_note;
+    receipt.downstream_dispatch_ready = downstream_dispatch_ready;
+    receipt.downstream_dispatch_blockers = downstream_dispatch_blockers;
+    receipt.downstream_dispatch_status = packet_ready.then(|| "packet_ready".to_string());
+    receipt.downstream_dispatch_result_path = preview_result_path;
+    receipt.downstream_dispatch_active_target = active_downstream_dispatch_target(receipt);
 }
 
 fn write_runtime_downstream_dispatch_trace(
@@ -1766,15 +1813,17 @@ pub(crate) async fn refresh_downstream_dispatch_preview(
     ) {
         return Err(error);
     }
-    receipt.downstream_dispatch_target = downstream_dispatch_target;
-    receipt.downstream_dispatch_command = downstream_dispatch_command;
-    receipt.downstream_dispatch_note = downstream_dispatch_note;
-    receipt.downstream_dispatch_ready = downstream_dispatch_ready;
-    receipt.downstream_dispatch_blockers = downstream_dispatch_blockers;
-    receipt.downstream_dispatch_status = None;
-    receipt.downstream_dispatch_result_path = None;
+    let preview_result_path = receipt.dispatch_result_path.clone();
+    apply_downstream_dispatch_preview_to_receipt(
+        receipt,
+        downstream_dispatch_target,
+        downstream_dispatch_command,
+        downstream_dispatch_note,
+        downstream_dispatch_ready,
+        downstream_dispatch_blockers,
+        preview_result_path,
+    );
     receipt.downstream_dispatch_trace_path = None;
-    receipt.downstream_dispatch_active_target = active_downstream_dispatch_target(receipt);
     receipt.downstream_dispatch_last_target = None;
     receipt.downstream_dispatch_executed_count = 0;
     receipt.downstream_dispatch_packet_path = write_runtime_downstream_dispatch_packet(
@@ -2427,7 +2476,95 @@ mod runtime_dispatch_packet_context_tests {
                 persisted.downstream_dispatch_status.as_deref(),
                 Some("packet_ready")
             );
+            assert_eq!(
+                persisted.downstream_dispatch_result_path.as_deref(),
+                Some("/tmp/implementer-result.json")
+            );
             assert!(persisted
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()));
+            let packet_path = persisted
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .expect("downstream packet path should exist");
+            let packet: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(packet_path).expect("downstream packet should be readable"),
+            )
+            .expect("downstream packet should decode");
+            let prompt = packet["prompt"]
+                .as_str()
+                .expect("downstream packet prompt should be a string");
+            assert!(prompt.contains("Runtime role=coach"));
+            assert!(prompt.contains("Do not run root-only orchestration commands"));
+            assert!(!prompt.contains("vida taskflow consume continue --json"));
+        });
+    }
+
+    #[test]
+    fn refresh_downstream_dispatch_preview_marks_ready_packets_as_packet_ready_with_result_path() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            let role_selection = bridge_test_role_selection("feature-x-dev");
+            let run_graph_bootstrap = json!({ "run_id": "run-refresh-preview" });
+            let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-refresh-preview".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_complete".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/implementer-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/implementer-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("implementer".to_string()),
+                downstream_dispatch_last_target: Some("implementer".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-04-10T00:00:00Z".to_string(),
+            };
+
+            refresh_downstream_dispatch_preview(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+            )
+            .await
+            .expect("preview should refresh");
+
+            assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("coach"));
+            assert!(receipt.downstream_dispatch_ready);
+            assert_eq!(
+                receipt.downstream_dispatch_status.as_deref(),
+                Some("packet_ready")
+            );
+            assert_eq!(
+                receipt.downstream_dispatch_result_path.as_deref(),
+                Some("/tmp/implementer-result.json")
+            );
+            assert!(receipt
                 .downstream_dispatch_packet_path
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty()));
@@ -2723,6 +2860,19 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
                 )
                 .await;
             }
+            if let Some(result) = execute_internal_agent_lane_dispatch(
+                store,
+                &project_root,
+                dispatch_packet_path,
+                canonical_backend.as_deref(),
+                role_selection,
+                receipt,
+                host_runtime.clone(),
+            )
+            .await?
+            {
+                return Ok(result);
+            }
             let activation_view =
                 crate::init_surfaces::render_agent_init_packet_activation_with_store(
                     store,
@@ -2919,11 +3069,16 @@ pub(crate) async fn execute_downstream_dispatch_chain(
         {
             return Err(error);
         }
-        downstream_receipt.downstream_dispatch_target = next_target;
-        downstream_receipt.downstream_dispatch_command = next_command;
-        downstream_receipt.downstream_dispatch_note = next_note;
-        downstream_receipt.downstream_dispatch_ready = next_ready;
-        downstream_receipt.downstream_dispatch_blockers = next_blockers;
+        let preview_result_path = downstream_receipt.dispatch_result_path.clone();
+        apply_downstream_dispatch_preview_to_receipt(
+            &mut downstream_receipt,
+            next_target,
+            next_command,
+            next_note,
+            next_ready,
+            next_blockers,
+            preview_result_path,
+        );
         downstream_receipt.downstream_dispatch_packet_path =
             write_runtime_downstream_dispatch_packet(
                 state_root,
@@ -2934,12 +3089,6 @@ pub(crate) async fn execute_downstream_dispatch_chain(
             .map_err(|error| {
                 format!("Failed to write chained downstream runtime dispatch packet: {error}")
             })?;
-        downstream_receipt.downstream_dispatch_status =
-            Some(downstream_receipt.dispatch_status.clone());
-        downstream_receipt.downstream_dispatch_result_path =
-            downstream_receipt.dispatch_result_path.clone();
-        downstream_receipt.downstream_dispatch_active_target =
-            active_downstream_dispatch_target(&downstream_receipt);
         if let Some(packet_path) = downstream_receipt
             .downstream_dispatch_packet_path
             .as_deref()
