@@ -1515,7 +1515,7 @@ agent_system:
     }
 
     #[test]
-    fn internal_host_can_dispatch_explicit_external_backend_when_policy_selects_it() {
+    fn internal_host_ignores_explicit_external_backend_and_stays_on_agent_init() {
         let overlay = serde_yaml::from_str(
             r#"
 host_environment:
@@ -1543,13 +1543,16 @@ agent_system:
             Some("qwen_cli"),
         );
 
-        assert_eq!(dispatch.surface, "external_cli:qwen_cli");
+        assert_eq!(dispatch.surface, "vida agent-init");
         assert_eq!(dispatch.backend_dispatch["selected_cli_system"], "codex");
         assert_eq!(
             dispatch.backend_dispatch["selected_execution_class"],
             "internal"
         );
-        assert_eq!(dispatch.backend_dispatch["backend_id"], "qwen_cli");
+        assert_eq!(
+            dispatch.backend_dispatch["backend_id"],
+            serde_json::Value::Null
+        );
     }
 
     #[test]
@@ -1671,7 +1674,7 @@ fn runtime_agent_lane_dispatch_from_overlay(
             };
         }
     }
-    if selected_execution_class != "external" && preferred_backend.is_none() {
+    if selected_execution_class != "external" {
         return RuntimeAgentLaneDispatch {
             surface: "vida agent-init".to_string(),
             activation_command: agent_init_command,
