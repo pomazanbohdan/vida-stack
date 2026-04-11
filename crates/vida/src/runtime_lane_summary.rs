@@ -224,6 +224,116 @@ pub(crate) async fn build_runtime_lane_selection_with_store(
     )
 }
 
+fn backend_capability_list(entry: &serde_json::Value, field: &str) -> Vec<String> {
+    json_string_list(json_lookup(entry, &[field]))
+        .into_iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn backend_has_any(values: &[String], candidates: &[&str]) -> bool {
+    candidates
+        .iter()
+        .any(|candidate| values.iter().any(|value| value == candidate))
+}
+
+fn build_backend_lane_admissibility(entry: &serde_json::Value) -> serde_json::Value {
+    let backend_class = json_string(json_lookup(entry, &["subagent_backend_class"]))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let write_scope = json_string(json_lookup(entry, &["write_scope"]))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let capabilities = backend_capability_list(entry, "capability_band");
+    let specialties = backend_capability_list(entry, "specialties");
+    let internal_backend = backend_class == "internal";
+    let read_only_capable = internal_backend
+        || backend_has_any(
+            &capabilities,
+            &[
+                "read_only",
+                "review_safe",
+                "web_search",
+                "architecture_safe",
+            ],
+        )
+        || !specialties.is_empty();
+    let execution_preparation_capable = internal_backend
+        || read_only_capable
+        || backend_has_any(
+            &specialties,
+            &["planning", "spec", "architecture", "long_context"],
+        );
+    let implementation_capable = write_scope != "none"
+        && (internal_backend
+            || backend_has_any(&capabilities, &["implementation_safe"])
+            || backend_has_any(&specialties, &["implementation", "integration"]));
+    let coach_capable = internal_backend
+        || backend_has_any(&capabilities, &["review_safe"])
+        || backend_has_any(&specialties, &["review", "planning", "spec"]);
+    let review_capable = coach_capable;
+    let verification_capable = internal_backend || backend_has_any(&specialties, &["verification"]);
+    let review_only_backend = (coach_capable || review_capable) && !implementation_capable;
+
+    serde_json::json!({
+        "analysis": read_only_capable,
+        "execution_preparation": execution_preparation_capable,
+        "implementation": implementation_capable,
+        "coach": coach_capable,
+        "review": review_capable,
+        "verification": verification_capable,
+        "policy_flags": {
+            "internal_only_backend": internal_backend,
+            "read_only_backend": write_scope == "none",
+            "review_only_backend": review_only_backend,
+            "scoped_write_backend": write_scope == "scoped_only",
+        }
+    })
+}
+
+fn backend_policy_entry(backend_id: &str, entry: &serde_json::Value) -> serde_json::Value {
+    let capabilities = backend_capability_list(entry, "capability_band");
+    let specialties = backend_capability_list(entry, "specialties");
+    serde_json::json!({
+        "backend_id": backend_id,
+        "backend_class": json_string(json_lookup(entry, &["subagent_backend_class"])).unwrap_or_default(),
+        "write_scope": json_string(json_lookup(entry, &["write_scope"])).unwrap_or_default(),
+        "capability_band": capabilities,
+        "specialties": specialties,
+        "lane_admissibility": build_backend_lane_admissibility(entry),
+    })
+}
+
+fn backend_policy_by_id(agent_system: &serde_json::Value, backend_id: &str) -> serde_json::Value {
+    json_lookup(agent_system, &["subagents", backend_id])
+        .filter(|entry| json_bool(json_lookup(entry, &["enabled"]), false))
+        .map(|entry| backend_policy_entry(backend_id, entry))
+        .unwrap_or(serde_json::Value::Null)
+}
+
+pub(crate) fn build_executor_backend_admissibility_matrix(
+    agent_system: &serde_json::Value,
+) -> serde_json::Value {
+    let Some(entries) =
+        json_lookup(agent_system, &["subagents"]).and_then(serde_json::Value::as_object)
+    else {
+        return serde_json::json!([]);
+    };
+    let mut rows = entries
+        .iter()
+        .filter(|(_, entry)| json_bool(json_lookup(entry, &["enabled"]), false))
+        .map(|(backend_id, entry)| backend_policy_entry(backend_id, entry))
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        left["backend_id"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["backend_id"].as_str().unwrap_or_default())
+    });
+    serde_json::Value::Array(rows)
+}
+
 pub(crate) fn summarize_agent_route_from_snapshot(
     compiled_bundle: &serde_json::Value,
     agent_system: &serde_json::Value,
@@ -284,6 +394,8 @@ pub(crate) fn summarize_agent_route_from_snapshot(
         "preferred_agent_type": runtime_assignment["selected_agent_id"],
         "preferred_agent_tier": runtime_assignment["selected_tier"],
         "preferred_runtime_role": runtime_assignment["runtime_role"],
+        "executor_backend_policy": backend_policy_by_id(agent_system, &executor_backend),
+        "fallback_executor_backend_policy": backend_policy_by_id(agent_system, &fallback_executor_backend),
         "profiles": json_lookup(route, &["profiles"]).cloned().unwrap_or(serde_json::Value::Null),
         "write_scope": json_string(json_lookup(route, &["write_scope"])).unwrap_or_default(),
         "dispatch_required": json_string(json_lookup(route, &["dispatch_required"])).unwrap_or_default(),
@@ -305,7 +417,7 @@ pub(crate) fn summarize_agent_route_from_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use super::summarize_agent_route_from_snapshot;
+    use super::{build_executor_backend_admissibility_matrix, summarize_agent_route_from_snapshot};
 
     #[test]
     fn summarize_agent_route_prefers_explicit_executor_fields() {
@@ -339,6 +451,22 @@ mod tests {
                     "graph_strategy": "deterministic_then_escalate",
                     "internal_escalation_trigger": "provider_exhausted_or_decision_conflict"
                 }
+            },
+            "subagents": {
+                "internal_subagents": {
+                    "enabled": true,
+                    "subagent_backend_class": "internal",
+                    "write_scope": "orchestrator_native",
+                    "capability_band": ["implementation_safe", "review_safe"],
+                    "specialties": ["implementation", "verification"]
+                },
+                "internal_review": {
+                    "enabled": true,
+                    "subagent_backend_class": "internal",
+                    "write_scope": "orchestrator_native",
+                    "capability_band": ["review_safe"],
+                    "specialties": ["review"]
+                }
             }
         });
 
@@ -355,6 +483,60 @@ mod tests {
         assert_eq!(summary["subagents"], "legacy_subagents");
         assert_eq!(summary["bridge_fallback_subagent"], "legacy_bridge");
         assert_eq!(summary["fanout_subagents"], "internal_fast, internal_arch");
+        assert_eq!(
+            summary["executor_backend_policy"]["lane_admissibility"]["implementation"],
+            true
+        );
+        assert_eq!(
+            summary["fallback_executor_backend_policy"]["lane_admissibility"]["review"],
+            true
+        );
+    }
+
+    #[test]
+    fn build_executor_backend_admissibility_matrix_marks_review_only_external_backends() {
+        let agent_system = serde_json::json!({
+            "subagents": {
+                "internal_subagents": {
+                    "enabled": true,
+                    "subagent_backend_class": "internal",
+                    "write_scope": "orchestrator_native",
+                    "capability_band": ["implementation_safe", "review_safe"],
+                    "specialties": ["implementation", "verification"]
+                },
+                "qwen_cli": {
+                    "enabled": true,
+                    "subagent_backend_class": "external_cli",
+                    "write_scope": "none",
+                    "capability_band": ["read_only", "review_safe", "web_search"],
+                    "specialties": ["review", "agentic_coding"]
+                }
+            }
+        });
+
+        let matrix = build_executor_backend_admissibility_matrix(&agent_system);
+        let rows = matrix.as_array().expect("matrix should be an array");
+        assert_eq!(rows.len(), 2);
+
+        let internal = rows
+            .iter()
+            .find(|row| row["backend_id"] == "internal_subagents")
+            .expect("internal row should exist");
+        assert_eq!(internal["lane_admissibility"]["implementation"], true);
+        assert_eq!(internal["lane_admissibility"]["verification"], true);
+
+        let qwen = rows
+            .iter()
+            .find(|row| row["backend_id"] == "qwen_cli")
+            .expect("qwen row should exist");
+        assert_eq!(qwen["lane_admissibility"]["analysis"], true);
+        assert_eq!(qwen["lane_admissibility"]["coach"], true);
+        assert_eq!(qwen["lane_admissibility"]["implementation"], false);
+        assert_eq!(qwen["lane_admissibility"]["verification"], false);
+        assert_eq!(
+            qwen["lane_admissibility"]["policy_flags"]["review_only_backend"],
+            true
+        );
     }
 }
 

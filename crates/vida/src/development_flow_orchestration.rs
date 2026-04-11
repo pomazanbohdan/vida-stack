@@ -669,6 +669,8 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
         .as_array()
         .cloned()
         .unwrap_or_default();
+    let backend_admissibility_matrix =
+        crate::runtime_lane_summary::build_executor_backend_admissibility_matrix(agent_system);
     let mut execution_plan = serde_json::json!({
         "status": if requires_design_gate {
             "design_first"
@@ -681,6 +683,7 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
         "autonomous_execution": {
             "agent_only_development": agent_only_development,
         },
+        "backend_admissibility_matrix": backend_admissibility_matrix,
         "orchestration_contract": orchestration_contract,
         "default_route": crate::runtime_lane_summary::summarize_agent_route_from_snapshot(compiled_bundle, agent_system, "default"),
         "conversation_stage": {
