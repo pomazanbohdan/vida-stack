@@ -311,7 +311,7 @@ pub(crate) async fn run(cli: Cli) -> ExitCode {
     run_root_command(cli).await
 }
 
-pub(crate) use runtime_lane_summary::{
+pub(crate) use development_flow_orchestration::{
     build_runtime_execution_plan_from_snapshot, build_runtime_lane_selection_with_store,
     RuntimeConsumptionLaneSelection,
 };

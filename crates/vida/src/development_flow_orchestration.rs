@@ -1,3 +1,7 @@
+pub(crate) use crate::runtime_lane_summary::{
+    build_runtime_lane_selection_with_store, RuntimeConsumptionLaneSelection,
+};
+
 pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_json::Value {
     let feature_slug = crate::infer_feature_request_slug(request)
         .trim()
