@@ -242,6 +242,53 @@ pub(crate) fn agent_lane_dispatch_result(
     activation_view
 }
 
+fn mark_dispatch_result_execution_evidence(
+    body: &mut serde_json::Map<String, serde_json::Value>,
+    evidence_kind: &str,
+    backend_id: &str,
+) {
+    let activation_semantics = body
+        .entry("activation_semantics".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let activation_semantics = activation_semantics
+        .as_object_mut()
+        .expect("activation_semantics should serialize to an object");
+    activation_semantics.insert(
+        "activation_kind".to_string(),
+        serde_json::json!("execution_evidence"),
+    );
+    activation_semantics.insert("view_only".to_string(), serde_json::json!(false));
+    activation_semantics.insert("executes_packet".to_string(), serde_json::json!(true));
+    activation_semantics.insert(
+        "records_completion_receipt".to_string(),
+        serde_json::json!(true),
+    );
+    activation_semantics.insert(
+        "transfers_root_session_write_authority".to_string(),
+        serde_json::json!(false),
+    );
+    activation_semantics.insert(
+        "root_session_write_guard_remains_authoritative".to_string(),
+        serde_json::json!(true),
+    );
+    activation_semantics.insert(
+        "next_lawful_action".to_string(),
+        serde_json::json!(
+            "treat this result as receipt-backed delegated-lane execution evidence and continue through runtime downstream progression"
+        ),
+    );
+    body.insert(
+        "execution_evidence".to_string(),
+        serde_json::json!({
+            "status": "recorded",
+            "evidence_kind": evidence_kind,
+            "backend_id": backend_id,
+            "receipt_backed": true,
+            "records_dispatch_result": true,
+        }),
+    );
+}
+
 pub(crate) async fn execute_internal_agent_lane_dispatch(
     store: &StateStore,
     project_root: &Path,
@@ -397,6 +444,7 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
     if success {
         body.insert("blocker_code".to_string(), serde_json::Value::Null);
         body.insert("blocker_reason".to_string(), serde_json::Value::Null);
+        mark_dispatch_result_execution_evidence(body, "internal_carrier_completion", carrier_id);
     } else {
         let blocker_reason = if !stderr.is_empty() {
             stderr
@@ -590,6 +638,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     if success {
         body.insert("blocker_code".to_string(), serde_json::Value::Null);
         body.insert("blocker_reason".to_string(), serde_json::Value::Null);
+        mark_dispatch_result_execution_evidence(body, "external_backend_completion", &backend_id);
     } else if timed_out {
         let timeout_seconds = wall_timeout_seconds.unwrap_or_default();
         body.insert(
@@ -633,7 +682,10 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_external_provider_output, parse_internal_codex_exec_output};
+    use super::{
+        mark_dispatch_result_execution_evidence, parse_external_provider_output,
+        parse_internal_codex_exec_output,
+    };
 
     #[test]
     fn parse_external_provider_output_extracts_qwen_json_success_result() {
@@ -675,5 +727,38 @@ mod tests {
         assert_eq!(parsed.result_text.as_deref(), Some("final"));
         assert_eq!(parsed.error_messages, vec!["warning".to_string()]);
         assert_eq!(parsed.raw_json.as_array().map(Vec::len), Some(4));
+    }
+
+    #[test]
+    fn mark_dispatch_result_execution_evidence_reclassifies_activation_view() {
+        let mut body = serde_json::Map::from_iter([(
+            "activation_semantics".to_string(),
+            serde_json::json!({
+                "activation_kind": "activation_view",
+                "view_only": true,
+                "executes_packet": false,
+                "records_completion_receipt": false,
+            }),
+        )]);
+
+        mark_dispatch_result_execution_evidence(&mut body, "internal_carrier_completion", "junior");
+
+        assert_eq!(
+            body["activation_semantics"]["activation_kind"],
+            "execution_evidence"
+        );
+        assert_eq!(body["activation_semantics"]["view_only"], false);
+        assert_eq!(body["activation_semantics"]["executes_packet"], true);
+        assert_eq!(
+            body["activation_semantics"]["records_completion_receipt"],
+            true
+        );
+        assert_eq!(body["execution_evidence"]["status"], "recorded");
+        assert_eq!(
+            body["execution_evidence"]["evidence_kind"],
+            "internal_carrier_completion"
+        );
+        assert_eq!(body["execution_evidence"]["backend_id"], "junior");
+        assert_eq!(body["execution_evidence"]["receipt_backed"], true);
     }
 }
