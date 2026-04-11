@@ -154,8 +154,6 @@ pub struct StateStore {
     root: PathBuf,
 }
 
-impl StateStore {}
-
 #[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
 struct StorageMetaRow {
     engine: String,
