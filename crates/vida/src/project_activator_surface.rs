@@ -518,44 +518,11 @@ pub(crate) fn materialize_host_cli_template(
     let copy_tree_target = project_root.join(&runtime_root);
     match mode.as_str() {
         "codex_toml_catalog_render" => {
-            copy_tree_if_missing(&source, &copy_tree_target)?;
-            let overlay = read_yaml_file_checked(&project_root.join("vida.config.yaml"))
-                .unwrap_or(serde_yaml::Value::Null);
-            let scoring_policy = serde_json::to_value(
-                yaml_lookup(&overlay, &["agent_system", "scoring"])
-                    .cloned()
-                    .unwrap_or(serde_yaml::Value::Null),
+            project_activator_codex_materialization::materialize_codex_template_with_catalog_render(
+                project_root,
+                cli_system,
+                &entry_ref,
             )
-            .unwrap_or(serde_json::Value::Null);
-            let rendered_catalog_root =
-                project_root.join(host_cli_system_runtime_surface(&entry_ref, cli_system));
-            let carrier_roles = {
-                let overlay_roles =
-                    project_activator_codex_materialization::overlay_codex_agent_catalog(&overlay);
-                if overlay_roles.is_empty() {
-                    project_activator_codex_materialization::read_codex_agent_catalog(
-                        &rendered_catalog_root,
-                    )
-                } else {
-                    overlay_roles
-                }
-            };
-            let carrier_dispatch_aliases =
-                project_activator_codex_materialization::codex_dispatch_alias_catalog_for_root(
-                    &overlay,
-                    project_root,
-                    &carrier_roles,
-                )?;
-            if !carrier_roles.is_empty() {
-                project_activator_codex_materialization::render_codex_template_from_catalog(
-                    project_root,
-                    &source,
-                    &carrier_roles,
-                    &carrier_dispatch_aliases,
-                )?;
-            }
-            refresh_worker_strategy(project_root, &carrier_roles, &scoring_policy);
-            Ok(runtime_root)
         }
         "copy_tree_only" => {
             copy_tree_if_missing(&source, &copy_tree_target)?;
@@ -626,19 +593,13 @@ pub(crate) fn resolved_host_cli_agent_catalog_for_root(
             .as_deref()
             == Some("codex_toml_catalog_render")
         {
-            let carrier_catalog_root = project_root.join(host_cli_system_runtime_surface(
-                catalog_entry.unwrap_or(&serde_yaml::Value::Null),
-                &selected_host_cli_system,
-            ));
-            let overlay_rows =
-                project_activator_codex_materialization::overlay_codex_agent_catalog(overlay);
-            host_cli_agent_catalog = if overlay_rows.is_empty() {
-                project_activator_codex_materialization::read_codex_agent_catalog(
-                    carrier_catalog_root.as_path(),
-                )
-            } else {
-                overlay_rows
-            };
+            host_cli_agent_catalog =
+                project_activator_codex_materialization::resolve_codex_agent_catalog_for_rendered_root(
+                    project_root,
+                    overlay,
+                    catalog_entry,
+                    &selected_host_cli_system,
+                );
         }
     }
     if host_cli_agent_catalog.is_empty() {

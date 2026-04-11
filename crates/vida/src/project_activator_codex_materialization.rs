@@ -63,3 +63,65 @@ pub(crate) fn codex_dispatch_alias_catalog_for_root(
         agent_catalog,
     )
 }
+
+pub(crate) fn materialize_codex_template_with_catalog_render(
+    project_root: &Path,
+    cli_system: &str,
+    registry_entry: &serde_yaml::Value,
+) -> Result<PathBuf, String> {
+    let source = super::resolve_host_cli_template_source(cli_system, Some(registry_entry))?;
+    let runtime_root =
+        super::host_cli_system_runtime_root(registry_entry, cli_system, project_root);
+    let copy_tree_target = project_root.join(&runtime_root);
+    super::copy_tree_if_missing(&source, &copy_tree_target)?;
+    let overlay = super::read_yaml_file_checked(&project_root.join("vida.config.yaml"))
+        .unwrap_or(serde_yaml::Value::Null);
+    let scoring_policy = serde_json::to_value(
+        yaml_lookup(&overlay, &["agent_system", "scoring"])
+            .cloned()
+            .unwrap_or(serde_yaml::Value::Null),
+    )
+    .unwrap_or(serde_json::Value::Null);
+    let rendered_catalog_root = project_root.join(super::host_cli_system_runtime_surface(
+        registry_entry,
+        cli_system,
+    ));
+    let carrier_roles = {
+        let overlay_roles = overlay_codex_agent_catalog(&overlay);
+        if overlay_roles.is_empty() {
+            read_codex_agent_catalog(&rendered_catalog_root)
+        } else {
+            overlay_roles
+        }
+    };
+    let carrier_dispatch_aliases =
+        codex_dispatch_alias_catalog_for_root(&overlay, project_root, &carrier_roles)?;
+    if !carrier_roles.is_empty() {
+        render_codex_template_from_catalog(
+            project_root,
+            &source,
+            &carrier_roles,
+            &carrier_dispatch_aliases,
+        )?;
+    }
+    super::refresh_worker_strategy(project_root, &carrier_roles, &scoring_policy);
+    Ok(runtime_root)
+}
+
+pub(crate) fn resolve_codex_agent_catalog_for_rendered_root(
+    project_root: &Path,
+    overlay: &serde_yaml::Value,
+    catalog_entry: Option<&serde_yaml::Value>,
+    selected_host_cli_system: &str,
+) -> Vec<serde_json::Value> {
+    let carrier_catalog_root = project_root.join(super::host_cli_system_runtime_surface(
+        catalog_entry.unwrap_or(&serde_yaml::Value::Null),
+        selected_host_cli_system,
+    ));
+    let overlay_rows = overlay_codex_agent_catalog(overlay);
+    if overlay_rows.is_empty() {
+        read_codex_agent_catalog(carrier_catalog_root.as_path())
+    } else {
+        overlay_rows
+    }
+}
