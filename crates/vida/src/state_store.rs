@@ -154,13 +154,22 @@ impl StateStore {
     pub async fn open(root: PathBuf) -> Result<Self, StateStoreError> {
         fs::create_dir_all(&root)?;
 
-        let db: Surreal<Db> = Surreal::new::<SurrealKv>(root.clone()).await?;
-        db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
-        db.query(state_schema_document()).await?;
+        for attempt in 0..80 {
+            match Self::open_once(root.clone()).await {
+                Ok(store) => return Ok(store),
+                Err(StateStoreError::Db(error)) if attempt < 79 => {
+                    let message = error.to_string();
+                    if message.contains("LOCK") || message.contains("lock") {
+                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                        continue;
+                    }
+                    return Err(StateStoreError::Db(error));
+                }
+                Err(error) => return Err(error),
+            }
+        }
 
-        let store = Self { db, root };
-        store.ensure_minimal_authoritative_state_spine().await?;
-        Ok(store)
+        Self::open_once(root).await
     }
 
     pub async fn open_existing(root: PathBuf) -> Result<Self, StateStoreError> {
@@ -187,6 +196,10 @@ impl StateStore {
     }
 
     async fn open_existing_once(root: PathBuf) -> Result<Self, StateStoreError> {
+        Self::open_once(root).await
+    }
+
+    async fn open_once(root: PathBuf) -> Result<Self, StateStoreError> {
         let db: Surreal<Db> = Surreal::new::<SurrealKv>(root.clone()).await?;
         db.use_ns(STATE_NAMESPACE).use_db(STATE_DATABASE).await?;
         db.query(state_schema_document()).await?;
@@ -4273,6 +4286,7 @@ impl LauncherActivationSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state_store::state_store_boot_summary::StateSpineManifestContent;
     fn sample_tasks_jsonl() -> String {
         [
             r#"{"id":"vida-root","title":"Root epic","description":"epic","status":"open","priority":1,"issue_type":"epic","created_at":"2026-03-08T00:00:00Z","created_by":"tester","updated_at":"2026-03-08T00:00:00Z","source_repo":".","compaction_level":0,"original_size":0,"labels":["wave"],"dependencies":[]}"#,

@@ -1398,6 +1398,99 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 );
             let activation_semantics = agent_init_activation_semantics(&selection);
 
+            if args.execute_dispatch {
+                if packet_arg_count == 0 {
+                    eprintln!(
+                        "Agent init execute-dispatch requires either `--dispatch-packet` or `--downstream-packet`."
+                    );
+                    return ExitCode::from(2);
+                }
+
+                let mut resume_inputs =
+                    match super::taskflow_consume_resume::resolve_runtime_consumption_resume_inputs(
+                        &store,
+                        None,
+                        args.dispatch_packet.as_deref(),
+                        args.downstream_packet.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(inputs) => inputs,
+                        Err(error) => {
+                            eprintln!("{error}");
+                            return ExitCode::from(1);
+                        }
+                    };
+                if let Err(error) = super::execute_and_record_dispatch_receipt(
+                    store.root(),
+                    &store,
+                    &resume_inputs.role_selection,
+                    &resume_inputs.run_graph_bootstrap,
+                    &mut resume_inputs.dispatch_receipt,
+                )
+                .await
+                {
+                    eprintln!("Failed to execute agent-init dispatch packet: {error}");
+                    return ExitCode::from(1);
+                }
+                if resume_inputs.dispatch_receipt.dispatch_kind == "agent_lane" {
+                    resume_inputs.dispatch_receipt.selected_backend =
+                        super::canonical_selected_backend_for_receipt(
+                            &resume_inputs.role_selection,
+                            &resume_inputs.dispatch_receipt,
+                        );
+                }
+                if let Err(error) = store
+                    .record_run_graph_dispatch_receipt(&resume_inputs.dispatch_receipt)
+                    .await
+                {
+                    eprintln!("Failed to record agent-init dispatch receipt: {error}");
+                    return ExitCode::from(1);
+                }
+                let Some(dispatch_result_path) = resume_inputs
+                    .dispatch_receipt
+                    .dispatch_result_path
+                    .as_deref()
+                else {
+                    eprintln!(
+                        "Agent init execute-dispatch did not produce a dispatch result artifact."
+                    );
+                    return ExitCode::from(1);
+                };
+                let result_body = match std::fs::read_to_string(dispatch_result_path) {
+                    Ok(body) => body,
+                    Err(error) => {
+                        eprintln!(
+                            "Failed to read agent-init dispatch result `{dispatch_result_path}`: {error}"
+                        );
+                        return ExitCode::from(1);
+                    }
+                };
+                let result_json = match serde_json::from_str::<serde_json::Value>(&result_body) {
+                    Ok(json) => json,
+                    Err(error) => {
+                        eprintln!(
+                            "Failed to parse agent-init dispatch result `{dispatch_result_path}`: {error}"
+                        );
+                        return ExitCode::from(1);
+                    }
+                };
+                if args.json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&result_json)
+                            .expect("agent-init dispatch result json should render")
+                    );
+                } else {
+                    crate::print_json_pretty(&result_json);
+                }
+                return if resume_inputs.dispatch_receipt.dispatch_status == "blocked" {
+                    ExitCode::from(1)
+                } else {
+                    ExitCode::SUCCESS
+                };
+            }
+
             if args.json {
                 println!(
                     "{}",
@@ -1579,12 +1672,49 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
         &project_activation_view,
     );
     let activation_semantics = agent_init_activation_semantics(&selection);
+    let execution_truth = packet
+        .get("execution_truth")
+        .cloned()
+        .or_else(|| {
+            let role_selection = packet
+                .get("role_selection_full")
+                .cloned()
+                .and_then(|value| {
+                    serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(value).ok()
+                })?;
+            let dispatch_target = if downstream {
+                packet
+                    .get("downstream_dispatch_target")
+                    .and_then(serde_json::Value::as_str)
+            } else {
+                packet
+                    .get("dispatch_target")
+                    .and_then(serde_json::Value::as_str)
+            }
+            .unwrap_or_default();
+            Some(
+                super::runtime_dispatch_state::dispatch_execution_route_summary(
+                    &role_selection,
+                    dispatch_target,
+                    packet
+                        .get("selected_backend")
+                        .and_then(serde_json::Value::as_str),
+                ),
+            )
+        })
+        .unwrap_or(serde_json::Value::Null);
+    let packet_activation_evidence = packet
+        .get("activation_evidence")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
 
     Ok(serde_json::json!({
         "surface": "vida agent-init",
         "init": init_view,
         "selection": selection,
         "activation_semantics": activation_semantics,
+        "execution_truth": execution_truth,
+        "packet_activation_evidence": packet_activation_evidence,
         "runtime_bundle_summary": {
             "bundle_id": bundle.metadata["bundle_id"],
             "activation_source": bundle.activation_source,

@@ -492,11 +492,11 @@ pub(crate) fn read_dispatch_packet(path: &str) -> Result<serde_json::Value, Stri
     Ok(packet)
 }
 
-struct ResumeInputs {
-    dispatch_receipt: crate::state_store::RunGraphDispatchReceipt,
-    dispatch_packet_path: String,
-    role_selection: super::RuntimeConsumptionLaneSelection,
-    run_graph_bootstrap: serde_json::Value,
+pub(crate) struct ResumeInputs {
+    pub(crate) dispatch_receipt: crate::state_store::RunGraphDispatchReceipt,
+    pub(crate) dispatch_packet_path: String,
+    pub(crate) role_selection: super::RuntimeConsumptionLaneSelection,
+    pub(crate) run_graph_bootstrap: serde_json::Value,
 }
 
 fn build_resume_inputs(
@@ -991,13 +991,18 @@ async fn maybe_resume_inputs_from_active_downstream_result(
             ));
         }
     }
-    let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
+    let (dispatch_kind, derived_dispatch_surface, activation_agent_type, activation_runtime_role) =
         super::downstream_activation_fields(&role_selection, active_target);
     let execution_state = result
         .get("execution_state")
         .and_then(serde_json::Value::as_str)
         .map(|value| canonical_resume_dispatch_status(Some(value)))
         .unwrap_or("blocked");
+    let dispatch_surface = result
+        .get("surface")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .or(derived_dispatch_surface);
     let dispatch_command = result
         .get("activation_command")
         .and_then(serde_json::Value::as_str)
@@ -1069,7 +1074,7 @@ async fn maybe_resume_inputs_from_active_downstream_result(
     )))
 }
 
-async fn resolve_runtime_consumption_resume_inputs(
+pub(crate) async fn resolve_runtime_consumption_resume_inputs(
     store: &super::StateStore,
     requested_run_id: Option<&str>,
     requested_dispatch_packet_path: Option<&str>,
@@ -3091,6 +3096,7 @@ agent_system:
         fs::write(
             &result_path,
             serde_json::json!({
+                "surface": "internal_cli:codex",
                 "execution_state": "blocked",
                 "blocker_code": "internal_activation_view_only",
                 "dispatch_packet_path": packet_path.display().to_string(),
@@ -3147,6 +3153,10 @@ agent_system:
         assert_eq!(
             inputs.dispatch_receipt.blocker_code.as_deref(),
             Some("internal_activation_view_only")
+        );
+        assert_eq!(
+            inputs.dispatch_receipt.dispatch_surface.as_deref(),
+            Some("internal_cli:codex")
         );
         assert_eq!(
             inputs.dispatch_receipt.selected_backend.as_deref(),

@@ -40,7 +40,13 @@ pub(crate) fn infer_project_root_from_state_root(state_root: &Path) -> Option<Pa
     state_root
         .ancestors()
         .find(|path| super::looks_like_project_root(path))
-        .map(Path::to_path_buf)
+        .map(|path| {
+            if path.as_os_str().is_empty() {
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+            } else {
+                path.to_path_buf()
+            }
+        })
 }
 
 fn read_runtime_consumption_snapshot(state_root: &Path) -> Result<serde_json::Value, String> {
