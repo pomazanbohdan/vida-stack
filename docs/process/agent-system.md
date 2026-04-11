@@ -22,6 +22,7 @@ Project activation owns host CLI agent-template selection and runtime admission.
 - project-local agent extensions remain under `.vida/project/agent-extensions/`
 - research, specification, planning, implementation, and verification packets should all route through the agent system once a bounded packet exists
 - delegated worker dispatch still materializes through `vida agent-init` until the operator-surface promotion slice closes
+- for the internal Codex host posture, runtime may bridge a bounded delegated packet into non-interactive `codex exec` execution; `vida agent-init` remains the activation/view contract and does not become execution evidence by itself
 - project "agent-first" development therefore means `vida agent-init`-backed delegated lanes first; host-tool-specific subagent APIs are optional carrier mechanics, not the canonical project execution contract
 - host-local shell/edit capability is an executor affordance only and must not be interpreted as lawful root-session write ownership
 - if the selected host execution class is internal, optional external CLI subagents remain auxiliary carrier details and must not redefine the whole session as externally gated by default

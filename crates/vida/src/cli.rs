@@ -501,6 +501,9 @@ pub(crate) struct AgentInitArgs {
     #[arg(long = "downstream-packet")]
     pub(crate) downstream_packet: Option<String>,
 
+    #[arg(long = "execute-dispatch")]
+    pub(crate) execute_dispatch: bool,
+
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
 
