@@ -34,6 +34,26 @@ impl StateStore {
         Ok(summary)
     }
 
+    async fn record_snapshot_bridge_reconciliation_summary(
+        &self,
+        operation: &str,
+        source_kind: &str,
+        source_path: Option<String>,
+        task_count: usize,
+        dependency_count: usize,
+        stale_removed_count: usize,
+    ) -> Result<TaskReconciliationSummary, StateStoreError> {
+        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
+            operation: operation.to_string(),
+            source_kind: source_kind.to_string(),
+            source_path,
+            task_count,
+            dependency_count,
+            stale_removed_count,
+        })
+        .await
+    }
+
     pub async fn task_store_summary(&self) -> Result<TaskStoreSummary, StateStoreError> {
         let tasks = self.all_tasks().await?;
         let open_count = tasks.iter().filter(|task| task.status == "open").count();
@@ -91,14 +111,14 @@ impl StateStore {
     #[allow(dead_code)]
     pub async fn export_taskflow_snapshot(&self) -> Result<TaskSnapshot, StateStoreError> {
         let snapshot = self.build_taskflow_snapshot().await?;
-        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
-            operation: "export_snapshot".to_string(),
-            source_kind: "canonical_snapshot_object".to_string(),
-            source_path: None,
-            task_count: snapshot.tasks.len(),
-            dependency_count: snapshot.dependencies.len(),
-            stale_removed_count: 0,
-        })
+        self.record_snapshot_bridge_reconciliation_summary(
+            "export_snapshot",
+            "canonical_snapshot_object",
+            None,
+            snapshot.tasks.len(),
+            snapshot.dependencies.len(),
+            0,
+        )
         .await?;
         Ok(snapshot)
     }
@@ -109,14 +129,14 @@ impl StateStore {
     ) -> Result<InMemoryTaskStore, StateStoreError> {
         let snapshot = self.build_taskflow_snapshot().await?;
         let restored = restore_canonical_in_memory_store(&snapshot);
-        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
-            operation: "export_snapshot".to_string(),
-            source_kind: "canonical_snapshot_memory".to_string(),
-            source_path: None,
-            task_count: snapshot.tasks.len(),
-            dependency_count: snapshot.dependencies.len(),
-            stale_removed_count: 0,
-        })
+        self.record_snapshot_bridge_reconciliation_summary(
+            "export_snapshot",
+            "canonical_snapshot_memory",
+            None,
+            snapshot.tasks.len(),
+            snapshot.dependencies.len(),
+            0,
+        )
         .await?;
         Ok(restored)
     }
@@ -129,14 +149,14 @@ impl StateStore {
         let snapshot = self.build_taskflow_snapshot().await?;
         let source_path = path.as_ref().display().to_string();
         write_canonical_snapshot(path, &snapshot)?;
-        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
-            operation: "export_snapshot".to_string(),
-            source_kind: "canonical_snapshot_file".to_string(),
-            source_path: Some(source_path),
-            task_count: snapshot.tasks.len(),
-            dependency_count: snapshot.dependencies.len(),
-            stale_removed_count: 0,
-        })
+        self.record_snapshot_bridge_reconciliation_summary(
+            "export_snapshot",
+            "canonical_snapshot_file",
+            Some(source_path),
+            snapshot.tasks.len(),
+            snapshot.dependencies.len(),
+            0,
+        )
         .await?;
         Ok(())
     }
@@ -160,14 +180,14 @@ impl StateStore {
         for task in task_records {
             self.persist_task_record(task).await?;
         }
-        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
-            operation: "import_snapshot".to_string(),
-            source_kind: "canonical_snapshot_memory".to_string(),
-            source_path: None,
-            task_count: snapshot.tasks.len(),
-            dependency_count: snapshot.dependencies.len(),
-            stale_removed_count: 0,
-        })
+        self.record_snapshot_bridge_reconciliation_summary(
+            "import_snapshot",
+            "canonical_snapshot_memory",
+            None,
+            snapshot.tasks.len(),
+            snapshot.dependencies.len(),
+            0,
+        )
         .await?;
         Ok(())
     }
@@ -186,14 +206,14 @@ impl StateStore {
         for task in task_records {
             self.persist_task_record(task).await?;
         }
-        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
-            operation: "import_snapshot".to_string(),
-            source_kind: "canonical_snapshot_file".to_string(),
-            source_path: Some(source_path),
-            task_count: snapshot.tasks.len(),
-            dependency_count: snapshot.dependencies.len(),
-            stale_removed_count: 0,
-        })
+        self.record_snapshot_bridge_reconciliation_summary(
+            "import_snapshot",
+            "canonical_snapshot_file",
+            Some(source_path),
+            snapshot.tasks.len(),
+            snapshot.dependencies.len(),
+            0,
+        )
         .await?;
         Ok(())
     }
@@ -227,14 +247,14 @@ impl StateStore {
             }
         }
 
-        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
-            operation: "replace_snapshot".to_string(),
-            source_kind: "canonical_snapshot_memory".to_string(),
-            source_path: None,
-            task_count: snapshot.tasks.len(),
-            dependency_count: snapshot.dependencies.len(),
+        self.record_snapshot_bridge_reconciliation_summary(
+            "replace_snapshot",
+            "canonical_snapshot_memory",
+            None,
+            snapshot.tasks.len(),
+            snapshot.dependencies.len(),
             stale_removed_count,
-        })
+        )
         .await?;
         Ok(())
     }
@@ -267,14 +287,14 @@ impl StateStore {
                 stale_removed_count += 1;
             }
         }
-        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
-            operation: "replace_snapshot".to_string(),
-            source_kind: "canonical_snapshot_file".to_string(),
-            source_path: Some(source_path),
-            task_count: snapshot.tasks.len(),
-            dependency_count: snapshot.dependencies.len(),
+        self.record_snapshot_bridge_reconciliation_summary(
+            "replace_snapshot",
+            "canonical_snapshot_file",
+            Some(source_path),
+            snapshot.tasks.len(),
+            snapshot.dependencies.len(),
             stale_removed_count,
-        })
+        )
         .await?;
         Ok(())
     }
@@ -300,14 +320,14 @@ impl StateStore {
             return Ok(latest);
         }
 
-        self.write_task_reconciliation_summary(TaskReconciliationSummaryInput {
-            operation: "consume_final".to_string(),
-            source_kind: "runtime_consumption_final_snapshot".to_string(),
+        self.record_snapshot_bridge_reconciliation_summary(
+            "consume_final",
+            "runtime_consumption_final_snapshot",
             source_path,
-            task_count: 0,
-            dependency_count: 0,
-            stale_removed_count: 0,
-        })
+            0,
+            0,
+            0,
+        )
         .await
     }
 
