@@ -49,6 +49,19 @@ use state_store_core_utils::{
     task_sort_key, unix_timestamp, unix_timestamp_nanos,
 };
 pub use state_store_core_utils::{default_state_dir, repo_root};
+#[allow(unused_imports)]
+pub use state_store_instruction_bundle::{
+    EffectiveBundleReceiptSummary, EffectiveInstructionArtifact, EffectiveInstructionBundle,
+    InstructionDiffPatchContent, InstructionIngestSummary, InstructionPatchOperation,
+    InstructionProjection,
+};
+#[allow(unused_imports)]
+pub(crate) use state_store_instruction_bundle::{
+    EffectiveInstructionBundleReceiptContent, InstructionArtifactContent, InstructionArtifactRow,
+    InstructionDependencyEdgeContent, InstructionDependencyEdgeRow, InstructionDiffPatchRow,
+    InstructionIngestReceiptContent, InstructionProjectionReceiptContent,
+    InstructionRuntimeStateRow, SourceArtifactContent, SourceArtifactRow, SourceTreeConfigRow,
+};
 use state_store_patching::{
     apply_patch_operation, collect_patch_ids, join_lines, split_lines, validate_patch_bindings,
     validate_patch_conflicts,
@@ -182,194 +195,6 @@ pub struct TaskDependencyRecord {
     pub created_by: String,
     pub metadata: String,
     pub thread_id: String,
-}
-
-#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
-struct SourceTreeConfigRow {
-    slice: String,
-    source_root: String,
-}
-
-#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
-struct SourceArtifactRow {
-    content_hash: String,
-}
-
-#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
-#[allow(dead_code)]
-struct InstructionArtifactRow {
-    artifact_id: String,
-    version: u32,
-    source_hash: String,
-    body: String,
-}
-
-#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue, Clone)]
-#[allow(dead_code)]
-struct InstructionDiffPatchRow {
-    patch_id: String,
-    target_artifact_id: String,
-    target_artifact_version: u32,
-    target_artifact_hash: String,
-    patch_precedence: u32,
-    active: bool,
-    operations: Vec<InstructionPatchOperation>,
-}
-
-#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
-struct InstructionDependencyEdgeRow {
-    to_artifact: String,
-    edge_kind: String,
-}
-
-#[derive(Debug, serde::Serialize, SurrealValue)]
-struct SourceArtifactContent {
-    source_artifact_id: String,
-    artifact_id: String,
-    artifact_kind: String,
-    version: u32,
-    ownership_class: String,
-    mutability_class: String,
-    slice: String,
-    source_root: String,
-    source_path: String,
-    content_hash: String,
-    ingest_status: String,
-    hierarchy: Vec<String>,
-}
-
-#[derive(Debug, serde::Serialize, SurrealValue)]
-struct InstructionArtifactContent {
-    artifact_id: String,
-    artifact_kind: String,
-    version: u32,
-    ownership_class: String,
-    mutability_class: String,
-    activation_class: String,
-    source_hash: String,
-    body: String,
-    hierarchy: Vec<String>,
-    required_follow_on: Vec<String>,
-}
-
-#[derive(Debug, serde::Serialize, SurrealValue)]
-struct InstructionIngestReceiptContent {
-    receipt_id: String,
-    slice: String,
-    source_root: String,
-    product_version: String,
-    ingest_kind: String,
-    applied: bool,
-    imported_count: usize,
-    unchanged_count: usize,
-    updated_count: usize,
-}
-
-#[derive(Debug, serde::Serialize, SurrealValue)]
-struct InstructionDependencyEdgeContent {
-    from_artifact: String,
-    to_artifact: String,
-    edge_kind: String,
-}
-
-#[derive(Debug, serde::Serialize, SurrealValue, Clone)]
-#[allow(dead_code)]
-pub struct InstructionDiffPatchContent {
-    pub patch_id: String,
-    pub target_artifact_id: String,
-    pub target_artifact_version: u32,
-    pub target_artifact_hash: String,
-    pub patch_precedence: u32,
-    pub author_class: String,
-    pub applies_if: String,
-    pub created_at: String,
-    pub active: bool,
-    pub operations: Vec<InstructionPatchOperation>,
-}
-
-#[derive(Debug, serde::Serialize, SurrealValue)]
-#[allow(dead_code)]
-struct InstructionProjectionReceiptContent {
-    receipt_id: String,
-    artifact_id: String,
-    base_version: u32,
-    base_hash: String,
-    projected_hash: String,
-    applied_patch_ids: Vec<String>,
-    skipped_patch_ids: Vec<String>,
-    failed_reason: String,
-    line_count: usize,
-}
-
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
-#[allow(dead_code)]
-pub struct InstructionPatchOperation {
-    pub op: String,
-    pub target_mode: String,
-    pub target: String,
-    pub with_lines: Vec<String>,
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct InstructionProjection {
-    pub artifact_id: String,
-    pub body: String,
-    pub projected_hash: String,
-    pub applied_patch_ids: Vec<String>,
-    pub skipped_patch_ids: Vec<String>,
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct EffectiveInstructionBundle {
-    pub root_artifact_id: String,
-    pub mandatory_chain_order: Vec<String>,
-    pub source_version_tuple: Vec<String>,
-    pub projected_artifacts: Vec<EffectiveInstructionArtifact>,
-    pub receipt_id: String,
-}
-
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct EffectiveInstructionArtifact {
-    pub artifact_id: String,
-    pub version: u32,
-    pub source_hash: String,
-    pub projected_hash: String,
-    pub body: String,
-}
-
-#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
-struct EffectiveInstructionBundleReceiptContent {
-    receipt_id: String,
-    root_artifact_id: String,
-    mandatory_chain_order: Vec<String>,
-    source_version_tuple: Vec<String>,
-    optional_triggered_reads: Vec<String>,
-    artifact_count: usize,
-}
-
-#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
-pub struct EffectiveBundleReceiptSummary {
-    pub receipt_id: String,
-    pub root_artifact_id: String,
-    pub artifact_count: usize,
-}
-
-#[derive(Debug)]
-pub struct InstructionIngestSummary {
-    source_root: String,
-    imported_count: usize,
-    unchanged_count: usize,
-    updated_count: usize,
-}
-
-#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
-struct InstructionRuntimeStateRow {
-    state_id: String,
-    active_root_artifact_id: String,
-    runtime_mode: String,
 }
 
 #[derive(Debug)]
@@ -811,15 +636,6 @@ impl RunGraphStatus {
 #[derive(Debug, serde::Deserialize, SurrealValue)]
 struct CountRow {
     total: usize,
-}
-
-impl InstructionIngestSummary {
-    pub fn as_display(&self) -> String {
-        format!(
-            "{} imported, {} unchanged, {} updated from {}",
-            self.imported_count, self.unchanged_count, self.updated_count, self.source_root
-        )
-    }
 }
 
 #[derive(Debug)]

@@ -1,5 +1,202 @@
 use super::*;
 
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub(crate) struct SourceTreeConfigRow {
+    pub slice: String,
+    pub source_root: String,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub(crate) struct SourceArtifactRow {
+    pub content_hash: String,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+#[allow(dead_code)]
+pub(crate) struct InstructionArtifactRow {
+    pub artifact_id: String,
+    pub version: u32,
+    pub source_hash: String,
+    pub body: String,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue, Clone)]
+#[allow(dead_code)]
+pub(crate) struct InstructionDiffPatchRow {
+    pub patch_id: String,
+    pub target_artifact_id: String,
+    pub target_artifact_version: u32,
+    pub target_artifact_hash: String,
+    pub patch_precedence: u32,
+    pub active: bool,
+    pub operations: Vec<InstructionPatchOperation>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub(crate) struct InstructionDependencyEdgeRow {
+    pub to_artifact: String,
+    pub edge_kind: String,
+}
+
+#[derive(Debug, serde::Serialize, SurrealValue)]
+pub(crate) struct SourceArtifactContent {
+    pub source_artifact_id: String,
+    pub artifact_id: String,
+    pub artifact_kind: String,
+    pub version: u32,
+    pub ownership_class: String,
+    pub mutability_class: String,
+    pub slice: String,
+    pub source_root: String,
+    pub source_path: String,
+    pub content_hash: String,
+    pub ingest_status: String,
+    pub hierarchy: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize, SurrealValue)]
+pub(crate) struct InstructionArtifactContent {
+    pub artifact_id: String,
+    pub artifact_kind: String,
+    pub version: u32,
+    pub ownership_class: String,
+    pub mutability_class: String,
+    pub activation_class: String,
+    pub source_hash: String,
+    pub body: String,
+    pub hierarchy: Vec<String>,
+    pub required_follow_on: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize, SurrealValue)]
+pub(crate) struct InstructionIngestReceiptContent {
+    pub receipt_id: String,
+    pub slice: String,
+    pub source_root: String,
+    pub product_version: String,
+    pub ingest_kind: String,
+    pub applied: bool,
+    pub imported_count: usize,
+    pub unchanged_count: usize,
+    pub updated_count: usize,
+}
+
+#[derive(Debug, serde::Serialize, SurrealValue)]
+pub(crate) struct InstructionDependencyEdgeContent {
+    pub from_artifact: String,
+    pub to_artifact: String,
+    pub edge_kind: String,
+}
+
+#[derive(Debug, serde::Serialize, SurrealValue, Clone)]
+#[allow(dead_code)]
+pub struct InstructionDiffPatchContent {
+    pub patch_id: String,
+    pub target_artifact_id: String,
+    pub target_artifact_version: u32,
+    pub target_artifact_hash: String,
+    pub patch_precedence: u32,
+    pub author_class: String,
+    pub applies_if: String,
+    pub created_at: String,
+    pub active: bool,
+    pub operations: Vec<InstructionPatchOperation>,
+}
+
+#[derive(Debug, serde::Serialize, SurrealValue)]
+#[allow(dead_code)]
+pub(crate) struct InstructionProjectionReceiptContent {
+    pub receipt_id: String,
+    pub artifact_id: String,
+    pub base_version: u32,
+    pub base_hash: String,
+    pub projected_hash: String,
+    pub applied_patch_ids: Vec<String>,
+    pub skipped_patch_ids: Vec<String>,
+    pub failed_reason: String,
+    pub line_count: usize,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, SurrealValue)]
+#[allow(dead_code)]
+pub struct InstructionPatchOperation {
+    pub op: String,
+    pub target_mode: String,
+    pub target: String,
+    pub with_lines: Vec<String>,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct InstructionProjection {
+    pub artifact_id: String,
+    pub body: String,
+    pub projected_hash: String,
+    pub applied_patch_ids: Vec<String>,
+    pub skipped_patch_ids: Vec<String>,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct EffectiveInstructionBundle {
+    pub root_artifact_id: String,
+    pub mandatory_chain_order: Vec<String>,
+    pub source_version_tuple: Vec<String>,
+    pub projected_artifacts: Vec<EffectiveInstructionArtifact>,
+    pub receipt_id: String,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct EffectiveInstructionArtifact {
+    pub artifact_id: String,
+    pub version: u32,
+    pub source_hash: String,
+    pub projected_hash: String,
+    pub body: String,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub(crate) struct EffectiveInstructionBundleReceiptContent {
+    pub(crate) receipt_id: String,
+    pub(crate) root_artifact_id: String,
+    pub(crate) mandatory_chain_order: Vec<String>,
+    pub(crate) source_version_tuple: Vec<String>,
+    pub(crate) optional_triggered_reads: Vec<String>,
+    pub(crate) artifact_count: usize,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub struct EffectiveBundleReceiptSummary {
+    pub receipt_id: String,
+    pub root_artifact_id: String,
+    pub artifact_count: usize,
+}
+
+#[derive(Debug)]
+pub struct InstructionIngestSummary {
+    pub source_root: String,
+    pub imported_count: usize,
+    pub unchanged_count: usize,
+    pub updated_count: usize,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub(crate) struct InstructionRuntimeStateRow {
+    pub state_id: String,
+    pub active_root_artifact_id: String,
+    pub runtime_mode: String,
+}
+
+impl InstructionIngestSummary {
+    pub fn as_display(&self) -> String {
+        format!(
+            "{} imported, {} unchanged, {} updated from {}",
+            self.imported_count, self.unchanged_count, self.updated_count, self.source_root
+        )
+    }
+}
+
 impl StateStore {
     pub async fn seed_framework_instruction_bundle(&self) -> Result<(), StateStoreError> {
         let existing_runtime_state: Option<InstructionRuntimeStateRow> = self
