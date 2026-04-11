@@ -2,12 +2,12 @@ use std::path::{Path, PathBuf};
 
 use time::format_description::well_known::Rfc3339;
 
+use crate::taskflow_protocol_binding::TASKFLOW_PROTOCOL_BINDING_AUTHORITY;
 use crate::{
     build_project_activator_view, doctor_launcher_summary_for_root,
     merge_project_activation_into_init_view, read_or_sync_launcher_activation_snapshot,
     runtime_consumption_state::latest_admissible_retrieval_trust_signal, DoctorLauncherSummary,
     StateStore, TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload,
-    TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
 };
 
 use super::activation_status::{activation_status_is_pending, canonical_activation_status};
@@ -1644,7 +1644,7 @@ mod tests {
         retrieval_trust_evidence_blockers, runtime_bundle_retrieval_trust_evidence,
         taskflow_consume_bundle_check, TaskflowConsumeBundlePayload,
     };
-    use crate::TASKFLOW_PROTOCOL_BINDING_AUTHORITY;
+    use crate::taskflow_protocol_binding::TASKFLOW_PROTOCOL_BINDING_AUTHORITY;
 
     static PROJECTION_FIXTURE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 

@@ -229,8 +229,6 @@ use taskflow_spec_bootstrap::{
     execute_taskflow_bootstrap_spec_with_store, execute_work_packet_create_with_store,
 };
 use time::format_description::well_known::Rfc3339;
-const TASKFLOW_PROTOCOL_BINDING_SCENARIO: &str = "v0.2.2-taskflow-wave1-primary";
-const TASKFLOW_PROTOCOL_BINDING_AUTHORITY: &str = "taskflow_state_store";
 const DEFAULT_AGENT_EXTENSION_ROLES_YAML: &str =
     include_str!("../../../docs/process/agent-extensions/roles.yaml");
 const DEFAULT_AGENT_EXTENSION_SKILLS_YAML: &str =

@@ -9,6 +9,9 @@ use crate::contract_profile_adapter::{
 };
 use crate::operator_contracts::shared_operator_output_contract_parity_error;
 
+pub(crate) const TASKFLOW_PROTOCOL_BINDING_SCENARIO: &str = "v0.2.2-taskflow-wave1-primary";
+pub(crate) const TASKFLOW_PROTOCOL_BINDING_AUTHORITY: &str = "taskflow_state_store";
+
 #[derive(Clone, serde::Serialize)]
 struct ProtocolBindingDecisionGateStatus {
     policy_gate: String,
@@ -316,7 +319,7 @@ fn build_taskflow_protocol_binding_rows(
             runtime_owner: seed.runtime_owner.to_string(),
             enforcement_type: seed.enforcement_type.to_string(),
             proof_surface: seed.proof_surface.to_string(),
-            primary_state_authority: super::TASKFLOW_PROTOCOL_BINDING_AUTHORITY.to_string(),
+            primary_state_authority: TASKFLOW_PROTOCOL_BINDING_AUTHORITY.to_string(),
             binding_status: if blockers.is_empty() {
                 "fully-runtime-bound".to_string()
             } else {
@@ -324,7 +327,7 @@ fn build_taskflow_protocol_binding_rows(
             },
             active: true,
             blockers,
-            scenario: super::TASKFLOW_PROTOCOL_BINDING_SCENARIO.to_string(),
+            scenario: TASKFLOW_PROTOCOL_BINDING_SCENARIO.to_string(),
             synced_at: String::new(),
         });
     }
@@ -613,8 +616,8 @@ pub(crate) async fn run_taskflow_protocol_binding(args: &[String]) -> ExitCode {
                     };
                     match store
                         .record_protocol_binding_snapshot(
-                            super::TASKFLOW_PROTOCOL_BINDING_SCENARIO,
-                            super::TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
+                            TASKFLOW_PROTOCOL_BINDING_SCENARIO,
+                            TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
                             &rows,
                         )
                         .await
@@ -695,8 +698,8 @@ pub(crate) async fn run_taskflow_protocol_binding(args: &[String]) -> ExitCode {
                     };
                     match store
                         .record_protocol_binding_snapshot(
-                            super::TASKFLOW_PROTOCOL_BINDING_SCENARIO,
-                            super::TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
+                            TASKFLOW_PROTOCOL_BINDING_SCENARIO,
+                            TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
                             &rows,
                         )
                         .await
@@ -854,8 +857,8 @@ pub(crate) async fn sync_taskflow_protocol_binding_snapshot(
     let rows = build_taskflow_protocol_binding_rows(&evidence)?;
     store
         .record_protocol_binding_snapshot(
-            super::TASKFLOW_PROTOCOL_BINDING_SCENARIO,
-            super::TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
+            TASKFLOW_PROTOCOL_BINDING_SCENARIO,
+            TASKFLOW_PROTOCOL_BINDING_AUTHORITY,
             &rows,
         )
         .await
@@ -865,7 +868,10 @@ pub(crate) async fn sync_taskflow_protocol_binding_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use super::{protocol_binding_check_ok, ProtocolBindingCompiledPayloadImportEvidence};
+    use super::{
+        protocol_binding_check_ok, ProtocolBindingCompiledPayloadImportEvidence,
+        TASKFLOW_PROTOCOL_BINDING_AUTHORITY, TASKFLOW_PROTOCOL_BINDING_SCENARIO,
+    };
     use crate::contract_profile_adapter::release_contract_status;
     use crate::state_store::{ProtocolBindingState, ProtocolBindingSummary};
 
@@ -900,11 +906,9 @@ mod tests {
             unbound_count: 0,
             blocking_issue_count: 0,
             latest_receipt_id: Some("receipt-1".to_string()),
-            latest_scenario: Some(super::super::TASKFLOW_PROTOCOL_BINDING_SCENARIO.to_string()),
+            latest_scenario: Some(TASKFLOW_PROTOCOL_BINDING_SCENARIO.to_string()),
             latest_recorded_at: Some("2026-03-17T00:00:00Z".to_string()),
-            primary_state_authority: Some(
-                super::super::TASKFLOW_PROTOCOL_BINDING_AUTHORITY.to_string(),
-            ),
+            primary_state_authority: Some(TASKFLOW_PROTOCOL_BINDING_AUTHORITY.to_string()),
         }
     }
 
@@ -918,12 +922,11 @@ mod tests {
                 runtime_owner: seed.runtime_owner.to_string(),
                 enforcement_type: seed.enforcement_type.to_string(),
                 proof_surface: seed.proof_surface.to_string(),
-                primary_state_authority: super::super::TASKFLOW_PROTOCOL_BINDING_AUTHORITY
-                    .to_string(),
+                primary_state_authority: TASKFLOW_PROTOCOL_BINDING_AUTHORITY.to_string(),
                 binding_status: "fully-runtime-bound".to_string(),
                 active: true,
                 blockers: vec![],
-                scenario: super::super::TASKFLOW_PROTOCOL_BINDING_SCENARIO.to_string(),
+                scenario: TASKFLOW_PROTOCOL_BINDING_SCENARIO.to_string(),
                 synced_at: "2026-03-17T00:00:00Z".to_string(),
             })
             .collect()
