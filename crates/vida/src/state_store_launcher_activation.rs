@@ -2,6 +2,16 @@ use super::*;
 
 const LAUNCHER_ACTIVATION_SNAPSHOT_ID: &str = "launcher_live";
 
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub struct LauncherActivationSnapshot {
+    pub source: String,
+    pub source_config_path: String,
+    pub source_config_digest: String,
+    pub captured_at: String,
+    pub compiled_bundle: serde_json::Value,
+    pub pack_router_keywords: serde_json::Value,
+}
+
 impl StateStore {
     pub async fn write_launcher_activation_snapshot(
         &self,

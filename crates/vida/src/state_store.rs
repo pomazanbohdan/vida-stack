@@ -64,6 +64,7 @@ pub(crate) use state_store_instruction_bundle::{
     InstructionIngestReceiptContent, InstructionProjectionReceiptContent,
     InstructionRuntimeStateRow, SourceArtifactContent, SourceArtifactRow, SourceTreeConfigRow,
 };
+pub use state_store_launcher_activation::LauncherActivationSnapshot;
 use state_store_patching::{
     apply_patch_operation, collect_patch_ids, join_lines, split_lines, validate_patch_bindings,
     validate_patch_conflicts,
@@ -374,16 +375,6 @@ impl From<surrealdb::Error> for StateStoreError {
     fn from(error: surrealdb::Error) -> Self {
         Self::Db(error)
     }
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, SurrealValue)]
-pub struct LauncherActivationSnapshot {
-    pub source: String,
-    pub source_config_path: String,
-    pub source_config_digest: String,
-    pub captured_at: String,
-    pub compiled_bundle: serde_json::Value,
-    pub pack_router_keywords: serde_json::Value,
 }
 
 #[cfg(test)]
