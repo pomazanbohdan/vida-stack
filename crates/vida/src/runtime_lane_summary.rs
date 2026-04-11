@@ -3,10 +3,38 @@ use crate::taskflow_routing::{
     fanout_executor_backends_from_route, selected_backend_from_execution_plan_route,
 };
 use crate::{
-    build_runtime_execution_plan_from_snapshot, json_bool, json_lookup, json_string,
-    json_string_list, read_or_sync_launcher_activation_snapshot, RuntimeConsumptionLaneSelection,
-    StateStore,
+    json_bool, json_lookup, json_string, json_string_list,
+    read_or_sync_launcher_activation_snapshot, StateStore,
 };
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub(crate) struct RuntimeConsumptionLaneSelection {
+    pub(crate) ok: bool,
+    pub(crate) activation_source: String,
+    pub(crate) selection_mode: String,
+    pub(crate) fallback_role: String,
+    pub(crate) request: String,
+    pub(crate) selected_role: String,
+    pub(crate) conversational_mode: Option<String>,
+    pub(crate) single_task_only: bool,
+    pub(crate) tracked_flow_entry: Option<String>,
+    pub(crate) allow_freeform_chat: bool,
+    pub(crate) confidence: String,
+    pub(crate) matched_terms: Vec<String>,
+    pub(crate) compiled_bundle: serde_json::Value,
+    pub(crate) execution_plan: serde_json::Value,
+    pub(crate) reason: String,
+}
+
+pub(crate) fn build_runtime_execution_plan_from_snapshot(
+    compiled_bundle: &serde_json::Value,
+    selection: &RuntimeConsumptionLaneSelection,
+) -> serde_json::Value {
+    crate::development_flow_orchestration::build_runtime_execution_plan_from_snapshot(
+        compiled_bundle,
+        selection,
+    )
+}
 
 pub(crate) fn build_runtime_lane_selection_from_bundle(
     bundle: &serde_json::Value,

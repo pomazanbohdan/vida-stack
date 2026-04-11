@@ -311,41 +311,10 @@ pub(crate) async fn run(cli: Cli) -> ExitCode {
     run_root_command(cli).await
 }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
-pub(crate) struct RuntimeConsumptionLaneSelection {
-    pub(crate) ok: bool,
-    pub(crate) activation_source: String,
-    pub(crate) selection_mode: String,
-    pub(crate) fallback_role: String,
-    pub(crate) request: String,
-    pub(crate) selected_role: String,
-    pub(crate) conversational_mode: Option<String>,
-    pub(crate) single_task_only: bool,
-    pub(crate) tracked_flow_entry: Option<String>,
-    pub(crate) allow_freeform_chat: bool,
-    pub(crate) confidence: String,
-    pub(crate) matched_terms: Vec<String>,
-    pub(crate) compiled_bundle: serde_json::Value,
-    pub(crate) execution_plan: serde_json::Value,
-    pub(crate) reason: String,
-}
-
-pub(crate) async fn build_runtime_lane_selection_with_store(
-    store: &StateStore,
-    request: &str,
-) -> Result<RuntimeConsumptionLaneSelection, String> {
-    crate::runtime_lane_summary::build_runtime_lane_selection_with_store(store, request).await
-}
-
-pub(crate) fn build_runtime_execution_plan_from_snapshot(
-    compiled_bundle: &serde_json::Value,
-    selection: &RuntimeConsumptionLaneSelection,
-) -> serde_json::Value {
-    crate::development_flow_orchestration::build_runtime_execution_plan_from_snapshot(
-        compiled_bundle,
-        selection,
-    )
-}
+pub(crate) use runtime_lane_summary::{
+    build_runtime_execution_plan_from_snapshot, build_runtime_lane_selection_with_store,
+    RuntimeConsumptionLaneSelection,
+};
 
 #[cfg(test)]
 mod tests {
