@@ -42,6 +42,8 @@ use crate::release1_contracts::{
     derive_lane_status, BlockerCode, CompatibilityClass, LaneStatus, Release1ContractType,
     Release1SchemaVersion,
 };
+#[cfg(test)]
+use state_store_boot_summary::StorageMetaRow;
 pub(crate) use state_store_boot_summary::{
     BootCompatibilitySummary, MigrationPreflightSummary, MigrationReceiptSummary,
     StateSpineSummary, StorageMetadataSummary,
@@ -189,16 +191,6 @@ pub struct StateStore {
     root: PathBuf,
 }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
-struct StorageMetaRow {
-    engine: String,
-    backend: String,
-    namespace: String,
-    database: String,
-    state_schema_version: u32,
-    instruction_schema_version: u32,
-}
-
 #[derive(Debug, serde::Serialize, serde::Deserialize, SurrealValue, Clone, PartialEq, Eq)]
 pub struct TaskDependencyRecord {
     pub issue_id: String,
@@ -208,11 +200,6 @@ pub struct TaskDependencyRecord {
     pub created_by: String,
     pub metadata: String,
     pub thread_id: String,
-}
-
-#[derive(Debug, serde::Deserialize, SurrealValue)]
-struct CountRow {
-    total: usize,
 }
 
 #[derive(Debug)]

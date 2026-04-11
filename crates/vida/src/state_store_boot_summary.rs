@@ -1,10 +1,25 @@
 use super::{
     canonical_compatibility_class_str, canonical_release1_contract_type_str,
-    canonical_release1_schema_version_str, unix_timestamp_nanos, CompatibilityClass, CountRow,
+    canonical_release1_schema_version_str, unix_timestamp_nanos, CompatibilityClass,
     EffectiveBundleReceiptSummary, Release1ContractType, Release1SchemaVersion,
-    StateSpineManifestContract, StateStore, StateStoreError, StorageMetaRow, SurrealStoreTarget,
-    SurrealValue, DEFAULT_STATE_DIR,
+    StateSpineManifestContract, StateStore, StateStoreError, SurrealStoreTarget, SurrealValue,
+    DEFAULT_STATE_DIR,
 };
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
+pub(crate) struct StorageMetaRow {
+    pub(crate) engine: String,
+    pub(crate) backend: String,
+    pub(crate) namespace: String,
+    pub(crate) database: String,
+    pub(crate) state_schema_version: u32,
+    pub(crate) instruction_schema_version: u32,
+}
+
+#[derive(Debug, serde::Deserialize, SurrealValue)]
+pub(crate) struct CountRow {
+    pub(crate) total: usize,
+}
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
 pub(crate) struct StateSpineManifestContent {
