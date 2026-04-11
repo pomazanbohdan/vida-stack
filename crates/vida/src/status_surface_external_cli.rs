@@ -299,11 +299,12 @@ fn external_cli_carrier_readiness(
         _ => false,
     };
     if provider_failure_detected {
-        let provider_failure_status = crate::yaml_lookup(readiness, &["provider_failure", "status"])
-            .and_then(serde_yaml::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("provider_auth_failed");
+        let provider_failure_status =
+            crate::yaml_lookup(readiness, &["provider_failure", "status"])
+                .and_then(serde_yaml::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("provider_auth_failed");
         let provider_failure_blocker_code =
             crate::yaml_lookup(readiness, &["provider_failure", "blocker_code"])
                 .and_then(serde_yaml::Value::as_str)
@@ -314,8 +315,10 @@ fn external_cli_carrier_readiness(
                         crate::release1_contracts::BlockerCode::ProviderAuthFailed,
                     )
                 });
-        let provider_failure_next_actions =
-            crate::yaml_string_list(crate::yaml_lookup(readiness, &["provider_failure", "next_actions"]));
+        let provider_failure_next_actions = crate::yaml_string_list(crate::yaml_lookup(
+            readiness,
+            &["provider_failure", "next_actions"],
+        ));
         let next_actions = if provider_failure_next_actions.is_empty() {
             vec![
                 "Repair the provider credential or provider-specific auth path, then rerun `vida status --json`."
@@ -421,7 +424,8 @@ fn route_primary_external_backends(overlay: &serde_yaml::Value) -> Vec<String> {
         ["routing"].as_slice(),
         ["development_flow"].as_slice(),
     ] {
-        if let Some(routes) = crate::yaml_lookup(overlay, path).and_then(serde_yaml::Value::as_mapping)
+        if let Some(routes) =
+            crate::yaml_lookup(overlay, path).and_then(serde_yaml::Value::as_mapping)
         {
             collect_executor_backends_from_mapping(routes, &mut backends);
         }
@@ -520,6 +524,15 @@ pub(crate) fn external_cli_preflight_summary(
             .unwrap_or(false);
     let hybrid_external_cli_relevant = !selected_is_external && has_enabled_external_subagents;
     let requires_external_cli = selected_is_external || hybrid_external_cli_relevant;
+    let effective_execution_posture = if selected_is_external {
+        "external"
+    } else if hybrid_external_cli_relevant {
+        "mixed"
+    } else if selected_execution_class == "internal" {
+        "internal"
+    } else {
+        "unknown"
+    };
     let sandbox_active = is_sandbox_active_from_env();
     let network_reachable = can_resolve_public_network();
     let tool_contract = external_cli_tool_contract_summary(
@@ -536,7 +549,11 @@ pub(crate) fn external_cli_preflight_summary(
         .flatten()
         .filter(|carrier| carrier["blocked"].as_bool() == Some(true))
         .filter_map(|carrier| carrier["backend_id"].as_str())
-        .filter(|backend_id| route_primary_backends.iter().any(|backend| backend == backend_id))
+        .filter(|backend_id| {
+            route_primary_backends
+                .iter()
+                .any(|backend| backend == backend_id)
+        })
         .map(str::to_string)
         .collect::<Vec<_>>();
     let primary_blocker_next_actions = if blocked_primary_backends.is_empty() {
@@ -557,6 +574,8 @@ pub(crate) fn external_cli_preflight_summary(
             "external_cli_subagents_present": has_enabled_external_subagents,
             "hybrid_external_cli_relevant": hybrid_external_cli_relevant,
             "selected_execution_class": selected_execution_class,
+            "effective_execution_posture": effective_execution_posture,
+            "mixed_posture": effective_execution_posture == "mixed",
             "tool_contract": tool_contract,
             "carrier_readiness": carrier_readiness,
             "route_primary_external_backends": route_primary_backends,
@@ -578,6 +597,8 @@ pub(crate) fn external_cli_preflight_summary(
             "external_cli_subagents_present": has_enabled_external_subagents,
             "hybrid_external_cli_relevant": hybrid_external_cli_relevant,
             "selected_execution_class": selected_execution_class,
+            "effective_execution_posture": effective_execution_posture,
+            "mixed_posture": effective_execution_posture == "mixed",
             "tool_contract": tool_contract,
             "carrier_readiness": carrier_readiness,
             "route_primary_external_backends": route_primary_backends,
@@ -614,6 +635,8 @@ pub(crate) fn external_cli_preflight_summary(
             "external_cli_subagents_present": has_enabled_external_subagents,
             "hybrid_external_cli_relevant": hybrid_external_cli_relevant,
             "selected_execution_class": selected_execution_class,
+            "effective_execution_posture": effective_execution_posture,
+            "mixed_posture": effective_execution_posture == "mixed",
             "tool_contract": tool_contract,
             "carrier_readiness": carrier_readiness,
             "route_primary_external_backends": route_primary_backends,
@@ -634,6 +657,8 @@ pub(crate) fn external_cli_preflight_summary(
         "external_cli_subagents_present": has_enabled_external_subagents,
         "hybrid_external_cli_relevant": hybrid_external_cli_relevant,
         "selected_execution_class": selected_execution_class,
+        "effective_execution_posture": effective_execution_posture,
+        "mixed_posture": effective_execution_posture == "mixed",
         "tool_contract": tool_contract,
         "carrier_readiness": carrier_readiness,
         "route_primary_external_backends": route_primary_backends,
@@ -671,6 +696,8 @@ host_environment:
         assert_eq!(summary["requires_external_cli"], false);
         assert_eq!(summary["hybrid_external_cli_relevant"], false);
         assert_eq!(summary["selected_execution_class"], "internal");
+        assert_eq!(summary["effective_execution_posture"], "internal");
+        assert_eq!(summary["mixed_posture"], false);
     }
 
     #[test]
@@ -699,6 +726,8 @@ agent_system:
         assert_eq!(summary["requires_external_cli"], true);
         assert_eq!(summary["hybrid_external_cli_relevant"], true);
         assert_eq!(summary["selected_execution_class"], "internal");
+        assert_eq!(summary["effective_execution_posture"], "mixed");
+        assert_eq!(summary["mixed_posture"], true);
     }
 
     #[test]
@@ -722,6 +751,8 @@ host_environment:
         assert_eq!(summary["requires_external_cli"], true);
         assert_eq!(summary["hybrid_external_cli_relevant"], false);
         assert_eq!(summary["selected_execution_class"], "external");
+        assert_eq!(summary["effective_execution_posture"], "external");
+        assert_eq!(summary["mixed_posture"], false);
     }
 
     #[test]

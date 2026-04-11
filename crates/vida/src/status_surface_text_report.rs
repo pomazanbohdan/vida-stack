@@ -33,6 +33,40 @@ pub(crate) struct StatusTextReportInputs<'a> {
     pub(crate) latest_run_graph_dispatch_receipt_checkpoint_leakage: bool,
     pub(crate) continuation_binding: &'a serde_json::Value,
     pub(crate) host_agents: Option<&'a serde_json::Value>,
+    pub(crate) latest_run_graph_dispatch_receipt:
+        Option<&'a crate::state_store::RunGraphDispatchReceiptSummary>,
+    pub(crate) latest_run_graph_mixed_posture: Option<&'a serde_json::Value>,
+    pub(crate) latest_run_graph_activation_vs_execution_evidence: Option<&'a serde_json::Value>,
+}
+
+fn format_run_graph_mixed_posture(mixed_posture: &serde_json::Value) -> String {
+    let fanout = mixed_posture["fanout_backends"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "none".to_string());
+    format!(
+        "{} backend={} fallback={} fanout={}",
+        mixed_posture["effective_posture_kind"]
+            .as_str()
+            .unwrap_or("unknown"),
+        mixed_posture["selected_backend"].as_str().unwrap_or("none"),
+        mixed_posture["fallback_backend"].as_str().unwrap_or("none"),
+        fanout
+    )
+}
+
+fn format_run_graph_activation_vs_execution_evidence(evidence: &serde_json::Value) -> String {
+    format!(
+        "{} activation_kind={}",
+        evidence["evidence_state"].as_str().unwrap_or("unknown"),
+        evidence["activation_kind"].as_str().unwrap_or("unknown")
+    )
 }
 
 pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> ExitCode {
@@ -230,6 +264,20 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
             );
         }
     }
+    if let Some(mixed_posture) = inputs.latest_run_graph_mixed_posture {
+        crate::surface_render::print_surface_line(
+            inputs.render,
+            "latest run graph mixed posture",
+            &format_run_graph_mixed_posture(mixed_posture),
+        );
+    }
+    if let Some(evidence) = inputs.latest_run_graph_activation_vs_execution_evidence {
+        crate::surface_render::print_surface_line(
+            inputs.render,
+            "latest run graph activation vs execution evidence",
+            &format_run_graph_activation_vs_execution_evidence(evidence),
+        );
+    }
     match inputs.latest_run_graph_gate {
         Some(summary) => {
             crate::surface_render::print_surface_line(
@@ -242,6 +290,22 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
             crate::surface_render::print_surface_line(
                 inputs.render,
                 "latest run graph gate",
+                "none",
+            );
+        }
+    }
+    match inputs.latest_run_graph_dispatch_receipt {
+        Some(summary) => {
+            crate::surface_render::print_surface_line(
+                inputs.render,
+                "latest run graph dispatch receipt",
+                &summary.as_display(),
+            );
+        }
+        None => {
+            crate::surface_render::print_surface_line(
+                inputs.render,
+                "latest run graph dispatch receipt",
                 "none",
             );
         }
@@ -344,6 +408,13 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
         );
         crate::surface_render::print_surface_line(
             inputs.render,
+            "host agent posture",
+            host_agents["mixed_posture_details"]["effective_execution_posture"]
+                .as_str()
+                .unwrap_or("unknown"),
+        );
+        crate::surface_render::print_surface_line(
+            inputs.render,
             "root session write guard",
             host_agents["root_session_write_guard"]["status"]
                 .as_str()
@@ -376,4 +447,39 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
         }
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        format_run_graph_activation_vs_execution_evidence, format_run_graph_mixed_posture,
+    };
+
+    #[test]
+    fn mixed_posture_display_includes_selected_backend_and_fanout() {
+        let mixed_posture = serde_json::json!({
+            "effective_posture_kind": "hybrid_external_cli",
+            "selected_backend": "qwen",
+            "fallback_backend": "vibe",
+            "fanout_backends": ["qwen", "vibe"],
+        });
+
+        assert_eq!(
+            format_run_graph_mixed_posture(&mixed_posture),
+            "hybrid_external_cli backend=qwen fallback=vibe fanout=qwen, vibe"
+        );
+    }
+
+    #[test]
+    fn activation_vs_execution_evidence_display_includes_state_and_kind() {
+        let evidence = serde_json::json!({
+            "evidence_state": "consistent",
+            "activation_kind": "dispatch",
+        });
+
+        assert_eq!(
+            format_run_graph_activation_vs_execution_evidence(&evidence),
+            "consistent activation_kind=dispatch"
+        );
+    }
 }
