@@ -1,7 +1,10 @@
 use super::*;
 use crate::release1_contracts::lane_status_has_required_evidence;
+use crate::taskflow_run_graph::{
+    approval_delegation_transition_kind, is_dispatch_resume_handoff_complete,
+};
 
-pub(super) fn reconcile_run_graph_status_with_dispatch_receipt(
+fn reconcile_run_graph_status_with_dispatch_receipt(
     mut status: RunGraphStatus,
     receipt: Option<&RunGraphDispatchReceiptStored>,
 ) -> Result<RunGraphStatus, StateStoreError> {
@@ -444,7 +447,7 @@ impl RunGraphApprovalDelegationReceipt {
     }
 }
 
-pub(crate) fn ensure_run_graph_approval_delegation_receipt_consistency(
+fn ensure_run_graph_approval_delegation_receipt_consistency(
     receipt: &RunGraphApprovalDelegationReceipt,
 ) -> Result<(), StateStoreError> {
     if receipt.receipt_id.trim().is_empty()
@@ -681,5 +684,668 @@ impl RunGraphGateSummary {
             self.delegation_gate.reporting_pause_gate,
             self.delegation_gate.continuation_signal
         )
+    }
+}
+
+impl StateStore {
+    pub async fn run_graph_summary(&self) -> Result<RunGraphSummary, StateStoreError> {
+        Ok(RunGraphSummary {
+            execution_plan_count: self.count_table_rows("execution_plan_state").await?,
+            routed_run_count: self.count_table_rows("routed_run_state").await?,
+            governance_count: self.count_table_rows("governance_state").await?,
+            resumability_count: self.count_table_rows("resumability_capsule").await?,
+            reconciliation_count: self.count_table_rows("task_reconciliation_summary").await?,
+        })
+    }
+
+    #[allow(dead_code)]
+    pub async fn record_run_graph_status(
+        &self,
+        status: &RunGraphStatus,
+    ) -> Result<(), StateStoreError> {
+        status.validate_memory_governance()?;
+        let updated_at = unix_timestamp_nanos().to_string();
+        let receipt_recorded_at = updated_at.clone();
+        let _: Option<RoutedRunStateRow> = self
+            .db
+            .upsert(("routed_run_state", status.run_id.as_str()))
+            .content(RoutedRunStateRow {
+                run_id: status.run_id.clone(),
+                route_task_class: status.route_task_class.clone(),
+                selected_backend: status.selected_backend.clone(),
+                lane_id: status.lane_id.clone(),
+                lifecycle_stage: status.lifecycle_stage.clone(),
+                updated_at: updated_at.clone(),
+            })
+            .await?;
+        let _: Option<GovernanceStateRow> = self
+            .db
+            .upsert(("governance_state", status.run_id.as_str()))
+            .content(GovernanceStateRow {
+                run_id: status.run_id.clone(),
+                policy_gate: status.policy_gate.clone(),
+                handoff_state: status.handoff_state.clone(),
+                context_state: status.context_state.clone(),
+                updated_at: updated_at.clone(),
+            })
+            .await?;
+        let _: Option<ResumabilityCapsuleRow> = self
+            .db
+            .upsert(("resumability_capsule", status.run_id.as_str()))
+            .content(ResumabilityCapsuleRow {
+                run_id: status.run_id.clone(),
+                checkpoint_kind: status.checkpoint_kind.clone(),
+                resume_target: status.resume_target.clone(),
+                recovery_ready: status.recovery_ready,
+                updated_at,
+            })
+            .await?;
+        let _: Option<ExecutionPlanStateRow> = self
+            .db
+            .upsert(("execution_plan_state", status.run_id.as_str()))
+            .content(ExecutionPlanStateRow {
+                run_id: status.run_id.clone(),
+                task_id: status.task_id.clone(),
+                task_class: status.task_class.clone(),
+                active_node: status.active_node.clone(),
+                next_node: status.next_node.clone(),
+                status: status.status.clone(),
+                updated_at: unix_timestamp_nanos().to_string(),
+            })
+            .await?;
+        if let Some(transition_kind) = approval_delegation_transition_kind(status) {
+            let receipt = RunGraphApprovalDelegationReceipt::from_status(
+                status,
+                transition_kind,
+                receipt_recorded_at,
+            );
+            self.record_run_graph_approval_delegation_receipt(&receipt)
+                .await?;
+        }
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub async fn record_run_graph_dispatch_receipt(
+        &self,
+        receipt: &RunGraphDispatchReceipt,
+    ) -> Result<(), StateStoreError> {
+        let receipt: RunGraphDispatchReceiptStored = receipt.clone().into();
+        Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&receipt)?;
+        let _: Option<RunGraphDispatchReceiptStored> = self
+            .db
+            .upsert(("run_graph_dispatch_receipt", receipt.run_id.as_str()))
+            .content(receipt)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn record_run_graph_continuation_binding(
+        &self,
+        binding: &RunGraphContinuationBinding,
+    ) -> Result<(), StateStoreError> {
+        binding.validate()?;
+        let _: Option<RunGraphContinuationBinding> = self
+            .db
+            .upsert(("run_graph_continuation_binding", binding.run_id.as_str()))
+            .content(binding.clone())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn run_graph_continuation_binding(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<RunGraphContinuationBinding>, StateStoreError> {
+        let binding: Option<RunGraphContinuationBinding> = self
+            .db
+            .select(("run_graph_continuation_binding", run_id))
+            .await?;
+        match binding {
+            Some(binding) => {
+                binding.validate()?;
+                Ok(Some(binding))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub async fn record_run_graph_dispatch_context(
+        &self,
+        context: &RunGraphDispatchContext,
+    ) -> Result<(), StateStoreError> {
+        context.validate()?;
+        let _: Option<RunGraphDispatchContext> = self
+            .db
+            .upsert(("run_graph_dispatch_context", context.run_id.as_str()))
+            .content(context.clone())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn run_graph_dispatch_context(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<RunGraphDispatchContext>, StateStoreError> {
+        let context: Option<RunGraphDispatchContext> = self
+            .db
+            .select(("run_graph_dispatch_context", run_id))
+            .await?;
+        match context {
+            Some(context) => {
+                context.validate()?;
+                Ok(Some(context))
+            }
+            None => Ok(None),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn run_graph_status(&self, run_id: &str) -> Result<RunGraphStatus, StateStoreError> {
+        let execution: Option<ExecutionPlanStateRow> =
+            self.db.select(("execution_plan_state", run_id)).await?;
+        let execution = execution.ok_or_else(|| StateStoreError::MissingTask {
+            task_id: format!("run_graph:{run_id}"),
+        })?;
+        let routed: Option<RoutedRunStateRow> =
+            self.db.select(("routed_run_state", run_id)).await?;
+        let routed = routed.ok_or_else(|| StateStoreError::MissingTask {
+            task_id: format!("run_graph_route:{run_id}"),
+        })?;
+        let governance: Option<GovernanceStateRow> =
+            self.db.select(("governance_state", run_id)).await?;
+        let governance = governance.ok_or_else(|| StateStoreError::MissingTask {
+            task_id: format!("run_graph_governance:{run_id}"),
+        })?;
+        let resumability: Option<ResumabilityCapsuleRow> =
+            self.db.select(("resumability_capsule", run_id)).await?;
+        let resumability = resumability.ok_or_else(|| StateStoreError::MissingTask {
+            task_id: format!("run_graph_resumability:{run_id}"),
+        })?;
+
+        let status = RunGraphStatus {
+            run_id: execution.run_id,
+            task_id: execution.task_id,
+            task_class: execution.task_class,
+            active_node: execution.active_node,
+            next_node: execution.next_node,
+            status: execution.status,
+            route_task_class: routed.route_task_class,
+            selected_backend: routed.selected_backend,
+            lane_id: routed.lane_id,
+            lifecycle_stage: routed.lifecycle_stage,
+            policy_gate: governance.policy_gate,
+            handoff_state: governance.handoff_state,
+            context_state: governance.context_state,
+            checkpoint_kind: resumability.checkpoint_kind,
+            resume_target: resumability.resume_target,
+            recovery_ready: resumability.recovery_ready,
+        };
+        let receipt = self.run_graph_dispatch_receipt_stored(run_id).await?;
+        let status = reconcile_run_graph_status_with_dispatch_receipt(status, receipt.as_ref())?;
+        status.validate_memory_governance()?;
+        Ok(status)
+    }
+
+    pub async fn record_run_graph_approval_delegation_receipt(
+        &self,
+        receipt: &RunGraphApprovalDelegationReceipt,
+    ) -> Result<(), StateStoreError> {
+        let receipt = receipt.clone();
+        ensure_run_graph_approval_delegation_receipt_consistency(&receipt)?;
+        let _: Option<RunGraphApprovalDelegationReceipt> = self
+            .db
+            .upsert((
+                "run_graph_approval_delegation_receipt",
+                receipt.run_id.as_str(),
+            ))
+            .content(receipt)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn run_graph_approval_delegation_receipt(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<RunGraphApprovalDelegationReceipt>, StateStoreError> {
+        let receipt: Option<RunGraphApprovalDelegationReceipt> = self
+            .db
+            .select(("run_graph_approval_delegation_receipt", run_id))
+            .await?;
+        Ok(match receipt {
+            Some(receipt) => Some(
+                ensure_run_graph_approval_delegation_receipt_consistency(&receipt)
+                    .map(|()| receipt)?,
+            ),
+            None => None,
+        })
+    }
+
+    pub async fn latest_run_graph_status(&self) -> Result<Option<RunGraphStatus>, StateStoreError> {
+        let Some(run_id) = self.latest_run_graph_run_id().await? else {
+            return Ok(None);
+        };
+        Ok(Some(self.run_graph_status(&run_id).await?))
+    }
+
+    pub(crate) async fn latest_run_graph_run_id(&self) -> Result<Option<String>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT run_id, updated_at FROM execution_plan_state ORDER BY updated_at DESC, run_id DESC LIMIT 1;",
+            )
+            .await?;
+        let rows: Vec<RunGraphLatestRow> = query.take(0)?;
+        Ok(rows.into_iter().next().map(|latest| latest.run_id))
+    }
+
+    async fn ensure_run_graph_recovery_surface_rows_present(
+        &self,
+        run_id: &str,
+    ) -> Result<(), StateStoreError> {
+        let governance: Option<GovernanceStateRow> =
+            self.db.select(("governance_state", run_id)).await?;
+        let resumability: Option<ResumabilityCapsuleRow> =
+            self.db.select(("resumability_capsule", run_id)).await?;
+        if governance.is_none() || resumability.is_none() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph recovery/checkpoint summary is inconsistent for `{run_id}`: latest status requires both governance and resumability rows (governance_present={}, resumability_present={})",
+                    governance.is_some(),
+                    resumability.is_some()
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    async fn latest_run_graph_checkpoint_run_id(&self) -> Result<Option<String>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT run_id, updated_at FROM resumability_capsule ORDER BY updated_at DESC, run_id DESC LIMIT 1;",
+            )
+            .await?;
+        let rows: Vec<RunGraphLatestRow> = query.take(0)?;
+        Ok(rows.into_iter().next().map(|latest| latest.run_id))
+    }
+
+    async fn ensure_run_graph_recovery_surface_latest_checkpoint_matches_run_id(
+        &self,
+        run_id: &str,
+    ) -> Result<(), StateStoreError> {
+        let latest_checkpoint_run_id = self.latest_run_graph_checkpoint_run_id().await?;
+        if latest_checkpoint_run_id.as_deref() != Some(run_id) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph recovery/checkpoint summary is inconsistent for `{run_id}`: latest checkpoint evidence must share the same run_id (latest_checkpoint_run_id={})",
+                    latest_checkpoint_run_id.as_deref().unwrap_or("none")
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn ensure_run_graph_recovery_surface_consistency(
+        status: &RunGraphStatus,
+    ) -> Result<(), StateStoreError> {
+        if status.resume_target.starts_with("dispatch.")
+            && !is_dispatch_resume_handoff_complete(status)
+        {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph recovery/gate summary is inconsistent for `{}`: dispatch resume target `{}` requires complete handoff metadata (next_node={}, policy_gate=`{}`, handoff=`{}`)",
+                    status.run_id,
+                    status.resume_target,
+                    status.next_node.as_deref().unwrap_or("none"),
+                    status.policy_gate,
+                    status.handoff_state
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    pub async fn ensure_memory_governance_guard(&self) -> Result<(), StateStoreError> {
+        let Some(status) = self.latest_run_graph_status().await? else {
+            return Ok(());
+        };
+        status.validate_memory_governance()
+    }
+
+    pub async fn latest_run_graph_dispatch_receipt_summary(
+        &self,
+    ) -> Result<Option<RunGraphDispatchReceiptSummary>, StateStoreError> {
+        let Some(status) = self.latest_run_graph_status().await? else {
+            return Ok(None);
+        };
+        let latest_checkpoint_run_id = self.latest_run_graph_checkpoint_run_id().await?;
+        if latest_checkpoint_run_id.as_deref() != Some(status.run_id.as_str()) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: latest checkpoint evidence must share the same run_id (latest_checkpoint_run_id={})",
+                    status.run_id,
+                    latest_checkpoint_run_id.as_deref().unwrap_or("none")
+                ),
+            });
+        }
+        let Some(receipt) = self
+            .run_graph_dispatch_receipt_stored(&status.run_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
+        let receipt: RunGraphDispatchReceipt = receipt.into();
+        let host_runtime = crate::taskflow_task_bridge::infer_project_root_from_state_root(
+            self.root(),
+        )
+        .map(|project_root| {
+            crate::runtime_dispatch_state::runtime_host_execution_contract_for_root(&project_root)
+        });
+        let role_selection = self
+            .run_graph_dispatch_context(&status.run_id)
+            .await?
+            .map(|context| context.role_selection())
+            .transpose()?;
+        let effective_execution_posture = {
+            let mut summary = crate::runtime_dispatch_state::effective_execution_posture_summary(
+                role_selection
+                    .as_ref()
+                    .map(|selection| &selection.execution_plan)
+                    .unwrap_or(&serde_json::Value::Null),
+                &receipt.dispatch_target,
+                receipt.selected_backend.as_deref(),
+                receipt.activation_agent_type.as_deref(),
+                host_runtime.as_ref(),
+                crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(&receipt),
+            );
+            let activation_evidence =
+                crate::runtime_dispatch_state::dispatch_activation_evidence_summary(&receipt);
+            if let Some(object) = summary.as_object_mut() {
+                object.insert(
+                    "activation_kind".to_string(),
+                    activation_evidence["activation_kind"].clone(),
+                );
+                object.insert(
+                    "execution_evidence_path".to_string(),
+                    activation_evidence["execution_evidence_path"].clone(),
+                );
+                object.insert(
+                    "receipt_backed".to_string(),
+                    activation_evidence["receipt_backed"].clone(),
+                );
+            }
+            summary
+        };
+        let route_policy = role_selection
+            .as_ref()
+            .map(|selection| {
+                crate::runtime_dispatch_state::dispatch_execution_route_summary(
+                    selection,
+                    &receipt.dispatch_target,
+                    receipt.selected_backend.as_deref(),
+                )
+            })
+            .unwrap_or(serde_json::Value::Null);
+        let activation_evidence =
+            crate::runtime_dispatch_state::dispatch_activation_evidence_summary(&receipt);
+        Ok(Some(
+            RunGraphDispatchReceiptSummary::from_receipt(receipt)
+                .with_effective_execution_posture(effective_execution_posture)
+                .with_route_policy(route_policy)
+                .with_activation_evidence(activation_evidence),
+        ))
+    }
+
+    pub async fn latest_run_graph_dispatch_receipt(
+        &self,
+    ) -> Result<Option<RunGraphDispatchReceipt>, StateStoreError> {
+        let Some(status) = self.latest_run_graph_status().await? else {
+            return Ok(None);
+        };
+        let latest_checkpoint_run_id = self.latest_run_graph_checkpoint_run_id().await?;
+        if latest_checkpoint_run_id.as_deref() != Some(status.run_id.as_str()) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt is inconsistent for `{}`: latest checkpoint evidence must share the same run_id (latest_checkpoint_run_id={})",
+                    status.run_id,
+                    latest_checkpoint_run_id.as_deref().unwrap_or("none")
+                ),
+            });
+        }
+        let Some(receipt) = self
+            .run_graph_dispatch_receipt_stored(&status.run_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
+        Ok(Some(receipt.into()))
+    }
+
+    pub async fn run_graph_dispatch_receipt(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<RunGraphDispatchReceipt>, StateStoreError> {
+        self.run_graph_dispatch_receipt_stored(run_id)
+            .await
+            .map(|row| row.map(Into::into))
+    }
+
+    async fn run_graph_dispatch_receipt_stored(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<RunGraphDispatchReceiptStored>, StateStoreError> {
+        self.db
+            .select(("run_graph_dispatch_receipt", run_id))
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn latest_run_graph_recovery_summary(
+        &self,
+    ) -> Result<Option<RunGraphRecoverySummary>, StateStoreError> {
+        let Some(run_id) = self.latest_run_graph_run_id().await? else {
+            return Ok(None);
+        };
+        let status = self.load_consistent_run_graph_status(&run_id).await?;
+        Ok(Some(RunGraphRecoverySummary::from_status(status)))
+    }
+
+    pub async fn latest_run_graph_checkpoint_summary(
+        &self,
+    ) -> Result<Option<RunGraphCheckpointSummary>, StateStoreError> {
+        let Some(run_id) = self.latest_run_graph_run_id().await? else {
+            return Ok(None);
+        };
+        let status = self.load_consistent_run_graph_status(&run_id).await?;
+        Ok(Some(RunGraphCheckpointSummary::from_status(status)))
+    }
+
+    pub async fn latest_run_graph_gate_summary(
+        &self,
+    ) -> Result<Option<RunGraphGateSummary>, StateStoreError> {
+        let Some(run_id) = self.latest_run_graph_run_id().await? else {
+            return Ok(None);
+        };
+        let status = self.load_consistent_run_graph_status(&run_id).await?;
+        Ok(Some(RunGraphGateSummary::from_status(status)))
+    }
+
+    pub async fn run_graph_recovery_summary(
+        &self,
+        run_id: &str,
+    ) -> Result<RunGraphRecoverySummary, StateStoreError> {
+        let status = self.load_consistent_run_graph_status(run_id).await?;
+        Ok(RunGraphRecoverySummary::from_status(status))
+    }
+
+    async fn load_consistent_run_graph_status(
+        &self,
+        run_id: &str,
+    ) -> Result<RunGraphStatus, StateStoreError> {
+        self.ensure_run_graph_recovery_surface_latest_checkpoint_matches_run_id(run_id)
+            .await?;
+        self.ensure_run_graph_recovery_surface_rows_present(run_id)
+            .await?;
+        let status = self.run_graph_status(run_id).await?;
+        Self::ensure_run_graph_recovery_surface_consistency(&status)?;
+        Ok(status)
+    }
+
+    pub async fn run_graph_checkpoint_summary(
+        &self,
+        run_id: &str,
+    ) -> Result<RunGraphCheckpointSummary, StateStoreError> {
+        self.ensure_run_graph_recovery_surface_latest_checkpoint_matches_run_id(run_id)
+            .await?;
+        self.ensure_run_graph_recovery_surface_rows_present(run_id)
+            .await?;
+        let status = self.run_graph_status(run_id).await?;
+        Self::ensure_run_graph_recovery_surface_consistency(&status)?;
+        Ok(RunGraphCheckpointSummary::from_status(status))
+    }
+
+    pub async fn run_graph_gate_summary(
+        &self,
+        run_id: &str,
+    ) -> Result<RunGraphGateSummary, StateStoreError> {
+        self.ensure_run_graph_recovery_surface_latest_checkpoint_matches_run_id(run_id)
+            .await?;
+        self.ensure_run_graph_recovery_surface_rows_present(run_id)
+            .await?;
+        let status = self.run_graph_status(run_id).await?;
+        Self::ensure_run_graph_recovery_surface_consistency(&status)?;
+        Ok(RunGraphGateSummary::from_status(status))
+    }
+
+    fn ensure_run_graph_dispatch_receipt_summary_consistency(
+        receipt: &RunGraphDispatchReceiptStored,
+    ) -> Result<(), StateStoreError> {
+        if receipt.dispatch_status.trim().is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: dispatch_status must be non-empty",
+                    receipt.run_id
+                ),
+            });
+        }
+        let Some(raw_lane_status) = receipt.lane_status.as_deref() else {
+            return Ok(());
+        };
+        if raw_lane_status.trim().is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: lane_status must be non-empty when present",
+                    receipt.run_id
+                ),
+            });
+        }
+        let raw_lane_status = raw_lane_status.trim();
+        let canonical_lane_status =
+            canonical_lane_status_str(raw_lane_status).unwrap_or(raw_lane_status);
+        let downstream_closure_completed = receipt.downstream_dispatch_status.as_deref()
+            == Some("executed")
+            && canonical_lane_status == "lane_completed";
+        let effective_derived_lane_status = if downstream_closure_completed {
+            "lane_completed".to_string()
+        } else {
+            normalize_run_graph_lane_status(
+                Some(raw_lane_status),
+                &receipt.dispatch_status,
+                receipt.supersedes_receipt_id.as_deref(),
+                receipt.exception_path_receipt_id.as_deref(),
+            )
+        };
+        if receipt.downstream_dispatch_status.is_some()
+            && canonical_lane_status != effective_derived_lane_status
+        {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: downstream_dispatch_status `{}` with lane_status `{}` conflicts with derived lane_status `{}` from dispatch_status `{}`",
+                    receipt.run_id,
+                    receipt
+                        .downstream_dispatch_status
+                        .as_deref()
+                        .unwrap_or("none"),
+                    canonical_lane_status,
+                    effective_derived_lane_status,
+                    receipt.dispatch_status
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(
+        receipt: &RunGraphDispatchReceiptStored,
+    ) -> Result<(), StateStoreError> {
+        let Some(downstream_status) = receipt.downstream_dispatch_status.as_deref() else {
+            return Ok(());
+        };
+        let downstream_status = downstream_status.trim().to_ascii_lowercase();
+        let requires_blockers = downstream_status == "blocked";
+        if requires_blockers && receipt.downstream_dispatch_blockers.is_empty() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: downstream_dispatch_blockers must be present and non-empty when downstream_dispatch_status `{}` is present",
+                    receipt.run_id,
+                    receipt
+                        .downstream_dispatch_status
+                        .as_deref()
+                        .unwrap_or("none")
+                ),
+            });
+        }
+        if receipt.downstream_dispatch_blockers.is_empty() {
+            return Ok(());
+        }
+        let mut canonical_blockers = std::collections::HashSet::new();
+        if receipt.downstream_dispatch_blockers.iter().any(|blocker| {
+            let raw_blocker = blocker.as_str();
+            let blocker = blocker.trim();
+            let collapsed = blocker.split_whitespace().collect::<Vec<_>>().join(" ");
+            raw_blocker != blocker
+                || blocker.is_empty()
+                || !blocker.is_ascii()
+                || blocker.to_ascii_lowercase() != blocker
+                || collapsed != blocker
+        }) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: downstream_dispatch_blockers must contain only non-empty ASCII lowercase canonical entries without whitespace, case, internal spacing, or unicode drift when downstream_dispatch_status `{}` is present",
+                    receipt.run_id,
+                    receipt
+                        .downstream_dispatch_status
+                        .as_deref()
+                        .unwrap_or("none")
+                ),
+            });
+        }
+        if receipt.downstream_dispatch_blockers.iter().any(|blocker| {
+            let canonical_blocker = blocker.trim().to_ascii_lowercase();
+            !canonical_blockers.insert(canonical_blocker)
+        }) {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "run-graph dispatch receipt summary is inconsistent for `{}`: downstream_dispatch_blockers must not contain duplicate canonical entries after lowercase canonicalization when downstream_dispatch_status `{}` is present",
+                    receipt.run_id,
+                    receipt
+                        .downstream_dispatch_status
+                        .as_deref()
+                        .unwrap_or("none")
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_run_graph_dispatch_receipt_contract(
+        receipt: RunGraphDispatchReceiptStored,
+    ) -> Result<RunGraphDispatchReceiptStored, StateStoreError> {
+        Self::ensure_run_graph_dispatch_receipt_summary_consistency(&receipt)?;
+        Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&receipt)?;
+        Ok(receipt)
     }
 }
