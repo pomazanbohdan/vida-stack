@@ -61,6 +61,12 @@ pub(crate) fn downstream_dispatch_packet_body(
     let closure_class = dispatch_contract_lane(&role_selection.execution_plan, downstream_target)
         .and_then(|lane| lane["closure_class"].as_str())
         .unwrap_or("implementation");
+    let selected_backend = crate::runtime_dispatch_state::downstream_selected_backend(
+        role_selection,
+        downstream_target,
+        activation_agent_type.as_deref(),
+        receipt.selected_backend.as_deref(),
+    );
     let delivery_task_packet = runtime_delivery_task_packet(
         &receipt.run_id,
         downstream_target,
@@ -76,20 +82,52 @@ pub(crate) fn downstream_dispatch_packet_body(
         handoff_task_class,
         closure_class,
     );
-    serde_json::json!({
-        "packet_kind": "runtime_downstream_dispatch_packet",
-        "packet_template_kind": packet_template_kind,
-        "delivery_task_packet": if packet_template_kind == "delivery_task_packet" {
+    let host_runtime =
+        crate::runtime_dispatch_state::runtime_host_execution_contract_for_root(&project_root);
+    let effective_execution_posture =
+        crate::runtime_dispatch_state::effective_execution_posture_summary(
+            &role_selection.execution_plan,
+            downstream_target,
+            selected_backend.as_deref(),
+            activation_agent_type.as_deref(),
+            Some(&host_runtime),
+            crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(receipt),
+        );
+    let execution_truth = crate::runtime_dispatch_state::dispatch_execution_route_summary(
+        role_selection,
+        downstream_target,
+        selected_backend.as_deref(),
+    );
+    let activation_evidence =
+        crate::runtime_dispatch_state::dispatch_activation_evidence_summary(receipt);
+    let mut body = serde_json::Map::new();
+    body.insert(
+        "packet_kind".to_string(),
+        serde_json::json!("runtime_downstream_dispatch_packet"),
+    );
+    body.insert(
+        "packet_template_kind".to_string(),
+        serde_json::json!(packet_template_kind),
+    );
+    body.insert(
+        "delivery_task_packet".to_string(),
+        if packet_template_kind == "delivery_task_packet" {
             delivery_task_packet
         } else {
             serde_json::Value::Null
         },
-        "execution_block_packet": if packet_template_kind == "execution_block_packet" {
+    );
+    body.insert(
+        "execution_block_packet".to_string(),
+        if packet_template_kind == "execution_block_packet" {
             execution_block_packet
         } else {
             serde_json::Value::Null
         },
-        "coach_review_packet": if packet_template_kind == "coach_review_packet" {
+    );
+    body.insert(
+        "coach_review_packet".to_string(),
+        if packet_template_kind == "coach_review_packet" {
             runtime_coach_review_packet(
                 &receipt.run_id,
                 downstream_target,
@@ -98,7 +136,10 @@ pub(crate) fn downstream_dispatch_packet_body(
         } else {
             serde_json::Value::Null
         },
-        "verifier_proof_packet": if packet_template_kind == "verifier_proof_packet" {
+    );
+    body.insert(
+        "verifier_proof_packet".to_string(),
+        if packet_template_kind == "verifier_proof_packet" {
             runtime_verifier_proof_packet(
                 &receipt.run_id,
                 downstream_target,
@@ -107,61 +148,162 @@ pub(crate) fn downstream_dispatch_packet_body(
         } else {
             serde_json::Value::Null
         },
-        "escalation_packet": if packet_template_kind == "escalation_packet" {
+    );
+    body.insert(
+        "escalation_packet".to_string(),
+        if packet_template_kind == "escalation_packet" {
             runtime_escalation_packet(&receipt.run_id, downstream_target)
         } else {
             serde_json::Value::Null
         },
-        "tracked_flow_packet": if packet_template_kind == "tracked_flow_packet" {
+    );
+    body.insert(
+        "tracked_flow_packet".to_string(),
+        if packet_template_kind == "tracked_flow_packet" {
             runtime_tracked_flow_packet(role_selection, &receipt.run_id, downstream_target)
         } else {
             serde_json::Value::Null
         },
-        "prompt": runtime_packet_prompt(
+    );
+    body.insert(
+        "prompt".to_string(),
+        serde_json::json!(runtime_packet_prompt(
             &receipt.run_id,
             downstream_target,
             handoff_runtime_role,
             &role_selection.request,
             &role_selection.execution_plan["orchestration_contract"],
+        )),
+    );
+    body.insert(
+        "recorded_at".to_string(),
+        serde_json::json!(receipt.recorded_at),
+    );
+    body.insert("run_id".to_string(), serde_json::json!(receipt.run_id));
+    body.insert(
+        "source_dispatch_target".to_string(),
+        serde_json::json!(receipt.dispatch_target),
+    );
+    body.insert(
+        "source_dispatch_status".to_string(),
+        serde_json::json!(receipt.dispatch_status),
+    );
+    body.insert(
+        "source_lane_status".to_string(),
+        serde_json::json!(receipt.lane_status),
+    );
+    body.insert(
+        "source_supersedes_receipt_id".to_string(),
+        serde_json::json!(receipt.supersedes_receipt_id),
+    );
+    body.insert(
+        "source_exception_path_receipt_id".to_string(),
+        serde_json::json!(receipt.exception_path_receipt_id),
+    );
+    body.insert(
+        "source_blocker_code".to_string(),
+        serde_json::json!(receipt.blocker_code),
+    );
+    body.insert(
+        "downstream_dispatch_target".to_string(),
+        serde_json::json!(receipt.downstream_dispatch_target),
+    );
+    body.insert(
+        "downstream_dispatch_command".to_string(),
+        serde_json::json!(
+            activation_command.or_else(|| receipt.downstream_dispatch_command.clone())
         ),
-        "recorded_at": receipt.recorded_at,
-        "run_id": receipt.run_id,
-        "source_dispatch_target": receipt.dispatch_target,
-        "source_dispatch_status": receipt.dispatch_status,
-        "source_lane_status": receipt.lane_status,
-        "source_supersedes_receipt_id": receipt.supersedes_receipt_id,
-        "source_exception_path_receipt_id": receipt.exception_path_receipt_id,
-        "source_blocker_code": receipt.blocker_code,
-        "downstream_dispatch_target": receipt.downstream_dispatch_target,
-        "downstream_dispatch_command": activation_command.or_else(|| receipt.downstream_dispatch_command.clone()),
-        "downstream_dispatch_note": receipt.downstream_dispatch_note,
-        "downstream_dispatch_ready": receipt.downstream_dispatch_ready,
-        "downstream_dispatch_blockers": receipt.downstream_dispatch_blockers,
-        "downstream_dispatch_status": receipt.downstream_dispatch_status,
-        "downstream_lane_status": receipt
-            .downstream_dispatch_status
-            .as_deref()
-            .map(|status| {
-                derive_lane_status(
-                    status,
-                    receipt.supersedes_receipt_id.as_deref(),
-                    receipt.exception_path_receipt_id.as_deref(),
-                )
-                .as_str()
-                .to_string()
-            }),
-        "downstream_supersedes_receipt_id": receipt.supersedes_receipt_id,
-        "downstream_exception_path_receipt_id": receipt.exception_path_receipt_id,
-        "downstream_dispatch_result_path": receipt.downstream_dispatch_result_path,
-        "downstream_dispatch_active_target": receipt.downstream_dispatch_active_target,
-        "activation_agent_type": activation_agent_type.clone(),
-        "activation_runtime_role": activation_runtime_role.clone(),
-        "selected_backend": activation_agent_type.or_else(|| receipt.selected_backend.clone()),
-        "host_runtime": crate::runtime_dispatch_state::runtime_host_execution_contract_for_root(&project_root),
-        "role_selection_full": role_selection,
-        "run_graph_bootstrap": run_graph_bootstrap,
-        "orchestration_contract": role_selection.execution_plan["orchestration_contract"],
-    })
+    );
+    body.insert(
+        "downstream_dispatch_note".to_string(),
+        serde_json::json!(receipt.downstream_dispatch_note),
+    );
+    body.insert(
+        "downstream_dispatch_ready".to_string(),
+        serde_json::json!(receipt.downstream_dispatch_ready),
+    );
+    body.insert(
+        "downstream_dispatch_blockers".to_string(),
+        serde_json::json!(receipt.downstream_dispatch_blockers),
+    );
+    body.insert(
+        "downstream_dispatch_status".to_string(),
+        serde_json::json!(receipt.downstream_dispatch_status),
+    );
+    body.insert(
+        "downstream_lane_status".to_string(),
+        serde_json::json!(receipt.downstream_dispatch_status.as_deref().map(|status| {
+            derive_lane_status(
+                status,
+                receipt.supersedes_receipt_id.as_deref(),
+                receipt.exception_path_receipt_id.as_deref(),
+            )
+            .as_str()
+            .to_string()
+        })),
+    );
+    body.insert(
+        "downstream_supersedes_receipt_id".to_string(),
+        serde_json::json!(receipt.supersedes_receipt_id),
+    );
+    body.insert(
+        "downstream_exception_path_receipt_id".to_string(),
+        serde_json::json!(receipt.exception_path_receipt_id),
+    );
+    body.insert(
+        "downstream_dispatch_result_path".to_string(),
+        serde_json::json!(receipt.downstream_dispatch_result_path),
+    );
+    body.insert(
+        "downstream_dispatch_active_target".to_string(),
+        serde_json::json!(receipt.downstream_dispatch_active_target),
+    );
+    body.insert(
+        "activation_agent_type".to_string(),
+        serde_json::json!(activation_agent_type),
+    );
+    body.insert(
+        "activation_runtime_role".to_string(),
+        serde_json::json!(activation_runtime_role),
+    );
+    body.insert(
+        "selected_backend".to_string(),
+        serde_json::json!(selected_backend),
+    );
+    body.insert(
+        "effective_execution_posture".to_string(),
+        effective_execution_posture.clone(),
+    );
+    body.insert("mixed_posture".to_string(), effective_execution_posture);
+    body.insert("route_policy".to_string(), execution_truth.clone());
+    body.insert(
+        "activation_vs_execution_evidence".to_string(),
+        activation_evidence.clone(),
+    );
+    body.insert(
+        "activation_semantics".to_string(),
+        activation_evidence["activation_semantics"].clone(),
+    );
+    body.insert(
+        "execution_evidence".to_string(),
+        activation_evidence["execution_evidence"].clone(),
+    );
+    body.insert("execution_truth".to_string(), execution_truth);
+    body.insert("activation_evidence".to_string(), activation_evidence);
+    body.insert("host_runtime".to_string(), host_runtime);
+    body.insert(
+        "role_selection_full".to_string(),
+        serde_json::to_value(role_selection).expect("role selection should serialize"),
+    );
+    body.insert(
+        "run_graph_bootstrap".to_string(),
+        run_graph_bootstrap.clone(),
+    );
+    body.insert(
+        "orchestration_contract".to_string(),
+        role_selection.execution_plan["orchestration_contract"].clone(),
+    );
+    serde_json::Value::Object(body)
 }
 
 pub(crate) fn write_runtime_downstream_dispatch_packet_at(

@@ -411,6 +411,12 @@ mod tests {
         original: PathBuf,
     }
 
+    struct EnvVarGuard {
+        _lock: MutexGuard<'static, ()>,
+        key: &'static str,
+        original: Option<String>,
+    }
+
     impl CurrentDirGuard {
         fn change_to(path: &Path) -> Self {
             let lock = current_dir_lock().lock();
@@ -427,9 +433,37 @@ mod tests {
         CurrentDirGuard::change_to(path)
     }
 
+    fn env_var_lock() -> &'static RecoveringMutex {
+        static LOCK: OnceLock<RecoveringMutex> = OnceLock::new();
+        LOCK.get_or_init(|| RecoveringMutex(Mutex::new(())))
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let lock = env_var_lock().lock();
+            let original = env::var(key).ok();
+            std::env::set_var(key, value);
+            Self {
+                _lock: lock,
+                key,
+                original,
+            }
+        }
+    }
+
     impl Drop for CurrentDirGuard {
         fn drop(&mut self) {
             env::set_current_dir(&self.original).expect("current dir should restore");
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.original.as_deref() {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
         }
     }
     use std::thread;
@@ -3456,6 +3490,26 @@ mod tests {
         );
         assert_eq!(packet["host_runtime"]["runtime_template_root"], ".qwen");
         assert_eq!(packet["selected_backend"], "qwen-primary");
+        assert_eq!(
+            packet["effective_execution_posture"]["selected_cli_system"],
+            "qwen"
+        );
+        assert_eq!(
+            packet["effective_execution_posture"]["selected_execution_class"],
+            "external"
+        );
+        assert_eq!(
+            packet["effective_execution_posture"]["selected_backend"],
+            "qwen-primary"
+        );
+        assert_eq!(
+            packet["effective_execution_posture"]["route_primary_backend"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            packet["effective_execution_posture"]["activation_evidence_state"],
+            "activation_view_only"
+        );
     }
 
     #[test]
@@ -3502,7 +3556,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_runtime_dispatch_handoff_reuses_canonical_agent_init_packet_view() {
+    fn execute_runtime_dispatch_handoff_executes_internal_codex_carrier() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
@@ -3525,6 +3579,31 @@ mod tests {
         wait_for_state_unlock(harness.path());
         assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
+
+        let fake_bin = harness.path().join("fake-bin");
+        fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
+        let fake_codex = fake_bin.join("codex");
+        fs::write(
+            &fake_codex,
+            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}'\n",
+        )
+        .expect("fake codex should write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&fake_codex)
+                .expect("fake codex metadata should load")
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
+        }
+        let original_path = env::var("PATH").unwrap_or_default();
+        let patched_path = if original_path.is_empty() {
+            fake_bin.display().to_string()
+        } else {
+            format!("{}:{}", fake_bin.display(), original_path)
+        };
+        let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
         let state_root = taskflow_task_bridge::proxy_state_dir();
         let store = runtime
@@ -3610,27 +3689,215 @@ mod tests {
                 &role_selection,
                 &receipt,
             ))
-            .expect("agent-lane dispatch handoff should render");
+            .expect("internal codex dispatch handoff should execute");
 
-        assert_eq!(result["surface"], "vida agent-init");
-        assert_eq!(result["execution_state"], "blocked");
-        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["surface"], "internal_cli:codex");
+        assert_eq!(result["execution_state"], "executed");
+        assert_eq!(result["status"], "pass");
         assert_eq!(result["selection"]["mode"], "dispatch_packet");
         assert_eq!(result["selection"]["selected_role"], "worker");
         assert_eq!(
             result["activation_semantics"]["activation_kind"],
-            "activation_view"
+            "execution_evidence"
         );
-        assert_eq!(result["activation_semantics"]["view_only"], true);
-        assert_eq!(result["blocker_code"], "internal_activation_view_only");
+        assert_eq!(result["activation_semantics"]["view_only"], false);
+        assert_eq!(result["activation_semantics"]["executes_packet"], true);
         assert_eq!(
-            result["activation_command"],
-            serde_json::json!(format!(
-                "vida agent-init --dispatch-packet {} --json",
-                shell_quote(&dispatch_packet_path.display().to_string())
-            ))
+            result["activation_semantics"]["records_completion_receipt"],
+            true
         );
+        assert!(result["blocker_code"].is_null());
+        assert_eq!(result["execution_evidence"]["status"], "recorded");
+        assert_eq!(
+            result["execution_evidence"]["evidence_kind"],
+            "internal_carrier_completion"
+        );
+        assert_eq!(
+            result["effective_execution_posture"]["selected_backend"],
+            "junior"
+        );
+        assert_eq!(
+            result["effective_execution_posture"]["selected_backend_class"],
+            "internal"
+        );
+        assert_eq!(
+            result["effective_execution_posture"]["activation_evidence_state"],
+            "execution_evidence"
+        );
+        assert_eq!(
+            result["effective_execution_posture"]["receipt_backed_execution_evidence"],
+            true
+        );
+        assert_eq!(result["execution_evidence"]["backend_id"], "junior");
+        assert_eq!(result["backend_dispatch"]["backend_id"], "junior");
+        assert_eq!(result["backend_dispatch"]["backend_class"], "internal");
+        assert_eq!(result["backend_dispatch"]["model"], "gpt-5.4");
+        assert_eq!(
+            result["backend_dispatch"]["sandbox_mode"],
+            "workspace-write"
+        );
+        let activation_command = result["activation_command"]
+            .as_str()
+            .expect("activation command should render");
+        assert!(activation_command.contains("exec"));
+        assert!(activation_command.contains("workspace-write"));
+        assert_eq!(result["provider_result"], "internal-dispatch-ok");
         assert_eq!(result["role_selection"]["selected_role"], "worker");
+    }
+
+    #[test]
+    fn execute_and_record_dispatch_receipt_updates_surface_from_internal_execution_result() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+        assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+
+        let fake_bin = harness.path().join("fake-bin");
+        fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
+        let fake_codex = fake_bin.join("codex");
+        fs::write(
+            &fake_codex,
+            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}'\n",
+        )
+        .expect("fake codex should write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&fake_codex)
+                .expect("fake codex metadata should load")
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
+        }
+        let original_path = env::var("PATH").unwrap_or_default();
+        let patched_path = if original_path.is_empty() {
+            fake_bin.display().to_string()
+        } else {
+            format!("{}:{}", fake_bin.display(), original_path)
+        };
+        let _path_guard = EnvVarGuard::set("PATH", &patched_path);
+
+        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let store = runtime
+            .block_on(StateStore::open(state_root.clone()))
+            .expect("state store should open");
+        let dispatch_packet_path = harness.path().join("agent-dispatch-record.json");
+        fs::write(
+            &dispatch_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": runtime_delivery_task_packet(
+                    "run-agent-dispatch-record",
+                    "implementer",
+                    "worker",
+                    "implementation",
+                    "implementation",
+                    "continue development"
+                ),
+                "dispatch_target": "implementer",
+                "request_text": "continue development",
+                "activation_runtime_role": "worker",
+                "role_selection": {
+                    "selected_role": "worker"
+                }
+            }))
+            .expect("dispatch packet json should encode"),
+        )
+        .expect("dispatch packet should write");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-agent-dispatch-record"
+        });
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-agent-dispatch-record".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(dispatch_packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-03-17T00:00:00Z".to_string(),
+        };
+
+        runtime
+            .block_on(execute_and_record_dispatch_receipt(
+                &state_root,
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+            ))
+            .expect("dispatch receipt should record execution evidence");
+
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(
+            receipt.dispatch_surface.as_deref(),
+            Some("internal_cli:codex")
+        );
+        assert!(receipt
+            .dispatch_command
+            .as_deref()
+            .is_some_and(|value| value.contains("exec")));
+        assert!(receipt
+            .dispatch_result_path
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()));
     }
 
     #[test]
@@ -3898,6 +4165,22 @@ mod tests {
             result["host_runtime"]["selected_cli_execution_class"],
             "internal"
         );
+        assert_eq!(
+            result["effective_execution_posture"]["effective_posture_kind"],
+            "mixed"
+        );
+        assert_eq!(
+            result["effective_execution_posture"]["hybrid_host_backend_selection"],
+            true
+        );
+        assert_eq!(
+            result["effective_execution_posture"]["selected_backend_class"],
+            "external_cli"
+        );
+        assert_eq!(
+            result["effective_execution_posture"]["activation_evidence_state"],
+            "execution_evidence"
+        );
         assert_eq!(result["backend_dispatch"]["backend_id"], "qwen_cli");
         assert!(result["activation_command"]
             .as_str()
@@ -4035,10 +4318,7 @@ mod tests {
         assert_eq!(result["surface"], "external_cli:qwen_cli");
         assert_eq!(result["status"], "blocked");
         assert_eq!(result["execution_state"], "blocked");
-        assert_eq!(
-            result["blocker_code"],
-            "timeout_without_takeover_authority"
-        );
+        assert_eq!(result["blocker_code"], "timeout_without_takeover_authority");
         assert!(result["provider_error"]
             .as_str()
             .expect("provider error should render")

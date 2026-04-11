@@ -2178,9 +2178,66 @@ impl StateStore {
             return Ok(None);
         };
         let receipt = Self::validate_run_graph_dispatch_receipt_contract(receipt)?;
-        Ok(Some(RunGraphDispatchReceiptSummary::from_receipt(
-            receipt.into(),
-        )))
+        let receipt: RunGraphDispatchReceipt = receipt.into();
+        let host_runtime = crate::taskflow_task_bridge::infer_project_root_from_state_root(
+            self.root(),
+        )
+        .map(|project_root| {
+            crate::runtime_dispatch_state::runtime_host_execution_contract_for_root(&project_root)
+        });
+        let role_selection = self
+            .run_graph_dispatch_context(&status.run_id)
+            .await?
+            .map(|context| context.role_selection())
+            .transpose()?;
+        let effective_execution_posture = {
+            let mut summary = crate::runtime_dispatch_state::effective_execution_posture_summary(
+                role_selection
+                    .as_ref()
+                    .map(|selection| &selection.execution_plan)
+                    .unwrap_or(&serde_json::Value::Null),
+                &receipt.dispatch_target,
+                receipt.selected_backend.as_deref(),
+                receipt.activation_agent_type.as_deref(),
+                host_runtime.as_ref(),
+                crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(&receipt),
+            );
+            let activation_evidence =
+                crate::runtime_dispatch_state::dispatch_activation_evidence_summary(&receipt);
+            if let Some(object) = summary.as_object_mut() {
+                object.insert(
+                    "activation_kind".to_string(),
+                    activation_evidence["activation_kind"].clone(),
+                );
+                object.insert(
+                    "execution_evidence_path".to_string(),
+                    activation_evidence["execution_evidence_path"].clone(),
+                );
+                object.insert(
+                    "receipt_backed".to_string(),
+                    activation_evidence["receipt_backed"].clone(),
+                );
+            }
+            summary
+        };
+        let route_policy = role_selection
+            .as_ref()
+            .map(|selection| {
+                crate::runtime_dispatch_state::dispatch_execution_route_summary(
+                    selection,
+                    &receipt.dispatch_target,
+                    receipt.selected_backend.as_deref(),
+                )
+            })
+            .unwrap_or(serde_json::Value::Null);
+        let activation_evidence =
+            crate::runtime_dispatch_state::dispatch_activation_evidence_summary(&receipt);
+        Ok(Some(
+            RunGraphDispatchReceiptSummary::from_receipt(receipt)
+                .with_effective_execution_posture(effective_execution_posture)
+                .with_route_policy(route_policy)
+                .with_activation_evidence(activation_evidence),
+        ))
     }
 
     pub async fn latest_run_graph_dispatch_receipt(
@@ -6878,6 +6935,54 @@ hierarchy: framework,contracts
             .record_run_graph_status(&status)
             .await
             .expect("persist run graph status");
+        store
+            .record_run_graph_dispatch_context(&RunGraphDispatchContext {
+                run_id: "run-shared-contract-flow".to_string(),
+                task_id: "task-shared-contract-flow".to_string(),
+                request_text: "continue development".to_string(),
+                role_selection: serde_json::json!({
+                    "ok": true,
+                    "activation_source": "test",
+                    "selection_mode": "fixed",
+                    "fallback_role": "orchestrator",
+                    "request": "continue development",
+                    "selected_role": "worker",
+                    "conversational_mode": null,
+                    "single_task_only": false,
+                    "tracked_flow_entry": null,
+                    "allow_freeform_chat": false,
+                    "confidence": "high",
+                    "matched_terms": [],
+                    "compiled_bundle": null,
+                    "execution_plan": {
+                        "development_flow": {
+                            "dispatch_contract": {
+                                "lane_catalog": {
+                                    "implementer": {
+                                        "executor_backend": "opencode_cli",
+                                        "fallback_executor_backend": "internal_subagents",
+                                        "fanout_executor_backends": ["hermes_cli", "junior"],
+                                        "activation": {
+                                            "activation_agent_type": "junior",
+                                            "activation_runtime_role": "worker"
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "backend_admissibility_matrix": [
+                            { "backend_id": "opencode_cli", "backend_class": "external_cli" },
+                            { "backend_id": "hermes_cli", "backend_class": "external_cli" },
+                            { "backend_id": "internal_subagents", "backend_class": "internal" },
+                            { "backend_id": "junior", "backend_class": "internal" }
+                        ]
+                    },
+                    "reason": "test"
+                }),
+                recorded_at: "2026-03-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist run graph dispatch context");
 
         let mut receipt = sample_dispatch_receipt_with_status("executed");
         receipt.run_id = "run-shared-contract-flow".to_string();
@@ -6915,6 +7020,34 @@ hierarchy: framework,contracts
                 "pending_execution_preparation_evidence".to_string(),
                 "pending_review_findings".to_string(),
             ]
+        );
+        assert_eq!(
+            summary.effective_execution_posture["selected_backend"],
+            "junior"
+        );
+        assert_eq!(
+            summary.effective_execution_posture["route_primary_backend"],
+            "opencode_cli"
+        );
+        assert_eq!(
+            summary.effective_execution_posture["fallback_backend"],
+            "internal_subagents"
+        );
+        assert_eq!(
+            summary.effective_execution_posture["fanout_backends"],
+            serde_json::json!(["hermes_cli", "junior"])
+        );
+        assert_eq!(
+            summary.effective_execution_posture["mixed_route_backends"],
+            true
+        );
+        assert_eq!(
+            summary.effective_execution_posture["activation_evidence_state"],
+            "execution_evidence"
+        );
+        assert_eq!(
+            summary.effective_execution_posture["receipt_backed_execution_evidence"],
+            true
         );
 
         let _ = fs::remove_dir_all(&root);

@@ -1,6 +1,6 @@
 use crate::taskflow_routing::{
     explicit_executor_backend_from_route, fallback_executor_backend_from_route,
-    fanout_executor_backends_from_route,
+    fanout_executor_backends_from_route, selected_backend_from_execution_plan_route,
 };
 use crate::{
     build_runtime_execution_plan_from_snapshot, json_bool, json_lookup, json_string,
@@ -312,6 +312,130 @@ fn backend_policy_by_id(agent_system: &serde_json::Value, backend_id: &str) -> s
         .unwrap_or(serde_json::Value::Null)
 }
 
+fn backend_policy_from_execution_plan(
+    execution_plan: &serde_json::Value,
+    backend_id: &str,
+) -> serde_json::Value {
+    if backend_id.trim().is_empty() {
+        return serde_json::Value::Null;
+    }
+    execution_plan["backend_admissibility_matrix"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry["backend_id"].as_str() == Some(backend_id))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null)
+}
+
+fn backend_policy_class(policy: &serde_json::Value) -> Option<&str> {
+    policy
+        .get("backend_class")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn route_has_external_backend(
+    route_primary_policy: &serde_json::Value,
+    fallback_policy: &serde_json::Value,
+    fanout_policies: &[serde_json::Value],
+) -> bool {
+    backend_policy_class(route_primary_policy) == Some("external_cli")
+        || backend_policy_class(fallback_policy) == Some("external_cli")
+        || fanout_policies
+            .iter()
+            .any(|policy| backend_policy_class(policy) == Some("external_cli"))
+}
+
+fn effective_execution_posture(
+    selected_execution_class: Option<&str>,
+    route_has_external_backend: bool,
+) -> &'static str {
+    match selected_execution_class.unwrap_or("unknown") {
+        "external" => "external_only",
+        "internal" if route_has_external_backend => "hybrid",
+        "internal" => "internal_only",
+        "unknown" if route_has_external_backend => "hybrid_unknown_host",
+        _ => "unknown",
+    }
+}
+
+pub(crate) fn summarize_execution_truth_for_route(
+    execution_plan: &serde_json::Value,
+    route: Option<&serde_json::Value>,
+    selected_execution_class: Option<&str>,
+    effective_selected_backend: Option<&str>,
+    activation_kind: Option<&str>,
+    execution_evidence_status: Option<&str>,
+) -> serde_json::Value {
+    let route_primary_backend =
+        route.and_then(|route| selected_backend_from_execution_plan_route(execution_plan, route));
+    let fallback_backend = route.and_then(fallback_executor_backend_from_route);
+    let fanout_backends = route
+        .map(fanout_executor_backends_from_route)
+        .unwrap_or_default();
+    let effective_selected_backend = effective_selected_backend
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| route_primary_backend.clone());
+    let route_primary_policy = route_primary_backend
+        .as_deref()
+        .map(|backend_id| backend_policy_from_execution_plan(execution_plan, backend_id))
+        .unwrap_or(serde_json::Value::Null);
+    let fallback_policy = fallback_backend
+        .as_deref()
+        .map(|backend_id| backend_policy_from_execution_plan(execution_plan, backend_id))
+        .unwrap_or(serde_json::Value::Null);
+    let fanout_policies = fanout_backends
+        .iter()
+        .map(|backend_id| backend_policy_from_execution_plan(execution_plan, backend_id))
+        .collect::<Vec<_>>();
+    let selected_backend_policy = effective_selected_backend
+        .as_deref()
+        .map(|backend_id| backend_policy_from_execution_plan(execution_plan, backend_id))
+        .unwrap_or(serde_json::Value::Null);
+    let route_uses_external_backend =
+        route_has_external_backend(&route_primary_policy, &fallback_policy, &fanout_policies);
+    let selected_backend_source = match effective_selected_backend.as_deref() {
+        Some(backend_id) if route_primary_backend.as_deref() == Some(backend_id) => "route_primary",
+        Some(backend_id) if fallback_backend.as_deref() == Some(backend_id) => "route_fallback",
+        Some(backend_id)
+            if fanout_backends
+                .iter()
+                .any(|candidate| candidate == backend_id) =>
+        {
+            "route_fanout"
+        }
+        Some(_) => "activation_or_inherited",
+        None => "unknown",
+    };
+
+    serde_json::json!({
+        "effective_execution_posture": effective_execution_posture(
+            selected_execution_class,
+            route_uses_external_backend,
+        ),
+        "selected_execution_class": selected_execution_class.unwrap_or("unknown"),
+        "route_primary_backend": route_primary_backend,
+        "effective_selected_backend": effective_selected_backend,
+        "selected_backend_source": selected_backend_source,
+        "fallback_backend": fallback_backend,
+        "fanout_backends": fanout_backends,
+        "route_uses_external_backend": route_uses_external_backend,
+        "selected_backend_policy": selected_backend_policy,
+        "route_primary_backend_policy": route_primary_policy,
+        "fallback_backend_policy": fallback_policy,
+        "fanout_backend_policies": fanout_policies,
+        "activation_evidence": {
+            "activation_kind": activation_kind.unwrap_or("unknown"),
+            "execution_evidence_status": execution_evidence_status.unwrap_or("missing"),
+            "receipt_backed": execution_evidence_status == Some("recorded"),
+        },
+    })
+}
+
 pub(crate) fn build_executor_backend_admissibility_matrix(
     agent_system: &serde_json::Value,
 ) -> serde_json::Value {
@@ -417,7 +541,10 @@ pub(crate) fn summarize_agent_route_from_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_executor_backend_admissibility_matrix, summarize_agent_route_from_snapshot};
+    use super::{
+        build_executor_backend_admissibility_matrix, summarize_agent_route_from_snapshot,
+        summarize_execution_truth_for_route,
+    };
     use std::fs;
 
     #[test]
@@ -568,10 +695,12 @@ mod tests {
         let coach =
             summarize_agent_route_from_snapshot(&serde_json::Value::Null, agent_system, "coach");
         assert_eq!(coach["executor_backend"], "hermes_cli");
-        assert_eq!(
-            coach["fanout_executor_backends"],
-            serde_json::json!(["hermes_cli", "qwen_cli", "opencode_cli"])
-        );
+        let coach_fanout = coach["fanout_executor_backends"]
+            .as_array()
+            .expect("coach fanout should be an array");
+        assert!(coach_fanout.iter().any(|value| value == "hermes_cli"));
+        assert!(coach_fanout.iter().any(|value| value == "qwen_cli"));
+        assert!(coach_fanout.iter().any(|value| value == "opencode_cli"));
 
         let verification = summarize_agent_route_from_snapshot(
             &serde_json::Value::Null,
@@ -585,9 +714,66 @@ mod tests {
             agent_system,
             "review_ensemble",
         );
+        let review_ensemble_fanout = review_ensemble["fanout_executor_backends"]
+            .as_array()
+            .expect("review ensemble fanout should be an array");
+        assert!(review_ensemble_fanout
+            .iter()
+            .any(|value| value == "qwen_cli"));
+        assert!(review_ensemble_fanout
+            .iter()
+            .any(|value| value == "hermes_cli"));
+        assert!(review_ensemble_fanout
+            .iter()
+            .any(|value| value == "opencode_cli"));
+    }
+
+    #[test]
+    fn summarize_execution_truth_for_route_marks_hybrid_posture_and_fallback_selection() {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "opencode_cli",
+                    "backend_class": "external_cli"
+                },
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal"
+                },
+                {
+                    "backend_id": "hermes_cli",
+                    "backend_class": "external_cli"
+                }
+            ]
+        });
+        let route = serde_json::json!({
+            "executor_backend": "opencode_cli",
+            "fallback_executor_backend": "internal_subagents",
+            "fanout_executor_backends": ["hermes_cli"]
+        });
+
+        let summary = summarize_execution_truth_for_route(
+            &execution_plan,
+            Some(&route),
+            Some("internal"),
+            Some("internal_subagents"),
+            Some("activation_view"),
+            Some("missing"),
+        );
+
+        assert_eq!(summary["effective_execution_posture"], "hybrid");
+        assert_eq!(summary["route_primary_backend"], "opencode_cli");
+        assert_eq!(summary["effective_selected_backend"], "internal_subagents");
+        assert_eq!(summary["selected_backend_source"], "route_fallback");
+        assert_eq!(summary["fallback_backend"], "internal_subagents");
+        assert_eq!(summary["fanout_backends"][0], "hermes_cli");
         assert_eq!(
-            review_ensemble["fanout_executor_backends"],
-            serde_json::json!(["qwen_cli", "hermes_cli", "opencode_cli"])
+            summary["activation_evidence"]["execution_evidence_status"],
+            "missing"
+        );
+        assert_eq!(
+            summary["selected_backend_policy"]["backend_class"],
+            "internal"
         );
     }
 }

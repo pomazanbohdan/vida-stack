@@ -38,6 +38,21 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
         external_cli_preflight_summary(&overlay, &selected_cli_system, host_cli_entry.as_ref());
     let hybrid_external_cli_relevant =
         external_cli_preflight["hybrid_external_cli_relevant"].clone();
+    let selected_execution_class = external_cli_preflight["selected_execution_class"].clone();
+    let requires_external_cli = external_cli_preflight["requires_external_cli"].clone();
+    let route_primary_external_backends =
+        external_cli_preflight["route_primary_external_backends"].clone();
+    let blocked_primary_backends = external_cli_preflight["blocked_primary_backends"].clone();
+    let hybrid_external_cli_relevant_flag = hybrid_external_cli_relevant.as_bool().unwrap_or(false);
+    let effective_execution_posture = match (
+        selected_execution_class.as_str(),
+        hybrid_external_cli_relevant_flag,
+    ) {
+        (Some("external"), _) => "external_only",
+        (_, true) => "hybrid_external_cli",
+        (Some("internal"), _) => "internal_only",
+        _ => "unknown",
+    };
 
     let mut payload = serde_json::Map::new();
     payload.insert(
@@ -52,10 +67,33 @@ pub(crate) fn build_host_agent_status_summary(project_root: &Path) -> Option<ser
         "runtime_root".to_string(),
         serde_json::Value::String(runtime_root),
     );
-    payload.insert("external_cli_preflight".to_string(), external_cli_preflight);
+    payload.insert(
+        "external_cli_preflight".to_string(),
+        external_cli_preflight.clone(),
+    );
     payload.insert(
         "hybrid_external_cli_relevant".to_string(),
-        hybrid_external_cli_relevant,
+        hybrid_external_cli_relevant.clone(),
+    );
+    payload.insert(
+        "effective_execution_posture".to_string(),
+        external_cli_preflight["effective_execution_posture"].clone(),
+    );
+    payload.insert(
+        "mixed_posture".to_string(),
+        external_cli_preflight["mixed_posture"].clone(),
+    );
+    payload.insert(
+        "mixed_posture_details".to_string(),
+        serde_json::json!({
+            "selected_cli_system": selected_cli_system.clone(),
+            "selected_execution_class": selected_execution_class.clone(),
+            "effective_execution_posture": effective_execution_posture,
+            "requires_external_cli": requires_external_cli,
+            "hybrid_external_cli_relevant": hybrid_external_cli_relevant_flag,
+            "route_primary_external_backends": route_primary_external_backends,
+            "blocked_primary_backends": blocked_primary_backends,
+        }),
     );
     payload.insert("budget".to_string(), budget_value);
     payload.insert("recent_events".to_string(), recent_events_value);
@@ -174,6 +212,8 @@ mod tests {
             summary["external_cli_preflight"]["hybrid_external_cli_relevant"],
             true
         );
+        assert_eq!(summary["effective_execution_posture"], "mixed");
+        assert_eq!(summary["mixed_posture"], true);
     }
 
     #[test]

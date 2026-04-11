@@ -250,6 +250,9 @@ pub struct RunGraphDispatchReceiptSummary {
     pub activation_agent_type: Option<String>,
     pub activation_runtime_role: Option<String>,
     pub selected_backend: Option<String>,
+    pub effective_execution_posture: serde_json::Value,
+    pub route_policy: serde_json::Value,
+    pub activation_evidence: serde_json::Value,
     pub recorded_at: String,
 }
 
@@ -308,13 +311,37 @@ impl RunGraphDispatchReceiptSummary {
             activation_agent_type: receipt.activation_agent_type,
             activation_runtime_role: receipt.activation_runtime_role,
             selected_backend: receipt.selected_backend,
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
             recorded_at: receipt.recorded_at,
         }
     }
 
+    pub(crate) fn with_effective_execution_posture(
+        mut self,
+        effective_execution_posture: serde_json::Value,
+    ) -> Self {
+        self.effective_execution_posture = effective_execution_posture;
+        self
+    }
+
+    pub(crate) fn with_route_policy(mut self, route_policy: serde_json::Value) -> Self {
+        self.route_policy = route_policy;
+        self
+    }
+
+    pub(crate) fn with_activation_evidence(
+        mut self,
+        activation_evidence: serde_json::Value,
+    ) -> Self {
+        self.activation_evidence = activation_evidence;
+        self
+    }
+
     pub fn as_display(&self) -> String {
         format!(
-            "run={} target={} status={} lane_status={} supersedes_receipt_id={} exception_path_receipt_id={} blocker_code={} kind={} surface={} command={} packet={} result={} next_target={} next_command={} next_note={} next_ready={} next_blockers={} next_packet={} next_status={} next_result={} next_trace={} next_count={} next_last_target={} agent={} runtime_role={} backend={} recorded_at={}",
+            "run={} target={} status={} lane_status={} supersedes_receipt_id={} exception_path_receipt_id={} blocker_code={} kind={} surface={} command={} packet={} result={} next_target={} next_command={} next_note={} next_ready={} next_blockers={} next_packet={} next_status={} next_result={} next_trace={} next_count={} next_last_target={} agent={} runtime_role={} backend={} posture={} route_backend={} evidence={} recorded_at={}",
             self.run_id,
             self.dispatch_target,
             self.dispatch_status,
@@ -355,6 +382,15 @@ impl RunGraphDispatchReceiptSummary {
             self.activation_agent_type.as_deref().unwrap_or("none"),
             self.activation_runtime_role.as_deref().unwrap_or("none"),
             self.selected_backend.as_deref().unwrap_or("none"),
+            self.effective_execution_posture["effective_posture_kind"]
+                .as_str()
+                .unwrap_or("unknown"),
+            self.route_policy["route_primary_backend"]
+                .as_str()
+                .unwrap_or("none"),
+            self.activation_evidence["activation_kind"]
+                .as_str()
+                .unwrap_or("unknown"),
             self.recorded_at
         )
     }

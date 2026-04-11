@@ -252,6 +252,26 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         );
                     }
                 }
+                let project_root =
+                    crate::taskflow_task_bridge::infer_project_root_from_state_root(store.root())
+                        .or_else(|| std::env::current_dir().ok())
+                        .unwrap_or_else(|| std::path::PathBuf::from("."));
+                let latest_run_graph_surface_truth = latest_run_graph_dispatch_receipt
+                    .as_ref()
+                    .and_then(|receipt| {
+                        crate::runtime_dispatch_state::dispatch_surface_truth_from_packet_path(
+                            &project_root,
+                            receipt.dispatch_packet_path.as_deref(),
+                            receipt,
+                        )
+                    });
+                let latest_run_graph_mixed_posture = latest_run_graph_surface_truth
+                    .as_ref()
+                    .and_then(|value| value.get("mixed_posture"));
+                let latest_run_graph_activation_vs_execution_evidence =
+                    latest_run_graph_surface_truth
+                        .as_ref()
+                        .and_then(|value| value.get("activation_vs_execution_evidence"));
                 if as_json {
                     let incomplete_release_admission_operator_evidence =
                         latest_recorded_final_snapshot_path
@@ -355,6 +375,8 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         latest_run_graph_gate: latest_run_graph_gate.as_ref(),
                         latest_run_graph_dispatch_receipt: latest_run_graph_dispatch_receipt
                             .as_ref(),
+                        latest_run_graph_mixed_posture,
+                        latest_run_graph_activation_vs_execution_evidence,
                     }) {
                         Ok(summary_json) => summary_json,
                         Err(error) => {
@@ -397,6 +419,9 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     latest_run_graph_dispatch_receipt_checkpoint_leakage,
                     continuation_binding: &continuation_binding,
                     host_agents: host_agents.as_ref(),
+                    latest_run_graph_dispatch_receipt: latest_run_graph_dispatch_receipt.as_ref(),
+                    latest_run_graph_mixed_posture,
+                    latest_run_graph_activation_vs_execution_evidence,
                 });
             }
             Err(error) => {
@@ -1128,6 +1153,9 @@ host_environment:
             activation_agent_type: Some("junior".to_string()),
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("junior".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
             recorded_at: "2026-03-18T00:00:00Z".to_string(),
         };
 

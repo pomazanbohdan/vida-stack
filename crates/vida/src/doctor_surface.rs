@@ -1243,6 +1243,9 @@ mod tests {
             activation_agent_type: None,
             activation_runtime_role: None,
             selected_backend: Some("taskflow_state_store".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
             recorded_at: "2026-03-08T00:00:00Z".to_string(),
         };
         let protocol_binding = crate::state_store::ProtocolBindingSummary {

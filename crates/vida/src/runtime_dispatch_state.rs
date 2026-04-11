@@ -284,6 +284,180 @@ pub(crate) fn downstream_selected_backend(
     }
 }
 
+fn backend_admissibility_row<'a>(
+    execution_plan: &'a serde_json::Value,
+    backend_id: &str,
+) -> Option<&'a serde_json::Value> {
+    execution_plan["backend_admissibility_matrix"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["backend_id"].as_str() == Some(backend_id))
+}
+
+fn backend_class_for_execution_plan_backend(
+    execution_plan: &serde_json::Value,
+    backend_id: &str,
+) -> String {
+    if backend_id.trim().is_empty() {
+        return "unknown".to_string();
+    }
+    backend_admissibility_row(execution_plan, backend_id)
+        .and_then(|row| row["backend_class"].as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if backend_id == "taskflow_state_store" {
+                "taskflow_pack".to_string()
+            } else if backend_id.ends_with("_cli") {
+                "external_cli".to_string()
+            } else {
+                "internal".to_string()
+            }
+        })
+}
+
+fn backend_execution_dimension(backend_class: &str) -> &'static str {
+    match backend_class.trim() {
+        "external_cli" | "external" => "external",
+        "internal" | "internal_cli" => "internal",
+        "taskflow_pack" => "taskflow_pack",
+        _ => "unknown",
+    }
+}
+
+pub(crate) fn effective_execution_posture_summary(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+    selected_backend: Option<&str>,
+    activation_agent_type: Option<&str>,
+    host_runtime: Option<&serde_json::Value>,
+    receipt_backed_execution_evidence: bool,
+) -> serde_json::Value {
+    let route = execution_plan_route_for_dispatch_target(execution_plan, dispatch_target);
+    let route_primary_backend =
+        route.and_then(|lane| selected_backend_from_execution_plan_route(execution_plan, lane));
+    let fallback_backend = route.and_then(fallback_executor_backend_from_route);
+    let fanout_backends = route
+        .map(fanout_executor_backends_from_route)
+        .unwrap_or_default();
+    let effective_selected_backend = selected_backend
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            activation_agent_type
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+        })
+        .or_else(|| route_primary_backend.clone());
+    let selected_backend_source = if selected_backend.is_some_and(|value| !value.trim().is_empty())
+    {
+        "dispatch_receipt"
+    } else if activation_agent_type.is_some_and(|value| !value.trim().is_empty()) {
+        "activation_agent_type"
+    } else if route_primary_backend.is_some() {
+        "route_primary_backend"
+    } else {
+        "unknown"
+    };
+    let selected_backend_class = effective_selected_backend
+        .as_deref()
+        .map(|backend_id| backend_class_for_execution_plan_backend(execution_plan, backend_id));
+    let route_primary_backend_class = route_primary_backend
+        .as_deref()
+        .map(|backend_id| backend_class_for_execution_plan_backend(execution_plan, backend_id));
+    let fallback_backend_class = fallback_backend
+        .as_deref()
+        .map(|backend_id| backend_class_for_execution_plan_backend(execution_plan, backend_id));
+    let fanout_backend_classes = fanout_backends
+        .iter()
+        .map(|backend_id| {
+            (
+                backend_id.clone(),
+                serde_json::Value::String(backend_class_for_execution_plan_backend(
+                    execution_plan,
+                    backend_id,
+                )),
+            )
+        })
+        .collect::<serde_json::Map<String, serde_json::Value>>();
+
+    let route_dimensions = route_primary_backend_class
+        .iter()
+        .chain(fallback_backend_class.iter())
+        .map(|value| backend_execution_dimension(value))
+        .chain(
+            fanout_backend_classes
+                .values()
+                .filter_map(serde_json::Value::as_str)
+                .map(backend_execution_dimension),
+        )
+        .collect::<std::collections::BTreeSet<_>>();
+    let route_contains_internal_backend = route_dimensions.contains("internal");
+    let route_contains_external_backend = route_dimensions.contains("external");
+    let mixed_route_backends = route_contains_internal_backend && route_contains_external_backend;
+
+    let selected_execution_class = host_runtime
+        .and_then(|value| value.get("selected_cli_execution_class"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let selected_cli_system = host_runtime
+        .and_then(|value| value.get("selected_cli_system"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let host_execution_dimension = selected_execution_class
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown");
+    let selected_backend_dimension = selected_backend_class
+        .as_deref()
+        .map(backend_execution_dimension)
+        .unwrap_or("unknown");
+    let hybrid_host_backend_selection = matches!(
+        (host_execution_dimension, selected_backend_dimension),
+        ("internal", "external") | ("external", "internal")
+    );
+    let effective_posture_kind = if hybrid_host_backend_selection || mixed_route_backends {
+        "mixed"
+    } else if selected_backend_dimension == "external" || host_execution_dimension == "external" {
+        "external"
+    } else if selected_backend_dimension == "internal" || host_execution_dimension == "internal" {
+        "internal"
+    } else if selected_backend_dimension == "taskflow_pack" {
+        "taskflow_pack"
+    } else {
+        "unknown"
+    };
+
+    serde_json::json!({
+        "dispatch_target": dispatch_target,
+        "selected_cli_system": selected_cli_system,
+        "selected_execution_class": selected_execution_class,
+        "selected_backend": effective_selected_backend,
+        "selected_backend_source": selected_backend_source,
+        "selected_backend_class": selected_backend_class,
+        "route_primary_backend": route_primary_backend,
+        "route_primary_backend_class": route_primary_backend_class,
+        "fallback_backend": fallback_backend,
+        "fallback_backend_class": fallback_backend_class,
+        "fanout_backends": fanout_backends,
+        "fanout_backend_classes": fanout_backend_classes,
+        "route_contains_internal_backend": route_contains_internal_backend,
+        "route_contains_external_backend": route_contains_external_backend,
+        "mixed_route_backends": mixed_route_backends,
+        "hybrid_host_backend_selection": hybrid_host_backend_selection,
+        "effective_posture_kind": effective_posture_kind,
+        "activation_evidence_state": if receipt_backed_execution_evidence {
+            "execution_evidence"
+        } else {
+            "activation_view_only"
+        },
+        "receipt_backed_execution_evidence": receipt_backed_execution_evidence,
+    })
+}
+
 pub(crate) fn canonical_selected_backend_for_receipt(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
@@ -294,6 +468,358 @@ pub(crate) fn canonical_selected_backend_for_receipt(
         receipt.activation_agent_type.as_deref(),
         receipt.selected_backend.as_deref(),
     )
+}
+
+fn backend_policy_from_execution_plan<'a>(
+    execution_plan: &'a serde_json::Value,
+    backend_id: &str,
+) -> Option<&'a serde_json::Value> {
+    execution_plan["backend_admissibility_matrix"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry["backend_id"].as_str() == Some(backend_id))
+}
+
+fn backend_class_from_execution_plan(
+    execution_plan: &serde_json::Value,
+    backend_id: &str,
+) -> Option<String> {
+    backend_policy_from_execution_plan(execution_plan, backend_id)
+        .and_then(|entry| entry["backend_class"].as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn route_execution_posture_from_classes(classes: &[String]) -> &'static str {
+    let has_internal = classes.iter().any(|value| value == "internal");
+    let has_external = classes.iter().any(|value| value == "external_cli");
+    match (has_internal, has_external) {
+        (true, true) => "hybrid",
+        (true, false) => "internal_only",
+        (false, true) => "external_only",
+        _ => "unknown",
+    }
+}
+
+pub(crate) fn dispatch_execution_route_summary(
+    role_selection: &RuntimeConsumptionLaneSelection,
+    dispatch_target: &str,
+    selected_backend: Option<&str>,
+) -> serde_json::Value {
+    let route =
+        execution_plan_route_for_dispatch_target(&role_selection.execution_plan, dispatch_target);
+    let route_primary_backend = route.and_then(|entry| {
+        selected_backend_from_execution_plan_route(&role_selection.execution_plan, entry)
+    });
+    let route_fallback_backend = route.and_then(fallback_executor_backend_from_route);
+    let route_fanout_backends = route
+        .map(fanout_executor_backends_from_route)
+        .unwrap_or_default();
+    let effective_selected_backend = selected_backend
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| route_primary_backend.clone());
+    let selected_backend_source = match effective_selected_backend.as_deref() {
+        Some(_backend_id) if selected_backend.is_some() => "dispatch_receipt",
+        Some(backend_id) if route_primary_backend.as_deref() == Some(backend_id) => "route_primary",
+        Some(backend_id) if route_fallback_backend.as_deref() == Some(backend_id) => {
+            "route_fallback"
+        }
+        Some(backend_id)
+            if route_fanout_backends
+                .iter()
+                .any(|candidate| candidate == backend_id) =>
+        {
+            "route_fanout"
+        }
+        Some(_) => "activation_or_inherited",
+        None => "unknown",
+    };
+
+    let mut execution_classes = Vec::new();
+    for backend_id in effective_selected_backend
+        .iter()
+        .chain(route_primary_backend.iter())
+        .chain(route_fallback_backend.iter())
+        .chain(route_fanout_backends.iter())
+    {
+        if let Some(class) =
+            backend_class_from_execution_plan(&role_selection.execution_plan, backend_id)
+        {
+            if !execution_classes.iter().any(|existing| existing == &class) {
+                execution_classes.push(class);
+            }
+        }
+    }
+    let effective_execution_posture = route_execution_posture_from_classes(&execution_classes);
+    let selected_backend_class = effective_selected_backend
+        .as_deref()
+        .and_then(|backend_id| {
+            backend_class_from_execution_plan(&role_selection.execution_plan, backend_id)
+        });
+    let route_primary_backend_class = route_primary_backend.as_deref().and_then(|backend_id| {
+        backend_class_from_execution_plan(&role_selection.execution_plan, backend_id)
+    });
+    let route_fallback_backend_class = route_fallback_backend.as_deref().and_then(|backend_id| {
+        backend_class_from_execution_plan(&role_selection.execution_plan, backend_id)
+    });
+    let route_fanout_backend_classes = route_fanout_backends
+        .iter()
+        .map(|backend_id| {
+            (
+                backend_id.clone(),
+                serde_json::json!(backend_class_from_execution_plan(
+                    &role_selection.execution_plan,
+                    backend_id
+                )),
+            )
+        })
+        .collect::<serde_json::Map<String, serde_json::Value>>();
+    let selected_backend_policy = effective_selected_backend
+        .as_deref()
+        .and_then(|backend_id| {
+            backend_policy_from_execution_plan(&role_selection.execution_plan, backend_id)
+        })
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let route_primary_backend_policy = route_primary_backend
+        .as_deref()
+        .and_then(|backend_id| {
+            backend_policy_from_execution_plan(&role_selection.execution_plan, backend_id)
+        })
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let route_fallback_backend_policy = route_fallback_backend
+        .as_deref()
+        .and_then(|backend_id| {
+            backend_policy_from_execution_plan(&role_selection.execution_plan, backend_id)
+        })
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let route_fanout_backend_policies = route_fanout_backends
+        .iter()
+        .map(|backend_id| {
+            backend_policy_from_execution_plan(&role_selection.execution_plan, backend_id)
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({ "backend_id": backend_id }))
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::json!({
+        "dispatch_target": dispatch_target,
+        "effective_selected_backend": effective_selected_backend,
+        "selected_backend_source": selected_backend_source,
+        "selected_backend_class": selected_backend_class,
+        "route_primary_backend": route_primary_backend,
+        "route_primary_backend_class": route_primary_backend_class,
+        "route_fallback_backend": route_fallback_backend,
+        "route_fallback_backend_class": route_fallback_backend_class,
+        "route_fanout_backends": route_fanout_backends,
+        "route_fanout_backend_classes": route_fanout_backend_classes,
+        "selected_backend_policy": selected_backend_policy,
+        "route_primary_backend_policy": route_primary_backend_policy,
+        "route_fallback_backend_policy": route_fallback_backend_policy,
+        "route_fanout_backend_policies": route_fanout_backend_policies,
+        "selected_execution_class": selected_backend_class,
+        "effective_execution_posture": effective_execution_posture,
+        "mixed_posture": effective_execution_posture == "hybrid",
+    })
+}
+
+fn activation_kind_from_dispatch_result_path(path: &str) -> Option<&'static str> {
+    let result = crate::read_json_file_if_present(Path::new(path))?;
+    if result["artifact_kind"].as_str() == Some("runtime_lane_completion_result")
+        || result["execution_evidence"]["status"].as_str() == Some("recorded")
+        || result["activation_semantics"]["activation_kind"].as_str() == Some("execution_evidence")
+        || result["execution_state"].as_str() == Some("executed")
+    {
+        return Some("execution_evidence");
+    }
+    if result["artifact_kind"].as_str() == Some("runtime_dispatch_result")
+        || result["activation_semantics"]["activation_kind"].as_str() == Some("activation_view")
+        || result["execution_state"].as_str() == Some("blocked")
+    {
+        return Some("activation_view");
+    }
+    None
+}
+
+fn resolve_project_artifact_path(
+    project_root: &Path,
+    raw_path: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    let raw_path = raw_path.map(str::trim).filter(|value| !value.is_empty())?;
+    let path = Path::new(raw_path);
+    Some(if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        project_root.join(path)
+    })
+}
+
+pub(crate) fn dispatch_activation_evidence_summary(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> serde_json::Value {
+    let dispatch_result_path = nonempty_result_path(receipt.dispatch_result_path.as_deref());
+    let downstream_result_path =
+        nonempty_result_path(receipt.downstream_dispatch_result_path.as_deref());
+    let evidence_path = if dispatch_receipt_has_execution_evidence(receipt) {
+        dispatch_result_path
+            .clone()
+            .or_else(|| downstream_result_path.clone())
+    } else {
+        dispatch_result_path
+            .as_deref()
+            .and_then(activation_kind_from_dispatch_result_path)
+            .filter(|kind| *kind == "execution_evidence")
+            .map(|_| {
+                dispatch_result_path
+                    .clone()
+                    .expect("dispatch_result_path should exist")
+            })
+            .or_else(|| {
+                downstream_result_path
+                    .as_deref()
+                    .and_then(activation_kind_from_dispatch_result_path)
+                    .filter(|kind| *kind == "execution_evidence")
+                    .map(|_| {
+                        downstream_result_path
+                            .clone()
+                            .expect("downstream_result_path should exist")
+                    })
+            })
+    };
+    let activation_kind = if evidence_path.is_some() {
+        "execution_evidence"
+    } else {
+        "activation_view"
+    };
+    let result_body = evidence_path
+        .as_deref()
+        .and_then(|path| crate::read_json_file_if_present(Path::new(path)));
+    let activation_semantics = result_body
+        .as_ref()
+        .and_then(|value| value.get("activation_semantics"))
+        .cloned()
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "activation_kind": activation_kind,
+                "view_only": activation_kind != "execution_evidence",
+                "executes_packet": activation_kind == "execution_evidence",
+                "records_completion_receipt": activation_kind == "execution_evidence",
+            })
+        });
+    let execution_evidence = result_body
+        .as_ref()
+        .and_then(|value| value.get("execution_evidence"))
+        .cloned()
+        .unwrap_or_else(|| {
+            if activation_kind == "execution_evidence" {
+                serde_json::json!({
+                    "status": "recorded",
+                    "receipt_backed": true,
+                    "result_path": evidence_path.clone(),
+                })
+            } else {
+                serde_json::Value::Null
+            }
+        });
+
+    serde_json::json!({
+        "activation_kind": activation_kind,
+        "evidence_state": if activation_kind == "execution_evidence" {
+            "execution_evidence_recorded"
+        } else {
+            "activation_view_only"
+        },
+        "execution_evidence_path": evidence_path,
+        "receipt_backed": activation_kind == "execution_evidence",
+        "activation_semantics": activation_semantics,
+        "execution_evidence": execution_evidence,
+    })
+}
+
+pub(crate) fn dispatch_surface_truth_from_packet_path(
+    project_root: &Path,
+    packet_path: Option<&str>,
+    dispatch_receipt: &crate::state_store::RunGraphDispatchReceiptSummary,
+) -> Option<serde_json::Value> {
+    let packet_path = resolve_project_artifact_path(project_root, packet_path)?;
+    let packet = crate::read_json_file_if_present(&packet_path)?;
+    let mut mixed_posture = packet
+        .get("mixed_posture")
+        .cloned()
+        .or_else(|| packet.get("effective_execution_posture").cloned())
+        .or_else(|| packet.get("execution_truth").cloned());
+    if let Some(object) = mixed_posture
+        .as_mut()
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        if object.get("effective_posture_kind").is_none() {
+            if let Some(value) = object
+                .get("effective_execution_posture")
+                .cloned()
+                .or_else(|| object.get("effective_posture_kind").cloned())
+            {
+                object.insert("effective_posture_kind".to_string(), value);
+            }
+        }
+        if object.get("selected_backend").is_none() {
+            if let Some(value) = object
+                .get("effective_selected_backend")
+                .cloned()
+                .or_else(|| object.get("selected_backend").cloned())
+            {
+                object.insert("selected_backend".to_string(), value);
+            }
+        }
+        if object.get("fanout_backends").is_none() {
+            if let Some(value) = object
+                .get("fanout_backends")
+                .cloned()
+                .or_else(|| object.get("fanout_executor_backends").cloned())
+            {
+                object.insert("fanout_backends".to_string(), value);
+            }
+        }
+        if object.get("fallback_backend").is_none() {
+            if let Some(value) = object
+                .get("fallback_backend")
+                .cloned()
+                .or_else(|| object.get("fallback_executor_backend").cloned())
+                .or_else(|| object.get("route_fallback_backend").cloned())
+            {
+                object.insert("fallback_backend".to_string(), value);
+            }
+        }
+    }
+    let activation_evidence = packet
+        .get("activation_vs_execution_evidence")
+        .cloned()
+        .or_else(|| packet.get("activation_evidence").cloned())
+        .or_else(|| {
+            dispatch_receipt.dispatch_result_path.as_deref().and_then(|path| {
+                let resolved = resolve_project_artifact_path(project_root, Some(path))?;
+                let value = crate::read_json_file_if_present(&resolved)?;
+                Some(serde_json::json!({
+                    "activation_kind": value["activation_semantics"]["activation_kind"],
+                    "evidence_state": if value["execution_evidence"]["status"].as_str() == Some("recorded") {
+                        "execution_evidence_recorded"
+                    } else {
+                        "activation_view_only"
+                    },
+                    "activation_semantics": value["activation_semantics"].clone(),
+                    "execution_evidence": value["execution_evidence"].clone(),
+                }))
+            })
+        });
+    Some(serde_json::json!({
+        "mixed_posture": mixed_posture.unwrap_or(serde_json::Value::Null),
+        "activation_vs_execution_evidence": activation_evidence.unwrap_or(serde_json::Value::Null),
+    }))
 }
 
 pub(crate) fn fallback_backend_for_blocked_primary_dispatch_receipt(
@@ -1237,6 +1763,12 @@ pub(crate) fn dispatch_receipt_has_execution_evidence(
     }
 }
 
+fn nonempty_result_path(path: Option<&str>) -> Option<String> {
+    path.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 fn tracked_implementer_dev_task_id<'a>(
     role_selection: &'a RuntimeConsumptionLaneSelection,
 ) -> Option<&'a str> {
@@ -1262,6 +1794,56 @@ async fn tracked_implementer_task_closed(
         .await
         .map(|task| task.status == "closed")
         .unwrap_or(false)
+}
+
+async fn tracked_implementer_task_close_evidence_path(
+    store: &StateStore,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<Option<String>, String> {
+    let implementer_context = receipt.dispatch_target == "implementer"
+        || receipt.downstream_dispatch_last_target.as_deref() == Some("implementer");
+    if !implementer_context {
+        return Ok(None);
+    }
+    if !tracked_implementer_task_closed(store, role_selection, receipt).await {
+        return Ok(None);
+    }
+    let Some(task_id) = tracked_implementer_dev_task_id(role_selection) else {
+        return Ok(None);
+    };
+    let Some(packet_path) = receipt.dispatch_packet_path.as_deref() else {
+        return Ok(None);
+    };
+    let completion_receipt_id = format!("task-close-{task_id}");
+    write_runtime_lane_completion_result(
+        store.root(),
+        &receipt.run_id,
+        "implementer",
+        &completion_receipt_id,
+        packet_path,
+    )
+    .map(Some)
+}
+
+async fn receipt_backed_execution_evidence_path(
+    store: &StateStore,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<Option<String>, String> {
+    if let Some(path) =
+        tracked_implementer_task_close_evidence_path(store, role_selection, receipt).await?
+    {
+        return Ok(Some(path));
+    }
+    if dispatch_receipt_has_execution_evidence(receipt) {
+        return Ok(nonempty_result_path(
+            receipt.dispatch_result_path.as_deref(),
+        ));
+    }
+    Ok(nonempty_result_path(
+        receipt.downstream_dispatch_result_path.as_deref(),
+    ))
 }
 
 fn decode_receipt_packet_context(
@@ -1466,10 +2048,8 @@ pub(crate) async fn try_bridge_bounded_implementer_completion_to_downstream_rece
         return Ok(false);
     }
 
-    let preview_result_path = receipt
-        .downstream_dispatch_result_path
-        .clone()
-        .or_else(|| receipt.dispatch_result_path.clone());
+    let preview_result_path =
+        receipt_backed_execution_evidence_path(store, role_selection, receipt).await?;
     apply_downstream_dispatch_preview_to_receipt(
         receipt,
         next_target,
@@ -1813,7 +2393,8 @@ pub(crate) async fn refresh_downstream_dispatch_preview(
     ) {
         return Err(error);
     }
-    let preview_result_path = receipt.dispatch_result_path.clone();
+    let preview_result_path =
+        receipt_backed_execution_evidence_path(store, role_selection, receipt).await?;
     apply_downstream_dispatch_preview_to_receipt(
         receipt,
         downstream_dispatch_target,
@@ -2199,6 +2780,18 @@ mod runtime_dispatch_packet_context_tests {
             .expect("task should close");
     }
 
+    fn read_json(project_root: &Path, path: &str) -> serde_json::Value {
+        let resolved = if Path::new(path).is_absolute() {
+            Path::new(path).to_path_buf()
+        } else {
+            project_root.join(path)
+        };
+        serde_json::from_str(
+            &fs::read_to_string(&resolved).expect("json artifact should be readable"),
+        )
+        .expect("json artifact should decode")
+    }
+
     #[test]
     fn context_preserves_inputs() {
         let selection = RuntimeConsumptionLaneSelection {
@@ -2336,6 +2929,33 @@ mod runtime_dispatch_packet_context_tests {
         assert_eq!(packet["activation_agent_type"], "junior");
         assert_eq!(packet["activation_runtime_role"], "worker");
         assert_eq!(packet["selected_backend"], "junior");
+        assert!(packet["mixed_posture"]["route_primary_backend"].is_null());
+        assert!(packet["route_policy"]["route_primary_backend"].is_null());
+        assert_eq!(
+            packet["activation_vs_execution_evidence"]["evidence_state"],
+            "execution_evidence_recorded"
+        );
+        assert_eq!(
+            packet["activation_semantics"]["activation_kind"],
+            "execution_evidence"
+        );
+        assert_eq!(packet["execution_evidence"]["status"], "recorded");
+        assert_eq!(
+            packet["effective_execution_posture"]["route_primary_backend"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            packet["effective_execution_posture"]["selected_backend"],
+            "junior"
+        );
+        assert_eq!(
+            packet["effective_execution_posture"]["mixed_route_backends"],
+            false
+        );
+        assert_eq!(
+            packet["effective_execution_posture"]["activation_evidence_state"],
+            "execution_evidence"
+        );
         assert_eq!(
             packet["delivery_task_packet"]["handoff_runtime_role"],
             "worker"
@@ -2476,9 +3096,16 @@ mod runtime_dispatch_packet_context_tests {
                 persisted.downstream_dispatch_status.as_deref(),
                 Some("packet_ready")
             );
+            let evidence_path = persisted
+                .downstream_dispatch_result_path
+                .as_deref()
+                .expect("bridged downstream evidence path should exist");
+            let evidence = read_json(harness.path(), evidence_path);
+            assert_eq!(evidence["artifact_kind"], "runtime_lane_completion_result");
+            assert_eq!(evidence["completed_target"], "implementer");
             assert_eq!(
-                persisted.downstream_dispatch_result_path.as_deref(),
-                Some("/tmp/implementer-result.json")
+                evidence["completion_receipt_id"],
+                "task-close-feature-x-dev"
             );
             assert!(persisted
                 .downstream_dispatch_packet_path
@@ -2572,6 +3199,82 @@ mod runtime_dispatch_packet_context_tests {
     }
 
     #[test]
+    fn refresh_downstream_dispatch_preview_uses_task_close_completion_evidence_for_blocked_implementer(
+    ) {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            create_and_close_task(&store, "feature-x-dev").await;
+
+            let role_selection = bridge_test_role_selection("feature-x-dev");
+            let run_graph_bootstrap = json!({ "run_id": "run-refresh-closed-task" });
+            let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-refresh-closed-task".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_blocked".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/implementer-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/activation-view.json".to_string()),
+                blocker_code: Some("internal_activation_view_only".to_string()),
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("implementer".to_string()),
+                downstream_dispatch_last_target: Some("implementer".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-04-10T00:00:00Z".to_string(),
+            };
+
+            refresh_downstream_dispatch_preview(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+            )
+            .await
+            .expect("preview should refresh");
+
+            assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("coach"));
+            assert!(receipt.downstream_dispatch_ready);
+            assert_eq!(
+                receipt.downstream_dispatch_status.as_deref(),
+                Some("packet_ready")
+            );
+            let evidence_path = receipt
+                .downstream_dispatch_result_path
+                .as_deref()
+                .expect("task-close bridge evidence path should exist");
+            let evidence = read_json(harness.path(), evidence_path);
+            assert_eq!(evidence["artifact_kind"], "runtime_lane_completion_result");
+            assert_eq!(evidence["completed_target"], "implementer");
+            assert_eq!(
+                evidence["completion_receipt_id"],
+                "task-close-feature-x-dev"
+            );
+        });
+    }
+
+    #[test]
     fn downstream_receipt_prefers_route_executor_backend_over_activation_tier() {
         let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,
@@ -2650,6 +3353,131 @@ mod runtime_dispatch_packet_context_tests {
         assert_eq!(downstream.activation_runtime_role.as_deref(), Some("coach"));
         assert_eq!(downstream.selected_backend.as_deref(), Some("qwen_cli"));
     }
+
+    #[test]
+    fn write_runtime_dispatch_result_records_completion_evidence_for_executed_agent_lane() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-completion-evidence".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_command: Some("codex exec".to_string()),
+            dispatch_packet_path: Some("/tmp/implementer-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+
+        let path = write_runtime_dispatch_result(
+            harness.path(),
+            &receipt,
+            &serde_json::json!({
+                "surface": "internal_cli:codex",
+                "status": "pass",
+                "execution_state": "executed",
+                "provider_result": "implemented"
+            }),
+        )
+        .expect("dispatch result should write");
+
+        let artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&path).expect("dispatch result should be readable"),
+        )
+        .expect("dispatch result should decode");
+
+        assert_eq!(artifact["artifact_kind"], "runtime_lane_completion_result");
+        assert_eq!(artifact["run_id"], "run-completion-evidence");
+        assert_eq!(artifact["completed_target"], "implementer");
+        assert_eq!(
+            artifact["source_dispatch_packet_path"],
+            "/tmp/implementer-packet.json"
+        );
+        assert_eq!(artifact["provider_result"], "implemented");
+        assert!(artifact["completion_receipt_id"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("dispatch-completion-")));
+        assert!(artifact["recorded_at"]
+            .as_str()
+            .is_some_and(|value| !value.trim().is_empty()));
+    }
+
+    #[test]
+    fn write_runtime_dispatch_result_keeps_blocked_agent_lane_as_dispatch_artifact() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-blocked-dispatch".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/coach-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+
+        let path = write_runtime_dispatch_result(
+            harness.path(),
+            &receipt,
+            &serde_json::json!({
+                "surface": "vida agent-init",
+                "status": "blocked",
+                "execution_state": "blocked",
+                "blocker_code": "internal_activation_view_only"
+            }),
+        )
+        .expect("dispatch result should write");
+
+        let artifact: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&path).expect("dispatch result should be readable"),
+        )
+        .expect("dispatch result should decode");
+
+        assert_eq!(artifact["artifact_kind"], "runtime_dispatch_result");
+        assert_eq!(artifact["run_id"], "run-blocked-dispatch");
+        assert_eq!(artifact["dispatch_target"], "coach");
+        assert_eq!(artifact["blocker_code"], "internal_activation_view_only");
+        assert!(artifact.get("completion_receipt_id").is_none());
+    }
 }
 
 pub(crate) fn write_runtime_dispatch_packet(
@@ -2672,6 +3500,14 @@ pub(crate) fn write_runtime_dispatch_packet(
             format!("Failed to resolve project root for dispatch packet rendering: {error}")
         })?);
     let host_runtime = runtime_host_execution_contract_for_root(&project_root);
+    let effective_execution_posture = effective_execution_posture_summary(
+        &ctx.role_selection.execution_plan,
+        &ctx.receipt.dispatch_target,
+        ctx.receipt.selected_backend.as_deref(),
+        ctx.receipt.activation_agent_type.as_deref(),
+        Some(&host_runtime),
+        false,
+    );
     let packet_template_kind = runtime_dispatch_packet_kind(
         &ctx.role_selection.execution_plan,
         &ctx.receipt.dispatch_target,
@@ -2695,6 +3531,12 @@ pub(crate) fn write_runtime_dispatch_packet(
         ctx.receipt,
         &packet_path_display,
     );
+    let execution_truth = dispatch_execution_route_summary(
+        ctx.role_selection,
+        &ctx.receipt.dispatch_target,
+        ctx.receipt.selected_backend.as_deref(),
+    );
+    let activation_evidence = dispatch_activation_evidence_summary(ctx.receipt);
     let delivery_task_packet = runtime_delivery_task_packet(
         &ctx.receipt.run_id,
         &ctx.receipt.dispatch_target,
@@ -2776,6 +3618,14 @@ pub(crate) fn write_runtime_dispatch_packet(
         "activation_agent_type": ctx.receipt.activation_agent_type,
         "activation_runtime_role": ctx.receipt.activation_runtime_role,
         "selected_backend": ctx.receipt.selected_backend,
+        "mixed_posture": effective_execution_posture.clone(),
+        "route_policy": execution_truth.clone(),
+        "activation_vs_execution_evidence": activation_evidence.clone(),
+        "activation_semantics": activation_evidence["activation_semantics"].clone(),
+        "execution_evidence": activation_evidence["execution_evidence"].clone(),
+        "effective_execution_posture": effective_execution_posture,
+        "execution_truth": execution_truth,
+        "activation_evidence": activation_evidence,
         "host_runtime": host_runtime,
         "request_text": ctx.role_selection.request,
         "role_selection": {
@@ -2886,6 +3736,7 @@ pub(crate) async fn execute_runtime_dispatch_handoff(
                 dispatch_packet_path,
                 canonical_backend.as_deref(),
                 role_selection,
+                receipt,
                 host_runtime,
             ))
         }
@@ -2907,7 +3758,62 @@ fn write_runtime_dispatch_result(
         .expect("rfc3339 timestamp should render")
         .replace(':', "-");
     let result_path = result_dir.join(format!("{}-{ts}.json", receipt.run_id));
-    let encoded = serde_json::to_string_pretty(body)
+    let recorded_at = time::OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("rfc3339 timestamp should render");
+    let mut artifact_body = body.clone();
+    if let Some(object) = artifact_body.as_object_mut() {
+        object.insert("run_id".to_string(), serde_json::json!(receipt.run_id));
+        object.insert(
+            "recorded_at".to_string(),
+            serde_json::json!(recorded_at.clone()),
+        );
+        if let Some(packet_path) = receipt
+            .dispatch_packet_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            object.insert(
+                "source_dispatch_packet_path".to_string(),
+                serde_json::json!(packet_path),
+            );
+        }
+        let executed_agent_lane = receipt.dispatch_kind == "agent_lane"
+            && json_string(body.get("execution_state")).as_deref() == Some("executed")
+            && receipt
+                .dispatch_packet_path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty());
+        if executed_agent_lane {
+            let completion_receipt_id = format!(
+                "dispatch-completion-{}",
+                time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+            );
+            object.insert(
+                "artifact_kind".to_string(),
+                serde_json::json!("runtime_lane_completion_result"),
+            );
+            object.insert(
+                "completed_target".to_string(),
+                serde_json::json!(receipt.dispatch_target),
+            );
+            object.insert(
+                "completion_receipt_id".to_string(),
+                serde_json::json!(completion_receipt_id),
+            );
+        } else {
+            object.insert(
+                "artifact_kind".to_string(),
+                serde_json::json!("runtime_dispatch_result"),
+            );
+            object.insert(
+                "dispatch_target".to_string(),
+                serde_json::json!(receipt.dispatch_target),
+            );
+        }
+    }
+    let encoded = serde_json::to_string_pretty(&artifact_body)
         .map_err(|error| format!("Failed to encode dispatch result: {error}"))?;
     std::fs::write(&result_path, encoded)
         .map_err(|error| format!("Failed to write dispatch result: {error}"))?;
@@ -2988,6 +3894,9 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
         } else {
             None
         };
+    if let Some(dispatch_surface) = json_string(execution_result.get("surface")) {
+        receipt.dispatch_surface = Some(dispatch_surface);
+    }
     if let Some(dispatch_command) = json_string(execution_result.get("activation_command")) {
         receipt.dispatch_command = Some(dispatch_command);
     }

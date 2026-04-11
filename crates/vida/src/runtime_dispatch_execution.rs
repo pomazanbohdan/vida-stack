@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
 
 fn configured_external_dispatch_wall_timeout_seconds(
@@ -195,6 +196,7 @@ pub(crate) fn agent_lane_dispatch_result(
     dispatch_packet_path: &str,
     preferred_backend: Option<&str>,
     role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
     host_runtime: serde_json::Value,
 ) -> serde_json::Value {
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -202,6 +204,26 @@ pub(crate) fn agent_lane_dispatch_result(
         &project_root,
         dispatch_packet_path,
         preferred_backend,
+    );
+    let effective_execution_posture =
+        crate::runtime_dispatch_state::effective_execution_posture_summary(
+            &role_selection.execution_plan,
+            &receipt.dispatch_target,
+            receipt.selected_backend.as_deref(),
+            receipt.activation_agent_type.as_deref(),
+            Some(&host_runtime),
+            false,
+        );
+    let execution_truth = summarize_execution_truth_for_route(
+        &role_selection.execution_plan,
+        crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
+            &role_selection.execution_plan,
+            &receipt.dispatch_target,
+        ),
+        host_runtime["selected_cli_execution_class"].as_str(),
+        receipt.selected_backend.as_deref(),
+        Some("activation_view"),
+        Some("missing"),
     );
     let body = activation_view
         .as_object_mut()
@@ -222,6 +244,11 @@ pub(crate) fn agent_lane_dispatch_result(
     );
     body.insert("host_runtime".to_string(), host_runtime);
     body.insert(
+        "effective_execution_posture".to_string(),
+        effective_execution_posture,
+    );
+    body.insert("execution_truth".to_string(), execution_truth);
+    body.insert(
         "blocker_code".to_string(),
         serde_json::json!("internal_activation_view_only"),
     );
@@ -240,6 +267,38 @@ pub(crate) fn agent_lane_dispatch_result(
         serde_json::to_value(role_selection).expect("lane selection should serialize"),
     );
     activation_view
+}
+
+fn refresh_execution_truth(
+    body: &mut serde_json::Map<String, serde_json::Value>,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    effective_selected_backend: Option<&str>,
+    execution_evidence_status: &str,
+) {
+    let host_runtime = body
+        .get("host_runtime")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let activation_kind = body
+        .get("activation_semantics")
+        .and_then(|value| value.get("activation_kind"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    body.insert(
+        "execution_truth".to_string(),
+        summarize_execution_truth_for_route(
+            &role_selection.execution_plan,
+            crate::runtime_dispatch_state::execution_plan_route_for_dispatch_target(
+                &role_selection.execution_plan,
+                &receipt.dispatch_target,
+            ),
+            host_runtime["selected_cli_execution_class"].as_str(),
+            effective_selected_backend,
+            Some(activation_kind),
+            Some(execution_evidence_status),
+        ),
+    );
 }
 
 fn mark_dispatch_result_execution_evidence(
@@ -287,6 +346,46 @@ fn mark_dispatch_result_execution_evidence(
             "records_dispatch_result": true,
         }),
     );
+    if let Some(posture) = body
+        .get_mut("effective_execution_posture")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        posture.insert(
+            "activation_evidence_state".to_string(),
+            serde_json::json!("execution_evidence"),
+        );
+        posture.insert(
+            "receipt_backed_execution_evidence".to_string(),
+            serde_json::json!(true),
+        );
+        posture.insert(
+            "selected_backend".to_string(),
+            serde_json::json!(backend_id),
+        );
+    }
+    if let Some(posture) = body
+        .get_mut("execution_truth")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        posture.insert(
+            "effective_selected_backend".to_string(),
+            serde_json::json!(backend_id),
+        );
+        if let Some(activation_evidence) = posture
+            .get_mut("activation_evidence")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            activation_evidence.insert(
+                "activation_kind".to_string(),
+                serde_json::json!("execution_evidence"),
+            );
+            activation_evidence.insert(
+                "execution_evidence_status".to_string(),
+                serde_json::json!("recorded"),
+            );
+            activation_evidence.insert("receipt_backed".to_string(), serde_json::json!(true));
+        }
+    }
 }
 
 pub(crate) async fn execute_internal_agent_lane_dispatch(
@@ -370,6 +469,7 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         dispatch_packet_path,
         preferred_backend,
         role_selection,
+        receipt,
         host_runtime,
     );
     let body = result
@@ -445,6 +545,7 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         body.insert("blocker_code".to_string(), serde_json::Value::Null);
         body.insert("blocker_reason".to_string(), serde_json::Value::Null);
         mark_dispatch_result_execution_evidence(body, "internal_carrier_completion", carrier_id);
+        refresh_execution_truth(body, role_selection, receipt, Some(carrier_id), "recorded");
     } else {
         let blocker_reason = if !stderr.is_empty() {
             stderr
@@ -463,6 +564,7 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
             "blocker_reason".to_string(),
             serde_json::json!(blocker_reason),
         );
+        refresh_execution_truth(body, role_selection, receipt, Some(carrier_id), "missing");
     }
 
     Ok(Some(result))
@@ -564,6 +666,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         dispatch_packet_path,
         preferred_backend,
         role_selection,
+        receipt,
         host_runtime,
     );
     let body = result
@@ -639,6 +742,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         body.insert("blocker_code".to_string(), serde_json::Value::Null);
         body.insert("blocker_reason".to_string(), serde_json::Value::Null);
         mark_dispatch_result_execution_evidence(body, "external_backend_completion", &backend_id);
+        refresh_execution_truth(body, role_selection, receipt, Some(&backend_id), "recorded");
     } else if timed_out {
         let timeout_seconds = wall_timeout_seconds.unwrap_or_default();
         body.insert(
@@ -659,6 +763,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
                 "configured external backend exceeded the bounded runtime window before returning execution evidence"
             ),
         );
+        refresh_execution_truth(body, role_selection, receipt, Some(&backend_id), "missing");
     } else {
         let provider_error_message = body
             .get("provider_error_message")
@@ -676,6 +781,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
                     .to_string()
             })),
         );
+        refresh_execution_truth(body, role_selection, receipt, Some(&backend_id), "missing");
     }
     Ok(result)
 }
@@ -683,9 +789,10 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
 #[cfg(test)]
 mod tests {
     use super::{
-        mark_dispatch_result_execution_evidence, parse_external_provider_output,
-        parse_internal_codex_exec_output,
+        agent_lane_dispatch_result, mark_dispatch_result_execution_evidence,
+        parse_external_provider_output, parse_internal_codex_exec_output,
     };
+    use crate::RuntimeConsumptionLaneSelection;
 
     #[test]
     fn parse_external_provider_output_extracts_qwen_json_success_result() {
@@ -760,5 +867,103 @@ mod tests {
         );
         assert_eq!(body["execution_evidence"]["backend_id"], "junior");
         assert_eq!(body["execution_evidence"]["receipt_backed"], true);
+    }
+
+    #[test]
+    fn agent_lane_dispatch_result_emits_execution_truth() {
+        let result = agent_lane_dispatch_result(
+            serde_json::json!({
+                "activation_semantics": {
+                    "activation_kind": "activation_view",
+                    "view_only": true
+                }
+            }),
+            "/tmp/dispatch-packet.json",
+            Some("internal_subagents"),
+            &RuntimeConsumptionLaneSelection {
+                ok: true,
+                activation_source: "test".to_string(),
+                selection_mode: "fixed".to_string(),
+                fallback_role: "orchestrator".to_string(),
+                request: "Implement the task".to_string(),
+                selected_role: "worker".to_string(),
+                conversational_mode: None,
+                single_task_only: false,
+                tracked_flow_entry: None,
+                allow_freeform_chat: false,
+                confidence: "high".to_string(),
+                matched_terms: vec![],
+                compiled_bundle: serde_json::Value::Null,
+                execution_plan: serde_json::json!({
+                    "backend_admissibility_matrix": [
+                        {
+                            "backend_id": "opencode_cli",
+                            "backend_class": "external_cli"
+                        },
+                        {
+                            "backend_id": "internal_subagents",
+                            "backend_class": "internal"
+                        }
+                    ],
+                    "development_flow": {
+                        "implementer": {
+                            "executor_backend": "opencode_cli",
+                            "fallback_executor_backend": "internal_subagents"
+                        }
+                    }
+                }),
+                reason: "test".to_string(),
+            },
+            &crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-1".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "routed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec![],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("worker".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-11T00:00:00Z".to_string(),
+            },
+            serde_json::json!({
+                "selected_cli_execution_class": "internal"
+            }),
+        );
+
+        assert_eq!(
+            result["execution_truth"]["effective_execution_posture"],
+            "hybrid"
+        );
+        assert_eq!(
+            result["execution_truth"]["route_primary_backend"],
+            "opencode_cli"
+        );
+        assert_eq!(
+            result["execution_truth"]["effective_selected_backend"],
+            "internal_subagents"
+        );
+        assert_eq!(
+            result["execution_truth"]["activation_evidence"]["execution_evidence_status"],
+            "missing"
+        );
     }
 }
