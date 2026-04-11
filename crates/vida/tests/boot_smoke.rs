@@ -401,12 +401,24 @@ async fn open_test_state_db_with_retry(state_dir: &str) -> Surreal<Db> {
     );
 }
 
-fn seed_run_graph_status(
+fn upsert_run_graph_status_rows(
     state_dir: &str,
     run_id: &str,
+    task_id: &str,
+    task_class: &str,
+    active_node: &str,
+    next_node: Option<&str>,
+    status: &str,
+    route_task_class: &str,
+    selected_backend: &str,
+    lane_id: &str,
+    lifecycle_stage: &str,
     policy_gate: &str,
     handoff_state: &str,
     context_state: &str,
+    checkpoint_kind: &str,
+    resume_target: &str,
+    recovery_ready: bool,
 ) {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
     runtime.block_on(async {
@@ -425,11 +437,11 @@ fn seed_run_graph_status(
             .upsert(("execution_plan_state", run_id))
             .content(TestExecutionPlanStateRow {
                 run_id: run_id.to_string(),
-                task_id: "vida-a".to_string(),
-                task_class: "writer".to_string(),
-                active_node: "writer".to_string(),
-                next_node: None,
-                status: "ready".to_string(),
+                task_id: task_id.to_string(),
+                task_class: task_class.to_string(),
+                active_node: active_node.to_string(),
+                next_node: next_node.map(str::to_string),
+                status: status.to_string(),
                 updated_at: updated_at.clone(),
             })
             .await
@@ -438,10 +450,10 @@ fn seed_run_graph_status(
             .upsert(("routed_run_state", run_id))
             .content(TestRoutedRunStateRow {
                 run_id: run_id.to_string(),
-                route_task_class: "analysis".to_string(),
-                selected_backend: "middle".to_string(),
-                lane_id: "writer_lane".to_string(),
-                lifecycle_stage: "active".to_string(),
+                route_task_class: route_task_class.to_string(),
+                selected_backend: selected_backend.to_string(),
+                lane_id: lane_id.to_string(),
+                lifecycle_stage: lifecycle_stage.to_string(),
                 updated_at: updated_at.clone(),
             })
             .await
@@ -461,15 +473,43 @@ fn seed_run_graph_status(
             .upsert(("resumability_capsule", run_id))
             .content(TestResumabilityCapsuleRow {
                 run_id: run_id.to_string(),
-                checkpoint_kind: "execution_cursor".to_string(),
-                resume_target: "none".to_string(),
-                recovery_ready: true,
+                checkpoint_kind: checkpoint_kind.to_string(),
+                resume_target: resume_target.to_string(),
+                recovery_ready,
                 updated_at,
             })
             .await
             .expect("resumability capsule should be seeded");
         drop(db);
     });
+}
+
+fn seed_run_graph_status(
+    state_dir: &str,
+    run_id: &str,
+    policy_gate: &str,
+    handoff_state: &str,
+    context_state: &str,
+) {
+    upsert_run_graph_status_rows(
+        state_dir,
+        run_id,
+        "vida-a",
+        "writer",
+        "writer",
+        None,
+        "ready",
+        "analysis",
+        "middle",
+        "writer_lane",
+        "active",
+        policy_gate,
+        handoff_state,
+        context_state,
+        "execution_cursor",
+        "none",
+        true,
+    );
 }
 
 fn sync_protocol_binding(state_dir: &str) {
@@ -934,6 +974,19 @@ fn boot_with_retry(state_dir: &str) -> std::process::Output {
     })
 }
 
+fn wait_for_state_unlock(state_dir: &str) {
+    let direct_lock_path = Path::new(state_dir).join("LOCK");
+    let nested_lock_path = Path::new(state_dir)
+        .join(".vida")
+        .join("data")
+        .join("state")
+        .join("LOCK");
+    let deadline = SystemTime::now() + Duration::from_secs(2);
+    while (direct_lock_path.exists() || nested_lock_path.exists()) && SystemTime::now() < deadline {
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 #[test]
 fn root_help_succeeds() {
     let output = vida().arg("--help").output().expect("root help should run");
@@ -1073,7 +1126,12 @@ fn boot_supports_color_render_mode() {
         .env("VIDA_STATE_DIR", unique_state_dir())
         .output()
         .expect("boot should run with color render mode");
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("\u{1b}[1;36mvida boot scaffold ready\u{1b}[0m"));
@@ -1136,7 +1194,12 @@ fn taskflow_proxy_help_is_runtime_specific() {
         .output()
         .expect("taskflow proxy help should run");
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow runtime family"));
     assert!(stdout.contains(
@@ -1164,7 +1227,12 @@ fn taskflow_proxy_help_supports_task_topic() {
         .output()
         .expect("taskflow task topic help should run");
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: task"));
     assert!(stdout.contains("`vida task` is the root parity surface"));
@@ -1189,7 +1257,12 @@ fn taskflow_task_help_alias_routes_to_canonical_task_help() {
         .output()
         .expect("taskflow task help alias should run");
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: task"));
     assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>] [--json]"));
@@ -1208,7 +1281,12 @@ fn root_task_help_supports_next_topic() {
         .output()
         .expect("root task next help should run");
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: next"));
     assert!(stdout.contains("vida task next [--scope <task-id>] [--state-dir <path>] [--json]"));
@@ -1221,7 +1299,12 @@ fn root_task_help_routes_backlog_subcommand_topics_to_canonical_task_help() {
         .output()
         .expect("root task blocked help should run");
 
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("VIDA TaskFlow help: task"));
     assert!(stdout.contains("vida task blocked --json"));
@@ -1593,6 +1676,173 @@ fn root_approval_surface_emits_blocked_canonical_json_envelope() {
         parsed["next_actions"][0],
         "Use `vida approval show --latest --json` or `vida approval show <run-id> --json` once approval evidence exists."
     );
+}
+
+#[test]
+fn root_approval_show_latest_smokes_waiting_for_approval() {
+    let state_dir = unique_state_dir();
+
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+    wait_for_state_unlock(&state_dir);
+    let init = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "taskflow",
+                "run-graph",
+                "init",
+                "run-approval-latest",
+                "implementation",
+                "implementation",
+            ])
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        init.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&init.stdout),
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let update = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "taskflow",
+                "run-graph",
+                "update",
+                "run-approval-latest",
+                "implementation",
+                "approval",
+                "awaiting_approval",
+                "implementation",
+                "{\"next_node\":\"approval\",\"selected_backend\":\"internal_subagents\",\"lane_id\":\"dev_pack_direct\",\"lifecycle_stage\":\"approval_wait\",\"policy_gate\":\"approval_required\",\"handoff_state\":\"awaiting_approval\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"conversation_cursor\",\"resume_target\":\"dispatch.approval\",\"recovery_ready\":true}",
+            ])
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        update.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&update.stdout),
+        String::from_utf8_lossy(&update.stderr)
+    );
+
+    let output = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "root approval show latest should run",
+        |command| {
+            command
+                .args(["approval", "show", "--latest", "--json"])
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("root approval latest json should parse");
+    assert_eq!(parsed["surface"], "vida approval");
+    assert_eq!(parsed["status"], "pass");
+    assert_eq!(parsed["run_id"], "run-approval-latest");
+    assert_eq!(parsed["task_id"], "run-approval-latest");
+    assert_eq!(parsed["approval_status"], "waiting_for_approval");
+    assert_eq!(parsed["gate_level"], "block");
+    assert_eq!(parsed["expiry_state"], "not_tracked");
+    assert!(!parsed["decision_reason"]
+        .as_str()
+        .expect("approval decision reason should render")
+        .trim()
+        .is_empty());
+}
+
+#[test]
+fn root_approval_show_run_smokes_completed_run_as_approved() {
+    let state_dir = unique_state_dir();
+
+    let boot = boot_with_retry(&state_dir);
+    assert!(boot.status.success());
+    wait_for_state_unlock(&state_dir);
+    let init = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "taskflow",
+                "run-graph",
+                "init",
+                "run-approval-specific",
+                "implementation",
+                "implementation",
+            ])
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        init.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&init.stdout),
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let update = run_command_with_state_lock_retry(|| {
+        let mut command = vida();
+        command
+            .args([
+                "taskflow",
+                "run-graph",
+                "update",
+                "run-approval-specific",
+                "implementation",
+                "closure",
+                "completed",
+                "implementation",
+                "{\"next_node\":null,\"selected_backend\":\"internal_subagents\",\"lane_id\":\"dev_pack_direct\",\"lifecycle_stage\":\"implementation_complete\",\"policy_gate\":\"not_required\",\"handoff_state\":\"none\",\"context_state\":\"sealed\",\"checkpoint_kind\":\"conversation_cursor\",\"resume_target\":\"none\",\"recovery_ready\":true}",
+            ])
+            .env("VIDA_STATE_DIR", &state_dir);
+        command
+    });
+    assert!(
+        update.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&update.stdout),
+        String::from_utf8_lossy(&update.stderr)
+    );
+
+    let output = bounded_vida_output_with_state_lock_retry(
+        &["-k", "5s", "20s"],
+        "root approval show run should run",
+        |command| {
+            command
+                .args(["approval", "show", "run-approval-specific", "--json"])
+                .env("VIDA_STATE_DIR", &state_dir);
+        },
+    );
+
+    assert!(
+        output.status.success(),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("root approval run json should parse");
+    assert_eq!(parsed["surface"], "vida approval");
+    assert_eq!(parsed["status"], "pass");
+    assert_eq!(parsed["run_id"], "run-approval-specific");
+    assert_eq!(parsed["approval_status"], "approved");
+    assert_eq!(parsed["gate_level"], "observe");
+    assert_eq!(parsed["expiry_state"], "not_applicable");
+    assert!(!parsed["decision_reason"]
+        .as_str()
+        .expect("approval decision reason should render")
+        .trim()
+        .is_empty());
 }
 
 #[test]
