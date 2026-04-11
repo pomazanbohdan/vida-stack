@@ -673,7 +673,11 @@ agent_system:
       subagents: qwen_cli
       profiles:
         internal_subagents: internal_fast
-      fanout_subagents: qwen_cli
+      fanout_executor_backends:
+        - qwen_cli
+        - hermes_cli
+        - opencode_cli
+      fanout_subagents: qwen_cli,hermes_cli,opencode_cli
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -701,7 +705,10 @@ agent_system:
       subagents: qwen_cli
       profiles:
         internal_subagents: internal_fast
-      fanout_subagents: qwen_cli
+      fanout_executor_backends:
+        - qwen_cli
+        - opencode_cli
+      fanout_subagents: qwen_cli,opencode_cli
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -722,7 +729,11 @@ agent_system:
       subagents: qwen_cli
       profiles:
         internal_subagents: internal_fast
-      fanout_subagents: qwen_cli
+      fanout_executor_backends:
+        - qwen_cli
+        - vibe_cli
+        - opencode_cli
+      fanout_subagents: qwen_cli,vibe_cli,opencode_cli
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -743,7 +754,12 @@ agent_system:
       subagents: qwen_cli
       profiles:
         internal_subagents: internal_arch
-      fanout_subagents: qwen_cli
+      fanout_executor_backends:
+        - qwen_cli
+        - hermes_cli
+        - opencode_cli
+        - kilo_cli
+      fanout_subagents: qwen_cli,hermes_cli,opencode_cli,kilo_cli
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -767,11 +783,16 @@ agent_system:
       verification_route_task_class: verification_ensemble
       independent_verification_required: yes
     analysis:
-      executor_backend: qwen_cli
-      subagents: qwen_cli
+      executor_backend: opencode_cli
+      subagents: opencode_cli
       profiles:
         internal_subagents: internal_fast
-      fanout_subagents: qwen_cli
+      fanout_executor_backends:
+        - qwen_cli
+        - hermes_cli
+        - opencode_cli
+        - kilo_cli
+      fanout_subagents: qwen_cli,hermes_cli,opencode_cli,kilo_cli
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -787,11 +808,15 @@ agent_system:
       verification_route_task_class: verification_ensemble
       independent_verification_required: no
     read_only_prep:
-      executor_backend: qwen_cli
-      subagents: qwen_cli
+      executor_backend: opencode_cli
+      subagents: opencode_cli
       profiles:
         internal_subagents: internal_fast
-      fanout_subagents: qwen_cli
+      fanout_executor_backends:
+        - opencode_cli
+        - hermes_cli
+        - kilo_cli
+      fanout_subagents: opencode_cli,hermes_cli,kilo_cli
       fanout_min_results: 1
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -821,7 +846,11 @@ agent_system:
       subagents: qwen_cli
       profiles:
         internal_subagents: internal_review
-      fanout_subagents: qwen_cli
+      fanout_executor_backends:
+        - qwen_cli
+        - hermes_cli
+        - opencode_cli
+      fanout_subagents: qwen_cli,hermes_cli,opencode_cli
       fanout_min_results: 3
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -837,8 +866,8 @@ agent_system:
       verification_route_task_class: verification_ensemble
       independent_verification_required: yes
     review:
-      executor_backend: qwen_cli
-      subagents: qwen_cli
+      executor_backend: hermes_cli
+      subagents: hermes_cli
       profiles:
         internal_subagents: internal_review
       write_scope: none
@@ -853,8 +882,8 @@ agent_system:
       internal_escalation_trigger: unresolved_high_risk_findings
       independent_verification_required: no
     review_first_pass:
-      executor_backend: qwen_cli
-      subagents: qwen_cli
+      executor_backend: opencode_cli
+      subagents: opencode_cli
       profiles:
         internal_subagents: internal_review
       write_scope: none
@@ -869,8 +898,8 @@ agent_system:
       internal_escalation_trigger: unresolved_high_risk_findings
       independent_verification_required: no
     ui_review:
-      executor_backend: qwen_cli
-      subagents: qwen_cli
+      executor_backend: vibe_cli
+      subagents: vibe_cli
       profiles:
         internal_subagents: internal_review
       write_scope: none
@@ -889,6 +918,11 @@ agent_system:
       subagents: qwen_cli
       profiles:
         internal_subagents: internal_review
+      fanout_executor_backends:
+        - qwen_cli
+        - hermes_cli
+        - opencode_cli
+      fanout_subagents: qwen_cli,hermes_cli,opencode_cli
       write_scope: none
       verification_gate: review_findings
       max_runtime_seconds: 240
@@ -905,7 +939,9 @@ agent_system:
       subagents: qwen_cli
       fanout_executor_backends:
         - qwen_cli
-      fanout_subagents: qwen_cli
+        - hermes_cli
+        - opencode_cli
+      fanout_subagents: qwen_cli,hermes_cli,opencode_cli
       fanout_min_results: 2
       merge_policy: consensus_with_conflict_flag
       write_scope: none
@@ -920,11 +956,13 @@ agent_system:
       internal_escalation_trigger: unresolved_high_risk_findings
       independent_verification_required: no
     coach:
-      executor_backend: qwen_cli
-      subagents: qwen_cli
+      executor_backend: hermes_cli
+      subagents: hermes_cli
       fanout_executor_backends:
+        - hermes_cli
         - qwen_cli
-      fanout_subagents: qwen_cli
+        - opencode_cli
+      fanout_subagents: hermes_cli,qwen_cli,opencode_cli
       fanout_min_results: 1
       merge_policy: unanimous_approve_rework_bias
       write_scope: none
@@ -944,11 +982,13 @@ agent_system:
       profiles:
         internal_subagents: internal_fast
       analysis_required: yes
-      analysis_executor_backend: qwen_cli
+      analysis_executor_backend: opencode_cli
       analysis_route_task_class: analysis
       analysis_fanout_executor_backends:
         - qwen_cli
-      analysis_fanout_subagents: qwen_cli
+        - hermes_cli
+        - opencode_cli
+      analysis_fanout_subagents: qwen_cli,hermes_cli,opencode_cli
       analysis_fanout_min_results: 1
       analysis_merge_policy: consensus_with_conflict_flag
       analysis_external_first_required: yes
@@ -956,7 +996,7 @@ agent_system:
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: qwen_cli
+      coach_executor_backend: hermes_cli
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification
@@ -982,11 +1022,13 @@ agent_system:
       profiles:
         internal_subagents: internal_fast
       analysis_required: yes
-      analysis_executor_backend: qwen_cli
+      analysis_executor_backend: opencode_cli
       analysis_route_task_class: analysis
       analysis_fanout_executor_backends:
         - qwen_cli
-      analysis_fanout_subagents: qwen_cli
+        - hermes_cli
+        - opencode_cli
+      analysis_fanout_subagents: qwen_cli,hermes_cli,opencode_cli
       analysis_fanout_min_results: 1
       analysis_merge_policy: consensus_with_conflict_flag
       analysis_external_first_required: yes
@@ -994,7 +1036,7 @@ agent_system:
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: qwen_cli
+      coach_executor_backend: hermes_cli
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification
@@ -1013,11 +1055,13 @@ agent_system:
       profiles:
         internal_subagents: internal_fast
       analysis_required: yes
-      analysis_executor_backend: qwen_cli
+      analysis_executor_backend: vibe_cli
       analysis_route_task_class: ui_review
       analysis_fanout_executor_backends:
         - qwen_cli
-      analysis_fanout_subagents: qwen_cli
+        - vibe_cli
+        - opencode_cli
+      analysis_fanout_subagents: qwen_cli,vibe_cli,opencode_cli
       analysis_fanout_min_results: 2
       analysis_merge_policy: consensus_with_conflict_flag
       analysis_external_first_required: yes
@@ -1025,7 +1069,7 @@ agent_system:
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: qwen_cli
+      coach_executor_backend: hermes_cli
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification
@@ -1045,11 +1089,14 @@ agent_system:
         internal_subagents: internal_fast
       max_runtime_seconds: 420
       analysis_required: yes
-      analysis_executor_backend: qwen_cli
+      analysis_executor_backend: opencode_cli
       analysis_route_task_class: analysis
       analysis_fanout_executor_backends:
         - qwen_cli
-      analysis_fanout_subagents: qwen_cli
+        - hermes_cli
+        - opencode_cli
+        - kilo_cli
+      analysis_fanout_subagents: qwen_cli,hermes_cli,opencode_cli,kilo_cli
       analysis_fanout_min_results: 1
       analysis_merge_policy: consensus_with_conflict_flag
       analysis_external_first_required: yes
@@ -1057,7 +1104,7 @@ agent_system:
       analysis_zero_budget_required: yes
       analysis_default_in_boot: yes
       coach_required: yes
-      coach_executor_backend: qwen_cli
+      coach_executor_backend: hermes_cli
       coach_route_task_class: coach
       write_scope: scoped_only
       verification_gate: targeted_verification
@@ -1082,6 +1129,11 @@ agent_system:
       subagents: qwen_cli
       profiles:
         internal_subagents: internal_arch
+      fanout_executor_backends:
+        - qwen_cli
+        - hermes_cli
+        - opencode_cli
+      fanout_subagents: qwen_cli,hermes_cli,opencode_cli
       write_scope: none
       verification_gate: architectural_review
       max_fallback_hops: 2
@@ -1093,8 +1145,8 @@ agent_system:
       verification_route_task_class: review_ensemble
       independent_verification_required: yes
     verification:
-      executor_backend: qwen_cli
-      subagents: qwen_cli
+      executor_backend: opencode_cli
+      subagents: opencode_cli
       profiles:
         internal_subagents: internal_review
       write_scope: none
@@ -1113,9 +1165,11 @@ agent_system:
       subagents: qwen_cli
       fanout_executor_backends:
         - qwen_cli
+        - hermes_cli
+        - opencode_cli
       profiles:
         internal_subagents: internal_review
-      fanout_subagents: qwen_cli
+      fanout_subagents: qwen_cli,hermes_cli,opencode_cli
       fanout_min_results: 3
       merge_policy: consensus_with_conflict_flag
       write_scope: none

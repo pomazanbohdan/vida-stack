@@ -418,6 +418,7 @@ pub(crate) fn summarize_agent_route_from_snapshot(
 #[cfg(test)]
 mod tests {
     use super::{build_executor_backend_admissibility_matrix, summarize_agent_route_from_snapshot};
+    use std::fs;
 
     #[test]
     fn summarize_agent_route_prefers_explicit_executor_fields() {
@@ -536,6 +537,57 @@ mod tests {
         assert_eq!(
             qwen["lane_admissibility"]["policy_flags"]["review_only_backend"],
             true
+        );
+    }
+
+    #[test]
+    fn real_project_config_expands_analysis_and_review_routes_beyond_qwen_only() {
+        let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("vida.config.yaml");
+        let overlay: serde_yaml::Value =
+            serde_yaml::from_str(&fs::read_to_string(&config_path).expect("config should read"))
+                .expect("config should parse");
+        let overlay_json =
+            serde_json::to_value(overlay).expect("yaml config should convert to json");
+        let agent_system = &overlay_json["agent_system"];
+
+        let analysis =
+            summarize_agent_route_from_snapshot(&serde_json::Value::Null, agent_system, "analysis");
+        assert_eq!(analysis["executor_backend"], "opencode_cli");
+        assert_eq!(
+            analysis["fanout_executor_backends"],
+            serde_json::json!(["qwen_cli", "hermes_cli", "opencode_cli", "kilo_cli"])
+        );
+        assert_eq!(
+            analysis["executor_backend_policy"]["lane_admissibility"]["implementation"],
+            false
+        );
+
+        let coach =
+            summarize_agent_route_from_snapshot(&serde_json::Value::Null, agent_system, "coach");
+        assert_eq!(coach["executor_backend"], "hermes_cli");
+        assert_eq!(
+            coach["fanout_executor_backends"],
+            serde_json::json!(["hermes_cli", "qwen_cli", "opencode_cli"])
+        );
+
+        let verification = summarize_agent_route_from_snapshot(
+            &serde_json::Value::Null,
+            agent_system,
+            "verification",
+        );
+        assert_eq!(verification["executor_backend"], "opencode_cli");
+
+        let review_ensemble = summarize_agent_route_from_snapshot(
+            &serde_json::Value::Null,
+            agent_system,
+            "review_ensemble",
+        );
+        assert_eq!(
+            review_ensemble["fanout_executor_backends"],
+            serde_json::json!(["qwen_cli", "hermes_cli", "opencode_cli"])
         );
     }
 }
