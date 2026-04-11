@@ -199,6 +199,9 @@ use runtime_dispatch_packets::{
 pub(crate) use runtime_dispatch_state::*;
 #[cfg(test)]
 use runtime_dispatch_status::fallback_runtime_consumption_run_graph_status;
+#[cfg(test)]
+use runtime_lane_summary::build_runtime_lane_selection_from_bundle;
+pub(crate) use runtime_lane_summary::role_exists_in_lane_bundle;
 pub(crate) use shell_runtime_helpers::{
     block_on_state_store, print_json_pretty, repo_runtime_root,
 };
@@ -329,21 +332,6 @@ pub(crate) struct RuntimeConsumptionLaneSelection {
     pub(crate) reason: String,
 }
 
-#[cfg(test)]
-fn build_runtime_lane_selection_from_bundle(
-    bundle: &serde_json::Value,
-    activation_source: &str,
-    pack_router_keywords: &serde_json::Value,
-    request: &str,
-) -> Result<RuntimeConsumptionLaneSelection, String> {
-    crate::runtime_lane_summary::build_runtime_lane_selection_from_bundle(
-        bundle,
-        activation_source,
-        pack_router_keywords,
-        request,
-    )
-}
-
 pub(crate) async fn build_runtime_lane_selection_with_store(
     store: &StateStore,
     request: &str,
@@ -359,25 +347,6 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
         compiled_bundle,
         selection,
     )
-}
-
-fn role_exists_in_lane_bundle(bundle: &serde_json::Value, role_id: &str) -> bool {
-    if role_id.is_empty() {
-        return false;
-    }
-
-    bundle["enabled_framework_roles"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .any(|value| value == role_id)
-        || bundle["project_roles"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|row| row["role_id"].as_str())
-            .any(|value| value == role_id)
 }
 
 #[cfg(test)]
