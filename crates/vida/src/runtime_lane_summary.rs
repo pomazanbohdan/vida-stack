@@ -570,10 +570,68 @@ pub(crate) fn summarize_agent_route_from_snapshot(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_executor_backend_admissibility_matrix, summarize_agent_route_from_snapshot,
+        build_executor_backend_admissibility_matrix, build_runtime_execution_plan_from_snapshot,
+        build_runtime_lane_selection_from_bundle, summarize_agent_route_from_snapshot,
         summarize_execution_truth_for_route,
     };
+    use crate::launcher_activation_snapshot::pack_router_keywords_json;
+    use crate::project_activator_surface::read_yaml_file_checked;
+    use crate::temp_state::TempStateHarness;
+    use crate::{build_compiled_agent_extension_bundle_for_root, run, Cli};
+    use clap::Parser;
+    use std::env;
     use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::ExitCode;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    struct RecoveringMutex(Mutex<()>);
+
+    impl RecoveringMutex {
+        fn lock(&self) -> MutexGuard<'_, ()> {
+            self.0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
+    }
+
+    fn current_dir_lock() -> &'static RecoveringMutex {
+        static LOCK: OnceLock<RecoveringMutex> = OnceLock::new();
+        LOCK.get_or_init(|| RecoveringMutex(Mutex::new(())))
+    }
+
+    struct CurrentDirGuard {
+        _lock: MutexGuard<'static, ()>,
+        original: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn change_to(path: &Path) -> Self {
+            let lock = current_dir_lock().lock();
+            let original = env::current_dir().expect("current dir should resolve");
+            env::set_current_dir(path).expect("current dir should change");
+            Self {
+                _lock: lock,
+                original,
+            }
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            env::set_current_dir(&self.original).expect("current dir should restore");
+        }
+    }
+
+    fn guard_current_dir(path: &Path) -> CurrentDirGuard {
+        CurrentDirGuard::change_to(path)
+    }
+
+    fn cli(args: &[&str]) -> Cli {
+        let mut argv = vec!["vida"];
+        argv.extend(args.iter().copied());
+        Cli::parse_from(argv)
+    }
 
     #[test]
     fn summarize_agent_route_prefers_explicit_executor_fields() {
@@ -802,6 +860,184 @@ mod tests {
         assert_eq!(
             summary["selected_backend_policy"]["backend_class"],
             "internal"
+        );
+    }
+
+    #[test]
+    fn runtime_assignment_uses_overlay_ladder_for_all_four_tiers() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        let config =
+            read_yaml_file_checked(&harness.path().join("vida.config.yaml")).expect("config");
+        let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
+            .expect("bundle should compile");
+        let pack_router = pack_router_keywords_json(&config);
+
+        let assignment_for = |request: &str| {
+            let selection = build_runtime_lane_selection_from_bundle(
+                &bundle,
+                "state_store",
+                &pack_router,
+                request,
+            )
+            .expect("selection should build");
+            let plan = build_runtime_execution_plan_from_snapshot(&bundle, &selection);
+            let carrier_runtime_assignment = plan["carrier_runtime_assignment"].clone();
+            let runtime_assignment = plan["runtime_assignment"].clone();
+            assert_eq!(carrier_runtime_assignment, runtime_assignment);
+            assert!(plan.get("codex_runtime_assignment").is_none());
+            runtime_assignment
+        };
+        let implementation = assignment_for("write one bounded implementation patch");
+        assert_eq!(implementation["enabled"], true);
+        assert_eq!(implementation["runtime_role"], "worker");
+        assert_eq!(implementation["activation_agent_type"], "junior");
+        assert_eq!(implementation["activation_runtime_role"], "worker");
+        assert_eq!(implementation["selected_tier"], "junior");
+        assert_eq!(implementation["selected_runtime_role"], "worker");
+        assert_eq!(implementation["tier_default_runtime_role"], "worker");
+        assert_eq!(implementation["rate"], 1);
+        assert_eq!(implementation["estimated_task_price_units"], 1);
+
+        let specification = assignment_for(
+            "research the feature, write the specification, and develop an implementation plan",
+        );
+        assert_eq!(specification["enabled"], true);
+        assert_eq!(specification["runtime_role"], "business_analyst");
+        assert_eq!(specification["activation_agent_type"], "middle");
+        assert_eq!(specification["activation_runtime_role"], "business_analyst");
+        assert_eq!(specification["selected_tier"], "middle");
+        assert_eq!(specification["selected_runtime_role"], "business_analyst");
+        assert_eq!(specification["tier_default_runtime_role"], "coach");
+        assert_eq!(specification["rate"], 4);
+        assert_eq!(specification["estimated_task_price_units"], 8);
+
+        let coach = assignment_for(
+            "review the implemented result against the spec, acceptance criteria, and definition of done; request rework if it drifts",
+        );
+        assert_eq!(coach["enabled"], true);
+        assert_eq!(coach["runtime_role"], "coach");
+        assert_eq!(coach["activation_agent_type"], "middle");
+        assert_eq!(coach["activation_runtime_role"], "coach");
+        assert_eq!(coach["selected_tier"], "middle");
+        assert_eq!(coach["selected_runtime_role"], "coach");
+        assert_eq!(coach["tier_default_runtime_role"], "coach");
+        assert_eq!(coach["rate"], 4);
+        assert_eq!(coach["estimated_task_price_units"], 8);
+
+        let verification = assignment_for("review one bounded patch and verify release readiness");
+        assert_eq!(verification["enabled"], true);
+        assert_eq!(verification["runtime_role"], "verifier");
+        assert_eq!(verification["activation_agent_type"], "senior");
+        assert_eq!(verification["activation_runtime_role"], "verifier");
+        assert_eq!(verification["selected_tier"], "senior");
+        assert_eq!(verification["selected_runtime_role"], "verifier");
+        assert_eq!(verification["tier_default_runtime_role"], "verifier");
+        assert_eq!(verification["rate"], 16);
+        assert_eq!(verification["estimated_task_price_units"], 32);
+
+        let architecture = assignment_for(
+            "prepare the architecture and hard escalation plan for a cross cutting migration conflict",
+        );
+        assert_eq!(architecture["enabled"], true);
+        assert_eq!(architecture["runtime_role"], "solution_architect");
+        assert_eq!(architecture["activation_agent_type"], "architect");
+        assert_eq!(
+            architecture["activation_runtime_role"],
+            "solution_architect"
+        );
+        assert_eq!(architecture["selected_tier"], "architect");
+        assert_eq!(architecture["selected_runtime_role"], "solution_architect");
+        assert_eq!(
+            architecture["tier_default_runtime_role"],
+            "solution_architect"
+        );
+        assert_eq!(architecture["rate"], 32);
+        assert_eq!(architecture["estimated_task_price_units"], 128);
+    }
+
+    #[test]
+    fn codex_dispatch_aliases_are_loaded_from_overlay_not_rust_catalog() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+
+        let config_path = harness.path().join("vida.config.yaml");
+        let config_body =
+            fs::read_to_string(&config_path).expect("config should be readable after init");
+        let updated = config_body.replace("development_implementer:", "custom_impl_lane:");
+        fs::write(&config_path, updated).expect("config should be rewritten");
+
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        let codex_config = fs::read_to_string(harness.path().join(".codex/config.toml"))
+            .expect("rendered codex config should exist");
+        assert!(!codex_config.contains("[agents.custom_impl_lane]"));
+        assert!(!codex_config.contains("[agents.development_implementer]"));
+
+        let config =
+            read_yaml_file_checked(&harness.path().join("vida.config.yaml")).expect("config");
+        let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
+            .expect("bundle should compile");
+        let pack_router = pack_router_keywords_json(&config);
+        let selection = build_runtime_lane_selection_from_bundle(
+            &bundle,
+            "state_store",
+            &pack_router,
+            "write one bounded implementation patch",
+        )
+        .expect("selection should build");
+        let plan = build_runtime_execution_plan_from_snapshot(&bundle, &selection);
+
+        let carrier_runtime_assignment = plan["carrier_runtime_assignment"].clone();
+        let runtime_assignment = plan["runtime_assignment"].clone();
+        assert_eq!(carrier_runtime_assignment, runtime_assignment);
+        assert!(plan.get("codex_runtime_assignment").is_none());
+        assert!(runtime_assignment.get("internal_named_lane_id").is_none());
+        assert_eq!(
+            plan["development_flow"]["dispatch_contract"]["implementer_activation"]
+                ["activation_agent_type"],
+            "junior"
+        );
+        assert!(
+            plan["development_flow"]["dispatch_contract"]["implementer_activation"]
+                .get("internal_named_lane_id")
+                .is_none()
         );
     }
 }

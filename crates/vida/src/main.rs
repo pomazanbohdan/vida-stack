@@ -133,8 +133,6 @@ pub(crate) use host_agent_state::{
     worker_strategy_state_path, HostAgentFeedbackInput,
 };
 pub(crate) use init_surfaces::resolve_init_bootstrap_source_root;
-#[cfg(test)]
-use launcher_activation_snapshot::pack_router_keywords_json;
 pub(crate) use launcher_activation_snapshot::{
     ensure_launcher_bootstrap, read_or_sync_launcher_activation_snapshot,
     sync_launcher_activation_snapshot,
@@ -199,8 +197,6 @@ use runtime_dispatch_packets::{
 pub(crate) use runtime_dispatch_state::*;
 #[cfg(test)]
 use runtime_dispatch_status::fallback_runtime_consumption_run_graph_status;
-#[cfg(test)]
-use runtime_lane_summary::build_runtime_lane_selection_from_bundle;
 pub(crate) use runtime_lane_summary::role_exists_in_lane_bundle;
 pub(crate) use shell_runtime_helpers::{
     block_on_state_store, print_json_pretty, repo_runtime_root,
@@ -1614,120 +1610,6 @@ mod tests {
     }
 
     #[test]
-    fn runtime_assignment_uses_overlay_ladder_for_all_four_tiers() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-        assert_eq!(
-            runtime.block_on(run(cli(&[
-                "project-activator",
-                "--project-id",
-                "vida-test",
-                "--project-name",
-                "VIDA Test",
-                "--language",
-                "english",
-                "--host-cli-system",
-                "codex",
-                "--json"
-            ]))),
-            ExitCode::SUCCESS
-        );
-
-        let config = project_activator_surface::read_yaml_file_checked(
-            &harness.path().join("vida.config.yaml"),
-        )
-        .expect("config");
-        let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
-            .expect("bundle should compile");
-        let pack_router = pack_router_keywords_json(&config);
-
-        let assignment_for = |request: &str| {
-            let selection = build_runtime_lane_selection_from_bundle(
-                &bundle,
-                "state_store",
-                &pack_router,
-                request,
-            )
-            .expect("selection should build");
-            let plan = build_runtime_execution_plan_from_snapshot(&bundle, &selection);
-            let carrier_runtime_assignment = plan["carrier_runtime_assignment"].clone();
-            let runtime_assignment = plan["runtime_assignment"].clone();
-            assert_eq!(carrier_runtime_assignment, runtime_assignment);
-            assert!(plan.get("codex_runtime_assignment").is_none());
-            runtime_assignment
-        };
-        let implementation = assignment_for("write one bounded implementation patch");
-        assert_eq!(implementation["enabled"], true);
-        assert_eq!(implementation["runtime_role"], "worker");
-        assert_eq!(implementation["activation_agent_type"], "junior");
-        assert_eq!(implementation["activation_runtime_role"], "worker");
-        assert_eq!(implementation["selected_tier"], "junior");
-        assert_eq!(implementation["selected_runtime_role"], "worker");
-        assert_eq!(implementation["tier_default_runtime_role"], "worker");
-        assert_eq!(implementation["rate"], 1);
-        assert_eq!(implementation["estimated_task_price_units"], 1);
-
-        let specification = assignment_for(
-            "research the feature, write the specification, and develop an implementation plan",
-        );
-        assert_eq!(specification["enabled"], true);
-        assert_eq!(specification["runtime_role"], "business_analyst");
-        assert_eq!(specification["activation_agent_type"], "middle");
-        assert_eq!(specification["activation_runtime_role"], "business_analyst");
-        assert_eq!(specification["selected_tier"], "middle");
-        assert_eq!(specification["selected_runtime_role"], "business_analyst");
-        assert_eq!(specification["tier_default_runtime_role"], "coach");
-        assert_eq!(specification["rate"], 4);
-        assert_eq!(specification["estimated_task_price_units"], 8);
-
-        let coach = assignment_for(
-            "review the implemented result against the spec, acceptance criteria, and definition of done; request rework if it drifts",
-        );
-        assert_eq!(coach["enabled"], true);
-        assert_eq!(coach["runtime_role"], "coach");
-        assert_eq!(coach["activation_agent_type"], "middle");
-        assert_eq!(coach["activation_runtime_role"], "coach");
-        assert_eq!(coach["selected_tier"], "middle");
-        assert_eq!(coach["selected_runtime_role"], "coach");
-        assert_eq!(coach["tier_default_runtime_role"], "coach");
-        assert_eq!(coach["rate"], 4);
-        assert_eq!(coach["estimated_task_price_units"], 8);
-
-        let verification = assignment_for("review one bounded patch and verify release readiness");
-        assert_eq!(verification["enabled"], true);
-        assert_eq!(verification["runtime_role"], "verifier");
-        assert_eq!(verification["activation_agent_type"], "senior");
-        assert_eq!(verification["activation_runtime_role"], "verifier");
-        assert_eq!(verification["selected_tier"], "senior");
-        assert_eq!(verification["selected_runtime_role"], "verifier");
-        assert_eq!(verification["tier_default_runtime_role"], "verifier");
-        assert_eq!(verification["rate"], 16);
-        assert_eq!(verification["estimated_task_price_units"], 32);
-
-        let architecture = assignment_for(
-            "prepare the architecture and hard escalation plan for a cross cutting migration conflict",
-        );
-        assert_eq!(architecture["enabled"], true);
-        assert_eq!(architecture["runtime_role"], "solution_architect");
-        assert_eq!(architecture["activation_agent_type"], "architect");
-        assert_eq!(
-            architecture["activation_runtime_role"],
-            "solution_architect"
-        );
-        assert_eq!(architecture["selected_tier"], "architect");
-        assert_eq!(architecture["selected_runtime_role"], "solution_architect");
-        assert_eq!(
-            architecture["tier_default_runtime_role"],
-            "solution_architect"
-        );
-        assert_eq!(architecture["rate"], 32);
-        assert_eq!(architecture["estimated_task_price_units"], 128);
-    }
-
-    #[test]
     fn selected_backend_prefers_carrier_tier_over_internal_subagents() {
         let execution_plan = serde_json::json!({
             "runtime_assignment": {
@@ -2943,74 +2825,6 @@ mod tests {
             )
         );
         assert!(super::downstream_dispatch_ready_blocker_parity_error(false, &blockers).is_none());
-    }
-
-    #[test]
-    fn codex_dispatch_aliases_are_loaded_from_overlay_not_rust_catalog() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-
-        let config_path = harness.path().join("vida.config.yaml");
-        let config_body =
-            fs::read_to_string(&config_path).expect("config should be readable after init");
-        let updated = config_body.replace("development_implementer:", "custom_impl_lane:");
-        fs::write(&config_path, updated).expect("config should be rewritten");
-
-        assert_eq!(
-            runtime.block_on(run(cli(&[
-                "project-activator",
-                "--project-id",
-                "vida-test",
-                "--project-name",
-                "VIDA Test",
-                "--language",
-                "english",
-                "--host-cli-system",
-                "codex",
-                "--json"
-            ]))),
-            ExitCode::SUCCESS
-        );
-
-        let codex_config = fs::read_to_string(harness.path().join(".codex/config.toml"))
-            .expect("rendered codex config should exist");
-        assert!(!codex_config.contains("[agents.custom_impl_lane]"));
-        assert!(!codex_config.contains("[agents.development_implementer]"));
-
-        let config = project_activator_surface::read_yaml_file_checked(
-            &harness.path().join("vida.config.yaml"),
-        )
-        .expect("config");
-        let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
-            .expect("bundle should compile");
-        let pack_router = pack_router_keywords_json(&config);
-        let selection = build_runtime_lane_selection_from_bundle(
-            &bundle,
-            "state_store",
-            &pack_router,
-            "write one bounded implementation patch",
-        )
-        .expect("selection should build");
-        let plan = build_runtime_execution_plan_from_snapshot(&bundle, &selection);
-
-        let carrier_runtime_assignment = plan["carrier_runtime_assignment"].clone();
-        let runtime_assignment = plan["runtime_assignment"].clone();
-        assert_eq!(carrier_runtime_assignment, runtime_assignment);
-        assert!(plan.get("codex_runtime_assignment").is_none());
-        assert!(runtime_assignment.get("internal_named_lane_id").is_none());
-        assert_eq!(
-            plan["development_flow"]["dispatch_contract"]["implementer_activation"]
-                ["activation_agent_type"],
-            "junior"
-        );
-        assert!(
-            plan["development_flow"]["dispatch_contract"]["implementer_activation"]
-                .get("internal_named_lane_id")
-                .is_none()
-        );
     }
 
     #[test]
