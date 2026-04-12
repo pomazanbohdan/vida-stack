@@ -2260,7 +2260,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_runtime_dispatch_handoff_allows_internal_host_to_route_to_external_backend() {
+    fn execute_runtime_dispatch_handoff_keeps_internal_host_external_backend_hint_on_agent_init() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
@@ -2375,42 +2375,26 @@ mod tests {
                 &role_selection,
                 &receipt,
             ))
-            .expect("hybrid internal-host external-backend dispatch should execute");
+            .expect("internal host should stay on agent-init for external backend hint");
 
-        assert_eq!(result["surface"], "external_cli:qwen_cli");
-        assert_eq!(result["status"], "pass");
-        assert_eq!(result["execution_state"], "executed");
-        assert!(result["blocker_code"].is_null());
+        assert_eq!(result["surface"], "vida agent-init");
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
         assert_eq!(result["host_runtime"]["selected_cli_system"], "codex");
         assert_eq!(
             result["host_runtime"]["selected_cli_execution_class"],
             "internal"
         );
         assert_eq!(
-            result["effective_execution_posture"]["effective_posture_kind"],
-            "mixed"
-        );
-        assert_eq!(
-            result["effective_execution_posture"]["hybrid_host_backend_selection"],
-            true
-        );
-        assert_eq!(
-            result["effective_execution_posture"]["selected_backend_class"],
-            "external_cli"
-        );
-        assert_eq!(
             result["effective_execution_posture"]["activation_evidence_state"],
-            "execution_evidence"
+            "activation_view_only"
         );
-        assert_eq!(result["backend_dispatch"]["backend_id"], "qwen_cli");
+        assert_eq!(result["backend_dispatch"]["backend_id"], serde_json::Value::Null);
         assert!(result["activation_command"]
             .as_str()
             .expect("activation command should render")
-            .contains("sh"));
-        assert!(result["provider_output"]
-            .as_str()
-            .expect("provider output should render")
-            .contains("external-dispatch:Read and execute the VIDA dispatch packet"));
+            .contains("vida agent-init"));
+        assert_eq!(result["blocker_code"], "internal_activation_view_only");
     }
 
     #[test]
