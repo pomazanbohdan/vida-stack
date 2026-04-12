@@ -2680,6 +2680,8 @@ mod runtime_dispatch_packet_context_tests {
     use std::path::PathBuf;
     use std::process::ExitCode;
     use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     struct RecoveringMutex(Mutex<()>);
 
@@ -2723,10 +2725,108 @@ mod runtime_dispatch_packet_context_tests {
         CurrentDirGuard::change_to(path)
     }
 
+    struct EnvVarGuard {
+        _lock: MutexGuard<'static, ()>,
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    fn env_var_lock() -> &'static RecoveringMutex {
+        static LOCK: OnceLock<RecoveringMutex> = OnceLock::new();
+        LOCK.get_or_init(|| RecoveringMutex(Mutex::new(())))
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let lock = env_var_lock().lock();
+            let original = env::var(key).ok();
+            std::env::set_var(key, value);
+            Self {
+                _lock: lock,
+                key,
+                original,
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.original.as_deref() {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
     fn cli(args: &[&str]) -> Cli {
         let mut argv = vec!["vida"];
         argv.extend(args.iter().copied());
         Cli::parse_from(argv)
+    }
+
+    fn wait_for_state_unlock(state_dir: &Path) {
+        let direct_lock_path = state_dir.join("LOCK");
+        let nested_lock_path = state_dir
+            .join(".vida")
+            .join("data")
+            .join("state")
+            .join("LOCK");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while (direct_lock_path.exists() || nested_lock_path.exists()) && Instant::now() < deadline
+        {
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn install_external_cli_test_subagents(config_path: &Path) {
+        let config = fs::read_to_string(config_path).expect("config should exist");
+        let updated = config.replace(
+            "agent_system:\n  init_on_boot: true\n  mode: native\n  state_owner: orchestrator_only\n  max_parallel_agents: 4\n  routing: {}\n  scoring: {}\n",
+            concat!(
+                "agent_system:\n",
+                "  init_on_boot: true\n",
+                "  mode: native\n",
+                "  state_owner: orchestrator_only\n",
+                "  max_parallel_agents: 4\n",
+                "  subagents:\n",
+                "    internal_subagents:\n",
+                "      enabled: true\n",
+                "      subagent_backend_class: internal\n",
+                "    qwen_cli:\n",
+                "      enabled: true\n",
+                "      subagent_backend_class: external_cli\n",
+                "      detect_command: qwen\n",
+                "      dispatch:\n",
+                "        command: qwen\n",
+                "        static_args:\n",
+                "          - -y\n",
+                "          - -o\n",
+                "          - text\n",
+                "        model_flag: --model\n",
+                "        prompt_mode: positional\n",
+                "    hermes_cli:\n",
+                "      enabled: true\n",
+                "      subagent_backend_class: external_cli\n",
+                "      detect_command: hermes\n",
+                "      dispatch:\n",
+                "        command: hermes\n",
+                "        static_args:\n",
+                "          - chat\n",
+                "          - -Q\n",
+                "          - -q\n",
+                "        model_flag: --model\n",
+                "        provider_flag: --provider\n",
+                "        prompt_mode: positional\n",
+                "  routing: {}\n",
+                "  scoring: {}\n",
+            ),
+        );
+        assert_ne!(
+            updated, config,
+            "expected agent_system scaffold replacement"
+        );
+        fs::write(config_path, updated).expect("config should update");
     }
 
     fn bridge_test_role_selection(dev_task_id: &str) -> RuntimeConsumptionLaneSelection {
@@ -2904,6 +3004,429 @@ mod runtime_dispatch_packet_context_tests {
             .expect_err("packet without goal should fail closed");
         assert!(error.contains("missing required packet fields"));
         assert!(error.contains("goal"));
+    }
+
+    #[test]
+    fn execute_runtime_dispatch_handoff_executes_internal_codex_carrier() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+        assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+
+        let fake_bin = harness.path().join("fake-bin");
+        fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
+        let fake_codex = fake_bin.join("codex");
+        fs::write(
+            &fake_codex,
+            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}'\n",
+        )
+        .expect("fake codex should write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&fake_codex)
+                .expect("fake codex metadata should load")
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
+        }
+        let original_path = env::var("PATH").unwrap_or_default();
+        let patched_path = if original_path.is_empty() {
+            fake_bin.display().to_string()
+        } else {
+            format!("{}:{}", fake_bin.display(), original_path)
+        };
+        let _path_guard = EnvVarGuard::set("PATH", &patched_path);
+
+        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let store = runtime
+            .block_on(StateStore::open(state_root.clone()))
+            .expect("state store should open");
+        let dispatch_packet_path = harness.path().join("agent-dispatch.json");
+        fs::write(
+            &dispatch_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": runtime_delivery_task_packet(
+                    "run-agent-dispatch",
+                    "implementer",
+                    "worker",
+                    "implementation",
+                    "implementation",
+                    "continue development"
+                ),
+                "dispatch_target": "implementer",
+                "request_text": "continue development",
+                "activation_runtime_role": "worker",
+                "role_selection": {
+                    "selected_role": "worker"
+                }
+            }))
+            .expect("dispatch packet json should encode"),
+        )
+        .expect("dispatch packet should write");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "implementer": {
+                            "activation": {
+                                "activation_agent_type": "junior",
+                                "activation_runtime_role": "worker",
+                            },
+                            "closure_class": "implementation",
+                        }
+                    }
+                },
+                "orchestration_contract": {}
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-agent-dispatch"
+        });
+        let status = crate::state_store::RunGraphStatus {
+            run_id: "run-agent-dispatch".to_string(),
+            task_id: "run-agent-dispatch".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "planning".to_string(),
+            next_node: Some("worker".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "junior".to_string(),
+            lane_id: "worker_lane".to_string(),
+            lifecycle_stage: "dispatch_ready".to_string(),
+            policy_gate: "single_task_scope_required".to_string(),
+            handoff_state: "awaiting_worker".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "conversation_cursor".to_string(),
+            resume_target: "dispatch.worker_lane".to_string(),
+            recovery_ready: true,
+        };
+        runtime
+            .block_on(store.record_run_graph_status(&status))
+            .expect("run graph status should record");
+
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-agent-dispatch".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-03-17T00:00:00Z".to_string(),
+        };
+        let handoff_plan = serde_json::json!({});
+        let ctx = RuntimeDispatchPacketContext::new(
+            &state_root,
+            &role_selection,
+            &receipt,
+            &handoff_plan,
+            &run_graph_bootstrap,
+        );
+        let dispatch_packet_path =
+            write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
+        let mut persisted_receipt = receipt.clone();
+        persisted_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
+        runtime
+            .block_on(store.record_run_graph_dispatch_receipt(&persisted_receipt))
+            .expect("dispatch receipt should record");
+        drop(store);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "agent-init",
+                "--dispatch-packet",
+                dispatch_packet_path.as_str(),
+                "--execute-dispatch",
+                "--json",
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+
+        let store = runtime
+            .block_on(StateStore::open(state_root.clone()))
+            .expect("state store should reopen");
+        let recorded_receipt = runtime
+            .block_on(store.latest_run_graph_dispatch_receipt())
+            .expect("latest dispatch receipt should load")
+            .expect("latest dispatch receipt should exist");
+        let dispatch_result_path = recorded_receipt
+            .dispatch_result_path
+            .as_deref()
+            .expect("dispatch result path should record");
+        let rendered =
+            fs::read_to_string(dispatch_result_path).expect("dispatch result artifact should load");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&rendered).expect("execute-dispatch json should parse");
+        assert_eq!(parsed["execution_state"], "executed");
+        assert_eq!(parsed["status"], "pass");
+        assert_eq!(
+            parsed["activation_semantics"]["activation_kind"],
+            "execution_evidence"
+        );
+        assert_eq!(parsed["activation_semantics"]["view_only"], false);
+        assert_eq!(parsed["activation_semantics"]["executes_packet"], true);
+        assert_eq!(parsed["execution_evidence"]["status"], "recorded");
+        assert_eq!(
+            parsed["execution_evidence"]["evidence_kind"],
+            "internal_carrier_completion"
+        );
+        assert_eq!(parsed["provider_result"], "internal-dispatch-ok");
+        assert_eq!(parsed["backend_dispatch"]["backend_id"], "junior");
+    }
+
+    #[test]
+    fn agent_init_execute_dispatch_executes_internal_codex_carrier() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+        assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+
+        let fake_bin = harness.path().join("fake-bin");
+        fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
+        let fake_codex = fake_bin.join("codex");
+        fs::write(
+            &fake_codex,
+            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}'\n",
+        )
+        .expect("fake codex should write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&fake_codex)
+                .expect("fake codex metadata should load")
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
+        }
+        let original_path = env::var("PATH").unwrap_or_default();
+        let patched_path = if original_path.is_empty() {
+            fake_bin.display().to_string()
+        } else {
+            format!("{}:{}", fake_bin.display(), original_path)
+        };
+        let _path_guard = EnvVarGuard::set("PATH", &patched_path);
+
+        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let store = runtime
+            .block_on(StateStore::open(state_root.clone()))
+            .expect("state store should open");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "implementer": {
+                            "activation": {
+                                "activation_agent_type": "junior",
+                                "activation_runtime_role": "worker",
+                            },
+                            "closure_class": "implementation",
+                        }
+                    }
+                },
+                "orchestration_contract": {}
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-agent-init-execute-dispatch"
+        });
+        let status = crate::state_store::RunGraphStatus {
+            run_id: "run-agent-init-execute-dispatch".to_string(),
+            task_id: "run-agent-init-execute-dispatch".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "planning".to_string(),
+            next_node: Some("worker".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "junior".to_string(),
+            lane_id: "worker_lane".to_string(),
+            lifecycle_stage: "dispatch_ready".to_string(),
+            policy_gate: "single_task_scope_required".to_string(),
+            handoff_state: "awaiting_worker".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "conversation_cursor".to_string(),
+            resume_target: "dispatch.worker_lane".to_string(),
+            recovery_ready: true,
+        };
+        runtime
+            .block_on(store.record_run_graph_status(&status))
+            .expect("run graph status should record");
+
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-agent-init-execute-dispatch".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-03-17T00:00:00Z".to_string(),
+        };
+        let handoff_plan = serde_json::json!({});
+        let ctx = RuntimeDispatchPacketContext::new(
+            &state_root,
+            &role_selection,
+            &receipt,
+            &handoff_plan,
+            &run_graph_bootstrap,
+        );
+        let dispatch_packet_path =
+            write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
+        let mut persisted_receipt = receipt.clone();
+        persisted_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
+        runtime
+            .block_on(store.record_run_graph_dispatch_receipt(&persisted_receipt))
+            .expect("dispatch receipt should record");
+        drop(store);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "agent-init",
+                "--dispatch-packet",
+                dispatch_packet_path.as_str(),
+                "--execute-dispatch",
+                "--json",
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+
+        let store = runtime
+            .block_on(StateStore::open(state_root.clone()))
+            .expect("state store should reopen");
+        let recorded_receipt = runtime
+            .block_on(store.latest_run_graph_dispatch_receipt())
+            .expect("latest dispatch receipt should load")
+            .expect("latest dispatch receipt should exist");
+        let dispatch_result_path = recorded_receipt
+            .dispatch_result_path
+            .as_deref()
+            .expect("dispatch result path should record");
+        let rendered =
+            fs::read_to_string(dispatch_result_path).expect("dispatch result artifact should load");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&rendered).expect("execute-dispatch json should parse");
+        assert_eq!(parsed["execution_state"], "executed");
+        assert_eq!(parsed["status"], "pass");
+        assert_eq!(
+            parsed["activation_semantics"]["activation_kind"],
+            "execution_evidence"
+        );
+        assert_eq!(parsed["activation_semantics"]["view_only"], false);
+        assert_eq!(parsed["activation_semantics"]["executes_packet"], true);
+        assert_eq!(parsed["execution_evidence"]["status"], "recorded");
+        assert_eq!(
+            parsed["execution_evidence"]["evidence_kind"],
+            "internal_carrier_completion"
+        );
+        assert_eq!(parsed["provider_result"], "internal-dispatch-ok");
+        assert_eq!(parsed["backend_dispatch"]["backend_id"], "junior");
     }
 
     #[test]
