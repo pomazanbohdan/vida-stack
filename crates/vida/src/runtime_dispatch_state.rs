@@ -2672,8 +2672,62 @@ mod runtime_dispatch_packet_context_tests {
     use crate::state_store::CreateTaskRequest;
     use crate::state_store::RunGraphDispatchReceipt;
     use crate::temp_state::TempStateHarness;
+    use crate::{run, Cli};
+    use clap::Parser;
     use serde_json::json;
+    use std::env;
     use std::fs;
+    use std::path::PathBuf;
+    use std::process::ExitCode;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    struct RecoveringMutex(Mutex<()>);
+
+    impl RecoveringMutex {
+        fn lock(&self) -> MutexGuard<'_, ()> {
+            self.0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
+    }
+
+    fn current_dir_lock() -> &'static RecoveringMutex {
+        static LOCK: OnceLock<RecoveringMutex> = OnceLock::new();
+        LOCK.get_or_init(|| RecoveringMutex(Mutex::new(())))
+    }
+
+    struct CurrentDirGuard {
+        _lock: MutexGuard<'static, ()>,
+        original: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn change_to(path: &Path) -> Self {
+            let lock = current_dir_lock().lock();
+            let original = env::current_dir().expect("current dir should resolve");
+            env::set_current_dir(path).expect("current dir should change");
+            Self {
+                _lock: lock,
+                original,
+            }
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            env::set_current_dir(&self.original).expect("current dir should restore");
+        }
+    }
+
+    fn guard_current_dir(path: &Path) -> CurrentDirGuard {
+        CurrentDirGuard::change_to(path)
+    }
+
+    fn cli(args: &[&str]) -> Cli {
+        let mut argv = vec!["vida"];
+        argv.extend(args.iter().copied());
+        Cli::parse_from(argv)
+    }
 
     fn bridge_test_role_selection(dev_task_id: &str) -> RuntimeConsumptionLaneSelection {
         RuntimeConsumptionLaneSelection {
@@ -2850,6 +2904,130 @@ mod runtime_dispatch_packet_context_tests {
             .expect_err("packet without goal should fail closed");
         assert!(error.contains("missing required packet fields"));
         assert!(error.contains("goal"));
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_carries_external_host_runtime_contract() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "qwen",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        let state_root = harness.path().join(".vida/data/state");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "implement backend execution".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["implementation".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "implementer_activation": {
+                            "activation_agent_type": "qwen-primary",
+                            "activation_runtime_role": "worker",
+                            "closure_class": "implementation",
+                        }
+                    }
+                },
+                "orchestration_contract": {}
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-qwen-dispatch".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("qwen-primary".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("qwen-primary".to_string()),
+            recorded_at: "2026-03-15T00:00:00Z".to_string(),
+        };
+        let handoff_plan = serde_json::json!({});
+        let run_graph_bootstrap = serde_json::json!({});
+        let ctx = RuntimeDispatchPacketContext::new(
+            &state_root,
+            &role_selection,
+            &receipt,
+            &handoff_plan,
+            &run_graph_bootstrap,
+        );
+        let packet_path =
+            write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
+        let packet = crate::read_json_file_if_present(Path::new(&packet_path))
+            .expect("dispatch packet json should load");
+        assert_eq!(packet["host_runtime"]["selected_cli_system"], "qwen");
+        assert_eq!(
+            packet["host_runtime"]["selected_cli_execution_class"],
+            "external"
+        );
+        assert_eq!(packet["host_runtime"]["runtime_template_root"], ".qwen");
+        assert_eq!(packet["selected_backend"], "qwen-primary");
+        assert_eq!(
+            packet["effective_execution_posture"]["selected_cli_system"],
+            "qwen"
+        );
+        assert_eq!(
+            packet["effective_execution_posture"]["selected_execution_class"],
+            "external"
+        );
+        assert_eq!(
+            packet["effective_execution_posture"]["selected_backend"],
+            "qwen-primary"
+        );
+        assert_eq!(
+            packet["effective_execution_posture"]["route_primary_backend"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            packet["effective_execution_posture"]["activation_evidence_state"],
+            "activation_view_only"
+        );
     }
 
     #[test]
