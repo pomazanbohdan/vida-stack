@@ -1823,6 +1823,7 @@ mod tests {
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir};
     use serde_json::json;
+    use std::fs;
     use std::process::ExitCode;
 
     #[test]
@@ -1948,6 +1949,22 @@ mod tests {
         assert_eq!(
             db_first_activation_truth_read_back_error(&expected, &read_back),
             None
+        );
+    }
+
+    #[test]
+    fn project_activator_reports_pending_activation_for_partial_project() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        fs::write(harness.path().join("README.md"), "# demo\n").expect("readme should exist");
+
+        let view = super::build_project_activator_view(harness.path());
+
+        assert_eq!(view["status"], "pending");
+        assert_eq!(view["project_shape"], "partial");
+        assert_eq!(view["activation_pending"], true);
+        assert_eq!(
+            view["triggers"]["initial_onboarding_missing"],
+            serde_json::Value::Bool(true)
         );
     }
 

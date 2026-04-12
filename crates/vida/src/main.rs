@@ -848,22 +848,6 @@ mod tests {
     }
 
     #[test]
-    fn project_activator_reports_pending_activation_for_partial_project() {
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        fs::write(harness.path().join("README.md"), "# demo\n").expect("readme should exist");
-
-        let view = project_activator_surface::build_project_activator_view(harness.path());
-
-        assert_eq!(view["status"], "pending");
-        assert_eq!(view["project_shape"], "partial");
-        assert_eq!(view["activation_pending"], true);
-        assert_eq!(
-            view["triggers"]["initial_onboarding_missing"],
-            serde_json::Value::Bool(true)
-        );
-    }
-
-    #[test]
     fn project_activator_reports_ready_when_bootstrap_and_docs_exist() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let root = harness.path();
