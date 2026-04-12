@@ -3864,6 +3864,279 @@ mod runtime_dispatch_packet_context_tests {
     }
 
     #[test]
+    fn execute_runtime_dispatch_handoff_keeps_external_host_internal_backend_on_agent_init() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "qwen",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+        install_external_cli_test_subagents(&harness.path().join("vida.config.yaml"));
+
+        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let store = runtime
+            .block_on(StateStore::open(state_root.clone()))
+            .expect("state store should open");
+        let dispatch_packet_path = harness.path().join("hybrid-internal-agent-dispatch.json");
+        fs::write(
+            &dispatch_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": runtime_delivery_task_packet(
+                    "run-hybrid-internal-dispatch",
+                    "implementer",
+                    "worker",
+                    "implementation",
+                    "implementation",
+                    "continue development"
+                ),
+                "dispatch_target": "implementer",
+                "request_text": "continue development",
+                "activation_runtime_role": "worker",
+                "role_selection": {
+                    "selected_role": "worker"
+                }
+            }))
+            .expect("dispatch packet json should encode"),
+        )
+        .expect("dispatch packet should write");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-hybrid-internal-dispatch".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(dispatch_packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("internal_subagents".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-03-17T00:00:00Z".to_string(),
+        };
+
+        let result = runtime
+            .block_on(execute_runtime_dispatch_handoff(
+                &state_root,
+                &store,
+                &role_selection,
+                &receipt,
+            ))
+            .expect("hybrid external-host internal-backend dispatch should stay on agent-init");
+
+        assert_eq!(result["surface"], "vida agent-init");
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["host_runtime"]["selected_cli_system"], "qwen");
+        assert_eq!(
+            result["host_runtime"]["selected_cli_execution_class"],
+            "external"
+        );
+        assert_eq!(result["backend_dispatch"]["backend_class"], "internal");
+        assert_eq!(
+            result["backend_dispatch"]["backend_id"],
+            "internal_subagents"
+        );
+        assert_eq!(
+            result["backend_dispatch"]["policy_selected_internal_backend"],
+            true
+        );
+        assert_eq!(result["blocker_code"], "internal_activation_view_only");
+    }
+
+    #[test]
+    fn runtime_agent_lane_dispatch_prefers_receipt_selected_backend_for_external_hosts() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "qwen",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+        install_external_cli_test_subagents(&harness.path().join("vida.config.yaml"));
+
+        let dispatch = runtime_agent_lane_dispatch_for_root(
+            harness.path(),
+            "/tmp/runtime-dispatch-packet.json",
+            Some("hermes_cli"),
+        );
+
+        assert_eq!(dispatch.surface, "external_cli:hermes_cli");
+        assert!(
+            dispatch.activation_command.contains("hermes"),
+            "expected hermes command, got {}",
+            dispatch.activation_command
+        );
+        assert_eq!(dispatch.backend_dispatch["selected_cli_system"], "qwen");
+        assert_eq!(
+            dispatch.backend_dispatch["selected_execution_class"],
+            "external"
+        );
+        assert_eq!(dispatch.backend_dispatch["backend_id"], "hermes_cli");
+    }
+
+    #[test]
+    fn runtime_agent_lane_dispatch_keeps_internal_hosts_on_agent_init() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+        install_external_cli_test_subagents(&harness.path().join("vida.config.yaml"));
+
+        let dispatch = runtime_agent_lane_dispatch_for_root(
+            harness.path(),
+            "/tmp/runtime-dispatch-packet.json",
+            None,
+        );
+
+        assert_eq!(dispatch.surface, "vida agent-init");
+        assert!(
+            dispatch.activation_command.contains("vida agent-init"),
+            "expected canonical internal activation command, got {}",
+            dispatch.activation_command
+        );
+        assert_eq!(dispatch.backend_dispatch["selected_cli_system"], "codex");
+        assert_eq!(
+            dispatch.backend_dispatch["selected_execution_class"],
+            "internal"
+        );
+        assert_eq!(
+            dispatch.backend_dispatch["backend_id"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn runtime_agent_lane_dispatch_keeps_policy_selected_internal_backend_on_agent_init() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "qwen",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+        install_external_cli_test_subagents(&harness.path().join("vida.config.yaml"));
+
+        let dispatch = runtime_agent_lane_dispatch_for_root(
+            harness.path(),
+            "/tmp/runtime-dispatch-packet.json",
+            Some("internal_subagents"),
+        );
+
+        assert_eq!(dispatch.surface, "vida agent-init");
+        assert!(
+            dispatch.activation_command.contains("vida agent-init"),
+            "expected canonical internal activation command, got {}",
+            dispatch.activation_command
+        );
+        assert_eq!(dispatch.backend_dispatch["selected_cli_system"], "qwen");
+        assert_eq!(
+            dispatch.backend_dispatch["selected_execution_class"],
+            "external"
+        );
+        assert_eq!(dispatch.backend_dispatch["backend_class"], "internal");
+        assert_eq!(
+            dispatch.backend_dispatch["backend_id"],
+            "internal_subagents"
+        );
+        assert_eq!(
+            dispatch.backend_dispatch["policy_selected_internal_backend"],
+            true
+        );
+    }
+
+    #[test]
     fn execute_runtime_dispatch_handoff_keeps_internal_host_external_backend_hint_on_agent_init() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -3993,7 +4266,10 @@ mod runtime_dispatch_packet_context_tests {
             result["effective_execution_posture"]["activation_evidence_state"],
             "activation_view_only"
         );
-        assert_eq!(result["backend_dispatch"]["backend_id"], serde_json::Value::Null);
+        assert_eq!(
+            result["backend_dispatch"]["backend_id"],
+            serde_json::Value::Null
+        );
         assert!(result["activation_command"]
             .as_str()
             .expect("activation command should render")
