@@ -1790,6 +1790,15 @@ fn tracked_specification_task_id<'a>(
         .filter(|value| !value.is_empty())
 }
 
+fn tracked_design_doc_path<'a>(
+    role_selection: &'a RuntimeConsumptionLaneSelection,
+) -> Option<&'a str> {
+    role_selection.execution_plan["tracked_flow_bootstrap"]["design_doc_path"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 async fn tracked_implementer_task_closed(
     store: &StateStore,
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -1805,6 +1814,15 @@ async fn tracked_implementer_task_closed(
         .show_task(task_id)
         .await
         .map(|task| task.status == "closed")
+        .unwrap_or(false)
+}
+
+fn tracked_design_doc_finalized(role_selection: &RuntimeConsumptionLaneSelection) -> bool {
+    let Some(path) = tracked_design_doc_path(role_selection) else {
+        return false;
+    };
+    std::fs::read_to_string(path)
+        .map(|contents| contents.contains("Status: `approved`"))
         .unwrap_or(false)
 }
 
@@ -2290,6 +2308,10 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                     && current_lane.and_then(|lane| lane["stage"].as_str()).is_none()
                     && dispatch_contract.get("specification_activation").is_some())
             {
+                let has_specification_evidence = dispatch_receipt_has_execution_evidence(receipt);
+                let spec_task_closed =
+                    tracked_specification_task_closed(store, role_selection, receipt).await;
+                let design_doc_finalized = tracked_design_doc_finalized(role_selection);
                 let evidence_blocker = current_lane
                     .and_then(|lane| lane["completion_blocker"].as_str())
                     .unwrap_or(blocker_code_str(BlockerCode::PendingSpecificationEvidence));
@@ -2301,7 +2323,9 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                     ),
                     Some(
                         if receipt.dispatch_status == "executed"
-                            && tracked_specification_task_closed(store, role_selection, receipt).await
+                            && has_specification_evidence
+                            && spec_task_closed
+                            && design_doc_finalized
                         {
                             "specification/planning evidence is recorded and the spec-pack is closed; ensure or reuse the tracked work-pool packet"
                         } else if receipt.dispatch_status == "executed" {
@@ -2311,16 +2335,16 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                         }
                         .to_string(),
                     ),
-                    dispatch_receipt_has_execution_evidence(receipt)
-                        && tracked_specification_task_closed(store, role_selection, receipt).await,
+                    has_specification_evidence && spec_task_closed && design_doc_finalized,
                     {
                         let mut blockers = Vec::new();
-                        if !dispatch_receipt_has_execution_evidence(receipt) {
+                        if !has_specification_evidence {
                             blockers.push(evidence_blocker.to_string());
                         }
-                        if !tracked_specification_task_closed(store, role_selection, receipt).await
-                        {
+                        if !design_doc_finalized {
                             blockers.push("pending_design_finalize".to_string());
+                        }
+                        if !spec_task_closed {
                             blockers.push("pending_spec_task_close".to_string());
                         }
                         blockers
@@ -2916,7 +2940,10 @@ mod runtime_dispatch_packet_context_tests {
         }
     }
 
-    fn specification_test_role_selection(spec_task_id: &str) -> RuntimeConsumptionLaneSelection {
+    fn specification_test_role_selection(
+        spec_task_id: &str,
+        design_doc_path: &str,
+    ) -> RuntimeConsumptionLaneSelection {
         RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -2936,6 +2963,7 @@ mod runtime_dispatch_packet_context_tests {
                     "spec_task": {
                         "task_id": spec_task_id
                     },
+                    "design_doc_path": design_doc_path,
                     "work_pool_task": {
                         "ensure_command": "vida task ensure feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
                     }
@@ -3013,6 +3041,10 @@ mod runtime_dispatch_packet_context_tests {
             .close_task(task_id, "implemented and proven")
             .await
             .expect("task should close");
+    }
+
+    fn write_approved_design_doc(path: &Path) {
+        fs::write(path, "# Test Design\n\nStatus: `approved`\n").expect("design doc should write");
     }
 
     fn read_json(project_root: &Path, path: &str) -> serde_json::Value {
@@ -6032,8 +6064,15 @@ mod runtime_dispatch_packet_context_tests {
                 .await
                 .expect("state store should open");
             create_and_close_task(&store, "feature-x-spec").await;
+            let design_doc_path = harness.path().join("feature-x-spec-design.md");
+            write_approved_design_doc(&design_doc_path);
 
-            let role_selection = specification_test_role_selection("feature-x-spec");
+            let role_selection = specification_test_role_selection(
+                "feature-x-spec",
+                design_doc_path
+                    .to_str()
+                    .expect("design doc path should be utf-8"),
+            );
             let run_graph_bootstrap = json!({ "run_id": "run-refresh-spec-closed-task" });
             let mut receipt = crate::state_store::RunGraphDispatchReceipt {
                 run_id: "run-refresh-spec-closed-task".to_string(),

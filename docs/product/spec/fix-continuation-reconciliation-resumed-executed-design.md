@@ -29,7 +29,7 @@ Status: `approved`
 ## Requirements
 
 ### Functional Requirements
-- When `vida taskflow consume continue` resumes a receipt whose `dispatch_status` is already `executed`, it must still refresh downstream dispatch preview from current state when the receipt remains the latest active run-graph receipt.
+- When `vida taskflow consume continue` resumes a receipt whose `dispatch_status` is already `executed`, it must still refresh downstream dispatch preview from current state for the explicitly resumed receipt and its run, rather than preserving stale blocker state from the earlier execution moment.
 - For a specification lane, refreshed preview logic must recognize when specification evidence is already recorded, the design doc is finalized, and the spec packet is closed, then unblock the tracked work-pool handoff.
 - If downstream work-pool or dev tasks are already closed and their existing logic marks the next handoff ready, the resumed receipt must reflect that refreshed readiness rather than preserve stale blockers.
 - The persisted dispatch receipt, downstream packet, and status/continuation projection must all become mutually consistent after the resume cycle.
@@ -127,7 +127,7 @@ Will implement / choose:
 
 ### Phase 2
 - Update resume logic so an already executed receipt can still refresh downstream preview from current persisted evidence before status projection is emitted.
-- Keep the refresh path bounded to the latest resumed receipt rather than global task scanning.
+- Keep the refresh path bounded to the explicitly resumed receipt and its run rather than global task scanning or sibling-run mutation.
 - Proof target:
   - targeted unit / regression coverage for resumed executed receipts
 
