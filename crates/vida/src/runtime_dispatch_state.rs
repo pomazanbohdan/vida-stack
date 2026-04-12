@@ -2796,6 +2796,63 @@ mod runtime_dispatch_packet_context_tests {
     }
 
     #[test]
+    fn runtime_dispatch_packet_contract_accepts_template_specific_minimums() {
+        let delivery = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "delivery_task_packet": runtime_delivery_task_packet(
+                "run-1",
+                "implementer",
+                "worker",
+                "implementation",
+                "implementation",
+                "request text",
+            ),
+        });
+        assert!(validate_runtime_dispatch_packet_contract(&delivery, "test packet").is_ok());
+
+        let coach = serde_json::json!({
+            "packet_template_kind": "coach_review_packet",
+            "coach_review_packet": runtime_coach_review_packet(
+                "run-1",
+                "coach",
+                "bounded proof target",
+            ),
+        });
+        assert!(validate_runtime_dispatch_packet_contract(&coach, "test packet").is_ok());
+
+        let verifier = serde_json::json!({
+            "packet_template_kind": "verifier_proof_packet",
+            "verifier_proof_packet": runtime_verifier_proof_packet(
+                "run-1",
+                "verification",
+                "bounded proof target",
+            ),
+        });
+        assert!(validate_runtime_dispatch_packet_contract(&verifier, "test packet").is_ok());
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_contract_fails_closed_for_missing_required_fields() {
+        let malformed = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "delivery_task_packet": {
+                "packet_id": "run-1::implementer::delivery",
+                "scope_in": ["dispatch_target:implementer"],
+                "read_only_paths": ["docs/process"],
+                "definition_of_done": ["done"],
+                "verification_command": "vida taskflow consume continue --run-id run-1 --json",
+                "proof_target": "proof",
+                "stop_rules": ["stop"],
+                "blocking_question": "what next?"
+            }
+        });
+        let error = validate_runtime_dispatch_packet_contract(&malformed, "test packet")
+            .expect_err("packet without goal should fail closed");
+        assert!(error.contains("missing required packet fields"));
+        assert!(error.contains("goal"));
+    }
+
+    #[test]
     fn downstream_receipt_backend_prefers_activation_agent_type() {
         let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,
