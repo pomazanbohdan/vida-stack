@@ -189,8 +189,6 @@ pub(crate) use runtime_consumption_surface::{
 #[cfg(test)]
 use runtime_dispatch_bootstrap::build_runtime_consumption_run_graph_bootstrap;
 #[cfg(test)]
-use runtime_dispatch_packet_text::runtime_tracked_flow_packet;
-#[cfg(test)]
 use runtime_dispatch_packets::runtime_delivery_task_packet;
 pub(crate) use runtime_dispatch_state::*;
 #[cfg(test)]
@@ -2278,49 +2276,6 @@ mod tests {
             packet["effective_execution_posture"]["activation_evidence_state"],
             "activation_view_only"
         );
-    }
-
-    #[test]
-    fn runtime_tracked_flow_packet_marks_view_only_materialization_semantics() {
-        let role_selection = RuntimeConsumptionLaneSelection {
-            ok: true,
-            activation_source: "test".to_string(),
-            selection_mode: "auto".to_string(),
-            fallback_role: "orchestrator".to_string(),
-            request: "continue development".to_string(),
-            selected_role: "pm".to_string(),
-            conversational_mode: Some("pbi_discussion".to_string()),
-            single_task_only: true,
-            tracked_flow_entry: Some("work-pool-pack".to_string()),
-            allow_freeform_chat: true,
-            confidence: "high".to_string(),
-            matched_terms: vec!["development".to_string()],
-            compiled_bundle: serde_json::Value::Null,
-            execution_plan: serde_json::json!({
-                "tracked_flow_bootstrap": {
-                    "work_pool_task": {
-                        "task_id": "feature-x-work-pool",
-                        "title": "Work-pool pack: Feature X",
-                        "runtime": "vida taskflow",
-                        "inspect_command": "vida task show feature-x-work-pool --json",
-                        "ensure_command": "vida task ensure feature-x-work-pool \"Work-pool pack: Feature X\" --type task --status open --json",
-                        "create_command": "vida task create feature-x-work-pool \"Work-pool pack: Feature X\" --type task --status open --json",
-                        "close_command": "vida task close feature-x-work-pool --reason 'closed' --json",
-                        "required": true
-                    }
-                }
-            }),
-            reason: "test".to_string(),
-        };
-
-        let packet = runtime_tracked_flow_packet(&role_selection, "run-1", "work-pool-pack");
-        assert_eq!(
-            packet["activation_semantics"],
-            "tracked_flow_materialization_only"
-        );
-        assert_eq!(packet["view_only"], true);
-        assert_eq!(packet["executes_packet"], false);
-        assert_eq!(packet["transfers_root_session_write_authority"], false);
     }
 
     #[test]
