@@ -1781,6 +1781,15 @@ fn tracked_implementer_dev_task_id<'a>(
         .filter(|value| !value.is_empty())
 }
 
+fn tracked_specification_task_id<'a>(
+    role_selection: &'a RuntimeConsumptionLaneSelection,
+) -> Option<&'a str> {
+    role_selection.execution_plan["tracked_flow_bootstrap"]["spec_task"]["task_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 async fn tracked_implementer_task_closed(
     store: &StateStore,
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -1790,6 +1799,24 @@ async fn tracked_implementer_task_closed(
         return false;
     }
     let Some(task_id) = tracked_implementer_dev_task_id(role_selection) else {
+        return false;
+    };
+    store
+        .show_task(task_id)
+        .await
+        .map(|task| task.status == "closed")
+        .unwrap_or(false)
+}
+
+async fn tracked_specification_task_closed(
+    store: &StateStore,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    if receipt.dispatch_target != "specification" {
+        return false;
+    }
+    let Some(task_id) = tracked_specification_task_id(role_selection) else {
         return false;
     };
     store
@@ -2270,22 +2297,34 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                     Some("work-pool-pack".to_string()),
                     json_string(
                         role_selection.execution_plan["tracked_flow_bootstrap"]["work_pool_task"]
-                            .get("ensure_command"),
+                        .get("ensure_command"),
                     ),
                     Some(
-                        if receipt.dispatch_status == "executed" {
+                        if receipt.dispatch_status == "executed"
+                            && tracked_specification_task_closed(store, role_selection, receipt).await
+                        {
+                            "specification/planning evidence is recorded and the spec-pack is closed; ensure or reuse the tracked work-pool packet"
+                        } else if receipt.dispatch_status == "executed" {
                             "after specification/planning evidence is recorded, finalize the design doc and close spec-pack before work-pool shaping via tracked work-pool ensure/reuse"
                         } else {
                             "specification/planning lane is active; wait for bounded evidence return before design finalization, spec-pack closure, and tracked work-pool ensure/reuse"
                         }
                         .to_string(),
                     ),
-                    false,
-                    vec![
-                        evidence_blocker.to_string(),
-                        "pending_design_finalize".to_string(),
-                        "pending_spec_task_close".to_string(),
-                    ],
+                    dispatch_receipt_has_execution_evidence(receipt)
+                        && tracked_specification_task_closed(store, role_selection, receipt).await,
+                    {
+                        let mut blockers = Vec::new();
+                        if !dispatch_receipt_has_execution_evidence(receipt) {
+                            blockers.push(evidence_blocker.to_string());
+                        }
+                        if !tracked_specification_task_closed(store, role_selection, receipt).await
+                        {
+                            blockers.push("pending_design_finalize".to_string());
+                            blockers.push("pending_spec_task_close".to_string());
+                        }
+                        blockers
+                    },
                 );
             }
             let current_index = execution_lane_sequence
@@ -2868,6 +2907,45 @@ mod runtime_dispatch_packet_context_tests {
                             "completion_blocker": "pending_verification_evidence",
                             "activation_agent_type": "senior",
                             "activation_runtime_role": "verifier"
+                        }
+                    }
+                },
+                "orchestration_contract": {}
+            }),
+            reason: "test".to_string(),
+        }
+    }
+
+    fn specification_test_role_selection(spec_task_id: &str) -> RuntimeConsumptionLaneSelection {
+        RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue specification".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("spec-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["specification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: json!({
+                "tracked_flow_bootstrap": {
+                    "spec_task": {
+                        "task_id": spec_task_id
+                    },
+                    "work_pool_task": {
+                        "ensure_command": "vida task ensure feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
+                    }
+                },
+                "development_flow": {
+                    "dispatch_contract": {
+                        "specification_activation": {
+                            "completion_blocker": "pending_specification_evidence",
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "business_analyst"
                         }
                     }
                 },
@@ -5939,6 +6017,87 @@ mod runtime_dispatch_packet_context_tests {
                 evidence["completion_receipt_id"],
                 "task-close-feature-x-dev"
             );
+        });
+    }
+
+    #[test]
+    fn refresh_downstream_dispatch_preview_unblocks_work_pool_handoff_after_spec_task_closure() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        runtime.block_on(async {
+            let store = crate::StateStore::open(state_root.clone())
+                .await
+                .expect("state store should open");
+            create_and_close_task(&store, "feature-x-spec").await;
+
+            let role_selection = specification_test_role_selection("feature-x-spec");
+            let run_graph_bootstrap = json!({ "run_id": "run-refresh-spec-closed-task" });
+            let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-refresh-spec-closed-task".to_string(),
+                dispatch_target: "specification".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_complete".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/specification-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/specification-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec![
+                    "pending_specification_evidence".to_string(),
+                    "pending_design_finalize".to_string(),
+                    "pending_spec_task_close".to_string(),
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("specification".to_string()),
+                downstream_dispatch_last_target: Some("specification".to_string()),
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("business_analyst".to_string()),
+                selected_backend: Some("middle".to_string()),
+                recorded_at: "2026-04-10T00:00:00Z".to_string(),
+            };
+
+            refresh_downstream_dispatch_preview(
+                &store,
+                &role_selection,
+                &run_graph_bootstrap,
+                &mut receipt,
+            )
+            .await
+            .expect("preview should refresh");
+
+            assert_eq!(
+                receipt.downstream_dispatch_target.as_deref(),
+                Some("work-pool-pack")
+            );
+            assert!(receipt.downstream_dispatch_ready);
+            assert!(receipt.downstream_dispatch_blockers.is_empty());
+            assert_eq!(
+                receipt.downstream_dispatch_status.as_deref(),
+                Some("packet_ready")
+            );
+            assert_eq!(
+                receipt.downstream_dispatch_result_path.as_deref(),
+                Some("/tmp/specification-result.json")
+            );
+            assert!(receipt
+                .downstream_dispatch_note
+                .as_deref()
+                .unwrap_or_default()
+                .contains("spec-pack is closed"));
         });
     }
 

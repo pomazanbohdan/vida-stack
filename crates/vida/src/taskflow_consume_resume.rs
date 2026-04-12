@@ -1230,6 +1230,13 @@ fn resume_packet_ready_blocker_parity_error(
     None
 }
 
+fn should_refresh_resumed_downstream_preview(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    receipt.dispatch_status == "executed"
+        && (!receipt.downstream_dispatch_ready || !receipt.downstream_dispatch_blockers.is_empty())
+}
+
 type TaskflowConsumeContinueArgs = (bool, Option<String>, Option<String>, Option<String>);
 
 pub(crate) fn parse_taskflow_consume_continue_args(
@@ -1497,6 +1504,18 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                         return ExitCode::from(1);
                     }
                 }
+            } else if should_refresh_resumed_downstream_preview(&dispatch_receipt) {
+                if let Err(error) = super::refresh_downstream_dispatch_preview(
+                    &store,
+                    &role_selection,
+                    &run_graph_bootstrap,
+                    &mut dispatch_receipt,
+                )
+                .await
+                {
+                    eprintln!("Failed to refresh resumed downstream dispatch preview: {error}");
+                    return ExitCode::from(1);
+                }
             }
             if let Err(error) = super::execute_downstream_dispatch_chain(
                 store.root(),
@@ -1702,7 +1721,8 @@ mod tests {
         primary_backend_for_dispatch_receipt, read_dispatch_packet,
         resolve_runtime_consumption_resume_inputs, resume_from_persisted_final_snapshot,
         resume_packet_ready_blocker_parity_error, retry_backend_for_dispatch_receipt,
-        runtime_consumption_snapshot_has_failure_control_evidence, validate_run_graph_resume_state,
+        runtime_consumption_snapshot_has_failure_control_evidence,
+        should_refresh_resumed_downstream_preview, validate_run_graph_resume_state,
         validate_run_graph_resume_state_for_downstream_packet,
         DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
@@ -2492,6 +2512,54 @@ agent_system:
             downstream_dispatch_ready_blocker_parity_error(true, &blockers),
             crate::downstream_dispatch_ready_blocker_parity_error(true, &blockers)
         );
+    }
+
+    #[test]
+    fn should_refresh_resumed_downstream_preview_for_executed_receipt_with_stale_blockers() {
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-refresh".to_string(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_complete".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/spec-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/spec-result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("work-pool-pack".to_string()),
+            downstream_dispatch_command: Some("vida task ensure".to_string()),
+            downstream_dispatch_note: Some("stale blockers".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![
+                "pending_specification_evidence".to_string(),
+                "pending_design_finalize".to_string(),
+            ],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("blocked".to_string()),
+            downstream_dispatch_result_path: Some("/tmp/spec-result.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("specification".to_string()),
+            downstream_dispatch_last_target: Some("specification".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-04-12T00:00:00Z".to_string(),
+        };
+
+        assert!(should_refresh_resumed_downstream_preview(&receipt));
+
+        let mut settled = receipt.clone();
+        settled.downstream_dispatch_ready = true;
+        settled.downstream_dispatch_blockers.clear();
+        assert!(!should_refresh_resumed_downstream_preview(&settled));
+
+        let mut blocked = receipt.clone();
+        blocked.dispatch_status = "blocked".to_string();
+        assert!(!should_refresh_resumed_downstream_preview(&blocked));
     }
 
     #[test]

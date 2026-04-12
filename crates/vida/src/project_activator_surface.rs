@@ -1818,12 +1818,12 @@ mod tests {
     use super::activation_status::canonical_activation_status;
     use super::db_first_activation_truth_read_back_error;
     use super::merge_project_activation_into_init_view;
+    use crate::run;
     use crate::state_store::LauncherActivationSnapshot;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir};
-    use crate::run;
-    use std::process::ExitCode;
     use serde_json::json;
+    use std::process::ExitCode;
 
     #[test]
     fn canonical_project_activation_status_normalizes_pending_compat_to_pending() {

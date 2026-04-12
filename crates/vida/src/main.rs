@@ -78,8 +78,6 @@ mod taskflow_consume_bundle;
 mod taskflow_consume_resume;
 mod taskflow_continuation;
 mod taskflow_layer4;
-#[cfg(test)]
-mod test_cli_support;
 mod taskflow_packet;
 mod taskflow_protocol_binding;
 mod taskflow_proxy;
@@ -89,6 +87,8 @@ mod taskflow_runtime_bundle;
 mod taskflow_spec_bootstrap;
 mod taskflow_task_bridge;
 mod temp_state;
+#[cfg(test)]
+mod test_cli_support;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
