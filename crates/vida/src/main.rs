@@ -78,6 +78,8 @@ mod taskflow_consume_bundle;
 mod taskflow_consume_resume;
 mod taskflow_continuation;
 mod taskflow_layer4;
+#[cfg(test)]
+mod test_cli_support;
 mod taskflow_packet;
 mod taskflow_protocol_binding;
 mod taskflow_proxy;
@@ -311,62 +313,12 @@ mod tests {
     use super::*;
     use crate::release1_contracts::canonical_lane_status_str;
     use crate::temp_state::TempStateHarness;
-    use clap::{CommandFactory, Parser};
-    use std::env;
+    use crate::test_cli_support::{cli, guard_current_dir};
+    use clap::CommandFactory;
     use std::fs;
     use std::path::Path;
-    use std::sync::{Mutex, MutexGuard, OnceLock};
-
-    struct RecoveringMutex(Mutex<()>);
-
-    impl RecoveringMutex {
-        fn lock(&self) -> MutexGuard<'_, ()> {
-            self.0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-        }
-    }
-
-    fn current_dir_lock() -> &'static RecoveringMutex {
-        static LOCK: OnceLock<RecoveringMutex> = OnceLock::new();
-        LOCK.get_or_init(|| RecoveringMutex(Mutex::new(())))
-    }
-
-    struct CurrentDirGuard {
-        _lock: MutexGuard<'static, ()>,
-        original: PathBuf,
-    }
-
-    impl CurrentDirGuard {
-        fn change_to(path: &Path) -> Self {
-            let lock = current_dir_lock().lock();
-            let original = env::current_dir().expect("current dir should resolve");
-            env::set_current_dir(path).expect("current dir should change");
-            Self {
-                _lock: lock,
-                original,
-            }
-        }
-    }
-
-    fn guard_current_dir(path: &Path) -> CurrentDirGuard {
-        CurrentDirGuard::change_to(path)
-    }
-
-    impl Drop for CurrentDirGuard {
-        fn drop(&mut self) {
-            env::set_current_dir(&self.original).expect("current dir should restore");
-        }
-    }
-
     use std::thread;
     use std::time::{Duration, Instant};
-
-    fn cli(args: &[&str]) -> Cli {
-        let mut argv = vec!["vida"];
-        argv.extend(args.iter().copied());
-        Cli::parse_from(argv)
-    }
 
     fn wait_for_state_unlock(state_dir: &std::path::Path) {
         let direct_lock_path = state_dir.join("LOCK");
@@ -2065,18 +2017,6 @@ mod tests {
         wait_for_state_unlock(harness.path());
         assert_eq!(
             runtime.block_on(run(cli(&["agent-init", "--role", "worker", "--json"]))),
-            ExitCode::SUCCESS
-        );
-    }
-
-    #[test]
-    fn project_activator_command_accepts_json_output() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-
-        assert_eq!(
-            runtime.block_on(run(cli(&["project-activator", "--json"]))),
             ExitCode::SUCCESS
         );
     }

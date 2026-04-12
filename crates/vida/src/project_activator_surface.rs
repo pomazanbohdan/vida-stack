@@ -1819,6 +1819,10 @@ mod tests {
     use super::db_first_activation_truth_read_back_error;
     use super::merge_project_activation_into_init_view;
     use crate::state_store::LauncherActivationSnapshot;
+    use crate::temp_state::TempStateHarness;
+    use crate::test_cli_support::{cli, guard_current_dir};
+    use crate::run;
+    use std::process::ExitCode;
     use serde_json::json;
 
     #[test]
@@ -1944,6 +1948,18 @@ mod tests {
         assert_eq!(
             db_first_activation_truth_read_back_error(&expected, &read_back),
             None
+        );
+    }
+
+    #[test]
+    fn project_activator_command_accepts_json_output() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(
+            runtime.block_on(run(cli(&["project-activator", "--json"]))),
+            ExitCode::SUCCESS
         );
     }
 }

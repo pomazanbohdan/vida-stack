@@ -59,3 +59,4 @@ changelog_ref: README.changelog.jsonl
 - `docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md`
 - `docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
 - `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
+- `docs/product/spec/continue-post-main-carveout-with-next-design.md`
