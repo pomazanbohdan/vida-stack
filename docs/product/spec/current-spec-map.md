@@ -210,22 +210,25 @@ Companion rule:
 28. [ops-state-and-runtime-evidence-hygiene-design.md](ops-state-and-runtime-evidence-hygiene-design.md)
    Config families: bounded post-release ops policy for authoritative state roots, runtime-consumption evidence hygiene, temp-state proof workflows, and generated-state working-tree posture
    Registered path: `docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md`
-29. [launcher-decomposition-and-code-hygiene-design.md](launcher-decomposition-and-code-hygiene-design.md)
+29. [authoritative-state-lock-recovery-design.md](authoritative-state-lock-recovery-design.md)
+   Config families: bounded authoritative state-store lock-lifetime reduction during agent-lane dispatch, lock-specific remediation hints, and fail-closed long-lived-state recovery posture without silent lock cleanup
+   Registered path: `docs/product/spec/authoritative-state-lock-recovery-design.md`
+30. [launcher-decomposition-and-code-hygiene-design.md](launcher-decomposition-and-code-hygiene-design.md)
    Config families: bounded launcher decomposition seams, large-file concentration reduction, dead-code and duplication validation, and proof-safe extraction planning for `crates/vida/**`
    Registered path: `docs/product/spec/launcher-decomposition-and-code-hygiene-design.md`
-30. [internal-codex-agent-execution-fail-closed-design.md](internal-codex-agent-execution-fail-closed-design.md)
+31. [internal-codex-agent-execution-fail-closed-design.md](internal-codex-agent-execution-fail-closed-design.md)
    Config families: bounded internal-host activation-view fail-closed semantics, truthful agent-lane execution state, root-session anti-bypass guidance, and runtime dispatch bridge hardening for Codex/internal execution
    Registered path: `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
-31. [external-cli-carrier-hardening-design.md](external-cli-carrier-hardening-design.md)
+32. [external-cli-carrier-hardening-design.md](external-cli-carrier-hardening-design.md)
    Config families: bounded external CLI carrier dispatch pinning, carrier readiness/status classification, normalized opencode/kilo/vibe project profiles, and operator-visible smoke-proof routing for sandbox/auth/model activation
    Registered path: `docs/product/spec/external-cli-carrier-hardening-design.md`
-32. [continuation-binding-fail-closed-hardening-design.md](continuation-binding-fail-closed-hardening-design.md)
+33. [continuation-binding-fail-closed-hardening-design.md](continuation-binding-fail-closed-hardening-design.md)
    Config families: bounded continuation-binding fail-closed enforcement, explicit active-bounded-unit init/status surfaces, ambiguity blocker vocabulary, and generated host guidance against self-selecting adjacent work
    Registered path: `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
-33. [continuation-and-seeded-dispatch-bridge-design.md](continuation-and-seeded-dispatch-bridge-design.md)
+34. [continuation-and-seeded-dispatch-bridge-design.md](continuation-and-seeded-dispatch-bridge-design.md)
    Config families: bounded explicit continuation binding records, seeded run dispatch-init bridges, persisted dispatch-context rows, and packet render/inspect operator surfaces for lawful resume inputs
    Registered path: `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
-34. [lawful-closure-continuation-rebinding-design.md](lawful-closure-continuation-rebinding-design.md)
+35. [lawful-closure-continuation-rebinding-design.md](lawful-closure-continuation-rebinding-design.md)
    Config families: bounded explicit post-closure continuation rebinding, backlog-task continuation artifacts, completed-run summary admissibility, and fail-closed rejection of stale in-flight bindings
    Registered path: `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
 
@@ -278,10 +281,10 @@ Activation rule:
 artifact_path: product/spec/current-spec-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-04-08
+artifact_revision: 2026-04-13
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-04-08T07:57:44.922704395Z
+updated_at: 2026-04-13T16:12:52.794340565Z
 changelog_ref: current-spec-map.changelog.jsonl

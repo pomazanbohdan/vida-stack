@@ -109,6 +109,9 @@ Project-routing rule:
 21. Synchronization is bidirectional and mandatory: if either `AGENTS.md` or `install/assets/AGENTS.scaffold.md` is changed, update the counterpart in the same bounded change before closure.
 21. During active development, if a runtime/workflow blockage is detected and that blockage does not conform to project specs or canonical runtime requirements, treat it as implementation debt: fix the code path to restore spec-compliant behavior, prove it with bounded tests/evidence, and then continue execution without manual blocker bypass hacks.
 22. After completing a complex task, or after fixing any error/blocking condition, run a fresh release build, update the system-installed binary, and continue development immediately in the next cycle.
+23. Do not apply hotfix-style write mutations based on the first visible symptom alone; first study the related code paths, runtime state, and relevant specs so the bounded unit is anchored in the surrounding architecture.
+24. Prefer architectural corrections over narrow symptom patches: once the affected codebase slice and spec contract are understood, fix the underlying invariant or routing rule rather than layering one-off local exceptions.
+25. When a user explicitly orders post-fix release actions, treat that sequence as mandatory: after the bounded implementation wave is complete, run a fresh release build, update the system-installed binary, create a commit, and push it before declaring that wave finished.
 
 -----
 artifact_path: project/repository/agents.sidecar

@@ -127,6 +127,166 @@ pub(crate) fn resolve_init_config_template_source(root: &Path) -> Result<PathBuf
     })
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::run;
+    use crate::temp_state::TempStateHarness;
+    use crate::test_cli_support::{cli, guard_current_dir};
+    use clap::CommandFactory;
+    use std::fs;
+    use std::process::ExitCode;
+
+    #[test]
+    fn boot_command_succeeds() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        assert_eq!(
+            runtime.block_on(run(super::super::Cli {
+                command: Some(super::super::Command::Boot(BootArgs {
+                    state_dir: Some(harness.path().to_path_buf()),
+                    render: RenderMode::Plain,
+                    instruction_source_root: None,
+                    framework_memory_source_root: None,
+                    extra_args: Vec::new(),
+                })),
+            })),
+            ExitCode::SUCCESS
+        );
+    }
+
+    #[test]
+    fn boot_with_extra_argument_fails_closed() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        assert_eq!(
+            runtime.block_on(run(cli(&["boot", "unexpected"]))),
+            ExitCode::from(2)
+        );
+    }
+
+    #[test]
+    fn clap_help_lists_project_activator() {
+        let mut command = crate::Cli::command();
+        let help = command.render_long_help().to_string();
+        assert!(
+            help.contains("project-activator"),
+            "project-activator should be present in help"
+        );
+    }
+
+    #[test]
+    fn init_bootstrap_source_requires_bootstrap_markers() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let root = harness.path();
+        fs::create_dir_all(root.join("bin")).expect("bin dir should exist");
+        fs::write(root.join("bin/taskflow"), "#!/bin/sh\n").expect("taskflow marker should exist");
+        assert!(
+            !looks_like_init_bootstrap_source_root(root),
+            "taskflow binary alone should not qualify as an init bootstrap source"
+        );
+
+        fs::create_dir_all(root.join("install/assets")).expect("install assets dir should exist");
+        fs::create_dir_all(root.join(".codex")).expect(".codex dir should exist");
+        fs::write(
+            root.join("install/assets/AGENTS.scaffold.md"),
+            "# scaffold\n",
+        )
+        .expect("generated AGENTS scaffold should exist");
+        fs::write(root.join("AGENTS.sidecar.md"), "# sidecar\n")
+            .expect("project sidecar should exist");
+        fs::write(
+            root.join("install/assets/vida.config.yaml.template"),
+            concat!(
+                "project:\n",
+                "  id: demo\n",
+                "host_environment:\n",
+                "  systems:\n",
+                "    codex:\n",
+                "      template_root: .codex\n",
+                "      runtime_root: .codex\n",
+            ),
+        )
+        .expect("config template should exist");
+        assert!(
+            looks_like_init_bootstrap_source_root(root),
+            "bootstrap source should require actual init assets rather than runtime-only markers"
+        );
+    }
+
+    #[test]
+    fn init_preserves_existing_agents_as_sidecar_when_missing() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        fs::write(
+            harness.path().join("AGENTS.md"),
+            "project documentation: docs/\n",
+        )
+        .expect("existing agents should be written");
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            fs::read_to_string(harness.path().join("AGENTS.sidecar.md"))
+                .expect("sidecar should exist"),
+            "project documentation: docs/\n"
+        );
+        let framework_agents = fs::read_to_string(harness.path().join("AGENTS.md"))
+            .expect("framework agents should exist");
+        assert!(
+            framework_agents.contains("VIDA Project Bootstrap Carrier"),
+            "generated bootstrap carrier should replace root AGENTS.md"
+        );
+    }
+
+    #[test]
+    fn init_replaces_agents_template_and_keeps_existing_sidecar_with_backup() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        fs::write(
+            harness.path().join("AGENTS.md"),
+            "project-specific bootstrap notes\n",
+        )
+        .expect("existing agents should be written");
+        fs::write(
+            harness.path().join("AGENTS.sidecar.md"),
+            "current sidecar content\n",
+        )
+        .expect("existing sidecar should be written");
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+
+        let framework_agents = fs::read_to_string(harness.path().join("AGENTS.md"))
+            .expect("framework agents should exist");
+        assert!(
+            framework_agents.contains("VIDA Project Bootstrap Carrier"),
+            "generated bootstrap carrier should replace root AGENTS.md"
+        );
+
+        let sidecar = fs::read_to_string(harness.path().join("AGENTS.sidecar.md"))
+            .expect("sidecar should still exist");
+        assert_eq!(sidecar, "current sidecar content\n");
+
+        let backup = fs::read_to_string(
+            harness
+                .path()
+                .join(".vida/receipts/AGENTS.pre-init.backup.md"),
+        )
+        .expect("agents backup should be written");
+        assert_eq!(backup, "project-specific bootstrap notes\n");
+    }
+
+    #[test]
+    fn init_with_extra_argument_fails_closed() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        assert_eq!(
+            runtime.block_on(run(cli(&["init", "unexpected"]))),
+            ExitCode::from(2)
+        );
+    }
+}
+
 fn ensure_runtime_home(project_root: &Path) -> Result<(), String> {
     for relative in [
         ".vida/config",
@@ -1421,9 +1581,10 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                             return ExitCode::from(1);
                         }
                     };
+                let state_root = store.root().to_path_buf();
+                drop(store);
                 if let Err(error) = super::execute_and_record_dispatch_receipt(
-                    store.root(),
-                    &store,
+                    &state_root,
                     &resume_inputs.role_selection,
                     &resume_inputs.run_graph_bootstrap,
                     &mut resume_inputs.dispatch_receipt,
@@ -1433,6 +1594,15 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     eprintln!("Failed to execute agent-init dispatch packet: {error}");
                     return ExitCode::from(1);
                 }
+                let store = match super::StateStore::open_existing(state_root).await {
+                    Ok(store) => store,
+                    Err(error) => {
+                        eprintln!(
+                            "Failed to reopen authoritative state store after agent-init dispatch: {error}"
+                        );
+                        return ExitCode::from(1);
+                    }
+                };
                 if resume_inputs.dispatch_receipt.dispatch_kind == "agent_lane" {
                     resume_inputs.dispatch_receipt.selected_backend =
                         super::canonical_selected_backend_for_receipt(

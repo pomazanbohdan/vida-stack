@@ -5,7 +5,7 @@ Status: approved
 Use this template for one bounded feature/change design before implementation.
 
 ## Summary
-- Feature / change: Fail closed when the internal Codex backend materializes only an activation view and does not actually execute a delegated agent lane, and update operator/runtime instructions so this cannot be misread as completed agent-first execution.
+- Feature / change: Fail closed when the internal Codex backend materializes only an activation view, never returns a terminal `agent_message`, or otherwise withholds execution evidence, and persist a blocked dispatch result/receipt so operator/runtime surfaces do not deadlock on missing receipt state.
 - Owner layer: `mixed`
 - Runtime surface: `taskflow | launcher | project activation`
 - Status: proposed
@@ -25,10 +25,12 @@ Use this template for one bounded feature/change design before implementation.
   - That creates a false positive delegated-execution signal for the orchestrator.
   - Existing instructions strongly forbid root-side write fallback, but they do not make the internal-host activation-view limitation explicit enough at the runtime handoff point.
   - The result is a dual failure mode: operator/orchestrator confusion and runtime state that overstates execution progress.
+  - In the live failing path, `execute_internal_agent_lane_dispatch` waits on `std::process::Command::output()`. If the internal Codex subprocess hangs after activation-view-like output and never returns a terminal `agent_message`, control never returns to `execute_and_record_dispatch_receipt`, so the runtime writes neither a blocked dispatch result artifact nor a persisted blocked receipt. `vida status`, `vida taskflow consume continue`, and `vida lane exception-takeover` then fail closed on missing evidence instead of a truthful blocked state.
 
 ## Goal
 - What this change should achieve
   - Make internal Codex delegated execution fail closed unless there is real execution evidence, not just an activation view.
+  - Guarantee that the internal Codex path returns bounded control flow and persists a blocked dispatch result when execution evidence never arrives.
   - Make instructions and runtime prompts explicitly say that an internal activation view is analysis/shaping evidence only and does not mean an agent lane executed.
   - Preserve agent-first routing by surfacing a bridge blocker instead of allowing misleading `packet_ready/lane_running` state.
 - What success looks like
@@ -44,8 +46,10 @@ Use this template for one bounded feature/change design before implementation.
 
 ### Functional Requirements
 - Must detect when the selected host execution class is internal and the dispatch result is only an activation view.
+- Must detect when the selected host execution class is internal and the dispatch subprocess exceeds a bounded runtime window before producing execution evidence.
 - Must not mark that case as `execution_state = "packet_ready"` or `dispatch_status = "lane_running"` as if execution already started.
 - Must surface an explicit blocker/result state that tells the orchestrator real execution has not yet happened.
+- Must persist a blocked dispatch result artifact and blocked receipt for timeout/no-terminal-message internal dispatches so downstream status, continue, and exception-takeover surfaces observe receipt-backed blocked state rather than missing receipt evidence.
 - Must update operator/runtime instructions so internal activation-view-only dispatch is described as non-executing and non-authoritative, and so bounded read-only diagnosis continues until a code-level blocker or next bounded fix is explicit.
 - Must keep root-session write-guard semantics fail-closed.
 - Must preserve external backend execution semantics.
@@ -113,6 +117,7 @@ Will implement / choose:
 ### Core Components
 - Main components
   - internal-vs-external runtime dispatch branch
+  - bounded internal subprocess wall-time enforcement
   - dispatch result classification
   - downstream dispatch readiness logic
   - runtime packet prompt / init guidance wording
@@ -137,6 +142,7 @@ Will implement / choose:
   - `lane_status`
   - `activation_semantics.activation_kind`
   - `selected_cli_execution_class`
+  - `dispatch_result_path`
   - blocker codes for activation-only internal dispatch
 - Migration or compatibility notes
   - Existing historical `packet_ready` receipts remain readable, but new internal activation-only results should stop claiming running-lane semantics.
@@ -186,6 +192,7 @@ Will implement / choose:
 
 ### Phase 2
 - Change runtime dispatch code so internal activation-view-only handoffs stop reporting `packet_ready/lane_running` as if execution happened.
+- Add bounded wall-time enforcement to the internal Codex carrier path so a hung subprocess still yields a persisted blocked result.
 - Update downstream receipt/state handling and targeted tests.
 - Second proof target
   - targeted `cargo test -p vida ...` for internal dispatch classification and lane-state semantics

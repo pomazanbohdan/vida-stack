@@ -81,6 +81,10 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                         let bundle_check = super::taskflow_consume_bundle_check(&runtime_bundle);
                         let (registry, check, readiness, proof, overview) =
                             super::build_docflow_runtime_evidence();
+                        let docflow_receipt_evidence =
+                            crate::runtime_consumption_surface::build_docflow_receipt_evidence(
+                                &readiness, &proof,
+                            );
                         let mut docflow_verdict = super::build_docflow_runtime_verdict(
                             &registry, &check, &readiness, &proof,
                         );
@@ -138,6 +142,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                                     "check": check,
                                                     "readiness": readiness,
                                                     "proof": proof,
+                                                    "receipt_evidence": docflow_receipt_evidence.clone(),
                                                 }),
                                             },
                                         docflow_verdict,
@@ -335,12 +340,13 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 store.root(),
                             )
                             .is_some();
+                        let state_root = store.root().to_path_buf();
                         if dispatch_receipt.dispatch_status == "routed"
                             && allow_taskflow_pack_execution
                         {
+                            drop(store);
                             if let Err(error) = super::execute_and_record_dispatch_receipt(
-                                store.root(),
-                                &store,
+                                &state_root,
                                 &role_selection,
                                 &run_graph_bootstrap,
                                 &mut dispatch_receipt,
@@ -351,9 +357,20 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         }
+                        let store = match super::StateStore::open_existing(state_root.clone()).await
+                        {
+                            Ok(store) => store,
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to reopen authoritative state store after runtime dispatch: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        };
+                        let state_root = store.root().to_path_buf();
+                        drop(store);
                         if let Err(error) = super::execute_downstream_dispatch_chain(
-                            store.root(),
-                            &store,
+                            &state_root,
                             &role_selection,
                             &run_graph_bootstrap,
                             &mut dispatch_receipt,
@@ -363,6 +380,15 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             eprintln!("{error}");
                             return ExitCode::from(1);
                         }
+                        let store = match super::StateStore::open_existing(state_root).await {
+                            Ok(store) => store,
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to reopen authoritative state store before receipt persistence: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        };
                         let dispatch_receipt_json = serde_json::to_value(&dispatch_receipt)
                             .unwrap_or(serde_json::Value::Null);
                         if let Err(error) = store
@@ -405,6 +431,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                     "check": check,
                                     "readiness": readiness,
                                     "proof": proof,
+                                    "receipt_evidence": docflow_receipt_evidence,
                                 }),
                             },
                             docflow_verdict,
@@ -626,11 +653,42 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 &mut docflow_verdict,
                                 &mut closure_admission,
                             );
+                            let readiness = super::RuntimeConsumptionEvidence {
+                                surface: "vida docflow readiness-check --profile active-canon"
+                                    .to_string(),
+                                ok: false,
+                                row_count: 0,
+                                verdict: Some("blocked".to_string()),
+                                artifact_path: Some(
+                                    "vida/config/docflow-readiness.current.jsonl".to_string(),
+                                ),
+                                output: error.clone(),
+                            };
+                            let proof = super::RuntimeConsumptionEvidence {
+                                surface: "vida docflow proofcheck --profile active-canon"
+                                    .to_string(),
+                                ok: false,
+                                row_count: 0,
+                                verdict: Some("blocked".to_string()),
+                                artifact_path: None,
+                                output: error.clone(),
+                            };
+                            let docflow_receipt_evidence =
+                                crate::runtime_consumption_surface::build_docflow_receipt_evidence(
+                                    &readiness, &proof,
+                                );
                             let dispatch_receipt = blocked_dispatch_receipt(
                                 "docflow_activation_failed",
                                 &bundle_check,
                                 &runtime_bundle,
                             );
+                            let mut docflow_activation = super::blocking_docflow_activation(&error);
+                            if let Some(evidence) = docflow_activation.evidence.as_object_mut() {
+                                evidence.insert(
+                                    "receipt_evidence".to_string(),
+                                    docflow_receipt_evidence,
+                                );
+                            }
                             let payload = super::TaskflowDirectConsumptionPayload {
                                 artifact_name: "taskflow_direct_runtime_consumption".to_string(),
                                 artifact_type: "runtime_consumption".to_string(),
@@ -642,7 +700,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 role_selection,
                                 runtime_bundle,
                                 bundle_check,
-                                docflow_activation: super::blocking_docflow_activation(&error),
+                                docflow_activation,
                                 docflow_verdict,
                                 closure_admission,
                                 taskflow_handoff_plan: serde_json::json!({

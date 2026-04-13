@@ -55,17 +55,40 @@ fn task_command_needs_project_root(args: &TaskArgs) -> bool {
     !matches!(args.command, TaskCommand::Help(_))
 }
 
+fn proxy_command_needs_project_root(args: &[String]) -> bool {
+    !matches!(
+        args.first().map(String::as_str),
+        None | Some("help" | "--help" | "-h")
+    )
+}
+
+fn command_needs_project_root_state_dir(command: &Option<Command>) -> bool {
+    match command {
+        Some(Command::Task(args)) => task_command_needs_project_root(args),
+        Some(Command::Taskflow(args) | Command::Consume(args) | Command::Recovery(args)) => {
+            proxy_command_needs_project_root(&args.args)
+        }
+        Some(
+            Command::OrchestratorInit(_)
+            | Command::AgentInit(_)
+            | Command::ProjectActivator(_)
+            | Command::AgentFeedback(_)
+            | Command::Memory(_)
+            | Command::Status(_)
+            | Command::Doctor(_)
+            | Command::Lane(_)
+            | Command::Approval(_),
+        ) => true,
+        _ => false,
+    }
+}
+
 fn prepare_runtime_state_dir(command: &Option<Command>) -> Option<String> {
     if std::env::var_os("VIDA_STATE_DIR").is_some() {
         return None;
     }
 
-    let needs_project_root = match command {
-        Some(Command::Task(args)) => task_command_needs_project_root(args),
-        _ => false,
-    };
-
-    if !needs_project_root {
+    if !command_needs_project_root_state_dir(command) {
         return None;
     }
 
@@ -78,6 +101,72 @@ fn prepare_runtime_state_dir(command: &Option<Command>) -> Option<String> {
             None
         }
         Err(error) => Some(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{command_needs_project_root_state_dir, prepare_runtime_state_dir, Cli};
+    use crate::temp_state::TempStateHarness;
+    use clap::Parser;
+    use std::fs;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn unset(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.previous {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn make_project_root(root: &std::path::Path) {
+        fs::create_dir_all(root.join(".vida/config")).expect("config dir should exist");
+        fs::create_dir_all(root.join(".vida/db")).expect("db dir should exist");
+        fs::create_dir_all(root.join(".vida/project")).expect("project dir should exist");
+        fs::write(root.join("AGENTS.md"), "# bootstrap\n").expect("AGENTS.md should exist");
+        fs::write(root.join("vida.config.yaml"), "project:\n  id: demo\n")
+            .expect("config should exist");
+    }
+
+    #[test]
+    fn prepare_runtime_state_dir_normalizes_project_bound_status_surface() {
+        let harness = TempStateHarness::new().expect("temp harness should initialize");
+        make_project_root(harness.path());
+        let _cwd = crate::test_cli_support::guard_current_dir(harness.path());
+        let _env_guard = EnvVarGuard::unset("VIDA_STATE_DIR");
+        let cli = Cli::try_parse_from(["vida", "status"]).expect("status cli should parse");
+
+        assert!(command_needs_project_root_state_dir(&cli.command));
+        assert_eq!(prepare_runtime_state_dir(&cli.command), None);
+        assert_eq!(
+            std::env::var_os("VIDA_STATE_DIR").map(std::path::PathBuf::from),
+            Some(harness.path().join(crate::state_store::default_state_dir()))
+        );
+    }
+
+    #[test]
+    fn prepare_runtime_state_dir_keeps_boot_permissive_for_temp_roots() {
+        let _env_guard = EnvVarGuard::unset("VIDA_STATE_DIR");
+        let cli = Cli::try_parse_from(["vida", "boot"]).expect("boot cli should parse");
+
+        assert!(!command_needs_project_root_state_dir(&cli.command));
+        assert_eq!(prepare_runtime_state_dir(&cli.command), None);
+        assert!(std::env::var_os("VIDA_STATE_DIR").is_none());
     }
 }
 

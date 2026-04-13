@@ -2546,6 +2546,10 @@ fn taskflow_consume_bundle_check_reports_ready_runtime_bundle() {
         parsed["seam_closure_admission_receipt_check"]["has_proof_surface"],
         true
     );
+    assert_eq!(
+        parsed["seam_closure_admission_receipt_check"]["receipt_evidence"]["receipt_backed"],
+        true
+    );
     let seam_docflow_surfaces = parsed["seam_closure_admission_receipt_check"]
         ["docflow_proof_surfaces"]
         .as_array()
@@ -2744,6 +2748,10 @@ fn taskflow_consume_bundle_check_fails_closed_without_protocol_binding_receipt()
     assert_eq!(
         parsed["seam_closure_admission_receipt_check"]["docflow_status"],
         "pass"
+    );
+    assert_eq!(
+        parsed["seam_closure_admission_receipt_check"]["receipt_evidence"]["receipt_backed"],
+        true
     );
     let blockers = parsed["check"]["blockers"]
         .as_array()
@@ -4455,11 +4463,20 @@ fn consume_final_uses_local_project_context_when_repo_context_is_missing() {
         parsed["payload"]["docflow_activation"]["evidence"]["proof"]["verdict"],
         "blocked"
     );
+    assert_eq!(
+        parsed["payload"]["docflow_activation"]["evidence"]["receipt_evidence"]["receipt_backed"],
+        true
+    );
     let readiness_artifact_path = parsed["payload"]["docflow_activation"]["evidence"]["readiness"]
         ["artifact_path"]
         .as_str()
         .expect("readiness artifact path should be a string");
     assert!(readiness_artifact_path.ends_with("vida/config/docflow-readiness.current.jsonl"));
+    assert_eq!(
+        parsed["payload"]["docflow_activation"]["evidence"]["receipt_evidence"]
+            ["readiness_receipt_path"],
+        readiness_artifact_path
+    );
     let blockers = parsed["payload"]["docflow_verdict"]["blockers"]
         .as_array()
         .expect("blockers should be an array");
@@ -11693,10 +11710,12 @@ fn doctor_surface_supports_json_summary() {
         parsed["effective_instruction_bundle"]["root_artifact_id"],
         "framework-agent-definition"
     );
-    assert!(parsed["launcher_runtime_paths"]["vida"]
-        .as_str()
-        .expect("vida path should be a string")
-        .contains("vida"));
+    assert_eq!(
+        parsed["launcher_runtime_paths"]["vida"]
+            .as_str()
+            .expect("vida launcher should be a string"),
+        "vida"
+    );
     assert!(parsed["launcher_runtime_paths"]["taskflow_surface"]
         .as_str()
         .expect("taskflow surface should be a string")

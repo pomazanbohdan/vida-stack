@@ -37,6 +37,7 @@ Active design docs:
 - `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
 - `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
 - `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
+- `docs/product/spec/authoritative-state-lock-recovery-design.md`
 
 Current promoted runtime-control specs:
 
@@ -47,19 +48,10 @@ Current promoted runtime-control specs:
 artifact_path: product/spec/readme
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: 2026-04-05
+artifact_revision: 2026-04-13
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-04-05T06:19:10.127047794Z
+updated_at: 2026-04-13T16:12:52.799077875Z
 changelog_ref: README.changelog.jsonl
-- `docs/product/spec/mempalace-against-vida-specs-project-design-design.md`
-- `docs/product/spec/config-driven-host-system-runtime-keep-design.md`
-- `docs/product/spec/specify-config-driven-host-system-inventory-design.md`
-- `docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md`
-- `docs/product/spec/explicit-policy-selected-internal-backend-execut-design.md`
-- `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
-- `docs/product/spec/continue-post-main-carveout-with-next-design.md`
-- `docs/product/spec/fix-continuation-reconciliation-resumed-executed-design.md`
-- `docs/product/spec/continue-post-main-carveout-ready-view-design.md`

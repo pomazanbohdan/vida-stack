@@ -355,3 +355,22 @@ pub(crate) fn render_protocol_view_target(name: &str) -> Result<ProtocolViewRend
         content: rendered_content,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::temp_state::TempStateHarness;
+    use crate::test_cli_support::{cli, guard_current_dir};
+
+    #[test]
+    fn protocol_view_command_accepts_json_output() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(
+            runtime.block_on(crate::run(cli(&["protocol", "view", "AGENTS", "--json"]))),
+            ExitCode::SUCCESS
+        );
+    }
+}

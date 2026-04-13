@@ -2,7 +2,41 @@ pub(crate) use crate::runtime_lane_summary::{
     build_runtime_lane_selection_with_store, RuntimeConsumptionLaneSelection,
 };
 
+fn canonicalize_moved_test_request(request: &str) -> String {
+    const MOVED_TEST_MOVE_PREFIX: &str = "move ";
+    const MOVED_TEST_MOVE_SUFFIX: &str =
+        " from crates/vida/src/main.rs into crates/vida/src/project_activator_surface.rs";
+    const BARE_PROOF_TARGET_PREFIX: &str = "cargo test -p vida ";
+    const BARE_PROOF_TARGET_SUFFIX: &str = " -- --nocapture";
+    const MODULE_QUALIFIED_PREFIX: &str = "project_activator_surface::tests::";
+
+    let Some(move_start) = request.find(MOVED_TEST_MOVE_PREFIX) else {
+        return request.to_string();
+    };
+    let move_start = move_start + MOVED_TEST_MOVE_PREFIX.len();
+    let Some(move_end) = request[move_start..].find(MOVED_TEST_MOVE_SUFFIX) else {
+        return request.to_string();
+    };
+    let move_end = move_start + move_end;
+    let test_name = request[move_start..move_end].trim();
+    if test_name.is_empty() {
+        return request.to_string();
+    }
+
+    let bare_proof_target =
+        format!("{BARE_PROOF_TARGET_PREFIX}{test_name}{BARE_PROOF_TARGET_SUFFIX}");
+    let canonical_proof_target = format!(
+        "{BARE_PROOF_TARGET_PREFIX}{MODULE_QUALIFIED_PREFIX}{test_name} -- --exact --nocapture"
+    );
+    if request.contains(&bare_proof_target) {
+        request.replace(&bare_proof_target, &canonical_proof_target)
+    } else {
+        request.to_string()
+    }
+}
+
 pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_json::Value {
+    let canonical_request = canonicalize_moved_test_request(request);
     let feature_slug = crate::infer_feature_request_slug(request)
         .trim()
         .trim_matches('-')
@@ -23,7 +57,7 @@ pub(crate) fn build_design_first_tracked_flow_bootstrap(request: &str) -> serde_
     let spec_title = format!("Spec pack: {feature_title}");
     let work_pool_title = format!("Work-pool pack: {feature_title}");
     let dev_title = format!("Dev pack: {feature_title}");
-    let quoted_request = crate::shell_quote(request);
+    let quoted_request = crate::shell_quote(&canonical_request);
 
     serde_json::json!({
         "required": true,
@@ -829,4 +863,32 @@ pub(crate) fn build_runtime_execution_plan_from_snapshot(
         plan.extend(crate::runtime_assignment_alias_fields(&runtime_assignment));
     }
     execution_plan
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_design_first_tracked_flow_bootstrap;
+
+    #[test]
+    fn design_first_bootstrap_canonicalizes_moved_project_activator_test_proof_target() {
+        let request = "Continue tf-post-r1-main-carveout with the next bounded owner-domain test move: move project_activator_command_accepts_json_output from crates/vida/src/main.rs into crates/vida/src/project_activator_surface.rs. Keep scope to that single test and any minimal test-only helper imports needed for compilation. Proof target: cargo test -p vida project_activator_command_accepts_json_output -- --nocapture. After a green bounded result, continue with the normal commit, push, release build, and system binary update cycle.";
+
+        let bootstrap = build_design_first_tracked_flow_bootstrap(request);
+        let bootstrap_command = bootstrap["bootstrap_command"]
+            .as_str()
+            .expect("bootstrap command should render");
+
+        assert!(
+            bootstrap_command.contains(
+                "cargo test -p vida project_activator_surface::tests::project_activator_command_accepts_json_output -- --exact --nocapture"
+            ),
+            "bootstrap command should carry the canonical exact module-qualified proof target"
+        );
+        assert!(
+            !bootstrap_command.contains(
+                "cargo test -p vida project_activator_command_accepts_json_output -- --nocapture"
+            ),
+            "bootstrap command should not retain the bare moved-test proof target"
+        );
+    }
 }

@@ -119,7 +119,7 @@ Will implement / choose:
 - Move the test into `project_activator_surface.rs`.
 - Remove the original copy from `main.rs`.
 - Proof target:
-  - `cargo test -p vida project_activator_command_accepts_json_output -- --nocapture`
+  - `cargo test -p vida project_activator_surface::tests::project_activator_command_accepts_json_output -- --exact --nocapture`
 
 ### Phase 3
 - Review the diff for owner alignment.
@@ -131,7 +131,7 @@ Will implement / choose:
 
 ## Validation / Proof
 - Unit tests:
-  - `cargo test -p vida project_activator_command_accepts_json_output -- --nocapture`
+  - `cargo test -p vida project_activator_surface::tests::project_activator_command_accepts_json_output -- --exact --nocapture`
 - Integration tests:
   - not required for this bounded slice
 - Runtime checks:

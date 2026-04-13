@@ -338,7 +338,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         })
                         .unwrap_or_default();
                     if let Some(error) =
-                        crate::operator_contracts::release1_operator_contracts_consistency_error(
+                        crate::contract_profile_adapter::operator_contracts_consistency_error(
                             operator_contracts["status"].as_str().unwrap_or(""),
                             &blocker_codes,
                             &next_actions,
@@ -441,7 +441,7 @@ mod tests {
     use std::{fs, time::SystemTime};
 
     use crate::activation_status::canonical_activation_status;
-    use crate::operator_contracts::release1_operator_contracts_consistency_error;
+    use crate::contract_profile_adapter::operator_contracts_consistency_error;
     use crate::operator_contracts::shared_operator_output_contract_parity_error;
     use crate::status_surface_external_cli::external_cli_preflight_summary;
     use crate::status_surface_host_cli_summary::host_cli_system_entry_summary;
@@ -457,17 +457,14 @@ mod tests {
 
     #[test]
     fn release1_operator_contracts_consistency_accepts_pass_without_blockers() {
-        assert_eq!(
-            release1_operator_contracts_consistency_error("pass", &[], &[]),
-            None
-        );
+        assert_eq!(operator_contracts_consistency_error("pass", &[], &[]), None);
     }
 
     #[test]
     fn release1_operator_contracts_consistency_rejects_pass_with_blockers() {
         let blocker_codes = vec!["boot_incompatible".to_string()];
         assert_eq!(
-            release1_operator_contracts_consistency_error("pass", &blocker_codes, &[]),
+            operator_contracts_consistency_error("pass", &blocker_codes, &[]),
             Some(
                 "operator contract inconsistency: status=pass must not include blocker_codes"
                     .to_string()
@@ -478,37 +475,31 @@ mod tests {
     #[test]
     fn release1_operator_contracts_consistency_rejects_unknown_status() {
         assert_eq!(
-            release1_operator_contracts_consistency_error("unknown", &[], &[]),
+            operator_contracts_consistency_error("unknown", &[], &[]),
             Some("operator contract inconsistency: unsupported status `unknown`".to_string())
         );
     }
 
     #[test]
     fn release1_operator_contracts_consistency_accepts_ok_compat_without_blockers() {
-        assert_eq!(
-            release1_operator_contracts_consistency_error("ok", &[], &[]),
-            None
-        );
+        assert_eq!(operator_contracts_consistency_error("ok", &[], &[]), None);
     }
 
     #[test]
     fn release1_operator_contracts_consistency_normalizes_case_and_whitespace_status_drift() {
         assert_eq!(
-            release1_operator_contracts_consistency_error(" PASS ", &[], &[]),
+            operator_contracts_consistency_error(" PASS ", &[], &[]),
             None
         );
         assert_eq!(
-            release1_operator_contracts_consistency_error(
+            operator_contracts_consistency_error(
                 " blocked ",
                 &["migration_required".to_string()],
                 &["Complete required migration before normal operation.".to_string()]
             ),
             None
         );
-        assert_eq!(
-            release1_operator_contracts_consistency_error(" Ok ", &[], &[]),
-            None
-        );
+        assert_eq!(operator_contracts_consistency_error(" Ok ", &[], &[]), None);
     }
 
     #[test]
@@ -1077,7 +1068,7 @@ host_environment:
         let next_action = run_graph_latest_snapshot_inconsistent_next_action().to_string();
         assert!(next_action.contains("recheck `vida status --json`"));
         assert_eq!(
-            release1_operator_contracts_consistency_error(
+            operator_contracts_consistency_error(
                 "blocked",
                 &["run_graph_latest_snapshot_inconsistent".to_string()],
                 &[next_action],
@@ -1094,7 +1085,7 @@ host_environment:
         assert!(next_action.contains("checkpoint evidence"));
         assert!(next_action.contains("same run_id"));
         assert_eq!(
-            release1_operator_contracts_consistency_error(
+            operator_contracts_consistency_error(
                 "blocked",
                 &["run_graph_latest_dispatch_receipt_checkpoint_leakage".to_string()],
                 &[next_action],
@@ -1161,7 +1152,7 @@ host_environment:
 
         assert!(state_store::latest_run_graph_dispatch_receipt_signal_is_ambiguous(&receipt));
         assert_eq!(
-            release1_operator_contracts_consistency_error(
+            operator_contracts_consistency_error(
                 "blocked",
                 &["run_graph_latest_dispatch_receipt_signal_ambiguous".to_string()],
                 &[run_graph_latest_dispatch_receipt_signal_ambiguous_next_action().to_string()],
@@ -1196,7 +1187,7 @@ host_environment:
             run_graph_latest_dispatch_receipt_summary_inconsistent_next_action().to_string();
         assert!(next_action.contains("run-graph dispatch receipt summary"));
         assert_eq!(
-            release1_operator_contracts_consistency_error(
+            operator_contracts_consistency_error(
                 "blocked",
                 &["run_graph_latest_dispatch_receipt_summary_inconsistent".to_string()],
                 &[next_action],

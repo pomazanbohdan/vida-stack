@@ -256,10 +256,17 @@ async fn run_consume_bundle_check(as_json: bool) -> ExitCode {
             let mut effective_blockers = check.blockers.clone();
             let (registry, docflow_check, readiness, proof, _) =
                 super::build_docflow_runtime_evidence();
+            let docflow_receipt_evidence =
+                crate::runtime_consumption_surface::build_docflow_receipt_evidence(
+                    &readiness, &proof,
+                );
             let docflow_verdict =
                 super::build_docflow_runtime_verdict(&registry, &docflow_check, &readiness, &proof);
-            let seam_closure_admission_receipt_check =
-                taskflow_docflow_seam_receipt_backed_check(&payload, &docflow_verdict);
+            let seam_closure_admission_receipt_check = taskflow_docflow_seam_receipt_backed_check(
+                &payload,
+                &docflow_verdict,
+                docflow_receipt_evidence,
+            );
             for blocker in seam_closure_admission_receipt_check["blocker_codes"]
                 .as_array()
                 .into_iter()
@@ -550,6 +557,7 @@ fn db_first_activation_snapshot_validation_error(
 fn taskflow_docflow_seam_receipt_backed_check(
     payload: &super::TaskflowConsumeBundlePayload,
     docflow_verdict: &super::RuntimeConsumptionDocflowVerdict,
+    docflow_receipt_evidence: serde_json::Value,
 ) -> serde_json::Value {
     let receipt_id = payload.protocol_binding_registry["receipt_id"]
         .as_str()
@@ -591,6 +599,7 @@ fn taskflow_docflow_seam_receipt_backed_check(
         "blocker_codes": blocker_codes,
         "docflow_blocker_codes": docflow_verdict.blockers.clone(),
         "docflow_proof_surfaces": docflow_verdict.proof_surfaces.clone(),
+        "receipt_evidence": docflow_receipt_evidence,
         "has_readiness_surface": has_readiness_surface,
         "has_proof_surface": has_proof_surface,
         "surface": "vida docflow readiness-check --profile active-canon | vida docflow proofcheck --profile active-canon",
@@ -740,8 +749,9 @@ mod tests {
         push_unique_string, taskflow_docflow_seam_receipt_backed_check,
     };
     use crate::{
-        release_contract_adapters::release_contract_status, DoctorLauncherSummary,
-        RuntimeConsumptionDocflowVerdict, TaskflowConsumeBundlePayload,
+        release_contract_adapters::release_contract_status,
+        runtime_consumption_surface::build_docflow_receipt_evidence, DoctorLauncherSummary,
+        RuntimeConsumptionDocflowVerdict, RuntimeConsumptionEvidence, TaskflowConsumeBundlePayload,
     };
 
     fn minimal_payload_for_operator_contract_status_checks() -> TaskflowConsumeBundlePayload {
@@ -770,6 +780,27 @@ mod tests {
             task_store: serde_json::json!({}),
             run_graph: serde_json::json!({}),
         }
+    }
+
+    fn minimal_docflow_receipt_evidence() -> serde_json::Value {
+        let readiness = RuntimeConsumptionEvidence {
+            surface: "vida docflow readiness-check --profile active-canon".to_string(),
+            ok: true,
+            row_count: 1,
+            verdict: Some("ready".to_string()),
+            artifact_path: Some("vida/config/docflow-readiness.current.jsonl".to_string()),
+            output: String::new(),
+        };
+        let proof = RuntimeConsumptionEvidence {
+            surface: "vida docflow proofcheck --profile active-canon".to_string(),
+            ok: true,
+            row_count: 1,
+            verdict: Some("ready".to_string()),
+            artifact_path: None,
+            output: String::new(),
+        };
+
+        build_docflow_receipt_evidence(&readiness, &proof)
     }
 
     #[test]
@@ -1456,7 +1487,11 @@ mod tests {
             blockers: vec!["missing_readiness_verdict".to_string()],
             proof_surfaces: vec!["vida docflow check --profile active-canon".to_string()],
         };
-        let seam = taskflow_docflow_seam_receipt_backed_check(&payload, &docflow_verdict);
+        let seam = taskflow_docflow_seam_receipt_backed_check(
+            &payload,
+            &docflow_verdict,
+            minimal_docflow_receipt_evidence(),
+        );
 
         assert_eq!(seam["status"], "blocked");
         assert_eq!(seam["receipt_backed"], false);
@@ -1474,6 +1509,12 @@ mod tests {
             seam["docflow_blocker_codes"],
             serde_json::json!(["missing_readiness_verdict"])
         );
+        assert_eq!(seam["receipt_evidence"]["receipt_backed"], true);
+        assert_eq!(
+            seam["receipt_evidence"]["readiness_receipt_path"],
+            "vida/config/docflow-readiness.current.jsonl"
+        );
+        assert!(seam["receipt_evidence"]["proof_receipt_path"].is_null());
         assert_eq!(seam["has_readiness_surface"], false);
         assert_eq!(seam["has_proof_surface"], false);
     }
@@ -1492,13 +1533,18 @@ mod tests {
             ],
         };
 
-        let seam = taskflow_docflow_seam_receipt_backed_check(&payload, &docflow_verdict);
+        let seam = taskflow_docflow_seam_receipt_backed_check(
+            &payload,
+            &docflow_verdict,
+            minimal_docflow_receipt_evidence(),
+        );
 
         assert_eq!(seam["status"], "pass");
         assert_eq!(seam["receipt_backed"], false);
         assert_eq!(seam["closure_inputs_ready"], true);
         assert_eq!(seam["docflow_status"], "pass");
         assert_eq!(seam["blocker_codes"], serde_json::json!([]));
+        assert_eq!(seam["receipt_evidence"]["receipt_backed"], true);
         assert_eq!(seam["has_readiness_surface"], true);
         assert_eq!(seam["has_proof_surface"], true);
     }
@@ -1513,7 +1559,11 @@ mod tests {
             proof_surfaces: vec!["vida docflow readiness-check --profile active-canon".to_string()],
         };
 
-        let seam = taskflow_docflow_seam_receipt_backed_check(&payload, &docflow_verdict);
+        let seam = taskflow_docflow_seam_receipt_backed_check(
+            &payload,
+            &docflow_verdict,
+            minimal_docflow_receipt_evidence(),
+        );
 
         assert_eq!(seam["status"], "blocked");
         assert_eq!(seam["closure_inputs_ready"], false);
@@ -1521,6 +1571,7 @@ mod tests {
             seam["blocker_codes"],
             serde_json::json!(["missing_closure_proof", "restore_reconcile_not_green"])
         );
+        assert_eq!(seam["receipt_evidence"]["receipt_backed"], true);
         assert_eq!(seam["has_readiness_surface"], true);
         assert_eq!(seam["has_proof_surface"], false);
     }

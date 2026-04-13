@@ -1231,9 +1231,6 @@ fn init_view_activation_is_pending(init_view: &serde_json::Value) -> bool {
 }
 
 pub(crate) fn blocking_runtime_bundle(error: &str) -> TaskflowConsumeBundlePayload {
-    let current_exe = std::env::current_exe()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|_| "unresolved".to_string());
     let vida_root = std::env::current_dir()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| "unresolved".to_string());
@@ -1247,7 +1244,7 @@ pub(crate) fn blocking_runtime_bundle(error: &str) -> TaskflowConsumeBundlePaylo
         config_path: expected_config_path(&vida_root),
         activation_source: "state_store".to_string(),
         launcher_runtime_paths: DoctorLauncherSummary {
-            vida: current_exe,
+            vida: crate::runtime_consumption_surface::CANONICAL_LAUNCHER_COMMAND.to_string(),
             project_root: vida_root,
             taskflow_surface: "vida taskflow".to_string(),
         },
@@ -1637,7 +1634,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        activation_status_is_pending, activation_truth_project_root,
+        activation_status_is_pending, activation_truth_project_root, blocking_runtime_bundle,
         build_project_protocol_projections, bundle_project_root,
         cache_contract_consistency_blockers, canonical_project_protocol_projection_status,
         init_view_activation_is_pending, retrieval_optional_context_boundary_blockers,
@@ -2434,6 +2431,26 @@ mod tests {
         let payload = minimal_payload_for_cache_checks();
         let selected = activation_truth_project_root(&payload, Some("/tmp/project".to_string()));
         assert_eq!(selected, "/tmp/project");
+    }
+
+    #[test]
+    fn blocking_runtime_bundle_exports_canonical_launcher_command() {
+        let bundle = blocking_runtime_bundle("launcher unavailable");
+        let current_exe = std::env::current_exe()
+            .expect("test executable path should resolve")
+            .display()
+            .to_string();
+
+        assert_eq!(
+            bundle.launcher_runtime_paths.vida,
+            crate::runtime_consumption_surface::CANONICAL_LAUNCHER_COMMAND
+        );
+        assert_eq!(
+            bundle.launcher_runtime_paths.taskflow_surface,
+            "vida taskflow"
+        );
+        assert_eq!(bundle.launcher_runtime_paths.project_root, bundle.vida_root);
+        assert_ne!(bundle.launcher_runtime_paths.vida, current_exe);
     }
 
     #[test]

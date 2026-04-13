@@ -112,3 +112,54 @@ pub(crate) fn blocking_docflow_activation(
         }),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::build_docflow_runtime_verdict;
+
+    #[test]
+    fn taskflow_consume_final_verdict_reports_pass_without_blockers() {
+        let registry = crate::RuntimeConsumptionEvidence {
+            surface: "registry".to_string(),
+            ok: true,
+            row_count: 1,
+            verdict: None,
+            artifact_path: None,
+            output: String::new(),
+        };
+        let check = crate::RuntimeConsumptionEvidence {
+            surface: "check".to_string(),
+            ok: true,
+            row_count: 0,
+            verdict: None,
+            artifact_path: None,
+            output: String::new(),
+        };
+        let readiness = crate::RuntimeConsumptionEvidence {
+            surface: "readiness".to_string(),
+            ok: true,
+            row_count: 0,
+            verdict: Some("ready".to_string()),
+            artifact_path: Some("vida/config/docflow-readiness.current.jsonl".to_string()),
+            output: String::new(),
+        };
+        let proof = crate::RuntimeConsumptionEvidence {
+            surface: "proof".to_string(),
+            ok: true,
+            row_count: 1,
+            verdict: Some("ready".to_string()),
+            artifact_path: None,
+            output: "✅ OK: proofcheck".to_string(),
+        };
+
+        let verdict = build_docflow_runtime_verdict(&registry, &check, &readiness, &proof);
+
+        assert_eq!(verdict.status, "pass");
+        assert!(verdict.ready);
+        assert!(verdict.blockers.is_empty());
+        assert_eq!(
+            verdict.proof_surfaces,
+            vec!["registry", "check", "readiness", "proof"]
+        );
+    }
+}

@@ -1822,6 +1822,9 @@ mod tests {
     use crate::state_store::LauncherActivationSnapshot;
     use crate::temp_state::TempStateHarness;
     use crate::test_cli_support::{cli, guard_current_dir};
+    use crate::DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC;
+    use crate::WORKER_SCORECARDS_STATE;
+    use crate::WORKER_STRATEGY_STATE;
     use serde_json::json;
     use std::fs;
     use std::process::ExitCode;
@@ -1916,6 +1919,112 @@ mod tests {
     }
 
     #[test]
+    fn merge_project_activation_marks_init_pending_when_activation_is_incomplete() {
+        let init_view = serde_json::json!({
+            "status": "ready"
+        });
+        let project_activation_view = serde_json::json!({
+            "status": "pending",
+            "activation_pending": true,
+            "project_shape": "bootstrapped",
+            "triggers": {
+                "config_state_incomplete": true
+            },
+            "activation_algorithm": {
+                "taskflow_admitted_while_pending": false
+            },
+            "interview": {
+                "required_inputs": []
+            },
+            "host_environment": {
+                "selected_cli_system": serde_json::Value::Null
+            },
+            "next_steps": [
+                "run `vida project-activator`"
+            ]
+        });
+
+        let merged = merge_project_activation_into_init_view(init_view, &project_activation_view);
+
+        assert_eq!(merged["status"], "pending");
+        assert_eq!(merged["project_activation"]["activation_pending"], true);
+        assert_eq!(
+            merged["project_activation"]["triggers"]["config_state_incomplete"],
+            true
+        );
+        assert_eq!(
+            merged["project_activation"]["activation_algorithm"]["taskflow_admitted_while_pending"],
+            false
+        );
+    }
+
+    #[test]
+    fn project_activator_view_uses_builtin_host_registry_without_overlay_systems() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+
+        let view = super::build_project_activator_view(harness.path());
+        assert_eq!(
+            view["host_environment"]["selected_cli_system"],
+            serde_json::Value::Null
+        );
+        assert_eq!(view["host_environment"]["selection_required"], true);
+        assert_eq!(view["host_environment"]["template_materialized"], false);
+        assert_eq!(view["host_environment"]["runtime_template_root"], ".codex");
+        assert!(view["host_environment"]["supported_cli_systems"]
+            .as_array()
+            .expect("supported cli systems should render")
+            .iter()
+            .any(|value| value.as_str() == Some("codex")));
+        assert!(view["host_environment"]["supported_cli_systems"]
+            .as_array()
+            .expect("supported cli systems should render")
+            .iter()
+            .any(|value| value.as_str() == Some("qwen")));
+        assert!(view["host_environment"]["template_source_root"]
+            .as_str()
+            .expect("template source root should render")
+            .ends_with("/.codex"));
+    }
+
+    #[test]
+    fn project_activator_fails_closed_when_dispatch_alias_registry_is_configured_but_missing() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+
+        let config_path = harness.path().join("vida.config.yaml");
+        let config_body =
+            fs::read_to_string(&config_path).expect("config should be readable after init");
+        let updated = config_body.replace(
+            "dispatch_aliases: .vida/project/agent-extensions/dispatch-aliases.yaml",
+            "dispatch_aliases: .vida/project/agent-extensions/missing-dispatch-aliases.yaml",
+        );
+        fs::write(&config_path, updated).expect("config should be rewritten");
+
+        assert_ne!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+    }
+
+    #[test]
     fn db_first_activation_truth_read_back_allows_source_config_path_as_provenance_only() {
         let expected = LauncherActivationSnapshot {
             source: "state_store".to_string(),
@@ -1966,6 +2075,192 @@ mod tests {
             view["triggers"]["initial_onboarding_missing"],
             serde_json::Value::Bool(true)
         );
+    }
+
+    #[test]
+    fn project_activator_reports_pending_after_init_scaffold_without_docs() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+
+        let view = super::build_project_activator_view(harness.path());
+        assert_eq!(view["status"], "pending");
+        assert_eq!(view["activation_pending"], true);
+        assert_eq!(view["triggers"]["sidecar_or_project_docs_too_thin"], false);
+        assert_eq!(
+            view["triggers"]["host_cli_unselected_or_unmaterialized"],
+            true
+        );
+        assert_eq!(view["project_docs"]["config_has_placeholders"], true);
+        assert_eq!(view["agent_extensions"]["bundle_ready"], true);
+        assert_eq!(
+            view["activation_algorithm"]["taskflow_admitted_while_pending"],
+            false
+        );
+        assert_eq!(view["activation_algorithm"]["docflow_first"], true);
+        assert!(
+            view["interview"]["required_inputs"]
+                .as_array()
+                .expect("required inputs should render")
+                .len()
+                >= 3,
+            "activation interview should require project id, language, and host CLI selection"
+        );
+    }
+
+    #[test]
+    fn project_activator_materializes_builtin_copy_tree_template_without_overlay_entry() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+
+        let config = super::read_yaml_file_checked(&harness.path().join("vida.config.yaml"))
+            .expect("project config should exist");
+        let registry = super::host_cli_system_registry_with_fallback(Some(&config));
+        let qwen_entry = registry
+            .get("qwen")
+            .expect("configured qwen template source should exist");
+        let source = super::resolve_host_cli_template_source("qwen", Some(qwen_entry))
+            .expect("configured qwen template source should resolve");
+        assert!(source.ends_with(".qwen"));
+
+        let runtime_root =
+            super::materialize_host_cli_template(harness.path(), "qwen", Some(qwen_entry))
+                .expect("configured qwen template should materialize");
+        assert!(runtime_root.ends_with(".qwen"));
+        assert!(harness.path().join(".qwen").is_dir());
+    }
+
+    #[test]
+    fn project_activator_accepts_host_cli_selection_and_materializes_copy_tree_template() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "qwen",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        assert!(harness.path().join(".qwen").is_dir());
+        let config = fs::read_to_string(harness.path().join("vida.config.yaml"))
+            .expect("config should exist");
+        assert!(config.contains("cli_system: qwen"));
+
+        let view = super::build_project_activator_view(harness.path());
+        assert_eq!(view["host_environment"]["selected_cli_system"], "qwen");
+        assert_eq!(
+            view["host_environment"]["selected_cli_execution_class"],
+            "external"
+        );
+        assert_eq!(view["host_environment"]["template_materialized"], true);
+        assert_eq!(view["host_environment"]["runtime_template_root"], ".qwen");
+        assert_eq!(
+            view["normal_work_defaults"]["default_agent_topology"],
+            serde_json::json!(["qwen-primary"])
+        );
+        assert_eq!(
+            view["normal_work_defaults"]["carrier_tier_rates"]["qwen"],
+            4
+        );
+        assert!(view["normal_work_defaults"]
+            .get("local_codex_guide")
+            .is_none());
+        assert!(view["normal_work_defaults"]
+            .get("codex_tier_rates")
+            .is_none());
+        assert!(view["host_environment"]["supported_cli_systems"]
+            .as_array()
+            .expect("supported cli systems should render")
+            .iter()
+            .any(|value| value.as_str() == Some("qwen")));
+        assert!(view["host_environment"]["supported_cli_systems"]
+            .as_array()
+            .expect("supported cli systems should render")
+            .iter()
+            .any(|value| value.as_str() == Some("codex")));
+    }
+
+    #[test]
+    fn project_activator_accepts_host_cli_selection_and_materializes_codex_template() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        assert!(harness.path().join(".codex/config.toml").is_file());
+        assert!(harness.path().join(".codex/agents").is_dir());
+        assert!(harness.path().join(WORKER_SCORECARDS_STATE).is_file());
+        assert!(harness.path().join(WORKER_STRATEGY_STATE).is_file());
+        let config = fs::read_to_string(harness.path().join("vida.config.yaml"))
+            .expect("config should exist");
+        assert!(config.contains("cli_system: codex"));
+        assert!(config.contains("host_environment:"));
+        assert!(config.contains("protocol_activation:\n  agent_system: true"));
+        assert!(config.contains("agent_only_development: true"));
+        assert!(config.contains("agent_system:\n  init_on_boot: true"));
+        assert!(config.contains("mode: native"));
+        assert!(config.contains("state_owner: orchestrator_only"));
+        assert!(config.contains("max_parallel_agents: 4"));
+        for agent in ["junior", "middle", "senior", "architect"] {
+            let rendered =
+                fs::read_to_string(harness.path().join(format!(".codex/agents/{agent}.toml")))
+                    .unwrap_or_else(|_| panic!("{agent} agent should exist"));
+            assert!(!rendered.contains("vida_tier"));
+            assert!(!rendered.contains("vida_rate"));
+            assert!(!rendered.contains("vida_reasoning_band"));
+        }
+
+        let view = super::build_project_activator_view(harness.path());
+        assert_eq!(view["host_environment"]["selected_cli_system"], "codex");
+        assert_eq!(
+            view["host_environment"]["selected_cli_execution_class"],
+            "internal"
+        );
+        assert_eq!(view["host_environment"]["template_materialized"], true);
+        assert_eq!(view["host_environment"]["runtime_template_root"], ".codex");
+        assert_eq!(
+            view["normal_work_defaults"]["local_host_agent_guide"],
+            DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC
+        );
+        assert!(view["normal_work_defaults"]
+            .get("local_codex_guide")
+            .is_none());
+        assert!(view["normal_work_defaults"]
+            .get("codex_tier_rates")
+            .is_none());
     }
 
     #[test]

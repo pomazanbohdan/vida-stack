@@ -31,6 +31,56 @@ fn runtime_implementer_delivery_source_packet_id(run_id: &str) -> String {
     runtime_delivery_source_packet_id(run_id, "implementer")
 }
 
+fn trim_move_request_scope_path(segment: &str) -> String {
+    segment
+        .trim()
+        .trim_matches(|ch: char| {
+            ch.is_whitespace() || matches!(ch, '`' | '"' | '\'' | ',' | ';' | ':')
+        })
+        .trim_end_matches('.')
+        .to_string()
+}
+
+pub(crate) fn single_task_move_scope_paths(request_text: &str) -> Option<Vec<String>> {
+    let lowered = request_text.to_ascii_lowercase();
+    let move_start = lowered.find("move ")?;
+    let from_start = lowered[move_start + "move ".len()..]
+        .find(" from ")
+        .map(|offset| move_start + "move ".len() + offset)?;
+    let source_start = from_start + " from ".len();
+    let into_start = lowered[source_start..]
+        .find(" into ")
+        .map(|offset| source_start + offset)?;
+    let source_path = trim_move_request_scope_path(&request_text[source_start..into_start]);
+    if source_path.is_empty() {
+        return None;
+    }
+
+    let destination_start = into_start + " into ".len();
+    let destination_segment = &request_text[destination_start..];
+    let destination_lowered = &lowered[destination_start..];
+    let mut destination_end = destination_segment.len();
+    for marker in [
+        "\n",
+        ";",
+        " keep scope",
+        " keep ",
+        " proof target",
+        " proof ",
+        " after ",
+    ] {
+        if let Some(offset) = destination_lowered.find(marker) {
+            destination_end = destination_end.min(offset);
+        }
+    }
+    let destination_path = trim_move_request_scope_path(&destination_segment[..destination_end]);
+    if destination_path.is_empty() {
+        return None;
+    }
+
+    Some(vec![source_path, destination_path])
+}
+
 pub(crate) fn runtime_delivery_task_packet(
     run_id: &str,
     dispatch_target: &str,
@@ -58,7 +108,7 @@ pub(crate) fn runtime_delivery_task_packet(
             "mutation outside bounded packet scope",
             "closure without recorded handoff evidence"
         ],
-        "owned_paths": [],
+        "owned_paths": single_task_move_scope_paths(request_text).unwrap_or_default(),
         "read_only_paths": [
             ".vida/data/state/runtime-consumption",
             "docs/product/spec",

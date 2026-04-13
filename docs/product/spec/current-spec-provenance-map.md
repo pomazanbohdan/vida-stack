@@ -177,7 +177,9 @@ Companion rule:
    Sources: `AGENTS.md`, `docs/process/project-orchestrator-operating-protocol.md`, `docs/process/project-orchestrator-session-start-protocol.md`, `docs/process/project-packet-and-lane-runtime-capsule.md`, `docs/process/project-start-readiness-runtime-capsule.md`, `docs/product/spec/autonomous-report-continuation-law.md`, `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, current launcher/status code in `crates/vida/src/{taskflow_runtime_bundle,status_surface,status_surface_operator_contracts,status_surface_signals,runtime_dispatch_packet_text,init_surfaces,release1_contracts}.rs`, and the current need to fail closed when continued-development intent lacks an explicitly bound bounded unit
 25. [continuation-and-seeded-dispatch-bridge-design.md](continuation-and-seeded-dispatch-bridge-design.md)
    Sources: `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`, `docs/product/spec/release-1-operator-surface-contract.md`, current launcher/runtime code in `crates/vida/src/{state_store,taskflow_run_graph,taskflow_consume,runtime_dispatch_state,taskflow_runtime_bundle,status_surface}.rs`, and the current need to bridge seeded run-graph state to the first persisted dispatch receipt and packet evidence without heuristic fallback
-26. [lawful-closure-continuation-rebinding-design.md](lawful-closure-continuation-rebinding-design.md)
+26. [authoritative-state-lock-recovery-design.md](authoritative-state-lock-recovery-design.md)
+   Sources: `docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md`, `docs/process/project-operations.md`, `docs/process/environments.md`, `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`, current state-store/runtime code in `crates/vida/src/{state_store,state_store_open,taskflow_consume,taskflow_consume_resume,runtime_dispatch_state,runtime_dispatch_execution,status_surface,doctor_surface}.rs`, and the current need to shorten authoritative lock lifetime during agent-lane dispatch without introducing silent long-lived-state cleanup
+27. [lawful-closure-continuation-rebinding-design.md](lawful-closure-continuation-rebinding-design.md)
    Sources: `docs/product/spec/autonomous-report-continuation-law.md`, `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`, `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`, current continuation/runtime code in `crates/vida/src/{taskflow_continuation,continuation_binding_summary,taskflow_layer4,status_surface,taskflow_runtime_bundle}.rs`, and the current need to support explicit post-closure rebinding without heuristic task picking
 
 ## Routing Pointers
@@ -224,10 +226,10 @@ Activation rule:
 artifact_path: product/spec/current-spec-provenance-map
 artifact_type: product_spec
 artifact_version: '1'
-artifact_revision: '2026-03-16'
+artifact_revision: 2026-04-13
 schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-provenance-map.md
 created_at: '2026-03-16T09:05:00+02:00'
-updated_at: 2026-04-08T09:37:14Z
+updated_at: 2026-04-13T16:12:52.796643184Z
 changelog_ref: current-spec-provenance-map.changelog.jsonl

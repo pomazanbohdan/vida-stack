@@ -212,6 +212,20 @@ pub(crate) fn build_runtime_lane_selection_from_bundle(
             }
         }
 
+        let implementation_terms = explicit_implementation_request_terms(&normalized_request);
+        if !implementation_terms.is_empty() && role_exists_in_lane_bundle(bundle, "worker") {
+            result.selected_role = "worker".to_string();
+            result.matched_terms = implementation_terms.clone();
+            result.confidence = if implementation_terms.len() >= 3 {
+                "high".to_string()
+            } else {
+                "medium".to_string()
+            };
+            result.reason = "auto_explicit_implementation_request".to_string();
+            result.execution_plan = build_runtime_execution_plan_from_snapshot(bundle, &result);
+            return Ok(result);
+        }
+
         result.reason = "auto_no_keyword_match".to_string();
         result.execution_plan = build_runtime_execution_plan_from_snapshot(bundle, &result);
         return Ok(result);
@@ -976,6 +990,51 @@ mod tests {
     }
 
     #[test]
+    fn explicit_implementation_request_selects_worker_without_conversation_mode() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        let config =
+            read_yaml_file_checked(&harness.path().join("vida.config.yaml")).expect("config");
+        let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
+            .expect("bundle should compile");
+        let pack_router = pack_router_keywords_json(&config);
+        let selection = build_runtime_lane_selection_from_bundle(
+            &bundle,
+            "state_store",
+            &pack_router,
+            "Implement exactly one bounded write-producing code change: move the test and make only minimal compile-fix adjustments.",
+        )
+        .expect("selection should build");
+
+        assert_eq!(selection.selected_role, "worker");
+        assert!(selection.conversational_mode.is_none());
+        assert_eq!(selection.reason, "auto_explicit_implementation_request");
+        assert!(selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "write-producing" || term == "move the test"));
+    }
+
+    #[test]
     fn codex_dispatch_aliases_are_loaded_from_overlay_not_rust_catalog() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -1091,4 +1150,24 @@ fn contains_keywords(request: &str, keywords: &[String]) -> Vec<String> {
 
 fn feature_delivery_design_terms(request: &str) -> Vec<String> {
     crate::feature_delivery_design_terms(request)
+}
+
+fn explicit_implementation_request_terms(request: &str) -> Vec<String> {
+    crate::contains_keywords(
+        request,
+        &[
+            "implement".to_string(),
+            "implementation patch".to_string(),
+            "bounded patch".to_string(),
+            "write-producing".to_string(),
+            "code change".to_string(),
+            "move the test".to_string(),
+            "minimal compile-fix".to_string(),
+            "fix the code".to_string(),
+            "edit the code".to_string(),
+            "update the code".to_string(),
+            "refactor".to_string(),
+            "patch".to_string(),
+        ],
+    )
 }

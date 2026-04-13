@@ -533,6 +533,8 @@ pub(crate) enum BlockerCode {
     PendingVerificationEvidence,
     PendingLaneEvidence,
     PendingReviewFindings,
+    PendingDesignFinalize,
+    PendingSpecTaskClose,
     PendingDesignPacket,
     PendingDeveloperHandoffPacket,
     MissingExecutionPreparationContract,
@@ -697,6 +699,8 @@ impl BlockerCode {
             Self::PendingVerificationEvidence => "pending_verification_evidence",
             Self::PendingLaneEvidence => "pending_lane_evidence",
             Self::PendingReviewFindings => "pending_review_findings",
+            Self::PendingDesignFinalize => "pending_design_finalize",
+            Self::PendingSpecTaskClose => "pending_spec_task_close",
             Self::PendingDesignPacket => "pending_design_packet",
             Self::PendingDeveloperHandoffPacket => "pending_developer_handoff_packet",
             Self::MissingExecutionPreparationContract => "missing_execution_preparation_contract",
@@ -871,6 +875,8 @@ impl BlockerCode {
             "pending_verification_evidence" => Some(Self::PendingVerificationEvidence),
             "pending_lane_evidence" => Some(Self::PendingLaneEvidence),
             "pending_review_findings" => Some(Self::PendingReviewFindings),
+            "pending_design_finalize" => Some(Self::PendingDesignFinalize),
+            "pending_spec_task_close" => Some(Self::PendingSpecTaskClose),
             "pending_design_packet" => Some(Self::PendingDesignPacket),
             "pending_developer_handoff_packet" => Some(Self::PendingDeveloperHandoffPacket),
             "missing_execution_preparation_contract" => {
@@ -1334,7 +1340,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_exception_recorded_requires_exception_receipt_evidence() {
+    fn downstream_lane_exception_recorded_guard_requires_exception_receipt_evidence() {
         let blocker = missing_downstream_lane_evidence_blocker(
             Some(LaneStatus::LaneExceptionRecorded),
             None,
@@ -1368,7 +1374,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_superseded_requires_supersedes_receipt_evidence() {
+    fn downstream_lane_superseded_requires_supersedes_receipt_evidence() {
         let blocker =
             missing_downstream_lane_evidence_blocker(Some(LaneStatus::LaneSuperseded), None, None);
         assert_eq!(blocker, Some(BlockerCode::MissingLaneReceipt));
@@ -1503,11 +1509,13 @@ mod tests {
             " pending_specification_evidence ",
             "pending_execution_preparation_evidence",
             "pending_approval_delegation_evidence",
+            "pending_design_finalize",
             "pending_implementation_evidence",
             "pending_review_clean_evidence",
             "pending_verification_evidence",
             "pending_lane_evidence",
             "pending_review_findings",
+            "pending_spec_task_close",
             "missing_execution_preparation_contract",
         ]);
         assert_eq!(
@@ -1515,11 +1523,13 @@ mod tests {
             vec![
                 "missing_execution_preparation_contract".to_string(),
                 "pending_approval_delegation_evidence".to_string(),
+                "pending_design_finalize".to_string(),
                 "pending_execution_preparation_evidence".to_string(),
                 "pending_implementation_evidence".to_string(),
                 "pending_lane_evidence".to_string(),
                 "pending_review_clean_evidence".to_string(),
                 "pending_review_findings".to_string(),
+                "pending_spec_task_close".to_string(),
                 "pending_specification_evidence".to_string(),
                 "pending_verification_evidence".to_string(),
             ]

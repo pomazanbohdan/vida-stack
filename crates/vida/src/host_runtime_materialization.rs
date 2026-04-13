@@ -137,6 +137,21 @@ fn set_toml_multiline_string(contents: &str, key: &str, body: &str) -> String {
     format!("{}\n", lines.join("\n"))
 }
 
+fn strip_toml_keys(contents: &str, keys: &[&str]) -> String {
+    let mut lines = Vec::new();
+    for line in contents.lines() {
+        let trimmed = line.trim_start();
+        if keys
+            .iter()
+            .any(|key| trimmed.starts_with(&format!("{key} =")))
+        {
+            continue;
+        }
+        lines.push(line.to_string());
+    }
+    format!("{}\n", lines.join("\n"))
+}
+
 fn compose_host_runtime_lane_developer_instructions(
     base_instructions: Option<&str>,
     lane_override: Option<&str>,
@@ -163,28 +178,10 @@ fn render_host_runtime_agent_toml(
     row: &serde_json::Value,
     template_contents: Option<&str>,
 ) -> Option<String> {
-    let role_id = row["role_id"].as_str()?;
+    row["role_id"].as_str()?;
     let model = row["model"].as_str().unwrap_or("gpt-5.4");
     let reasoning_effort = row["model_reasoning_effort"].as_str().unwrap_or("medium");
     let sandbox_mode = row["sandbox_mode"].as_str().unwrap_or("workspace-write");
-    let tier = row["tier"].as_str().unwrap_or(role_id);
-    let rate = row["rate"].as_u64().unwrap_or(0);
-    let reasoning_band = row["reasoning_band"].as_str().unwrap_or_default();
-    let default_runtime_role = row["default_runtime_role"].as_str().unwrap_or_default();
-    let runtime_roles = row["runtime_roles"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .collect::<Vec<_>>()
-        .join(",");
-    let task_classes = row["task_classes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .collect::<Vec<_>>()
-        .join(",");
     let developer_instructions_override = row["developer_instructions"]
         .as_str()
         .filter(|value| !value.trim().is_empty());
@@ -197,28 +194,6 @@ fn render_host_runtime_agent_toml(
         );
         let patched =
             set_toml_scalar_line(&patched, "sandbox_mode", &format!("\"{sandbox_mode}\""));
-        let patched = set_toml_scalar_line(&patched, "vida_tier", &format!("\"{tier}\""));
-        let patched = set_toml_scalar_line(&patched, "vida_rate", &format!("\"{rate}\""));
-        let patched = set_toml_scalar_line(
-            &patched,
-            "vida_reasoning_band",
-            &format!("\"{reasoning_band}\""),
-        );
-        let patched = set_toml_scalar_line(
-            &patched,
-            "vida_default_runtime_role",
-            &format!("\"{default_runtime_role}\""),
-        );
-        let patched = set_toml_scalar_line(
-            &patched,
-            "vida_runtime_roles",
-            &format!("\"{runtime_roles}\""),
-        );
-        let patched = set_toml_scalar_line(
-            &patched,
-            "vida_task_classes",
-            &format!("\"{task_classes}\""),
-        );
         let patched = if let Some(instructions) = compose_host_runtime_lane_developer_instructions(
             extract_toml_multiline_string(template, "developer_instructions").as_deref(),
             developer_instructions_override,
@@ -227,19 +202,29 @@ fn render_host_runtime_agent_toml(
         } else {
             patched
         };
-        return Some(patched);
+        return Some(strip_toml_keys(
+            &patched,
+            &[
+                "vida_tier",
+                "vida_rate",
+                "vida_reasoning_band",
+                "vida_default_runtime_role",
+                "vida_runtime_roles",
+                "vida_task_classes",
+            ],
+        ));
     }
 
     if let Some(instructions) =
         compose_host_runtime_lane_developer_instructions(None, developer_instructions_override)
     {
         return Some(format!(
-            "model = \"{model}\"\nmodel_reasoning_effort = \"{reasoning_effort}\"\nsandbox_mode = \"{sandbox_mode}\"\nvida_tier = \"{tier}\"\nvida_rate = \"{rate}\"\nvida_reasoning_band = \"{reasoning_band}\"\nvida_default_runtime_role = \"{default_runtime_role}\"\nvida_runtime_roles = \"{runtime_roles}\"\nvida_task_classes = \"{task_classes}\"\ndeveloper_instructions = \"\"\"\n{instructions}\n\"\"\"\n"
+            "model = \"{model}\"\nmodel_reasoning_effort = \"{reasoning_effort}\"\nsandbox_mode = \"{sandbox_mode}\"\ndeveloper_instructions = \"\"\"\n{instructions}\n\"\"\"\n"
         ));
     }
 
     Some(format!(
-        "model = \"{model}\"\nmodel_reasoning_effort = \"{reasoning_effort}\"\nsandbox_mode = \"{sandbox_mode}\"\nvida_tier = \"{tier}\"\nvida_rate = \"{rate}\"\nvida_reasoning_band = \"{reasoning_band}\"\nvida_default_runtime_role = \"{default_runtime_role}\"\nvida_runtime_roles = \"{runtime_roles}\"\nvida_task_classes = \"{task_classes}\"\n"
+        "model = \"{model}\"\nmodel_reasoning_effort = \"{reasoning_effort}\"\nsandbox_mode = \"{sandbox_mode}\"\n"
     ))
 }
 

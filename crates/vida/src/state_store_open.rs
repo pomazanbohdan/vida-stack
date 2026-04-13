@@ -1,5 +1,10 @@
 use super::*;
 
+pub(super) fn state_schema_document() -> String {
+    let storage_schema = SurrealStoreTarget::new(DEFAULT_STATE_DIR).bootstrap_schema_document();
+    format!("{storage_schema}\n\n{INSTRUCTION_STATE_SCHEMA}")
+}
+
 impl StateStore {
     pub async fn open(root: PathBuf) -> Result<Self, StateStoreError> {
         fs::create_dir_all(&root)?;

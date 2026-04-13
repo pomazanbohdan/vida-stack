@@ -1,8 +1,7 @@
 use crate::contract_profile_adapter::{
     blocker_code_str, boot_compatibility_is_backward_compatible, canonical_blocker_codes,
-    BlockerCode,
+    operator_contracts_consistency_error, BlockerCode,
 };
-use crate::operator_contracts::release1_operator_contracts_consistency_error;
 
 pub(crate) struct StatusOperatorContractInputs<'a> {
     pub(crate) boot_compatibility: Option<&'a crate::state_store::BootCompatibilitySummary>,
@@ -272,7 +271,7 @@ pub(crate) fn build_status_operator_contracts(
         code == blocker_code_str(BlockerCode::IncompleteReleaseAdmissionOperatorEvidence)
     }) {
         operator_next_actions.push(
-            "Regenerate consume-final evidence so canonical risk/register, closure/readiness, and release-1 operator-contract fields are complete."
+            "Regenerate consume-final evidence so canonical risk/register, closure/readiness, and operator-contract fields are complete."
                 .to_string(),
         );
     }
@@ -328,7 +327,7 @@ pub(crate) fn build_status_operator_contracts(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    if let Some(error) = release1_operator_contracts_consistency_error(
+    if let Some(error) = operator_contracts_consistency_error(
         operator_contracts["status"].as_str().unwrap_or(""),
         &blocker_codes,
         &next_actions,

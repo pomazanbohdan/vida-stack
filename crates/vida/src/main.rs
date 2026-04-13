@@ -468,24 +468,6 @@ mod tests {
     }
 
     #[test]
-    fn boot_command_succeeds() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        assert_eq!(
-            runtime.block_on(run(Cli {
-                command: Some(Command::Boot(BootArgs {
-                    state_dir: Some(harness.path().to_path_buf()),
-                    render: RenderMode::Plain,
-                    instruction_source_root: None,
-                    framework_memory_source_root: None,
-                    extra_args: Vec::new(),
-                })),
-            })),
-            ExitCode::SUCCESS
-        );
-    }
-
-    #[test]
     fn init_command_succeeds() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -619,62 +601,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_root_command_fails_closed() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        assert_eq!(runtime.block_on(run(cli(&["unknown"]))), ExitCode::from(2));
-    }
-
-    #[test]
-    fn boot_with_extra_argument_fails_closed() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        assert_eq!(
-            runtime.block_on(run(cli(&["boot", "unexpected"]))),
-            ExitCode::from(2)
-        );
-    }
-
-    #[test]
-    fn init_with_extra_argument_fails_closed() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        assert_eq!(
-            runtime.block_on(run(cli(&["init", "unexpected"]))),
-            ExitCode::from(2)
-        );
-    }
-
-    #[test]
-    fn clap_help_lists_init_before_boot() {
-        let mut command = Cli::command();
-        let help = command.render_long_help().to_string();
-        let init_index = help.find("init").expect("init should be present in help");
-        let boot_index = help.find("boot").expect("boot should be present in help");
-        assert!(
-            init_index < boot_index,
-            "init should appear before boot in help"
-        );
-    }
-
-    #[test]
-    fn clap_help_lists_project_activator() {
-        let mut command = Cli::command();
-        let help = command.render_long_help().to_string();
-        assert!(
-            help.contains("project-activator"),
-            "project-activator should be present in help"
-        );
-    }
-
-    #[test]
-    fn clap_help_lists_protocol() {
-        let mut command = Cli::command();
-        let help = command.render_long_help().to_string();
-        assert!(
-            help.contains("protocol"),
-            "protocol should be present in help"
-        );
-    }
-
-    #[test]
     fn task_help_lists_mutation_commands() {
         let mut command = Cli::command();
         let task = command
@@ -772,115 +698,6 @@ mod tests {
     }
 
     #[test]
-    fn protocol_view_command_accepts_json_output() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-
-        assert_eq!(
-            runtime.block_on(run(cli(&["protocol", "view", "AGENTS", "--json"]))),
-            ExitCode::SUCCESS
-        );
-    }
-
-    #[test]
-    fn init_preserves_existing_agents_as_sidecar_when_missing() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-        fs::write(
-            harness.path().join("AGENTS.md"),
-            "project documentation: docs/\n",
-        )
-        .expect("existing agents should be written");
-
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-        assert_eq!(
-            fs::read_to_string(harness.path().join("AGENTS.sidecar.md"))
-                .expect("sidecar should exist"),
-            "project documentation: docs/\n"
-        );
-        let framework_agents = fs::read_to_string(harness.path().join("AGENTS.md"))
-            .expect("framework agents should exist");
-        assert!(
-            framework_agents.contains("VIDA Project Bootstrap Carrier"),
-            "generated bootstrap carrier should replace root AGENTS.md"
-        );
-    }
-
-    #[test]
-    fn init_replaces_agents_template_and_keeps_existing_sidecar_with_backup() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-
-        fs::write(
-            harness.path().join("AGENTS.md"),
-            "project-specific bootstrap notes\n",
-        )
-        .expect("existing agents should be written");
-        fs::write(
-            harness.path().join("AGENTS.sidecar.md"),
-            "current sidecar content\n",
-        )
-        .expect("existing sidecar should be written");
-
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-
-        let framework_agents = fs::read_to_string(harness.path().join("AGENTS.md"))
-            .expect("framework agents should exist");
-        assert!(
-            framework_agents.contains("VIDA Project Bootstrap Carrier"),
-            "generated bootstrap carrier should replace root AGENTS.md"
-        );
-
-        let sidecar = fs::read_to_string(harness.path().join("AGENTS.sidecar.md"))
-            .expect("sidecar should still exist");
-        assert_eq!(sidecar, "current sidecar content\n");
-
-        let backup = fs::read_to_string(
-            harness
-                .path()
-                .join(".vida/receipts/AGENTS.pre-init.backup.md"),
-        )
-        .expect("agents backup should be written");
-        assert_eq!(backup, "project-specific bootstrap notes\n");
-    }
-
-    #[test]
-    fn project_activator_reports_pending_after_init_scaffold_without_docs() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-
-        let view = project_activator_surface::build_project_activator_view(harness.path());
-        assert_eq!(view["status"], "pending");
-        assert_eq!(view["activation_pending"], true);
-        assert_eq!(view["triggers"]["sidecar_or_project_docs_too_thin"], false);
-        assert_eq!(
-            view["triggers"]["host_cli_unselected_or_unmaterialized"],
-            true
-        );
-        assert_eq!(view["project_docs"]["config_has_placeholders"], true);
-        assert_eq!(view["agent_extensions"]["bundle_ready"], true);
-        assert_eq!(
-            view["activation_algorithm"]["taskflow_admitted_while_pending"],
-            false
-        );
-        assert_eq!(view["activation_algorithm"]["docflow_first"], true);
-        assert!(
-            view["interview"]["required_inputs"]
-                .as_array()
-                .expect("required inputs should render")
-                .len()
-                >= 3,
-            "activation interview should require project id, language, and host CLI selection"
-        );
-    }
-
-    #[test]
     fn project_activator_fails_closed_for_partial_activation_submission() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -901,126 +718,6 @@ mod tests {
         let view = project_activator_surface::build_project_activator_view(harness.path());
         assert_eq!(view["activation_pending"], true);
         assert!(view["host_environment"]["selected_cli_system"].is_null());
-    }
-
-    #[test]
-    fn project_activator_accepts_host_cli_selection_and_materializes_codex_template() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-        assert_eq!(
-            runtime.block_on(run(cli(&[
-                "project-activator",
-                "--project-id",
-                "vida-test",
-                "--project-name",
-                "VIDA Test",
-                "--language",
-                "english",
-                "--host-cli-system",
-                "codex",
-                "--json"
-            ]))),
-            ExitCode::SUCCESS
-        );
-
-        assert!(harness.path().join(".codex/config.toml").is_file());
-        assert!(harness.path().join(".codex/agents").is_dir());
-        assert!(harness.path().join(WORKER_SCORECARDS_STATE).is_file());
-        assert!(harness.path().join(WORKER_STRATEGY_STATE).is_file());
-        let config = fs::read_to_string(harness.path().join("vida.config.yaml"))
-            .expect("config should exist");
-        assert!(config.contains("cli_system: codex"));
-        assert!(config.contains("host_environment:"));
-        assert!(config.contains("protocol_activation:\n  agent_system: true"));
-        assert!(config.contains("agent_only_development: true"));
-        assert!(config.contains("agent_system:\n  init_on_boot: true"));
-        assert!(config.contains("mode: native"));
-        assert!(config.contains("state_owner: orchestrator_only"));
-        assert!(config.contains("max_parallel_agents: 4"));
-
-        let view = project_activator_surface::build_project_activator_view(harness.path());
-        assert_eq!(view["host_environment"]["selected_cli_system"], "codex");
-        assert_eq!(
-            view["host_environment"]["selected_cli_execution_class"],
-            "internal"
-        );
-        assert_eq!(view["host_environment"]["template_materialized"], true);
-        assert_eq!(view["host_environment"]["runtime_template_root"], ".codex");
-        assert_eq!(
-            view["normal_work_defaults"]["local_host_agent_guide"],
-            DEFAULT_PROJECT_HOST_AGENT_GUIDE_DOC
-        );
-        assert!(view["normal_work_defaults"]
-            .get("local_codex_guide")
-            .is_none());
-        assert!(view["normal_work_defaults"]
-            .get("codex_tier_rates")
-            .is_none());
-    }
-
-    #[test]
-    fn project_activator_accepts_host_cli_selection_and_materializes_copy_tree_template() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-        assert_eq!(
-            runtime.block_on(run(cli(&[
-                "project-activator",
-                "--project-id",
-                "vida-test",
-                "--project-name",
-                "VIDA Test",
-                "--language",
-                "english",
-                "--host-cli-system",
-                "qwen",
-                "--json"
-            ]))),
-            ExitCode::SUCCESS
-        );
-
-        assert!(harness.path().join(".qwen").is_dir());
-        let config = fs::read_to_string(harness.path().join("vida.config.yaml"))
-            .expect("config should exist");
-        assert!(config.contains("cli_system: qwen"));
-
-        let view = project_activator_surface::build_project_activator_view(harness.path());
-        assert_eq!(view["host_environment"]["selected_cli_system"], "qwen");
-        assert_eq!(
-            view["host_environment"]["selected_cli_execution_class"],
-            "external"
-        );
-        assert_eq!(view["host_environment"]["template_materialized"], true);
-        assert_eq!(view["host_environment"]["runtime_template_root"], ".qwen");
-        assert_eq!(
-            view["normal_work_defaults"]["default_agent_topology"],
-            serde_json::json!(["qwen-primary"])
-        );
-        assert_eq!(
-            view["normal_work_defaults"]["carrier_tier_rates"]["qwen"],
-            4
-        );
-        assert!(view["normal_work_defaults"]
-            .get("local_codex_guide")
-            .is_none());
-        assert!(view["normal_work_defaults"]
-            .get("codex_tier_rates")
-            .is_none());
-        assert!(view["host_environment"]["supported_cli_systems"]
-            .as_array()
-            .expect("supported cli systems should render")
-            .iter()
-            .any(|value| value.as_str() == Some("qwen")));
-        assert!(view["host_environment"]["supported_cli_systems"]
-            .as_array()
-            .expect("supported cli systems should render")
-            .iter()
-            .any(|value| value.as_str() == Some("codex")));
     }
 
     #[test]
@@ -1051,70 +748,6 @@ mod tests {
         assert_eq!(contract["selected_cli_execution_class"], "external");
         assert_eq!(contract["runtime_template_root"], ".qwen");
         assert_eq!(contract["template_materialized"], true);
-    }
-
-    #[test]
-    fn project_activator_view_uses_builtin_host_registry_without_overlay_systems() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-
-        let view = project_activator_surface::build_project_activator_view(harness.path());
-        assert_eq!(
-            view["host_environment"]["selected_cli_system"],
-            serde_json::Value::Null
-        );
-        assert_eq!(view["host_environment"]["selection_required"], true);
-        assert_eq!(view["host_environment"]["template_materialized"], false);
-        assert_eq!(view["host_environment"]["runtime_template_root"], ".codex");
-        assert!(view["host_environment"]["supported_cli_systems"]
-            .as_array()
-            .expect("supported cli systems should render")
-            .iter()
-            .any(|value| value.as_str() == Some("codex")));
-        assert!(view["host_environment"]["supported_cli_systems"]
-            .as_array()
-            .expect("supported cli systems should render")
-            .iter()
-            .any(|value| value.as_str() == Some("qwen")));
-        assert!(view["host_environment"]["template_source_root"]
-            .as_str()
-            .expect("template source root should render")
-            .ends_with("/.codex"));
-    }
-
-    #[test]
-    fn project_activator_materializes_builtin_copy_tree_template_without_overlay_entry() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-
-        let config = project_activator_surface::read_yaml_file_checked(
-            &harness.path().join("vida.config.yaml"),
-        )
-        .expect("project config should exist");
-        let registry =
-            project_activator_surface::host_cli_system_registry_with_fallback(Some(&config));
-        let qwen_entry = registry
-            .get("qwen")
-            .expect("configured qwen template source should exist");
-        let source =
-            project_activator_surface::resolve_host_cli_template_source("qwen", Some(qwen_entry))
-                .expect("configured qwen template source should resolve");
-        assert!(source.ends_with(".qwen"));
-
-        let runtime_root = project_activator_surface::materialize_host_cli_template(
-            harness.path(),
-            "qwen",
-            Some(qwen_entry),
-        )
-        .expect("configured qwen template should materialize");
-        assert!(runtime_root.ends_with(".qwen"));
-        assert!(harness.path().join(".qwen").is_dir());
     }
 
     #[test]
@@ -1265,37 +898,17 @@ mod tests {
         assert!(!config.contains("[agents.development_verifier]"));
         assert!(!config.contains("[agents.development_escalation]"));
 
-        let junior = fs::read_to_string(harness.path().join(".codex/agents/junior.toml"))
-            .expect("junior agent should exist");
-        assert!(junior.contains("vida_rate = \"1\""));
-        assert!(junior.contains("vida_runtime_roles = \"worker\""));
-        assert!(
-            junior.contains("vida_task_classes = \"implementation,delivery_task,execution_block\"")
-        );
-
-        let middle = fs::read_to_string(harness.path().join(".codex/agents/middle.toml"))
-            .expect("middle agent should exist");
-        assert!(middle.contains("vida_rate = \"4\""));
-        assert!(middle.contains("vida_runtime_roles = \"business_analyst,pm,coach,worker\""));
-        assert!(middle.contains(
-            "vida_task_classes = \"specification,planning,coach,implementation_medium\""
-        ));
-
-        let senior = fs::read_to_string(harness.path().join(".codex/agents/senior.toml"))
-            .expect("senior agent should exist");
-        assert!(senior.contains("vida_rate = \"16\""));
-        assert!(senior.contains("vida_runtime_roles = \"verifier,prover\""));
-        assert!(senior.contains(
-            "vida_task_classes = \"verification,review,quality_gate,release_readiness\""
-        ));
-
-        let architect = fs::read_to_string(harness.path().join(".codex/agents/architect.toml"))
-            .expect("architect agent should exist");
-        assert!(architect.contains("vida_rate = \"32\""));
-        assert!(architect.contains("vida_reasoning_band = \"xhigh\""));
-        assert!(architect.contains(
-            "vida_task_classes = \"architecture,execution_preparation,hard_escalation,meta_analysis\""
-        ));
+        for agent in ["junior", "middle", "senior", "architect"] {
+            let rendered =
+                fs::read_to_string(harness.path().join(format!(".codex/agents/{agent}.toml")))
+                    .unwrap_or_else(|_| panic!("{agent} agent should exist"));
+            assert!(!rendered.contains("vida_tier"));
+            assert!(!rendered.contains("vida_rate"));
+            assert!(!rendered.contains("vida_reasoning_band"));
+            assert!(!rendered.contains("vida_default_runtime_role"));
+            assert!(!rendered.contains("vida_runtime_roles"));
+            assert!(!rendered.contains("vida_task_classes"));
+        }
 
         assert!(!harness
             .path()
@@ -1640,40 +1253,6 @@ mod tests {
     }
 
     #[test]
-    fn project_activator_fails_closed_when_dispatch_alias_registry_is_configured_but_missing() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let _cwd = guard_current_dir(harness.path());
-
-        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
-
-        let config_path = harness.path().join("vida.config.yaml");
-        let config_body =
-            fs::read_to_string(&config_path).expect("config should be readable after init");
-        let updated = config_body.replace(
-            "dispatch_aliases: .vida/project/agent-extensions/dispatch-aliases.yaml",
-            "dispatch_aliases: .vida/project/agent-extensions/missing-dispatch-aliases.yaml",
-        );
-        fs::write(&config_path, updated).expect("config should be rewritten");
-
-        assert_ne!(
-            runtime.block_on(run(cli(&[
-                "project-activator",
-                "--project-id",
-                "vida-test",
-                "--project-name",
-                "VIDA Test",
-                "--language",
-                "english",
-                "--host-cli-system",
-                "codex",
-                "--json"
-            ]))),
-            ExitCode::SUCCESS
-        );
-    }
-
-    #[test]
     fn agent_feedback_records_scorecard_and_refreshes_strategy() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -1795,49 +1374,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_project_activation_marks_init_pending_when_activation_is_incomplete() {
-        let init_view = serde_json::json!({
-            "status": "ready"
-        });
-        let project_activation_view = serde_json::json!({
-            "status": "pending",
-            "activation_pending": true,
-            "project_shape": "bootstrapped",
-            "triggers": {
-                "config_state_incomplete": true
-            },
-            "activation_algorithm": {
-                "taskflow_admitted_while_pending": false
-            },
-            "interview": {
-                "required_inputs": []
-            },
-            "host_environment": {
-                "selected_cli_system": serde_json::Value::Null
-            },
-            "next_steps": [
-                "run `vida project-activator`"
-            ]
-        });
-
-        let merged = project_activator_surface::merge_project_activation_into_init_view(
-            init_view,
-            &project_activation_view,
-        );
-
-        assert_eq!(merged["status"], "pending");
-        assert_eq!(merged["project_activation"]["activation_pending"], true);
-        assert_eq!(
-            merged["project_activation"]["triggers"]["config_state_incomplete"],
-            true
-        );
-        assert_eq!(
-            merged["project_activation"]["activation_algorithm"]["taskflow_admitted_while_pending"],
-            false
-        );
-    }
-
-    #[test]
     fn orchestrator_init_succeeds_after_init_scaffold() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -1902,145 +1438,6 @@ mod tests {
         assert_eq!(
             view["continuation_binding"]["binding_source"],
             "latest_run_graph_status"
-        );
-    }
-
-    #[test]
-    fn init_bootstrap_source_requires_bootstrap_markers() {
-        let harness = TempStateHarness::new().expect("temp state harness should initialize");
-        let root = harness.path();
-        fs::create_dir_all(root.join("bin")).expect("bin dir should exist");
-        fs::write(root.join("bin/taskflow"), "#!/bin/sh\n").expect("taskflow marker should exist");
-        assert!(
-            !init_surfaces::looks_like_init_bootstrap_source_root(root),
-            "taskflow binary alone should not qualify as an init bootstrap source"
-        );
-
-        fs::create_dir_all(root.join("install/assets")).expect("install assets dir should exist");
-        fs::create_dir_all(root.join(".codex")).expect(".codex dir should exist");
-        fs::write(
-            root.join("install/assets/AGENTS.scaffold.md"),
-            "# scaffold\n",
-        )
-        .expect("generated AGENTS scaffold should exist");
-        fs::write(root.join("AGENTS.sidecar.md"), "# sidecar\n")
-            .expect("project sidecar should exist");
-        fs::write(
-            root.join("install/assets/vida.config.yaml.template"),
-            concat!(
-                "project:\n",
-                "  id: demo\n",
-                "host_environment:\n",
-                "  systems:\n",
-                "    codex:\n",
-                "      template_root: .codex\n",
-                "      runtime_root: .codex\n",
-            ),
-        )
-        .expect("config template should exist");
-        assert!(
-            init_surfaces::looks_like_init_bootstrap_source_root(root),
-            "bootstrap source should require actual init assets rather than runtime-only markers"
-        );
-    }
-
-    #[test]
-    fn downstream_lane_superseded_requires_supersedes_receipt_evidence() {
-        let blocker = missing_downstream_lane_evidence_blocker(
-            Some(LaneStatus::LaneSuperseded),
-            None,
-            Some("exception-1"),
-        );
-        assert_eq!(blocker, Some(BlockerCode::MissingLaneReceipt));
-    }
-
-    #[test]
-    fn downstream_lane_exception_takeover_guard_remains_unchanged() {
-        let blocker = missing_downstream_lane_evidence_blocker(
-            Some(LaneStatus::LaneExceptionTakeover),
-            None,
-            None,
-        );
-        assert_eq!(blocker, Some(BlockerCode::ExceptionPathMissing));
-    }
-
-    #[test]
-    fn downstream_lane_exception_recorded_guard_requires_exception_receipt_evidence() {
-        let blocker = missing_downstream_lane_evidence_blocker(
-            Some(LaneStatus::LaneExceptionRecorded),
-            None,
-            None,
-        );
-        assert_eq!(blocker, Some(BlockerCode::ExceptionPathMissing));
-    }
-
-    #[test]
-    fn release1_operator_contracts_envelope_normalizes_status_to_canonical_vocabulary() {
-        let envelope = build_release1_operator_contracts_envelope(
-            " pass ",
-            Vec::new(),
-            Vec::new(),
-            serde_json::json!({}),
-        );
-
-        assert_eq!(envelope["status"], "pass");
-    }
-
-    #[test]
-    fn release1_operator_contracts_envelope_accepts_ok_compat_status() {
-        let envelope = build_release1_operator_contracts_envelope(
-            "ok",
-            Vec::new(),
-            Vec::new(),
-            serde_json::json!({}),
-        );
-
-        assert_eq!(envelope["status"], "pass");
-    }
-
-    #[test]
-    fn taskflow_consume_final_verdict_reports_pass_without_blockers() {
-        let registry = RuntimeConsumptionEvidence {
-            surface: "registry".to_string(),
-            ok: true,
-            row_count: 1,
-            verdict: None,
-            artifact_path: None,
-            output: String::new(),
-        };
-        let check = RuntimeConsumptionEvidence {
-            surface: "check".to_string(),
-            ok: true,
-            row_count: 0,
-            verdict: None,
-            artifact_path: None,
-            output: String::new(),
-        };
-        let readiness = RuntimeConsumptionEvidence {
-            surface: "readiness".to_string(),
-            ok: true,
-            row_count: 0,
-            verdict: Some("ready".to_string()),
-            artifact_path: Some("vida/config/docflow-readiness.current.jsonl".to_string()),
-            output: String::new(),
-        };
-        let proof = RuntimeConsumptionEvidence {
-            surface: "proof".to_string(),
-            ok: true,
-            row_count: 1,
-            verdict: Some("ready".to_string()),
-            artifact_path: None,
-            output: "✅ OK: proofcheck".to_string(),
-        };
-
-        let verdict = build_docflow_runtime_verdict(&registry, &check, &readiness, &proof);
-
-        assert_eq!(verdict.status, "pass");
-        assert!(verdict.ready);
-        assert!(verdict.blockers.is_empty());
-        assert_eq!(
-            verdict.proof_surfaces,
-            vec!["registry", "check", "readiness", "proof"]
         );
     }
 

@@ -429,3 +429,507 @@ impl StateStore {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn import_taskflow_snapshot_replaces_dependencies_for_updated_tasks_without_removing_unrelated_tasks(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-import-deps-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-blocker\",\"title\":\"Blocker\",\"description\":\"blocker\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-keep\",\"title\":\"Keep\",\"description\":\"keep\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-keep\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"},{\"issue_id\":\"vida-keep\",\"depends_on_id\":\"vida-blocker\",\"type\":\"blocks\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n",
+                "{\"id\":\"vida-unrelated\",\"title\":\"Unrelated\",\"description\":\"unrelated\",\"status\":\"open\",\"priority\":4,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n"
+            ),
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let snapshot = TaskSnapshot {
+            tasks: vec![
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-root"),
+                    title: "Root".to_string(),
+                    status: CanonicalTaskStatus::Open,
+                    issue_type: CanonicalIssueType::Epic,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:00Z", &Rfc3339)
+                            .expect("parse root timestamp"),
+                    ),
+                },
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-keep"),
+                    title: "Keep".to_string(),
+                    status: CanonicalTaskStatus::Open,
+                    issue_type: CanonicalIssueType::Task,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                            .expect("parse keep timestamp"),
+                    ),
+                },
+            ],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-keep"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
+        };
+
+        store
+            .import_taskflow_snapshot(&snapshot)
+            .await
+            .expect("additive import should succeed");
+
+        let keep = store
+            .show_task("vida-keep")
+            .await
+            .expect("keep task should remain");
+        assert_eq!(keep.dependencies.len(), 1);
+        assert_eq!(keep.dependencies[0].depends_on_id, "vida-root");
+        assert_eq!(keep.dependencies[0].edge_type, "parent-child");
+
+        let unrelated = store
+            .show_task("vida-unrelated")
+            .await
+            .expect("unrelated task should remain after additive import");
+        assert_eq!(unrelated.title, "Unrelated");
+
+        let graph_issues = store
+            .validate_task_graph()
+            .await
+            .expect("graph validation should succeed");
+        assert!(graph_issues.is_empty());
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load")
+            .expect("latest reconciliation receipt should exist");
+        assert_eq!(latest.operation, "import_snapshot");
+        assert_eq!(latest.source_kind, "canonical_snapshot_memory");
+        assert_eq!(latest.task_count, 2);
+        assert_eq!(latest.dependency_count, 1);
+
+        let bridge = store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 1);
+        assert_eq!(bridge.import_receipts, 1);
+        assert_eq!(bridge.memory_import_receipts, 1);
+        assert_eq!(bridge.file_import_receipts, 0);
+        assert_eq!(bridge.latest_operation.as_deref(), Some("import_snapshot"));
+        assert_eq!(
+            bridge.latest_source_kind.as_deref(),
+            Some("canonical_snapshot_memory")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn replace_with_taskflow_snapshot_removes_stale_dependencies_for_kept_tasks() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-replace-deps-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root\",\"title\":\"Root\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-blocker\",\"title\":\"Blocker\",\"description\":\"blocker\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-keep\",\"title\":\"Keep\",\"description\":\"keep\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-keep\",\"depends_on_id\":\"vida-root\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"},{\"issue_id\":\"vida-keep\",\"depends_on_id\":\"vida-blocker\",\"type\":\"blocks\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+            ),
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let snapshot = TaskSnapshot {
+            tasks: vec![
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-root"),
+                    title: "Root".to_string(),
+                    status: CanonicalTaskStatus::Open,
+                    issue_type: CanonicalIssueType::Epic,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:00Z", &Rfc3339)
+                            .expect("parse root timestamp"),
+                    ),
+                },
+                CanonicalTaskRecord {
+                    id: CanonicalTaskId::new("vida-keep"),
+                    title: "Keep".to_string(),
+                    status: CanonicalTaskStatus::Open,
+                    issue_type: CanonicalIssueType::Task,
+                    updated_at: CanonicalTimestamp(
+                        OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                            .expect("parse keep timestamp"),
+                    ),
+                },
+            ],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-keep"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
+        };
+
+        store
+            .replace_with_taskflow_snapshot(&snapshot)
+            .await
+            .expect("replacement import should succeed");
+
+        let keep = store
+            .show_task("vida-keep")
+            .await
+            .expect("keep task should remain");
+        assert_eq!(keep.dependencies.len(), 1);
+        assert_eq!(keep.dependencies[0].depends_on_id, "vida-root");
+        assert_eq!(keep.dependencies[0].edge_type, "parent-child");
+
+        let blockers = store
+            .task_dependencies("vida-keep")
+            .await
+            .expect("dependencies should load");
+        assert_eq!(blockers.len(), 1);
+        assert_eq!(blockers[0].depends_on_id, "vida-root");
+
+        let graph_issues = store
+            .validate_task_graph()
+            .await
+            .expect("graph validation should succeed");
+        assert!(graph_issues.is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn import_taskflow_snapshot_allows_dependencies_on_existing_authoritative_tasks_outside_payload(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-import-existing-target-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        fs::write(
+            &source,
+            "{\"id\":\"vida-root\",\"title\":\"Root\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-child"),
+                title: "Child".to_string(),
+                status: CanonicalTaskStatus::Open,
+                issue_type: CanonicalIssueType::Task,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                        .expect("parse child timestamp"),
+                ),
+            }],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-child"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
+        };
+
+        store
+            .import_taskflow_snapshot(&snapshot)
+            .await
+            .expect("additive import should accept existing authoritative dependency target");
+
+        let child = store
+            .show_task("vida-child")
+            .await
+            .expect("child task should be imported");
+        assert_eq!(child.dependencies.len(), 1);
+        assert_eq!(child.dependencies[0].depends_on_id, "vida-root");
+        assert_eq!(child.dependencies[0].edge_type, "parent-child");
+
+        let graph_issues = store
+            .validate_task_graph()
+            .await
+            .expect("graph validation should succeed");
+        assert!(graph_issues.is_empty());
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load")
+            .expect("latest reconciliation receipt should exist");
+        assert_eq!(latest.operation, "import_snapshot");
+        assert_eq!(latest.source_kind, "canonical_snapshot_memory");
+        assert_eq!(latest.task_count, 1);
+        assert_eq!(latest.dependency_count, 1);
+
+        let bridge = store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 1);
+        assert_eq!(bridge.import_receipts, 1);
+        assert_eq!(bridge.memory_import_receipts, 1);
+        assert_eq!(bridge.file_import_receipts, 0);
+        assert_eq!(bridge.latest_operation.as_deref(), Some("import_snapshot"));
+        assert_eq!(
+            bridge.latest_source_kind.as_deref(),
+            Some("canonical_snapshot_memory")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn import_taskflow_snapshot_file_allows_dependencies_on_existing_authoritative_tasks_outside_payload(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-file-import-existing-target-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        let snapshot_path = root.join("snapshot.json");
+        fs::write(
+            &source,
+            "{\"id\":\"vida-root\",\"title\":\"Root\",\"description\":\"root\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-child"),
+                title: "Child".to_string(),
+                status: CanonicalTaskStatus::Open,
+                issue_type: CanonicalIssueType::Task,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                        .expect("parse child timestamp"),
+                ),
+            }],
+            dependencies: vec![CanonicalDependencyEdge {
+                issue_id: CanonicalTaskId::new("vida-child"),
+                depends_on_id: CanonicalTaskId::new("vida-root"),
+                dependency_type: "parent-child".to_string(),
+            }],
+        };
+        taskflow_state_fs::write_snapshot(&snapshot_path, &snapshot).expect("write snapshot");
+
+        store
+            .import_taskflow_snapshot_file(&snapshot_path)
+            .await
+            .expect(
+            "file-backed additive import should accept existing authoritative dependency target",
+        );
+
+        let child = store
+            .show_task("vida-child")
+            .await
+            .expect("child task should be imported");
+        assert_eq!(child.dependencies.len(), 1);
+        assert_eq!(child.dependencies[0].depends_on_id, "vida-root");
+        assert_eq!(child.dependencies[0].edge_type, "parent-child");
+
+        let graph_issues = store
+            .validate_task_graph()
+            .await
+            .expect("graph validation should succeed");
+        assert!(graph_issues.is_empty());
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load")
+            .expect("latest reconciliation receipt should exist");
+        assert_eq!(latest.operation, "import_snapshot");
+        assert_eq!(latest.source_kind, "canonical_snapshot_file");
+        assert_eq!(
+            latest.source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(latest.task_count, 1);
+        assert_eq!(latest.dependency_count, 1);
+
+        let bridge = store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 1);
+        assert_eq!(bridge.import_receipts, 1);
+        assert_eq!(bridge.memory_import_receipts, 0);
+        assert_eq!(bridge.file_import_receipts, 1);
+        assert_eq!(bridge.latest_operation.as_deref(), Some("import_snapshot"));
+        assert_eq!(
+            bridge.latest_source_kind.as_deref(),
+            Some("canonical_snapshot_file")
+        );
+        assert_eq!(
+            bridge.latest_source_path.as_deref(),
+            Some(snapshot_path.to_string_lossy().as_ref())
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn import_taskflow_snapshot_fails_closed_before_mutation_on_post_merge_parent_conflict() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-taskflow-snapshot-import-parent-conflict-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let source = root.join("tasks.jsonl");
+        fs::write(
+            &source,
+            concat!(
+                "{\"id\":\"vida-root-a\",\"title\":\"Root A\",\"description\":\"root a\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-root-b\",\"title\":\"Root B\",\"description\":\"root b\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"epic\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[]}\n",
+                "{\"id\":\"vida-child\",\"title\":\"Child old\",\"description\":\"child\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"task\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"updated_at\":\"2026-03-08T00:00:00Z\",\"source_repo\":\".\",\"compaction_level\":0,\"original_size\":0,\"labels\":[],\"dependencies\":[{\"issue_id\":\"vida-child\",\"depends_on_id\":\"vida-root-a\",\"type\":\"parent-child\",\"created_at\":\"2026-03-08T00:00:00Z\",\"created_by\":\"tester\",\"metadata\":\"{}\",\"thread_id\":\"\"}]}\n"
+            ),
+        )
+        .expect("write initial jsonl");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("initial import should succeed");
+
+        let before_child = store
+            .show_task("vida-child")
+            .await
+            .expect("child should exist before conflicting import");
+        assert_eq!(before_child.title, "Child old");
+        assert_eq!(before_child.dependencies.len(), 1);
+        assert_eq!(before_child.dependencies[0].depends_on_id, "vida-root-a");
+
+        let snapshot = TaskSnapshot {
+            tasks: vec![CanonicalTaskRecord {
+                id: CanonicalTaskId::new("vida-child"),
+                title: "Child new".to_string(),
+                status: CanonicalTaskStatus::Open,
+                issue_type: CanonicalIssueType::Task,
+                updated_at: CanonicalTimestamp(
+                    OffsetDateTime::parse("2026-03-08T00:00:05Z", &Rfc3339)
+                        .expect("parse child timestamp"),
+                ),
+            }],
+            dependencies: vec![
+                CanonicalDependencyEdge {
+                    issue_id: CanonicalTaskId::new("vida-child"),
+                    depends_on_id: CanonicalTaskId::new("vida-root-a"),
+                    dependency_type: "parent-child".to_string(),
+                },
+                CanonicalDependencyEdge {
+                    issue_id: CanonicalTaskId::new("vida-child"),
+                    depends_on_id: CanonicalTaskId::new("vida-root-b"),
+                    dependency_type: "parent-child".to_string(),
+                },
+            ],
+        };
+
+        let error = store
+            .import_taskflow_snapshot(&snapshot)
+            .await
+            .expect_err("post-merge multiple-parent conflict should fail");
+        match error {
+            StateStoreError::InvalidCanonicalTaskflowExport { reason } => {
+                assert!(reason.contains("snapshot graph is invalid after additive merge"));
+                assert!(reason.contains("multiple_parent_edges"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+
+        let after_child = store
+            .show_task("vida-child")
+            .await
+            .expect("child should still exist after rejected import");
+        assert_eq!(after_child.title, "Child old");
+        assert_eq!(after_child.dependencies.len(), 1);
+        assert_eq!(after_child.dependencies[0].depends_on_id, "vida-root-a");
+
+        let latest = store
+            .latest_task_reconciliation_summary()
+            .await
+            .expect("latest reconciliation summary should load");
+        assert!(
+            latest.is_none(),
+            "rejected import must not emit reconciliation receipt"
+        );
+
+        let bridge = store
+            .taskflow_snapshot_bridge_summary()
+            .await
+            .expect("snapshot bridge summary should load");
+        assert_eq!(bridge.total_receipts, 0);
+        assert_eq!(bridge.import_receipts, 0);
+        assert_eq!(bridge.memory_import_receipts, 0);
+        assert_eq!(bridge.file_import_receipts, 0);
+        assert!(bridge.latest_operation.is_none());
+        assert!(bridge.latest_source_kind.is_none());
+
+        let graph_issues = store
+            .validate_task_graph()
+            .await
+            .expect("graph validation should succeed");
+        assert!(graph_issues.is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+}

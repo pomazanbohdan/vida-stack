@@ -235,3 +235,32 @@ fn consume_final_operator_next_actions(payload: &serde_json::Value) -> Vec<Strin
     }
     next_actions
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn release1_operator_contracts_envelope_normalizes_status_to_canonical_vocabulary() {
+        let envelope = build_release1_operator_contracts_envelope(
+            " pass ",
+            Vec::new(),
+            Vec::new(),
+            serde_json::json!({}),
+        );
+
+        assert_eq!(envelope["status"], "pass");
+    }
+
+    #[test]
+    fn release1_operator_contracts_envelope_accepts_ok_compat_status() {
+        let envelope = build_release1_operator_contracts_envelope(
+            "ok",
+            Vec::new(),
+            Vec::new(),
+            serde_json::json!({}),
+        );
+
+        assert_eq!(envelope["status"], "pass");
+    }
+}

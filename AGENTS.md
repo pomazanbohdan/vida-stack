@@ -57,6 +57,18 @@ Host CLI rule:
 5. Prefer project-local docs/process/spec guidance resolved from `AGENTS.sidecar.md`.
 6. Open deeper framework protocol surfaces only on demand through canonical shorthand ids interpreted via `vida protocol view`.
 
+## Compact Re-entry Rule
+
+1. After any host-side compact, context drop, or continuity uncertainty, re-read `AGENTS.md` and `AGENTS.sidecar.md` before continuing.
+2. Re-run the bounded runtime init surface for the active lane (`vida orchestrator-init --json` for the root lane, `vida agent-init --json` for a worker lane) before selecting the next step.
+3. After re-entry, restate three runtime fields before any new write-producing move:
+   - `active_bounded_unit`
+   - `why_this_unit`
+   - `sequential_vs_parallel_posture`
+4. If any of those fields are missing, ambiguous, or stale relative to the current runtime evidence, fail closed to diagnosis/bind/recovery and do not continue implementation heuristically.
+5. Keep the session and step thinking overlays active across compact boundaries; re-open the bounded overlay/runtime surfaces when the compact may have weakened confidence in the active thinking mode or task-class selection.
+6. Do not duplicate full thinking algorithms into this bootstrap carrier; this file should enforce the mandatory re-entry contract and point back to the canonical runtime/init surfaces for the algorithms themselves.
+
 ## Working Boundary
 
 1. This file routes bootstrap only.

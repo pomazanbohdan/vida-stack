@@ -1,5 +1,7 @@
 use std::path::Path;
 
+pub(crate) const CANONICAL_LAUNCHER_COMMAND: &str = "vida";
+
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct DoctorLauncherSummary {
     pub(crate) vida: String,
@@ -10,10 +12,8 @@ pub(crate) struct DoctorLauncherSummary {
 pub(crate) fn doctor_launcher_summary_for_root(
     project_root: &Path,
 ) -> Result<DoctorLauncherSummary, String> {
-    let current_exe = std::env::current_exe()
-        .map_err(|error| format!("failed to resolve current executable: {error}"))?;
     Ok(DoctorLauncherSummary {
-        vida: current_exe.display().to_string(),
+        vida: CANONICAL_LAUNCHER_COMMAND.to_string(),
         project_root: project_root.display().to_string(),
         taskflow_surface: "vida taskflow".to_string(),
     })
@@ -235,6 +235,33 @@ pub(crate) fn build_docflow_runtime_evidence() -> (
     (registry, check, readiness, proof, overview)
 }
 
+pub(crate) fn build_docflow_receipt_evidence(
+    readiness: &RuntimeConsumptionEvidence,
+    proof: &RuntimeConsumptionEvidence,
+) -> serde_json::Value {
+    let readiness_surface = readiness.surface.clone();
+    let readiness_verdict = readiness.verdict.clone();
+    let readiness_artifact_path = readiness.artifact_path.clone();
+    let readiness_receipt_path = readiness_artifact_path.clone();
+    let proof_surface = proof.surface.clone();
+    let proof_verdict = proof.verdict.clone();
+    let proof_receipt_path = serde_json::Value::Null;
+    let receipt_backed = readiness_receipt_path
+        .as_ref()
+        .is_some_and(|path| !path.trim().is_empty());
+
+    serde_json::json!({
+        "receipt_backed": receipt_backed,
+        "readiness_surface": readiness_surface,
+        "readiness_verdict": readiness_verdict,
+        "readiness_artifact_path": readiness_artifact_path,
+        "readiness_receipt_path": readiness_receipt_path,
+        "proof_surface": proof_surface,
+        "proof_verdict": proof_verdict,
+        "proof_receipt_path": proof_receipt_path,
+    })
+}
+
 pub(crate) fn blocking_lane_selection(
     request: &str,
     error: &str,
@@ -258,5 +285,73 @@ pub(crate) fn blocking_lane_selection(
             "reason": error,
         }),
         reason: error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_docflow_receipt_evidence, doctor_launcher_summary_for_root,
+        RuntimeConsumptionEvidence, CANONICAL_LAUNCHER_COMMAND,
+    };
+
+    #[test]
+    fn docflow_receipt_evidence_derives_readiness_receipt_path_from_artifact_path() {
+        let readiness = RuntimeConsumptionEvidence {
+            surface: "vida docflow readiness-check --profile active-canon".to_string(),
+            ok: true,
+            row_count: 1,
+            verdict: Some("ready".to_string()),
+            artifact_path: Some("vida/config/docflow-readiness.current.jsonl".to_string()),
+            output: String::new(),
+        };
+        let proof = RuntimeConsumptionEvidence {
+            surface: "vida docflow proofcheck --profile active-canon".to_string(),
+            ok: true,
+            row_count: 1,
+            verdict: Some("ready".to_string()),
+            artifact_path: None,
+            output: String::new(),
+        };
+
+        let evidence = build_docflow_receipt_evidence(&readiness, &proof);
+
+        assert_eq!(evidence["receipt_backed"], true);
+        assert_eq!(
+            evidence["readiness_surface"],
+            "vida docflow readiness-check --profile active-canon"
+        );
+        assert_eq!(evidence["readiness_verdict"], "ready");
+        assert_eq!(
+            evidence["readiness_artifact_path"],
+            "vida/config/docflow-readiness.current.jsonl"
+        );
+        assert_eq!(
+            evidence["readiness_receipt_path"],
+            "vida/config/docflow-readiness.current.jsonl"
+        );
+        assert_eq!(
+            evidence["proof_surface"],
+            "vida docflow proofcheck --profile active-canon"
+        );
+        assert_eq!(evidence["proof_verdict"], "ready");
+        assert!(evidence["proof_receipt_path"].is_null());
+    }
+
+    #[test]
+    fn doctor_launcher_summary_uses_canonical_launcher_command() {
+        let project_root = std::path::Path::new("/tmp/vida-stack");
+        let current_exe = std::env::current_exe()
+            .expect("test executable path should resolve")
+            .display()
+            .to_string();
+
+        let summary =
+            doctor_launcher_summary_for_root(project_root).expect("launcher summary should build");
+
+        assert_eq!(summary.vida, CANONICAL_LAUNCHER_COMMAND);
+        assert_eq!(summary.project_root, "/tmp/vida-stack");
+        assert_eq!(summary.taskflow_surface, "vida taskflow");
+        assert_ne!(summary.vida, current_exe);
     }
 }

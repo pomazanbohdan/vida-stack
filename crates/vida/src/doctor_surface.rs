@@ -1032,8 +1032,7 @@ mod tests {
         selected_effective_bundle_receipt_id,
     };
     use crate::contract_profile_adapter::{
-        operator_contracts_consistency_error as release1_operator_contracts_consistency_error,
-        shared_operator_output_contract_parity_error,
+        operator_contracts_consistency_error, shared_operator_output_contract_parity_error,
     };
     use crate::operator_contracts::canonical_release1_operator_contract_status;
 
@@ -1044,7 +1043,7 @@ mod tests {
             "Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff.".to_string(),
         ];
         assert_eq!(
-            release1_operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
+            operator_contracts_consistency_error("blocked", &blocker_codes, &next_actions),
             None
         );
     }
@@ -1053,7 +1052,7 @@ mod tests {
     fn release1_operator_contracts_consistency_rejects_blocked_without_actions() {
         let blocker_codes = vec!["recovery_readiness_blocked".to_string()];
         assert_eq!(
-            release1_operator_contracts_consistency_error("blocked", &blocker_codes, &[]),
+            operator_contracts_consistency_error("blocked", &blocker_codes, &[]),
             Some(
                 "operator contract inconsistency: status=blocked requires next_actions".to_string()
             )
@@ -1063,37 +1062,31 @@ mod tests {
     #[test]
     fn release1_operator_contracts_consistency_rejects_unknown_status() {
         assert_eq!(
-            release1_operator_contracts_consistency_error("unknown", &[], &[]),
+            operator_contracts_consistency_error("unknown", &[], &[]),
             Some("operator contract inconsistency: unsupported status `unknown`".to_string())
         );
     }
 
     #[test]
     fn release1_operator_contracts_consistency_accepts_ok_compat_without_blockers() {
-        assert_eq!(
-            release1_operator_contracts_consistency_error("ok", &[], &[]),
-            None
-        );
+        assert_eq!(operator_contracts_consistency_error("ok", &[], &[]), None);
     }
 
     #[test]
     fn release1_operator_contracts_consistency_normalizes_case_and_whitespace_status_drift() {
         assert_eq!(
-            release1_operator_contracts_consistency_error(" PASS ", &[], &[]),
+            operator_contracts_consistency_error(" PASS ", &[], &[]),
             None
         );
         assert_eq!(
-            release1_operator_contracts_consistency_error(
+            operator_contracts_consistency_error(
                 " blocked ",
                 &["recovery_readiness_blocked".to_string()],
                 &["Inspect `vida taskflow recovery latest --json`, then run `vida taskflow consume continue --json` after `recovery_ready=true` is proven for resume/rollback handoff.".to_string()],
             ),
             None
         );
-        assert_eq!(
-            release1_operator_contracts_consistency_error(" Ok ", &[], &[]),
-            None
-        );
+        assert_eq!(operator_contracts_consistency_error(" Ok ", &[], &[]), None);
     }
 
     #[test]
