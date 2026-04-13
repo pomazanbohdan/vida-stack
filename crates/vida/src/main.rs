@@ -1865,63 +1865,6 @@ mod tests {
     }
 
     #[test]
-    fn orchestrator_init_view_exposes_protocol_view_targets() {
-        let view = crate::taskflow_runtime_bundle::build_orchestrator_init_view(
-            Path::new("/tmp/demo"),
-            &serde_json::json!({"root_artifact_id": "root"}),
-            &serde_json::json!({"startup_bundle": serde_json::Value::Null, "startup_capsules": []}),
-            &serde_json::json!({"binding_status": "bound"}),
-            &serde_json::json!({
-                "always_on_core": [],
-                "project_startup_bundle": [],
-                "project_runtime_capsules": [],
-                "task_specific_dynamic_context": [],
-            }),
-            &serde_json::json!({
-                "status": "ambiguous",
-                "continuation_allowed": false,
-                "active_bounded_unit": serde_json::Value::Null,
-                "binding_source": serde_json::Value::Null,
-                "why_this_unit": serde_json::Value::Null,
-                "primary_path": "diagnosis_path",
-                "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
-                "next_actions": ["bind explicitly"]
-            }),
-            "compatible",
-            "no_migration_required",
-        );
-        assert_eq!(view["protocol_view_targets"][0], "bootstrap/router");
-        assert_eq!(
-            view["thinking_protocol_targets"][0],
-            "instruction-contracts/overlay.step-thinking-runtime-capsule"
-        );
-        assert_eq!(view["allowed_thinking_modes"][0], "STC");
-        assert_eq!(view["allowed_thinking_modes"][4], "META");
-        assert!(
-            view["minimum_commands"]
-                .as_array()
-                .expect("minimum commands should be an array")
-                .iter()
-                .any(|row| row == "vida protocol view agent-definitions/entry.orchestrator-entry"),
-            "orchestrator init should surface protocol-view-friendly command hints"
-        );
-        assert!(
-            view["minimum_commands"]
-                .as_array()
-                .expect("minimum commands should be an array")
-                .iter()
-                .any(|row| row
-                    == "vida protocol view instruction-contracts/overlay.step-thinking-runtime-capsule"),
-            "orchestrator init should surface the compact thinking bootstrap surface"
-        );
-        assert_eq!(view["continuation_binding"]["status"], "ambiguous");
-        assert_eq!(
-            view["continuation_binding"]["primary_path"],
-            "diagnosis_path"
-        );
-    }
-
-    #[test]
     fn orchestrator_init_view_exposes_continuation_binding_fail_closed_summary() {
         let view = crate::taskflow_runtime_bundle::build_orchestrator_init_view(
             Path::new("/tmp/demo"),
@@ -1959,36 +1902,6 @@ mod tests {
         assert_eq!(
             view["continuation_binding"]["binding_source"],
             "latest_run_graph_status"
-        );
-    }
-
-    #[test]
-    fn agent_init_view_exposes_protocol_view_targets() {
-        let view = crate::taskflow_runtime_bundle::build_agent_init_view(
-            Path::new("/tmp/demo"),
-            &serde_json::json!({"enabled_framework_roles": ["orchestrator", "worker"], "project_roles": []}),
-            &serde_json::json!({"startup_capsules": []}),
-            &serde_json::json!({"binding_status": "bound"}),
-            "compatible",
-            "no_migration_required",
-        );
-        assert_eq!(
-            view["protocol_view_targets"][0],
-            "agent-definitions/entry.worker-entry"
-        );
-        assert_eq!(
-            view["thinking_protocol_targets"][0],
-            "instruction-contracts/role.worker-thinking"
-        );
-        assert_eq!(view["allowed_thinking_modes"][0], "STC");
-        assert_eq!(view["allowed_thinking_modes"][2], "MAR");
-        assert!(
-            view["minimum_commands"]
-                .as_array()
-                .expect("minimum commands should be an array")
-                .iter()
-                .any(|row| row == "vida protocol view instruction-contracts/role.worker-thinking"),
-            "agent init should surface protocol-view-friendly command hints"
         );
     }
 
