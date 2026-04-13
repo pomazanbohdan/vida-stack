@@ -1979,4 +1979,145 @@ mod tests {
             ExitCode::SUCCESS
         );
     }
+
+    #[test]
+    fn project_activator_reports_ready_when_bootstrap_and_docs_exist() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let root = harness.path();
+        fs::create_dir_all(root.join(".codex/agents")).expect(".codex agents dir should exist");
+        fs::create_dir_all(root.join(".vida/config")).expect(".vida/config dir should exist");
+        fs::create_dir_all(root.join(".vida/db")).expect(".vida/db dir should exist");
+        fs::create_dir_all(root.join(".vida/cache")).expect(".vida/cache dir should exist");
+        fs::create_dir_all(root.join(".vida/framework")).expect(".vida/framework dir should exist");
+        fs::create_dir_all(root.join(".vida/project/agent-extensions"))
+            .expect(".vida/project agent extensions dir should exist");
+        fs::create_dir_all(root.join(".vida/receipts")).expect(".vida/receipts dir should exist");
+        fs::create_dir_all(root.join(".vida/runtime")).expect(".vida/runtime dir should exist");
+        fs::create_dir_all(root.join(".vida/scratchpad"))
+            .expect(".vida/scratchpad dir should exist");
+        fs::create_dir_all(root.join("docs/product")).expect("product docs dir should exist");
+        fs::create_dir_all(root.join("docs/process")).expect("process docs dir should exist");
+        fs::write(root.join("AGENTS.md"), "# framework\n").expect("agents should exist");
+        fs::write(root.join("AGENTS.sidecar.md"), "project docs map\n")
+            .expect("sidecar should exist");
+        fs::write(
+            root.join("vida.config.yaml"),
+            concat!(
+                "project:\n  id: demo\n",
+                "language_policy:\n",
+                "  user_communication: english\n",
+                "  reasoning: english\n",
+                "  documentation: english\n",
+                "  todo_protocol: english\n",
+                "host_environment:\n",
+                "  cli_system: codex\n",
+                "  systems:\n",
+                "    codex:\n",
+                "      enabled: true\n",
+                "      execution_class: internal\n",
+                "      materialization_mode: codex_toml_catalog_render\n",
+                "      template_root: .codex\n",
+                "      runtime_root: .codex\n",
+                "      carriers: {}\n",
+            ),
+        )
+        .expect("config should exist");
+        fs::write(root.join(".codex/config.toml"), "[agents]\n")
+            .expect("codex config should exist");
+        fs::write(root.join("docs/project-root-map.md"), "# root map\n")
+            .expect("project root map should exist");
+        fs::write(root.join("docs/product/index.md"), "# product\n")
+            .expect("product index should exist");
+        fs::create_dir_all(root.join("docs/product/spec/templates"))
+            .expect("product spec template dir should exist");
+        fs::write(
+            root.join("docs/product/spec/README.md"),
+            "# product spec guide\n",
+        )
+        .expect("product spec guide should exist");
+        fs::write(
+            root.join("docs/product/spec/templates/feature-design-document.template.md"),
+            "# feature design template\n",
+        )
+        .expect("feature design template should exist");
+        fs::write(root.join("docs/process/README.md"), "# process\n")
+            .expect("process readme should exist");
+        fs::write(
+            root.join("docs/process/codex-agent-configuration-guide.md"),
+            "# codex guide\n",
+        )
+        .expect("codex guide should exist");
+        fs::write(
+            root.join("docs/process/documentation-tooling-map.md"),
+            "# tooling\n",
+        )
+        .expect("documentation tooling map should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/README.md"),
+            "# runtime agent extensions\n",
+        )
+        .expect("runtime readme should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/roles.yaml"),
+            "version: 1\nroles: []\n",
+        )
+        .expect("roles registry should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/skills.yaml"),
+            "version: 1\nskills: []\n",
+        )
+        .expect("skills registry should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/profiles.yaml"),
+            "version: 1\nprofiles: []\n",
+        )
+        .expect("profiles registry should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/flows.yaml"),
+            "version: 1\nflow_sets: []\n",
+        )
+        .expect("flows registry should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/dispatch-aliases.yaml"),
+            "version: 1\ndispatch_aliases: []\n",
+        )
+        .expect("dispatch aliases registry should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/roles.sidecar.yaml"),
+            "version: 1\nroles: []\n",
+        )
+        .expect("roles sidecar should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/skills.sidecar.yaml"),
+            "version: 1\nskills: []\n",
+        )
+        .expect("skills sidecar should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/profiles.sidecar.yaml"),
+            "version: 1\nprofiles: []\n",
+        )
+        .expect("profiles sidecar should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/flows.sidecar.yaml"),
+            "version: 1\nflow_sets: []\n",
+        )
+        .expect("flows sidecar should exist");
+        fs::write(
+            root.join(".vida/project/agent-extensions/dispatch-aliases.sidecar.yaml"),
+            "version: 1\ndispatch_aliases: []\n",
+        )
+        .expect("dispatch aliases sidecar should exist");
+
+        let view = super::build_project_activator_view(root);
+
+        assert_eq!(view["status"], "ready_enough_for_normal_work");
+        assert_eq!(view["project_shape"], "bootstrapped");
+        assert_eq!(view["activation_pending"], false);
+        assert_eq!(view["host_environment"]["selected_cli_system"], "codex");
+        assert_eq!(view["host_environment"]["template_materialized"], true);
+        assert_eq!(
+            view["next_steps"][0],
+            "activation looks ready enough for normal orchestrator and worker initialization"
+        );
+    }
 }
