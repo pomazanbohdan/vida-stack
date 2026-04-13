@@ -1,3 +1,23 @@
+fn explicit_binding_is_admissible_for_status(
+    binding: &crate::state_store::RunGraphContinuationBinding,
+    status: &crate::state_store::RunGraphStatus,
+) -> bool {
+    if binding.run_id != status.run_id {
+        return false;
+    }
+    if status.status != "completed" {
+        return true;
+    }
+
+    matches!(
+        binding
+            .active_bounded_unit
+            .get("kind")
+            .and_then(serde_json::Value::as_str),
+        Some("downstream_dispatch_target") | Some("task_graph_task")
+    )
+}
+
 pub(crate) fn build_continuation_binding_summary(
     explicit_binding: Option<&crate::state_store::RunGraphContinuationBinding>,
     latest_run_graph_status: Option<&crate::state_store::RunGraphStatus>,
@@ -32,13 +52,7 @@ pub(crate) fn build_continuation_binding_summary(
 
     if let Some(status) = latest_run_graph_status {
         if let Some(binding) = explicit_binding {
-            if binding.run_id == status.run_id
-                && (status.status != "completed"
-                    || status
-                        .next_node
-                        .as_deref()
-                        .is_some_and(|value| !value.trim().is_empty()))
-            {
+            if explicit_binding_is_admissible_for_status(binding, status) {
                 return serde_json::json!({
                     "status": binding.status,
                     "continuation_allowed": binding.status == "bound",
@@ -120,7 +134,7 @@ pub(crate) fn build_continuation_binding_summary(
             "ambiguity_reason": "completed_without_explicit_next_bounded_unit",
             "next_actions": [
                 "Do not continue by selecting the next ready task heuristically after a completed bounded slice.",
-                "Either cite the explicit next bounded unit from the user or refresh continuation evidence with `vida taskflow consume continue --json` before further implementation."
+                "Either cite the explicit next bounded unit from the user, bind it with `vida taskflow continuation bind <run-id> --task-id <task-id> --json`, or refresh runtime evidence with `vida taskflow consume continue --json` before further implementation."
             ]
         });
     }
@@ -136,7 +150,7 @@ pub(crate) fn build_continuation_binding_summary(
         "ambiguity_reason": "missing_active_bounded_unit_runtime_evidence",
         "next_actions": [
             "Do not continue by plausibility when runtime state does not expose an explicit active bounded unit.",
-            "Bind the bounded unit explicitly from user intent or refresh runtime evidence before implementation continues."
+            "Bind the bounded unit explicitly from user intent with `vida taskflow continuation bind <run-id> --task-id <task-id> --json` or refresh runtime evidence before implementation continues."
         ]
     })
 }
@@ -219,5 +233,90 @@ mod tests {
 
         assert_eq!(summary["binding_source"], "explicit_continuation_bind");
         assert_eq!(summary["why_this_unit"], "explicit");
+    }
+
+    #[test]
+    fn completed_status_accepts_explicit_task_graph_binding() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "task-1",
+            "implementation",
+            "implementation",
+        );
+        status.active_node = "closure".to_string();
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "task-1".to_string(),
+            task_id: "tf-post-r1-main-carveout".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "task_id": "tf-post-r1-main-carveout",
+                "run_id": "task-1",
+                "task_status": "in_progress",
+                "issue_type": "task"
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "user explicitly selected the active epic".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+            request_text: Some("continue".to_string()),
+            recorded_at: "2026-04-13T10:00:00Z".to_string(),
+        };
+
+        let summary =
+            build_continuation_binding_summary(Some(&binding), Some(&status), None, None, false);
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["binding_source"], "explicit_continuation_bind_task");
+        assert_eq!(
+            summary["active_bounded_unit"]["task_id"],
+            "tf-post-r1-main-carveout"
+        );
+    }
+
+    #[test]
+    fn completed_status_rejects_stale_run_graph_task_binding() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "task-1",
+            "implementation",
+            "implementation",
+        );
+        status.active_node = "closure".to_string();
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+
+        let stale_binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "task-1".to_string(),
+            task_id: "task-1".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "run_graph_task",
+                "task_id": "task-1",
+                "run_id": "task-1",
+                "active_node": "implementation"
+            }),
+            binding_source: "run_graph_advance".to_string(),
+            why_this_unit: "stale active binding".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only".to_string(),
+            request_text: Some("continue".to_string()),
+            recorded_at: "2026-04-13T10:00:00Z".to_string(),
+        };
+
+        let summary = build_continuation_binding_summary(
+            Some(&stale_binding),
+            Some(&status),
+            None,
+            None,
+            false,
+        );
+
+        assert_eq!(summary["status"], "ambiguous");
+        assert_eq!(
+            summary["ambiguity_reason"],
+            "completed_without_explicit_next_bounded_unit"
+        );
     }
 }

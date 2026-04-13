@@ -226,7 +226,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Canonical commands:");
-            println!("  vida taskflow continuation bind <run-id> [--why <text>] [--json]");
+            println!(
+                "  vida taskflow continuation bind <run-id> [--task-id <task-id>] [--why <text>] [--json]"
+            );
             println!();
             println!("Returned semantics:");
             println!(
@@ -236,6 +238,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("Failure modes:");
             println!(
                 "  Binding fails closed when the run does not expose a bindable active bounded unit."
+            );
+            println!(
+                "  Explicit backlog-task binding fails closed when the cited task is missing or already closed."
             );
             println!("  Explicit binding does not replace persisted dispatch receipt evidence.");
             return;
@@ -447,7 +452,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida taskflow status --summary --json");
     println!("  vida task show <task-id> --json");
     println!("  vida taskflow run-graph status <task-id>");
-    println!("  vida taskflow continuation bind <task-id> --json");
+    println!("  vida taskflow continuation bind <run-id> --task-id <task-id> --json");
     println!("  vida taskflow run-graph dispatch-init <task-id> --json");
     println!("  vida taskflow packet render <task-id> --json");
     println!("  vida taskflow consume final \"proof path\" --json");

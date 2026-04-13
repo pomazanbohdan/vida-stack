@@ -225,6 +225,9 @@ Companion rule:
 33. [continuation-and-seeded-dispatch-bridge-design.md](continuation-and-seeded-dispatch-bridge-design.md)
    Config families: bounded explicit continuation binding records, seeded run dispatch-init bridges, persisted dispatch-context rows, and packet render/inspect operator surfaces for lawful resume inputs
    Registered path: `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
+34. [lawful-closure-continuation-rebinding-design.md](lawful-closure-continuation-rebinding-design.md)
+   Config families: bounded explicit post-closure continuation rebinding, backlog-task continuation artifacts, completed-run summary admissibility, and fail-closed rejection of stale in-flight bindings
+   Registered path: `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
 
 ### Support
 

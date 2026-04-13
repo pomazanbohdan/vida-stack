@@ -11,7 +11,7 @@ pub(crate) fn run_graph_latest_dispatch_receipt_signal_ambiguous_next_action() -
 }
 
 pub(crate) fn continuation_binding_ambiguous_next_action() -> &'static str {
-    "Do not continue by heuristic. Either bind the bounded unit explicitly from user intent or refresh runtime evidence with `vida taskflow consume continue --json` and recheck `vida status --json` before further implementation."
+    "Do not continue by heuristic. Either bind the bounded unit explicitly from user intent with `vida taskflow continuation bind <run-id> --task-id <task-id> --json` or refresh runtime evidence with `vida taskflow consume continue --json` and recheck `vida status --json` before further implementation."
 }
 
 pub(crate) fn run_graph_latest_dispatch_receipt_summary_inconsistent_next_action() -> &'static str {

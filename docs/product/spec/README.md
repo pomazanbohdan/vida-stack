@@ -36,6 +36,7 @@ Active design docs:
 - `docs/product/spec/fix-release-admission-evidence-detection-artifac-design.md`
 - `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
 - `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
+- `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
 
 Current promoted runtime-control specs:
 
@@ -61,3 +62,4 @@ changelog_ref: README.changelog.jsonl
 - `docs/product/spec/hybrid-host-executor-semantics-host-environment-design.md`
 - `docs/product/spec/continue-post-main-carveout-with-next-design.md`
 - `docs/product/spec/fix-continuation-reconciliation-resumed-executed-design.md`
+- `docs/product/spec/continue-post-main-carveout-ready-view-design.md`

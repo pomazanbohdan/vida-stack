@@ -4,7 +4,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::{
     print_surface_header, print_surface_line,
-    state_store::{RunGraphContinuationBinding, RunGraphStatus, StateStore},
+    state_store::{RunGraphContinuationBinding, RunGraphStatus, StateStore, TaskRecord},
     taskflow_task_bridge::proxy_state_dir,
     RenderMode,
 };
@@ -84,6 +84,49 @@ pub(crate) fn build_run_graph_continuation_binding(
     })
 }
 
+fn build_task_graph_continuation_binding(
+    run_id: &str,
+    request_text: Option<&str>,
+    task: &TaskRecord,
+    why_override: Option<&str>,
+) -> Option<RunGraphContinuationBinding> {
+    let why_this_unit = if let Some(why_override) = why_override {
+        why_override.trim().to_string()
+    } else {
+        format!(
+            "Explicit continuation binding records backlog task `{}` as the next lawful bounded unit for run `{}`.",
+            task.id, run_id
+        )
+    };
+    if why_this_unit.trim().is_empty() {
+        return None;
+    }
+
+    Some(RunGraphContinuationBinding {
+        run_id: run_id.to_string(),
+        task_id: task.id.clone(),
+        status: "bound".to_string(),
+        active_bounded_unit: serde_json::json!({
+            "kind": "task_graph_task",
+            "task_id": task.id.clone(),
+            "run_id": run_id,
+            "task_status": task.status.clone(),
+            "issue_type": task.issue_type.clone(),
+        }),
+        binding_source: "explicit_continuation_bind_task".to_string(),
+        why_this_unit,
+        primary_path: "normal_delivery_path".to_string(),
+        sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+        request_text: request_text
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        recorded_at: time::OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .expect("rfc3339 timestamp should render"),
+    })
+}
+
 pub(crate) async fn sync_run_graph_continuation_binding(
     store: &StateStore,
     status: &RunGraphStatus,
@@ -106,18 +149,25 @@ pub(crate) async fn sync_run_graph_continuation_binding(
     Ok(Some(binding))
 }
 
-fn parse_bind_args(args: &[String]) -> Result<(String, Option<String>, bool), &'static str> {
+fn parse_bind_args(
+    args: &[String],
+) -> Result<(String, Option<String>, Option<String>, bool), &'static str> {
     if !matches!(
         args,
         [head, subcommand, ..] if head == "continuation" && subcommand == "bind"
     ) {
-        return Err("Usage: vida taskflow continuation bind <run-id> [--why <text>] [--json]");
+        return Err(
+            "Usage: vida taskflow continuation bind <run-id> [--task-id <task-id>] [--why <text>] [--json]",
+        );
     }
 
     let Some(run_id) = args.get(2) else {
-        return Err("Usage: vida taskflow continuation bind <run-id> [--why <text>] [--json]");
+        return Err(
+            "Usage: vida taskflow continuation bind <run-id> [--task-id <task-id>] [--why <text>] [--json]",
+        );
     };
     let mut why = None;
+    let mut task_id = None;
     let mut as_json = false;
     let mut index = 3;
     while index < args.len() {
@@ -126,10 +176,19 @@ fn parse_bind_args(args: &[String]) -> Result<(String, Option<String>, bool), &'
                 as_json = true;
                 index += 1;
             }
+            "--task-id" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(
+                        "Usage: vida taskflow continuation bind <run-id> [--task-id <task-id>] [--why <text>] [--json]",
+                    );
+                };
+                task_id = Some(value.clone());
+                index += 2;
+            }
             "--why" => {
                 let Some(value) = args.get(index + 1) else {
                     return Err(
-                        "Usage: vida taskflow continuation bind <run-id> [--why <text>] [--json]",
+                        "Usage: vida taskflow continuation bind <run-id> [--task-id <task-id>] [--why <text>] [--json]",
                     );
                 };
                 why = Some(value.clone());
@@ -137,12 +196,12 @@ fn parse_bind_args(args: &[String]) -> Result<(String, Option<String>, bool), &'
             }
             _ => {
                 return Err(
-                    "Usage: vida taskflow continuation bind <run-id> [--why <text>] [--json]",
+                    "Usage: vida taskflow continuation bind <run-id> [--task-id <task-id>] [--why <text>] [--json]",
                 );
             }
         }
     }
-    Ok((run_id.clone(), why, as_json))
+    Ok((run_id.clone(), task_id, why, as_json))
 }
 
 pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
@@ -166,7 +225,7 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
         _ => {}
     }
 
-    let (run_id, why, as_json) = match parse_bind_args(args) {
+    let (run_id, task_id, why, as_json) = match parse_bind_args(args) {
         Ok(parsed) => parsed,
         Err(error) => {
             eprintln!("{error}");
@@ -195,16 +254,49 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let Some(binding) = build_run_graph_continuation_binding(
-        &status,
-        request_text.as_deref(),
-        "explicit_continuation_bind",
-        why.as_deref(),
-    ) else {
-        eprintln!(
-            "Run `{run_id}` does not expose a bindable active bounded unit; refresh run-graph evidence before binding."
-        );
-        return ExitCode::from(1);
+    let binding = if let Some(task_id) = task_id.as_deref() {
+        let task = match store.show_task(task_id).await {
+            Ok(task) => task,
+            Err(error) => {
+                eprintln!(
+                    "Failed to read task `{task_id}` for explicit continuation binding: {error}"
+                );
+                return ExitCode::from(1);
+            }
+        };
+        if task.status == "closed" {
+            eprintln!(
+                "Task `{task_id}` is closed and cannot be recorded as the next lawful bounded unit."
+            );
+            return ExitCode::from(1);
+        }
+        match build_task_graph_continuation_binding(
+            &run_id,
+            request_text.as_deref(),
+            &task,
+            why.as_deref(),
+        ) {
+            Some(binding) => binding,
+            None => {
+                eprintln!(
+                    "Task `{task_id}` did not yield a valid explicit continuation binding payload."
+                );
+                return ExitCode::from(1);
+            }
+        }
+    } else {
+        let Some(binding) = build_run_graph_continuation_binding(
+            &status,
+            request_text.as_deref(),
+            "explicit_continuation_bind",
+            why.as_deref(),
+        ) else {
+            eprintln!(
+                "Run `{run_id}` does not expose a bindable active bounded unit; refresh run-graph evidence before binding."
+            );
+            return ExitCode::from(1);
+        };
+        binding
     };
     if let Err(error) = store.record_run_graph_continuation_binding(&binding).await {
         eprintln!("Failed to record continuation binding: {error}");
@@ -226,7 +318,66 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
             "posture",
             &binding.sequential_vs_parallel_posture,
         );
+        print_surface_line(RenderMode::Plain, "bound_task_id", &binding.task_id);
         print_surface_line(RenderMode::Plain, "why_this_unit", &binding.why_this_unit);
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_task_graph_continuation_binding, parse_bind_args};
+
+    #[test]
+    fn parse_bind_args_accepts_task_id_flag() {
+        let args = vec![
+            "continuation".to_string(),
+            "bind".to_string(),
+            "run-1".to_string(),
+            "--task-id".to_string(),
+            "task-42".to_string(),
+            "--why".to_string(),
+            "explicit".to_string(),
+            "--json".to_string(),
+        ];
+
+        let (run_id, task_id, why, as_json) = parse_bind_args(&args).expect("args should parse");
+
+        assert_eq!(run_id, "run-1");
+        assert_eq!(task_id.as_deref(), Some("task-42"));
+        assert_eq!(why.as_deref(), Some("explicit"));
+        assert!(as_json);
+    }
+
+    #[test]
+    fn explicit_task_graph_binding_uses_task_payload() {
+        let task = crate::state_store::TaskRecord {
+            id: "task-42".to_string(),
+            title: "Bounded task".to_string(),
+            status: "in_progress".to_string(),
+            priority: 2,
+            issue_type: "task".to_string(),
+            created_at: "1776000000".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "1776000000".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: String::new(),
+            compaction_level: 0,
+            original_size: 0,
+            description: String::new(),
+            notes: None,
+            labels: Vec::new(),
+            dependencies: Vec::new(),
+            display_id: None,
+        };
+
+        let binding = build_task_graph_continuation_binding("run-1", Some("req"), &task, None)
+            .expect("binding should build");
+
+        assert_eq!(binding.task_id, "task-42");
+        assert_eq!(binding.binding_source, "explicit_continuation_bind_task");
+        assert_eq!(binding.active_bounded_unit["kind"], "task_graph_task");
+        assert_eq!(binding.active_bounded_unit["task_status"], "in_progress");
+    }
 }
