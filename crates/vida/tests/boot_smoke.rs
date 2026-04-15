@@ -681,6 +681,12 @@ where
     })
 }
 
+fn configured_seed_default_route_backend(seed_payload: &serde_json::Value) -> &str {
+    seed_payload["payload"]["role_selection"]["execution_plan"]["default_route"]["executor_backend"]
+        .as_str()
+        .expect("seed payload should expose the configured default-route executor backend")
+}
+
 fn command_output_with_retry(command: &mut Command) -> std::process::Output {
     let mut last = None;
     for attempt in 0..60 {
@@ -6511,7 +6517,7 @@ fn taskflow_run_graph_seed_builds_scope_discussion_state_from_configured_agent_s
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["selected_backend"],
-        "qwen_cli"
+        configured_seed_default_route_backend(&seed_parsed)
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["lane_id"],
@@ -6597,7 +6603,7 @@ fn taskflow_run_graph_seed_builds_pbi_discussion_state_from_configured_agent_sys
     );
     assert_eq!(
         seed_parsed["payload"]["status"]["selected_backend"],
-        "qwen_cli"
+        configured_seed_default_route_backend(&seed_parsed)
     );
     assert_eq!(seed_parsed["payload"]["status"]["lane_id"], "pm_lane");
     assert_eq!(

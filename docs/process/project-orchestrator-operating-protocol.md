@@ -81,22 +81,24 @@ Intent-binding clarification:
 Loop binding rule:
 
 1. once steps 3-7 become lawful for the active bounded unit, the orchestrator must continue through them in the same active cycle unless a real blocker appears,
-2. commentary/progress visibility between those steps does not authorize stopping the cycle,
+2. commentary/progress visibility, status output, or intermediate reporting between those steps does not authorize stopping the cycle,
 3. context gathering that already answers packet ownership and next route is not a closure point,
 4. interim status summaries must remain commentary-style while continuation intent is active,
 5. final closure wording/reporting is forbidden while continuation intent is active unless the user explicitly asks to end/finalize the session.
+6. commentary, status surfaces, and intermediate reports are visibility only; they never count as lawful pause boundaries by themselves.
 6. before emitting any final report, the orchestrator must pass a pre-response gate:
    - `active delegated agents == 0`,
    - delegated handoff state is resolved,
    - no ready continuation item exists in TaskFlow unless the user explicitly requests stop/closure.
 7. “immediately bind the next lawful continuation item” applies only inside the same already-bound bounded unit; crossing into a new sibling slice requires a fresh explicit binding or uniquely evidenced continuation receipt.
 7. if any pre-response gate check fails, continue orchestration and reporting through commentary updates only.
-8. after any green proof/build/test result, finished delegated lane, or intermediate report, the orchestrator must immediately bind the next lawful continuation item in the same cycle when one is already evidenced.
+8. after any green proof/build/test result, runtime handoff, finished delegated lane, or intermediate report, the orchestrator must immediately bind the next lawful continuation item in the same cycle when one is already evidenced.
 9. “report now, continue later” is forbidden when the next lawful item is already known from TaskFlow, recovery state, delegated evidence, or the just-finished proof result.
-10. when the user gives an explicit ordered sequence, that sequence is the controlling execution contract; the orchestrator must not reorder it because some adjacent cleanup or broader technical program looks more complete.
-11. scope expansion is forbidden unless the current bounded step cannot be completed without it or the user explicitly authorizes the broader track.
-12. if closure-style wording is emitted by mistake during active continuation intent, the immediate recovery step is to return to commentary mode and bind the already-evidenced next lawful continuation item in the same cycle.
-13. when shell commands record backlog notes or similar free text, prefer file-backed arguments such as `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
+10. an intermediate report may describe the state transition, but it does not complete the cycle and must not delay the already-evidenced next lawful continuation item.
+11. when the user gives an explicit ordered sequence, that sequence is the controlling execution contract; the orchestrator must not reorder it because some adjacent cleanup or broader technical program looks more complete.
+12. scope expansion is forbidden unless the current bounded step cannot be completed without it or the user explicitly authorizes the broader track.
+13. if closure-style wording is emitted by mistake during active continuation intent, the immediate recovery step is to return to commentary mode and bind the already-evidenced next lawful continuation item in the same cycle.
+14. when shell commands record backlog notes or similar free text, prefer file-backed arguments such as `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
 
 The orchestrator must not:
 
@@ -232,6 +234,8 @@ Project narrowing:
 4. `continue development` must not collapse into a symptom-only proof step such as "fix the first failing test" unless the active packet already names that symptom as the current leaf,
 5. a green local proof command closes only its bounded proof target,
 6. if the next lawful item is already known from TaskFlow, verifier, subagent, or continuation evidence, that signal is a trigger to continue routing rather than a closure-style reporting boundary.
+7. commentary, status output, and intermediate reports are visibility only and never count as lawful pause boundaries by themselves.
+8. after any bounded result, green build/test/proof, or delegated handoff/result, the orchestrator must continue the already-evidenced same-cycle next lawful item rather than waiting for another user nudge.
 
 ## Recorded Exception Path Rule
 

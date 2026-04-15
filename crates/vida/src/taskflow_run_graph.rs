@@ -2341,7 +2341,8 @@ mod tests {
             activation_source: "test".to_string(),
             selection_mode: "fixed".to_string(),
             fallback_role: "worker".to_string(),
-            request: "Implement one bounded patch".to_string(),
+            request: "Implement one bounded patch in crates/vida/src/taskflow_run_graph.rs with regression tests."
+                .to_string(),
             selected_role: "worker".to_string(),
             conversational_mode: None,
             single_task_only: false,

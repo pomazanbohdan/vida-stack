@@ -72,10 +72,11 @@ Local write work still requires an explicit exception-path receipt and remains b
 2. review-found compile blocker in a mutated packet still stays under reroute/exception law,
 3. if delegated state is still open, packet closure and root takeover are both blocked,
 4. worker timeout or empty poll window does not authorize generic single-agent fallback or root-session self-development,
-5. when one packet closes, immediately rebuild the parent bounded unit and continue to the next lawful packet unless a real blocker or escalation receipt exists.
-6. if closure-style wording/reporting is emitted by mistake under active continuation intent, the recovery action is to return to commentary mode and bind the already-known next lawful packet immediately.
-7. when recording task progress from shell during orchestration, prefer file-backed text arguments such as `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
-8. packet closure does not by itself authorize binding a different sibling bounded unit; if the next lawful unit is not explicitly evidenced, continuation must fail closed to ambiguity instead of widening by inertia.
+5. commentary, status output, and intermediate reports are visibility only; they never create a lawful pause boundary.
+6. when one packet closes or a runtime handoff returns bounded evidence, immediately rebuild the parent bounded unit and continue to the next lawful packet in the same cycle unless a real blocker or escalation receipt exists.
+7. if closure-style wording/reporting is emitted by mistake under active continuation intent, the recovery action is to return to commentary mode and bind the already-known next lawful packet immediately.
+8. when recording task progress from shell during orchestration, prefer file-backed text arguments such as `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.
+9. packet closure does not by itself authorize binding a different sibling bounded unit; if the next lawful unit is not explicitly evidenced, continuation must fail closed to ambiguity instead of widening by inertia.
 
 ## Routing
 

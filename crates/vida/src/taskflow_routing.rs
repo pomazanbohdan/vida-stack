@@ -33,6 +33,12 @@ fn legacy_dispatch_target_for_runtime_role(runtime_role: &str) -> Option<&'stati
     }
 }
 
+fn canonical_dispatch_target_name(dispatch_target: &str) -> String {
+    legacy_dispatch_target_for_runtime_role(dispatch_target)
+        .unwrap_or(dispatch_target)
+        .to_string()
+}
+
 pub(crate) fn dispatch_contract_lane<'a>(
     execution_plan: &'a serde_json::Value,
     dispatch_target: &str,
@@ -58,7 +64,7 @@ pub(crate) fn dispatch_contract_lane_sequence(
         .into_iter()
         .flatten()
         .filter_map(serde_json::Value::as_str)
-        .map(str::to_string)
+        .map(canonical_dispatch_target_name)
         .collect::<Vec<_>>();
     if !explicit.is_empty() {
         return explicit;
@@ -184,6 +190,7 @@ pub(crate) fn runtime_assignment_source_from_execution_plan(
     }
 }
 
+#[allow(dead_code)]
 fn carrier_backend_from_route(route: &serde_json::Value) -> Option<String> {
     json_string(route.get("preferred_agent_tier"))
         .or_else(|| json_string(route.get("preferred_agent_type")))
@@ -208,6 +215,7 @@ pub(crate) fn fanout_executor_backends_from_route(route: &serde_json::Value) -> 
     json_string_list(route.get("fanout_subagents"))
 }
 
+#[allow(dead_code)]
 fn legacy_route_backend_hint(route: &serde_json::Value) -> Option<String> {
     route_backend_value(route, "carrier_backend_hint")
         .or_else(|| route_backend_value(route, "subagents"))
@@ -222,12 +230,22 @@ pub(crate) fn selected_backend_from_execution_plan_route(
     explicit_executor_backend_from_route(route)
         .or_else(|| route_backend_value(route, "fallback_executor_backend"))
         .or_else(|| route_backend_value(route, "fanout_executor_backends"))
-        .or_else(|| carrier_backend_from_route(route))
         .or_else(|| {
             carrier_backend_from_assignment(runtime_assignment_from_execution_plan(execution_plan))
+                .filter(|backend_id| is_valid_executor_backend_id(backend_id))
         })
-        .or_else(|| legacy_route_backend_hint(route))
         .filter(|value| !value.is_empty())
+}
+
+fn is_valid_executor_backend_id(backend_id: &str) -> bool {
+    if backend_id.trim().is_empty() {
+        return false;
+    }
+    let known_tier_ids = [
+        "junior", "middle", "senior", "principal", "architect",
+        "fast", "balanced", "quality",
+    ];
+    !known_tier_ids.contains(&backend_id.trim())
 }
 
 #[cfg(test)]

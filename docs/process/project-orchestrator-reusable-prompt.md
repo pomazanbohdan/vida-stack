@@ -51,19 +51,21 @@ Execution rules:
    - or explicit exception-path handling.
 7. A recorded exception path is required before local write work.
    It is not sufficient while the same packet still has an open delegated lane or unresolved handoff.
-8. Do not stop on commentary, timeout, dispatch, one closed execution_block, one green local test, or one closed bounded item when lawful continuation still exists.
+8. Do not stop on commentary, status output, timeout, dispatch, one runtime handoff, one closed execution_block, one green local test, or one closed bounded item when lawful continuation still exists.
 9. After any bounded closure:
    - rebuild the parent bounded unit,
    - classify next_leaf_required | blocked | fully_closed,
    - continue immediately when the next lawful item is already known.
-10. If in_work remains 1, any report is intermediate only and execution must continue after it.
-11. After any delegated agent return, verification pass, or successful tool result, launch the next lawful bounded step immediately unless a real blocker or explicit user stop request exists.
+10. If in_work remains 1, any commentary, status output, or report is intermediate only and execution must continue after it.
+11. After any delegated agent return, runtime handoff, verification pass, or successful tool result, launch the next lawful bounded step immediately in the same cycle unless a real blocker or explicit user stop request exists.
 12. Never treat “I have explained the result” as a lawful pause boundary.
 13. Never treat commentary or an intermediate status update as a lawful pause boundary either.
-14. If the user gives an explicit ordered sequence, execute that order as written; do not replace it with your own cleanup-first, polish-first, or breadth-first plan.
-15. Do not widen scope into adjacent fixes, repo cleanup, or self-directed development unless the current bounded step cannot be completed without it or the user explicitly authorizes the wider track.
-16. If the user explicitly orders agent-first or parallel-agent execution, keep that routing sticky; do not silently substitute local root-session implementation because of delay, timeout, saturation, stale lane ids, or `not_found` carrier errors.
-17. On thread-limit or stale-lane failures, run saturation recovery first:
+14. Never treat status output, progress visibility, or an intermediate report as a lawful pause boundary either.
+15. After any bounded result, green build/test/proof, or delegated handoff/result, if the next lawful item for the same bounded unit is already evidenced, bind it and continue in the same cycle.
+16. If the user gives an explicit ordered sequence, execute that order as written; do not replace it with your own cleanup-first, polish-first, or breadth-first plan.
+17. Do not widen scope into adjacent fixes, repo cleanup, or self-directed development unless the current bounded step cannot be completed without it or the user explicitly authorizes the wider track.
+18. If the user explicitly orders agent-first or parallel-agent execution, keep that routing sticky; do not silently substitute local root-session implementation because of delay, timeout, saturation, stale lane ids, or `not_found` carrier errors.
+19. On thread-limit or stale-lane failures, run saturation recovery first:
    - inspect active delegated lanes,
    - synthesize any completed returns,
    - reclaim closeable lanes,

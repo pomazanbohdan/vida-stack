@@ -4,6 +4,7 @@ use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
 
 const DEFAULT_INTERNAL_CODEX_DISPATCH_TIMEOUT_SECONDS: u64 = 240;
+const DEFAULT_DISPATCH_TIMEOUT_KILL_AFTER_GRACE_SECONDS: u64 = 1;
 
 fn configured_external_dispatch_wall_timeout_seconds(
     backend_entry: &serde_yaml::Value,
@@ -32,17 +33,55 @@ fn configured_internal_codex_dispatch_wall_timeout_seconds(
         .unwrap_or(DEFAULT_INTERNAL_CODEX_DISPATCH_TIMEOUT_SECONDS)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandTimeoutWrapper {
+    timeout_seconds: u64,
+    kill_after_grace_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WrappedCommand {
+    command: String,
+    args: Vec<String>,
+    timeout_wrapper: Option<CommandTimeoutWrapper>,
+}
+
+impl WrappedCommand {
+    fn timed_out(&self, exit_code: Option<i32>) -> bool {
+        self.timeout_wrapper
+            .as_ref()
+            .is_some_and(|_| matches!(exit_code, Some(124) | Some(137)))
+    }
+}
+
 fn wrap_command_with_optional_timeout(
     command: String,
     args: Vec<String>,
     timeout_seconds: Option<u64>,
-) -> (String, Vec<String>) {
-    if let Some(timeout_seconds) = timeout_seconds {
-        let mut wrapped_args = vec![format!("{timeout_seconds}s"), command.clone()];
+) -> WrappedCommand {
+    if let Some(timeout_seconds) = timeout_seconds.filter(|seconds| *seconds > 0) {
+        let kill_after_grace_seconds =
+            DEFAULT_DISPATCH_TIMEOUT_KILL_AFTER_GRACE_SECONDS.min(timeout_seconds.max(1));
+        let mut wrapped_args = vec![
+            format!("--kill-after={kill_after_grace_seconds}s"),
+            format!("{timeout_seconds}s"),
+            command.clone(),
+        ];
         wrapped_args.extend(args);
-        ("timeout".to_string(), wrapped_args)
+        WrappedCommand {
+            command: "timeout".to_string(),
+            args: wrapped_args,
+            timeout_wrapper: Some(CommandTimeoutWrapper {
+                timeout_seconds,
+                kill_after_grace_seconds,
+            }),
+        }
     } else {
-        (command, args)
+        WrappedCommand {
+            command,
+            args,
+            timeout_wrapper: None,
+        }
     }
 }
 
@@ -166,11 +205,10 @@ fn selected_internal_codex_carrier(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> Option<serde_json::Value> {
+    let _ = role_selection;
     let preferred_ids = [
         preferred_backend,
         receipt.selected_backend.as_deref(),
-        receipt.activation_agent_type.as_deref(),
-        Some(role_selection.selected_role.as_str()),
     ];
     let carriers =
         crate::host_runtime_materialization::host_runtime_entry_carrier_catalog(selected_cli_entry);
@@ -280,6 +318,12 @@ pub(crate) fn agent_lane_dispatch_result(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     host_runtime: serde_json::Value,
 ) -> serde_json::Value {
+    let effective_selected_backend =
+        crate::runtime_dispatch_state::canonical_selected_backend_for_receipt(
+            role_selection,
+            receipt,
+        )
+        .or_else(|| receipt.selected_backend.clone());
     let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let lane_dispatch = crate::runtime_dispatch_state::runtime_agent_lane_dispatch_for_root(
         &project_root,
@@ -290,7 +334,7 @@ pub(crate) fn agent_lane_dispatch_result(
         crate::runtime_dispatch_state::effective_execution_posture_summary(
             &role_selection.execution_plan,
             &receipt.dispatch_target,
-            receipt.selected_backend.as_deref(),
+            effective_selected_backend.as_deref(),
             receipt.activation_agent_type.as_deref(),
             Some(&host_runtime),
             false,
@@ -302,7 +346,7 @@ pub(crate) fn agent_lane_dispatch_result(
             &receipt.dispatch_target,
         ),
         host_runtime["selected_cli_execution_class"].as_str(),
-        receipt.selected_backend.as_deref(),
+        effective_selected_backend.as_deref(),
         Some("activation_view"),
         Some("missing"),
     );
@@ -511,14 +555,18 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
     let wall_timeout_seconds = Some(configured_internal_codex_dispatch_wall_timeout_seconds(
         selected_cli_entry.as_ref(),
     ));
-    let (effective_command, effective_args) =
+    let wrapped_command =
         wrap_command_with_optional_timeout(command.clone(), args.clone(), wall_timeout_seconds);
-    let activation_command =
-        crate::runtime_dispatch_state::render_command_display(&effective_command, &effective_args);
+    let activation_command = crate::runtime_dispatch_state::render_command_display(
+        &wrapped_command.command,
+        &wrapped_command.args,
+    );
     let runtime_env = configured_internal_codex_runtime_env(project_root, carrier_id)?;
 
-    let mut process = std::process::Command::new(&effective_command);
-    process.args(&effective_args).current_dir(project_root);
+    let mut process = std::process::Command::new(&wrapped_command.command);
+    process
+        .args(&wrapped_command.args)
+        .current_dir(project_root);
     for (key, value) in runtime_env {
         process.env(key, value);
     }
@@ -532,32 +580,37 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
 
     let output = process.output().map_err(|error| {
         format!(
-            "Failed to execute internal Codex carrier `{carrier_id}` via `{effective_command}`: {error}"
+            "Failed to execute internal Codex carrier `{carrier_id}` via `{}`: {error}",
+            wrapped_command.command
         )
     })?;
     let activation_view = match StateStore::open_existing(state_root.to_path_buf()).await {
-        Ok(store) => crate::init_surfaces::render_agent_init_packet_activation_with_store(
-            &store,
-            project_root,
-            dispatch_packet_path,
-            false,
-        )
-        .await
-        .unwrap_or_else(|_| {
-            serde_json::json!({
-                "selection": {
-                    "mode": "dispatch_packet",
-                    "selected_role": receipt
-                        .activation_runtime_role
-                        .as_deref()
-                        .unwrap_or(&role_selection.selected_role),
-                },
-                "activation_semantics": {
-                    "activation_kind": "activation_view",
-                    "view_only": true,
-                },
-            })
-        }),
+        Ok(store) => {
+            let rendered = crate::init_surfaces::render_agent_init_packet_activation_with_store(
+                &store,
+                project_root,
+                dispatch_packet_path,
+                false,
+            )
+            .await
+            .unwrap_or_else(|_| {
+                serde_json::json!({
+                    "selection": {
+                        "mode": "dispatch_packet",
+                        "selected_role": receipt
+                            .activation_runtime_role
+                            .as_deref()
+                            .unwrap_or(&role_selection.selected_role),
+                    },
+                    "activation_semantics": {
+                        "activation_kind": "activation_view",
+                        "view_only": true,
+                    },
+                })
+            });
+            drop(store);
+            rendered
+        }
         Err(_) => serde_json::json!({
             "selection": {
                 "mode": "dispatch_packet",
@@ -619,7 +672,7 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let parsed_output = parse_internal_codex_exec_output(&stdout);
     let exit_code = output.status.code();
-    let timed_out = wall_timeout_seconds.is_some() && exit_code == Some(124);
+    let timed_out = wrapped_command.timed_out(exit_code);
     let activation_only = timed_out
         || (output.status.success()
             && parsed_output.result_text.is_none()
@@ -637,6 +690,18 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
     body.insert("provider_output".to_string(), serde_json::json!(stdout));
     body.insert("provider_error".to_string(), serde_json::json!(stderr));
     body.insert("exit_code".to_string(), serde_json::json!(exit_code));
+    if let Some(timeout_wrapper) = &wrapped_command.timeout_wrapper {
+        body.insert(
+            "timeout_wrapper".to_string(),
+            serde_json::json!({
+                "command": wrapped_command.command,
+                "timeout_seconds": timeout_wrapper.timeout_seconds,
+                "kill_after_grace_seconds": timeout_wrapper.kill_after_grace_seconds,
+                "timed_out": timed_out,
+                "timeout_exit_code": exit_code,
+            }),
+        );
+    }
     body.insert(
         "provider_output_json".to_string(),
         parsed_output.raw_json.clone(),
@@ -661,11 +726,20 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         refresh_execution_truth(body, role_selection, receipt, Some(carrier_id), "recorded");
     } else if activation_only {
         if timed_out {
-            let timeout_seconds = wall_timeout_seconds.unwrap_or_default();
+            let timeout_seconds = wrapped_command
+                .timeout_wrapper
+                .as_ref()
+                .map(|wrapper| wrapper.timeout_seconds)
+                .unwrap_or_default();
+            let kill_after_grace_seconds = wrapped_command
+                .timeout_wrapper
+                .as_ref()
+                .map(|wrapper| wrapper.kill_after_grace_seconds)
+                .unwrap_or_default();
             body.insert(
                 "provider_error".to_string(),
                 serde_json::json!(format!(
-                    "internal Codex carrier timed out after {timeout_seconds}s without receipt-backed completion"
+                    "internal Codex carrier timed out after {timeout_seconds}s and kill-after grace {kill_after_grace_seconds}s without receipt-backed completion"
                 )),
             );
         }
@@ -719,34 +793,49 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     let overlay = crate::runtime_dispatch_state::load_project_overlay_yaml_for_root(project_root)?;
     let (selected_cli_system, _) =
         crate::runtime_dispatch_state::selected_host_cli_system_for_runtime_dispatch(&overlay);
-    let backend_class = crate::runtime_dispatch_state::configured_dispatch_backend_class(
-        &overlay,
-        &selected_cli_system,
-    );
-    let (backend_id, backend_entry) =
-        crate::runtime_dispatch_state::selected_external_backend_for_system(
+    let preferred_external_backend = preferred_backend.and_then(|backend_id| {
+        crate::runtime_dispatch_state::configured_external_backend_entry(&overlay, backend_id)
+            .map(|entry| (backend_id.to_string(), entry.clone()))
+    });
+    let (backend_id, backend_entry, backend_class) = if let Some((backend_id, backend_entry)) =
+        preferred_external_backend
+    {
+        (backend_id, backend_entry, "external_cli".to_string())
+    } else {
+        let backend_class = crate::runtime_dispatch_state::configured_dispatch_backend_class(
             &overlay,
             &selected_cli_system,
-            preferred_backend,
-        )
+        );
+        let (backend_id, backend_entry) =
+            crate::runtime_dispatch_state::selected_external_backend_for_system(
+                &overlay,
+                &selected_cli_system,
+                preferred_backend,
+            )
             .ok_or_else(|| {
                 format!(
                     "Configured host CLI system `{selected_cli_system}` has no enabled external backend dispatch adapter"
                 )
             })?;
+        (backend_id, backend_entry, backend_class)
+    };
     let (command, args) = crate::runtime_dispatch_state::configured_external_activation_parts(
         &backend_entry,
         project_root,
         dispatch_packet_path,
     )?;
     let wall_timeout_seconds = configured_external_dispatch_wall_timeout_seconds(&backend_entry);
-    let (effective_command, effective_args) =
+    let wrapped_command =
         wrap_command_with_optional_timeout(command.clone(), args.clone(), wall_timeout_seconds);
-    let activation_command =
-        crate::runtime_dispatch_state::render_command_display(&effective_command, &effective_args);
+    let activation_command = crate::runtime_dispatch_state::render_command_display(
+        &wrapped_command.command,
+        &wrapped_command.args,
+    );
 
-    let mut process = std::process::Command::new(&effective_command);
-    process.args(&effective_args).current_dir(project_root);
+    let mut process = std::process::Command::new(&wrapped_command.command);
+    process
+        .args(&wrapped_command.args)
+        .current_dir(project_root);
     if let Some(serde_yaml::Value::Mapping(env_map)) =
         yaml_lookup(&backend_entry, &["dispatch", "env"])
     {
@@ -762,38 +851,48 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     if let Some(runtime_role) = receipt.activation_runtime_role.as_deref() {
         process.env("VIDA_RUNTIME_ROLE", runtime_role);
     }
-    if let Some(selected_backend) = receipt.selected_backend.as_deref() {
+    let effective_selected_backend = crate::runtime_dispatch_state::canonical_selected_backend_for_receipt(
+        role_selection,
+        receipt,
+    )
+    .or_else(|| receipt.selected_backend.clone());
+    if let Some(selected_backend) = effective_selected_backend.as_deref() {
         process.env("VIDA_SELECTED_BACKEND", selected_backend);
     }
 
     let output = process.output().map_err(|error| {
         format!(
-            "Failed to execute configured external backend `{backend_id}` via `{effective_command}`: {error}"
+            "Failed to execute configured external backend `{backend_id}` via `{}`: {error}",
+            wrapped_command.command
         )
     })?;
     let activation_view = match StateStore::open_existing(state_root.to_path_buf()).await {
-        Ok(store) => crate::init_surfaces::render_agent_init_packet_activation_with_store(
-            &store,
-            project_root,
-            dispatch_packet_path,
-            false,
-        )
-        .await
-        .unwrap_or_else(|_| {
-            serde_json::json!({
-                "selection": {
-                    "mode": "dispatch_packet",
-                    "selected_role": receipt
-                        .activation_runtime_role
-                        .as_deref()
-                        .unwrap_or(&role_selection.selected_role),
-                },
-                "activation_semantics": {
-                    "activation_kind": "activation_view",
-                    "view_only": true,
-                },
-            })
-        }),
+        Ok(store) => {
+            let rendered = crate::init_surfaces::render_agent_init_packet_activation_with_store(
+                &store,
+                project_root,
+                dispatch_packet_path,
+                false,
+            )
+            .await
+            .unwrap_or_else(|_| {
+                serde_json::json!({
+                    "selection": {
+                        "mode": "dispatch_packet",
+                        "selected_role": receipt
+                            .activation_runtime_role
+                            .as_deref()
+                            .unwrap_or(&role_selection.selected_role),
+                    },
+                    "activation_semantics": {
+                        "activation_kind": "activation_view",
+                        "view_only": true,
+                    },
+                })
+            });
+            drop(store);
+            rendered
+        }
         Err(_) => serde_json::json!({
             "selection": {
                 "mode": "dispatch_packet",
@@ -845,7 +944,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         .unwrap_or(false);
     let success = output.status.success() && !provider_reported_error;
     let exit_code = output.status.code();
-    let timed_out = wall_timeout_seconds.is_some() && exit_code == Some(124);
+    let timed_out = wrapped_command.timed_out(exit_code);
     body.insert(
         "status".to_string(),
         serde_json::json!(if success { "pass" } else { "blocked" }),
@@ -857,6 +956,18 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     body.insert("provider_output".to_string(), serde_json::json!(stdout));
     body.insert("provider_error".to_string(), serde_json::json!(stderr));
     body.insert("exit_code".to_string(), serde_json::json!(exit_code));
+    if let Some(timeout_wrapper) = &wrapped_command.timeout_wrapper {
+        body.insert(
+            "timeout_wrapper".to_string(),
+            serde_json::json!({
+                "command": wrapped_command.command,
+                "timeout_seconds": timeout_wrapper.timeout_seconds,
+                "kill_after_grace_seconds": timeout_wrapper.kill_after_grace_seconds,
+                "timed_out": timed_out,
+                "timeout_exit_code": exit_code,
+            }),
+        );
+    }
     if let Some(parsed_output) = parsed_output {
         body.insert("provider_output_json".to_string(), parsed_output.raw_json);
         body.insert(
@@ -891,11 +1002,20 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         mark_dispatch_result_execution_evidence(body, "external_backend_completion", &backend_id);
         refresh_execution_truth(body, role_selection, receipt, Some(&backend_id), "recorded");
     } else if timed_out {
-        let timeout_seconds = wall_timeout_seconds.unwrap_or_default();
+        let timeout_seconds = wrapped_command
+            .timeout_wrapper
+            .as_ref()
+            .map(|wrapper| wrapper.timeout_seconds)
+            .unwrap_or_default();
+        let kill_after_grace_seconds = wrapped_command
+            .timeout_wrapper
+            .as_ref()
+            .map(|wrapper| wrapper.kill_after_grace_seconds)
+            .unwrap_or_default();
         body.insert(
             "provider_error".to_string(),
             serde_json::json!(format!(
-                "configured external backend timed out after {timeout_seconds}s without receipt-backed completion"
+                "configured external backend timed out after {timeout_seconds}s and kill-after grace {kill_after_grace_seconds}s without receipt-backed completion"
             )),
         );
         body.insert(
@@ -938,6 +1058,7 @@ mod tests {
     use super::{
         agent_lane_dispatch_result, mark_dispatch_result_execution_evidence,
         parse_external_provider_output, parse_internal_codex_exec_output,
+        wrap_command_with_optional_timeout,
     };
     use crate::RuntimeConsumptionLaneSelection;
 
@@ -1106,11 +1227,38 @@ mod tests {
         );
         assert_eq!(
             result["execution_truth"]["effective_selected_backend"],
-            "internal_subagents"
+            "opencode_cli"
+        );
+        assert_eq!(
+            result["execution_truth"]["selected_backend_source"],
+            "route_primary"
         );
         assert_eq!(
             result["execution_truth"]["activation_evidence"]["execution_evidence_status"],
             "missing"
         );
+    }
+
+    #[test]
+    fn wrap_command_with_optional_timeout_adds_kill_after_grace() {
+        let wrapped = wrap_command_with_optional_timeout(
+            "codex".to_string(),
+            vec!["exec".to_string()],
+            Some(5),
+        );
+
+        assert_eq!(wrapped.command, "timeout");
+        assert_eq!(
+            wrapped.args,
+            vec![
+                "--kill-after=1s".to_string(),
+                "5s".to_string(),
+                "codex".to_string(),
+                "exec".to_string()
+            ]
+        );
+        assert!(wrapped.timed_out(Some(124)));
+        assert!(wrapped.timed_out(Some(137)));
+        assert!(!wrapped.timed_out(Some(1)));
     }
 }

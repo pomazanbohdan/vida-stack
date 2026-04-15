@@ -108,6 +108,34 @@ pub(crate) fn runtime_consumption_final_dispatch_receipt_blocker_code(
     )
 }
 
+pub(crate) fn runtime_consumption_final_dispatch_receipt_blocker_code_for_run(
+    store: &StateStore,
+    payload_json: &serde_json::Value,
+    run_id: &str,
+) -> Result<Option<String>, String> {
+    let status = block_on_state_store(store.run_graph_status(run_id))
+        .map_err(|error| format!("Failed to read persisted run-graph state for `{run_id}`: {error}"))?;
+    let Some(payload_run_id) = payload_json["dispatch_receipt"]["run_id"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(Some(
+            super::RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER
+                .to_string(),
+        ));
+    };
+    let dispatch_receipt_summary = block_on_state_store(store.run_graph_dispatch_receipt(run_id))
+        .map_err(|error| {
+            format!("Failed to read persisted run-graph dispatch receipt for `{run_id}`: {error}")
+        })
+        .map(|receipt| receipt.map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt));
+    runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result(
+        status.run_id.as_str(),
+        payload_run_id,
+        dispatch_receipt_summary,
+    )
+}
+
 pub(crate) fn runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result(
     latest_status_run_id: &str,
     payload_run_id: &str,
@@ -345,9 +373,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        latest_admissible_retrieval_trust_signal, RuntimeConsumptionSummary,
+        latest_admissible_retrieval_trust_signal,
+        runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result,
+        RuntimeConsumptionSummary,
         RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
     };
+    use crate::state_store::RunGraphDispatchReceiptSummary;
 
     fn sample_runtime_consumption_summary(
         latest_kind: Option<&str>,
@@ -419,5 +450,54 @@ mod tests {
             None,
         )
         .is_none());
+    }
+
+    #[test]
+    fn runtime_consumption_final_dispatch_receipt_blocker_code_stays_fail_closed_for_latest_run_mismatch() {
+        let summary = RunGraphDispatchReceiptSummary {
+            run_id: "run-latest".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/latest-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/latest-result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
+            recorded_at: "2026-04-15T00:00:00Z".to_string(),
+        };
+
+        let blocker = runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result(
+            "run-latest",
+            "run-explicit",
+            Ok(Some(summary)),
+        )
+        .expect("mismatch evaluation should succeed");
+
+        assert_eq!(
+            blocker.as_deref(),
+            Some(crate::RUNTIME_CONSUMPTION_LATEST_DISPATCH_RECEIPT_SUMMARY_INCONSISTENT_BLOCKER)
+        );
     }
 }

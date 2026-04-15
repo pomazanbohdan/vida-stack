@@ -188,10 +188,12 @@ pub(crate) fn build_runtime_lane_selection_from_bundle(
         return Ok(result);
     }
 
+    let feature_terms = feature_delivery_design_terms(&normalized_request);
+    let implementation_terms = explicit_implementation_request_terms(&normalized_request);
+    let verification_terms = explicit_verification_request_terms(&normalized_request);
     candidates.sort_by(|a, b| b.5.len().cmp(&a.5.len()).then_with(|| a.0.cmp(&b.0)));
     let selected = &candidates[0];
     if selected.5.is_empty() {
-        let feature_terms = feature_delivery_design_terms(&normalized_request);
         if !feature_terms.is_empty() {
             if let Some(scope_candidate) = candidates.iter().find(|row| row.0 == "scope_discussion")
             {
@@ -212,8 +214,23 @@ pub(crate) fn build_runtime_lane_selection_from_bundle(
             }
         }
 
-        let implementation_terms = explicit_implementation_request_terms(&normalized_request);
-        if !implementation_terms.is_empty() && role_exists_in_lane_bundle(bundle, "worker") {
+        if !verification_terms.is_empty() && role_exists_in_lane_bundle(bundle, "verifier") {
+            result.selected_role = "verifier".to_string();
+            result.matched_terms = verification_terms.clone();
+            result.confidence = if verification_terms.len() >= 3 {
+                "high".to_string()
+            } else {
+                "medium".to_string()
+            };
+            result.reason = "auto_explicit_verification_request".to_string();
+            result.execution_plan = build_runtime_execution_plan_from_snapshot(bundle, &result);
+            return Ok(result);
+        }
+
+        if !implementation_terms.is_empty()
+            && verification_terms.is_empty()
+            && role_exists_in_lane_bundle(bundle, "worker")
+        {
             result.selected_role = "worker".to_string();
             result.matched_terms = implementation_terms.clone();
             result.confidence = if implementation_terms.len() >= 3 {
@@ -227,6 +244,44 @@ pub(crate) fn build_runtime_lane_selection_from_bundle(
         }
 
         result.reason = "auto_no_keyword_match".to_string();
+        result.execution_plan = build_runtime_execution_plan_from_snapshot(bundle, &result);
+        return Ok(result);
+    }
+    let selected_mode = selected.0.as_str();
+    let selected_is_weak_pbi_discussion = selected_mode == "pbi_discussion"
+        && selected
+            .5
+            .iter()
+            .all(|term| weak_pbi_discussion_term(term.as_str()));
+    if selected_is_weak_pbi_discussion
+        && !verification_terms.is_empty()
+        && role_exists_in_lane_bundle(bundle, "verifier")
+    {
+        result.selected_role = "verifier".to_string();
+        result.matched_terms = verification_terms.clone();
+        result.confidence = if verification_terms.len() >= 3 {
+            "high".to_string()
+        } else {
+            "medium".to_string()
+        };
+        result.reason = "auto_explicit_verification_request_override".to_string();
+        result.execution_plan = build_runtime_execution_plan_from_snapshot(bundle, &result);
+        return Ok(result);
+    }
+    if selected_is_weak_pbi_discussion
+        && !implementation_terms.is_empty()
+        && verification_terms.is_empty()
+        && feature_terms.is_empty()
+        && role_exists_in_lane_bundle(bundle, "worker")
+    {
+        result.selected_role = "worker".to_string();
+        result.matched_terms = implementation_terms.clone();
+        result.confidence = if implementation_terms.len() >= 3 {
+            "high".to_string()
+        } else {
+            "medium".to_string()
+        };
+        result.reason = "auto_explicit_implementation_request_override".to_string();
         result.execution_plan = build_runtime_execution_plan_from_snapshot(bundle, &result);
         return Ok(result);
     }
@@ -1035,6 +1090,102 @@ mod tests {
     }
 
     #[test]
+    fn weak_pbi_discussion_match_does_not_override_explicit_fix_patch_intent() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        let config =
+            read_yaml_file_checked(&harness.path().join("vida.config.yaml")).expect("config");
+        let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
+            .expect("bundle should compile");
+        let pack_router = pack_router_keywords_json(&config);
+        let selection = build_runtime_lane_selection_from_bundle(
+            &bundle,
+            "state_store",
+            &pack_router,
+            "Take the next backlog task and implement a bounded patch to fix the runtime code path with minimal code change.",
+        )
+        .expect("selection should build");
+
+        assert_eq!(selection.selected_role, "worker");
+        assert!(selection.conversational_mode.is_none());
+        assert_eq!(
+            selection.reason,
+            "auto_explicit_implementation_request_override"
+        );
+        assert!(selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "implement" || term == "bounded patch" || term == "code change"));
+    }
+
+    #[test]
+    fn feature_design_request_keeps_scope_discussion_route_even_with_fix_wording() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        let config =
+            read_yaml_file_checked(&harness.path().join("vida.config.yaml")).expect("config");
+        let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
+            .expect("bundle should compile");
+        let pack_router = pack_router_keywords_json(&config);
+        let selection = build_runtime_lane_selection_from_bundle(
+            &bundle,
+            "state_store",
+            &pack_router,
+            "Research the feature scope, write the specification and acceptance criteria, then clarify what code fix should follow for the backlog task.",
+        )
+        .expect("selection should build");
+
+        assert_eq!(selection.selected_role, "business_analyst");
+        assert_eq!(
+            selection.conversational_mode.as_deref(),
+            Some("scope_discussion")
+        );
+        assert_eq!(selection.reason, "auto_keyword_match");
+        assert!(selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "scope" || term == "spec" || term == "acceptance"));
+    }
+
+    #[test]
     fn codex_dispatch_aliases_are_loaded_from_overlay_not_rust_catalog() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -1169,5 +1320,28 @@ fn explicit_implementation_request_terms(request: &str) -> Vec<String> {
             "refactor".to_string(),
             "patch".to_string(),
         ],
+    )
+}
+
+fn explicit_verification_request_terms(request: &str) -> Vec<String> {
+    crate::contains_keywords(
+        request,
+        &[
+            "verify".to_string(),
+            "verification".to_string(),
+            "verifier".to_string(),
+            "review readiness".to_string(),
+            "release readiness".to_string(),
+            "verify release readiness".to_string(),
+            "release-ready".to_string(),
+            "release ready".to_string(),
+        ],
+    )
+}
+
+fn weak_pbi_discussion_term(term: &str) -> bool {
+    matches!(
+        term,
+        "pbi" | "backlog" | "priority" | "task" | "ticket" | "work pool"
     )
 }

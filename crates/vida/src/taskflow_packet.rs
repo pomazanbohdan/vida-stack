@@ -12,6 +12,31 @@ fn read_packet_body(path: &str) -> Result<serde_json::Value, String> {
         .map_err(|error| format!("Failed to decode persisted packet `{path}`: {error}"))
 }
 
+fn build_taskflow_packet_render_payload(
+    run_id: &str,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    dispatch_packet_path: &str,
+    dispatch_packet_body: serde_json::Value,
+    downstream_packet: Option<serde_json::Value>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "surface": "vida taskflow packet render",
+        "run_id": run_id,
+        "dispatch_receipt": receipt,
+        "dispatch_packet": {
+            "path": dispatch_packet_path,
+            "body": dispatch_packet_body,
+        },
+        "downstream_dispatch_packet": downstream_packet,
+        "lawful_resume_inputs": {
+            "run_id": run_id,
+            "dispatch_packet_path": dispatch_packet_path,
+            "downstream_dispatch_packet_path": receipt.downstream_dispatch_packet_path,
+            "continue_command": format!("vida taskflow consume continue --run-id {} --json", receipt.run_id),
+        }
+    })
+}
+
 pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
     match args {
         [head] if head == "packet" => {
@@ -96,22 +121,13 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
         _ => None,
     };
 
-    let payload = serde_json::json!({
-        "surface": "vida taskflow packet render",
-        "run_id": run_id,
-        "dispatch_receipt": receipt,
-        "dispatch_packet": {
-            "path": dispatch_packet_path,
-            "body": dispatch_packet_body,
-        },
-        "downstream_dispatch_packet": downstream_packet,
-        "lawful_resume_inputs": {
-            "run_id": run_id,
-            "dispatch_packet_path": dispatch_packet_path,
-            "downstream_dispatch_packet_path": receipt.downstream_dispatch_packet_path,
-            "continue_command": format!("vida taskflow consume continue --run-id {} --json", receipt.run_id),
-        }
-    });
+    let payload = build_taskflow_packet_render_payload(
+        &run_id,
+        &receipt,
+        dispatch_packet_path,
+        dispatch_packet_body,
+        downstream_packet,
+    );
 
     if as_json {
         crate::print_json_pretty(&payload);
@@ -138,4 +154,60 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_taskflow_packet_render_payload;
+
+    #[test]
+    fn packet_render_payload_preserves_persisted_selected_backend_truth() {
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-impl".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("opencode_cli".to_string()),
+            recorded_at: "2026-04-14T00:00:00Z".to_string(),
+        };
+
+        let payload = build_taskflow_packet_render_payload(
+            "run-impl",
+            &receipt,
+            "/tmp/dispatch-packet.json",
+            serde_json::json!({
+                "dispatch_target": "implementer",
+                "selected_backend": "opencode_cli"
+            }),
+            None,
+        );
+
+        assert_eq!(payload["dispatch_receipt"]["selected_backend"], "opencode_cli");
+        assert_eq!(
+            payload["dispatch_packet"]["body"]["selected_backend"],
+            "opencode_cli"
+        );
+    }
 }

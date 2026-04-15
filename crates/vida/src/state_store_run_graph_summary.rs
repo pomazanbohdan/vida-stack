@@ -38,6 +38,27 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
     Ok(status)
 }
 
+fn reconcile_run_graph_status_with_closed_task(
+    mut status: RunGraphStatus,
+    task: Option<&TaskRecord>,
+) -> RunGraphStatus {
+    let Some(task) = task else {
+        return status;
+    };
+    if task.status != "closed" || status.status == "completed" {
+        return status;
+    }
+
+    status.next_node = None;
+    status.status = "completed".to_string();
+    status.lifecycle_stage = "implementation_complete".to_string();
+    status.policy_gate = "not_required".to_string();
+    status.handoff_state = "none".to_string();
+    status.resume_target = "none".to_string();
+    status.recovery_ready = false;
+    status
+}
+
 pub(crate) fn requires_memory_governance_enforcement(policy_gate: &str) -> bool {
     let normalized = policy_gate.trim().to_ascii_lowercase();
     normalized.contains("consent")
@@ -883,6 +904,8 @@ impl StateStore {
         };
         let receipt = self.run_graph_dispatch_receipt_stored(run_id).await?;
         let status = reconcile_run_graph_status_with_dispatch_receipt(status, receipt.as_ref())?;
+        let task = self.show_task(&status.task_id).await.ok();
+        let status = reconcile_run_graph_status_with_closed_task(status, task.as_ref());
         status.validate_memory_governance()?;
         Ok(status)
     }
@@ -1347,5 +1370,82 @@ impl StateStore {
         Self::ensure_run_graph_dispatch_receipt_summary_consistency(&receipt)?;
         Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&receipt)?;
         Ok(receipt)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[tokio::test]
+    async fn run_graph_status_reconciles_closed_active_task_into_completed_clear_cycle() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-status-task-close-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "feature-close-dev",
+                title: "Implement bounded fix",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create active task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-close-task",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "feature-close-dev".to_string();
+        status.active_node = "implementer".to_string();
+        status.status = "in_progress".to_string();
+        status.lifecycle_stage = "implementer_active".to_string();
+        status.policy_gate = "targeted_verification".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run-graph status");
+
+        store
+            .close_task("feature-close-dev", "implemented and proven")
+            .await
+            .expect("close active task");
+
+        let reconciled = store
+            .run_graph_status("run-close-task")
+            .await
+            .expect("load reconciled run-graph status");
+        assert_eq!(reconciled.active_node, "implementer");
+        assert_eq!(reconciled.status, "completed");
+        assert_eq!(reconciled.lifecycle_stage, "implementation_complete");
+        assert_eq!(reconciled.next_node, None);
+        assert_eq!(reconciled.policy_gate, "not_required");
+        assert_eq!(reconciled.handoff_state, "none");
+        assert_eq!(reconciled.resume_target, "none");
+        assert!(!reconciled.recovery_ready);
+        assert!(!reconciled.delegation_gate().delegated_cycle_open);
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

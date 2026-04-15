@@ -55,3 +55,9 @@ source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
 updated_at: 2026-04-13T16:12:52.799077875Z
 changelog_ref: README.changelog.jsonl
+- `docs/product/spec/review-implemented-result-against-spec-acceptanc-design.md`
+- `docs/product/spec/fix-bug-consume-continue-completed-closure-design.md`
+- `docs/product/spec/fix-bug-specification-lane-can-mutate-design.md`
+- `docs/product/spec/fix-bug-implementer-delivery-packet-can-design.md`
+- `docs/product/spec/export-canonical-operator-command-map-through-design.md`
+- `docs/product/spec/update-only-agents-sidecar-add-project-design.md`

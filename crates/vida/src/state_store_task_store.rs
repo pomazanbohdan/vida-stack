@@ -2,6 +2,39 @@ use super::*;
 use serde_json::Deserializer;
 
 impl StateStore {
+    async fn refresh_run_graph_continuation_after_task_close(
+        &self,
+        task_id: &str,
+    ) -> Result<(), StateStoreError> {
+        #[derive(serde::Deserialize, SurrealValue)]
+        struct RunIdRow {
+            run_id: String,
+        }
+
+        let mut query = self
+            .db
+            .query(format!(
+                "SELECT run_id FROM execution_plan_state WHERE task_id = '{}';",
+                escape_surql_literal(task_id)
+            ))
+            .await?;
+        let rows: Vec<RunIdRow> = query.take(0)?;
+        for row in rows {
+            let status = self.run_graph_status(&row.run_id).await?;
+            if let Some(binding) = crate::taskflow_continuation::build_run_graph_continuation_binding(
+                &status,
+                None,
+                "task_close_reconcile",
+                Some(
+                    "Closing the active task reconciled the run into a completed state and bound downstream closure as the next lawful bounded unit.",
+                ),
+            ) {
+                self.record_run_graph_continuation_binding(&binding).await?;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn import_tasks_from_jsonl(
         &self,
         source_path: &Path,
@@ -562,6 +595,8 @@ impl StateStore {
         task.closed_at = Some(now);
         task.close_reason = Some(reason.to_string());
         self.persist_task_record(task.clone()).await?;
+        self.refresh_run_graph_continuation_after_task_close(task_id)
+            .await?;
         Ok(task)
     }
 
@@ -630,5 +665,103 @@ impl StateStore {
             .await?;
         let rows: Vec<TaskStorageRow> = query.take(0)?;
         Ok(rows.into_iter().map(TaskRecord::from).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[tokio::test]
+    async fn close_task_refreshes_run_graph_continuation_binding_to_closure() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-task-close-continuation-refresh-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "feature-close-dev",
+                title: "Implement bounded fix",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-close-task",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "feature-close-dev".to_string();
+        status.active_node = "implementer".to_string();
+        status.status = "in_progress".to_string();
+        status.lifecycle_stage = "implementer_active".to_string();
+        status.policy_gate = "targeted_verification".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run-graph status");
+
+        store
+            .record_run_graph_continuation_binding(&RunGraphContinuationBinding {
+                run_id: "run-close-task".to_string(),
+                task_id: "feature-close-dev".to_string(),
+                status: "bound".to_string(),
+                active_bounded_unit: serde_json::json!({
+                    "kind": "run_graph_task",
+                    "task_id": "feature-close-dev",
+                    "run_id": "run-close-task",
+                    "active_node": "implementer"
+                }),
+                binding_source: "test".to_string(),
+                why_this_unit: "pre-close task binding".to_string(),
+                primary_path: "normal_delivery_path".to_string(),
+                sequential_vs_parallel_posture: "sequential_only_open_cycle".to_string(),
+                request_text: None,
+                recorded_at: "2026-04-13T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist initial continuation binding");
+
+        store
+            .close_task("feature-close-dev", "implemented and proven")
+            .await
+            .expect("close task");
+
+        let binding = store
+            .run_graph_continuation_binding("run-close-task")
+            .await
+            .expect("load continuation binding")
+            .expect("continuation binding should exist");
+        assert_eq!(binding.binding_source, "task_close_reconcile");
+        assert_eq!(binding.task_id, "feature-close-dev");
+        assert_eq!(
+            binding.active_bounded_unit["kind"],
+            "downstream_dispatch_target"
+        );
+        assert_eq!(binding.active_bounded_unit["dispatch_target"], "closure");
+        assert_eq!(binding.sequential_vs_parallel_posture, "sequential_only");
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

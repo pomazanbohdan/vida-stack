@@ -1067,9 +1067,9 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
         .get("latest_status")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    let dispatch_target = super::json_string(latest_status.get("next_node"))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| role_selection.selected_role.clone());
+    let dispatch_target =
+        canonical_dispatch_target_from_latest_status(role_selection, &latest_status)
+            .unwrap_or_else(|| role_selection.selected_role.clone());
     let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
         super::downstream_activation_fields(role_selection, &dispatch_target);
     let activation_agent_type = activation_agent_type.or_else(|| {
@@ -1164,6 +1164,22 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
     }
 }
 
+fn canonical_dispatch_target_from_latest_status(
+    role_selection: &super::RuntimeConsumptionLaneSelection,
+    latest_status: &serde_json::Value,
+) -> Option<String> {
+    let next_node = super::json_string(latest_status.get("next_node")).filter(|value| !value.is_empty());
+    next_node.as_deref().and_then(|next_node| {
+        super::dispatch_target_for_runtime_role(&role_selection.execution_plan, next_node)
+            .or_else(|| Some(next_node.to_string()))
+    }).or_else(|| {
+        super::dispatch_target_for_runtime_role(
+            &role_selection.execution_plan,
+            &role_selection.selected_role,
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1225,6 +1241,221 @@ mod tests {
         assert_eq!(receipt.activation_agent_type.as_deref(), Some("middle"));
         assert_eq!(receipt.activation_runtime_role.as_deref(), Some("coach"));
         assert_eq!(receipt.selected_backend.as_deref(), Some("qwen_cli"));
+    }
+
+    #[test]
+    fn runtime_consumption_dispatch_receipt_canonicalizes_specification_target_from_business_analyst_alias(
+    ) {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue specification".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("spec-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["research".to_string(), "specification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "specification_activation": {
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "business_analyst",
+                            "selected_agent_id": "middle"
+                        }
+                    }
+                },
+                "runtime_assignment": {
+                    "selected_tier": "middle",
+                    "activation_agent_type": "middle"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-specification",
+            "latest_status": {
+                "active_node": "planning",
+                "next_node": "business_analyst",
+                "route_task_class": "spec-pack",
+                "task_class": "scope_discussion"
+            }
+        });
+
+        let receipt =
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+
+        assert_eq!(receipt.dispatch_target, "specification");
+        assert_eq!(receipt.activation_agent_type.as_deref(), Some("middle"));
+        assert_eq!(
+            receipt.activation_runtime_role.as_deref(),
+            Some("business_analyst")
+        );
+    }
+
+    #[test]
+    fn runtime_consumption_dispatch_receipt_canonicalizes_real_bootstrap_shape_with_spec_pack_route_task_class(
+    ) {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue specification".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("spec-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["research".to_string(), "specification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "specification": {
+                                "activation_runtime_role": "business_analyst",
+                                "activation_agent_type": "middle"
+                            }
+                        },
+                        "specification_activation": {
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "business_analyst",
+                            "selected_agent_id": "middle"
+                        }
+                    }
+                },
+                "runtime_assignment": {
+                    "selected_tier": "middle",
+                    "activation_agent_type": "middle"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-spec-bootstrap-shape",
+            "latest_status": {
+                "active_node": "planning",
+                "next_node": "business_analyst",
+                "route_task_class": "spec-pack",
+                "task_class": "scope_discussion"
+            }
+        });
+
+        let receipt =
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+
+        assert_eq!(receipt.dispatch_target, "specification");
+        assert_eq!(
+            receipt.activation_runtime_role.as_deref(),
+            Some("business_analyst")
+        );
+    }
+
+    #[test]
+    fn runtime_consumption_dispatch_receipt_canonicalizes_specification_target_without_next_node() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "test".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue specification".to_string(),
+            selected_role: "business_analyst".to_string(),
+            conversational_mode: Some("scope_discussion".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("spec-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["research".to_string(), "specification".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "specification_activation": {
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "business_analyst",
+                            "selected_agent_id": "middle"
+                        }
+                    }
+                },
+                "runtime_assignment": {
+                    "selected_tier": "middle",
+                    "activation_agent_type": "middle"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-specification-no-next-node",
+            "latest_status": {
+                "active_node": "planning",
+                "route_task_class": "spec-pack",
+                "task_class": "scope_discussion"
+            }
+        });
+
+        let receipt =
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+
+        assert_eq!(receipt.dispatch_target, "specification");
+        assert_eq!(
+            receipt.activation_runtime_role.as_deref(),
+            Some("business_analyst")
+        );
+    }
+
+    #[test]
+    fn runtime_consumption_dispatch_receipt_keeps_non_alias_dispatch_target() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue review".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["review".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "coach_activation": {
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "coach",
+                            "selected_agent_id": "middle"
+                        }
+                    }
+                },
+                "runtime_assignment": {
+                    "selected_tier": "middle",
+                    "activation_agent_type": "middle"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-coach-stable",
+            "latest_status": {
+                "next_node": "coach",
+                "route_task_class": "implementation"
+            }
+        });
+
+        let receipt =
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+
+        assert_eq!(receipt.dispatch_target, "coach");
+        assert_eq!(receipt.activation_runtime_role.as_deref(), Some("coach"));
     }
 
     #[test]

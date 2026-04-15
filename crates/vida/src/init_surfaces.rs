@@ -13,8 +13,10 @@ use crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload;
 
 pub(crate) fn resolve_init_bootstrap_source_root() -> PathBuf {
     if let Some(installed_root) = resolve_installed_runtime_root() {
-        if looks_like_init_bootstrap_source_root(&installed_root) {
-            return installed_root;
+        for candidate in installed_runtime_source_root_candidates(&installed_root) {
+            if looks_like_init_bootstrap_source_root(&candidate) {
+                return candidate;
+            }
         }
     }
     super::repo_runtime_root()
@@ -28,6 +30,15 @@ pub(crate) fn resolve_installed_runtime_root() -> Option<PathBuf> {
         .into_iter()
         .next()
         .map(|_| root.to_path_buf())
+}
+
+pub(crate) fn installed_runtime_source_root_candidates(root: &Path) -> Vec<PathBuf> {
+    let current_root = root.join("current");
+    if current_root == root {
+        vec![root.to_path_buf()]
+    } else {
+        vec![current_root, root.to_path_buf()]
+    }
 }
 
 pub(crate) fn taskflow_binary_candidates_for_root(root: &Path) -> Vec<PathBuf> {
@@ -210,6 +221,46 @@ mod tests {
         assert!(
             looks_like_init_bootstrap_source_root(root),
             "bootstrap source should require actual init assets rather than runtime-only markers"
+        );
+    }
+
+    #[test]
+    fn installed_runtime_source_root_candidates_prefer_current_layout() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let install_root = harness.path().join("vida-install");
+        let current_root = install_root.join("current");
+        fs::create_dir_all(current_root.join("bin")).expect("current bin dir should exist");
+        fs::write(current_root.join("bin/taskflow"), "#!/bin/sh\n")
+            .expect("current taskflow marker should exist");
+        fs::create_dir_all(current_root.join("install/assets"))
+            .expect("current install assets dir should exist");
+        fs::create_dir_all(current_root.join(".codex")).expect("current .codex dir should exist");
+        fs::write(
+            current_root.join("install/assets/AGENTS.scaffold.md"),
+            "# scaffold\n",
+        )
+        .expect("current generated AGENTS scaffold should exist");
+        fs::write(current_root.join("AGENTS.sidecar.md"), "# sidecar\n")
+            .expect("current sidecar should exist");
+        fs::write(
+            current_root.join("install/assets/vida.config.yaml.template"),
+            concat!(
+                "project:\n",
+                "  id: demo\n",
+                "host_environment:\n",
+                "  systems:\n",
+                "    codex:\n",
+                "      template_root: .codex\n",
+                "      runtime_root: .codex\n",
+            ),
+        )
+        .expect("current config template should exist");
+
+        let candidates = installed_runtime_source_root_candidates(&install_root);
+        assert_eq!(candidates[0], current_root);
+        assert!(
+            looks_like_init_bootstrap_source_root(&candidates[0]),
+            "installed `current/` layout should be recognized as the bootstrap source root"
         );
     }
 
@@ -734,9 +785,9 @@ Default feature-delivery flow:\n\n\
 15. If delegated execution returns only an activation view without execution evidence and a bounded read-only diagnostic path still exists, continue diagnosis to a code-level blocker or next bounded fix before asking the user to choose a route.\n\
 16. Saturation recovery means: inspect active lanes, synthesize completed returns, reclaim closeable lanes, and retry lawful `vida agent-init` dispatch before any local fallback is considered.\n\
 17. Under continued-development intent, stay in commentary/progress mode until the user explicitly asks to stop; do not emit final closure wording while a next lawful TaskFlow continuation item is already known.\n\
-18. Do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\n\
+18. Do not treat commentary, status output, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\n\
 19. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.\n\
-20. After any bounded result, green test, successful build, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.\n\
+20. After any bounded result, green test, successful build, runtime handoff, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.\n\
 21. Sticky continuation intent is not permission to self-select `ready_head[0]`, the first ready backlog item, or any adjacent slice; fail closed unless the active bounded unit is explicit from user wording or runtime evidence.\n\
 22. If continued-development intent is active but `vida status --json` or `vida orchestrator-init --json` cannot state `active_bounded_unit`, `why_this_unit`, `primary_path`, and sequential-vs-parallel posture, publish an ambiguity report instead of continuing implementation.\n\
 23. When recording progress into the backlog from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n",
@@ -796,7 +847,7 @@ pub(crate) fn render_project_research_readme() -> String {
 
 pub(crate) fn render_project_codex_guide() -> String {
     with_scaffold_footer(
-        "# Codex Agent Configuration Guide\n\nThis project uses framework-materialized `.codex/**` as the local Codex runtime surface.\n\nSource-of-truth rule:\n\n- `vida.config.yaml -> host_environment.codex.agents` owns carrier-tier metadata, rates, runtime-role fit, and task-class fit\n- `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` owns the dispatch-alias registry for executor-local overlays\n- `.codex/**` is the rendered executor surface used by Codex after activation\n- `.codex/config.toml` should expose the carrier tiers materialized from overlay\n\nCarrier rule:\n\n- the primary visible agent model is `junior`, `middle`, `senior`, `architect`\n- runtime role remains explicit activation state such as `worker`, `coach`, `verifier`, or `solution_architect`\n- internal alias ids may exist in registry state, but they must not replace the carrier-tier model at the project surface\n\nWorking rule:\n\n1. The root session stays the orchestrator.\n2. Documentation/specification work should complete the bounded design document first.\n3. Before delegated implementation starts, open the feature epic/spec task in `vida taskflow` and close the spec task only after the design artifact is finalized.\n4. After a bounded packet exists, route research, specification, planning, implementation, review, and verification through the configured tier ladder instead of collapsing into root-session coding.\n5. Let runtime choose the cheapest capable configured carrier tier with a healthy local score from `.vida/state/worker-strategy.json` and pass the lawful runtime role explicitly.\n6. Canonical delegated execution still dispatches through `vida agent-init`; host-tool-specific Codex subagent APIs are optional executor details and not the primary project delegation surface.\n7. Before any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`; an active root-session write guard still means orchestration-only.\n8. If the user explicitly orders agent-first or parallel-agent execution, keep that routing sticky; do not silently substitute root-session coding because a host tool offers local write access.\n9. Finding the patch location, reproducing a runtime defect, hitting a worker timeout, or tripping a thread-limit/`not_found` lane failure is not a lane-change receipt and does not authorize root-session coding.\n10. Recover delegated-lane saturation first: inspect active lanes, synthesize completed returns, reclaim closeable lanes, and retry lawful `vida agent-init` dispatch before any local fallback is considered.\n11. Under continued-development intent, stay in commentary/progress mode and continue routing; do not emit final closure wording while a next lawful continuation item is already known.\n12. Do not treat commentary, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\n13. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.\n14. Sticky continuation intent does not authorize choosing the first ready task or an adjacent slice by plausibility; continue only when the active bounded unit is explicit from user wording or runtime evidence.\n15. If `vida status --json` or `vida orchestrator-init --json` does not expose explicit `active_bounded_unit`, `why_this_unit`, `primary_path`, and sequential-vs-parallel posture, fail closed to an ambiguity report instead of continuing implementation.\n16. When recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n17. Use `.vida/project/agent-extensions/**` for project-local role and skill overlays; do not treat `.codex/**` as the owner of framework or product law.\n",
+        "# Codex Agent Configuration Guide\n\nThis project uses framework-materialized `.codex/**` as the local Codex runtime surface.\n\nSource-of-truth rule:\n\n- `vida.config.yaml -> host_environment.codex.agents` owns carrier-tier metadata, rates, runtime-role fit, and task-class fit\n- `vida.config.yaml -> agent_extensions.registries.dispatch_aliases` owns the dispatch-alias registry for executor-local overlays\n- `.codex/**` is the rendered executor surface used by Codex after activation\n- `.codex/config.toml` should expose the carrier tiers materialized from overlay\n\nCarrier rule:\n\n- the primary visible agent model is `junior`, `middle`, `senior`, `architect`\n- runtime role remains explicit activation state such as `worker`, `coach`, `verifier`, or `solution_architect`\n- internal alias ids may exist in registry state, but they must not replace the carrier-tier model at the project surface\n\nWorking rule:\n\n1. The root session stays the orchestrator.\n2. Documentation/specification work should complete the bounded design document first.\n3. Before delegated implementation starts, open the feature epic/spec task in `vida taskflow` and close the spec task only after the design artifact is finalized.\n4. After a bounded packet exists, route research, specification, planning, implementation, review, and verification through the configured tier ladder instead of collapsing into root-session coding.\n5. Let runtime choose the cheapest capable configured carrier tier with a healthy local score from `.vida/state/worker-strategy.json` and pass the lawful runtime role explicitly.\n6. Canonical delegated execution still dispatches through `vida agent-init`; host-tool-specific Codex subagent APIs are optional executor details and not the primary project delegation surface.\n7. Before any local write decision, re-check `vida status --json`, `vida taskflow recovery latest --json`, and `vida taskflow consume continue --json`; an active root-session write guard still means orchestration-only.\n8. If the user explicitly orders agent-first or parallel-agent execution, keep that routing sticky; do not silently substitute root-session coding because a host tool offers local write access.\n9. Finding the patch location, reproducing a runtime defect, hitting a worker timeout, or tripping a thread-limit/`not_found` lane failure is not a lane-change receipt and does not authorize root-session coding.\n10. Recover delegated-lane saturation first: inspect active lanes, synthesize completed returns, reclaim closeable lanes, and retry lawful `vida agent-init` dispatch before any local fallback is considered.\n11. Under continued-development intent, stay in commentary/progress mode and continue routing; do not emit final closure wording while a next lawful continuation item is already known.\n12. Do not treat commentary, status output, an intermediate status update, or “I have explained the result” as a lawful pause boundary.\n13. If closure-style wording is emitted by mistake, immediately re-enter commentary mode and bind the next lawful continuation item without waiting for more user input.\n14. After any bounded result, successful build, runtime handoff, or delegated handoff, immediately bind the next lawful continuation item in the same cycle instead of pausing at a summary.\n15. Sticky continuation intent does not authorize choosing the first ready task or an adjacent slice by plausibility; continue only when the active bounded unit is explicit from user wording or runtime evidence.\n16. If `vida status --json` or `vida orchestrator-init --json` does not expose explicit `active_bounded_unit`, `why_this_unit`, `primary_path`, and sequential-vs-parallel posture, fail closed to an ambiguity report instead of continuing implementation.\n17. When recording task progress from shell, prefer `vida task update <task-id> --notes-file <path> --json` over inline shell quoting for complex text.\n18. Use `.vida/project/agent-extensions/**` for project-local role and skill overlays; do not treat `.codex/**` as the owner of framework or product law.\n",
         "process/codex-agent-configuration-guide",
         "process_doc",
         "docs/process/codex-agent-configuration-guide.md",

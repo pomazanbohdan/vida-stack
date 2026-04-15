@@ -14,7 +14,8 @@ fn run_graph_active_bounded_unit(status: &RunGraphStatus) -> Option<serde_json::
         let dispatch_target = status
             .next_node
             .as_deref()
-            .filter(|value| !value.trim().is_empty())?;
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("closure");
         return Some(serde_json::json!({
             "kind": "downstream_dispatch_target",
             "task_id": status.task_id,
@@ -326,7 +327,10 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_task_graph_continuation_binding, parse_bind_args};
+    use super::{
+        build_run_graph_continuation_binding, build_task_graph_continuation_binding,
+        parse_bind_args,
+    };
 
     #[test]
     fn parse_bind_args_accepts_task_id_flag() {
@@ -379,5 +383,33 @@ mod tests {
         assert_eq!(binding.binding_source, "explicit_continuation_bind_task");
         assert_eq!(binding.active_bounded_unit["kind"], "task_graph_task");
         assert_eq!(binding.active_bounded_unit["task_status"], "in_progress");
+    }
+
+    #[test]
+    fn completed_status_without_next_node_binds_closure_target() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-1",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "feature-close-dev".to_string();
+        status.active_node = "implementer".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "implementation_complete".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+
+        let binding = build_run_graph_continuation_binding(&status, None, "test", None)
+            .expect("completed status should bind closure");
+
+        assert_eq!(binding.task_id, "feature-close-dev");
+        assert_eq!(
+            binding.active_bounded_unit["kind"],
+            "downstream_dispatch_target"
+        );
+        assert_eq!(binding.active_bounded_unit["dispatch_target"], "closure");
+        assert_eq!(binding.sequential_vs_parallel_posture, "sequential_only");
     }
 }
