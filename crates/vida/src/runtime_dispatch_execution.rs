@@ -3,6 +3,53 @@ use std::path::{Path, PathBuf};
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
 
+/// Check whether a backend is admissible for a given dispatch target (lane).
+/// Returns `true` if the backend's lane_admissibility entry in the execution plan
+/// allows the lane, or if no admissibility matrix is present (fail-open for backward
+/// compatibility during the transition period).
+fn backend_is_admissible_for_dispatch_target(
+    execution_plan: &serde_json::Value,
+    backend_id: &str,
+    dispatch_target: &str,
+) -> bool {
+    let Some(matrix) = execution_plan["backend_admissibility_matrix"].as_array() else {
+        // No admissibility matrix present; fail open to avoid breaking existing flows.
+        return true;
+    };
+    let Some(row) = matrix.iter().find(|entry| {
+        entry["backend_id"].as_str() == Some(backend_id)
+    }) else {
+        // Backend not in matrix; fail open.
+        return true;
+    };
+    let Some(lane_admissibility) = row["lane_admissibility"].as_object() else {
+        return true;
+    };
+    lane_admissibility
+        .get(dispatch_target)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true)
+}
+
+fn default_activation_view(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    role_selection: &RuntimeConsumptionLaneSelection,
+) -> serde_json::Value {
+    serde_json::json!({
+        "selection": {
+            "mode": "dispatch_packet",
+            "selected_role": receipt
+                .activation_runtime_role
+                .as_deref()
+                .unwrap_or(&role_selection.selected_role),
+        },
+        "activation_semantics": {
+            "activation_kind": "activation_view",
+            "view_only": true,
+        },
+    })
+}
+
 const DEFAULT_INTERNAL_CODEX_DISPATCH_TIMEOUT_SECONDS: u64 = 240;
 const DEFAULT_DISPATCH_TIMEOUT_KILL_AFTER_GRACE_SECONDS: u64 = 1;
 
@@ -819,6 +866,63 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
             })?;
         (backend_id, backend_entry, backend_class)
     };
+
+    // Admissibility gate: refuse to dispatch to an external backend that is not
+    // admissible for the target lane (e.g. a read-only backend for an implementer lane).
+    if !backend_is_admissible_for_dispatch_target(
+        &role_selection.execution_plan,
+        &backend_id,
+        &receipt.dispatch_target,
+    ) {
+        let activation_view = match StateStore::open_existing(state_root.to_path_buf()).await {
+            Ok(store) => {
+                let rendered = crate::init_surfaces::render_agent_init_packet_activation_with_store(
+                    &store,
+                    project_root,
+                    dispatch_packet_path,
+                    false,
+                )
+                .await
+                .unwrap_or_else(|_| default_activation_view(receipt, role_selection));
+                drop(store);
+                rendered
+            }
+            Err(_) => default_activation_view(receipt, role_selection),
+        };
+        let mut result = agent_lane_dispatch_result(
+            activation_view,
+            dispatch_packet_path,
+            Some(&backend_id),
+            role_selection,
+            receipt,
+            host_runtime,
+        );
+        let body = result
+            .as_object_mut()
+            .expect("agent lane dispatch result should serialize to an object");
+        body.insert(
+            "blocker_code".to_string(),
+            serde_json::json!("backend_inadmissible_for_lane"),
+        );
+        body.insert(
+            "blocker_reason".to_string(),
+            serde_json::json!(format!(
+                "Backend `{backend_id}` is not admissible for dispatch target `{}` (lane_admissibility denies this lane); an implementation-capable backend is required",
+                receipt.dispatch_target
+            )),
+        );
+        body.insert(
+            "status".to_string(),
+            serde_json::json!("blocked"),
+        );
+        body.insert(
+            "execution_state".to_string(),
+            serde_json::json!("blocked"),
+        );
+        refresh_execution_truth(body, role_selection, receipt, Some(&backend_id), "missing");
+        return Ok(result);
+    }
+
     let (command, args) = crate::runtime_dispatch_state::configured_external_activation_parts(
         &backend_entry,
         project_root,
@@ -1260,5 +1364,109 @@ mod tests {
         assert!(wrapped.timed_out(Some(124)));
         assert!(wrapped.timed_out(Some(137)));
         assert!(!wrapped.timed_out(Some(1)));
+    }
+
+    #[test]
+    fn backend_is_admissible_for_dispatch_target_denies_read_only_backend_for_implementer() {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "qwen_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "analysis": true,
+                        "coach": true,
+                        "execution_preparation": true,
+                        "implementation": false,
+                        "review": true,
+                        "verification": false,
+                        "policy_flags": {
+                            "read_only_backend": true,
+                            "review_only_backend": true,
+                            "scoped_write_backend": false,
+                            "internal_only_backend": false
+                        }
+                    }
+                },
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "analysis": true,
+                        "coach": true,
+                        "execution_preparation": true,
+                        "implementation": true,
+                        "review": true,
+                        "verification": true,
+                        "policy_flags": {
+                            "read_only_backend": false,
+                            "review_only_backend": false,
+                            "scoped_write_backend": false,
+                            "internal_only_backend": true
+                        }
+                    }
+                }
+            ]
+        });
+
+        assert!(
+            !super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "qwen_cli",
+                "implementation"
+            ),
+            "qwen_cli should be inadmissible for implementation lane"
+        );
+        assert!(
+            super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "qwen_cli",
+                "analysis"
+            ),
+            "qwen_cli should be admissible for analysis lane"
+        );
+        assert!(
+            super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "internal_subagents",
+                "implementation"
+            ),
+            "internal_subagents should be admissible for implementation lane"
+        );
+    }
+
+    #[test]
+    fn backend_is_admissible_for_dispatch_target_fails_open_without_matrix() {
+        let execution_plan = serde_json::json!({});
+        assert!(
+            super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "qwen_cli",
+                "implementation"
+            ),
+            "should fail open when no admissibility matrix is present"
+        );
+    }
+
+    #[test]
+    fn backend_is_admissible_for_dispatch_target_fails_open_for_unknown_backend() {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "other_backend",
+                    "lane_admissibility": {
+                        "implementation": false
+                    }
+                }
+            ]
+        });
+        assert!(
+            super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "qwen_cli",
+                "implementation"
+            ),
+            "should fail open when backend is not in the matrix"
+        );
     }
 }

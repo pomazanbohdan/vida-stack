@@ -380,7 +380,7 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             eprintln!("{error}");
                             return ExitCode::from(1);
                         }
-                        let store = match super::StateStore::open_existing(state_root).await {
+                        let store = match super::StateStore::open_existing(state_root.clone()).await {
                             Ok(store) => store,
                             Err(error) => {
                                 eprintln!(
@@ -389,6 +389,28 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 return ExitCode::from(1);
                             }
                         };
+                        // Re-sync continuation binding after downstream dispatch chain advances the run-graph.
+                        // Downstream execution inside execute_downstream_dispatch_chain updates run-graph status
+                        // via execute_and_record_dispatch_receipt, but the root-level continuation binding must
+                        // be refreshed to reflect the final downstream target.
+                        if let Some(run_id) = run_graph_bootstrap
+                            .get("run_id")
+                            .and_then(serde_json::Value::as_str)
+                            .filter(|value| !value.is_empty())
+                        {
+                            if let Ok(status) = store.run_graph_status(run_id).await {
+                                if let Err(error) = crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                                    &store,
+                                    &status,
+                                    "consume_after_downstream_chain",
+                                )
+                                .await
+                                {
+                                    eprintln!("Failed to re-sync continuation binding after downstream dispatch chain: {error}");
+                                    return ExitCode::from(1);
+                                }
+                            }
+                        }
                         let dispatch_receipt_json = serde_json::to_value(&dispatch_receipt)
                             .unwrap_or(serde_json::Value::Null);
                         if let Err(error) = store

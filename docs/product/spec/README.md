@@ -61,3 +61,5 @@ changelog_ref: README.changelog.jsonl
 - `docs/product/spec/fix-bug-implementer-delivery-packet-can-design.md`
 - `docs/product/spec/export-canonical-operator-command-map-through-design.md`
 - `docs/product/spec/update-only-agents-sidecar-add-project-design.md`
+- `docs/product/spec/exactly-one-bounded-small-patch-bug-design.md`
+- `docs/product/spec/exactly-one-bounded-producing-change-bug-design.md`
