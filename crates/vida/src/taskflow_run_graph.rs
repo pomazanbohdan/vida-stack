@@ -1210,6 +1210,15 @@ async fn persist_seed_artifacts(
     payload: &TaskflowRunGraphSeedPayload,
 ) -> Result<(), String> {
     store
+        .clear_run_graph_dispatch_receipt(&payload.status.run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to clear stale dispatch receipt before reseeding run `{}`: {error}",
+                payload.status.run_id
+            )
+        })?;
+    store
         .record_run_graph_status(&payload.status)
         .await
         .map_err(|error| format!("Failed to record seeded run-graph state: {error}"))?;
@@ -2214,15 +2223,15 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::temp_state::TempStateHarness;
+    use crate::build_compiled_agent_extension_bundle_for_root;
+    use crate::launcher_activation_snapshot::config_file_digest;
     use crate::launcher_activation_snapshot::pack_router_keywords_json;
     use crate::runtime_dispatch_state::load_project_overlay_yaml_for_root;
     use crate::state_store::LauncherActivationSnapshot;
+    use crate::temp_state::TempStateHarness;
     use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
     use std::path::Path;
-    use crate::launcher_activation_snapshot::config_file_digest;
-    use crate::build_compiled_agent_extension_bundle_for_root;
 
     #[test]
     fn governance_handoff_uses_lane_targets_for_execution() {
@@ -2241,9 +2250,7 @@ mod tests {
     }
 
     async fn write_activation_snapshot_for_store(store: &StateStore) -> Result<(), String> {
-        let project_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..");
+        let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
         let config = load_project_overlay_yaml_for_root(&project_root)?;
         let bundle = build_compiled_agent_extension_bundle_for_root(&config, &project_root)
             .map_err(|error| format!("build compiled bundle: {error}"))?;
@@ -2495,6 +2502,111 @@ mod tests {
         assert_eq!(receipt.dispatch_target, "implementer");
         assert!(receipt.dispatch_packet_path.is_some());
         assert!(payload["dispatch_packet_path"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn reseed_clears_stale_blocked_dispatch_receipt_before_dispatch_init() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        let stale_status = RunGraphStatus {
+            run_id: "task-reseed-1".to_string(),
+            task_id: "task-reseed-1".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "planning".to_string(),
+            next_node: Some("implementer".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "qwen_cli".to_string(),
+            lane_id: "implementer_lane".to_string(),
+            lifecycle_stage: "implementation_dispatch_ready".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            handoff_state: "awaiting_implementer".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.implementer_lane".to_string(),
+            recovery_ready: false,
+        };
+        store
+            .record_run_graph_status(&stale_status)
+            .await
+            .expect("persist stale run status");
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: "task-reseed-1".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_blocked".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("qwen".to_string()),
+                dispatch_packet_path: Some("/tmp/stale-dispatch-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/stale-dispatch-result.json".to_string()),
+                blocker_code: Some("stale_receipt".to_string()),
+                downstream_dispatch_target: Some("coach".to_string()),
+                downstream_dispatch_command: Some("vida agent-init".to_string()),
+                downstream_dispatch_note: Some("stale downstream note".to_string()),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["pending_implementation_evidence".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("implementer".to_string()),
+                downstream_dispatch_last_target: Some("implementer".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("qwen_cli".to_string()),
+                recorded_at: "2026-04-16T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist stale dispatch receipt");
+
+        let payload = derive_seeded_run_graph_status(
+            &store,
+            "task-reseed-1",
+            "Fix the exact in-process test hang in runtime_dispatch_state by removing nested EnvVarGuard acquisition and preserving harness-local state isolation. Owned paths: crates/vida/src/runtime_dispatch_state.rs.",
+        )
+        .await
+        .expect("seed should be generated");
+        assert_eq!(payload.status.selected_backend, "opencode_cli");
+        assert!(payload.status.recovery_ready);
+
+        persist_seed_artifacts(&store, &payload)
+            .await
+            .expect("persist seeded artifacts should succeed");
+
+        let reconciled = store
+            .run_graph_status("task-reseed-1")
+            .await
+            .expect("reseeded run status should load");
+        assert_eq!(reconciled.status, "ready");
+        assert_eq!(reconciled.selected_backend, "opencode_cli");
+        assert!(reconciled.recovery_ready);
+
+        assert!(
+            store.run_graph_dispatch_receipt("task-reseed-1")
+                .await
+                .expect("dispatch receipt lookup should succeed")
+                .is_none(),
+            "fresh reseed should clear stale pre-dispatch receipt lineage"
+        );
+
+        let dispatch_init = run_graph_dispatch_init(&store, "task-reseed-1")
+            .await
+            .expect("dispatch init should succeed after reseed");
+        assert_eq!(
+            dispatch_init["dispatch_receipt"]["selected_backend"].as_str(),
+            Some("opencode_cli")
+        );
     }
 
     #[tokio::test]

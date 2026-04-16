@@ -17,19 +17,22 @@ use crate::runtime_dispatch_execution::{
     execute_internal_agent_lane_dispatch,
 };
 use crate::runtime_dispatch_packet_text::{runtime_packet_prompt, runtime_tracked_flow_packet};
+#[cfg(test)]
+use crate::runtime_dispatch_packets::explicit_request_scope_paths;
 use crate::runtime_dispatch_packets::{
     request_has_explicit_owned_scope, runtime_coach_review_packet, runtime_delivery_task_packet,
     runtime_escalation_packet, runtime_execution_block_packet, runtime_verifier_proof_packet,
     single_task_move_scope_paths,
 };
-#[cfg(test)]
-use crate::runtime_dispatch_packets::explicit_request_scope_paths;
 use crate::taskflow_routing::{
     fallback_executor_backend_from_route, fanout_executor_backends_from_route,
     runtime_assignment_source_from_execution_plan,
 };
 
 use super::*;
+
+const DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS: u64 = 5;
+const DEFAULT_DISPATCH_HANDOFF_EXECUTION_TIMEOUT_SECONDS: u64 = 10;
 
 pub(crate) fn build_runtime_closure_admission(
     bundle_check: &TaskflowConsumeBundleCheck,
@@ -2947,6 +2950,7 @@ mod tests {
     use crate::{run, Cli};
     use clap::Parser;
     use serde_json::json;
+    use std::cell::Cell;
     use std::env;
     use std::fs;
     use std::path::PathBuf;
@@ -3001,8 +3005,38 @@ mod tests {
         harness.path().join(crate::state_store::default_state_dir())
     }
 
+    struct ProxyStateDirOverrideGuard;
+
+    impl ProxyStateDirOverrideGuard {
+        fn set(path: PathBuf) -> Self {
+            crate::taskflow_task_bridge::set_test_proxy_state_dir_override(Some(path));
+            Self
+        }
+    }
+
+    impl Drop for ProxyStateDirOverrideGuard {
+        fn drop(&mut self) {
+            crate::taskflow_task_bridge::set_test_proxy_state_dir_override(None);
+        }
+    }
+
+    struct HarnessStateRootGuards {
+        _proxy_override: ProxyStateDirOverrideGuard,
+        _env_guard: EnvVarGuard,
+    }
+
+    impl HarnessStateRootGuards {
+        fn set(path: PathBuf) -> Self {
+            let env_value = path.display().to_string();
+            Self {
+                _proxy_override: ProxyStateDirOverrideGuard::set(path),
+                _env_guard: EnvVarGuard::set("VIDA_STATE_DIR", &env_value),
+            }
+        }
+    }
+
     struct EnvVarGuard {
-        _lock: MutexGuard<'static, ()>,
+        lock: Option<MutexGuard<'static, ()>>,
         key: &'static str,
         original: Option<String>,
     }
@@ -3012,13 +3046,21 @@ mod tests {
         LOCK.get_or_init(|| RecoveringMutex(Mutex::new(())))
     }
 
+    thread_local! {
+        static ENV_VAR_GUARD_DEPTH: Cell<usize> = const { Cell::new(0) };
+    }
+
     impl EnvVarGuard {
         fn set(key: &'static str, value: &str) -> Self {
-            let lock = env_var_lock().lock();
+            let lock = ENV_VAR_GUARD_DEPTH.with(|depth| {
+                let current = depth.get();
+                depth.set(current + 1);
+                (current == 0).then(|| env_var_lock().lock())
+            });
             let original = env::var(key).ok();
             std::env::set_var(key, value);
             Self {
-                _lock: lock,
+                lock,
                 key,
                 original,
             }
@@ -3032,6 +3074,11 @@ mod tests {
             } else {
                 std::env::remove_var(self.key);
             }
+            ENV_VAR_GUARD_DEPTH.with(|depth| {
+                let current = depth.get();
+                depth.set(current.saturating_sub(1));
+            });
+            let _ = self.lock.take();
         }
     }
 
@@ -3453,6 +3500,8 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _vida_root_guard = EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -3668,6 +3717,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
         let original_home = env::var("HOME").unwrap_or_default();
         let original_xdg_data_home = env::var("XDG_DATA_HOME").unwrap_or_default();
         let original_xdg_config_home = env::var("XDG_CONFIG_HOME").unwrap_or_default();
@@ -3805,11 +3855,9 @@ mod tests {
             ))
             .expect("internal host should execute with writable runtime env");
 
-        assert!(
-            result["surface"]
-                .as_str()
-                .is_some_and(|value| value.starts_with("internal_cli:"))
-        );
+        assert!(result["surface"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("internal_cli:")));
         assert_eq!(result["execution_state"], "executed");
         let captured = fs::read_to_string(&env_capture).expect("env capture should exist");
         let rows: Vec<_> = captured.lines().collect();
@@ -3846,6 +3894,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -4033,6 +4082,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -4162,11 +4212,9 @@ mod tests {
             ))
             .expect("internal host should ignore external receipt backend and execute on codex");
 
-        assert!(
-            result["surface"]
-                .as_str()
-                .is_some_and(|value| value.starts_with("internal_cli:"))
-        );
+        assert!(result["surface"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("internal_cli:")));
         assert_eq!(result["execution_state"], "executed");
         assert_eq!(result["status"], "pass");
         assert_eq!(result["execution_evidence"]["backend_id"], "junior");
@@ -4180,6 +4228,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -4315,12 +4364,10 @@ mod tests {
             .expect("dispatch receipt should record execution evidence");
 
         assert_eq!(receipt.dispatch_status, "executed");
-        assert!(
-            receipt
-                .dispatch_surface
-                .as_deref()
-                .is_some_and(|value| value.starts_with("internal_cli:"))
-        );
+        assert!(receipt
+            .dispatch_surface
+            .as_deref()
+            .is_some_and(|value| value.starts_with("internal_cli:")));
         assert!(receipt
             .dispatch_command
             .as_deref()
@@ -4337,6 +4384,7 @@ mod tests {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
         let _vida_root_guard = EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -4487,12 +4535,10 @@ mod tests {
             receipt.blocker_code.as_deref(),
             Some("internal_activation_view_only")
         );
-        assert!(
-            receipt
-                .dispatch_surface
-                .as_deref()
-                .is_some_and(|value| value.starts_with("internal_cli:"))
-        );
+        assert!(receipt
+            .dispatch_surface
+            .as_deref()
+            .is_some_and(|value| value.starts_with("internal_cli:")));
         let dispatch_result_path = receipt
             .dispatch_result_path
             .as_deref()
@@ -4528,6 +4574,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -4699,12 +4746,10 @@ mod tests {
         );
         assert_eq!(receipt.dispatch_status, "executed");
         assert_eq!(receipt.lane_status, "lane_running");
-        assert!(
-            receipt
-                .dispatch_surface
-                .as_deref()
-                .is_some_and(|value| value.starts_with("internal_cli:"))
-        );
+        assert!(receipt
+            .dispatch_surface
+            .as_deref()
+            .is_some_and(|value| value.starts_with("internal_cli:")));
         assert!(receipt
             .dispatch_result_path
             .as_deref()
@@ -4717,6 +4762,7 @@ mod tests {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
         let _vida_root_guard = EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -4864,6 +4910,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -4993,6 +5040,8 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
+        let _vida_root_guard = EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -5012,9 +5061,10 @@ mod tests {
         wait_for_state_unlock(harness.path());
         install_external_cli_test_subagents(&harness.path().join("vida.config.yaml"));
 
+        let dispatch_packet_path = harness.path().join("runtime-dispatch-packet.json");
         let dispatch = runtime_agent_lane_dispatch_for_root(
             harness.path(),
-            "/tmp/runtime-dispatch-packet.json",
+            dispatch_packet_path.to_string_lossy().as_ref(),
             Some("hermes_cli"),
         );
 
@@ -5037,6 +5087,8 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _vida_root_guard = EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -5056,9 +5108,10 @@ mod tests {
         wait_for_state_unlock(harness.path());
         install_external_cli_test_subagents(&harness.path().join("vida.config.yaml"));
 
+        let dispatch_packet_path = harness.path().join("runtime-dispatch-packet.json");
         let dispatch = runtime_agent_lane_dispatch_for_root(
             harness.path(),
-            "/tmp/runtime-dispatch-packet.json",
+            dispatch_packet_path.to_string_lossy().as_ref(),
             None,
         );
 
@@ -5084,6 +5137,8 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _vida_root_guard = EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -5103,9 +5158,10 @@ mod tests {
         wait_for_state_unlock(harness.path());
         install_external_cli_test_subagents(&harness.path().join("vida.config.yaml"));
 
+        let dispatch_packet_path = harness.path().join("runtime-dispatch-packet.json");
         let dispatch = runtime_agent_lane_dispatch_for_root(
             harness.path(),
-            "/tmp/runtime-dispatch-packet.json",
+            dispatch_packet_path.to_string_lossy().as_ref(),
             Some("internal_subagents"),
         );
 
@@ -5136,6 +5192,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -5269,6 +5326,8 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _vida_root_guard = EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         wait_for_state_unlock(harness.path());
@@ -5406,6 +5465,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let _cwd = guard_current_dir(harness.path());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
 
         assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
         assert_eq!(
@@ -7092,7 +7152,10 @@ mod tests {
             .await
             .expect("preview should fail closed into a blocked state, not an error");
 
-            assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("implementer"));
+            assert_eq!(
+                receipt.downstream_dispatch_target.as_deref(),
+                Some("implementer")
+            );
             assert!(!receipt.downstream_dispatch_ready);
             assert_eq!(receipt.downstream_dispatch_status, None);
             assert_eq!(
@@ -7368,7 +7431,12 @@ mod tests {
         };
 
         assert_eq!(
-            downstream_selected_backend(&role_selection, "implementer", Some("junior"), Some("junior")),
+            downstream_selected_backend(
+                &role_selection,
+                "implementer",
+                Some("junior"),
+                Some("junior")
+            ),
             Some("junior".to_string())
         );
     }
@@ -7982,8 +8050,17 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
     if receipt.dispatch_kind == "agent_lane" {
         receipt.selected_backend = canonical_selected_backend_for_receipt(role_selection, receipt);
     }
-    let execution_result =
-        execute_runtime_dispatch_handoff(state_root, role_selection, receipt).await?;
+    let execution_result = tokio::time::timeout(
+        std::time::Duration::from_secs(DEFAULT_DISPATCH_HANDOFF_EXECUTION_TIMEOUT_SECONDS),
+        execute_runtime_dispatch_handoff(state_root, role_selection, receipt),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "Timed out executing runtime dispatch handoff after {}s",
+            DEFAULT_DISPATCH_HANDOFF_EXECUTION_TIMEOUT_SECONDS
+        )
+    })??;
     let dispatch_result_path =
         write_runtime_dispatch_result(state_root, receipt, &execution_result)?;
     receipt.dispatch_result_path = Some(dispatch_result_path);
@@ -8016,13 +8093,31 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
     if let Some(dispatch_command) = json_string(execution_result.get("activation_command")) {
         receipt.dispatch_command = Some(dispatch_command);
     }
-    let store = StateStore::open_existing(state_root.to_path_buf())
-        .await
-        .map_err(|error| {
-            format!("Failed to reopen authoritative state store after dispatch execution: {error}")
-        })?;
-    refresh_downstream_dispatch_preview(&store, role_selection, run_graph_bootstrap, receipt)
-        .await?;
+    let store = tokio::time::timeout(
+        std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
+        StateStore::open_existing(state_root.to_path_buf()),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "Timed out reopening authoritative state store after dispatch execution after {}s",
+            DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS
+        )
+    })?
+    .map_err(|error| {
+        format!("Failed to reopen authoritative state store after dispatch execution: {error}")
+    })?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
+        refresh_downstream_dispatch_preview(&store, role_selection, run_graph_bootstrap, receipt),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "Timed out refreshing downstream dispatch preview after dispatch execution after {}s",
+            DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS
+        )
+    })??;
     if receipt.dispatch_status == "executed" {
         if let Some(run_id) = json_string(run_graph_bootstrap.get("run_id")) {
             if let Ok(status) = store.run_graph_status(&run_id).await {

@@ -824,6 +824,17 @@ impl StateStore {
         Ok(())
     }
 
+    pub async fn clear_run_graph_dispatch_receipt(
+        &self,
+        run_id: &str,
+    ) -> Result<(), StateStoreError> {
+        let _: Option<RunGraphDispatchReceiptStored> = self
+            .db
+            .delete(("run_graph_dispatch_receipt", run_id))
+            .await?;
+        Ok(())
+    }
+
     pub async fn record_run_graph_continuation_binding(
         &self,
         binding: &RunGraphContinuationBinding,
