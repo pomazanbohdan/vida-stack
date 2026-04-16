@@ -756,6 +756,55 @@ pub(crate) fn dispatch_activation_evidence_summary(
     })
 }
 
+fn activation_evidence_from_result_body(result: &serde_json::Value) -> serde_json::Value {
+    let activation_kind = result["activation_semantics"]["activation_kind"]
+        .as_str()
+        .or_else(|| {
+            if result["execution_evidence"]["status"].as_str() == Some("recorded")
+                || result["execution_state"].as_str() == Some("executed")
+            {
+                Some("execution_evidence")
+            } else if result["artifact_kind"].as_str() == Some("runtime_dispatch_result")
+                || result["execution_state"].as_str() == Some("blocked")
+            {
+                Some("activation_view")
+            } else {
+                None
+            }
+        })
+        .unwrap_or("activation_view");
+    serde_json::json!({
+        "activation_kind": activation_kind,
+        "evidence_state": if activation_kind == "execution_evidence" {
+            "execution_evidence_recorded"
+        } else {
+            "activation_view_only"
+        },
+        "activation_semantics": result["activation_semantics"].clone(),
+        "execution_evidence": result["execution_evidence"].clone(),
+        "receipt_backed": activation_kind == "execution_evidence",
+    })
+}
+
+fn activation_evidence_from_receipt_result_paths(
+    project_root: &Path,
+    dispatch_receipt: &crate::state_store::RunGraphDispatchReceiptSummary,
+) -> Option<serde_json::Value> {
+    for raw_path in [
+        dispatch_receipt.dispatch_result_path.as_deref(),
+        dispatch_receipt.downstream_dispatch_result_path.as_deref(),
+    ] {
+        let Some(resolved) = resolve_project_artifact_path(project_root, raw_path) else {
+            continue;
+        };
+        let Some(result) = crate::read_json_file_if_present(&resolved) else {
+            continue;
+        };
+        return Some(activation_evidence_from_result_body(&result));
+    }
+    None
+}
+
 pub(crate) fn dispatch_surface_truth_from_packet_path(
     project_root: &Path,
     packet_path: Option<&str>,
@@ -810,26 +859,9 @@ pub(crate) fn dispatch_surface_truth_from_packet_path(
             }
         }
     }
-    let activation_evidence = packet
-        .get("activation_vs_execution_evidence")
-        .cloned()
-        .or_else(|| packet.get("activation_evidence").cloned())
-        .or_else(|| {
-            dispatch_receipt.dispatch_result_path.as_deref().and_then(|path| {
-                let resolved = resolve_project_artifact_path(project_root, Some(path))?;
-                let value = crate::read_json_file_if_present(&resolved)?;
-                Some(serde_json::json!({
-                    "activation_kind": value["activation_semantics"]["activation_kind"],
-                    "evidence_state": if value["execution_evidence"]["status"].as_str() == Some("recorded") {
-                        "execution_evidence_recorded"
-                    } else {
-                        "activation_view_only"
-                    },
-                    "activation_semantics": value["activation_semantics"].clone(),
-                    "execution_evidence": value["execution_evidence"].clone(),
-                }))
-            })
-        });
+    let activation_evidence = activation_evidence_from_receipt_result_paths(project_root, dispatch_receipt)
+        .or_else(|| packet.get("activation_vs_execution_evidence").cloned())
+        .or_else(|| packet.get("activation_evidence").cloned());
     Some(serde_json::json!({
         "mixed_posture": mixed_posture.unwrap_or(serde_json::Value::Null),
         "activation_vs_execution_evidence": activation_evidence.unwrap_or(serde_json::Value::Null),
@@ -2963,7 +2995,7 @@ mod tests {
     use std::process::ExitCode;
     use std::sync::{Mutex, MutexGuard, OnceLock};
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     struct RecoveringMutex(Mutex<()>);
 
@@ -7315,6 +7347,106 @@ mod tests {
             packet["delivery_task_packet"]["handoff_runtime_role"],
             "worker"
         );
+    }
+
+    #[test]
+    fn dispatch_surface_truth_prefers_receipt_result_evidence_over_packet_activation_view() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-surface-truth-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&root).expect("temp root should exist");
+        let packet_path = root.join("dispatch-packet.json");
+        let result_path = root.join("dispatch-result.json");
+
+        fs::write(
+            &packet_path,
+            json!({
+                "activation_vs_execution_evidence": {
+                    "activation_kind": "activation_view",
+                    "evidence_state": "activation_view_only",
+                    "receipt_backed": false
+                },
+                "mixed_posture": {
+                    "effective_posture_kind": "external_only"
+                }
+            })
+            .to_string(),
+        )
+        .expect("packet should write");
+        fs::write(
+            &result_path,
+            json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "activation_semantics": {
+                    "activation_kind": "execution_evidence"
+                },
+                "execution_evidence": {
+                    "status": "recorded",
+                    "backend_id": "internal_subagents"
+                },
+                "execution_state": "executed"
+            })
+            .to_string(),
+        )
+        .expect("result should write");
+
+        let receipt = crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: "run-status-truth".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("implementer".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            activation_evidence: serde_json::Value::Null,
+            recorded_at: "2026-04-16T00:00:00Z".to_string(),
+        };
+
+        let truth = dispatch_surface_truth_from_packet_path(
+            &root,
+            Some(packet_path.to_str().expect("packet path should be utf8")),
+            &receipt,
+        )
+        .expect("surface truth should resolve");
+
+        assert_eq!(
+            truth["activation_vs_execution_evidence"]["evidence_state"],
+            "execution_evidence_recorded"
+        );
+        assert_eq!(
+            truth["activation_vs_execution_evidence"]["receipt_backed"],
+            true
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
