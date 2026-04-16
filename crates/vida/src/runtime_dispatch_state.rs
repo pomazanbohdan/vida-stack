@@ -2,6 +2,7 @@ use std::path::Path;
 
 use time::format_description::well_known::Rfc3339;
 
+use crate::release1_contracts::canonical_lane_status_str;
 use crate::runtime_contract_vocab::{
     RUNTIME_ROLE_BUSINESS_ANALYST, RUNTIME_ROLE_COACH, RUNTIME_ROLE_PM,
     RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER, TASK_CLASS_ARCHITECTURE,
@@ -7790,6 +7791,65 @@ mod tests {
     }
 
     #[test]
+    fn apply_first_handoff_execution_does_not_complete_exception_recorded_closure() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-closure-exception",
+            "closure",
+            "delivery",
+        );
+        status.task_id = "run-closure-exception".to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "closure_active".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = true;
+
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-closure-exception".to_string(),
+            dispatch_target: "closure".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_exception_recorded".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: Some("exc-1".to_string()),
+            dispatch_kind: "closure".to_string(),
+            dispatch_surface: None,
+            dispatch_command: None,
+            dispatch_packet_path: Some("/tmp/closure-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/closure-result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("opencode_cli".to_string()),
+            recorded_at: "2026-04-16T00:00:00Z".to_string(),
+        };
+
+        let advanced = apply_first_handoff_execution_to_run_graph_status(&status, &receipt);
+
+        assert_eq!(advanced.active_node, "closure");
+        assert_eq!(advanced.status, "blocked");
+        assert_eq!(advanced.lifecycle_stage, "closure_active");
+        assert_eq!(advanced.resume_target, "none");
+        assert!(!advanced.recovery_ready);
+    }
+
+    #[test]
     fn write_runtime_dispatch_result_records_completion_evidence_for_executed_agent_lane() {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
         let receipt = RunGraphDispatchReceipt {
@@ -8356,14 +8416,15 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
     let execution_state = json_string(execution_result.get("execution_state"))
         .unwrap_or_else(|| "executed".to_string());
     receipt.dispatch_status = execution_state;
-    let closure_completed = receipt.dispatch_target == "closure"
-        && receipt.dispatch_status == "executed"
-        && json_bool(execution_result.get("closure_ready"), false);
     let mut lane_status = derive_lane_status(
         &receipt.dispatch_status,
         receipt.supersedes_receipt_id.as_deref(),
         receipt.exception_path_receipt_id.as_deref(),
     );
+    let closure_completed = receipt.dispatch_target == "closure"
+        && receipt.dispatch_status == "executed"
+        && json_bool(execution_result.get("closure_ready"), false)
+        && lane_status == LaneStatus::LaneRunning;
     if closure_completed {
         lane_status = LaneStatus::LaneCompleted;
     }
@@ -8569,6 +8630,29 @@ pub(crate) fn apply_first_handoff_execution_to_run_graph_status(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> crate::state_store::RunGraphStatus {
     if receipt.dispatch_target == "closure" {
+        if canonical_lane_status_str(&receipt.lane_status) != Some("lane_completed") {
+            return crate::state_store::RunGraphStatus {
+                run_id: status.run_id.clone(),
+                task_id: status.task_id.clone(),
+                task_class: status.task_class.clone(),
+                active_node: "closure".to_string(),
+                next_node: None,
+                status: "blocked".to_string(),
+                route_task_class: status.route_task_class.clone(),
+                selected_backend: receipt
+                    .selected_backend
+                    .clone()
+                    .unwrap_or_else(|| status.selected_backend.clone()),
+                lane_id: "closure_direct".to_string(),
+                lifecycle_stage: "closure_active".to_string(),
+                policy_gate: status.policy_gate.clone(),
+                handoff_state: "none".to_string(),
+                context_state: "sealed".to_string(),
+                checkpoint_kind: status.checkpoint_kind.clone(),
+                resume_target: "none".to_string(),
+                recovery_ready: false,
+            };
+        }
         return crate::state_store::RunGraphStatus {
             run_id: status.run_id.clone(),
             task_id: status.task_id.clone(),

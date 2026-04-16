@@ -12,13 +12,13 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         return Ok(status);
     };
     let receipt = StateStore::validate_run_graph_dispatch_receipt_contract(receipt.clone())?;
-    if status.status == "completed" {
-        return Ok(status);
-    }
     let blocked_receipt = matches!(receipt.dispatch_status.as_str(), "blocked" | "failed")
         || matches!(
             receipt.lane_status.as_deref(),
-            Some("lane_blocked") | Some("lane_failed")
+            Some("lane_blocked")
+                | Some("lane_failed")
+                | Some("lane_exception_recorded")
+                | Some("lane_exception_takeover")
         )
         || receipt
             .blocker_code
@@ -36,6 +36,9 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         }
         status.status = "blocked".to_string();
         status.recovery_ready = false;
+        return Ok(status);
+    }
+    if status.status == "completed" {
         return Ok(status);
     }
     let closure_candidate = receipt.downstream_dispatch_target.as_deref() == Some("closure")
@@ -71,7 +74,9 @@ fn reconcile_run_graph_status_with_closed_task(
     let Some(task) = task else {
         return status;
     };
-    if task.status != "closed" || status.status == "completed" {
+    if task.status != "closed"
+        || matches!(status.status.as_str(), "completed" | "blocked" | "failed")
+    {
         return status;
     }
 
@@ -1520,7 +1525,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completed_run_status_is_not_downgraded_by_stale_blocked_dispatch_receipt() {
+    async fn completed_run_status_is_downgraded_by_newer_blocked_dispatch_receipt() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
@@ -1532,8 +1537,11 @@ mod tests {
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
 
-        let mut status =
-            crate::taskflow_run_graph::default_run_graph_status("run-closure", "closure", "delivery");
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-closure",
+            "closure",
+            "delivery",
+        );
         status.task_id = "task-closure".to_string();
         status.active_node = "closure".to_string();
         status.next_node = None;
@@ -1588,11 +1596,195 @@ mod tests {
             .run_graph_status("run-closure")
             .await
             .expect("load reconciled completed run-graph status");
-        assert_eq!(reconciled.status, "completed");
+        assert_eq!(reconciled.status, "blocked");
         assert_eq!(reconciled.active_node, "closure");
         assert_eq!(reconciled.lifecycle_stage, "closure_complete");
         assert_eq!(reconciled.next_node, None);
         assert_eq!(reconciled.resume_target, "none");
+        assert_eq!(reconciled.selected_backend, "senior");
+        assert!(!reconciled.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn completed_run_status_is_downgraded_by_exception_recorded_receipt() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-status-completed-over-exception-receipt-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-closure-exception",
+            "closure",
+            "delivery",
+        );
+        status.task_id = "task-closure-exception".to_string();
+        status.active_node = "closure".to_string();
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist completed run-graph status");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-closure-exception".to_string(),
+                dispatch_target: "closure".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_exception_recorded".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: Some("exc-1".to_string()),
+                dispatch_kind: "closure".to_string(),
+                dispatch_surface: None,
+                dispatch_command: None,
+                dispatch_packet_path: Some("/tmp/closure-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/closure-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: None,
+                activation_runtime_role: None,
+                selected_backend: Some("opencode_cli".to_string()),
+                recorded_at: "2026-04-16T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist exception-recorded dispatch receipt");
+
+        let reconciled = store
+            .run_graph_status("run-closure-exception")
+            .await
+            .expect("load reconciled run-graph status");
+        assert_eq!(reconciled.status, "blocked");
+        assert_eq!(reconciled.active_node, "closure");
+        assert_eq!(reconciled.lifecycle_stage, "closure_complete");
+        assert_eq!(reconciled.selected_backend, "opencode_cli");
+        assert!(!reconciled.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn closed_task_does_not_override_exception_recorded_run_status() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-status-closed-task-exception-receipt-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "task-closed-exception",
+                title: "Closed task with exception-backed closure receipt",
+                display_id: None,
+                description: "",
+                issue_type: "bug",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &[],
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-closed-exception",
+            "closure",
+            "delivery",
+        );
+        status.task_id = "task-closed-exception".to_string();
+        status.active_node = "closure".to_string();
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist completed run-graph status");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-closed-exception".to_string(),
+                dispatch_target: "closure".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_exception_recorded".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: Some("exc-closed-1".to_string()),
+                dispatch_kind: "closure".to_string(),
+                dispatch_surface: None,
+                dispatch_command: None,
+                dispatch_packet_path: Some("/tmp/closure-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/closure-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: None,
+                activation_runtime_role: None,
+                selected_backend: Some("opencode_cli".to_string()),
+                recorded_at: "2026-04-16T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist exception-recorded dispatch receipt");
+
+        store
+            .close_task("task-closed-exception", "exception path recorded")
+            .await
+            .expect("close task");
+
+        let reconciled = store
+            .run_graph_status("run-closed-exception")
+            .await
+            .expect("load reconciled run-graph status");
+        assert_eq!(reconciled.status, "blocked");
+        assert_eq!(reconciled.active_node, "closure");
+        assert_eq!(reconciled.lifecycle_stage, "closure_complete");
+        assert_eq!(reconciled.selected_backend, "opencode_cli");
+        assert!(!reconciled.recovery_ready);
 
         let _ = fs::remove_dir_all(&root);
     }
