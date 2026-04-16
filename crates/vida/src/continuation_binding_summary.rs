@@ -2,8 +2,14 @@ fn explicit_binding_is_admissible_for_status(
     binding: &crate::state_store::RunGraphContinuationBinding,
     status: &crate::state_store::RunGraphStatus,
 ) -> bool {
+    let binding_kind = binding
+        .active_bounded_unit
+        .get("kind")
+        .and_then(serde_json::Value::as_str);
+
     if binding.run_id != status.run_id {
-        return false;
+        return binding.binding_source == "explicit_continuation_bind_task"
+            && binding_kind == Some("task_graph_task");
     }
     if status.status != "completed" {
         return true;
@@ -19,19 +25,13 @@ fn explicit_binding_is_admissible_for_status(
 
     if terminal_completed_without_next_unit {
         return matches!(
-            binding
-                .active_bounded_unit
-                .get("kind")
-                .and_then(serde_json::Value::as_str),
+            binding_kind,
             Some("task_graph_task")
         );
     }
 
     matches!(
-        binding
-            .active_bounded_unit
-            .get("kind")
-            .and_then(serde_json::Value::as_str),
+        binding_kind,
         Some("downstream_dispatch_target") | Some("task_graph_task")
     )
 }
@@ -346,6 +346,48 @@ mod tests {
         assert_eq!(
             summary["ambiguity_reason"],
             "completed_without_explicit_next_bounded_unit"
+        );
+    }
+
+    #[test]
+    fn explicit_task_graph_binding_from_different_run_is_preferred_over_latest_status() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-child",
+            "implementation",
+            "implementation",
+        );
+        status.active_node = "implementer".to_string();
+        status.status = "in_progress".to_string();
+        status.lifecycle_stage = "implementer_active".to_string();
+
+        let binding = crate::state_store::RunGraphContinuationBinding {
+            run_id: "run-upstream".to_string(),
+            task_id: "task-upstream".to_string(),
+            status: "bound".to_string(),
+            active_bounded_unit: serde_json::json!({
+                "kind": "task_graph_task",
+                "task_id": "task-upstream",
+                "run_id": "run-upstream",
+                "task_status": "in_progress",
+                "issue_type": "task"
+            }),
+            binding_source: "explicit_continuation_bind_task".to_string(),
+            why_this_unit: "operator explicitly rebound work to the upstream task".to_string(),
+            primary_path: "normal_delivery_path".to_string(),
+            sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+            request_text: Some("continue".to_string()),
+            recorded_at: "2026-04-16T09:00:00Z".to_string(),
+        };
+
+        let summary =
+            build_continuation_binding_summary(Some(&binding), Some(&status), None, None, false);
+
+        assert_eq!(summary["status"], "bound");
+        assert_eq!(summary["binding_source"], "explicit_continuation_bind_task");
+        assert_eq!(summary["active_bounded_unit"]["task_id"], "task-upstream");
+        assert_eq!(
+            summary["sequential_vs_parallel_posture"],
+            "sequential_only_explicit_task_bound"
         );
     }
 }

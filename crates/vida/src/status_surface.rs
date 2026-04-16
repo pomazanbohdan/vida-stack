@@ -197,21 +197,16 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 receipt,
                             )
                         });
-                let explicit_continuation_binding = match latest_run_graph_status.as_ref() {
-                    Some(status) => {
-                        match store.run_graph_continuation_binding(&status.run_id).await {
-                            Ok(binding) => binding,
-                            Err(error) => {
-                                eprintln!(
-                                    "Failed to read explicit continuation binding for `{}`: {error}",
-                                    status.run_id
-                                );
-                                return ExitCode::from(1);
-                            }
+                let explicit_continuation_binding =
+                    match store.latest_explicit_run_graph_continuation_binding().await {
+                        Ok(binding) => binding,
+                        Err(error) => {
+                            eprintln!(
+                                "Failed to read latest explicit continuation binding: {error}"
+                            );
+                            return ExitCode::from(1);
                         }
-                    }
-                    None => None,
-                };
+                    };
                 let continuation_binding =
                     crate::continuation_binding_summary::build_continuation_binding_summary(
                         explicit_continuation_binding.as_ref(),

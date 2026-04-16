@@ -868,6 +868,28 @@ impl StateStore {
         }
     }
 
+    pub async fn latest_explicit_run_graph_continuation_binding(
+        &self,
+    ) -> Result<Option<RunGraphContinuationBinding>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT * FROM run_graph_continuation_binding \
+                 WHERE binding_source = 'explicit_continuation_bind' \
+                    OR binding_source = 'explicit_continuation_bind_task' \
+                 ORDER BY recorded_at DESC, run_id DESC LIMIT 1;",
+            )
+            .await?;
+        let rows: Vec<RunGraphContinuationBinding> = query.take(0)?;
+        match rows.into_iter().next() {
+            Some(binding) => {
+                binding.validate()?;
+                Ok(Some(binding))
+            }
+            None => Ok(None),
+        }
+    }
+
     pub async fn clear_run_graph_continuation_binding(
         &self,
         run_id: &str,
@@ -1571,6 +1593,75 @@ mod tests {
         assert_eq!(reconciled.lifecycle_stage, "closure_complete");
         assert_eq!(reconciled.next_node, None);
         assert_eq!(reconciled.resume_target, "none");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_explicit_run_graph_continuation_binding_ignores_newer_automatic_binding() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-latest-explicit-run-graph-continuation-binding-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .record_run_graph_continuation_binding(&RunGraphContinuationBinding {
+                run_id: "run-upstream".to_string(),
+                task_id: "task-upstream".to_string(),
+                status: "bound".to_string(),
+                active_bounded_unit: serde_json::json!({
+                    "kind": "task_graph_task",
+                    "task_id": "task-upstream",
+                    "run_id": "run-upstream",
+                    "task_status": "in_progress",
+                    "issue_type": "task"
+                }),
+                binding_source: "explicit_continuation_bind_task".to_string(),
+                why_this_unit: "operator rebound work to the upstream task".to_string(),
+                primary_path: "normal_delivery_path".to_string(),
+                sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+                request_text: Some("continue".to_string()),
+                recorded_at: "2026-04-16T09:00:00Z".to_string(),
+            })
+            .await
+            .expect("record explicit binding");
+
+        store
+            .record_run_graph_continuation_binding(&RunGraphContinuationBinding {
+                run_id: "run-child".to_string(),
+                task_id: "run-child".to_string(),
+                status: "bound".to_string(),
+                active_bounded_unit: serde_json::json!({
+                    "kind": "run_graph_task",
+                    "task_id": "run-child",
+                    "run_id": "run-child",
+                    "active_node": "implementer"
+                }),
+                binding_source: "run_graph_advance".to_string(),
+                why_this_unit: "stale automatic child continuation".to_string(),
+                primary_path: "normal_delivery_path".to_string(),
+                sequential_vs_parallel_posture: "sequential_only".to_string(),
+                request_text: Some("continue".to_string()),
+                recorded_at: "2026-04-16T10:00:00Z".to_string(),
+            })
+            .await
+            .expect("record automatic binding");
+
+        let latest = store
+            .latest_explicit_run_graph_continuation_binding()
+            .await
+            .expect("read latest explicit binding")
+            .expect("explicit binding should exist");
+
+        assert_eq!(latest.run_id, "run-upstream");
+        assert_eq!(latest.binding_source, "explicit_continuation_bind_task");
+        assert_eq!(latest.active_bounded_unit["kind"], "task_graph_task");
 
         let _ = fs::remove_dir_all(&root);
     }

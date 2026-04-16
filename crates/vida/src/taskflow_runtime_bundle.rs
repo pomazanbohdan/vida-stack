@@ -104,13 +104,10 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
         .latest_run_graph_recovery_summary()
         .await
         .map_err(|error| format!("Failed to read latest run graph recovery summary: {error}"))?;
-    let explicit_continuation_binding = match latest_run_graph_status.as_ref() {
-        Some(status) => store
-            .run_graph_continuation_binding(&status.run_id)
-            .await
-            .map_err(|error| format!("Failed to read explicit continuation binding: {error}"))?,
-        None => None,
-    };
+    let explicit_continuation_binding = store
+        .latest_explicit_run_graph_continuation_binding()
+        .await
+        .map_err(|error| format!("Failed to read latest explicit continuation binding: {error}"))?;
     let latest_run_graph_dispatch_receipt =
         match store.latest_run_graph_dispatch_receipt_summary().await {
             Ok(summary) => summary,

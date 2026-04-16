@@ -1663,7 +1663,7 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
         return Err("No persisted run-graph dispatch receipt is available".to_string());
     };
     let explicit_continuation_binding = store
-        .run_graph_continuation_binding(&status.run_id)
+        .latest_explicit_run_graph_continuation_binding()
         .await
         .map_err(|error| format!("Failed to read explicit continuation binding: {error}"))?;
     let latest_run_graph_recovery = store
@@ -1696,6 +1696,18 @@ async fn resolve_default_resume_run_id(store: &super::StateStore) -> Result<Stri
         return Err(format!(
             "Latest continuation binding for run `{}` is ambiguous. Either bind the next bounded unit explicitly with `vida taskflow continuation bind {} --task-id <task-id> --json` or pass `--run-id {}` to refresh that specific run.",
             status.run_id, status.run_id, status.run_id
+        ));
+    }
+    if continuation_binding["active_bounded_unit"]["run_id"]
+        .as_str()
+        .is_some_and(|binding_run_id| binding_run_id != status.run_id)
+    {
+        let binding_run_id = continuation_binding["active_bounded_unit"]["run_id"]
+            .as_str()
+            .unwrap_or("unknown");
+        return Err(format!(
+            "Latest explicit continuation binding points to run `{binding_run_id}` while the latest run-graph status is `{}`. Default `vida taskflow consume continue --json` must not silently reselect the stale latest run; pass `--run-id {binding_run_id}` or refresh/bind the intended bounded unit explicitly.",
+            status.run_id
         ));
     }
     if status.status == "completed"
@@ -5997,6 +6009,87 @@ agent_system:
         );
         assert!(
             error.contains("still points to task `task-old`"),
+            "unexpected error: {error}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn resolve_runtime_consumption_resume_inputs_without_run_id_fails_closed_on_cross_run_explicit_task_binding(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-cross-run-explicit-task-binding-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut upstream_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-upstream",
+            "implementation",
+            "implementation",
+        );
+        upstream_status.task_id = "task-upstream".to_string();
+        upstream_status.active_node = "implementation".to_string();
+        upstream_status.status = "in_progress".to_string();
+        upstream_status.lifecycle_stage = "implementation_active".to_string();
+        store
+            .record_run_graph_status(&upstream_status)
+            .await
+            .expect("persist upstream status");
+
+        let mut child_status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-child",
+            "implementation",
+            "implementation",
+        );
+        child_status.task_id = "run-child".to_string();
+        child_status.active_node = "implementation".to_string();
+        child_status.status = "pending".to_string();
+        child_status.lifecycle_stage = "initialized".to_string();
+        store
+            .record_run_graph_status(&child_status)
+            .await
+            .expect("persist child status");
+
+        store
+            .record_run_graph_continuation_binding(&crate::state_store::RunGraphContinuationBinding {
+                run_id: "run-upstream".to_string(),
+                task_id: "task-upstream".to_string(),
+                status: "bound".to_string(),
+                active_bounded_unit: serde_json::json!({
+                    "kind": "task_graph_task",
+                    "task_id": "task-upstream",
+                    "run_id": "run-upstream",
+                    "task_status": "in_progress",
+                    "issue_type": "task"
+                }),
+                binding_source: "explicit_continuation_bind_task".to_string(),
+                why_this_unit: "operator rebound work to the upstream task".to_string(),
+                primary_path: "normal_delivery_path".to_string(),
+                sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+                request_text: Some("continue".to_string()),
+                recorded_at: "2026-04-16T09:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist explicit continuation binding");
+
+        let error = match resolve_runtime_consumption_resume_inputs(&store, None, None, None).await
+        {
+            Ok(_) => panic!("cross-run explicit task binding should fail closed"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("must not silently reselect the stale latest run"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.contains("run-upstream"),
             "unexpected error: {error}"
         );
 
