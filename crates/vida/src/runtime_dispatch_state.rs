@@ -259,7 +259,7 @@ fn dispatch_target_requires_strict_backend_admissibility(dispatch_target: &str) 
     )
 }
 
-fn backend_is_admissible_for_dispatch_target(
+pub(crate) fn backend_is_admissible_for_dispatch_target(
     execution_plan: &serde_json::Value,
     backend_id: &str,
     dispatch_target: &str,
@@ -341,7 +341,9 @@ fn admissible_backend_candidates_for_dispatch_target(
     }
     candidates.extend(fanout_executor_backends_from_route(route));
     if let Some(inherited) = inherited_selected_backend
-        .filter(|candidate| route_is_backend_agnostic || route_declares_backend(execution_plan, route, candidate))
+        .filter(|candidate| {
+            route_is_backend_agnostic || route_declares_backend(execution_plan, route, candidate)
+        })
         .map(str::to_string)
     {
         candidates.push(inherited);
@@ -452,7 +454,8 @@ pub(crate) fn effective_execution_posture_summary(
     receipt_backed_execution_evidence: bool,
 ) -> serde_json::Value {
     let route = execution_plan_route_for_dispatch_target(execution_plan, dispatch_target);
-    let route_primary_backend = route.and_then(|route| route_selected_backend(execution_plan, route));
+    let route_primary_backend =
+        route.and_then(|route| route_selected_backend(execution_plan, route));
     let fallback_backend = route.and_then(fallback_executor_backend_from_route);
     let fanout_backends = route
         .map(fanout_executor_backends_from_route)
@@ -618,7 +621,8 @@ pub(crate) fn dispatch_execution_route_summary(
 ) -> serde_json::Value {
     let route =
         execution_plan_route_for_dispatch_target(&role_selection.execution_plan, dispatch_target);
-    let route_primary_backend = route.and_then(|route| route_selected_backend(&role_selection.execution_plan, route));
+    let route_primary_backend =
+        route.and_then(|route| route_selected_backend(&role_selection.execution_plan, route));
     let route_fallback_backend = route.and_then(fallback_executor_backend_from_route);
     let route_fanout_backends = route
         .map(fanout_executor_backends_from_route)
@@ -951,9 +955,10 @@ pub(crate) fn dispatch_surface_truth_from_packet_path(
             }
         }
     }
-    let activation_evidence = activation_evidence_from_receipt_result_paths(project_root, dispatch_receipt)
-        .or_else(|| packet.get("activation_vs_execution_evidence").cloned())
-        .or_else(|| packet.get("activation_evidence").cloned());
+    let activation_evidence =
+        activation_evidence_from_receipt_result_paths(project_root, dispatch_receipt)
+            .or_else(|| packet.get("activation_vs_execution_evidence").cloned())
+            .or_else(|| packet.get("activation_evidence").cloned());
     Some(serde_json::json!({
         "mixed_posture": mixed_posture.unwrap_or(serde_json::Value::Null),
         "activation_vs_execution_evidence": activation_evidence.unwrap_or(serde_json::Value::Null),
@@ -3030,7 +3035,9 @@ fn runtime_dispatch_command_for_packet_path(
         "agent_lane" => receipt
             .dispatch_command
             .clone()
-            .or_else(|| runtime_dispatch_command_for_target(role_selection, &receipt.dispatch_target))
+            .or_else(|| {
+                runtime_dispatch_command_for_target(role_selection, &receipt.dispatch_target)
+            })
             .or_else(|| {
                 Some(
                     runtime_agent_lane_dispatch_for_root(
@@ -8633,10 +8640,7 @@ mod tests {
         assert_eq!(packet["dispatch_surface"], "vida agent-init");
         assert_eq!(packet["dispatch_command"], "vida agent-init");
         assert_eq!(packet["selected_backend"], "qwen_cli");
-        assert_eq!(
-            packet["route_policy"]["route_primary_backend"],
-            "qwen_cli"
-        );
+        assert_eq!(packet["route_policy"]["route_primary_backend"], "qwen_cli");
     }
 }
 

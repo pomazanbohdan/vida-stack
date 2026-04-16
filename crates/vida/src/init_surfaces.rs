@@ -1562,33 +1562,13 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-                let selected_role = packet
-                    .get("activation_runtime_role")
-                    .and_then(serde_json::Value::as_str)
-                    .or_else(|| {
-                        packet
-                            .get("role_selection")
-                            .and_then(|value| value.get("selected_role"))
-                            .and_then(serde_json::Value::as_str)
-                    })
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or("unknown");
-                if selected_role == "orchestrator" || selected_role == "unknown" {
-                    eprintln!(
-                        "Dispatch packet activation requires a non-orchestrator runtime role."
-                    );
-                    return ExitCode::from(2);
+                match agent_init_packet_selection(packet_path, packet, false) {
+                    Ok(selection) => selection,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(2);
+                    }
                 }
-                serde_json::json!({
-                    "mode": "dispatch_packet",
-                    "selected_role": selected_role,
-                    "request_text": packet.get("request_text").and_then(serde_json::Value::as_str).unwrap_or_default(),
-                    "dispatch_target": packet.get("dispatch_target").and_then(serde_json::Value::as_str).unwrap_or_default(),
-                    "dispatch_packet_path": packet_path,
-                    "packet_kind": packet.get("packet_kind").cloned().unwrap_or(serde_json::Value::Null),
-                    "packet_template_kind": packet.get("packet_template_kind").cloned().unwrap_or(serde_json::Value::Null),
-                    "packet": packet,
-                })
             } else if let Some(packet_path) = args.downstream_packet.as_deref() {
                 if args.role.is_some() || args.request_text.is_some() {
                     eprintln!(
@@ -1604,33 +1584,13 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 };
-                let selected_role = packet
-                    .get("activation_runtime_role")
-                    .and_then(serde_json::Value::as_str)
-                    .or_else(|| {
-                        packet
-                            .get("role_selection")
-                            .and_then(|value| value.get("selected_role"))
-                            .and_then(serde_json::Value::as_str)
-                    })
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or("unknown");
-                if selected_role == "orchestrator" || selected_role == "unknown" {
-                    eprintln!(
-                        "Downstream packet activation requires a non-orchestrator runtime role."
-                    );
-                    return ExitCode::from(2);
+                match agent_init_packet_selection(packet_path, packet, true) {
+                    Ok(selection) => selection,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(2);
+                    }
                 }
-                serde_json::json!({
-                    "mode": "downstream_packet",
-                    "selected_role": selected_role,
-                    "request_text": packet.get("request_text").and_then(serde_json::Value::as_str).unwrap_or_default(),
-                    "dispatch_target": packet.get("downstream_dispatch_target").and_then(serde_json::Value::as_str).unwrap_or_default(),
-                    "downstream_packet_path": packet_path,
-                    "packet_kind": packet.get("packet_kind").cloned().unwrap_or(serde_json::Value::Null),
-                    "packet_template_kind": packet.get("packet_template_kind").cloned().unwrap_or(serde_json::Value::Null),
-                    "packet": packet,
-                })
             } else if let Some(role) = args.role.clone() {
                 let compiled_bundle = &bundle.activation_bundle;
                 if !role_exists_in_lane_bundle(compiled_bundle, &role) || role == "orchestrator" {
@@ -1684,6 +1644,18 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     &project_activation_view,
                 );
             let activation_semantics = agent_init_activation_semantics(&selection);
+            let surface_payload = build_agent_init_surface_payload(
+                init_view.clone(),
+                selection.clone(),
+                activation_semantics.clone(),
+                serde_json::json!({
+                    "bundle_id": bundle.metadata["bundle_id"],
+                    "activation_source": bundle.activation_source,
+                    "vida_root": bundle.vida_root,
+                    "state_dir": store.root().display().to_string(),
+                    "launcher_runtime_paths": bundle.launcher_runtime_paths,
+                }),
+            );
 
             if args.execute_dispatch {
                 if packet_arg_count == 0 {
@@ -1780,20 +1752,8 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
             if args.json {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "surface": "vida agent-init",
-                        "init": init_view,
-                        "selection": selection,
-                        "activation_semantics": activation_semantics,
-                        "runtime_bundle_summary": {
-                            "bundle_id": bundle.metadata["bundle_id"],
-                            "activation_source": bundle.activation_source,
-                            "vida_root": bundle.vida_root,
-                            "state_dir": store.root().display().to_string(),
-                            "launcher_runtime_paths": bundle.launcher_runtime_paths,
-                        },
-                    }))
-                    .expect("agent-init json should render")
+                    serde_json::to_string_pretty(&surface_payload)
+                        .expect("agent-init json should render")
                 );
             } else {
                 print_surface_header(RenderMode::Plain, "vida agent-init");
@@ -1815,6 +1775,28 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 }
                 if let Some(path) = selection["downstream_packet_path"].as_str() {
                     print_surface_line(RenderMode::Plain, "downstream packet", path);
+                }
+                if let Some(backend) = surface_payload["backend_truth"]["selected_backend"].as_str()
+                {
+                    print_surface_line(RenderMode::Plain, "selected backend", backend);
+                }
+                if let Some(source) =
+                    surface_payload["backend_truth"]["selected_backend_source"].as_str()
+                {
+                    print_surface_line(RenderMode::Plain, "backend source", source);
+                }
+                if let Some(backend) =
+                    surface_payload["backend_truth"]["route_fallback_backend"].as_str()
+                {
+                    print_surface_line(RenderMode::Plain, "fallback backend", backend);
+                }
+                if let Some(posture) =
+                    surface_payload["backend_truth"]["effective_execution_posture"].as_str()
+                {
+                    print_surface_line(RenderMode::Plain, "execution posture", posture);
+                }
+                if let Some(status) = surface_payload["backend_truth"]["override_status"].as_str() {
+                    print_surface_line(RenderMode::Plain, "lawful override", status);
                 }
                 print_surface_line(
                     RenderMode::Plain,
@@ -1898,24 +1880,11 @@ fn agent_init_activation_semantics(selection: &serde_json::Value) -> serde_json:
     })
 }
 
-pub(crate) async fn render_agent_init_packet_activation_with_store(
-    store: &super::StateStore,
-    project_root: &Path,
+fn agent_init_packet_selection(
     packet_path: &str,
+    packet: serde_json::Value,
     downstream: bool,
 ) -> Result<serde_json::Value, String> {
-    let instruction_source_root =
-        PathBuf::from(super::state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT);
-    let framework_memory_source_root =
-        PathBuf::from(super::state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
-    super::ensure_launcher_bootstrap(
-        store,
-        &instruction_source_root,
-        &framework_memory_source_root,
-    )
-    .await?;
-    let bundle = build_taskflow_consume_bundle_payload(store).await?;
-    let packet = super::taskflow_consume_resume::read_dispatch_packet(packet_path)?;
     let selected_role = packet
         .get("activation_runtime_role")
         .and_then(serde_json::Value::as_str)
@@ -1934,38 +1903,40 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
         );
     }
 
-    let selection = if downstream {
-        serde_json::json!({
-            "mode": "downstream_packet",
-            "selected_role": selected_role,
-            "request_text": packet.get("request_text").and_then(serde_json::Value::as_str).unwrap_or_default(),
-            "dispatch_target": packet.get("downstream_dispatch_target").and_then(serde_json::Value::as_str).unwrap_or_default(),
-            "downstream_packet_path": packet_path,
-            "packet_kind": packet.get("packet_kind").cloned().unwrap_or(serde_json::Value::Null),
-            "packet_template_kind": packet.get("packet_template_kind").cloned().unwrap_or(serde_json::Value::Null),
-            "packet": packet,
-        })
+    let dispatch_target_key = if downstream {
+        "downstream_dispatch_target"
     } else {
-        serde_json::json!({
-            "mode": "dispatch_packet",
-            "selected_role": selected_role,
-            "request_text": packet.get("request_text").and_then(serde_json::Value::as_str).unwrap_or_default(),
-            "dispatch_target": packet.get("dispatch_target").and_then(serde_json::Value::as_str).unwrap_or_default(),
-            "dispatch_packet_path": packet_path,
-            "packet_kind": packet.get("packet_kind").cloned().unwrap_or(serde_json::Value::Null),
-            "packet_template_kind": packet.get("packet_template_kind").cloned().unwrap_or(serde_json::Value::Null),
-            "packet": packet,
-        })
+        "dispatch_target"
+    };
+    let packet_path_key = if downstream {
+        "downstream_packet_path"
+    } else {
+        "dispatch_packet_path"
     };
 
-    let project_activation_view =
-        super::project_activator_surface::build_project_activator_view(project_root);
-    let init_view = super::project_activator_surface::merge_project_activation_into_init_view(
-        bundle.agent_init_view,
-        &project_activation_view,
-    );
-    let activation_semantics = agent_init_activation_semantics(&selection);
-    let execution_truth = packet
+    Ok(serde_json::json!({
+        "mode": if downstream { "downstream_packet" } else { "dispatch_packet" },
+        "selected_role": selected_role,
+        "request_text": packet.get("request_text").and_then(serde_json::Value::as_str).unwrap_or_default(),
+        "dispatch_target": packet.get(dispatch_target_key).and_then(serde_json::Value::as_str).unwrap_or_default(),
+        packet_path_key: packet_path,
+        "packet_kind": packet.get("packet_kind").cloned().unwrap_or(serde_json::Value::Null),
+        "packet_template_kind": packet.get("packet_template_kind").cloned().unwrap_or(serde_json::Value::Null),
+        "packet": packet,
+    }))
+}
+
+fn agent_init_execution_truth(selection: &serde_json::Value) -> serde_json::Value {
+    let packet = selection
+        .get("packet")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    if packet.is_null() {
+        return serde_json::Value::Null;
+    }
+
+    packet
         .get("execution_truth")
         .cloned()
         .or_else(|| {
@@ -1975,16 +1946,10 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
                 .and_then(|value| {
                     serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(value).ok()
                 })?;
-            let dispatch_target = if downstream {
-                packet
-                    .get("downstream_dispatch_target")
-                    .and_then(serde_json::Value::as_str)
-            } else {
-                packet
-                    .get("dispatch_target")
-                    .and_then(serde_json::Value::as_str)
-            }
-            .unwrap_or_default();
+            let dispatch_target = selection
+                .get("dispatch_target")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
             Some(
                 super::runtime_dispatch_state::dispatch_execution_route_summary(
                     &role_selection,
@@ -1995,25 +1960,309 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
                 ),
             )
         })
+        .unwrap_or(serde_json::Value::Null)
+}
+
+fn agent_init_backend_truth(
+    selection: &serde_json::Value,
+    execution_truth: &serde_json::Value,
+) -> serde_json::Value {
+    let Some(execution_truth) = execution_truth.as_object() else {
+        return serde_json::Value::Null;
+    };
+    let selected_backend = execution_truth
+        .get("effective_selected_backend")
+        .or_else(|| execution_truth.get("selected_backend"))
+        .cloned()
         .unwrap_or(serde_json::Value::Null);
-    let packet_activation_evidence = packet
-        .get("activation_evidence")
+    let route_primary_backend = execution_truth
+        .get("route_primary_backend")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let route_fallback_backend = execution_truth
+        .get("route_fallback_backend")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let selected_backend_source = execution_truth
+        .get("selected_backend_source")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let effective_execution_posture = execution_truth
+        .get("effective_execution_posture")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let selected_backend_class = execution_truth
+        .get("selected_backend_class")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
-    Ok(serde_json::json!({
+    let selected_backend_str = selected_backend.as_str().filter(|value| !value.is_empty());
+    let route_primary_backend_str = route_primary_backend
+        .as_str()
+        .filter(|value| !value.is_empty());
+    let override_active = matches!(
+        (selected_backend_str, route_primary_backend_str),
+        (Some(selected), Some(primary)) if selected != primary
+    );
+
+    let lawful_override = if override_active {
+        selection
+            .get("packet")
+            .and_then(|packet| packet.get("role_selection_full"))
+            .cloned()
+            .and_then(|value| {
+                serde_json::from_value::<super::RuntimeConsumptionLaneSelection>(value).ok()
+            })
+            .and_then(|role_selection| {
+                let dispatch_target = selection
+                    .get("dispatch_target")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                selected_backend_str.map(|backend_id| {
+                    super::runtime_dispatch_state::backend_is_admissible_for_dispatch_target(
+                        &role_selection.execution_plan,
+                        backend_id,
+                        dispatch_target,
+                    )
+                })
+            })
+            .map(serde_json::Value::Bool)
+            .unwrap_or(serde_json::Value::Null)
+    } else {
+        serde_json::Value::Bool(false)
+    };
+    let override_status = if !override_active {
+        "not_needed"
+    } else if lawful_override == serde_json::Value::Bool(true) {
+        "lawful"
+    } else if lawful_override == serde_json::Value::Bool(false) {
+        "inadmissible"
+    } else {
+        "unknown"
+    };
+
+    serde_json::json!({
+        "selected_backend": selected_backend,
+        "selected_backend_source": selected_backend_source,
+        "selected_backend_class": selected_backend_class,
+        "route_primary_backend": route_primary_backend,
+        "route_fallback_backend": route_fallback_backend,
+        "effective_execution_posture": effective_execution_posture,
+        "override_active": override_active,
+        "lawful_override": lawful_override,
+        "override_status": override_status,
+    })
+}
+
+fn build_agent_init_surface_payload(
+    init_view: serde_json::Value,
+    selection: serde_json::Value,
+    activation_semantics: serde_json::Value,
+    runtime_bundle_summary: serde_json::Value,
+) -> serde_json::Value {
+    let execution_truth = agent_init_execution_truth(&selection);
+    let backend_truth = agent_init_backend_truth(&selection, &execution_truth);
+    let packet_activation_evidence = selection
+        .get("packet")
+        .and_then(|packet| packet.get("activation_evidence"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+
+    serde_json::json!({
         "surface": "vida agent-init",
         "init": init_view,
         "selection": selection,
         "activation_semantics": activation_semantics,
         "execution_truth": execution_truth,
+        "backend_truth": backend_truth,
         "packet_activation_evidence": packet_activation_evidence,
-        "runtime_bundle_summary": {
+        "runtime_bundle_summary": runtime_bundle_summary,
+    })
+}
+
+pub(crate) async fn render_agent_init_packet_activation_with_store(
+    store: &super::StateStore,
+    project_root: &Path,
+    packet_path: &str,
+    downstream: bool,
+) -> Result<serde_json::Value, String> {
+    let instruction_source_root =
+        PathBuf::from(super::state_store::DEFAULT_INSTRUCTION_SOURCE_ROOT);
+    let framework_memory_source_root =
+        PathBuf::from(super::state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
+    super::ensure_launcher_bootstrap(
+        store,
+        &instruction_source_root,
+        &framework_memory_source_root,
+    )
+    .await?;
+    let bundle = build_taskflow_consume_bundle_payload(store).await?;
+    let packet = super::taskflow_consume_resume::read_dispatch_packet(packet_path)?;
+    let selection = agent_init_packet_selection(packet_path, packet, downstream)?;
+
+    let project_activation_view =
+        super::project_activator_surface::build_project_activator_view(project_root);
+    let init_view = super::project_activator_surface::merge_project_activation_into_init_view(
+        bundle.agent_init_view,
+        &project_activation_view,
+    );
+    let activation_semantics = agent_init_activation_semantics(&selection);
+
+    Ok(build_agent_init_surface_payload(
+        init_view,
+        selection,
+        activation_semantics,
+        serde_json::json!({
             "bundle_id": bundle.metadata["bundle_id"],
             "activation_source": bundle.activation_source,
             "vida_root": bundle.vida_root,
             "state_dir": store.root().display().to_string(),
             "launcher_runtime_paths": bundle.launcher_runtime_paths,
-        },
-    }))
+        }),
+    ))
+}
+
+#[cfg(test)]
+mod agent_init_surface_tests {
+    use super::*;
+    use crate::RuntimeConsumptionLaneSelection;
+
+    fn test_role_selection() -> RuntimeConsumptionLaneSelection {
+        RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "implementer": {
+                        "executor_backend": "qwen_cli",
+                        "fallback_executor_backend": "internal_subagents"
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "qwen_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "implementation": false
+                        }
+                    },
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ]
+            }),
+            reason: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn agent_init_surface_payload_exposes_execution_truth_selected_backend() {
+        let role_selection = test_role_selection();
+        let selection = agent_init_packet_selection(
+            "/tmp/dispatch.json",
+            serde_json::json!({
+                "activation_runtime_role": "worker",
+                "request_text": "fix runtime handoff",
+                "dispatch_target": "implementer",
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "selected_backend": "internal_subagents",
+                "role_selection_full": role_selection,
+            }),
+            false,
+        )
+        .expect("packet selection should build");
+        let payload = build_agent_init_surface_payload(
+            serde_json::json!({ "status": "ready" }),
+            selection,
+            serde_json::json!({ "activation_kind": "activation_view" }),
+            serde_json::json!({ "bundle_id": "bundle-test" }),
+        );
+
+        assert_eq!(
+            payload["execution_truth"]["effective_selected_backend"],
+            "internal_subagents"
+        );
+        assert_eq!(
+            payload["backend_truth"]["selected_backend"],
+            "internal_subagents"
+        );
+        assert_eq!(
+            payload["backend_truth"]["route_primary_backend"],
+            "qwen_cli"
+        );
+        assert_eq!(
+            payload["backend_truth"]["route_fallback_backend"],
+            "internal_subagents"
+        );
+        assert_eq!(payload["backend_truth"]["override_active"], true);
+        assert_eq!(payload["backend_truth"]["lawful_override"], true);
+        assert_eq!(payload["backend_truth"]["override_status"], "lawful");
+    }
+
+    #[test]
+    fn agent_init_surface_payload_exposes_route_fallback_backend_for_downstream_packet() {
+        let selection = agent_init_packet_selection(
+            "/tmp/downstream.json",
+            serde_json::json!({
+                "activation_runtime_role": "worker",
+                "request_text": "fix runtime handoff",
+                "downstream_dispatch_target": "implementer",
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "role_selection_full": test_role_selection(),
+            }),
+            true,
+        )
+        .expect("downstream packet selection should build");
+        let payload = build_agent_init_surface_payload(
+            serde_json::json!({ "status": "ready" }),
+            selection,
+            serde_json::json!({ "activation_kind": "activation_view" }),
+            serde_json::json!({ "bundle_id": "bundle-test" }),
+        );
+
+        assert_eq!(payload["selection"]["mode"], "downstream_packet");
+        assert_eq!(
+            payload["execution_truth"]["route_primary_backend"],
+            "qwen_cli"
+        );
+        assert_eq!(
+            payload["execution_truth"]["route_fallback_backend"],
+            "internal_subagents"
+        );
+        assert_eq!(payload["backend_truth"]["override_status"], "not_needed");
+    }
+
+    #[test]
+    fn agent_init_surface_payload_keeps_backend_truth_null_without_packet_mode() {
+        let payload = build_agent_init_surface_payload(
+            serde_json::json!({ "status": "ready" }),
+            serde_json::json!({
+                "mode": "explicit_role",
+                "selected_role": "worker",
+                "request_text": "repair"
+            }),
+            serde_json::json!({ "activation_kind": "activation_view" }),
+            serde_json::json!({ "bundle_id": "bundle-test" }),
+        );
+
+        assert!(payload["execution_truth"].is_null());
+        assert!(payload["backend_truth"].is_null());
+    }
 }
