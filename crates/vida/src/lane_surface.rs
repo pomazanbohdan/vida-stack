@@ -227,6 +227,60 @@ fn build_lane_envelope(
     }
 }
 
+struct LaneShowTruth {
+    blocked: bool,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+}
+
+fn derive_lane_show_truth(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+) -> LaneShowTruth {
+    let mut blocked = matches!(summary.dispatch_status.as_str(), "blocked" | "failed")
+        || matches!(summary.lane_status.as_str(), "lane_blocked" | "lane_failed");
+    let mut blocker_codes = Vec::new();
+    let mut next_actions = Vec::new();
+
+    if let Some(blocker_code) = summary
+        .blocker_code
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        blocker_codes.push(blocker_code.to_string());
+    }
+
+    if blocked {
+        blocker_codes.extend(
+            summary
+                .downstream_dispatch_blockers
+                .iter()
+                .filter(|value| !value.trim().is_empty())
+                .cloned(),
+        );
+    }
+
+    if summary.lane_status == crate::LaneStatus::LaneExceptionRecorded.as_str() {
+        blocked = true;
+        if recovery.is_some_and(|recovery| {
+            recovery.delegation_gate.local_exception_takeover_gate == "blocked_open_delegated_cycle"
+                || recovery.delegation_gate.delegated_cycle_open
+        }) {
+            blocker_codes.push("open_delegated_cycle".to_string());
+            next_actions.push(
+                "Exception-path receipt recorded; delegated cycle is still open, so root-local write remains blocked."
+                    .to_string(),
+            );
+        }
+    }
+
+    LaneShowTruth {
+        blocked,
+        blocker_codes: crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes),
+        next_actions,
+    }
+}
+
 fn emit_lane_envelope(envelope: &LaneEnvelope, as_json: bool) -> ExitCode {
     if crate::surface_render::print_surface_json(envelope, as_json, "lane surface should serialize")
     {
@@ -357,7 +411,15 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 Ok(status) => Some(status),
                 Err(_) => None,
             };
-            let envelope = build_lane_envelope(summary, status, false, None, Vec::new());
+            let recovery = store.run_graph_recovery_summary(&summary.run_id).await.ok();
+            let truth = derive_lane_show_truth(&summary, recovery.as_ref());
+            let envelope = build_lane_envelope(
+                summary,
+                status,
+                truth.blocked,
+                truth.blocker_codes.first().map(String::as_str),
+                truth.next_actions,
+            );
             emit_lane_envelope(&envelope, as_json)
         }
         LaneCommand::ShowRun { run_id, as_json } => {
@@ -376,7 +438,15 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
                 Ok(status) => Some(status),
                 Err(_) => None,
             };
-            let envelope = build_lane_envelope(summary, status, false, None, Vec::new());
+            let recovery = store.run_graph_recovery_summary(run_id).await.ok();
+            let truth = derive_lane_show_truth(&summary, recovery.as_ref());
+            let envelope = build_lane_envelope(
+                summary,
+                status,
+                truth.blocked,
+                truth.blocker_codes.first().map(String::as_str),
+                truth.next_actions,
+            );
             emit_lane_envelope(&envelope, as_json)
         }
         LaneCommand::Complete {
@@ -629,6 +699,93 @@ mod tests {
             sample_receipt("executed"),
         );
         assert!(!exception_takeover_allowed(&summary, None));
+    }
+
+    #[test]
+    fn derive_lane_show_truth_marks_blocked_dispatch_receipts_as_blocked() {
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(
+            sample_receipt("blocked"),
+        );
+
+        let truth = derive_lane_show_truth(&summary, None);
+
+        assert!(truth.blocked);
+        assert!(truth.next_actions.is_empty());
+    }
+
+    #[test]
+    fn derive_lane_show_truth_blocks_exception_recorded_open_cycle() {
+        let mut receipt = sample_receipt("executed");
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        let summary = crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-lane-test",
+            "specification",
+            "scope_discussion",
+        );
+        status.active_node = "implementer".to_string();
+        status.lifecycle_stage = "implementer_active".to_string();
+        status.status = "ready".to_string();
+        let recovery = crate::state_store::RunGraphRecoverySummary::from_status(status);
+
+        let truth = derive_lane_show_truth(&summary, Some(&recovery));
+
+        assert!(truth.blocked);
+        assert!(truth
+            .blocker_codes
+            .contains(&"open_delegated_cycle".to_string()));
+    }
+
+    #[tokio::test]
+    async fn lane_show_run_fails_closed_for_exception_recorded_open_cycle() {
+        let _guard = lane_surface_test_lock()
+            .lock()
+            .expect("lane surface test lock should acquire");
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-show-run-open-cycle-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-lane-show-open-cycle";
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "specification",
+            "scope_discussion",
+        );
+        status.active_node = "implementer".to_string();
+        status.lifecycle_stage = "implementer_active".to_string();
+        status.status = "ready".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let mut receipt = sample_receipt("executed");
+        receipt.run_id = run_id.to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.lane_status = crate::LaneStatus::LaneExceptionRecorded
+            .as_str()
+            .to_string();
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist exception-recorded receipt");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let args = ProxyArgs {
+            args: vec!["show".to_string(), run_id.to_string(), "--json".to_string()],
+        };
+        assert_eq!(run_lane(args).await, ExitCode::from(2));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
