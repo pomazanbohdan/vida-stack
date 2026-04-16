@@ -5,7 +5,6 @@ use crate::{
     print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
     state_store::{RunGraphStatus, StateStore, StateStoreError},
     taskflow_layer4::print_taskflow_proxy_help,
-    taskflow_routing::selected_backend_from_execution_plan_route,
     taskflow_task_bridge::proxy_state_dir,
     RenderMode, RuntimeConsumptionLaneSelection,
 };
@@ -1094,8 +1093,6 @@ pub(crate) async fn derive_seeded_run_graph_status(
     } else {
         &execution_plan["development_flow"]["implementation"]
     };
-    let selected_backend = selected_backend_from_execution_plan_route(execution_plan, route)
-        .unwrap_or_else(|| "unknown".to_string());
     let lane_node = if is_conversation {
         selection.selected_role.clone()
     } else if selection.selected_role == "worker" {
@@ -1114,6 +1111,18 @@ pub(crate) async fn derive_seeded_run_graph_status(
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| selection.selected_role.clone())
     };
+    let selected_backend =
+        crate::runtime_dispatch_state::admissible_selected_backend_for_dispatch_target(
+            execution_plan,
+            if is_conversation {
+                lane_node.as_str()
+            } else {
+                "implementer"
+            },
+            json_string_field(route, "activation_agent_type").as_deref(),
+            None,
+        )
+        .unwrap_or_else(|| "unknown".to_string());
     let lane_id = format!("{lane_node}_lane");
     let next_node = Some(lane_node.clone());
     let lifecycle_stage = if is_conversation {
@@ -2681,7 +2690,8 @@ mod tests {
         assert!(reconciled.recovery_ready);
 
         assert!(
-            store.run_graph_dispatch_receipt("task-reseed-1")
+            store
+                .run_graph_dispatch_receipt("task-reseed-1")
                 .await
                 .expect("dispatch receipt lookup should succeed")
                 .is_none(),

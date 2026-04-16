@@ -244,8 +244,51 @@ pub(crate) fn execution_plan_route_for_dispatch_target<'a>(
     dispatch_contract_lane(execution_plan, dispatch_target)
 }
 
-fn route_selected_backend(route: &serde_json::Value) -> Option<String> {
-    selected_backend_from_execution_plan_route(&serde_json::Value::Null, route)
+fn canonical_dispatch_target_for_backend_resolution(dispatch_target: &str) -> &str {
+    match dispatch_target {
+        "implementer" | "analysis" => "implementation",
+        "execution_preparation" => "architecture",
+        _ => dispatch_target,
+    }
+}
+
+fn dispatch_target_requires_strict_backend_admissibility(dispatch_target: &str) -> bool {
+    matches!(
+        canonical_dispatch_target_for_backend_resolution(dispatch_target),
+        "implementation"
+    )
+}
+
+fn backend_is_admissible_for_dispatch_target(
+    execution_plan: &serde_json::Value,
+    backend_id: &str,
+    dispatch_target: &str,
+) -> bool {
+    let canonical_target = canonical_dispatch_target_for_backend_resolution(dispatch_target);
+    let strict_required = dispatch_target_requires_strict_backend_admissibility(dispatch_target);
+    let Some(matrix) = execution_plan["backend_admissibility_matrix"].as_array() else {
+        return !strict_required;
+    };
+    let Some(row) = matrix
+        .iter()
+        .find(|entry| entry["backend_id"].as_str() == Some(backend_id))
+    else {
+        return !strict_required;
+    };
+    let Some(lane_admissibility) = row["lane_admissibility"].as_object() else {
+        return !strict_required;
+    };
+    lane_admissibility
+        .get(canonical_target)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(!strict_required)
+}
+
+fn route_selected_backend(
+    execution_plan: &serde_json::Value,
+    route: &serde_json::Value,
+) -> Option<String> {
+    selected_backend_from_execution_plan_route(execution_plan, route)
 }
 
 fn route_selected_backend_for_dispatch_target(
@@ -253,14 +296,18 @@ fn route_selected_backend_for_dispatch_target(
     dispatch_target: &str,
 ) -> Option<String> {
     execution_plan_route_for_dispatch_target(execution_plan, dispatch_target)
-        .and_then(route_selected_backend)
+        .and_then(|route| route_selected_backend(execution_plan, route))
 }
 
-fn route_declares_backend(route: &serde_json::Value, candidate: &str) -> bool {
+fn route_declares_backend(
+    execution_plan: &serde_json::Value,
+    route: &serde_json::Value,
+    candidate: &str,
+) -> bool {
     if candidate.trim().is_empty() {
         return false;
     }
-    if route_selected_backend(route).as_deref() == Some(candidate) {
+    if route_selected_backend(execution_plan, route).as_deref() == Some(candidate) {
         return true;
     }
     if fallback_executor_backend_from_route(route).as_deref() == Some(candidate) {
@@ -271,10 +318,69 @@ fn route_declares_backend(route: &serde_json::Value, candidate: &str) -> bool {
         .any(|backend| backend == candidate)
 }
 
-fn route_has_backend_hints(route: &serde_json::Value) -> bool {
-    route_selected_backend(route).is_some()
+fn route_has_backend_hints(execution_plan: &serde_json::Value, route: &serde_json::Value) -> bool {
+    route_selected_backend(execution_plan, route).is_some()
         || fallback_executor_backend_from_route(route).is_some()
         || !fanout_executor_backends_from_route(route).is_empty()
+}
+
+fn admissible_backend_candidates_for_dispatch_target(
+    execution_plan: &serde_json::Value,
+    _dispatch_target: &str,
+    route: &serde_json::Value,
+    inherited_selected_backend: Option<&str>,
+    activation_agent_type: Option<&str>,
+) -> Vec<String> {
+    let route_is_backend_agnostic = !route_has_backend_hints(execution_plan, route);
+    let mut candidates = Vec::new();
+    if let Some(primary) = route_selected_backend(execution_plan, route) {
+        candidates.push(primary);
+    }
+    if let Some(fallback) = fallback_executor_backend_from_route(route) {
+        candidates.push(fallback);
+    }
+    candidates.extend(fanout_executor_backends_from_route(route));
+    if let Some(inherited) = inherited_selected_backend
+        .filter(|candidate| route_is_backend_agnostic || route_declares_backend(execution_plan, route, candidate))
+        .map(str::to_string)
+    {
+        candidates.push(inherited);
+    }
+    if let Some(activation) = activation_agent_type
+        .filter(|_| route_is_backend_agnostic)
+        .map(str::to_string)
+    {
+        candidates.push(activation);
+    }
+    let mut unique = std::collections::BTreeSet::new();
+    candidates
+        .into_iter()
+        .filter(|candidate| !candidate.trim().is_empty())
+        .filter(|candidate| unique.insert(candidate.clone()))
+        .collect()
+}
+
+pub(crate) fn admissible_selected_backend_for_dispatch_target(
+    execution_plan: &serde_json::Value,
+    dispatch_target: &str,
+    activation_agent_type: Option<&str>,
+    inherited_selected_backend: Option<&str>,
+) -> Option<String> {
+    let route = execution_plan_route_for_dispatch_target(execution_plan, dispatch_target)?;
+    let strict_required = dispatch_target_requires_strict_backend_admissibility(dispatch_target);
+    let candidates = admissible_backend_candidates_for_dispatch_target(
+        execution_plan,
+        dispatch_target,
+        route,
+        inherited_selected_backend,
+        activation_agent_type,
+    );
+    if !strict_required {
+        return candidates.into_iter().next();
+    }
+    candidates.into_iter().find(|candidate| {
+        backend_is_admissible_for_dispatch_target(execution_plan, candidate, dispatch_target)
+    })
 }
 
 pub(crate) fn downstream_selected_backend(
@@ -287,26 +393,12 @@ pub(crate) fn downstream_selected_backend(
         "spec-pack" | "work-pool-pack" | "dev-pack" | "closure" => activation_agent_type
             .map(str::to_string)
             .or_else(|| inherited_selected_backend.map(str::to_string)),
-        _ => {
-            let route = execution_plan_route_for_dispatch_target(
-                &role_selection.execution_plan,
-                dispatch_target,
-            )?;
-            let route_is_backend_agnostic = !route_has_backend_hints(route);
-            route_selected_backend(route)
-                .or_else(|| {
-                    inherited_selected_backend
-                        .filter(|candidate| {
-                            route_is_backend_agnostic || route_declares_backend(route, candidate)
-                        })
-                        .map(str::to_string)
-                })
-                .or_else(|| {
-                    activation_agent_type
-                        .filter(|_| route_is_backend_agnostic)
-                        .map(str::to_string)
-                })
-        }
+        _ => admissible_selected_backend_for_dispatch_target(
+            &role_selection.execution_plan,
+            dispatch_target,
+            activation_agent_type,
+            inherited_selected_backend,
+        ),
     }
 }
 
@@ -360,7 +452,7 @@ pub(crate) fn effective_execution_posture_summary(
     receipt_backed_execution_evidence: bool,
 ) -> serde_json::Value {
     let route = execution_plan_route_for_dispatch_target(execution_plan, dispatch_target);
-    let route_primary_backend = route.and_then(route_selected_backend);
+    let route_primary_backend = route.and_then(|route| route_selected_backend(execution_plan, route));
     let fallback_backend = route.and_then(fallback_executor_backend_from_route);
     let fanout_backends = route
         .map(fanout_executor_backends_from_route)
@@ -526,7 +618,7 @@ pub(crate) fn dispatch_execution_route_summary(
 ) -> serde_json::Value {
     let route =
         execution_plan_route_for_dispatch_target(&role_selection.execution_plan, dispatch_target);
-    let route_primary_backend = route.and_then(route_selected_backend);
+    let route_primary_backend = route.and_then(|route| route_selected_backend(&role_selection.execution_plan, route));
     let route_fallback_backend = route.and_then(fallback_executor_backend_from_route);
     let route_fanout_backends = route
         .map(fanout_executor_backends_from_route)
@@ -6577,6 +6669,23 @@ mod tests {
     }
 
     #[test]
+    fn route_selected_backend_for_analysis_uses_execution_plan_runtime_assignment() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "analysis": {}
+            },
+            "runtime_assignment": {
+                "selected_tier": "junior",
+                "activation_agent_type": "junior"
+            }
+        });
+
+        let backend = route_selected_backend_for_dispatch_target(&execution_plan, "analysis");
+
+        assert_eq!(backend.as_deref(), Some("junior"));
+    }
+
+    #[test]
     fn effective_execution_posture_keeps_backend_class_unknown_without_matrix_row() {
         let summary = effective_execution_posture_summary(
             &serde_json::json!({}),
@@ -8076,6 +8185,98 @@ mod tests {
                 Some("junior"),
                 Some("junior")
             ),
+            Some("junior".to_string())
+        );
+    }
+
+    #[test]
+    fn downstream_selected_backend_prefers_admissible_fallback_when_primary_is_inadmissible() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "implementer": {
+                        "executor_backend": "qwen_cli",
+                        "fallback_executor_backend": "internal_subagents"
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "qwen_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "implementation": false
+                        }
+                    },
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ]
+            }),
+            reason: "test".to_string(),
+        };
+
+        assert_eq!(
+            downstream_selected_backend(&role_selection, "implementer", Some("junior"), None),
+            Some("internal_subagents".to_string())
+        );
+    }
+
+    #[test]
+    fn downstream_selected_backend_resolves_analysis_from_implementation_runtime_assignment() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "analysis": {}
+                },
+                "runtime_assignment": {
+                    "selected_tier": "junior",
+                    "activation_agent_type": "junior"
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "junior",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ]
+            }),
+            reason: "test".to_string(),
+        };
+
+        assert_eq!(
+            downstream_selected_backend(&role_selection, "analysis", Some("junior"), None),
             Some("junior".to_string())
         );
     }
