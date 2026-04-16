@@ -200,7 +200,27 @@ fn external_provider_output_indicates_error(output: &ParsedExternalProviderOutpu
         return normalized.contains("error") || normalized.contains("exception");
     }
 
-    false
+    [
+        "quota exceeded",
+        "daily quota has been reached",
+        "oauth quota exceeded",
+        "auth failure",
+        "authentication failed",
+        "unauthorized",
+        "invalid access token",
+        "token expired",
+        "invalid api key",
+        "rate limit exceeded",
+        "too many requests",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+}
+
+fn external_provider_output_confirms_execution(
+    output: Option<&ParsedExternalProviderOutput>,
+) -> bool {
+    output.is_some_and(|parsed| !external_provider_output_indicates_error(parsed))
 }
 
 fn external_provider_error_message(output: &ParsedExternalProviderOutput) -> Option<String> {
@@ -1099,10 +1119,8 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let parsed_output = parse_external_provider_output(&stdout);
-    let provider_reported_error = parsed_output
-        .as_ref()
-        .is_some_and(external_provider_output_indicates_error);
-    let success = output.status.success() && !provider_reported_error;
+    let success =
+        output.status.success() && external_provider_output_confirms_execution(parsed_output.as_ref());
     let exit_code = output.status.code();
     let timed_out = wrapped_command.timed_out(exit_code);
     body.insert(
@@ -1204,6 +1222,12 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
             .as_ref()
             .and_then(external_provider_error_message)
             .or_else(|| {
+                output.status.success().then(|| {
+                    "configured external backend exited successfully but did not return a parseable success payload"
+                        .to_string()
+                })
+            })
+            .or_else(|| {
                 body.get("provider_error_message")
                     .and_then(serde_json::Value::as_str)
                     .filter(|value| !value.trim().is_empty())
@@ -1230,7 +1254,8 @@ mod tests {
     use super::{
         agent_lane_dispatch_result, configured_internal_host_activation_parts,
         configured_internal_host_runtime_env, dispatch_packet_prompt,
-        mark_dispatch_result_execution_evidence, parse_external_provider_output,
+        external_provider_output_confirms_execution, mark_dispatch_result_execution_evidence,
+        parse_external_provider_output,
         parse_internal_codex_exec_output, wrap_command_with_optional_timeout,
     };
     use crate::RuntimeConsumptionLaneSelection;
@@ -1286,6 +1311,22 @@ mod tests {
         .expect("qwen json error output should parse");
 
         assert!(!super::external_provider_output_indicates_error(&parsed));
+        assert!(external_provider_output_confirms_execution(Some(&parsed)));
+    }
+
+    #[test]
+    fn parse_external_provider_output_detects_quota_exceeded_semantic_failure() {
+        let parsed = parse_external_provider_output(
+            r#"{"type":"result","subtype":"success","is_error":false,"result":"Qwen OAuth quota exceeded: Your free daily quota has been reached."}"#,
+        )
+        .expect("qwen json quota output should parse");
+
+        assert!(super::external_provider_output_indicates_error(&parsed));
+        assert!(!external_provider_output_confirms_execution(Some(&parsed)));
+        assert_eq!(
+            super::external_provider_error_message(&parsed).as_deref(),
+            Some("Qwen OAuth quota exceeded: Your free daily quota has been reached.")
+        );
     }
 
     #[test]
@@ -1300,6 +1341,11 @@ mod tests {
         let execution_succeeded =
             status_code_success && !super::external_provider_output_indicates_error(&parsed);
         assert!(!execution_succeeded);
+    }
+
+    #[test]
+    fn unparsable_external_provider_stdout_cannot_confirm_execution() {
+        assert!(!external_provider_output_confirms_execution(None));
     }
 
     #[test]
