@@ -58,6 +58,8 @@ impl StateStore {
             run_id: String,
         }
 
+        let mut affected_run_ids = std::collections::BTreeSet::new();
+
         let mut query = self
             .db
             .query(format!(
@@ -67,7 +69,25 @@ impl StateStore {
             .await?;
         let rows: Vec<RunIdRow> = query.take(0)?;
         for row in rows {
-            let status = self.run_graph_status(&row.run_id).await?;
+            affected_run_ids.insert(row.run_id);
+        }
+
+        let mut explicit_binding_query = self
+            .db
+            .query(format!(
+                "SELECT run_id FROM run_graph_continuation_binding \
+                 WHERE active_bounded_unit.kind = 'task_graph_task' \
+                 AND active_bounded_unit.task_id = '{}';",
+                escape_surql_literal(task_id)
+            ))
+            .await?;
+        let explicit_binding_rows: Vec<RunIdRow> = explicit_binding_query.take(0)?;
+        for row in explicit_binding_rows {
+            affected_run_ids.insert(row.run_id);
+        }
+
+        for run_id in affected_run_ids {
+            let status = self.run_graph_status(&run_id).await?;
             let Some(binding) =
                 crate::taskflow_continuation::build_run_graph_continuation_binding(
                     &status,
@@ -78,6 +98,7 @@ impl StateStore {
                     ),
                 )
             else {
+                self.clear_run_graph_continuation_binding(&run_id).await?;
                 continue;
             };
             let closure_bound = binding.active_bounded_unit["kind"] == "downstream_dispatch_target"
@@ -915,6 +936,111 @@ mod tests {
         .expect("closure-bound run should resolve after task close reconcile");
         assert_eq!(resolved.dispatch_receipt.dispatch_target, "closure");
         assert_eq!(resolved.dispatch_receipt.dispatch_status, "executed");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn close_task_rebinds_explicit_next_task_binding_that_targets_closed_task() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-task-close-explicit-binding-refresh-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "run-owner-task",
+                title: "Current active implementation task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create run owner task");
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "next-explicit-task",
+                title: "Explicit next task target",
+                display_id: None,
+                description: "",
+                issue_type: "bug",
+                status: "open",
+                priority: 2,
+                parent_id: None,
+                labels: &[],
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create explicit next task");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-explicit-task-close",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "run-owner-task".to_string();
+        status.active_node = "implementer".to_string();
+        status.status = "in_progress".to_string();
+        status.lifecycle_stage = "implementer_active".to_string();
+        status.policy_gate = "targeted_verification".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run-graph status");
+
+        store
+            .record_run_graph_continuation_binding(&RunGraphContinuationBinding {
+                run_id: "run-explicit-task-close".to_string(),
+                task_id: "next-explicit-task".to_string(),
+                status: "bound".to_string(),
+                active_bounded_unit: serde_json::json!({
+                    "kind": "task_graph_task",
+                    "task_id": "next-explicit-task",
+                    "run_id": "run-explicit-task-close",
+                    "task_status": "open",
+                    "issue_type": "bug"
+                }),
+                binding_source: "explicit_continuation_bind_task".to_string(),
+                why_this_unit: "test explicit next-task binding".to_string(),
+                primary_path: "normal_delivery_path".to_string(),
+                sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+                request_text: None,
+                recorded_at: "2026-04-16T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist explicit continuation binding");
+
+        store
+            .close_task("next-explicit-task", "superseded by completed owner run")
+            .await
+            .expect("close explicit next task");
+
+        let binding = store
+            .run_graph_continuation_binding("run-explicit-task-close")
+            .await
+            .expect("load refreshed continuation binding")
+            .expect("continuation binding should remain lawful");
+        assert_eq!(binding.binding_source, "task_close_reconcile");
+        assert_eq!(binding.task_id, "run-owner-task");
+        assert_eq!(binding.active_bounded_unit["kind"], "run_graph_task");
+        assert_eq!(binding.active_bounded_unit["task_id"], "run-owner-task");
+        assert_eq!(binding.active_bounded_unit["run_id"], "run-explicit-task-close");
 
         let _ = fs::remove_dir_all(&root);
     }
