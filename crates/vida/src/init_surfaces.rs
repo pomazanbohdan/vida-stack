@@ -11,6 +11,8 @@ use super::{
 };
 use crate::taskflow_runtime_bundle::build_taskflow_consume_bundle_payload;
 
+const DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS: u64 = 10;
+
 pub(crate) fn resolve_init_bootstrap_source_root() -> PathBuf {
     if let Some(installed_root) = resolve_installed_runtime_root() {
         for candidate in installed_runtime_source_root_candidates(&installed_root) {
@@ -1035,8 +1037,13 @@ pub(crate) async fn run_boot(args: BootArgs) -> ExitCode {
         .framework_memory_source_root
         .unwrap_or_else(|| PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT));
 
-    match StateStore::open(state_dir).await {
-        Ok(store) => match store.seed_framework_instruction_bundle().await {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+        StateStore::open(state_dir),
+    )
+    .await
+    {
+        Ok(Ok(store)) => match store.seed_framework_instruction_bundle().await {
             Ok(()) => match store.backend_summary().await {
                 Ok(summary) => match store.source_tree_summary().await {
                     Ok(source_tree) => match store
@@ -1219,8 +1226,14 @@ pub(crate) async fn run_boot(args: BootArgs) -> ExitCode {
                 ExitCode::from(1)
             }
         },
-        Err(error) => {
+        Ok(Err(error)) => {
             eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
+        }
+        Err(_) => {
+            eprintln!(
+                "Timed out opening authoritative state store for `vida boot` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+            );
             ExitCode::from(1)
         }
     }
@@ -1234,20 +1247,42 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
     let framework_memory_source_root =
         PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
 
-    match StateStore::open(state_dir).await {
-        Ok(store) => {
-            if let Err(error) = ensure_launcher_bootstrap(
-                &store,
-                &instruction_source_root,
-                &framework_memory_source_root,
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+        StateStore::open(state_dir),
+    )
+    .await
+    {
+        Ok(Ok(store)) => {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+                ensure_launcher_bootstrap(
+                    &store,
+                    &instruction_source_root,
+                    &framework_memory_source_root,
+                ),
             )
             .await
             {
-                eprintln!("{error}");
-                return ExitCode::from(1);
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(1);
+                }
+                Err(_) => {
+                    eprintln!(
+                        "Timed out ensuring launcher bootstrap for `vida orchestrator-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+                    );
+                    return ExitCode::from(1);
+                }
             }
-            match build_taskflow_consume_bundle_payload(&store).await {
-                Ok(bundle) => {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+                build_taskflow_consume_bundle_payload(&store),
+            )
+            .await
+            {
+                Ok(Ok(bundle)) => {
                     let project_activation_view = match std::env::current_dir() {
                         Ok(path) => {
                             super::project_activator_surface::build_project_activator_view(&path)
@@ -1423,14 +1458,26 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                     }
                     ExitCode::SUCCESS
                 }
-                Err(error) => {
+                Ok(Err(error)) => {
                     eprintln!("{error}");
+                    ExitCode::from(1)
+                }
+                Err(_) => {
+                    eprintln!(
+                        "Timed out building taskflow consume bundle for `vida orchestrator-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+                    );
                     ExitCode::from(1)
                 }
             }
         }
-        Err(error) => {
+        Ok(Err(error)) => {
             eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
+        }
+        Err(_) => {
+            eprintln!(
+                "Timed out opening authoritative state store for `vida orchestrator-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+            );
             ExitCode::from(1)
         }
     }
@@ -1444,22 +1491,50 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
     let framework_memory_source_root =
         PathBuf::from(state_store::DEFAULT_FRAMEWORK_MEMORY_SOURCE_ROOT);
 
-    match StateStore::open(state_dir).await {
-        Ok(store) => {
-            if let Err(error) = ensure_launcher_bootstrap(
-                &store,
-                &instruction_source_root,
-                &framework_memory_source_root,
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+        StateStore::open(state_dir),
+    )
+    .await
+    {
+        Ok(Ok(store)) => {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+                ensure_launcher_bootstrap(
+                    &store,
+                    &instruction_source_root,
+                    &framework_memory_source_root,
+                ),
             )
             .await
             {
-                eprintln!("{error}");
-                return ExitCode::from(1);
-            }
-            let bundle = match build_taskflow_consume_bundle_payload(&store).await {
-                Ok(bundle) => bundle,
-                Err(error) => {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
                     eprintln!("{error}");
+                    return ExitCode::from(1);
+                }
+                Err(_) => {
+                    eprintln!(
+                        "Timed out ensuring launcher bootstrap for `vida agent-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+                    );
+                    return ExitCode::from(1);
+                }
+            }
+            let bundle = match tokio::time::timeout(
+                std::time::Duration::from_secs(DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS),
+                build_taskflow_consume_bundle_payload(&store),
+            )
+            .await
+            {
+                Ok(Ok(bundle)) => bundle,
+                Ok(Err(error)) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(1);
+                }
+                Err(_) => {
+                    eprintln!(
+                        "Timed out building taskflow consume bundle for `vida agent-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+                    );
                     return ExitCode::from(1);
                 }
             };
@@ -1634,22 +1709,45 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                     };
                 let state_root = store.root().to_path_buf();
                 drop(store);
-                if let Err(error) = super::execute_and_record_dispatch_receipt(
-                    &state_root,
-                    &resume_inputs.role_selection,
-                    &resume_inputs.run_graph_bootstrap,
-                    &mut resume_inputs.dispatch_receipt,
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    super::execute_and_record_dispatch_receipt(
+                        &state_root,
+                        &resume_inputs.role_selection,
+                        &resume_inputs.run_graph_bootstrap,
+                        &mut resume_inputs.dispatch_receipt,
+                    ),
                 )
                 .await
                 {
-                    eprintln!("Failed to execute agent-init dispatch packet: {error}");
-                    return ExitCode::from(1);
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        eprintln!("Failed to execute agent-init dispatch packet: {error}");
+                        return ExitCode::from(1);
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "Timed out executing agent-init dispatch packet after 10s without receipt-backed completion"
+                        );
+                        return ExitCode::from(1);
+                    }
                 }
-                let store = match super::StateStore::open_existing(state_root).await {
-                    Ok(store) => store,
-                    Err(error) => {
+                let store = match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    super::StateStore::open_existing(state_root),
+                )
+                .await
+                {
+                    Ok(Ok(store)) => store,
+                    Ok(Err(error)) => {
                         eprintln!(
                             "Failed to reopen authoritative state store after agent-init dispatch: {error}"
+                        );
+                        return ExitCode::from(1);
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "Timed out reopening authoritative state store after agent-init dispatch after 5s"
                         );
                         return ExitCode::from(1);
                     }
@@ -1661,12 +1759,23 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                             &resume_inputs.dispatch_receipt,
                         );
                 }
-                if let Err(error) = store
-                    .record_run_graph_dispatch_receipt(&resume_inputs.dispatch_receipt)
-                    .await
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    store.record_run_graph_dispatch_receipt(&resume_inputs.dispatch_receipt),
+                )
+                .await
                 {
-                    eprintln!("Failed to record agent-init dispatch receipt: {error}");
-                    return ExitCode::from(1);
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        eprintln!("Failed to record agent-init dispatch receipt: {error}");
+                        return ExitCode::from(1);
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "Timed out recording agent-init dispatch receipt after 5s"
+                        );
+                        return ExitCode::from(1);
+                    }
                 }
                 let Some(dispatch_result_path) = resume_inputs
                     .dispatch_receipt
@@ -1786,8 +1895,14 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Err(error) => {
+        Ok(Err(error)) => {
             eprintln!("Failed to open authoritative state store: {error}");
+            ExitCode::from(1)
+        }
+        Err(_) => {
+            eprintln!(
+                "Timed out opening authoritative state store for `vida agent-init` after {DEFAULT_INIT_SURFACE_TIMEOUT_SECONDS}s"
+            );
             ExitCode::from(1)
         }
     }

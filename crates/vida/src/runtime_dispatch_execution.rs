@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
@@ -16,9 +17,10 @@ fn backend_is_admissible_for_dispatch_target(
         // No admissibility matrix present; fail open to avoid breaking existing flows.
         return true;
     };
-    let Some(row) = matrix.iter().find(|entry| {
-        entry["backend_id"].as_str() == Some(backend_id)
-    }) else {
+    let Some(row) = matrix
+        .iter()
+        .find(|entry| entry["backend_id"].as_str() == Some(backend_id))
+    else {
         // Backend not in matrix; fail open.
         return true;
     };
@@ -52,6 +54,41 @@ fn default_activation_view(
 
 const DEFAULT_INTERNAL_HOST_DISPATCH_TIMEOUT_SECONDS: u64 = 240;
 const DEFAULT_DISPATCH_TIMEOUT_KILL_AFTER_GRACE_SECONDS: u64 = 1;
+const DEFAULT_ACTIVATION_VIEW_RENDER_TIMEOUT_SECONDS: u64 = 5;
+
+async fn bounded_activation_view(
+    state_root: &Path,
+    project_root: &Path,
+    dispatch_packet_path: &str,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    role_selection: &RuntimeConsumptionLaneSelection,
+) -> serde_json::Value {
+    let open_store = tokio::time::timeout(
+        std::time::Duration::from_secs(DEFAULT_ACTIVATION_VIEW_RENDER_TIMEOUT_SECONDS),
+        StateStore::open_existing(state_root.to_path_buf()),
+    )
+    .await;
+    let Ok(Ok(store)) = open_store else {
+        return default_activation_view(receipt, role_selection);
+    };
+
+    let rendered = tokio::time::timeout(
+        std::time::Duration::from_secs(DEFAULT_ACTIVATION_VIEW_RENDER_TIMEOUT_SECONDS),
+        crate::init_surfaces::render_agent_init_packet_activation_with_store(
+            &store,
+            project_root,
+            dispatch_packet_path,
+            false,
+        ),
+    )
+    .await;
+    drop(store);
+
+    match rendered {
+        Ok(Ok(view)) => view,
+        _ => default_activation_view(receipt, role_selection),
+    }
+}
 
 fn configured_external_dispatch_wall_timeout_seconds(
     backend_entry: &serde_yaml::Value,
@@ -298,10 +335,7 @@ fn selected_internal_host_carrier(
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> Option<serde_json::Value> {
     let _ = role_selection;
-    let preferred_ids = [
-        preferred_backend,
-        receipt.selected_backend.as_deref(),
-    ];
+    let preferred_ids = [preferred_backend, receipt.selected_backend.as_deref()];
     let carriers =
         crate::host_runtime_materialization::host_runtime_entry_carrier_catalog(selected_cli_entry);
     preferred_ids.iter().flatten().find_map(|backend_id| {
@@ -413,12 +447,10 @@ fn configured_internal_host_activation_parts(
     if let Some(reasoning_effort_flag) =
         crate::yaml_string(yaml_lookup(dispatch, &["reasoning_effort_flag"]))
     {
-        let rendered_value = crate::yaml_string(yaml_lookup(
-            dispatch,
-            &["reasoning_effort_value_template"],
-        ))
-        .map(|template| template.replace("{value}", reasoning_effort))
-        .unwrap_or_else(|| reasoning_effort.to_string());
+        let rendered_value =
+            crate::yaml_string(yaml_lookup(dispatch, &["reasoning_effort_value_template"]))
+                .map(|template| template.replace("{value}", reasoning_effort))
+                .unwrap_or_else(|| reasoning_effort.to_string());
         args.push(reasoning_effort_flag);
         args.push(rendered_value);
     }
@@ -698,7 +730,8 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
     let mut process = std::process::Command::new(&wrapped_command.command);
     process
         .args(&wrapped_command.args)
-        .current_dir(project_root);
+        .current_dir(project_root)
+        .stdin(Stdio::null());
     for (key, value) in runtime_env {
         process.env(key, value);
     }
@@ -716,47 +749,14 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
             wrapped_command.command
         )
     })?;
-    let activation_view = match StateStore::open_existing(state_root.to_path_buf()).await {
-        Ok(store) => {
-            let rendered = crate::init_surfaces::render_agent_init_packet_activation_with_store(
-                &store,
-                project_root,
-                dispatch_packet_path,
-                false,
-            )
-            .await
-            .unwrap_or_else(|_| {
-                serde_json::json!({
-                    "selection": {
-                        "mode": "dispatch_packet",
-                        "selected_role": receipt
-                            .activation_runtime_role
-                            .as_deref()
-                            .unwrap_or(&role_selection.selected_role),
-                    },
-                    "activation_semantics": {
-                        "activation_kind": "activation_view",
-                        "view_only": true,
-                    },
-                })
-            });
-            drop(store);
-            rendered
-        }
-        Err(_) => serde_json::json!({
-            "selection": {
-                "mode": "dispatch_packet",
-                "selected_role": receipt
-                    .activation_runtime_role
-                    .as_deref()
-                    .unwrap_or(&role_selection.selected_role),
-            },
-            "activation_semantics": {
-                "activation_kind": "activation_view",
-                "view_only": true,
-            },
-        }),
-    };
+    let activation_view = bounded_activation_view(
+        state_root,
+        project_root,
+        dispatch_packet_path,
+        receipt,
+        role_selection,
+    )
+    .await;
     let mut result = agent_lane_dispatch_result(
         activation_view,
         dispatch_packet_path,
@@ -969,14 +969,15 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     ) {
         let activation_view = match StateStore::open_existing(state_root.to_path_buf()).await {
             Ok(store) => {
-                let rendered = crate::init_surfaces::render_agent_init_packet_activation_with_store(
-                    &store,
-                    project_root,
-                    dispatch_packet_path,
-                    false,
-                )
-                .await
-                .unwrap_or_else(|_| default_activation_view(receipt, role_selection));
+                let rendered =
+                    crate::init_surfaces::render_agent_init_packet_activation_with_store(
+                        &store,
+                        project_root,
+                        dispatch_packet_path,
+                        false,
+                    )
+                    .await
+                    .unwrap_or_else(|_| default_activation_view(receipt, role_selection));
                 drop(store);
                 rendered
             }
@@ -1004,14 +1005,8 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
                 receipt.dispatch_target
             )),
         );
-        body.insert(
-            "status".to_string(),
-            serde_json::json!("blocked"),
-        );
-        body.insert(
-            "execution_state".to_string(),
-            serde_json::json!("blocked"),
-        );
+        body.insert("status".to_string(), serde_json::json!("blocked"));
+        body.insert("execution_state".to_string(), serde_json::json!("blocked"));
         refresh_execution_truth(body, role_selection, receipt, Some(&backend_id), "missing");
         return Ok(result);
     }
@@ -1032,7 +1027,8 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     let mut process = std::process::Command::new(&wrapped_command.command);
     process
         .args(&wrapped_command.args)
-        .current_dir(project_root);
+        .current_dir(project_root)
+        .stdin(Stdio::null());
     if let Some(serde_yaml::Value::Mapping(env_map)) =
         yaml_lookup(&backend_entry, &["dispatch", "env"])
     {
@@ -1048,11 +1044,12 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     if let Some(runtime_role) = receipt.activation_runtime_role.as_deref() {
         process.env("VIDA_RUNTIME_ROLE", runtime_role);
     }
-    let effective_selected_backend = crate::runtime_dispatch_state::canonical_selected_backend_for_receipt(
-        role_selection,
-        receipt,
-    )
-    .or_else(|| receipt.selected_backend.clone());
+    let effective_selected_backend =
+        crate::runtime_dispatch_state::canonical_selected_backend_for_receipt(
+            role_selection,
+            receipt,
+        )
+        .or_else(|| receipt.selected_backend.clone());
     if let Some(selected_backend) = effective_selected_backend.as_deref() {
         process.env("VIDA_SELECTED_BACKEND", selected_backend);
     }
@@ -1063,47 +1060,14 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
             wrapped_command.command
         )
     })?;
-    let activation_view = match StateStore::open_existing(state_root.to_path_buf()).await {
-        Ok(store) => {
-            let rendered = crate::init_surfaces::render_agent_init_packet_activation_with_store(
-                &store,
-                project_root,
-                dispatch_packet_path,
-                false,
-            )
-            .await
-            .unwrap_or_else(|_| {
-                serde_json::json!({
-                    "selection": {
-                        "mode": "dispatch_packet",
-                        "selected_role": receipt
-                            .activation_runtime_role
-                            .as_deref()
-                            .unwrap_or(&role_selection.selected_role),
-                    },
-                    "activation_semantics": {
-                        "activation_kind": "activation_view",
-                        "view_only": true,
-                    },
-                })
-            });
-            drop(store);
-            rendered
-        }
-        Err(_) => serde_json::json!({
-            "selection": {
-                "mode": "dispatch_packet",
-                "selected_role": receipt
-                    .activation_runtime_role
-                    .as_deref()
-                    .unwrap_or(&role_selection.selected_role),
-            },
-            "activation_semantics": {
-                "activation_kind": "activation_view",
-                "view_only": true,
-            },
-        }),
-    };
+    let activation_view = bounded_activation_view(
+        state_root,
+        project_root,
+        dispatch_packet_path,
+        receipt,
+        role_selection,
+    )
+    .await;
     let mut result = agent_lane_dispatch_result(
         activation_view,
         dispatch_packet_path,
@@ -1265,8 +1229,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
 mod tests {
     use super::{
         agent_lane_dispatch_result, configured_internal_host_activation_parts,
-        configured_internal_host_runtime_env,
-        dispatch_packet_prompt,
+        configured_internal_host_runtime_env, dispatch_packet_prompt,
         mark_dispatch_result_execution_evidence, parse_external_provider_output,
         parse_internal_codex_exec_output, wrap_command_with_optional_timeout,
     };
@@ -1334,7 +1297,8 @@ mod tests {
 
         assert!(super::external_provider_output_indicates_error(&parsed));
         let status_code_success = true;
-        let execution_succeeded = status_code_success && !super::external_provider_output_indicates_error(&parsed);
+        let execution_succeeded =
+            status_code_success && !super::external_provider_output_indicates_error(&parsed);
         assert!(!execution_succeeded);
     }
 

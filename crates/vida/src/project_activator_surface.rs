@@ -973,13 +973,25 @@ pub(crate) async fn run_project_activator(args: super::ProjectActivatorArgs) -> 
             .state_dir
             .clone()
             .unwrap_or_else(super::state_store::default_state_dir);
-        match super::StateStore::open(state_dir.clone()).await {
-            Ok(store) => {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            super::StateStore::open(state_dir.clone()),
+        )
+        .await
+        {
+            Ok(Ok(store)) => {
                 activation_store = Some(store);
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 eprintln!(
                     "Project activation failed closed before mutation: unable to initialize authoritative state store at {}: {error}",
+                    state_dir.display()
+                );
+                return ExitCode::from(1);
+            }
+            Err(_) => {
+                eprintln!(
+                    "Project activation failed closed before mutation: timed out initializing authoritative state store at {} after 10s",
                     state_dir.display()
                 );
                 return ExitCode::from(1);
@@ -1740,7 +1752,9 @@ pub(crate) fn write_project_activation_receipt(
         .as_deref()
         .and_then(|system| registry.get(system));
     let default_agent_templates = host_cli_entry
-        .map(|entry| project_activator_codex_materialization::host_cli_entry_carrier_catalog(Some(entry)))
+        .map(|entry| {
+            project_activator_codex_materialization::host_cli_entry_carrier_catalog(Some(entry))
+        })
         .unwrap_or_default()
         .into_iter()
         .filter_map(|row| row["role_id"].as_str().map(ToString::to_string))
