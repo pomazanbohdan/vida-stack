@@ -191,6 +191,7 @@ pub(crate) fn build_runtime_lane_selection_from_bundle(
     let feature_terms = feature_delivery_design_terms(&normalized_request);
     let implementation_terms = explicit_implementation_request_terms(&normalized_request);
     let verification_terms = explicit_verification_request_terms(&normalized_request);
+    let bounded_repair_terms = explicit_bounded_code_repair_terms(&normalized_request);
     candidates.sort_by(|a, b| b.5.len().cmp(&a.5.len()).then_with(|| a.0.cmp(&b.0)));
     let selected = &candidates[0];
     if selected.5.is_empty() {
@@ -243,6 +244,22 @@ pub(crate) fn build_runtime_lane_selection_from_bundle(
             return Ok(result);
         }
 
+        if !bounded_repair_terms.is_empty()
+            && verification_terms.is_empty()
+            && role_exists_in_lane_bundle(bundle, "worker")
+        {
+            result.selected_role = "worker".to_string();
+            result.matched_terms = bounded_repair_terms.clone();
+            result.confidence = if bounded_repair_terms.len() >= 3 {
+                "high".to_string()
+            } else {
+                "medium".to_string()
+            };
+            result.reason = "auto_explicit_implementation_request".to_string();
+            result.execution_plan = build_runtime_execution_plan_from_snapshot(bundle, &result);
+            return Ok(result);
+        }
+
         result.reason = "auto_no_keyword_match".to_string();
         result.execution_plan = build_runtime_execution_plan_from_snapshot(bundle, &result);
         return Ok(result);
@@ -271,12 +288,27 @@ pub(crate) fn build_runtime_lane_selection_from_bundle(
     if selected_is_weak_pbi_discussion
         && !implementation_terms.is_empty()
         && verification_terms.is_empty()
-        && feature_terms.is_empty()
         && role_exists_in_lane_bundle(bundle, "worker")
     {
         result.selected_role = "worker".to_string();
         result.matched_terms = implementation_terms.clone();
         result.confidence = if implementation_terms.len() >= 3 {
+            "high".to_string()
+        } else {
+            "medium".to_string()
+        };
+        result.reason = "auto_explicit_implementation_request_override".to_string();
+        result.execution_plan = build_runtime_execution_plan_from_snapshot(bundle, &result);
+        return Ok(result);
+    }
+    if matches!(selected_mode, "scope_discussion" | "pbi_discussion")
+        && !bounded_repair_terms.is_empty()
+        && verification_terms.is_empty()
+        && role_exists_in_lane_bundle(bundle, "worker")
+    {
+        result.selected_role = "worker".to_string();
+        result.matched_terms = bounded_repair_terms.clone();
+        result.confidence = if bounded_repair_terms.len() >= 3 {
             "high".to_string()
         } else {
             "medium".to_string()
@@ -1186,6 +1218,58 @@ mod tests {
     }
 
     #[test]
+    fn bounded_rust_file_repair_request_overrides_scope_discussion_route() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "vida-test",
+                "--project-name",
+                "VIDA Test",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+
+        let config =
+            read_yaml_file_checked(&harness.path().join("vida.config.yaml")).expect("config");
+        let bundle = build_compiled_agent_extension_bundle_for_root(&config, harness.path())
+            .expect("bundle should compile");
+        let pack_router = pack_router_keywords_json(&config);
+        let selection = build_runtime_lane_selection_from_bundle(
+            &bundle,
+            "state_store",
+            &pack_router,
+            "Repair selector precedence in crates/vida/src/runtime_lane_summary.rs, fix the bug, and add a regression test so this Rust file stops routing to specification planning.",
+        )
+        .expect("selection should build");
+
+        assert_eq!(selection.selected_role, "worker");
+        assert!(selection.conversational_mode.is_none());
+        assert_eq!(
+            selection.reason,
+            "auto_explicit_implementation_request_override"
+        );
+        assert!(selection
+            .matched_terms
+            .iter()
+            .any(|term| term == "repair" || term == "fix" || term == "regression test"));
+        assert!(selection
+            .matched_terms
+            .iter()
+            .any(|term| term == ".rs" || term == "crates/" || term == "rust file"));
+    }
+
+    #[test]
     fn codex_dispatch_aliases_are_loaded_from_overlay_not_rust_catalog() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -1321,6 +1405,55 @@ fn explicit_implementation_request_terms(request: &str) -> Vec<String> {
             "patch".to_string(),
         ],
     )
+}
+
+fn explicit_bounded_code_repair_terms(request: &str) -> Vec<String> {
+    let repair_terms = crate::contains_keywords(
+        request,
+        &[
+            "repair".to_string(),
+            "fix".to_string(),
+            "bug".to_string(),
+            "regression".to_string(),
+            "regression test".to_string(),
+            "regression-test".to_string(),
+        ],
+    );
+    if repair_terms.is_empty() {
+        return Vec::new();
+    }
+
+    let scope_terms = crate::contains_keywords(
+        request,
+        &[
+            ".rs".to_string(),
+            "crates/".to_string(),
+            "src/".to_string(),
+            "src".to_string(),
+            "rust file".to_string(),
+            "bounded rust file".to_string(),
+            "single rust file".to_string(),
+            "file scope".to_string(),
+            "exact file".to_string(),
+            "test".to_string(),
+            "tests".to_string(),
+            "unit test".to_string(),
+            "integration test".to_string(),
+            "proof".to_string(),
+            "proof of".to_string(),
+        ],
+    );
+    if scope_terms.is_empty() {
+        return Vec::new();
+    }
+
+    let mut combined = Vec::new();
+    for term in repair_terms.into_iter().chain(scope_terms.into_iter()) {
+        if !combined.contains(&term) {
+            combined.push(term);
+        }
+    }
+    combined
 }
 
 fn explicit_verification_request_terms(request: &str) -> Vec<String> {

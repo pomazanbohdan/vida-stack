@@ -81,7 +81,7 @@ Layout rule:
 4. `.codex/config.toml` is the rendered delegated carrier-tier registration surface, including thread/depth caps and per-role config-file mapping,
 5. `.codex/agents/*.toml` are rendered host-executor surfaces and must not become the owner of tier or dispatch-alias policy,
 6. project activation should render `.codex/**` from the overlay catalog while preserving the framework-owned tier instruction bodies from the template source,
-7. project-visible agent activation should target the carrier tiers `junior`, `middle`, `senior`, and `architect`; runtime role selection is carried separately in packet/runtime state instead of replacing the carrier identity,
+7. project-visible agent activation should target the carrier tiers declared in `vida.config.yaml -> host_environment.codex.agents`; runtime role selection is carried separately in packet/runtime state instead of replacing the carrier identity,
 8. VIDA role/skill/profile/team meaning still comes from the project activation layer, not from Codex TOML alone.
 9. Role/profile/flow catalogs should be sourced from the agent-extension YAML registries; `vida.config.yaml` may narrow them, but runtime should not require duplicated id lists when the registries already define the active set.
 10. the root session is a bootstrap and coordination owner, not a separate long-lived local implementer role.
@@ -117,7 +117,7 @@ Internal dispatch aliases:
 
 1. canonical `dispatch_aliases` should live in the registry path declared by `vida.config.yaml -> agent_extensions.registries.dispatch_aliases`,
 2. it is not the primary visible agent model of the project,
-3. the primary visible agent model is the carrier ladder `junior -> middle -> senior -> architect`,
+3. the primary visible agent model is the configured carrier catalog rendered from `vida.config.yaml`, not a Rust-hardcoded ladder,
 4. runtime role is activation-time state such as `worker`, `coach`, `verifier`, or `solution_architect`.
 
 Ownership note:

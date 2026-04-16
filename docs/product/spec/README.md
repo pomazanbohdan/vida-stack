@@ -63,3 +63,5 @@ changelog_ref: README.changelog.jsonl
 - `docs/product/spec/update-only-agents-sidecar-add-project-design.md`
 - `docs/product/spec/exactly-one-bounded-small-patch-bug-design.md`
 - `docs/product/spec/exactly-one-bounded-producing-change-bug-design.md`
+- `docs/product/spec/repair-fail-closed-resume-closure-truth-design.md`
+- `docs/product/spec/repair-selector-precedence-crates-vida-src-design.md`

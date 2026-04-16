@@ -12,6 +12,29 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         return Ok(status);
     };
     let receipt = StateStore::validate_run_graph_dispatch_receipt_contract(receipt.clone())?;
+    let blocked_receipt = matches!(receipt.dispatch_status.as_str(), "blocked" | "failed")
+        || matches!(
+            receipt.lane_status.as_deref(),
+            Some("lane_blocked") | Some("lane_failed")
+        )
+        || receipt
+            .blocker_code
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || !receipt.downstream_dispatch_blockers.is_empty();
+    if blocked_receipt {
+        if let Some(selected_backend) = receipt
+            .selected_backend
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            status.selected_backend = selected_backend.to_string();
+        }
+        status.status = "blocked".to_string();
+        status.recovery_ready = false;
+        return Ok(status);
+    }
     let closure_candidate = receipt.downstream_dispatch_target.as_deref() == Some("closure")
         && receipt.downstream_dispatch_ready
         && receipt.downstream_dispatch_blockers.is_empty()

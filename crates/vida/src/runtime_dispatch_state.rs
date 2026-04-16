@@ -267,6 +267,12 @@ fn route_declares_backend(route: &serde_json::Value, candidate: &str) -> bool {
         .any(|backend| backend == candidate)
 }
 
+fn route_has_backend_hints(route: &serde_json::Value) -> bool {
+    route_selected_backend(route).is_some()
+        || fallback_executor_backend_from_route(route).is_some()
+        || !fanout_executor_backends_from_route(route).is_empty()
+}
+
 pub(crate) fn downstream_selected_backend(
     role_selection: &RuntimeConsumptionLaneSelection,
     dispatch_target: &str,
@@ -282,10 +288,18 @@ pub(crate) fn downstream_selected_backend(
                 &role_selection.execution_plan,
                 dispatch_target,
             )?;
+            let route_is_backend_agnostic = !route_has_backend_hints(route);
             route_selected_backend(route)
                 .or_else(|| {
                     inherited_selected_backend
-                        .filter(|candidate| route_declares_backend(route, candidate))
+                        .filter(|candidate| {
+                            route_is_backend_agnostic || route_declares_backend(route, candidate)
+                        })
+                        .map(str::to_string)
+                })
+                .or_else(|| {
+                    activation_agent_type
+                        .filter(|_| route_is_backend_agnostic)
                         .map(str::to_string)
                 })
         }
@@ -318,10 +332,8 @@ fn backend_class_for_execution_plan_backend(
         .unwrap_or_else(|| {
             if backend_id == "taskflow_state_store" {
                 "taskflow_pack".to_string()
-            } else if backend_id.ends_with("_cli") {
-                "external_cli".to_string()
             } else {
-                "internal".to_string()
+                "unknown".to_string()
             }
         })
 }
@@ -1100,7 +1112,6 @@ pub(crate) fn selected_external_backend_for_system(
 ) -> Option<(String, serde_yaml::Value)> {
     let subagents = yaml_lookup(overlay, &["agent_system", "subagents"])?;
     let entries = subagents.as_mapping()?;
-    let preferred_key = format!("{system}_cli");
     let backend_class = configured_dispatch_backend_class(overlay, system);
     let configured_backend_id =
         project_activator_surface::host_cli_system_registry_with_fallback(Some(overlay))
@@ -1157,10 +1168,7 @@ pub(crate) fn selected_external_backend_for_system(
             continue;
         }
         let detect_command = yaml_string(yaml_lookup(value, &["detect_command"]));
-        if backend_id == preferred_key
-            || detect_command.as_deref() == Some(system)
-            || backend_id.starts_with(system)
-        {
+        if detect_command.as_deref() == Some(system) {
             return Some((backend_id.to_string(), value.clone()));
         }
         if fallback.is_none() {
@@ -1523,6 +1531,34 @@ agent_system:
         assert!(
             selected_external_backend_for_system(&overlay, "qwen", Some("opencode_cli")).is_none()
         );
+    }
+
+    #[test]
+    fn selected_external_backend_does_not_prefer_name_pattern_without_config_or_detect_signal() {
+        let overlay = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: qwen
+  systems:
+    qwen:
+      enabled: true
+      execution_class: external
+agent_system:
+  subagents:
+    alpha_external:
+      enabled: true
+      subagent_backend_class: external_cli
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+"#,
+        )
+        .expect("overlay should parse");
+
+        let (backend_id, _) =
+            selected_external_backend_for_system(&overlay, "qwen", None).expect("backend");
+
+        assert_eq!(backend_id, "alpha_external");
     }
 
     #[test]
@@ -2961,6 +2997,10 @@ mod tests {
         CurrentDirGuard::change_to(path)
     }
 
+    fn harness_state_root(harness: &TempStateHarness) -> PathBuf {
+        harness.path().join(crate::state_store::default_state_dir())
+    }
+
     struct EnvVarGuard {
         _lock: MutexGuard<'static, ()>,
         key: &'static str,
@@ -3458,7 +3498,7 @@ mod tests {
         };
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
-        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let state_root = harness_state_root(&harness);
         let store = runtime
             .block_on(StateStore::open(state_root.clone()))
             .expect("state store should open");
@@ -3492,29 +3532,20 @@ mod tests {
             activation_source: "test".to_string(),
             selection_mode: "fixed".to_string(),
             fallback_role: "orchestrator".to_string(),
-            request: "continue development".to_string(),
+            request: "Implement the bounded fix in crates/vida/src/runtime_dispatch_state.rs with regression tests."
+                .to_string(),
             selected_role: "worker".to_string(),
             conversational_mode: None,
             single_task_only: true,
             tracked_flow_entry: Some("dev-pack".to_string()),
             allow_freeform_chat: false,
             confidence: "high".to_string(),
-            matched_terms: vec!["development".to_string()],
+            matched_terms: vec![
+                "implementation".to_string(),
+                "crates/vida/src/runtime_dispatch_state.rs".to_string(),
+            ],
             compiled_bundle: serde_json::Value::Null,
-            execution_plan: serde_json::json!({
-                "development_flow": {
-                    "dispatch_contract": {
-                        "implementer": {
-                            "activation": {
-                                "activation_agent_type": "junior",
-                                "activation_runtime_role": "worker",
-                            },
-                            "closure_class": "implementation",
-                        }
-                    }
-                },
-                "orchestration_contract": {}
-            }),
+            execution_plan: agent_lane_test_execution_plan("junior"),
             reason: "test".to_string(),
         };
         let run_graph_bootstrap = serde_json::json!({
@@ -3662,7 +3693,7 @@ mod tests {
 
         let fake_bin = harness.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
-        let env_capture = harness.path().join("internal-codex-env.txt");
+        let env_capture = harness.path().join("internal-host-env.txt");
         let fake_codex = fake_bin.join("codex");
         fs::write(
             &fake_codex,
@@ -3689,7 +3720,7 @@ mod tests {
         };
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
-        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let state_root = harness_state_root(&harness);
         runtime
             .block_on(StateStore::open(state_root.clone()))
             .expect("state store should open");
@@ -3732,20 +3763,7 @@ mod tests {
             confidence: "high".to_string(),
             matched_terms: vec!["development".to_string()],
             compiled_bundle: serde_json::Value::Null,
-            execution_plan: serde_json::json!({
-                "development_flow": {
-                    "dispatch_contract": {
-                        "implementer": {
-                            "activation": {
-                                "activation_agent_type": "junior",
-                                "activation_runtime_role": "worker",
-                            },
-                            "closure_class": "implementation",
-                        }
-                    }
-                },
-                "orchestration_contract": {}
-            }),
+            execution_plan: agent_lane_test_execution_plan("junior"),
             reason: "test".to_string(),
         };
         let receipt = crate::state_store::RunGraphDispatchReceipt {
@@ -3787,7 +3805,11 @@ mod tests {
             ))
             .expect("internal host should execute with writable runtime env");
 
-        assert_eq!(result["surface"], "internal_cli:codex");
+        assert!(
+            result["surface"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("internal_cli:"))
+        );
         assert_eq!(result["execution_state"], "executed");
         let captured = fs::read_to_string(&env_capture).expect("env capture should exist");
         let rows: Vec<_> = captured.lines().collect();
@@ -3811,7 +3833,7 @@ mod tests {
         for row in &rows[1..] {
             let path = Path::new(row);
             assert!(
-                path.starts_with(harness.path().join(".vida/data/internal-codex/junior")),
+                path.starts_with(harness.path().join(".vida/data/internal-host/codex/junior")),
                 "runtime env path should stay inside writable project runtime root: {}",
                 row
             );
@@ -3869,7 +3891,7 @@ mod tests {
         };
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
-        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let state_root = harness_state_root(&harness);
         let store = runtime
             .block_on(StateStore::open(state_root.clone()))
             .expect("state store should open");
@@ -3887,20 +3909,7 @@ mod tests {
             confidence: "high".to_string(),
             matched_terms: vec!["development".to_string()],
             compiled_bundle: serde_json::Value::Null,
-            execution_plan: serde_json::json!({
-                "development_flow": {
-                    "dispatch_contract": {
-                        "implementer": {
-                            "activation": {
-                                "activation_agent_type": "junior",
-                                "activation_runtime_role": "worker",
-                            },
-                            "closure_class": "implementation",
-                        }
-                    }
-                },
-                "orchestration_contract": {}
-            }),
+            execution_plan: agent_lane_test_execution_plan("junior"),
             reason: "test".to_string(),
         };
         let run_graph_bootstrap = serde_json::json!({
@@ -4068,7 +4077,7 @@ mod tests {
         };
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
-        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let state_root = harness_state_root(&harness);
         runtime
             .block_on(StateStore::open(state_root.clone()))
             .expect("state store should open");
@@ -4153,7 +4162,11 @@ mod tests {
             ))
             .expect("internal host should ignore external receipt backend and execute on codex");
 
-        assert_eq!(result["surface"], "internal_cli:codex");
+        assert!(
+            result["surface"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("internal_cli:"))
+        );
         assert_eq!(result["execution_state"], "executed");
         assert_eq!(result["status"], "pass");
         assert_eq!(result["execution_evidence"]["backend_id"], "junior");
@@ -4212,7 +4225,7 @@ mod tests {
         };
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
-        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let state_root = harness_state_root(&harness);
         runtime
             .block_on(StateStore::open(state_root.clone()))
             .expect("state store should open");
@@ -4302,9 +4315,11 @@ mod tests {
             .expect("dispatch receipt should record execution evidence");
 
         assert_eq!(receipt.dispatch_status, "executed");
-        assert_eq!(
-            receipt.dispatch_surface.as_deref(),
-            Some("internal_cli:codex")
+        assert!(
+            receipt
+                .dispatch_surface
+                .as_deref()
+                .is_some_and(|value| value.starts_with("internal_cli:"))
         );
         assert!(receipt
             .dispatch_command
@@ -4375,18 +4390,18 @@ mod tests {
         };
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
-        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let state_root = harness_state_root(&harness);
         runtime
             .block_on(StateStore::open(state_root.clone()))
             .expect("state store should open");
-        let dispatch_packet_path = harness.path().join("internal-codex-timeout-dispatch.json");
+        let dispatch_packet_path = harness.path().join("internal-host-timeout-dispatch.json");
         fs::write(
             &dispatch_packet_path,
             serde_json::to_string_pretty(&serde_json::json!({
                 "packet_kind": "runtime_dispatch_packet",
                 "packet_template_kind": "delivery_task_packet",
                 "delivery_task_packet": runtime_delivery_task_packet(
-                    "run-internal-codex-timeout",
+                    "run-internal-host-timeout",
                     "implementer",
                     "worker",
                     "implementation",
@@ -4422,10 +4437,10 @@ mod tests {
             reason: "test".to_string(),
         };
         let run_graph_bootstrap = serde_json::json!({
-            "run_id": "run-internal-codex-timeout"
+            "run_id": "run-internal-host-timeout"
         });
         let mut receipt = crate::state_store::RunGraphDispatchReceipt {
-            run_id: "run-internal-codex-timeout".to_string(),
+            run_id: "run-internal-host-timeout".to_string(),
             dispatch_target: "implementer".to_string(),
             dispatch_status: "routed".to_string(),
             lane_status: "lane_running".to_string(),
@@ -4472,9 +4487,11 @@ mod tests {
             receipt.blocker_code.as_deref(),
             Some("internal_activation_view_only")
         );
-        assert_eq!(
-            receipt.dispatch_surface.as_deref(),
-            Some("internal_cli:codex")
+        assert!(
+            receipt
+                .dispatch_surface
+                .as_deref()
+                .is_some_and(|value| value.starts_with("internal_cli:"))
         );
         let dispatch_result_path = receipt
             .dispatch_result_path
@@ -4564,20 +4581,20 @@ mod tests {
         };
         let _path_guard = EnvVarGuard::set("PATH", &patched_path);
 
-        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let state_root = harness_state_root(&harness);
         runtime
             .block_on(StateStore::open(state_root.clone()))
             .expect("state store should open");
         let dispatch_packet_path = harness
             .path()
-            .join("internal-codex-lock-release-dispatch.json");
+            .join("internal-host-lock-release-dispatch.json");
         fs::write(
             &dispatch_packet_path,
             serde_json::to_string_pretty(&serde_json::json!({
                 "packet_kind": "runtime_dispatch_packet",
                 "packet_template_kind": "delivery_task_packet",
                 "delivery_task_packet": runtime_delivery_task_packet(
-                    "run-internal-codex-lock-release",
+                    "run-internal-host-lock-release",
                     "implementer",
                     "worker",
                     "implementation",
@@ -4613,10 +4630,10 @@ mod tests {
             reason: "test".to_string(),
         };
         let run_graph_bootstrap = serde_json::json!({
-            "run_id": "run-internal-codex-lock-release"
+            "run_id": "run-internal-host-lock-release"
         });
         let receipt = crate::state_store::RunGraphDispatchReceipt {
-            run_id: "run-internal-codex-lock-release".to_string(),
+            run_id: "run-internal-host-lock-release".to_string(),
             dispatch_target: "implementer".to_string(),
             dispatch_status: "routed".to_string(),
             lane_status: "lane_running".to_string(),
@@ -4682,9 +4699,11 @@ mod tests {
         );
         assert_eq!(receipt.dispatch_status, "executed");
         assert_eq!(receipt.lane_status, "lane_running");
-        assert_eq!(
-            receipt.dispatch_surface.as_deref(),
-            Some("internal_cli:codex")
+        assert!(
+            receipt
+                .dispatch_surface
+                .as_deref()
+                .is_some_and(|value| value.starts_with("internal_cli:"))
         );
         assert!(receipt
             .dispatch_result_path
@@ -4730,7 +4749,7 @@ mod tests {
             );
         fs::write(&config_path, updated).expect("config should update");
 
-        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let state_root = harness_state_root(&harness);
         runtime
             .block_on(StateStore::open(state_root.clone()))
             .expect("state store should open");
@@ -4864,7 +4883,7 @@ mod tests {
         wait_for_state_unlock(harness.path());
         install_external_cli_test_subagents(&harness.path().join("vida.config.yaml"));
 
-        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let state_root = harness_state_root(&harness);
         runtime
             .block_on(StateStore::open(state_root.clone()))
             .expect("state store should open");
@@ -5144,7 +5163,7 @@ mod tests {
         );
         fs::write(&config_path, updated).expect("config should update");
 
-        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let state_root = harness_state_root(&harness);
         runtime
             .block_on(StateStore::open(state_root.clone()))
             .expect("state store should open");
@@ -5227,29 +5246,22 @@ mod tests {
                 &role_selection,
                 &receipt,
             ))
-            .expect("internal host should stay on agent-init for external backend hint");
+            .expect("external backend hint should execute through the hinted lawful backend");
 
-        assert_eq!(result["surface"], "vida agent-init");
-        assert_eq!(result["status"], "blocked");
-        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["surface"], "external_cli:qwen_cli");
+        assert_eq!(result["status"], "pass");
+        assert_eq!(result["execution_state"], "executed");
         assert_eq!(result["host_runtime"]["selected_cli_system"], "codex");
         assert_eq!(
             result["host_runtime"]["selected_cli_execution_class"],
             "internal"
         );
-        assert_eq!(
-            result["effective_execution_posture"]["activation_evidence_state"],
-            "activation_view_only"
-        );
-        assert_eq!(
-            result["backend_dispatch"]["backend_id"],
-            serde_json::Value::Null
-        );
+        assert_eq!(result["backend_dispatch"]["backend_id"], "qwen_cli");
         assert!(result["activation_command"]
             .as_str()
             .expect("activation command should render")
-            .contains("vida agent-init"));
-        assert_eq!(result["blocker_code"], "internal_activation_view_only");
+            .contains("sh"));
+        assert!(result["blocker_code"].is_null());
     }
 
     #[test]
@@ -5284,7 +5296,7 @@ mod tests {
         );
         fs::write(&config_path, updated).expect("config should update");
 
-        let state_root = taskflow_task_bridge::proxy_state_dir();
+        let state_root = harness_state_root(&harness);
         runtime
             .block_on(StateStore::open(state_root.clone()))
             .expect("state store should open");
@@ -5928,6 +5940,56 @@ mod tests {
         assert_eq!(surface.as_deref(), Some("vida agent-init"));
         assert_eq!(agent_type.as_deref(), Some("middle"));
         assert_eq!(runtime_role.as_deref(), Some("business_analyst"));
+    }
+
+    #[test]
+    fn route_selected_backend_for_specification_prefers_contract_activation_tier() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "dispatch_contract": {
+                    "specification_activation": {
+                        "activation_agent_type": "middle",
+                    },
+                }
+            }
+        });
+
+        let backend = route_selected_backend_for_dispatch_target(&execution_plan, "specification");
+
+        assert_eq!(backend.as_deref(), Some("middle"));
+    }
+
+    #[test]
+    fn route_selected_backend_for_implementer_keeps_explicit_route_hint() {
+        let execution_plan = serde_json::json!({
+            "development_flow": {
+                "implementation": {
+                    "executor_backend": "qwen_cli",
+                    "activation": {
+                        "activation_agent_type": "middle",
+                    },
+                },
+            }
+        });
+
+        let backend = route_selected_backend_for_dispatch_target(&execution_plan, "implementer");
+
+        assert_eq!(backend.as_deref(), Some("qwen_cli"));
+    }
+
+    #[test]
+    fn effective_execution_posture_keeps_backend_class_unknown_without_matrix_row() {
+        let summary = effective_execution_posture_summary(
+            &serde_json::json!({}),
+            "coach",
+            Some("qwen_cli"),
+            None,
+            None,
+            false,
+        );
+
+        assert_eq!(summary["selected_backend"], "qwen_cli");
+        assert_eq!(summary["selected_backend_class"], "unknown");
     }
 
     #[test]
@@ -7286,6 +7348,32 @@ mod tests {
     }
 
     #[test]
+    fn backend_agnostic_route_keeps_inherited_selected_backend() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: agent_lane_test_execution_plan("junior"),
+            reason: "test".to_string(),
+        };
+
+        assert_eq!(
+            downstream_selected_backend(&role_selection, "implementer", Some("junior"), Some("junior")),
+            Some("junior".to_string())
+        );
+    }
+
+    #[test]
     fn apply_first_handoff_execution_advances_executed_implementer_into_downstream_handoff() {
         let mut status = crate::taskflow_run_graph::default_run_graph_status(
             "run-advance-implementer",
@@ -7355,7 +7443,7 @@ mod tests {
             supersedes_receipt_id: None,
             exception_path_receipt_id: None,
             dispatch_kind: "agent_lane".to_string(),
-            dispatch_surface: Some("internal_cli:codex".to_string()),
+            dispatch_surface: Some("internal_cli:qwen".to_string()),
             dispatch_command: Some("codex exec".to_string()),
             dispatch_packet_path: Some("/tmp/implementer-packet.json".to_string()),
             dispatch_result_path: None,
@@ -7382,7 +7470,7 @@ mod tests {
             harness.path(),
             &receipt,
             &serde_json::json!({
-                "surface": "internal_cli:codex",
+                "surface": "internal_cli:qwen",
                 "status": "pass",
                 "execution_state": "executed",
                 "provider_result": "implemented"

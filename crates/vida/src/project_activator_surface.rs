@@ -641,25 +641,6 @@ pub(crate) fn file_contains_placeholder(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn list_host_cli_agent_templates(root: &Path) -> Vec<String> {
-    let agents_dir = root.join("agents");
-    let Ok(entries) = std::fs::read_dir(agents_dir) else {
-        return Vec::new();
-    };
-    let mut names = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("toml"))
-        .filter_map(|path| {
-            path.file_stem()
-                .and_then(|stem| stem.to_str())
-                .map(ToString::to_string)
-        })
-        .collect::<Vec<_>>();
-    names.sort();
-    names
-}
-
 pub(crate) fn build_project_activator_view(project_root: &Path) -> serde_json::Value {
     let agents_md = project_root.join("AGENTS.md");
     let agents_sidecar = project_root.join("AGENTS.sidecar.md");
@@ -1758,15 +1739,12 @@ pub(crate) fn write_project_activation_receipt(
     let host_cli_entry = normalized_host_cli_system
         .as_deref()
         .and_then(|system| registry.get(system));
-    let host_template_root = normalized_host_cli_system
-        .as_deref()
-        .and_then(|system| resolve_host_cli_template_source(system, host_cli_entry).ok())
-        .map(|path| path.display().to_string());
-    let default_agent_templates = host_template_root
-        .as_deref()
-        .map(Path::new)
-        .map(list_host_cli_agent_templates)
-        .unwrap_or_default();
+    let default_agent_templates = host_cli_entry
+        .map(|entry| project_activator_codex_materialization::host_cli_entry_carrier_catalog(Some(entry)))
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|row| row["role_id"].as_str().map(ToString::to_string))
+        .collect::<Vec<_>>();
     let receipt = serde_json::json!({
         "receipt_kind": "project_activation",
         "recorded_at": recorded_at,
@@ -2234,7 +2212,17 @@ mod tests {
         assert!(config.contains("mode: native"));
         assert!(config.contains("state_owner: orchestrator_only"));
         assert!(config.contains("max_parallel_agents: 4"));
-        for agent in ["junior", "middle", "senior", "architect"] {
+        let view = super::build_project_activator_view(harness.path());
+        let configured_agents = view["normal_work_defaults"]["default_agent_topology"]
+            .as_array()
+            .expect("default agent topology should render")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert!(!configured_agents.is_empty());
+
+        for agent in configured_agents {
             let rendered =
                 fs::read_to_string(harness.path().join(format!(".codex/agents/{agent}.toml")))
                     .unwrap_or_else(|_| panic!("{agent} agent should exist"));
@@ -2243,7 +2231,6 @@ mod tests {
             assert!(!rendered.contains("vida_reasoning_band"));
         }
 
-        let view = super::build_project_activator_view(harness.path());
         assert_eq!(view["host_environment"]["selected_cli_system"], "codex");
         assert_eq!(
             view["host_environment"]["selected_cli_execution_class"],

@@ -231,21 +231,16 @@ pub(crate) fn selected_backend_from_execution_plan_route(
         .or_else(|| route_backend_value(route, "fallback_executor_backend"))
         .or_else(|| route_backend_value(route, "fanout_executor_backends"))
         .or_else(|| {
-            carrier_backend_from_assignment(runtime_assignment_from_execution_plan(execution_plan))
-                .filter(|backend_id| is_valid_executor_backend_id(backend_id))
+            carrier_backend_from_assignment(dispatch_contract_lane_activation(route))
         })
+        .or_else(|| carrier_backend_from_assignment(
+            runtime_assignment_from_route(route),
+        ))
+        .or_else(|| {
+            carrier_backend_from_assignment(runtime_assignment_from_execution_plan(execution_plan))
+        })
+        .or_else(|| legacy_route_backend_hint(route))
         .filter(|value| !value.is_empty())
-}
-
-fn is_valid_executor_backend_id(backend_id: &str) -> bool {
-    if backend_id.trim().is_empty() {
-        return false;
-    }
-    let known_tier_ids = [
-        "junior", "middle", "senior", "principal", "architect",
-        "fast", "balanced", "quality",
-    ];
-    !known_tier_ids.contains(&backend_id.trim())
 }
 
 #[cfg(test)]
@@ -331,6 +326,42 @@ mod tests {
         assert_eq!(
             selected_backend_from_execution_plan_route(&serde_json::json!({}), &route).as_deref(),
             Some("legacy_hint")
+        );
+    }
+
+    #[test]
+    fn selected_backend_prefers_route_activation_agent_type_when_executor_hints_missing() {
+        let execution_plan = serde_json::json!({});
+        let route = serde_json::json!({
+            "activation": {
+                "activation_agent_type": "middle",
+                "activation_runtime_role": "business_analyst"
+            }
+        });
+
+        assert_eq!(
+            selected_backend_from_execution_plan_route(&execution_plan, &route).as_deref(),
+            Some("middle")
+        );
+    }
+
+    #[test]
+    fn selected_backend_preserves_explicit_priority_over_activation_hint() {
+        let execution_plan = serde_json::json!({
+            "runtime_assignment": {
+                "selected_tier": "senior",
+            }
+        });
+        let route = serde_json::json!({
+            "activation": {
+                "activation_agent_type": "middle",
+            },
+            "fallback_executor_backend": "qwen_cli"
+        });
+
+        assert_eq!(
+            selected_backend_from_execution_plan_route(&execution_plan, &route).as_deref(),
+            Some("qwen_cli")
         );
     }
 }

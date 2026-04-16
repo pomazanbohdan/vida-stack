@@ -50,7 +50,7 @@ fn default_activation_view(
     })
 }
 
-const DEFAULT_INTERNAL_CODEX_DISPATCH_TIMEOUT_SECONDS: u64 = 240;
+const DEFAULT_INTERNAL_HOST_DISPATCH_TIMEOUT_SECONDS: u64 = 240;
 const DEFAULT_DISPATCH_TIMEOUT_KILL_AFTER_GRACE_SECONDS: u64 = 1;
 
 fn configured_external_dispatch_wall_timeout_seconds(
@@ -65,7 +65,7 @@ fn configured_external_dispatch_wall_timeout_seconds(
         .filter(|seconds| *seconds > 0)
 }
 
-fn configured_internal_codex_dispatch_wall_timeout_seconds(
+fn configured_internal_host_dispatch_wall_timeout_seconds(
     system_entry: Option<&serde_yaml::Value>,
 ) -> u64 {
     system_entry
@@ -77,7 +77,7 @@ fn configured_internal_codex_dispatch_wall_timeout_seconds(
                 })
         })
         .filter(|seconds| *seconds > 0)
-        .unwrap_or(DEFAULT_INTERNAL_CODEX_DISPATCH_TIMEOUT_SECONDS)
+        .unwrap_or(DEFAULT_INTERNAL_HOST_DISPATCH_TIMEOUT_SECONDS)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +139,51 @@ struct ParsedExternalProviderOutput {
     usage: Option<serde_json::Value>,
     is_error: Option<bool>,
     error_message: Option<String>,
+}
+
+fn external_provider_output_indicates_error(output: &ParsedExternalProviderOutput) -> bool {
+    if output.is_error.unwrap_or(false) {
+        return true;
+    }
+
+    if output
+        .error_message
+        .as_ref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return true;
+    }
+
+    let Some(result_text) = output.result_text.as_ref() else {
+        return false;
+    };
+
+    let normalized = result_text.trim().to_ascii_lowercase();
+    if normalized.starts_with('[') && normalized.ends_with(']') {
+        return normalized.contains("error") || normalized.contains("exception");
+    }
+
+    false
+}
+
+fn external_provider_error_message(output: &ParsedExternalProviderOutput) -> Option<String> {
+    if output
+        .error_message
+        .as_ref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return output.error_message.clone();
+    }
+
+    if output
+        .result_text
+        .as_ref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return output.result_text.clone();
+    }
+
+    None
 }
 
 fn parse_external_provider_output(stdout: &str) -> Option<ParsedExternalProviderOutput> {
@@ -246,7 +291,7 @@ fn dispatch_packet_prompt(dispatch_packet_path: &str) -> String {
         })
 }
 
-fn selected_internal_codex_carrier(
+fn selected_internal_host_carrier(
     selected_cli_entry: Option<&serde_yaml::Value>,
     preferred_backend: Option<&str>,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
@@ -267,14 +312,16 @@ fn selected_internal_codex_carrier(
     })
 }
 
-fn configured_internal_codex_runtime_env(
+fn configured_internal_host_runtime_env(
     project_root: &Path,
+    selected_cli_system: &str,
     carrier_id: &str,
 ) -> Result<Vec<(String, String)>, String> {
     let runtime_root = project_root
         .join(".vida")
         .join("data")
-        .join("internal-codex")
+        .join("internal-host")
+        .join(selected_cli_system)
         .join(carrier_id);
     let xdg_config_home = runtime_root.join("config");
     let xdg_data_home = runtime_root.join("data");
@@ -290,7 +337,7 @@ fn configured_internal_codex_runtime_env(
     ] {
         std::fs::create_dir_all(dir).map_err(|error| {
             format!(
-                "Failed to prepare internal Codex runtime dir `{}`: {error}",
+                "Failed to prepare internal host runtime dir `{}`: {error}",
                 dir.display()
             )
         })?;
@@ -317,44 +364,75 @@ fn configured_internal_codex_runtime_env(
     ])
 }
 
-fn configured_internal_codex_activation_parts(
+fn configured_internal_host_activation_parts(
+    system_entry: Option<&serde_yaml::Value>,
     project_root: &Path,
     dispatch_packet_path: &str,
     carrier: &serde_json::Value,
 ) -> Result<(String, Vec<String>), String> {
+    let dispatch = system_entry
+        .and_then(|entry| yaml_lookup(entry, &["dispatch"]))
+        .ok_or_else(|| "Configured internal host system is missing `dispatch`".to_string())?;
+    let command = yaml_lookup(dispatch, &["command"])
+        .and_then(serde_yaml::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "Configured internal host system is missing non-empty `dispatch.command`".to_string()
+        })?
+        .to_string();
     let model = carrier["model"]
         .as_str()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "Configured Codex carrier is missing model".to_string())?;
+        .ok_or_else(|| "Configured internal host carrier is missing model".to_string())?;
     let sandbox_mode = carrier["sandbox_mode"]
         .as_str()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "Configured Codex carrier is missing sandbox_mode".to_string())?;
+        .ok_or_else(|| "Configured internal host carrier is missing sandbox_mode".to_string())?;
     let reasoning_effort = carrier["model_reasoning_effort"]
         .as_str()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("medium");
     let prompt = dispatch_packet_prompt(dispatch_packet_path);
-
-    Ok((
-        "codex".to_string(),
-        vec![
-            "exec".to_string(),
-            "--json".to_string(),
-            "-C".to_string(),
-            project_root.display().to_string(),
-            "-s".to_string(),
-            sandbox_mode.to_string(),
-            "-m".to_string(),
-            model.to_string(),
-            "-c".to_string(),
-            format!("model_reasoning_effort=\"{reasoning_effort}\""),
-            prompt,
-        ],
-    ))
+    let mut args = crate::yaml_string_list(yaml_lookup(dispatch, &["static_args"]));
+    if let Some(workdir_flag) = crate::yaml_string(yaml_lookup(dispatch, &["workdir_flag"])) {
+        args.push(workdir_flag);
+        args.push(project_root.display().to_string());
+    }
+    if let Some(sandbox_flag) = crate::yaml_string(yaml_lookup(dispatch, &["sandbox_flag"])) {
+        args.push(sandbox_flag);
+        args.push(sandbox_mode.to_string());
+    }
+    if let Some(model_flag) = crate::yaml_string(yaml_lookup(dispatch, &["model_flag"])) {
+        args.push(model_flag);
+        args.push(model.to_string());
+    }
+    if let Some(reasoning_effort_flag) =
+        crate::yaml_string(yaml_lookup(dispatch, &["reasoning_effort_flag"]))
+    {
+        let rendered_value = crate::yaml_string(yaml_lookup(
+            dispatch,
+            &["reasoning_effort_value_template"],
+        ))
+        .map(|template| template.replace("{value}", reasoning_effort))
+        .unwrap_or_else(|| reasoning_effort.to_string());
+        args.push(reasoning_effort_flag);
+        args.push(rendered_value);
+    }
+    let prompt_mode = crate::yaml_string(yaml_lookup(dispatch, &["prompt_mode"]))
+        .unwrap_or_else(|| "positional".to_string());
+    match prompt_mode.as_str() {
+        "positional" => args.push(prompt),
+        other => {
+            return Err(format!(
+                "Configured internal host system uses unsupported prompt_mode `{other}`"
+            ));
+        }
+    }
+    Ok((command, args))
 }
 
 pub(crate) fn agent_lane_dispatch_result(
@@ -583,11 +661,11 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
                 .as_str()
                 .unwrap_or("unknown")
         });
-    if selected_cli_system != "codex" || execution_class != "internal" {
+    if execution_class != "internal" {
         return Ok(None);
     }
 
-    let Some(carrier) = selected_internal_codex_carrier(
+    let Some(carrier) = selected_internal_host_carrier(
         selected_cli_entry.as_ref(),
         preferred_backend,
         receipt,
@@ -596,10 +674,16 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         return Ok(None);
     };
 
-    let carrier_id = carrier["role_id"].as_str().unwrap_or("codex");
-    let (command, args) =
-        configured_internal_codex_activation_parts(project_root, dispatch_packet_path, &carrier)?;
-    let wall_timeout_seconds = Some(configured_internal_codex_dispatch_wall_timeout_seconds(
+    let carrier_id = carrier["role_id"]
+        .as_str()
+        .unwrap_or(selected_cli_system.as_str());
+    let (command, args) = configured_internal_host_activation_parts(
+        selected_cli_entry.as_ref(),
+        project_root,
+        dispatch_packet_path,
+        &carrier,
+    )?;
+    let wall_timeout_seconds = Some(configured_internal_host_dispatch_wall_timeout_seconds(
         selected_cli_entry.as_ref(),
     ));
     let wrapped_command =
@@ -608,7 +692,8 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         &wrapped_command.command,
         &wrapped_command.args,
     );
-    let runtime_env = configured_internal_codex_runtime_env(project_root, carrier_id)?;
+    let runtime_env =
+        configured_internal_host_runtime_env(project_root, &selected_cli_system, carrier_id)?;
 
     let mut process = std::process::Command::new(&wrapped_command.command);
     process
@@ -627,7 +712,7 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
 
     let output = process.output().map_err(|error| {
         format!(
-            "Failed to execute internal Codex carrier `{carrier_id}` via `{}`: {error}",
+            "Failed to execute internal host carrier `{carrier_id}` for `{selected_cli_system}` via `{}`: {error}",
             wrapped_command.command
         )
     })?;
@@ -685,7 +770,7 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         .expect("internal agent lane dispatch result should serialize to an object");
     body.insert(
         "surface".to_string(),
-        serde_json::json!("internal_cli:codex"),
+        serde_json::json!(format!("internal_cli:{selected_cli_system}")),
     );
     body.insert(
         "activation_command".to_string(),
@@ -764,7 +849,7 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
     body.insert(
         "provider_error_items".to_string(),
         serde_json::to_value(parsed_output.error_messages.clone())
-            .expect("internal codex error items should serialize"),
+            .expect("internal host error items should serialize"),
     );
     if success {
         body.insert("blocker_code".to_string(), serde_json::Value::Null);
@@ -786,14 +871,18 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
             body.insert(
                 "provider_error".to_string(),
                 serde_json::json!(format!(
-                    "internal Codex carrier timed out after {timeout_seconds}s and kill-after grace {kill_after_grace_seconds}s without receipt-backed completion"
+                    "internal host carrier for `{selected_cli_system}` timed out after {timeout_seconds}s and kill-after grace {kill_after_grace_seconds}s without receipt-backed completion"
                 )),
             );
         }
         let blocker_reason = if timed_out {
-            "internal Codex carrier exceeded the bounded runtime window before returning execution evidence".to_string()
+            format!(
+                "internal host carrier for `{selected_cli_system}` exceeded the bounded runtime window before returning execution evidence"
+            )
         } else {
-            "internal Codex carrier completed without returning an agent_message result".to_string()
+            format!(
+                "internal host carrier for `{selected_cli_system}` completed without returning an agent_message result"
+            )
         };
         body.insert(
             "blocker_code".to_string(),
@@ -810,9 +899,13 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         } else if !parsed_output.error_messages.is_empty() {
             parsed_output.error_messages.join("\n")
         } else if output.status.success() {
-            "internal Codex carrier completed without returning an agent_message result".to_string()
+            format!(
+                "internal host carrier for `{selected_cli_system}` completed without returning an agent_message result"
+            )
         } else {
-            "internal Codex carrier exited without returning receipt-backed completion".to_string()
+            format!(
+                "internal host carrier for `{selected_cli_system}` exited without returning receipt-backed completion"
+            )
         };
         body.insert(
             "blocker_code".to_string(),
@@ -1044,8 +1137,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     let parsed_output = parse_external_provider_output(&stdout);
     let provider_reported_error = parsed_output
         .as_ref()
-        .and_then(|parsed| parsed.is_error)
-        .unwrap_or(false);
+        .is_some_and(external_provider_output_indicates_error);
     let success = output.status.success() && !provider_reported_error;
     let exit_code = output.status.code();
     let timed_out = wrapped_command.timed_out(exit_code);
@@ -1072,18 +1164,25 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
             }),
         );
     }
-    if let Some(parsed_output) = parsed_output {
-        body.insert("provider_output_json".to_string(), parsed_output.raw_json);
+    if let Some(parsed_output) = parsed_output.as_ref() {
+        body.insert(
+            "provider_output_json".to_string(),
+            parsed_output.raw_json.clone(),
+        );
         body.insert(
             "provider_result".to_string(),
             parsed_output
                 .result_text
+                .clone()
                 .map(serde_json::Value::String)
                 .unwrap_or(serde_json::Value::Null),
         );
         body.insert(
             "provider_usage".to_string(),
-            parsed_output.usage.unwrap_or(serde_json::Value::Null),
+            parsed_output
+                .usage
+                .clone()
+                .unwrap_or(serde_json::Value::Null),
         );
         body.insert(
             "provider_is_error".to_string(),
@@ -1096,6 +1195,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
             "provider_error_message".to_string(),
             parsed_output
                 .error_message
+                .clone()
                 .map(serde_json::Value::String)
                 .unwrap_or(serde_json::Value::Null),
         );
@@ -1136,11 +1236,15 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         );
         refresh_execution_truth(body, role_selection, receipt, Some(&backend_id), "missing");
     } else {
-        let provider_error_message = body
-            .get("provider_error_message")
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(str::to_string);
+        let provider_error_message = parsed_output
+            .as_ref()
+            .and_then(external_provider_error_message)
+            .or_else(|| {
+                body.get("provider_error_message")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_string)
+            });
         body.insert(
             "blocker_code".to_string(),
             serde_json::json!("configured_backend_dispatch_failed"),
@@ -1160,11 +1264,14 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_lane_dispatch_result, mark_dispatch_result_execution_evidence,
-        parse_external_provider_output, parse_internal_codex_exec_output,
-        wrap_command_with_optional_timeout,
+        agent_lane_dispatch_result, configured_internal_host_activation_parts,
+        configured_internal_host_runtime_env,
+        dispatch_packet_prompt,
+        mark_dispatch_result_execution_evidence, parse_external_provider_output,
+        parse_internal_codex_exec_output, wrap_command_with_optional_timeout,
     };
     use crate::RuntimeConsumptionLaneSelection;
+    use std::path::Path;
 
     #[test]
     fn parse_external_provider_output_extracts_qwen_json_success_result() {
@@ -1195,6 +1302,43 @@ mod tests {
     }
 
     #[test]
+    fn parse_external_provider_output_detects_bracketed_api_error() {
+        let parsed = parse_external_provider_output(
+            r#"{"type":"result","is_error":false,"result":"[API Error: 401 invalid access token or token expired]"}"#,
+        )
+        .expect("qwen json error output should parse");
+
+        assert!(super::external_provider_output_indicates_error(&parsed));
+        assert_eq!(
+            super::external_provider_error_message(&parsed).as_deref(),
+            Some("[API Error: 401 invalid access token or token expired]")
+        );
+    }
+
+    #[test]
+    fn parse_external_provider_output_with_success_stays_success() {
+        let parsed = parse_external_provider_output(
+            r#"{"type":"result","subtype":"success","is_error":false,"result":"OK"}"#,
+        )
+        .expect("qwen json error output should parse");
+
+        assert!(!super::external_provider_output_indicates_error(&parsed));
+    }
+
+    #[test]
+    fn parse_external_provider_output_bracketed_api_error_cannot_be_treated_as_executed() {
+        let parsed = parse_external_provider_output(
+            r#"{"type":"result","is_error":false,"result":"[API Error: 401 invalid access token or token expired]"}"#,
+        )
+        .expect("qwen json error output should parse");
+
+        assert!(super::external_provider_output_indicates_error(&parsed));
+        let status_code_success = true;
+        let execution_succeeded = status_code_success && !super::external_provider_output_indicates_error(&parsed);
+        assert!(!execution_succeeded);
+    }
+
+    #[test]
     fn parse_internal_codex_exec_output_extracts_last_agent_message() {
         let parsed = parse_internal_codex_exec_output(
             r#"{"type":"thread.started","thread_id":"abc"}
@@ -1206,6 +1350,78 @@ mod tests {
         assert_eq!(parsed.result_text.as_deref(), Some("final"));
         assert_eq!(parsed.error_messages, vec!["warning".to_string()]);
         assert_eq!(parsed.raw_json.as_array().map(Vec::len), Some(4));
+    }
+
+    #[test]
+    fn configured_internal_host_runtime_env_uses_selected_system_segment() {
+        let harness = std::env::temp_dir().join(format!(
+            "vida-runtime-dispatch-execution-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&harness).expect("create harness dir");
+        let env = configured_internal_host_runtime_env(&harness, "qwen", "worker-a")
+            .expect("internal host env");
+        let xdg_config_home = env
+            .iter()
+            .find(|(key, _)| key == "XDG_CONFIG_HOME")
+            .map(|(_, value)| value.clone())
+            .expect("xdg config home");
+
+        assert!(xdg_config_home.contains("/.vida/data/internal-host/qwen/worker-a/config"));
+        let _ = std::fs::remove_dir_all(&harness);
+    }
+
+    #[test]
+    fn configured_internal_host_activation_parts_use_system_dispatch_config() {
+        let system_entry = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: codex
+  static_args: ["exec", "--json"]
+  workdir_flag: -C
+  sandbox_flag: -s
+  model_flag: -m
+  reasoning_effort_flag: -c
+  reasoning_effort_value_template: 'model_reasoning_effort="{value}"'
+  prompt_mode: positional
+"#,
+        )
+        .expect("system entry should parse");
+        let carrier = serde_json::json!({
+            "model": "gpt-5.4",
+            "model_reasoning_effort": "high",
+            "sandbox_mode": "workspace-write"
+        });
+
+        let (command, args) = configured_internal_host_activation_parts(
+            Some(&system_entry),
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            &carrier,
+        )
+        .expect("internal host activation parts");
+
+        assert_eq!(command, "codex");
+        assert_eq!(
+            args,
+            vec![
+                "exec".to_string(),
+                "--json".to_string(),
+                "-C".to_string(),
+                "/tmp/project".to_string(),
+                "-s".to_string(),
+                "workspace-write".to_string(),
+                "-m".to_string(),
+                "gpt-5.4".to_string(),
+                "-c".to_string(),
+                "model_reasoning_effort=\"high\"".to_string(),
+                dispatch_packet_prompt("/tmp/project/.vida/dispatch.json"),
+            ]
+        );
     }
 
     #[test]

@@ -100,6 +100,17 @@ host_environment:
       materialization_mode: codex_toml_catalog_render
       template_root: .codex
       runtime_root: .codex
+      dispatch:
+        command: codex
+        static_args:
+          - exec
+          - --json
+        workdir_flag: -C
+        sandbox_flag: -s
+        model_flag: -m
+        reasoning_effort_flag: -c
+        reasoning_effort_value_template: 'model_reasoning_effort="{value}"'
+        prompt_mode: positional
       carriers: *codex_agent_catalog
     qwen:
       enabled: true

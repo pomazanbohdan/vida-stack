@@ -6560,4 +6560,94 @@ hierarchy: framework,contracts
 
         let _ = fs::remove_dir_all(&root);
     }
+
+    #[tokio::test]
+    async fn latest_recovery_summary_fails_closed_when_latest_dispatch_receipt_is_blocked() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-recovery-blocked-receipt-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = sample_run_graph_status();
+        status.run_id = "run-blocked-recovery".to_string();
+        status.task_id = "task-blocked-recovery".to_string();
+        status.active_node = "coach".to_string();
+        status.next_node = None;
+        status.status = "ready".to_string();
+        status.lane_id = "coach_lane".to_string();
+        status.lifecycle_stage = "coach_active".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-blocked-recovery".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("external_cli:hermes_cli".to_string()),
+            dispatch_command: Some("hermes ...".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/dispatch-result.json".to_string()),
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_target: Some("verification".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("after review".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_review_clean_evidence".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: Some("coach".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-16T00:00:00Z".to_string(),
+        };
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist blocked dispatch receipt");
+
+        let reconciled = store
+            .run_graph_status("run-blocked-recovery")
+            .await
+            .expect("reconciled run graph status should load");
+        assert_eq!(reconciled.status, "blocked");
+        assert_eq!(reconciled.selected_backend, "hermes_cli");
+        assert!(!reconciled.recovery_ready);
+
+        let recovery = store
+            .latest_run_graph_recovery_summary()
+            .await
+            .expect("recovery summary should load")
+            .expect("recovery summary should exist");
+        assert_eq!(recovery.run_id, "run-blocked-recovery");
+        assert_eq!(recovery.resume_status, "blocked");
+        assert!(!recovery.recovery_ready);
+        assert!(recovery.delegation_gate.delegated_cycle_open);
+        assert_eq!(
+            recovery.delegation_gate.blocker_code.as_deref(),
+            Some("open_delegated_cycle")
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

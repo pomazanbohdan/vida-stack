@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use crate::project_activator_surface::{
     host_cli_system_enabled, host_cli_system_execution_class, host_cli_system_materialization_mode,
-    host_cli_system_runtime_root, host_cli_system_runtime_surface, list_host_cli_agent_templates,
-    normalize_host_cli_system, resolve_host_cli_template_source, HOST_CLI_PLACEHOLDER,
+    host_cli_system_runtime_root, host_cli_system_runtime_surface, normalize_host_cli_system,
+    resolve_host_cli_template_source, HOST_CLI_PLACEHOLDER,
 };
 
 pub(crate) struct ProjectActivatorHostCliSummary {
@@ -110,12 +110,12 @@ pub(crate) fn build_project_activator_host_cli_summary(
         .as_deref()
         .and_then(|system| host_cli_system_registry.get(system))
         .or_else(|| host_cli_system_registry.get(&catalog_system));
-    let default_host_agent_templates = host_cli_template_source_root
-        .as_deref()
-        .map(list_host_cli_agent_templates)
-        .unwrap_or_default();
     let host_cli_agent_catalog =
         crate::project_activator_surface::host_cli_entry_carrier_catalog(catalog_entry);
+    let default_host_agent_templates = host_cli_agent_catalog
+        .iter()
+        .filter_map(|row| row["role_id"].as_str().map(ToString::to_string))
+        .collect::<Vec<_>>();
     let default_agent_topology = host_cli_agent_catalog
         .iter()
         .filter_map(|row| row["role_id"].as_str().map(ToString::to_string))
@@ -144,5 +144,71 @@ pub(crate) fn build_project_activator_host_cli_summary(
         default_host_agent_templates,
         default_agent_topology,
         carrier_tier_rates,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_project_activator_host_cli_summary;
+    use std::{fs, time::{SystemTime, UNIX_EPOCH}};
+
+    #[test]
+    fn host_cli_summary_uses_configured_carrier_catalog_as_template_source_of_truth() {
+        let tempdir = std::env::temp_dir().join(format!(
+            "vida-host-cli-summary-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&tempdir).expect("temp dir should initialize");
+        let overlay: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      materialization_mode: codex_toml_catalog_render
+      runtime_root: .codex
+      template_root: .codex
+      carriers:
+        implementer-fast:
+          tier: fast
+          rate: 2
+          runtime_roles: [worker]
+          task_classes: [implementation]
+        reviewer-proof:
+          tier: proof
+          rate: 8
+          runtime_roles: [verifier]
+          task_classes: [verification]
+"#,
+        )
+        .expect("overlay yaml should parse");
+        let registry = crate::project_activator_surface::host_cli_system_registry_with_fallback(
+            Some(&overlay),
+        );
+
+        let summary =
+            build_project_activator_host_cli_summary(&tempdir, Some(&overlay), &registry);
+
+        assert_eq!(
+            summary.default_host_agent_templates,
+            vec![
+                "implementer-fast".to_string(),
+                "reviewer-proof".to_string()
+            ]
+        );
+        assert_eq!(
+            summary.default_agent_topology,
+            vec![
+                "implementer-fast".to_string(),
+                "reviewer-proof".to_string()
+            ]
+        );
+
+        let _ = fs::remove_dir_all(tempdir);
     }
 }

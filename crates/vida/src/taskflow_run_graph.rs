@@ -2215,8 +2215,14 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
 mod tests {
     use super::*;
     use crate::temp_state::TempStateHarness;
+    use crate::launcher_activation_snapshot::pack_router_keywords_json;
+    use crate::runtime_dispatch_state::load_project_overlay_yaml_for_root;
+    use crate::state_store::LauncherActivationSnapshot;
     use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
+    use std::path::Path;
+    use crate::launcher_activation_snapshot::config_file_digest;
+    use crate::build_compiled_agent_extension_bundle_for_root;
 
     #[test]
     fn governance_handoff_uses_lane_targets_for_execution() {
@@ -2232,6 +2238,78 @@ mod tests {
             governance_handoff(Some("spec-pack"), DispatchTargetFormat::Direct);
         assert_eq!(handoff_state, "awaiting_spec-pack");
         assert_eq!(resume_target, "dispatch.spec-pack");
+    }
+
+    async fn write_activation_snapshot_for_store(store: &StateStore) -> Result<(), String> {
+        let project_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        let config = load_project_overlay_yaml_for_root(&project_root)?;
+        let bundle = build_compiled_agent_extension_bundle_for_root(&config, &project_root)
+            .map_err(|error| format!("build compiled bundle: {error}"))?;
+        let pack_router = pack_router_keywords_json(&config);
+        let snapshot = LauncherActivationSnapshot {
+            source: "state_store".to_string(),
+            source_config_path: project_root.join("vida.config.yaml").display().to_string(),
+            source_config_digest: config_file_digest(&project_root.join("vida.config.yaml"))
+                .map_err(|error| format!("read config digest: {error}"))?,
+            captured_at: "2026-01-01T00:00:00Z".to_string(),
+            compiled_bundle: bundle,
+            pack_router_keywords: pack_router,
+        };
+        store
+            .write_launcher_activation_snapshot(&snapshot)
+            .await
+            .map_err(|error| format!("write launcher activation snapshot: {error}"))?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn derive_seeded_run_graph_prefers_worker_for_bound_repair_with_file_scope_terms() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open state store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        let payload = derive_seeded_run_graph_status(
+            &store,
+            "task-repair-seed-1",
+            "Repair scope and specification drift in crates/vida/src/runtime_lane_summary.rs, fix the file, add regression tests, and prove test coverage.",
+        )
+        .await
+        .expect("seed should be generated");
+
+        assert_eq!(payload.role_selection.selected_role, "worker");
+        assert!(payload.role_selection.conversational_mode.is_none());
+        assert_eq!(payload.status.task_class, "implementation");
+        assert_eq!(payload.status.route_task_class, "implementation");
+        assert_ne!(payload.status.next_node.as_deref(), Some("spec-pack"));
+    }
+
+    #[tokio::test]
+    async fn derive_seeded_run_graph_keeps_design_spec_request_in_scope_discussion() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open state store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+        let payload = derive_seeded_run_graph_status(
+            &store,
+            "task-design-seed-1",
+            "Research the feature scope, write the specification and acceptance criteria.",
+        )
+        .await
+        .expect("seed should be generated");
+
+        assert_eq!(payload.status.task_class, "scope_discussion");
+        assert!(payload.role_selection.conversational_mode.is_some());
+        assert_ne!(payload.status.route_task_class, "implementation");
     }
 
     #[test]

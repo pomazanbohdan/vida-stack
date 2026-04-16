@@ -889,19 +889,26 @@ mod tests {
 
         let config = fs::read_to_string(harness.path().join(".codex/config.toml"))
             .expect("rendered codex config should exist");
-        assert!(config.contains("[agents.junior]"));
-        assert!(config.contains("[agents.middle]"));
-        assert!(config.contains("[agents.senior]"));
-        assert!(config.contains("[agents.architect]"));
+        let configured_agents = project_activator_surface::build_project_activator_view(harness.path())
+            ["normal_work_defaults"]["default_agent_topology"]
+            .as_array()
+            .expect("default agent topology should render")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        assert!(!configured_agents.is_empty());
+        for agent in &configured_agents {
+            assert!(config.contains(&format!("[agents.{agent}]")));
+        }
         assert!(!config.contains("[agents.development_implementer]"));
         assert!(!config.contains("[agents.development_coach]"));
         assert!(!config.contains("[agents.development_verifier]"));
         assert!(!config.contains("[agents.development_escalation]"));
 
-        for agent in ["junior", "middle", "senior", "architect"] {
-            let rendered =
-                fs::read_to_string(harness.path().join(format!(".codex/agents/{agent}.toml")))
-                    .unwrap_or_else(|_| panic!("{agent} agent should exist"));
+        for agent in &configured_agents {
+            let rendered = fs::read_to_string(harness.path().join(format!(".codex/agents/{agent}.toml")))
+                .unwrap_or_else(|_| panic!("{agent} agent should exist"));
             assert!(!rendered.contains("vida_tier"));
             assert!(!rendered.contains("vida_rate"));
             assert!(!rendered.contains("vida_reasoning_band"));
