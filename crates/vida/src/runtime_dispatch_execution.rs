@@ -1,5 +1,11 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
+use std::sync::mpsc::{self, TryRecvError};
+use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
@@ -130,11 +136,156 @@ struct WrappedCommand {
     timeout_wrapper: Option<CommandTimeoutWrapper>,
 }
 
-impl WrappedCommand {
-    fn timed_out(&self, exit_code: Option<i32>) -> bool {
-        self.timeout_wrapper
-            .as_ref()
-            .is_some_and(|_| matches!(exit_code, Some(124) | Some(137)))
+#[derive(Debug)]
+struct ObservedCommandOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    timed_out: bool,
+}
+
+#[derive(Debug)]
+enum TimeoutProgress {
+    WaitingForDeadline(Instant),
+    WaitingForKill(Instant),
+    TimedOut,
+}
+
+#[cfg(unix)]
+fn signal_process_group(process_group_id: u32, signal: libc::c_int) -> Result<(), String> {
+    let result = unsafe { libc::killpg(process_group_id as libc::pid_t, signal) };
+    if result == 0 {
+        return Ok(());
+    }
+
+    let error = std::io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(code) if code == libc::ESRCH => Ok(()),
+        _ => Err(format!(
+            "failed to signal process group {process_group_id} with signal {signal}: {error}"
+        )),
+    }
+}
+
+fn spawn_reader_thread<T>(stream: Option<T>) -> std::thread::JoinHandle<Vec<u8>>
+where
+    T: Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut stream) = stream {
+            let _ = stream.read_to_end(&mut bytes);
+        }
+        bytes
+    })
+}
+
+fn try_complete_reader(
+    slot: &mut Option<Vec<u8>>,
+    receiver: &mpsc::Receiver<Vec<u8>>,
+) -> Result<(), String> {
+    if slot.is_some() {
+        return Ok(());
+    }
+
+    match receiver.try_recv() {
+        Ok(bytes) => {
+            *slot = Some(bytes);
+            Ok(())
+        }
+        Err(TryRecvError::Empty) => Ok(()),
+        Err(TryRecvError::Disconnected) => Err("command output reader disconnected".to_string()),
+    }
+}
+
+fn execute_wrapped_command(
+    mut process: std::process::Command,
+    wrapped_command: &WrappedCommand,
+) -> Result<ObservedCommandOutput, String> {
+    process.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    if wrapped_command.timeout_wrapper.is_some() {
+        process.process_group(0);
+    }
+
+    let mut child = process
+        .spawn()
+        .map_err(|error| format!("spawn failed for `{}`: {error}", wrapped_command.command))?;
+    let process_group_id = child.id();
+    let child_stdout = child.stdout.take();
+    let child_stderr = child.stderr.take();
+    let (stdout_tx, stdout_rx) = mpsc::channel();
+    let (stderr_tx, stderr_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = stdout_tx.send(spawn_reader_thread(child_stdout).join().unwrap_or_default());
+    });
+    std::thread::spawn(move || {
+        let _ = stderr_tx.send(spawn_reader_thread(child_stderr).join().unwrap_or_default());
+    });
+
+    let mut status = None;
+    let mut stdout = None;
+    let mut stderr = None;
+    let mut timed_out = false;
+    let mut timeout_progress = wrapped_command.timeout_wrapper.as_ref().map(|wrapper| {
+        TimeoutProgress::WaitingForDeadline(
+            Instant::now() + Duration::from_secs(wrapper.timeout_seconds),
+        )
+    });
+
+    loop {
+        if status.is_none() {
+            status = child.try_wait().map_err(|error| {
+                format!("failed to wait on `{}`: {error}", wrapped_command.command)
+            })?;
+        }
+        try_complete_reader(&mut stdout, &stdout_rx)?;
+        try_complete_reader(&mut stderr, &stderr_rx)?;
+
+        if status.is_some() && stdout.is_some() && stderr.is_some() {
+            return Ok(ObservedCommandOutput {
+                status: status.expect("status checked above"),
+                stdout: stdout.take().expect("stdout checked above"),
+                stderr: stderr.take().expect("stderr checked above"),
+                timed_out,
+            });
+        }
+
+        match timeout_progress.take() {
+            Some(TimeoutProgress::WaitingForDeadline(deadline)) => {
+                if Instant::now() >= deadline {
+                    #[cfg(unix)]
+                    signal_process_group(process_group_id, libc::SIGTERM)?;
+                    timed_out = true;
+                    let kill_deadline = Instant::now()
+                        + Duration::from_secs(
+                            wrapped_command
+                                .timeout_wrapper
+                                .as_ref()
+                                .map(|wrapper| wrapper.kill_after_grace_seconds)
+                                .unwrap_or_default(),
+                        );
+                    timeout_progress = Some(TimeoutProgress::WaitingForKill(kill_deadline));
+                } else {
+                    timeout_progress = Some(TimeoutProgress::WaitingForDeadline(deadline));
+                }
+            }
+            Some(TimeoutProgress::WaitingForKill(kill_deadline)) => {
+                if Instant::now() >= kill_deadline {
+                    #[cfg(unix)]
+                    signal_process_group(process_group_id, libc::SIGKILL)?;
+                    timeout_progress = Some(TimeoutProgress::TimedOut);
+                } else {
+                    timeout_progress = Some(TimeoutProgress::WaitingForKill(kill_deadline));
+                }
+            }
+            Some(TimeoutProgress::TimedOut) => {
+                timeout_progress = Some(TimeoutProgress::TimedOut);
+            }
+            None => {}
+        }
+
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 
@@ -146,15 +297,9 @@ fn wrap_command_with_optional_timeout(
     if let Some(timeout_seconds) = timeout_seconds.filter(|seconds| *seconds > 0) {
         let kill_after_grace_seconds =
             DEFAULT_DISPATCH_TIMEOUT_KILL_AFTER_GRACE_SECONDS.min(timeout_seconds.max(1));
-        let mut wrapped_args = vec![
-            format!("--kill-after={kill_after_grace_seconds}s"),
-            format!("{timeout_seconds}s"),
-            command.clone(),
-        ];
-        wrapped_args.extend(args);
         WrappedCommand {
-            command: "timeout".to_string(),
-            args: wrapped_args,
+            command,
+            args,
             timeout_wrapper: Some(CommandTimeoutWrapper {
                 timeout_seconds,
                 kill_after_grace_seconds,
@@ -763,7 +908,7 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         process.env("VIDA_RUNTIME_ROLE", runtime_role);
     }
 
-    let output = process.output().map_err(|error| {
+    let output = execute_wrapped_command(process, &wrapped_command).map_err(|error| {
         format!(
             "Failed to execute internal host carrier `{carrier_id}` for `{selected_cli_system}` via `{}`: {error}",
             wrapped_command.command
@@ -824,7 +969,7 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let parsed_output = parse_internal_codex_exec_output(&stdout);
     let exit_code = output.status.code();
-    let timed_out = wrapped_command.timed_out(exit_code);
+    let timed_out = output.timed_out;
     let activation_only = timed_out
         || (output.status.success()
             && parsed_output.result_text.is_none()
@@ -1074,7 +1219,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         process.env("VIDA_SELECTED_BACKEND", selected_backend);
     }
 
-    let output = process.output().map_err(|error| {
+    let output = execute_wrapped_command(process, &wrapped_command).map_err(|error| {
         format!(
             "Failed to execute configured external backend `{backend_id}` via `{}`: {error}",
             wrapped_command.command
@@ -1119,10 +1264,10 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let parsed_output = parse_external_provider_output(&stdout);
-    let success =
-        output.status.success() && external_provider_output_confirms_execution(parsed_output.as_ref());
+    let success = output.status.success()
+        && external_provider_output_confirms_execution(parsed_output.as_ref());
     let exit_code = output.status.code();
-    let timed_out = wrapped_command.timed_out(exit_code);
+    let timed_out = output.timed_out;
     body.insert(
         "status".to_string(),
         serde_json::json!(if success { "pass" } else { "blocked" }),
@@ -1253,13 +1398,15 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
 mod tests {
     use super::{
         agent_lane_dispatch_result, configured_internal_host_activation_parts,
-        configured_internal_host_runtime_env, dispatch_packet_prompt,
+        configured_internal_host_runtime_env, dispatch_packet_prompt, execute_wrapped_command,
         external_provider_output_confirms_execution, mark_dispatch_result_execution_evidence,
-        parse_external_provider_output,
-        parse_internal_codex_exec_output, wrap_command_with_optional_timeout,
+        parse_external_provider_output, parse_internal_codex_exec_output,
+        wrap_command_with_optional_timeout, CommandTimeoutWrapper,
     };
     use crate::RuntimeConsumptionLaneSelection;
     use std::path::Path;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn parse_external_provider_output_extracts_qwen_json_success_result() {
@@ -1577,19 +1724,33 @@ dispatch:
             Some(5),
         );
 
-        assert_eq!(wrapped.command, "timeout");
+        assert_eq!(wrapped.command, "codex");
+        assert_eq!(wrapped.args, vec!["exec".to_string()]);
         assert_eq!(
-            wrapped.args,
-            vec![
-                "--kill-after=1s".to_string(),
-                "5s".to_string(),
-                "codex".to_string(),
-                "exec".to_string()
-            ]
+            wrapped.timeout_wrapper,
+            Some(CommandTimeoutWrapper {
+                timeout_seconds: 5,
+                kill_after_grace_seconds: 1,
+            })
         );
-        assert!(wrapped.timed_out(Some(124)));
-        assert!(wrapped.timed_out(Some(137)));
-        assert!(!wrapped.timed_out(Some(1)));
+    }
+
+    #[test]
+    fn execute_wrapped_command_times_out_when_descendant_keeps_pipe_open() {
+        let wrapped = wrap_command_with_optional_timeout(
+            "sh".to_string(),
+            vec!["-c".to_string(), "(sleep 30) & exit 0".to_string()],
+            Some(1),
+        );
+        let mut process = std::process::Command::new(&wrapped.command);
+        process.args(&wrapped.args).stdin(Stdio::null());
+
+        let started = Instant::now();
+        let output =
+            execute_wrapped_command(process, &wrapped).expect("timed command should complete");
+
+        assert!(output.timed_out);
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]

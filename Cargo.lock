@@ -5679,6 +5679,7 @@ dependencies = [
  "blake3",
  "clap",
  "docflow-cli",
+ "libc",
  "serde",
  "serde_json",
  "serde_yaml",
