@@ -2,6 +2,53 @@ use super::*;
 use serde_json::Deserializer;
 
 impl StateStore {
+    async fn materialize_task_close_closure_artifacts(
+        &self,
+        status: &RunGraphStatus,
+    ) -> Result<bool, StateStoreError> {
+        if status.status != "completed" {
+            return Ok(false);
+        }
+        let Some(mut receipt) = self.run_graph_dispatch_receipt(&status.run_id).await? else {
+            return Ok(false);
+        };
+        let Some(dispatch_packet_path) = receipt
+            .dispatch_packet_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(false);
+        };
+        let completion_receipt_id = format!("task-close-{}", status.task_id);
+        let completion_result_path =
+            crate::runtime_dispatch_state::write_runtime_lane_completion_result(
+                self.root(),
+                &status.run_id,
+                "closure",
+                &completion_receipt_id,
+                dispatch_packet_path,
+            )
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+        receipt.downstream_dispatch_target = Some("closure".to_string());
+        receipt.downstream_dispatch_command = Some(format!(
+            "vida taskflow consume continue --run-id {} --json",
+            status.run_id
+        ));
+        receipt.downstream_dispatch_note =
+            Some("task close reconciled the run into lawful closure".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers.clear();
+        receipt.downstream_dispatch_packet_path = None;
+        receipt.downstream_dispatch_status = Some("executed".to_string());
+        receipt.downstream_dispatch_result_path = Some(completion_result_path);
+        receipt.downstream_dispatch_trace_path = None;
+        receipt.downstream_dispatch_active_target = Some("closure".to_string());
+        receipt.downstream_dispatch_last_target = Some("closure".to_string());
+        self.record_run_graph_dispatch_receipt(&receipt).await?;
+        Ok(true)
+    }
+
     async fn refresh_run_graph_continuation_after_task_close(
         &self,
         task_id: &str,
@@ -21,16 +68,24 @@ impl StateStore {
         let rows: Vec<RunIdRow> = query.take(0)?;
         for row in rows {
             let status = self.run_graph_status(&row.run_id).await?;
-            if let Some(binding) = crate::taskflow_continuation::build_run_graph_continuation_binding(
-                &status,
-                None,
-                "task_close_reconcile",
-                Some(
-                    "Closing the active task reconciled the run into a completed state and bound downstream closure as the next lawful bounded unit.",
-                ),
-            ) {
-                self.record_run_graph_continuation_binding(&binding).await?;
+            let Some(binding) =
+                crate::taskflow_continuation::build_run_graph_continuation_binding(
+                    &status,
+                    None,
+                    "task_close_reconcile",
+                    Some(
+                        "Closing the active task reconciled the run into a completed state and bound downstream closure as the next lawful bounded unit.",
+                    ),
+                )
+            else {
+                continue;
+            };
+            let closure_bound = binding.active_bounded_unit["kind"] == "downstream_dispatch_target"
+                && binding.active_bounded_unit["dispatch_target"] == "closure";
+            if closure_bound && !self.materialize_task_close_closure_artifacts(&status).await? {
+                continue;
             }
+            self.record_run_graph_continuation_binding(&binding).await?;
         }
         Ok(())
     }
@@ -742,6 +797,81 @@ mod tests {
             })
             .await
             .expect("persist initial continuation binding");
+        let packet_dir = root.join("runtime-consumption/dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create dispatch packet dir");
+        let implementer_packet_path = packet_dir.join("run-close-task-implementer.json");
+        fs::write(
+            &implementer_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "run_id": "run-close-task",
+                "role_selection_full": {
+                    "ok": true,
+                    "activation_source": "test",
+                    "selection_mode": "fixed",
+                    "fallback_role": "orchestrator",
+                    "request": "continue development",
+                    "selected_role": "worker",
+                    "conversational_mode": null,
+                    "single_task_only": true,
+                    "tracked_flow_entry": "dev-pack",
+                    "allow_freeform_chat": false,
+                    "confidence": "high",
+                    "matched_terms": ["implementation"],
+                    "compiled_bundle": null,
+                    "execution_plan": null,
+                    "reason": "test"
+                },
+                "run_graph_bootstrap": { "run_id": "run-close-task" },
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": {
+                    "packet_id": "run-close-task::implementer::delivery",
+                    "goal": "Implement bounded fix",
+                    "scope_in": ["dispatch_target:implementer"],
+                    "owned_paths": ["crates/vida/src/state_store_task_store.rs"],
+                    "definition_of_done": ["record bounded implementation result"],
+                    "verification_command": "cargo test -p vida --bin vida 'state_store::state_store_task_store::tests::close_task_refreshes_run_graph_continuation_binding_to_closure' -- --exact --nocapture --test-threads=1",
+                    "proof_target": "closure reconcile proof",
+                    "stop_rules": ["stop after bounded result"],
+                    "blocking_question": "What remains to complete the bounded fix?"
+                }
+            }))
+            .expect("encode implementer packet"),
+        )
+        .expect("write implementer packet");
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-close-task".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init --dispatch-packet /tmp/implementer.json --execute-dispatch --json".to_string()),
+                dispatch_packet_path: Some(implementer_packet_path.display().to_string()),
+                dispatch_result_path: Some("/tmp/implementer-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: Some("coach".to_string()),
+                downstream_dispatch_command: Some("vida agent-init".to_string()),
+                downstream_dispatch_note: Some("stale coach handoff".to_string()),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["pending_implementation_evidence".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("blocked".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("implementer".to_string()),
+                downstream_dispatch_last_target: Some("implementer".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("junior".to_string()),
+                recorded_at: "2026-04-13T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist dispatch receipt");
 
         store
             .close_task("feature-close-dev", "implemented and proven")
@@ -761,6 +891,30 @@ mod tests {
         );
         assert_eq!(binding.active_bounded_unit["dispatch_target"], "closure");
         assert_eq!(binding.sequential_vs_parallel_posture, "sequential_only");
+        let receipt = store
+            .run_graph_dispatch_receipt("run-close-task")
+            .await
+            .expect("load reconciled receipt")
+            .expect("reconciled receipt should exist");
+        assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("closure"));
+        assert_eq!(receipt.downstream_dispatch_status.as_deref(), Some("executed"));
+        assert!(!receipt.downstream_dispatch_ready);
+        assert!(receipt.downstream_dispatch_blockers.is_empty());
+        assert!(receipt.downstream_dispatch_packet_path.is_none());
+        assert!(receipt
+            .downstream_dispatch_result_path
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()));
+        let resolved = crate::taskflow_consume_resume::resolve_runtime_consumption_resume_inputs(
+            &store,
+            Some("run-close-task"),
+            None,
+            None,
+        )
+        .await
+        .expect("closure-bound run should resolve after task close reconcile");
+        assert_eq!(resolved.dispatch_receipt.dispatch_target, "closure");
+        assert_eq!(resolved.dispatch_receipt.dispatch_status, "executed");
 
         let _ = fs::remove_dir_all(&root);
     }
