@@ -25,6 +25,14 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())
         || !receipt.downstream_dispatch_blockers.is_empty();
+    let spec_post_design_gate_blocked = receipt.dispatch_status == "executed"
+        && receipt.downstream_dispatch_target.as_deref() == Some("work-pool-pack")
+        && receipt.downstream_dispatch_blockers.iter().any(|blocker| {
+            matches!(
+                blocker.as_str(),
+                "pending_design_finalize" | "pending_spec_task_close"
+            )
+        });
     if blocked_receipt {
         if let Some(selected_backend) = receipt
             .selected_backend
@@ -33,6 +41,22 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             .filter(|value| !value.is_empty())
         {
             status.selected_backend = selected_backend.to_string();
+        }
+        if spec_post_design_gate_blocked {
+            let completed_target = receipt
+                .downstream_dispatch_last_target
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(receipt.dispatch_target.as_str());
+            let lifecycle_target = completed_target.replace('-', "_");
+            status.active_node = completed_target.to_string();
+            status.next_node = None;
+            status.lifecycle_stage = format!("{lifecycle_target}_complete");
+            status.policy_gate = "not_required".to_string();
+            status.handoff_state = "none".to_string();
+            status.resume_target = "none".to_string();
+            status.context_state = "sealed".to_string();
         }
         status.status = "blocked".to_string();
         status.recovery_ready = false;
@@ -1683,6 +1707,103 @@ mod tests {
         assert_eq!(reconciled.lifecycle_stage, "closure_complete");
         assert_eq!(reconciled.selected_backend, "opencode_cli");
         assert!(!reconciled.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-status-spec-design-gate-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let status = RunGraphStatus {
+            run_id: "run-spec-design-gate".to_string(),
+            task_id: "task-spec-design-gate".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "specification".to_string(),
+            next_node: None,
+            status: "running".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "middle".to_string(),
+            lane_id: "specification_lane".to_string(),
+            lifecycle_stage: "specification_active".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: true,
+        };
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist specification-active run-graph status");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-spec-design-gate".to_string(),
+                dispatch_target: "specification".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/specification-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/specification-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: Some("work-pool-pack".to_string()),
+                downstream_dispatch_command: Some("vida task ensure".to_string()),
+                downstream_dispatch_note: Some(
+                    "finalize the design doc and close spec-pack before work-pool shaping"
+                        .to_string(),
+                ),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec![
+                    "pending_design_finalize".to_string(),
+                    "pending_spec_task_close".to_string(),
+                ],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("blocked".to_string()),
+                downstream_dispatch_result_path: Some("/tmp/specification-result.json".to_string()),
+                downstream_dispatch_trace_path: Some("/tmp/specification-trace.json".to_string()),
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: Some("specification".to_string()),
+                downstream_dispatch_last_target: Some("specification".to_string()),
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("business_analyst".to_string()),
+                selected_backend: Some("middle".to_string()),
+                recorded_at: "2026-04-16T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist executed specification receipt");
+
+        let reconciled = store
+            .run_graph_status("run-spec-design-gate")
+            .await
+            .expect("load reconciled run-graph status");
+        assert_eq!(reconciled.status, "blocked");
+        assert_eq!(reconciled.active_node, "specification");
+        assert_eq!(reconciled.lifecycle_stage, "specification_complete");
+        assert_eq!(reconciled.next_node, None);
+        assert_eq!(reconciled.handoff_state, "none");
+        assert_eq!(reconciled.resume_target, "none");
+        assert!(!reconciled.recovery_ready);
+        assert!(!reconciled.delegation_gate().delegated_cycle_open);
+        assert_eq!(
+            reconciled.delegation_gate().delegated_cycle_state,
+            "clear".to_string()
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
