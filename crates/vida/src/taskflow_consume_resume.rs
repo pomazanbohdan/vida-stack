@@ -239,14 +239,6 @@ async fn validate_completed_run_downstream_resume_candidate(
     candidate_target: &str,
     candidate_source: &str,
 ) -> Result<(), String> {
-    let status = match store.run_graph_status(run_id).await {
-        Ok(status) => status,
-        Err(_) => return Ok(()),
-    };
-    if status.status != "completed" {
-        return Ok(());
-    }
-
     let binding = store
         .run_graph_continuation_binding(run_id)
         .await
@@ -292,17 +284,12 @@ async fn completed_run_explicit_downstream_target_for_resume(
     store: &super::StateStore,
     run_id: &str,
 ) -> Result<Option<String>, String> {
-    let status = store.run_graph_status(run_id).await.map_err(|error| {
-        format!("Failed to read persisted run-graph state for `{run_id}`: {error}")
-    })?;
-    if status.status != "completed" {
-        return Ok(None);
-    }
-
     let binding = store
         .run_graph_continuation_binding(run_id)
         .await
-        .map_err(|error| format!("Failed to read explicit continuation binding for `{run_id}`: {error}"))?;
+        .map_err(|error| {
+            format!("Failed to read explicit continuation binding for `{run_id}`: {error}")
+        })?;
     let Some(binding) = binding else {
         return Ok(None);
     };
@@ -445,8 +432,10 @@ fn runtime_consumption_resume_receipt_blocker_codes(
     if matches!(
         dispatch_receipt.dispatch_status.as_str(),
         "blocked" | "failed"
-    ) || matches!(dispatch_receipt.lane_status.as_str(), "lane_blocked" | "lane_failed")
-    {
+    ) || matches!(
+        dispatch_receipt.lane_status.as_str(),
+        "lane_blocked" | "lane_failed"
+    ) {
         blocker_codes.extend(
             dispatch_receipt
                 .downstream_dispatch_blockers
@@ -475,8 +464,8 @@ fn runtime_consumption_resume_receipt_next_actions(
         crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(dispatch_receipt);
     if current_lane_has_execution_evidence
         && blocker_codes
-        .iter()
-        .any(|code| code == "pending_review_clean_evidence")
+            .iter()
+            .any(|code| code == "pending_review_clean_evidence")
     {
         next_actions.push(
             "Record the missing clean review evidence before activating the downstream verification lane."
@@ -518,8 +507,10 @@ async fn emit_runtime_consumption_resume_json(
         runtime_consumption_resume_blocker_code(store, &payload_json, explicit_run_id).await?;
     let mut blocker_codes =
         runtime_consumption_resume_receipt_blocker_codes(&normalized_dispatch_receipt);
-    let mut next_actions =
-        runtime_consumption_resume_receipt_next_actions(&normalized_dispatch_receipt, &blocker_codes);
+    let mut next_actions = runtime_consumption_resume_receipt_next_actions(
+        &normalized_dispatch_receipt,
+        &blocker_codes,
+    );
     if let Some(blocker_code) = runtime_dispatch_receipt_blocker_code.as_deref() {
         super::apply_runtime_consumption_final_dispatch_receipt_blocker(
             &mut payload_json,
@@ -2319,12 +2310,13 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 .filter(|value| !value.is_empty())
             {
                 if let Ok(status) = store.run_graph_status(run_id).await {
-                    if let Err(error) = crate::taskflow_continuation::sync_run_graph_continuation_binding(
-                        &store,
-                        &status,
-                        "consume_continue_after_downstream_chain",
-                    )
-                    .await
+                    if let Err(error) =
+                        crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                            &store,
+                            &status,
+                            "consume_continue_after_downstream_chain",
+                        )
+                        .await
                     {
                         eprintln!("Failed to re-sync continuation binding after downstream dispatch chain: {error}");
                         return ExitCode::from(1);
@@ -2523,13 +2515,12 @@ mod tests {
         canonical_resume_lane_status, canonical_resume_string_array_entries,
         dispatch_receipt_internal_retry_eligible, dispatch_receipt_primary_rebind_eligible,
         dispatch_receipt_retry_eligible, normalize_runtime_dispatch_packet,
-        prefer_ready_downstream_packet_over_active_result,
-        prepare_explicit_resume_retry_artifact,
-        persisted_dispatch_packet_lineage_task_id, primary_backend_for_dispatch_receipt,
-        read_dispatch_packet, recover_missing_first_dispatch_receipt,
-        resolve_runtime_consumption_resume_inputs, resume_from_persisted_final_snapshot,
-        resume_packet_ready_blocker_parity_error, retry_backend_for_dispatch_receipt,
-        runtime_consumption_resume_blocker_code,
+        persisted_dispatch_packet_lineage_task_id,
+        prefer_ready_downstream_packet_over_active_result, prepare_explicit_resume_retry_artifact,
+        primary_backend_for_dispatch_receipt, read_dispatch_packet,
+        recover_missing_first_dispatch_receipt, resolve_runtime_consumption_resume_inputs,
+        resume_from_persisted_final_snapshot, resume_packet_ready_blocker_parity_error,
+        retry_backend_for_dispatch_receipt, runtime_consumption_resume_blocker_code,
         runtime_consumption_resume_receipt_blocker_codes,
         runtime_consumption_resume_receipt_next_actions,
         runtime_consumption_snapshot_has_failure_control_evidence,
@@ -4306,7 +4297,8 @@ agent_system:
 
         let downstream_packet_dir = root.join("runtime-consumption/downstream-dispatch-packets");
         fs::create_dir_all(&downstream_packet_dir).expect("create downstream packet dir");
-        let closure_packet_path = downstream_packet_dir.join("run-closure-bound-mixed-closure.json");
+        let closure_packet_path =
+            downstream_packet_dir.join("run-closure-bound-mixed-closure.json");
         let stale_coach_packet_path =
             downstream_packet_dir.join("run-closure-bound-mixed-stale-coach.json");
 
@@ -4403,8 +4395,7 @@ agent_system:
 
         let result_dir = root.join("runtime-consumption/dispatch-results");
         fs::create_dir_all(&result_dir).expect("create result dir");
-        let stale_coach_result_path =
-            result_dir.join("run-closure-bound-mixed-stale-coach.json");
+        let stale_coach_result_path = result_dir.join("run-closure-bound-mixed-stale-coach.json");
         fs::write(
             &stale_coach_result_path,
             serde_json::json!({
@@ -4719,8 +4710,7 @@ agent_system:
 
         receipt.downstream_dispatch_ready = true;
         receipt.downstream_dispatch_blockers = Vec::new();
-        receipt.downstream_dispatch_packet_path =
-            Some(closure_packet_path.display().to_string());
+        receipt.downstream_dispatch_packet_path = Some(closure_packet_path.display().to_string());
         receipt.downstream_dispatch_status = Some("packet_ready".to_string());
         store
             .record_run_graph_dispatch_receipt(&receipt)
@@ -4790,10 +4780,12 @@ agent_system:
             recorded_at: "2026-04-13T00:00:00Z".to_string(),
         };
 
-        let prepared =
-            prepare_explicit_resume_retry_artifact(None, &role_selection, &mut receipt);
+        let prepared = prepare_explicit_resume_retry_artifact(None, &role_selection, &mut receipt);
 
-        assert!(prepared, "retry eligibility may still be admitted as a candidate");
+        assert!(
+            prepared,
+            "retry eligibility may still be admitted as a candidate"
+        );
         assert_eq!(receipt.dispatch_status, "blocked");
         assert_eq!(receipt.lane_status, "lane_blocked");
         assert_eq!(
@@ -5631,8 +5623,7 @@ agent_system:
                     binding_source: "latest_run_graph_dispatch_receipt".to_string(),
                     why_this_unit: "closure is the only lawful next bounded unit".to_string(),
                     primary_path: "normal_delivery_path".to_string(),
-                    sequential_vs_parallel_posture: "sequential_only_downstream_bound"
-                        .to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_downstream_bound".to_string(),
                     request_text: Some("continue development".to_string()),
                     recorded_at: "2026-04-13T00:00:00Z".to_string(),
                 },
@@ -6058,24 +6049,27 @@ agent_system:
             .expect("persist child status");
 
         store
-            .record_run_graph_continuation_binding(&crate::state_store::RunGraphContinuationBinding {
-                run_id: "run-upstream".to_string(),
-                task_id: "task-upstream".to_string(),
-                status: "bound".to_string(),
-                active_bounded_unit: serde_json::json!({
-                    "kind": "task_graph_task",
-                    "task_id": "task-upstream",
-                    "run_id": "run-upstream",
-                    "task_status": "in_progress",
-                    "issue_type": "task"
-                }),
-                binding_source: "explicit_continuation_bind_task".to_string(),
-                why_this_unit: "operator rebound work to the upstream task".to_string(),
-                primary_path: "normal_delivery_path".to_string(),
-                sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
-                request_text: Some("continue".to_string()),
-                recorded_at: "2026-04-16T09:00:00Z".to_string(),
-            })
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: "run-upstream".to_string(),
+                    task_id: "task-upstream".to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "task_graph_task",
+                        "task_id": "task-upstream",
+                        "run_id": "run-upstream",
+                        "task_status": "in_progress",
+                        "issue_type": "task"
+                    }),
+                    binding_source: "explicit_continuation_bind_task".to_string(),
+                    why_this_unit: "operator rebound work to the upstream task".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound"
+                        .to_string(),
+                    request_text: Some("continue".to_string()),
+                    recorded_at: "2026-04-16T09:00:00Z".to_string(),
+                },
+            )
             .await
             .expect("persist explicit continuation binding");
 
@@ -6088,10 +6082,7 @@ agent_system:
             error.contains("must not silently reselect the stale latest run"),
             "unexpected error: {error}"
         );
-        assert!(
-            error.contains("run-upstream"),
-            "unexpected error: {error}"
-        );
+        assert!(error.contains("run-upstream"), "unexpected error: {error}");
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -6300,8 +6291,11 @@ agent_system:
         let store = StateStore::open(root.clone()).await.expect("open store");
 
         let explicit_run_id = "run-explicit";
-        let mut explicit_status =
-            crate::taskflow_run_graph::default_run_graph_status(explicit_run_id, "implementer", "delivery");
+        let mut explicit_status = crate::taskflow_run_graph::default_run_graph_status(
+            explicit_run_id,
+            "implementer",
+            "delivery",
+        );
         explicit_status.task_id = "task-explicit".to_string();
         explicit_status.status = "running".to_string();
         explicit_status.lifecycle_stage = "execution_active".to_string();
@@ -6347,8 +6341,11 @@ agent_system:
             .expect("persist explicit receipt");
 
         let latest_run_id = "run-latest";
-        let mut latest_status =
-            crate::taskflow_run_graph::default_run_graph_status(latest_run_id, "closure", "delivery");
+        let mut latest_status = crate::taskflow_run_graph::default_run_graph_status(
+            latest_run_id,
+            "closure",
+            "delivery",
+        );
         latest_status.task_id = "task-latest".to_string();
         latest_status.status = "completed".to_string();
         latest_status.lifecycle_stage = "closure_complete".to_string();
@@ -6397,13 +6394,10 @@ agent_system:
             }
         });
 
-        let explicit_blocker = runtime_consumption_resume_blocker_code(
-            &store,
-            &payload_json,
-            Some(explicit_run_id),
-        )
-        .await
-        .expect("explicit blocker lookup should succeed");
+        let explicit_blocker =
+            runtime_consumption_resume_blocker_code(&store, &payload_json, Some(explicit_run_id))
+                .await
+                .expect("explicit blocker lookup should succeed");
         assert_eq!(explicit_blocker, None);
 
         let latest_blocker = runtime_consumption_resume_blocker_code(&store, &payload_json, None)
@@ -6720,13 +6714,11 @@ agent_system:
             "direct consume path must declare a non-empty binding_source"
         );
         assert_ne!(
-            binding_source_resume,
-            "dispatch_execution",
+            binding_source_resume, "dispatch_execution",
             "downstream chain must use a distinct binding_source from per-receipt sync"
         );
         assert_ne!(
-            binding_source_direct,
-            "dispatch_execution",
+            binding_source_direct, "dispatch_execution",
             "downstream chain must use a distinct binding_source from per-receipt sync"
         );
     }
@@ -6781,8 +6773,7 @@ agent_system:
             recorded_at: "2026-04-15T00:00:00Z".to_string(),
         };
 
-        let prepared =
-            prepare_explicit_resume_retry_artifact(None, &role_selection, &mut receipt);
+        let prepared = prepare_explicit_resume_retry_artifact(None, &role_selection, &mut receipt);
 
         assert!(prepared);
         assert_eq!(receipt.dispatch_status, "blocked");
