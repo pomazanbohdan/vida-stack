@@ -3,6 +3,7 @@ use std::process::ExitCode;
 
 use crate::host_runtime_registry::looks_like_host_runtime_source_root;
 use crate::state_store::StateStore;
+use crate::surface_render::print_compact_command_families;
 
 use super::{
     build_runtime_lane_selection_with_store, ensure_launcher_bootstrap, normalize_root_arg,
@@ -1332,6 +1333,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                             "state dir",
                             &store.root().display().to_string(),
                         );
+                        print_compact_command_families(RenderMode::Plain, "vida orchestrator-init");
                         if init_view["project_activation"]["activation_pending"]
                             .as_bool()
                             .unwrap_or(false)
@@ -1776,6 +1778,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                 if let Some(path) = selection["downstream_packet_path"].as_str() {
                     print_surface_line(RenderMode::Plain, "downstream packet", path);
                 }
+                print_compact_command_families(RenderMode::Plain, "vida agent-init");
                 if let Some(backend) = surface_payload["backend_truth"]["selected_backend"].as_str()
                 {
                     print_surface_line(RenderMode::Plain, "selected backend", backend);

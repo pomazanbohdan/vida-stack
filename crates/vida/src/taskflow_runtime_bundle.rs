@@ -6,8 +6,9 @@ use crate::taskflow_protocol_binding::TASKFLOW_PROTOCOL_BINDING_AUTHORITY;
 use crate::{
     build_project_activator_view, doctor_launcher_summary_for_root,
     merge_project_activation_into_init_view, read_or_sync_launcher_activation_snapshot,
-    runtime_consumption_state::latest_admissible_retrieval_trust_signal, DoctorLauncherSummary,
-    StateStore, TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload,
+    runtime_consumption_state::latest_admissible_retrieval_trust_signal,
+    surface_render::operator_command_map, DoctorLauncherSummary, StateStore,
+    TaskflowConsumeBundleCheck, TaskflowConsumeBundlePayload,
 };
 
 use super::activation_status::{activation_status_is_pending, canonical_activation_status};
@@ -1544,6 +1545,7 @@ pub(crate) fn build_orchestrator_init_view(
             "vida taskflow consume bundle check --json",
             "vida docflow protocol-coverage-check --profile active-canon"
         ],
+        "operator_command_map": operator_command_map("vida orchestrator-init"),
         "feature_delivery_default_flow": {
             "documentation_first": true,
             "intake_runtime": "vida taskflow consume final <request> --json",
@@ -1614,6 +1616,7 @@ pub(crate) fn build_agent_init_view(
             "vida task show <task-id> --json",
             "vida taskflow consume bundle check --json"
         ],
+        "operator_command_map": operator_command_map("vida agent-init"),
         "allowed_non_orchestrator_roles": non_orchestrator_roles(activation_bundle),
         "worker_lane_markers": [
             "worker_lane_confirmed: true",
@@ -1888,6 +1891,82 @@ mod tests {
                 .any(|row| row == "vida protocol view instruction-contracts/role.worker-thinking"),
             "agent init should surface protocol-view-friendly command hints"
         );
+    }
+
+    #[test]
+    fn orchestrator_init_view_exposes_operator_command_map() {
+        let view = super::build_orchestrator_init_view(
+            Path::new("/tmp/demo"),
+            &serde_json::json!({"root_artifact_id": "framework-agent-definition"}),
+            &serde_json::json!({"startup_bundle": {}, "startup_capsules": []}),
+            &serde_json::json!({"binding_status": "bound"}),
+            &serde_json::json!({
+                "always_on_core": [],
+                "project_startup_bundle": [],
+                "project_runtime_capsules": [],
+                "task_specific_dynamic_context": [],
+            }),
+            &serde_json::json!({
+                "status": "bound",
+                "continuation_allowed": true,
+                "active_bounded_unit": serde_json::Value::Null,
+                "binding_source": serde_json::Value::Null,
+                "why_this_unit": serde_json::Value::Null,
+                "primary_path": "normal_delivery_path",
+                "sequential_vs_parallel_posture": "sequential_only_explicit_task_bound",
+                "next_actions": []
+            }),
+            "compatible",
+            "no_migration_required",
+        );
+
+        assert_eq!(view["operator_command_map"]["schema_version"], "v1");
+        let bootstrap = view["operator_command_map"]["families"]
+            .as_array()
+            .expect("families should be an array")
+            .iter()
+            .find(|family| family["family_id"] == "bootstrap")
+            .expect("bootstrap family should exist");
+        let commands = bootstrap["commands"]
+            .as_array()
+            .expect("bootstrap commands should be an array");
+        assert!(commands.iter().any(|command| command == "init"));
+        assert!(commands.iter().any(|command| command == "boot"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "orchestrator-init"));
+        assert_eq!(bootstrap["lane_scope"], "shared");
+    }
+
+    #[test]
+    fn agent_init_view_exposes_operator_command_map_with_lane_scope_markers() {
+        let view = super::build_agent_init_view(
+            Path::new("/tmp/demo"),
+            &serde_json::json!({"enabled_framework_roles": ["orchestrator", "worker"], "project_roles": []}),
+            &serde_json::json!({"startup_capsules": []}),
+            &serde_json::json!({"binding_status": "bound"}),
+            "compatible",
+            "no_migration_required",
+        );
+
+        assert_eq!(view["operator_command_map"]["schema_version"], "v1");
+        let runtime_status = view["operator_command_map"]["families"]
+            .as_array()
+            .expect("families should be an array")
+            .iter()
+            .find(|family| family["family_id"] == "runtime_status")
+            .expect("runtime status family should exist");
+        assert_eq!(runtime_status["lane_scope"], "root_only");
+        assert_eq!(runtime_status["availability"], "view_only_reference");
+
+        let bootstrap = view["operator_command_map"]["families"]
+            .as_array()
+            .expect("families should be an array")
+            .iter()
+            .find(|family| family["family_id"] == "bootstrap")
+            .expect("bootstrap family should exist");
+        assert_eq!(bootstrap["lane_scope"], "shared");
+        assert_eq!(bootstrap["availability"], "callable");
     }
 
     #[test]
