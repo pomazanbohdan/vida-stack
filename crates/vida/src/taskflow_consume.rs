@@ -380,7 +380,8 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                             eprintln!("{error}");
                             return ExitCode::from(1);
                         }
-                        let store = match super::StateStore::open_existing(state_root.clone()).await {
+                        let store = match super::StateStore::open_existing(state_root.clone()).await
+                        {
                             Ok(store) => store,
                             Err(error) => {
                                 eprintln!(
@@ -1137,7 +1138,8 @@ pub(crate) fn build_runtime_consumption_dispatch_receipt(
         None,
     )
     .filter(|value| !value.is_empty());
-    let dispatch_command = super::json_string(latest_status.get("dispatch_command"));
+    let dispatch_command =
+        super::runtime_dispatch_command_for_target(role_selection, &dispatch_target);
     let dispatch_blockers = super::json_string_list(latest_status.get("dispatch_blockers"));
     let dispatch_ready = super::json_bool(
         latest_status.get("dispatch_ready"),
@@ -1190,16 +1192,20 @@ fn canonical_dispatch_target_from_latest_status(
     role_selection: &super::RuntimeConsumptionLaneSelection,
     latest_status: &serde_json::Value,
 ) -> Option<String> {
-    let next_node = super::json_string(latest_status.get("next_node")).filter(|value| !value.is_empty());
-    next_node.as_deref().and_then(|next_node| {
-        super::dispatch_target_for_runtime_role(&role_selection.execution_plan, next_node)
-            .or_else(|| Some(next_node.to_string()))
-    }).or_else(|| {
-        super::dispatch_target_for_runtime_role(
-            &role_selection.execution_plan,
-            &role_selection.selected_role,
-        )
-    })
+    let next_node =
+        super::json_string(latest_status.get("next_node")).filter(|value| !value.is_empty());
+    next_node
+        .as_deref()
+        .and_then(|next_node| {
+            super::dispatch_target_for_runtime_role(&role_selection.execution_plan, next_node)
+                .or_else(|| Some(next_node.to_string()))
+        })
+        .or_else(|| {
+            super::dispatch_target_for_runtime_role(
+                &role_selection.execution_plan,
+                &role_selection.selected_role,
+            )
+        })
 }
 
 #[cfg(test)]
@@ -1318,6 +1324,59 @@ mod tests {
             receipt.activation_runtime_role.as_deref(),
             Some("business_analyst")
         );
+        assert_eq!(receipt.dispatch_command.as_deref(), Some("vida agent-init"));
+    }
+
+    #[test]
+    fn runtime_consumption_dispatch_receipt_keeps_agent_init_command_for_mixed_implementer_route() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue implementation".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["implementation".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "implementation": {
+                        "executor_backend": "qwen_cli",
+                        "fallback_executor_backend": "internal_subagents",
+                        "activation": {
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        }
+                    }
+                },
+                "runtime_assignment": {
+                    "selected_tier": "junior",
+                    "activation_agent_type": "junior",
+                    "activation_runtime_role": "worker"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-mixed-implementer",
+            "latest_status": {
+                "next_node": "implementer",
+                "dispatch_command": "qwen --auth-type qwen-oauth -y -o json"
+            }
+        });
+
+        let receipt =
+            build_runtime_consumption_dispatch_receipt(&role_selection, &run_graph_bootstrap);
+
+        assert_eq!(receipt.dispatch_target, "implementer");
+        assert_eq!(receipt.dispatch_surface.as_deref(), Some("vida agent-init"));
+        assert_eq!(receipt.selected_backend.as_deref(), Some("qwen_cli"));
+        assert_eq!(receipt.dispatch_command.as_deref(), Some("vida agent-init"));
     }
 
     #[test]

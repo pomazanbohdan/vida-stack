@@ -2899,19 +2899,24 @@ fn runtime_dispatch_command_for_packet_path(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     packet_path: &str,
 ) -> Option<String> {
-    let canonical_backend = canonical_selected_backend_for_receipt(role_selection, receipt);
     match receipt.dispatch_kind.as_str() {
         "taskflow_pack" => {
             runtime_dispatch_command_for_target(role_selection, &receipt.dispatch_target)
         }
-        "agent_lane" => Some(
-            runtime_agent_lane_dispatch_for_root(
-                &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-                packet_path,
-                canonical_backend.as_deref(),
-            )
-            .activation_command,
-        ),
+        "agent_lane" => receipt
+            .dispatch_command
+            .clone()
+            .or_else(|| runtime_dispatch_command_for_target(role_selection, &receipt.dispatch_target))
+            .or_else(|| {
+                Some(
+                    runtime_agent_lane_dispatch_for_root(
+                        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                        packet_path,
+                        None,
+                    )
+                    .activation_command,
+                )
+            }),
         _ => runtime_dispatch_command_for_target(role_selection, &receipt.dispatch_target),
     }
 }
@@ -8184,6 +8189,121 @@ mod tests {
         assert_eq!(artifact["dispatch_target"], "coach");
         assert_eq!(artifact["blocker_code"], "internal_activation_view_only");
         assert!(artifact.get("completion_receipt_id").is_none());
+    }
+
+    #[test]
+    fn write_runtime_dispatch_packet_keeps_agent_init_command_for_mixed_implementer_route_before_execution(
+    ) {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let state_root = harness.path().join(crate::state_store::default_state_dir());
+        fs::create_dir_all(state_root.join("runtime-consumption"))
+            .expect("runtime-consumption dir should exist");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue implementation in crates/vida/src/runtime_dispatch_state.rs"
+                .to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["implementation".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "implementation": {
+                        "executor_backend": "qwen_cli",
+                        "fallback_executor_backend": "internal_subagents",
+                        "activation": {
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        }
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "qwen_cli",
+                        "backend_class": "external_cli",
+                        "write_scope": "none",
+                        "lane_admissibility": {
+                            "implementation": false
+                        }
+                    },
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "write_scope": "repo",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ],
+                "runtime_assignment": {
+                    "selected_tier": "junior",
+                    "activation_agent_type": "junior",
+                    "activation_runtime_role": "worker"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-mixed-command".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_open".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("qwen_cli".to_string()),
+            recorded_at: "2026-04-16T00:00:00Z".to_string(),
+        };
+        let handoff_plan = serde_json::json!({});
+        let run_graph_bootstrap = serde_json::json!({});
+        let ctx = RuntimeDispatchPacketContext::new(
+            &state_root,
+            &role_selection,
+            &receipt,
+            &handoff_plan,
+            &run_graph_bootstrap,
+        );
+
+        let packet_path =
+            write_runtime_dispatch_packet(&ctx).expect("dispatch packet should render");
+        let packet = crate::read_json_file_if_present(Path::new(&packet_path))
+            .expect("dispatch packet json should load");
+
+        assert_eq!(packet["dispatch_surface"], "vida agent-init");
+        assert_eq!(packet["dispatch_command"], "vida agent-init");
+        assert_eq!(packet["selected_backend"], "qwen_cli");
+        assert_eq!(
+            packet["route_policy"]["route_primary_backend"],
+            "qwen_cli"
+        );
     }
 }
 
