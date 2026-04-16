@@ -12,6 +12,22 @@ use crate::{
     validate_runtime_dispatch_packet_contract, RuntimeConsumptionLaneSelection,
 };
 
+fn neutral_downstream_activation_evidence() -> serde_json::Value {
+    serde_json::json!({
+        "activation_kind": "activation_view",
+        "evidence_state": "activation_view_only",
+        "execution_evidence_path": serde_json::Value::Null,
+        "receipt_backed": false,
+        "activation_semantics": {
+            "activation_kind": "activation_view",
+            "view_only": true,
+            "executes_packet": false,
+            "records_completion_receipt": false,
+        },
+        "execution_evidence": serde_json::Value::Null,
+    })
+}
+
 pub(crate) fn downstream_dispatch_packet_body(
     role_selection: &RuntimeConsumptionLaneSelection,
     run_graph_bootstrap: &serde_json::Value,
@@ -98,8 +114,11 @@ pub(crate) fn downstream_dispatch_packet_body(
         downstream_target,
         selected_backend.as_deref(),
     );
-    let activation_evidence =
-        crate::runtime_dispatch_state::dispatch_activation_evidence_summary(receipt);
+    let activation_evidence = if downstream_target.is_empty() {
+        crate::runtime_dispatch_state::dispatch_activation_evidence_summary(receipt)
+    } else {
+        neutral_downstream_activation_evidence()
+    };
     let mut body = serde_json::Map::new();
     body.insert(
         "packet_kind".to_string(),

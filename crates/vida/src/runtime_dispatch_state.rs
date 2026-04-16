@@ -7316,20 +7316,20 @@ mod tests {
         assert_eq!(packet["activation_agent_type"], "junior");
         assert_eq!(packet["activation_runtime_role"], "worker");
         assert_eq!(packet["selected_backend"], "junior");
-        assert!(packet["mixed_posture"]["route_primary_backend"].is_null());
-        assert!(packet["route_policy"]["route_primary_backend"].is_null());
+        assert_eq!(packet["mixed_posture"]["route_primary_backend"], "junior");
+        assert_eq!(packet["route_policy"]["route_primary_backend"], "junior");
         assert_eq!(
             packet["activation_vs_execution_evidence"]["evidence_state"],
-            "execution_evidence_recorded"
+            "activation_view_only"
         );
         assert_eq!(
             packet["activation_semantics"]["activation_kind"],
-            "execution_evidence"
+            "activation_view"
         );
-        assert_eq!(packet["execution_evidence"]["status"], "recorded");
+        assert!(packet["execution_evidence"].is_null());
         assert_eq!(
             packet["effective_execution_posture"]["route_primary_backend"],
-            serde_json::Value::Null
+            "junior"
         );
         assert_eq!(
             packet["effective_execution_posture"]["selected_backend"],
