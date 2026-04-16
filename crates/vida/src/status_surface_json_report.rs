@@ -5,6 +5,7 @@ pub(crate) struct StatusJsonReportInputs<'a> {
     pub(crate) operator_contracts: serde_json::Value,
     pub(crate) backend_summary: &'a str,
     pub(crate) state_dir: &'a std::path::Path,
+    pub(crate) launcher_runtime_paths: &'a crate::DoctorLauncherSummary,
     pub(crate) storage_metadata: &'a crate::state_store::StorageMetadataSummary,
     pub(crate) state_spine: &'a crate::state_store::StateSpineSummary,
     pub(crate) effective_bundle_receipt:
@@ -90,6 +91,7 @@ pub(crate) fn build_status_json_report(
             },
             "operator_contracts": inputs.operator_contracts,
             "backend_summary": inputs.backend_summary,
+            "launcher_runtime_paths": inputs.launcher_runtime_paths,
             "state_spine": {
                 "state_schema_version": inputs.state_spine.state_schema_version,
                 "entity_surface_count": inputs.state_spine.entity_surface_count,
@@ -134,6 +136,7 @@ pub(crate) fn build_status_json_report(
                 "instruction_schema_version": inputs.storage_metadata.instruction_schema_version,
             },
             "backend_summary": inputs.backend_summary,
+            "launcher_runtime_paths": inputs.launcher_runtime_paths,
             "state_spine": {
                 "state_schema_version": inputs.state_spine.state_schema_version,
                 "entity_surface_count": inputs.state_spine.entity_surface_count,
@@ -530,12 +533,17 @@ mod tests {
         });
         let root_session_write_guard = serde_json::json!({"mode": "locked"});
         let continuation_binding = serde_json::json!({"status": "bound"});
+        let launcher_runtime_paths = crate::doctor_launcher_summary_for_root(std::path::Path::new(
+            "/tmp/project",
+        ))
+        .expect("launcher summary should build");
 
         let summary_json = super::build_status_json_report(super::StatusJsonReportInputs {
             summary_only: true,
             operator_contracts: operator_contracts.clone(),
             backend_summary: "backend summary",
             state_dir: std::path::Path::new("/tmp/state"),
+            launcher_runtime_paths: &launcher_runtime_paths,
             storage_metadata: &storage_metadata,
             state_spine: &state_spine,
             effective_bundle_receipt: None,
@@ -570,6 +578,7 @@ mod tests {
             operator_contracts,
             backend_summary: "backend summary",
             state_dir: std::path::Path::new("/tmp/state"),
+            launcher_runtime_paths: &launcher_runtime_paths,
             storage_metadata: &storage_metadata,
             state_spine: &state_spine,
             effective_bundle_receipt: None,

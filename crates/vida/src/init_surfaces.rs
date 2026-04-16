@@ -1309,6 +1309,7 @@ pub(crate) async fn run_orchestrator_init(args: InitArgs) -> ExitCode {
                                     "activation_source": bundle.activation_source,
                                     "vida_root": bundle.vida_root,
                                     "state_dir": store.root().display().to_string(),
+                                    "launcher_runtime_paths": bundle.launcher_runtime_paths,
                                 },
                             }))
                             .expect("orchestrator-init json should render")
@@ -1789,6 +1790,7 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                             "activation_source": bundle.activation_source,
                             "vida_root": bundle.vida_root,
                             "state_dir": store.root().display().to_string(),
+                            "launcher_runtime_paths": bundle.launcher_runtime_paths,
                         },
                     }))
                     .expect("agent-init json should render")
@@ -2011,6 +2013,7 @@ pub(crate) async fn render_agent_init_packet_activation_with_store(
             "activation_source": bundle.activation_source,
             "vida_root": bundle.vida_root,
             "state_dir": store.root().display().to_string(),
+            "launcher_runtime_paths": bundle.launcher_runtime_paths,
         },
     }))
 }

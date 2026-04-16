@@ -2,21 +2,98 @@ use std::path::Path;
 
 pub(crate) const CANONICAL_LAUNCHER_COMMAND: &str = "vida";
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, Clone, PartialEq, Eq)]
+pub(crate) struct LauncherBinaryEvidence {
+    pub(crate) path: String,
+    pub(crate) fingerprint: String,
+    pub(crate) active: bool,
+}
+
+#[derive(Debug, serde::Serialize, Clone, PartialEq, Eq)]
 pub(crate) struct DoctorLauncherSummary {
     pub(crate) vida: String,
     pub(crate) project_root: String,
     pub(crate) taskflow_surface: String,
+    pub(crate) active_executable_path: String,
+    pub(crate) active_executable_fingerprint: String,
+    pub(crate) installed_binaries: Vec<LauncherBinaryEvidence>,
+    pub(crate) divergent_installed_binaries: bool,
+    pub(crate) status: String,
+    pub(crate) next_actions: Vec<String>,
 }
 
 pub(crate) fn doctor_launcher_summary_for_root(
     project_root: &Path,
 ) -> Result<DoctorLauncherSummary, String> {
+    let active_executable_path = std::env::current_exe()
+        .map_err(|error| format!("failed to resolve active vida executable: {error}"))?;
+    let active_executable_fingerprint = launcher_binary_fingerprint(&active_executable_path)?;
+    let installed_binaries = installed_launcher_binary_evidence(&active_executable_path)?;
+    let divergent_installed_binaries = installed_binaries
+        .iter()
+        .map(|entry| entry.fingerprint.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        > 1;
+    let mut next_actions = Vec::new();
+    if divergent_installed_binaries {
+        next_actions.push(
+            "Installed `vida` binaries diverge by content; refresh the intended system binary and verify `command -v vida` before collecting runtime proofs.".to_string(),
+        );
+    }
     Ok(DoctorLauncherSummary {
         vida: CANONICAL_LAUNCHER_COMMAND.to_string(),
         project_root: project_root.display().to_string(),
         taskflow_surface: "vida taskflow".to_string(),
+        active_executable_path: active_executable_path.display().to_string(),
+        active_executable_fingerprint,
+        installed_binaries,
+        divergent_installed_binaries,
+        status: if divergent_installed_binaries {
+            "warn".to_string()
+        } else {
+            "pass".to_string()
+        },
+        next_actions,
     })
+}
+
+fn launcher_binary_fingerprint(path: &Path) -> Result<String, String> {
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("failed to read launcher binary `{}`: {error}", path.display()))?;
+    Ok(blake3::hash(&bytes).to_hex().to_string())
+}
+
+fn installed_launcher_binary_evidence(
+    active_executable_path: &Path,
+) -> Result<Vec<LauncherBinaryEvidence>, String> {
+    let mut candidates = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::PathBuf::from(home);
+        candidates.push(home.join(".local/bin/vida"));
+        candidates.push(home.join(".cargo/bin/vida"));
+    }
+    candidates.push(active_executable_path.to_path_buf());
+
+    let mut seen = std::collections::BTreeSet::new();
+    let mut evidence = Vec::new();
+    for candidate in candidates {
+        if !candidate.is_file() {
+            continue;
+        }
+        let canonical = candidate
+            .canonicalize()
+            .unwrap_or_else(|_| candidate.clone());
+        if !seen.insert(canonical.clone()) {
+            continue;
+        }
+        evidence.push(LauncherBinaryEvidence {
+            fingerprint: launcher_binary_fingerprint(&canonical)?,
+            active: canonical == active_executable_path,
+            path: canonical.display().to_string(),
+        });
+    }
+    Ok(evidence)
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -339,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn doctor_launcher_summary_uses_canonical_launcher_command() {
+    fn doctor_launcher_summary_captures_active_executable_evidence() {
         let project_root = std::path::Path::new("/tmp/vida-stack");
         let current_exe = std::env::current_exe()
             .expect("test executable path should resolve")
@@ -352,6 +429,11 @@ mod tests {
         assert_eq!(summary.vida, CANONICAL_LAUNCHER_COMMAND);
         assert_eq!(summary.project_root, "/tmp/vida-stack");
         assert_eq!(summary.taskflow_surface, "vida taskflow");
-        assert_ne!(summary.vida, current_exe);
+        assert_eq!(summary.active_executable_path, current_exe);
+        assert!(!summary.active_executable_fingerprint.is_empty());
+        assert!(summary
+            .installed_binaries
+            .iter()
+            .any(|binary| binary.active && binary.path == summary.active_executable_path));
     }
 }

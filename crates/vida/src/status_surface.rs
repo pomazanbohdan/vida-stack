@@ -197,16 +197,16 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                                 receipt,
                             )
                         });
-                let explicit_continuation_binding =
-                    match store.latest_explicit_run_graph_continuation_binding().await {
-                        Ok(binding) => binding,
-                        Err(error) => {
-                            eprintln!(
-                                "Failed to read latest explicit continuation binding: {error}"
-                            );
-                            return ExitCode::from(1);
-                        }
-                    };
+                let explicit_continuation_binding = match store
+                    .latest_explicit_run_graph_continuation_binding()
+                    .await
+                {
+                    Ok(binding) => binding,
+                    Err(error) => {
+                        eprintln!("Failed to read latest explicit continuation binding: {error}");
+                        return ExitCode::from(1);
+                    }
+                };
                 let continuation_binding =
                     crate::continuation_binding_summary::build_continuation_binding_summary(
                         explicit_continuation_binding.as_ref(),
@@ -251,6 +251,14 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                     crate::taskflow_task_bridge::infer_project_root_from_state_root(store.root())
                         .or_else(|| std::env::current_dir().ok())
                         .unwrap_or_else(|| std::path::PathBuf::from("."));
+                let launcher_runtime_paths =
+                    match crate::doctor_launcher_summary_for_root(&project_root) {
+                        Ok(summary) => summary,
+                        Err(error) => {
+                            eprintln!("Failed to resolve launcher/runtime paths: {error}");
+                            return ExitCode::from(1);
+                        }
+                    };
                 let latest_run_graph_surface_truth = latest_run_graph_dispatch_receipt
                     .as_ref()
                     .and_then(|receipt| {
@@ -347,6 +355,7 @@ pub(crate) async fn run_status(args: StatusArgs) -> ExitCode {
                         operator_contracts,
                         backend_summary: &backend_summary,
                         state_dir: store.root(),
+                        launcher_runtime_paths: &launcher_runtime_paths,
                         storage_metadata: &storage_metadata,
                         state_spine: &state_spine,
                         effective_bundle_receipt: effective_bundle_receipt.as_ref(),
