@@ -60,7 +60,10 @@ pub(crate) async fn build_taskflow_consume_bundle_payload(
     store: &StateStore,
 ) -> Result<TaskflowConsumeBundlePayload, String> {
     let activation_snapshot = read_or_sync_launcher_activation_snapshot(store).await?;
-    let vida_root = bundle_project_root(store.root())?;
+    let vida_root = bundle_project_root(
+        store.root(),
+        activation_snapshot.source_config_path.as_str(),
+    )?;
     let launcher_runtime_paths = doctor_launcher_summary_for_root(&vida_root)
         .map_err(|error| format!("Failed to resolve launcher/runtime paths: {error}"))?;
     let root_artifact_id = store
@@ -696,11 +699,40 @@ fn runtime_roots_equivalent(left: &str, right: &str) -> bool {
     }
 }
 
-fn bundle_project_root(state_root: &Path) -> Result<PathBuf, String> {
+fn bundle_project_root(
+    state_root: &Path,
+    activation_source_config_path: &str,
+) -> Result<PathBuf, String> {
     if let Some(project_root) =
         crate::taskflow_task_bridge::infer_project_root_from_state_root(state_root)
     {
         return Ok(project_root);
+    }
+
+    let activation_source_config_path = activation_source_config_path.trim();
+    if !activation_source_config_path.is_empty() {
+        let config_path = Path::new(activation_source_config_path);
+        if config_path.exists() {
+            let source_root = if config_path.is_file() {
+                config_path.parent().unwrap_or(config_path)
+            } else {
+                config_path
+            };
+
+            if crate::looks_like_project_root(source_root)
+                && std::fs::metadata(source_root.join(".vida"))
+                    .map(|metadata| metadata.is_dir())
+                    .unwrap_or(false)
+            {
+                return Ok(source_root.to_path_buf());
+            }
+
+            if let Some(project_root) =
+                crate::taskflow_task_bridge::infer_project_root_from_state_root(source_root)
+            {
+                return Ok(project_root);
+            }
+        }
     }
 
     Err(format!(
@@ -2458,7 +2490,7 @@ mod tests {
         let state_root = std::env::current_dir()
             .expect("current dir should resolve")
             .join(".vida/data/state");
-        let selected = bundle_project_root(&state_root)
+        let selected = bundle_project_root(&state_root, "")
             .expect("project root should resolve from authoritative state root");
         let expected = crate::taskflow_task_bridge::infer_project_root_from_state_root(&state_root)
             .expect("authoritative state root should map back to the project root");
@@ -2467,10 +2499,55 @@ mod tests {
 
     #[test]
     fn bundle_project_root_blocks_non_project_bound_state_root_without_db_first_fallback() {
-        let error = bundle_project_root(Path::new("/tmp/not-a-project/.vida/data/state"))
+        let error = bundle_project_root(Path::new("/tmp/not-a-project/.vida/data/state"), "")
             .expect_err(
                 "non-project-bound state root without DB-backed authority should fail closed",
             );
         assert!(error.contains("no DB-backed project root is available"));
+    }
+
+    #[test]
+    fn bundle_project_root_prefers_activation_source_config_root_when_state_root_non_project_bound()
+    {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time works on tests")
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("vida-runtime-bundle-root-fallback-{}", unique));
+        let config_root = root.join("repo");
+        let config_path = config_root.join("vida.config.yaml");
+        let state_root = root.join("non_project_state/.vida/data/state");
+
+        std::fs::create_dir_all(state_root.parent().expect("state root parent exists"))
+            .expect("state root parent should be created");
+        std::fs::create_dir_all(
+            config_root
+                .join("AGENTS.md")
+                .parent()
+                .expect("agents parent"),
+        )
+        .expect("AGENTS fixture parent should be created");
+        std::fs::write(config_root.join("AGENTS.md"), "agent marker")
+            .expect("AGENTS fixture should be written");
+        std::fs::write(config_root.join("vida.config.yaml"), "vida_root: \"\"")
+            .expect("config fixture should be written");
+        std::fs::create_dir_all(config_root.join(".vida/config"))
+            .expect("project .vida/config should be created");
+        std::fs::create_dir_all(config_root.join(".vida/db"))
+            .expect("project .vida/db should be created");
+        std::fs::create_dir_all(config_root.join(".vida/project"))
+            .expect("project .vida/project should be created");
+        std::fs::create_dir_all(config_root.join(".vida"))
+            .expect("project root .vida should be created");
+        std::fs::write(&config_path, "test").expect("config fixture should be written");
+
+        let selected = bundle_project_root(&state_root, config_path.to_string_lossy().as_ref())
+            .expect("config root fallback should resolve project root");
+        assert_eq!(selected, config_root);
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }
