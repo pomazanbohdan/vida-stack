@@ -419,6 +419,7 @@ pub(crate) fn derive_lane_status(
     match dispatch_status {
         "packet_ready" => LaneStatus::PacketReady,
         "routed" => LaneStatus::LaneOpen,
+        "executing" => LaneStatus::LaneRunning,
         "executed" => LaneStatus::LaneRunning,
         "blocked" => LaneStatus::LaneBlocked,
         _ => LaneStatus::LaneOpen,
@@ -1354,6 +1355,14 @@ mod tests {
         assert_eq!(
             super::derive_lane_status("executed", None, Some("receipt-1")),
             LaneStatus::LaneExceptionRecorded
+        );
+    }
+
+    #[test]
+    fn derive_lane_status_marks_executing_dispatch_as_running() {
+        assert_eq!(
+            super::derive_lane_status("executing", None, None),
+            LaneStatus::LaneRunning
         );
     }
 

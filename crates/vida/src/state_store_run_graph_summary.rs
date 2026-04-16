@@ -606,7 +606,7 @@ pub(crate) fn latest_run_graph_dispatch_receipt_signal_is_ambiguous(
 ) -> bool {
     matches!(
         receipt.dispatch_status.as_str(),
-        "packet_ready" | "routed" | "executed" | "blocked"
+        "packet_ready" | "routed" | "executing" | "executed" | "blocked"
     ) && receipt.lane_status.as_str()
         != normalize_run_graph_lane_status(
             Some(receipt.lane_status.as_str()),
@@ -616,7 +616,7 @@ pub(crate) fn latest_run_graph_dispatch_receipt_signal_is_ambiguous(
         )
         || !matches!(
             receipt.dispatch_status.as_str(),
-            "packet_ready" | "routed" | "executed" | "blocked"
+            "packet_ready" | "routed" | "executing" | "executed" | "blocked"
         )
 }
 

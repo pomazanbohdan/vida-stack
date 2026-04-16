@@ -5047,6 +5047,218 @@ mod tests {
     }
 
     #[test]
+    fn execute_and_record_dispatch_receipt_persists_in_flight_runtime_truth_while_internal_codex_runs(
+    ) {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+        assert_eq!(runtime.block_on(run(cli(&["boot"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+
+        let config_path = harness.path().join("vida.config.yaml");
+        let config = fs::read_to_string(&config_path).expect("config should exist");
+        let updated = config.replace(
+            "      execution_class: internal\n",
+            "      execution_class: internal\n      max_runtime_seconds: 5\n",
+        );
+        fs::write(&config_path, updated).expect("config should update");
+
+        let fake_bin = harness.path().join("fake-bin");
+        fs::create_dir_all(&fake_bin).expect("fake bin dir should exist");
+        let fake_codex = fake_bin.join("codex");
+        fs::write(
+            &fake_codex,
+            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"test-thread\"}'\nsleep 2\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":\"internal-dispatch-ok\"}}'\n",
+        )
+        .expect("fake codex should write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&fake_codex)
+                .expect("fake codex metadata should load")
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&fake_codex, perms).expect("fake codex should be executable");
+        }
+        let original_path = env::var("PATH").unwrap_or_default();
+        let patched_path = if original_path.is_empty() {
+            fake_bin.display().to_string()
+        } else {
+            format!("{}:{}", fake_bin.display(), original_path)
+        };
+        let _path_guard = EnvVarGuard::set("PATH", &patched_path);
+
+        let state_root = harness_state_root(&harness);
+        let store = runtime
+            .block_on(StateStore::open(state_root.clone()))
+            .expect("state store should open");
+        let run_graph_status = crate::state_store::RunGraphStatus {
+            run_id: "run-in-flight-dispatch".to_string(),
+            task_id: "task-in-flight-dispatch".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "planning".to_string(),
+            next_node: Some("implementer".to_string()),
+            status: "running".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "junior".to_string(),
+            lane_id: "planning_lane".to_string(),
+            lifecycle_stage: "implementation_dispatch_ready".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "awaiting_implementer".to_string(),
+            context_state: "open".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.implementer".to_string(),
+            recovery_ready: true,
+        };
+        runtime
+            .block_on(store.record_run_graph_status(&run_graph_status))
+            .expect("run graph status should persist");
+        drop(store);
+        let dispatch_packet_path = harness.path().join("in-flight-dispatch.json");
+        fs::write(
+            &dispatch_packet_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "delivery_task_packet": runtime_delivery_task_packet(
+                    "run-in-flight-dispatch",
+                    "implementer",
+                    "worker",
+                    "implementation",
+                    "implementation",
+                    agent_lane_test_request()
+                ),
+                "dispatch_target": "implementer",
+                "request_text": agent_lane_test_request(),
+                "activation_runtime_role": "worker",
+                "role_selection": {
+                    "selected_role": "worker"
+                }
+            }))
+            .expect("dispatch packet json should encode"),
+        )
+        .expect("dispatch packet should write");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: agent_lane_test_request().to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: agent_lane_test_execution_plan("junior"),
+            reason: "test".to_string(),
+        };
+        let run_graph_bootstrap = serde_json::json!({
+            "run_id": "run-in-flight-dispatch"
+        });
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-in-flight-dispatch".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: Some(dispatch_packet_path.display().to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-03-17T00:00:00Z".to_string(),
+        };
+
+        let state_root_dispatch = state_root.clone();
+        let run_graph_bootstrap_dispatch = run_graph_bootstrap.clone();
+        let dispatch = thread::spawn(move || {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+            let mut receipt = receipt;
+            runtime
+                .block_on(execute_and_record_dispatch_receipt(
+                    &state_root_dispatch,
+                    &role_selection,
+                    &run_graph_bootstrap_dispatch,
+                    &mut receipt,
+                ))
+                .expect("dispatch receipt should execute");
+            receipt
+        });
+
+        thread::sleep(Duration::from_millis(250));
+        let probe_runtime =
+            tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let probe_store = probe_runtime
+            .block_on(StateStore::open_existing(state_root.clone()))
+            .expect("state store reopen should succeed while dispatch is in flight");
+        let in_flight_receipt = probe_runtime
+            .block_on(probe_store.run_graph_dispatch_receipt("run-in-flight-dispatch"))
+            .expect("in-flight receipt should load")
+            .expect("in-flight receipt should exist");
+        let in_flight_status = probe_runtime
+            .block_on(probe_store.run_graph_status("run-in-flight-dispatch"))
+            .expect("in-flight run graph status should load");
+        drop(probe_store);
+
+        assert_eq!(in_flight_receipt.dispatch_status, "executing");
+        assert_eq!(in_flight_receipt.lane_status, "lane_running");
+        assert!(in_flight_receipt
+            .dispatch_result_path
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()));
+        assert_eq!(in_flight_status.active_node, "implementer");
+        assert_eq!(in_flight_status.lifecycle_stage, "implementer_active");
+        assert_eq!(in_flight_status.handoff_state, "none");
+        assert_eq!(in_flight_status.status, "running");
+        assert!(!in_flight_status.recovery_ready);
+
+        let receipt = dispatch
+            .join()
+            .expect("dispatch thread should join successfully");
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert_eq!(receipt.lane_status, "lane_running");
+    }
+
+    #[test]
     fn execute_runtime_dispatch_handoff_times_out_configured_external_backend() {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -8354,6 +8566,20 @@ fn write_runtime_dispatch_result(
     Ok(result_path.display().to_string())
 }
 
+fn runtime_dispatch_execution_started_result(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> serde_json::Value {
+    serde_json::json!({
+        "surface": receipt.dispatch_surface,
+        "activation_command": receipt.dispatch_command,
+        "status": "pass",
+        "execution_state": "executing",
+        "dispatch_target": receipt.dispatch_target,
+        "selected_backend": receipt.selected_backend,
+        "note": "runtime dispatch handoff started; terminal completion is still pending",
+    })
+}
+
 pub(crate) fn write_runtime_lane_completion_result(
     state_root: &Path,
     run_id: &str,
@@ -8399,6 +8625,59 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
     if receipt.dispatch_kind == "agent_lane" {
         receipt.selected_backend = canonical_selected_backend_for_receipt(role_selection, receipt);
     }
+    let in_flight_dispatch_result_path = write_runtime_dispatch_result(
+        state_root,
+        receipt,
+        &runtime_dispatch_execution_started_result(receipt),
+    )?;
+    receipt.dispatch_result_path = Some(in_flight_dispatch_result_path);
+    receipt.dispatch_status = "executing".to_string();
+    receipt.lane_status = LaneStatus::LaneRunning.as_str().to_string();
+    receipt.blocker_code = None;
+    let store = tokio::time::timeout(
+        std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
+        StateStore::open_existing(state_root.to_path_buf()),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "Timed out reopening authoritative state store before dispatch execution after {}s",
+            DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS
+        )
+    })?
+    .map_err(|error| {
+        format!("Failed to reopen authoritative state store before dispatch execution: {error}")
+    })?;
+    if let Some(run_id) = json_string(run_graph_bootstrap.get("run_id")) {
+        if let Ok(status) = store.run_graph_status(&run_id).await {
+            let executing_status =
+                apply_dispatch_execution_started_to_run_graph_status(&status, receipt);
+            store
+                .record_run_graph_status(&executing_status)
+                .await
+                .map_err(|error| {
+                    format!("Failed to record in-flight run-graph status before dispatch execution: {error}")
+                })?;
+            crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                &store,
+                &executing_status,
+                "dispatch_execution_started",
+            )
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to synchronize continuation binding before dispatch execution: {error}"
+                )
+            })?;
+        }
+    }
+    store
+        .record_run_graph_dispatch_receipt(receipt)
+        .await
+        .map_err(|error| {
+            format!("Failed to persist in-flight dispatch receipt before execution: {error}")
+        })?;
+    drop(store);
     let execution_result = tokio::time::timeout(
         std::time::Duration::from_secs(DEFAULT_DISPATCH_HANDOFF_EXECUTION_TIMEOUT_SECONDS),
         execute_runtime_dispatch_handoff(state_root, role_selection, receipt),
@@ -8717,6 +8996,42 @@ pub(crate) fn apply_first_handoff_execution_to_run_graph_status(
         checkpoint_kind: status.checkpoint_kind.clone(),
         resume_target,
         recovery_ready: true,
+    };
+    if receipt.dispatch_kind == "taskflow_pack" {
+        updated.selected_backend = "taskflow_state_store".to_string();
+    }
+    updated
+}
+
+fn apply_dispatch_execution_started_to_run_graph_status(
+    status: &crate::state_store::RunGraphStatus,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> crate::state_store::RunGraphStatus {
+    let dispatch_target = receipt.dispatch_target.replace('-', "_");
+    let mut updated = crate::state_store::RunGraphStatus {
+        run_id: status.run_id.clone(),
+        task_id: status.task_id.clone(),
+        task_class: status.task_class.clone(),
+        active_node: receipt.dispatch_target.clone(),
+        next_node: None,
+        status: "running".to_string(),
+        route_task_class: status.route_task_class.clone(),
+        selected_backend: receipt
+            .selected_backend
+            .clone()
+            .unwrap_or_else(|| status.selected_backend.clone()),
+        lane_id: if receipt.dispatch_kind == "taskflow_pack" {
+            format!("{dispatch_target}_direct")
+        } else {
+            format!("{dispatch_target}_lane")
+        },
+        lifecycle_stage: format!("{dispatch_target}_active"),
+        policy_gate: status.policy_gate.clone(),
+        handoff_state: "none".to_string(),
+        context_state: "sealed".to_string(),
+        checkpoint_kind: status.checkpoint_kind.clone(),
+        resume_target: "none".to_string(),
+        recovery_ready: false,
     };
     if receipt.dispatch_kind == "taskflow_pack" {
         updated.selected_backend = "taskflow_state_store".to_string();
