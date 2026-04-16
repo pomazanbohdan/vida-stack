@@ -9,6 +9,24 @@ fn explicit_binding_is_admissible_for_status(
         return true;
     }
 
+    let terminal_completed_without_next_unit = status.lifecycle_stage == "closure_complete"
+        && status
+            .next_node
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none();
+
+    if terminal_completed_without_next_unit {
+        return matches!(
+            binding
+                .active_bounded_unit
+                .get("kind")
+                .and_then(serde_json::Value::as_str),
+            Some("task_graph_task")
+        );
+    }
+
     matches!(
         binding
             .active_bounded_unit
@@ -51,6 +69,15 @@ pub(crate) fn build_continuation_binding_summary(
     };
 
     if let Some(status) = latest_run_graph_status {
+        let terminal_completed_without_next_unit = status.status == "completed"
+            && status.lifecycle_stage == "closure_complete"
+            && status
+                .next_node
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none();
+
         if let Some(binding) = explicit_binding {
             if explicit_binding_is_admissible_for_status(binding, status) {
                 return serde_json::json!({
@@ -89,7 +116,8 @@ pub(crate) fn build_continuation_binding_summary(
             });
         }
 
-        if let Some(receipt) = latest_run_graph_dispatch_receipt {
+        if !terminal_completed_without_next_unit {
+            if let Some(receipt) = latest_run_graph_dispatch_receipt {
             let downstream_target = receipt
                 .downstream_dispatch_target
                 .as_deref()
@@ -121,6 +149,7 @@ pub(crate) fn build_continuation_binding_summary(
                     });
                 }
             }
+        }
         }
 
         return serde_json::json!({

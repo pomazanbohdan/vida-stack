@@ -9,7 +9,21 @@ use crate::{
     RenderMode,
 };
 
+fn terminal_completed_without_next_unit(status: &RunGraphStatus) -> bool {
+    status.status == "completed"
+        && status.lifecycle_stage == "closure_complete"
+        && status
+            .next_node
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+}
+
 fn run_graph_active_bounded_unit(status: &RunGraphStatus) -> Option<serde_json::Value> {
+    if terminal_completed_without_next_unit(status) {
+        return None;
+    }
     if status.status == "completed" {
         let dispatch_target = status
             .next_node
@@ -141,6 +155,12 @@ pub(crate) async fn sync_run_graph_continuation_binding(
     let Some(binding) =
         build_run_graph_continuation_binding(status, request_text.as_deref(), binding_source, None)
     else {
+        store
+            .clear_run_graph_continuation_binding(&status.run_id)
+            .await
+            .map_err(|error| {
+                format!("Failed to clear stale run-graph continuation binding: {error}")
+            })?;
         return Ok(None);
     };
     store
@@ -329,7 +349,7 @@ pub(crate) async fn run_taskflow_continuation(args: &[String]) -> ExitCode {
 mod tests {
     use super::{
         build_run_graph_continuation_binding, build_task_graph_continuation_binding,
-        parse_bind_args,
+        parse_bind_args, terminal_completed_without_next_unit,
     };
 
     #[test]
@@ -411,5 +431,25 @@ mod tests {
         );
         assert_eq!(binding.active_bounded_unit["dispatch_target"], "closure");
         assert_eq!(binding.sequential_vs_parallel_posture, "sequential_only");
+    }
+
+    #[test]
+    fn closure_complete_without_next_node_does_not_build_binding() {
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-1",
+            "implementation",
+            "implementation",
+        );
+        status.task_id = "feature-close-dev".to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+
+        assert!(terminal_completed_without_next_unit(&status));
+        assert!(build_run_graph_continuation_binding(&status, None, "test", None).is_none());
     }
 }

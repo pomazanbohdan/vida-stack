@@ -865,6 +865,17 @@ impl StateStore {
         }
     }
 
+    pub async fn clear_run_graph_continuation_binding(
+        &self,
+        run_id: &str,
+    ) -> Result<(), StateStoreError> {
+        let _: Option<RunGraphContinuationBinding> = self
+            .db
+            .delete(("run_graph_continuation_binding", run_id))
+            .await?;
+        Ok(())
+    }
+
     pub async fn record_run_graph_dispatch_context(
         &self,
         context: &RunGraphDispatchContext,
