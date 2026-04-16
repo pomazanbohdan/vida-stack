@@ -1264,21 +1264,108 @@ fn dispatch_command_from_packet_path(packet_path: &str) -> Result<Option<String>
         .map(str::to_string))
 }
 
+async fn reseed_explicit_task_graph_binding_for_dispatch_init(
+    store: &StateStore,
+    requested_run_id: &str,
+) -> Result<Option<String>, String> {
+    let binding = store
+        .run_graph_continuation_binding(requested_run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to read explicit continuation binding for `{requested_run_id}`: {error}"
+            )
+        })?;
+    let Some(binding) = binding else {
+        return Ok(None);
+    };
+    if binding.status != "bound"
+        || binding.active_bounded_unit["kind"].as_str() != Some("task_graph_task")
+    {
+        return Ok(None);
+    }
+
+    let bound_task_id = binding.active_bounded_unit["task_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(binding.task_id.as_str());
+    if bound_task_id == requested_run_id {
+        return Ok(None);
+    }
+
+    let request_text = if let Some(request_text) = binding
+        .request_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        request_text.to_string()
+    } else if let Some(context) = store
+        .run_graph_dispatch_context(requested_run_id)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed to read persisted seeded dispatch context for `{requested_run_id}` while reseeding explicit continuation binding: {error}"
+            )
+        })?
+    {
+        context.request_text
+    } else {
+        return Err(format!(
+            "Run `{requested_run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but no persisted request text is available to reseed dispatch-init for the bound task."
+        ));
+    };
+
+    let payload = derive_seeded_run_graph_status(store, bound_task_id, &request_text).await?;
+    persist_seed_artifacts(store, &payload).await?;
+
+    let why = format!(
+        "Explicit continuation binding for run `{requested_run_id}` reseeded bounded task `{bound_task_id}` into a fresh dispatch-ready run."
+    );
+    if let Some(binding) = crate::taskflow_continuation::build_run_graph_continuation_binding(
+        &payload.status,
+        Some(&request_text),
+        "explicit_continuation_bind",
+        Some(&why),
+    ) {
+        store
+            .record_run_graph_continuation_binding(&binding)
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to record reseeded explicit continuation binding for `{bound_task_id}`: {error}"
+                )
+            })?;
+    }
+
+    Ok(Some(bound_task_id.to_string()))
+}
+
 async fn run_graph_dispatch_init(
     store: &StateStore,
     run_id: &str,
 ) -> Result<serde_json::Value, String> {
+    let effective_run_id = reseed_explicit_task_graph_binding_for_dispatch_init(store, run_id)
+        .await?
+        .unwrap_or_else(|| run_id.to_string());
     let status = store
-        .run_graph_status(run_id)
+        .run_graph_status(&effective_run_id)
         .await
-        .map_err(|error| format!("Failed to read run-graph state for `{run_id}`: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "Failed to read run-graph state for `{}`: {error}",
+                effective_run_id
+            )
+        })?;
     let context = store
-        .run_graph_dispatch_context(run_id)
+        .run_graph_dispatch_context(&effective_run_id)
         .await
         .map_err(|error| format!("Failed to read persisted seeded dispatch context: {error}"))?
         .ok_or_else(|| {
             format!(
-                "No persisted seeded dispatch context exists for run_id `{run_id}`; reseed the run with request text before dispatch-init."
+                "No persisted seeded dispatch context exists for run_id `{}`; reseed the run with request text before dispatch-init.",
+                effective_run_id
             )
         })?;
     let role_selection = context
@@ -1323,7 +1410,8 @@ async fn run_graph_dispatch_init(
     .await?;
     Ok(serde_json::json!({
         "surface": "vida taskflow run-graph dispatch-init",
-        "run_id": run_id,
+        "requested_run_id": run_id,
+        "run_id": effective_run_id,
         "dispatch_receipt": dispatch_receipt,
         "dispatch_packet_path": dispatch_packet_path,
         "downstream_dispatch_packet_path": dispatch_receipt.downstream_dispatch_packet_path,
@@ -2607,6 +2695,84 @@ mod tests {
             dispatch_init["dispatch_receipt"]["selected_backend"].as_str(),
             Some("opencode_cli")
         );
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_reseeds_explicit_task_graph_binding_into_bound_task_run() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        let mut stale_status = default_run_graph_status("run-old", "closure", "delivery");
+        stale_status.task_id = "run-old".to_string();
+        stale_status.active_node = "closure".to_string();
+        stale_status.status = "completed".to_string();
+        stale_status.lifecycle_stage = "closure_complete".to_string();
+        stale_status.policy_gate = "validation_report_required".to_string();
+        stale_status.context_state = "sealed".to_string();
+        stale_status.checkpoint_kind = "execution_cursor".to_string();
+        stale_status.resume_target = "none".to_string();
+        stale_status.recovery_ready = true;
+        store
+            .record_run_graph_status(&stale_status)
+            .await
+            .expect("persist stale status");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: "run-old".to_string(),
+                    task_id: "task-new".to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "task_graph_task",
+                        "task_id": "task-new",
+                        "run_id": "run-old",
+                        "task_status": "in_progress",
+                        "issue_type": "task"
+                    }),
+                    binding_source: "explicit_continuation_bind_task".to_string(),
+                    why_this_unit: "reseed onto task-new".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_explicit_task_bound"
+                        .to_string(),
+                    request_text: Some("Fix the runtime bridge for explicit task bindings in crates/vida/src/taskflow_run_graph.rs and crates/vida/src/taskflow_packet.rs.".to_string()),
+                    recorded_at: "2026-04-16T09:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist explicit binding");
+
+        let payload = run_graph_dispatch_init(&store, "run-old")
+            .await
+            .expect("dispatch init should reseed and succeed");
+
+        assert_eq!(payload["requested_run_id"], "run-old");
+        assert_eq!(payload["run_id"], "task-new");
+        assert_eq!(payload["dispatch_receipt"]["run_id"], "task-new");
+
+        let reseeded_status = store
+            .run_graph_status("task-new")
+            .await
+            .expect("reseeded task run should exist");
+        assert_eq!(reseeded_status.task_id, "task-new");
+        assert_eq!(reseeded_status.run_id, "task-new");
+        assert!(
+            matches!(reseeded_status.status.as_str(), "ready" | "blocked"),
+            "unexpected reseeded status: {}",
+            reseeded_status.status
+        );
+
+        let reseeded_receipt = store
+            .run_graph_dispatch_receipt("task-new")
+            .await
+            .expect("reseeded receipt lookup should succeed")
+            .expect("reseeded receipt should exist");
+        assert_eq!(reseeded_receipt.run_id, "task-new");
+        assert!(reseeded_receipt.dispatch_packet_path.is_some());
     }
 
     #[tokio::test]
