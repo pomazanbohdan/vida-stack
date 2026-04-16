@@ -10,33 +10,48 @@ use std::os::unix::process::CommandExt;
 use crate::runtime_lane_summary::summarize_execution_truth_for_route;
 use crate::{yaml_lookup, RuntimeConsumptionLaneSelection, StateStore};
 
+fn canonical_dispatch_target_for_admissibility(dispatch_target: &str) -> &str {
+    match dispatch_target {
+        "implementer" => "implementation",
+        "execution_preparation" => "architecture",
+        _ => dispatch_target,
+    }
+}
+
+fn dispatch_target_requires_strict_admissibility(dispatch_target: &str) -> bool {
+    matches!(
+        canonical_dispatch_target_for_admissibility(dispatch_target),
+        "implementation"
+    )
+}
+
 /// Check whether a backend is admissible for a given dispatch target (lane).
-/// Returns `true` if the backend's lane_admissibility entry in the execution plan
-/// allows the lane, or if no admissibility matrix is present (fail-open for backward
-/// compatibility during the transition period).
+/// When no admissibility matrix is present, keep fail-open behavior for backward
+/// compatibility. Once a matrix exists, write-producing lanes fail closed if the
+/// backend row, lane mapping, or canonical lane key is missing.
 fn backend_is_admissible_for_dispatch_target(
     execution_plan: &serde_json::Value,
     backend_id: &str,
     dispatch_target: &str,
 ) -> bool {
+    let canonical_target = canonical_dispatch_target_for_admissibility(dispatch_target);
+    let strict_required = dispatch_target_requires_strict_admissibility(dispatch_target);
     let Some(matrix) = execution_plan["backend_admissibility_matrix"].as_array() else {
-        // No admissibility matrix present; fail open to avoid breaking existing flows.
-        return true;
+        return !strict_required;
     };
     let Some(row) = matrix
         .iter()
         .find(|entry| entry["backend_id"].as_str() == Some(backend_id))
     else {
-        // Backend not in matrix; fail open.
-        return true;
+        return !strict_required;
     };
     let Some(lane_admissibility) = row["lane_admissibility"].as_object() else {
-        return true;
+        return !strict_required;
     };
     lane_admissibility
-        .get(dispatch_target)
+        .get(canonical_target)
         .and_then(serde_json::Value::as_bool)
-        .unwrap_or(true)
+        .unwrap_or(!strict_required)
 }
 
 fn default_activation_view(
@@ -1398,7 +1413,8 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
 mod tests {
     use super::{
         agent_lane_dispatch_result, configured_internal_host_activation_parts,
-        configured_internal_host_runtime_env, dispatch_packet_prompt, execute_wrapped_command,
+        configured_internal_host_runtime_env, dispatch_packet_prompt,
+        execute_external_agent_lane_dispatch, execute_wrapped_command,
         external_provider_output_confirms_execution, mark_dispatch_result_execution_evidence,
         parse_external_provider_output, parse_internal_codex_exec_output,
         wrap_command_with_optional_timeout, CommandTimeoutWrapper,
@@ -1800,6 +1816,14 @@ dispatch:
             !super::backend_is_admissible_for_dispatch_target(
                 &execution_plan,
                 "qwen_cli",
+                "implementer"
+            ),
+            "qwen_cli should be inadmissible for implementer alias lane"
+        );
+        assert!(
+            !super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "qwen_cli",
                 "implementation"
             ),
             "qwen_cli should be inadmissible for implementation lane"
@@ -1826,12 +1850,20 @@ dispatch:
     fn backend_is_admissible_for_dispatch_target_fails_open_without_matrix() {
         let execution_plan = serde_json::json!({});
         assert!(
+            !super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "qwen_cli",
+                "implementer"
+            ),
+            "write-producing implementer lane should fail closed when no admissibility matrix is present"
+        );
+        assert!(
             super::backend_is_admissible_for_dispatch_target(
                 &execution_plan,
                 "qwen_cli",
-                "implementation"
+                "analysis"
             ),
-            "should fail open when no admissibility matrix is present"
+            "read-only lanes should still fail open when no admissibility matrix is present"
         );
     }
 
@@ -1848,12 +1880,177 @@ dispatch:
             ]
         });
         assert!(
+            !super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "qwen_cli",
+                "implementer"
+            ),
+            "implementer lane should fail closed when backend row is missing from the matrix"
+        );
+        assert!(
             super::backend_is_admissible_for_dispatch_target(
                 &execution_plan,
                 "qwen_cli",
-                "implementation"
+                "analysis"
             ),
-            "should fail open when backend is not in the matrix"
+            "read-only lanes should continue failing open when backend is not in the matrix"
         );
+    }
+
+    #[test]
+    fn backend_is_admissible_for_dispatch_target_fails_closed_for_implementer_when_lane_key_missing(
+    ) {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "qwen_cli",
+                    "lane_admissibility": {
+                        "analysis": true,
+                        "coach": true
+                    }
+                }
+            ]
+        });
+        assert!(
+            !super::backend_is_admissible_for_dispatch_target(
+                &execution_plan,
+                "qwen_cli",
+                "implementer"
+            ),
+            "implementer lane should fail closed when canonical implementation key is absent"
+        );
+    }
+
+    #[test]
+    fn execute_external_agent_lane_dispatch_blocks_inadmissible_implementer_backend_before_launch()
+    {
+        let project_root = std::env::temp_dir().join(format!(
+            "vida-external-dispatch-admissibility-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&project_root).expect("create project root");
+        std::fs::write(
+            project_root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: qwen
+  systems:
+    qwen:
+      enabled: true
+      execution_class: external
+      external_backend_id: qwen_cli
+agent_system:
+  subagents:
+    qwen_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      dispatch:
+        command: sh
+        static_args: ["-c", "echo SHOULD_NOT_LAUNCH >&2; exit 99"]
+        prompt_mode: positional
+"#,
+        )
+        .expect("write overlay");
+
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Implement the task".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: None,
+            single_task_only: false,
+            tracked_flow_entry: None,
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec![],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "qwen_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "analysis": true,
+                            "coach": true,
+                            "implementation": false
+                        }
+                    }
+                ],
+                "development_flow": {
+                    "implementation": {
+                        "executor_backend": "qwen_cli"
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-1".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("worker".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("qwen_cli".to_string()),
+            recorded_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let result = runtime
+            .block_on(async {
+                execute_external_agent_lane_dispatch(
+                    project_root.join("missing-state").as_path(),
+                    &project_root,
+                    "/tmp/dispatch-packet.json",
+                    Some("qwen_cli"),
+                    &role_selection,
+                    &receipt,
+                    serde_json::json!({
+                        "selected_cli_execution_class": "external"
+                    }),
+                )
+                .await
+            })
+            .expect("dispatch should return blocked result");
+
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(result["blocker_code"], "backend_inadmissible_for_lane");
+        assert_eq!(result["backend_dispatch"]["backend_id"], "qwen_cli");
+        assert_eq!(
+            result["backend_dispatch"]["provider_error"],
+            serde_json::Value::Null
+        );
+
+        let _ = std::fs::remove_dir_all(&project_root);
     }
 }
