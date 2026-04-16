@@ -410,4 +410,23 @@ mod tests {
         assert_eq!(merged["required_exception_evidence"], "receipt-1");
         assert_eq!(merged["local_exception_takeover_state"], "active");
     }
+
+    #[test]
+    fn merge_live_exception_takeover_write_guard_marks_superseded_exception_takeover_active() {
+        let guard = canonical_root_session_write_guard_defaults();
+        let mut receipt = sample_receipt();
+        receipt.lane_status = "lane_exception_takeover".to_string();
+        receipt.supersedes_receipt_id = Some("supersede-1".to_string());
+
+        let merged = merge_live_exception_takeover_write_guard(
+            guard,
+            Some(&receipt),
+            Some(&sample_recovery("blocked_open_delegated_cycle")),
+        );
+
+        assert_eq!(merged["status"], "exception_takeover_active");
+        assert_eq!(merged["root_local_write_allowed"], true);
+        assert_eq!(merged["required_exception_evidence"], "receipt-1");
+        assert_eq!(merged["local_exception_takeover_state"], "active");
+    }
 }

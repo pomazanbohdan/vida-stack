@@ -56,10 +56,15 @@ enum LaneCommand<'a> {
         receipt_id: &'a str,
         as_json: bool,
     },
+    Supersede {
+        run_id: &'a str,
+        receipt_id: &'a str,
+        as_json: bool,
+    },
 }
 
 fn lane_usage() -> &'static str {
-    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane complete <run-id> --receipt-id <id> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> [--json]"
+    "Usage: vida lane show <run-id> [--json]\n       vida lane show --latest [--json]\n       vida lane complete <run-id> --receipt-id <id> [--json]\n       vida lane exception-takeover <run-id> --receipt-id <id> [--json]\n       vida lane supersede <run-id> --receipt-id <id> [--json]"
 }
 
 fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
@@ -148,6 +153,35 @@ fn parse_lane_args<'a>(args: &'a [String]) -> Result<LaneCommand<'a>, String> {
                 return Err(lane_usage().to_string());
             };
             Ok(LaneCommand::ExceptionTakeover {
+                run_id,
+                receipt_id,
+                as_json,
+            })
+        }
+        [head, run_id, rest @ ..] if head == "supersede" => {
+            let mut as_json = false;
+            let mut receipt_id = None;
+            let mut index = 0;
+            while index < rest.len() {
+                match rest[index].as_str() {
+                    "--json" => {
+                        as_json = true;
+                        index += 1;
+                    }
+                    "--receipt-id" => {
+                        let Some(value) = rest.get(index + 1) else {
+                            return Err(lane_usage().to_string());
+                        };
+                        receipt_id = Some(value.as_str());
+                        index += 2;
+                    }
+                    _ => return Err(lane_usage().to_string()),
+                }
+            }
+            let Some(receipt_id) = receipt_id else {
+                return Err(lane_usage().to_string());
+            };
+            Ok(LaneCommand::Supersede {
                 run_id,
                 receipt_id,
                 as_json,
@@ -279,6 +313,22 @@ fn derive_lane_show_truth(
         blocker_codes: crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes),
         next_actions,
     }
+}
+
+fn lane_takeover_state(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    recovery: Option<&crate::state_store::RunGraphRecoverySummary>,
+) -> crate::release1_contracts::ExceptionTakeoverState {
+    crate::release1_contracts::exception_takeover_state(
+        receipt.exception_path_receipt_id.as_deref(),
+        receipt.supersedes_receipt_id.as_deref(),
+        recovery.map(|recovery| {
+            recovery
+                .delegation_gate
+                .local_exception_takeover_gate
+                .as_str()
+        }),
+    )
 }
 
 fn emit_lane_envelope(envelope: &LaneEnvelope, as_json: bool) -> ExitCode {
@@ -592,6 +642,46 @@ pub(crate) async fn run_lane(args: ProxyArgs) -> ExitCode {
             };
             emit_lane_envelope(&envelope, as_json)
         }
+        LaneCommand::Supersede {
+            run_id,
+            receipt_id,
+            as_json,
+        } => {
+            let Some(mut receipt) = (match store.run_graph_dispatch_receipt(run_id).await {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    eprintln!("Failed to read lane receipt `{run_id}`: {error}");
+                    return ExitCode::from(1);
+                }
+            }) else {
+                eprintln!("Missing lane receipt for `{run_id}`.");
+                return ExitCode::from(2);
+            };
+            let recovery = store.run_graph_recovery_summary(run_id).await.ok();
+            receipt.supersedes_receipt_id = Some(receipt_id.to_string());
+            let takeover_active = lane_takeover_state(&receipt, recovery.as_ref()).is_active();
+            receipt.lane_status = if receipt
+                .exception_path_receipt_id
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+                && takeover_active
+            {
+                crate::LaneStatus::LaneExceptionTakeover
+                    .as_str()
+                    .to_string()
+            } else {
+                crate::LaneStatus::LaneSuperseded.as_str().to_string()
+            };
+            if let Err(error) = store.record_run_graph_dispatch_receipt(&receipt).await {
+                eprintln!("Failed to persist superseded lane receipt: {error}");
+                return ExitCode::from(1);
+            }
+            let updated_summary =
+                crate::state_store::RunGraphDispatchReceiptSummary::from_receipt(receipt);
+            let status = store.run_graph_status(run_id).await.ok();
+            let envelope = build_lane_envelope(updated_summary, status, false, None, Vec::new());
+            emit_lane_envelope(&envelope, as_json)
+        }
     }
 }
 
@@ -686,6 +776,26 @@ mod tests {
         assert!(matches!(
             command,
             LaneCommand::Complete {
+                run_id: "run-1",
+                receipt_id: "receipt-1",
+                as_json: true
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_lane_supersede_supports_receipt_id_and_json() {
+        let args = vec![
+            "supersede".to_string(),
+            "run-1".to_string(),
+            "--receipt-id".to_string(),
+            "receipt-1".to_string(),
+            "--json".to_string(),
+        ];
+        let command = parse_lane_args(&args).expect("lane supersede should parse");
+        assert!(matches!(
+            command,
+            LaneCommand::Supersede {
                 run_id: "run-1",
                 receipt_id: "receipt-1",
                 as_json: true
@@ -934,6 +1044,76 @@ mod tests {
             after.exception_path_receipt_id.as_deref(),
             Some("receipt-clear-1")
         );
+        assert_eq!(after.lane_status, "lane_exception_takeover");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn lane_supersede_activates_exception_takeover_for_recorded_exception_receipt() {
+        let _guard = lane_surface_test_lock()
+            .lock()
+            .expect("lane surface test lock should acquire");
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-lane-surface-supersede-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let _state_override = ProxyStateDirOverrideGuard::install(root.clone());
+        let run_id = "run-lane-supersede";
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "specification",
+            "scope_discussion",
+        );
+        status.active_node = "implementer".to_string();
+        status.lifecycle_stage = "implementer_active".to_string();
+        status.status = "ready".to_string();
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let mut receipt = sample_receipt("executed");
+        receipt.run_id = run_id.to_string();
+        receipt.exception_path_receipt_id = Some("exception-1".to_string());
+        receipt.lane_status = crate::LaneStatus::LaneExceptionRecorded
+            .as_str()
+            .to_string();
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .expect("persist exception-recorded receipt");
+        drop(store);
+        wait_for_state_unlock(&root);
+
+        let args = ProxyArgs {
+            args: vec![
+                "supersede".to_string(),
+                run_id.to_string(),
+                "--receipt-id".to_string(),
+                "supersede-1".to_string(),
+                "--json".to_string(),
+            ],
+        };
+        assert_eq!(run_lane(args).await, ExitCode::SUCCESS);
+
+        let store = StateStore::open_existing(root.clone())
+            .await
+            .expect("reopen store after lane command");
+        let after = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read receipt after")
+            .expect("receipt should exist");
+        assert_eq!(after.supersedes_receipt_id.as_deref(), Some("supersede-1"));
+        assert_eq!(after.exception_path_receipt_id.as_deref(), Some("exception-1"));
         assert_eq!(after.lane_status, "lane_exception_takeover");
 
         let _ = std::fs::remove_dir_all(&root);

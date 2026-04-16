@@ -1380,6 +1380,14 @@ mod tests {
             exception_takeover_state(Some("receipt-1"), None, Some("delegated_cycle_clear")),
             ExceptionTakeoverState::ActiveTakeover
         );
+        assert_eq!(
+            exception_takeover_state(
+                Some("receipt-1"),
+                Some("supersede-1"),
+                Some("blocked_open_delegated_cycle")
+            ),
+            ExceptionTakeoverState::ActiveTakeover
+        );
     }
 
     #[test]
