@@ -1732,51 +1732,6 @@ pub(crate) async fn run_agent_init(args: AgentInitArgs) -> ExitCode {
                         return ExitCode::from(1);
                     }
                 }
-                let store = match tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    super::StateStore::open_existing(state_root),
-                )
-                .await
-                {
-                    Ok(Ok(store)) => store,
-                    Ok(Err(error)) => {
-                        eprintln!(
-                            "Failed to reopen authoritative state store after agent-init dispatch: {error}"
-                        );
-                        return ExitCode::from(1);
-                    }
-                    Err(_) => {
-                        eprintln!(
-                            "Timed out reopening authoritative state store after agent-init dispatch after 5s"
-                        );
-                        return ExitCode::from(1);
-                    }
-                };
-                if resume_inputs.dispatch_receipt.dispatch_kind == "agent_lane" {
-                    resume_inputs.dispatch_receipt.selected_backend =
-                        super::canonical_selected_backend_for_receipt(
-                            &resume_inputs.role_selection,
-                            &resume_inputs.dispatch_receipt,
-                        );
-                }
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    store.record_run_graph_dispatch_receipt(&resume_inputs.dispatch_receipt),
-                )
-                .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => {
-                        eprintln!("Failed to record agent-init dispatch receipt: {error}");
-                        return ExitCode::from(1);
-                    }
-                    Err(_) => {
-                        eprintln!(
-                            "Timed out recording agent-init dispatch receipt after 5s"
-                        );
-                        return ExitCode::from(1);
-                    }
-                }
                 let Some(dispatch_result_path) = resume_inputs
                     .dispatch_receipt
                     .dispatch_result_path

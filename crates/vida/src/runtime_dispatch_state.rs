@@ -4384,6 +4384,19 @@ mod tests {
             .dispatch_result_path
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty()));
+        let store = runtime
+            .block_on(StateStore::open_existing(state_root.clone()))
+            .expect("state store should reopen");
+        let persisted_receipt = runtime
+            .block_on(store.run_graph_dispatch_receipt("run-agent-dispatch-record"))
+            .expect("persisted dispatch receipt should load")
+            .expect("persisted dispatch receipt should exist");
+        assert_eq!(persisted_receipt.dispatch_status, "executed");
+        assert_eq!(persisted_receipt.dispatch_target, "implementer");
+        assert!(persisted_receipt
+            .dispatch_result_path
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()));
     }
 
     #[test]
@@ -8151,6 +8164,10 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
             }
         }
     }
+    store
+        .record_run_graph_dispatch_receipt(receipt)
+        .await
+        .map_err(|error| format!("Failed to persist dispatch receipt after execution: {error}"))?;
     Ok(())
 }
 
