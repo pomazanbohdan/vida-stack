@@ -12,6 +12,9 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         return Ok(status);
     };
     let receipt = StateStore::validate_run_graph_dispatch_receipt_contract(receipt.clone())?;
+    if status.status == "completed" {
+        return Ok(status);
+    }
     let blocked_receipt = matches!(receipt.dispatch_status.as_str(), "blocked" | "failed")
         || matches!(
             receipt.lane_status.as_deref(),
@@ -1490,6 +1493,84 @@ mod tests {
         assert_eq!(reconciled.resume_target, "none");
         assert!(!reconciled.recovery_ready);
         assert!(!reconciled.delegation_gate().delegated_cycle_open);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn completed_run_status_is_not_downgraded_by_stale_blocked_dispatch_receipt() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-status-completed-over-stale-blocked-receipt-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status("run-closure", "closure", "delivery");
+        status.task_id = "task-closure".to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist completed run-graph status");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-closure".to_string(),
+                dispatch_target: "verification".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_blocked".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/verification-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: Some("internal_activation_view_only".to_string()),
+                downstream_dispatch_target: Some("closure".to_string()),
+                downstream_dispatch_command: Some("vida agent-init".to_string()),
+                downstream_dispatch_note: Some("stale blocked coach lineage".to_string()),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["pending_closure_handoff".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("blocked".to_string()),
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("coach".to_string()),
+                downstream_dispatch_last_target: Some("coach".to_string()),
+                activation_agent_type: Some("senior".to_string()),
+                activation_runtime_role: Some("verifier".to_string()),
+                selected_backend: Some("senior".to_string()),
+                recorded_at: "2026-04-14T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist stale blocked dispatch receipt");
+
+        let reconciled = store
+            .run_graph_status("run-closure")
+            .await
+            .expect("load reconciled completed run-graph status");
+        assert_eq!(reconciled.status, "completed");
+        assert_eq!(reconciled.active_node, "closure");
+        assert_eq!(reconciled.lifecycle_stage, "closure_complete");
+        assert_eq!(reconciled.next_node, None);
+        assert_eq!(reconciled.resume_target, "none");
 
         let _ = fs::remove_dir_all(&root);
     }
