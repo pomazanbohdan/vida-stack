@@ -404,7 +404,32 @@ fn external_provider_error_message(output: &ParsedExternalProviderOutput) -> Opt
 }
 
 fn parse_external_provider_output(stdout: &str) -> Option<ParsedExternalProviderOutput> {
-    let raw_json: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let raw_json = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        parsed
+    } else {
+        let parsed_lines = trimmed
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<Result<Vec<_>, _>>();
+        match parsed_lines {
+            Ok(rows) if !rows.is_empty() => serde_json::Value::Array(rows),
+            _ => {
+                return Some(ParsedExternalProviderOutput {
+                    raw_json: serde_json::Value::String(trimmed.to_string()),
+                    result_text: Some(trimmed.to_string()),
+                    usage: None,
+                    is_error: None,
+                    error_message: None,
+                });
+            }
+        }
+    };
     let result_row = match &raw_json {
         serde_json::Value::Array(rows) => rows
             .iter()
@@ -1507,6 +1532,37 @@ mod tests {
     }
 
     #[test]
+    fn parse_external_provider_output_accepts_plain_text_success() {
+        let parsed = parse_external_provider_output("external-dispatch:implemented")
+            .expect("plain text success output should parse");
+
+        assert_eq!(
+            parsed.raw_json,
+            serde_json::Value::String("external-dispatch:implemented".to_string())
+        );
+        assert_eq!(
+            parsed.result_text.as_deref(),
+            Some("external-dispatch:implemented")
+        );
+        assert!(!super::external_provider_output_indicates_error(&parsed));
+        assert!(external_provider_output_confirms_execution(Some(&parsed)));
+    }
+
+    #[test]
+    fn parse_external_provider_output_plain_text_auth_failure_stays_blocked() {
+        let parsed =
+            parse_external_provider_output("Authentication failed: invalid API key provided")
+                .expect("plain text auth failure should parse");
+
+        assert!(super::external_provider_output_indicates_error(&parsed));
+        assert!(!external_provider_output_confirms_execution(Some(&parsed)));
+        assert_eq!(
+            super::external_provider_error_message(&parsed).as_deref(),
+            Some("Authentication failed: invalid API key provided")
+        );
+    }
+
+    #[test]
     fn unparsable_external_provider_stdout_cannot_confirm_execution() {
         assert!(!external_provider_output_confirms_execution(None));
     }
@@ -1720,11 +1776,11 @@ dispatch:
         );
         assert_eq!(
             result["execution_truth"]["effective_selected_backend"],
-            "opencode_cli"
+            "internal_subagents"
         );
         assert_eq!(
             result["execution_truth"]["selected_backend_source"],
-            "route_primary"
+            "route_fallback"
         );
         assert_eq!(
             result["execution_truth"]["activation_evidence"]["execution_evidence_status"],

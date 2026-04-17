@@ -169,8 +169,7 @@ impl StateStore {
 
         for run_id in affected_run_ids {
             let status = self.run_graph_status(&run_id).await?;
-            let Some(binding) = Self::build_task_close_reconciled_binding(&status, task_id)
-            else {
+            let Some(binding) = Self::build_task_close_reconciled_binding(&status, task_id) else {
                 self.clear_run_graph_continuation_binding(&run_id).await?;
                 continue;
             };

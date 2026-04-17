@@ -967,9 +967,7 @@ impl StateStore {
             .await?;
         match binding {
             Some(binding) => {
-                let binding = self
-                    .normalize_task_close_reconcile_binding(binding)
-                    .await?;
+                let binding = self.normalize_task_close_reconcile_binding(binding).await?;
                 binding.validate()?;
                 Ok(Some(binding))
             }
@@ -992,9 +990,7 @@ impl StateStore {
             .await?;
         let rows: Vec<RunGraphContinuationBinding> = query.take(0)?;
         for mut binding in rows {
-            binding = self
-                .normalize_task_close_reconcile_binding(binding)
-                .await?;
+            binding = self.normalize_task_close_reconcile_binding(binding).await?;
             binding.validate()?;
             if binding.binding_source != "explicit_continuation_bind_task" {
                 return Ok(Some(binding));
@@ -1323,6 +1319,14 @@ impl StateStore {
             .await?
             .map(|context| context.role_selection())
             .transpose()?;
+        let canonical_selected_backend = role_selection
+            .as_ref()
+            .and_then(|selection| {
+                crate::runtime_dispatch_state::canonical_selected_backend_for_receipt(
+                    selection, &receipt,
+                )
+            })
+            .or_else(|| receipt.selected_backend.clone());
         let effective_execution_posture = {
             let mut summary = crate::runtime_dispatch_state::effective_execution_posture_summary(
                 role_selection
@@ -1330,7 +1334,7 @@ impl StateStore {
                     .map(|selection| &selection.execution_plan)
                     .unwrap_or(&serde_json::Value::Null),
                 &receipt.dispatch_target,
-                receipt.selected_backend.as_deref(),
+                canonical_selected_backend.as_deref(),
                 receipt.activation_agent_type.as_deref(),
                 host_runtime.as_ref(),
                 crate::runtime_dispatch_state::dispatch_receipt_has_execution_evidence(&receipt),
@@ -1359,18 +1363,18 @@ impl StateStore {
                 crate::runtime_dispatch_state::dispatch_execution_route_summary(
                     selection,
                     &receipt.dispatch_target,
-                    receipt.selected_backend.as_deref(),
+                    canonical_selected_backend.as_deref(),
                 )
             })
             .unwrap_or(serde_json::Value::Null);
         let activation_evidence =
             crate::runtime_dispatch_state::dispatch_activation_evidence_summary(&receipt);
-        Ok(Some(
-            RunGraphDispatchReceiptSummary::from_receipt(receipt)
-                .with_effective_execution_posture(effective_execution_posture)
-                .with_route_policy(route_policy)
-                .with_activation_evidence(activation_evidence),
-        ))
+        let mut summary = RunGraphDispatchReceiptSummary::from_receipt(receipt)
+            .with_effective_execution_posture(effective_execution_posture)
+            .with_route_policy(route_policy)
+            .with_activation_evidence(activation_evidence);
+        summary.selected_backend = canonical_selected_backend;
+        Ok(Some(summary))
     }
 
     pub async fn latest_run_graph_dispatch_receipt(
@@ -1412,8 +1416,10 @@ impl StateStore {
         &self,
         run_id: &str,
     ) -> Result<Option<RunGraphDispatchReceiptStored>, StateStoreError> {
-        let receipt: Option<RunGraphDispatchReceiptStored> =
-            self.db.select(("run_graph_dispatch_receipt", run_id)).await?;
+        let receipt: Option<RunGraphDispatchReceiptStored> = self
+            .db
+            .select(("run_graph_dispatch_receipt", run_id))
+            .await?;
         let Some(receipt) = receipt.map(normalize_legacy_downstream_preview_drift) else {
             return Ok(None);
         };
@@ -1488,7 +1494,8 @@ impl StateStore {
         receipt.downstream_dispatch_last_target = Some("closure".to_string());
         receipt.lane_status = Some("lane_completed".to_string());
         let public_receipt: RunGraphDispatchReceipt = receipt.clone().into();
-        self.record_run_graph_dispatch_receipt(&public_receipt).await?;
+        self.record_run_graph_dispatch_receipt(&public_receipt)
+            .await?;
         Ok(receipt)
     }
 
@@ -2033,8 +2040,11 @@ mod tests {
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
 
-        let mut status =
-            crate::taskflow_run_graph::default_run_graph_status("run-closure-direct", "closure", "delivery");
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-closure-direct",
+            "closure",
+            "delivery",
+        );
         status.task_id = "task-closure-direct".to_string();
         status.active_node = "closure".to_string();
         status.next_node = None;
@@ -2060,7 +2070,9 @@ mod tests {
                 exception_path_receipt_id: None,
                 dispatch_kind: "closure".to_string(),
                 dispatch_surface: None,
-                dispatch_command: Some("vida taskflow consume continue --run-id run-closure-direct --json".to_string()),
+                dispatch_command: Some(
+                    "vida taskflow consume continue --run-id run-closure-direct --json".to_string(),
+                ),
                 dispatch_packet_path: Some("/tmp/closure-packet.json".to_string()),
                 dispatch_result_path: Some("/tmp/closure-result.json".to_string()),
                 blocker_code: None,

@@ -105,6 +105,27 @@ fn build_task_graph_continuation_binding(
     task: &TaskRecord,
     why_override: Option<&str>,
 ) -> Option<RunGraphContinuationBinding> {
+    let task_request_text = task
+        .description
+        .trim()
+        .strip_prefix('\n')
+        .unwrap_or(task.description.trim())
+        .trim();
+    let effective_request_text = if !task_request_text.is_empty() {
+        Some(task_request_text.to_string())
+    } else {
+        task.title
+            .trim()
+            .chars()
+            .next()
+            .map(|_| task.title.trim().to_string())
+            .or_else(|| {
+                request_text
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            })
+    };
     let why_this_unit = if let Some(why_override) = why_override {
         why_override.trim().to_string()
     } else {
@@ -132,10 +153,7 @@ fn build_task_graph_continuation_binding(
         why_this_unit,
         primary_path: "normal_delivery_path".to_string(),
         sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
-        request_text: request_text
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
+        request_text: effective_request_text,
         recorded_at: time::OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .expect("rfc3339 timestamp should render"),
@@ -404,6 +422,45 @@ mod tests {
         assert_eq!(binding.binding_source, "explicit_continuation_bind_task");
         assert_eq!(binding.active_bounded_unit["kind"], "task_graph_task");
         assert_eq!(binding.active_bounded_unit["task_status"], "in_progress");
+        assert_eq!(binding.request_text.as_deref(), Some("Bounded task"));
+    }
+
+    #[test]
+    fn explicit_task_graph_binding_prefers_task_description_over_inherited_request() {
+        let task = crate::state_store::TaskRecord {
+            id: "task-42".to_string(),
+            title: "Bounded task".to_string(),
+            status: "in_progress".to_string(),
+            priority: 2,
+            issue_type: "task".to_string(),
+            created_at: "1776000000".to_string(),
+            created_by: "test".to_string(),
+            updated_at: "1776000000".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: String::new(),
+            compaction_level: 0,
+            original_size: 0,
+            description: "Task-rooted scoped request".to_string(),
+            notes: None,
+            labels: Vec::new(),
+            execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+            dependencies: Vec::new(),
+            display_id: None,
+        };
+
+        let binding = build_task_graph_continuation_binding(
+            "run-1",
+            Some("stale inherited request"),
+            &task,
+            None,
+        )
+        .expect("binding should build");
+
+        assert_eq!(
+            binding.request_text.as_deref(),
+            Some("Task-rooted scoped request")
+        );
     }
 
     #[test]

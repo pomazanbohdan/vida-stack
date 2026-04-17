@@ -431,10 +431,24 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida taskflow recovery checkpoint-latest [--json]");
             println!("  vida taskflow recovery gate <run-id> [--json]");
             println!("  vida taskflow recovery gate-latest [--json]");
+            println!("  vida lane show <run-id> [--json]");
+            println!("  vida lane exception-takeover <run-id> --receipt-id <id> [--json]");
+            println!("  vida lane supersede <run-id> --receipt-id <id> [--json]");
             println!();
             println!("Returned semantics:");
             println!(
                 "  resume_node, resume_status, checkpoint_kind, resume_target, policy_gate, handoff_state, recovery_ready"
+            );
+            println!();
+            println!("Recovery-critical lane mutations:");
+            println!(
+                "  Record exception-path evidence with `vida lane exception-takeover` before any local takeover path."
+            );
+            println!(
+                "  Record explicit supersession with `vida lane supersede` before treating admissible takeover as active authority."
+            );
+            println!(
+                "  Inspect the current lane envelope with `vida lane show` when recovery and write-guard posture disagree."
             );
             println!();
             println!("Failure modes:");

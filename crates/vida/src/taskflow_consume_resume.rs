@@ -570,6 +570,19 @@ async fn emit_runtime_consumption_resume_json(
     });
     let runtime_dispatch_receipt_blocker_code =
         runtime_consumption_resume_blocker_code(store, &payload_json, explicit_run_id).await?;
+    let projection_truth = match store.run_graph_status(&dispatch_receipt.run_id).await {
+        Ok(status) => Some(
+            crate::taskflow_run_graph::run_graph_projection_truth(store, &status)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "Failed to build run-graph projection truth for `{}`: {error}",
+                        dispatch_receipt.run_id
+                    )
+                })?,
+        ),
+        Err(_) => None,
+    };
     let mut blocker_codes =
         runtime_consumption_resume_receipt_blocker_codes(&normalized_dispatch_receipt);
     let mut next_actions = runtime_consumption_resume_receipt_next_actions(
@@ -655,6 +668,7 @@ async fn emit_runtime_consumption_resume_json(
                 "source_run_id": dispatch_receipt.run_id,
                 "source_dispatch_packet_path": dispatch_packet_path,
                 "dispatch_receipt": payload_json["dispatch_receipt"].clone(),
+                "projection_truth": projection_truth,
                 "snapshot_path": snapshot_path,
                 "failure_control_evidence": snapshot_with_operator_contracts["failure_control_evidence"].clone(),
             }))
@@ -673,6 +687,16 @@ async fn emit_runtime_consumption_resume_json(
             "source packet",
             dispatch_packet_path,
         );
+        if let Some(projection_truth) = projection_truth.as_ref() {
+            super::print_surface_line(
+                super::RenderMode::Plain,
+                "projection",
+                &projection_truth.projection_reason,
+            );
+            if let Some(next_action) = projection_truth.next_lawful_operator_action.as_deref() {
+                super::print_surface_line(super::RenderMode::Plain, "next action", next_action);
+            }
+        }
         super::print_surface_line(super::RenderMode::Plain, "snapshot path", &snapshot_path);
     }
     Ok(())
@@ -5809,8 +5833,11 @@ agent_system:
             .expect("create closed task");
 
         let run_id = "run-task-close-heal";
-        let mut status =
-            crate::taskflow_run_graph::default_run_graph_status(run_id, "implementation", "delivery");
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "implementation",
+            "delivery",
+        );
         status.task_id = "task-close-heal".to_string();
         status.active_node = "closure".to_string();
         status.next_node = None;

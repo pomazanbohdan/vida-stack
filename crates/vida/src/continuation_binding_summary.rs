@@ -40,15 +40,41 @@ pub(crate) fn build_continuation_binding_summary(
     latest_run_graph_dispatch_receipt: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
     evidence_ambiguous: bool,
 ) -> serde_json::Value {
+    let active_run_id = latest_run_graph_status.map(|status| status.run_id.as_str());
+    let delegated_cycle_open = latest_run_graph_recovery
+        .is_some_and(|recovery| recovery.delegation_gate.delegated_cycle_open);
+    let continuation_required_now = delegated_cycle_open;
+    let pause_boundary_gate = if delegated_cycle_open {
+        "non_blocking_only"
+    } else {
+        "allowed_if_no_further_bound_work_is_evidenced"
+    };
+    let continuation_next_actions = active_run_id
+        .filter(|run_id| !run_id.trim().is_empty())
+        .map(|run_id| {
+            vec![
+                "Do not stop on commentary, status output, or intermediate reporting while the delegated cycle is still open."
+                    .to_string(),
+                format!(
+                    "Continue the active bounded unit with `vida taskflow consume continue --run-id {run_id} --json`."
+                ),
+                format!(
+                    "Inspect the live delegated-cycle recovery state with `vida taskflow recovery status {run_id} --json` if routing context is needed before the next step."
+                ),
+            ]
+        })
+        .unwrap_or_default();
     if evidence_ambiguous {
         return serde_json::json!({
             "status": "ambiguous",
             "continuation_allowed": false,
+            "continuation_required_now": false,
             "active_bounded_unit": serde_json::Value::Null,
             "binding_source": serde_json::Value::Null,
             "why_this_unit": serde_json::Value::Null,
             "primary_path": "diagnosis_path",
             "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
+            "pause_boundary_gate": "forbidden_while_ambiguous",
             "ambiguity_reason": "runtime_evidence_ambiguous",
             "next_actions": [
                 "Do not continue by heuristic while run-graph continuation evidence is ambiguous.",
@@ -80,13 +106,19 @@ pub(crate) fn build_continuation_binding_summary(
                 return serde_json::json!({
                     "status": binding.status,
                     "continuation_allowed": binding.status == "bound",
+                    "continuation_required_now": continuation_required_now,
                     "active_bounded_unit": binding.active_bounded_unit,
                     "binding_source": binding.binding_source,
                     "why_this_unit": binding.why_this_unit,
                     "primary_path": binding.primary_path,
                     "sequential_vs_parallel_posture": binding.sequential_vs_parallel_posture,
+                    "pause_boundary_gate": pause_boundary_gate,
                     "ambiguity_reason": serde_json::Value::Null,
-                    "next_actions": []
+                    "next_actions": if continuation_required_now {
+                        continuation_next_actions.clone()
+                    } else {
+                        Vec::<String>::new()
+                    }
                 });
             }
         }
@@ -95,6 +127,7 @@ pub(crate) fn build_continuation_binding_summary(
             return serde_json::json!({
                 "status": "bound",
                 "continuation_allowed": true,
+                "continuation_required_now": continuation_required_now,
                 "active_bounded_unit": {
                     "kind": "run_graph_task",
                     "task_id": status.task_id,
@@ -108,8 +141,13 @@ pub(crate) fn build_continuation_binding_summary(
                 ),
                 "primary_path": "normal_delivery_path",
                 "sequential_vs_parallel_posture": sequential_vs_parallel_posture,
+                "pause_boundary_gate": pause_boundary_gate,
                 "ambiguity_reason": serde_json::Value::Null,
-                "next_actions": []
+                "next_actions": if continuation_required_now {
+                    continuation_next_actions.clone()
+                } else {
+                    Vec::<String>::new()
+                }
             });
         }
 
@@ -128,6 +166,7 @@ pub(crate) fn build_continuation_binding_summary(
                         return serde_json::json!({
                             "status": "bound",
                             "continuation_allowed": true,
+                            "continuation_required_now": false,
                             "active_bounded_unit": {
                                 "kind": "downstream_dispatch_target",
                                 "task_id": status.task_id,
@@ -141,6 +180,7 @@ pub(crate) fn build_continuation_binding_summary(
                             ),
                             "primary_path": "normal_delivery_path",
                             "sequential_vs_parallel_posture": "sequential_only_downstream_bound",
+                            "pause_boundary_gate": "allowed_if_no_further_bound_work_is_evidenced",
                             "ambiguity_reason": serde_json::Value::Null,
                             "next_actions": []
                         });
@@ -152,11 +192,13 @@ pub(crate) fn build_continuation_binding_summary(
         return serde_json::json!({
             "status": "ambiguous",
             "continuation_allowed": false,
+            "continuation_required_now": false,
             "active_bounded_unit": serde_json::Value::Null,
             "binding_source": serde_json::Value::Null,
             "why_this_unit": serde_json::Value::Null,
             "primary_path": "diagnosis_path",
             "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
+            "pause_boundary_gate": "forbidden_without_explicit_next_unit",
             "ambiguity_reason": "completed_without_explicit_next_bounded_unit",
             "next_actions": [
                 "Do not continue by selecting the next ready task heuristically after a completed bounded slice.",
@@ -168,11 +210,13 @@ pub(crate) fn build_continuation_binding_summary(
     serde_json::json!({
         "status": "ambiguous",
         "continuation_allowed": false,
+        "continuation_required_now": false,
         "active_bounded_unit": serde_json::Value::Null,
         "binding_source": serde_json::Value::Null,
         "why_this_unit": serde_json::Value::Null,
         "primary_path": "diagnosis_path",
         "sequential_vs_parallel_posture": "unknown_until_explicit_binding",
+        "pause_boundary_gate": "forbidden_without_runtime_evidence",
         "ambiguity_reason": "missing_active_bounded_unit_runtime_evidence",
         "next_actions": [
             "Do not continue by plausibility when runtime state does not expose an explicit active bounded unit.",
@@ -195,8 +239,32 @@ mod tests {
         status.active_node = "implementation".to_string();
         status.status = "running".to_string();
         status.lifecycle_stage = "implementation_active".to_string();
+        let recovery = crate::state_store::RunGraphRecoverySummary {
+            run_id: "task-1".to_string(),
+            task_id: "task-1".to_string(),
+            active_node: "implementation".to_string(),
+            lifecycle_stage: "implementation_active".to_string(),
+            resume_node: None,
+            resume_status: "running".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.implementation_lane".to_string(),
+            policy_gate: "not_required".to_string(),
+            handoff_state: "awaiting_implementation".to_string(),
+            recovery_ready: false,
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "implementation".to_string(),
+                lifecycle_stage: "implementation_active".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "delegated_lane_active".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+            },
+        };
 
-        let summary = build_continuation_binding_summary(None, Some(&status), None, None, false);
+        let summary =
+            build_continuation_binding_summary(None, Some(&status), Some(&recovery), None, false);
 
         assert_eq!(summary["status"], "bound");
         assert_eq!(
@@ -204,6 +272,11 @@ mod tests {
             serde_json::Value::String("task-1".to_string())
         );
         assert_eq!(summary["binding_source"], "latest_run_graph_status");
+        assert_eq!(summary["continuation_required_now"], true);
+        assert_eq!(summary["pause_boundary_gate"], "non_blocking_only");
+        assert!(summary["next_actions"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row.as_str().is_some_and(|value| value.contains("consume continue --run-id task-1 --json")))));
     }
 
     #[test]

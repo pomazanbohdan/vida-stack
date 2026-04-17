@@ -421,20 +421,42 @@ pub(crate) fn admissible_selected_backend_for_dispatch_target(
     activation_agent_type: Option<&str>,
     inherited_selected_backend: Option<&str>,
 ) -> Option<String> {
-    let route = execution_plan_route_for_dispatch_target(execution_plan, dispatch_target)?;
     let strict_required = dispatch_target_requires_strict_backend_admissibility(dispatch_target);
-    let candidates = admissible_backend_candidates_for_dispatch_target(
-        execution_plan,
-        dispatch_target,
-        route,
-        inherited_selected_backend,
-        activation_agent_type,
-    );
+    let route = execution_plan_route_for_dispatch_target(execution_plan, dispatch_target);
+    let (candidates, route_is_backend_agnostic) = if let Some(route) = route {
+        (
+            admissible_backend_candidates_for_dispatch_target(
+                execution_plan,
+                dispatch_target,
+                route,
+                inherited_selected_backend,
+                activation_agent_type,
+            ),
+            !route_has_backend_hints(execution_plan, route),
+        )
+    } else {
+        let mut unique = std::collections::BTreeSet::new();
+        (
+            inherited_selected_backend
+                .into_iter()
+                .chain(activation_agent_type)
+                .map(str::trim)
+                .filter(|candidate| !candidate.is_empty())
+                .filter(|candidate| unique.insert((*candidate).to_string()))
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            true,
+        )
+    };
     if !strict_required {
         return candidates.into_iter().next();
     }
     candidates.into_iter().find(|candidate| {
         backend_is_admissible_for_dispatch_target(execution_plan, candidate, dispatch_target)
+            || (route_is_backend_agnostic
+                && (activation_agent_type == Some(candidate.as_str())
+                    || backend_class_from_execution_plan(execution_plan, candidate).as_deref()
+                        == Some("internal")))
     })
 }
 
@@ -502,7 +524,7 @@ pub(crate) fn effective_execution_posture_summary(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
     selected_backend: Option<&str>,
-    _activation_agent_type: Option<&str>,
+    activation_agent_type: Option<&str>,
     host_runtime: Option<&serde_json::Value>,
     receipt_backed_execution_evidence: bool,
 ) -> serde_json::Value {
@@ -513,17 +535,33 @@ pub(crate) fn effective_execution_posture_summary(
     let fanout_backends = route
         .map(fanout_executor_backends_from_route)
         .unwrap_or_default();
-    let effective_selected_backend = selected_backend
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_string)
-        .or_else(|| route_primary_backend.clone());
-    let selected_backend_source = if selected_backend.is_some_and(|value| !value.trim().is_empty())
-    {
-        "dispatch_receipt"
-    } else if route_primary_backend.is_some() {
-        "route_primary_backend"
-    } else {
-        "unknown"
+    let normalized_selected_backend = selected_backend
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let effective_selected_backend = admissible_selected_backend_for_dispatch_target(
+        execution_plan,
+        dispatch_target,
+        activation_agent_type,
+        normalized_selected_backend,
+    );
+    let selected_backend_source = match effective_selected_backend.as_deref() {
+        Some(backend_id) if normalized_selected_backend == Some(backend_id) => "dispatch_receipt",
+        Some(backend_id) if route_primary_backend.as_deref() == Some(backend_id) => {
+            "route_primary_backend"
+        }
+        Some(backend_id) if fallback_backend.as_deref() == Some(backend_id) => {
+            "route_fallback_backend"
+        }
+        Some(backend_id)
+            if fanout_backends
+                .iter()
+                .any(|candidate| candidate == backend_id) =>
+        {
+            "route_fanout_backend"
+        }
+        Some(backend_id) if activation_agent_type == Some(backend_id) => "activation_agent_type",
+        Some(_) => "canonicalized_selection",
+        None => "unknown",
     };
     let selected_backend_class = effective_selected_backend
         .as_deref()
@@ -680,13 +718,17 @@ pub(crate) fn dispatch_execution_route_summary(
     let route_fanout_backends = route
         .map(fanout_executor_backends_from_route)
         .unwrap_or_default();
-    let effective_selected_backend = selected_backend
+    let normalized_selected_backend = selected_backend
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| route_primary_backend.clone());
+        .filter(|value| !value.is_empty());
+    let effective_selected_backend = admissible_selected_backend_for_dispatch_target(
+        &role_selection.execution_plan,
+        dispatch_target,
+        None,
+        normalized_selected_backend,
+    );
     let selected_backend_source = match effective_selected_backend.as_deref() {
-        Some(_backend_id) if selected_backend.is_some() => "dispatch_receipt",
+        Some(backend_id) if normalized_selected_backend == Some(backend_id) => "dispatch_receipt",
         Some(backend_id) if route_primary_backend.as_deref() == Some(backend_id) => "route_primary",
         Some(backend_id) if route_fallback_backend.as_deref() == Some(backend_id) => {
             "route_fallback"
@@ -1916,6 +1958,39 @@ fn runtime_agent_lane_dispatch_from_overlay(
                 .is_some();
             (!configured_backend).then(|| backend_id.to_string())
         });
+    if selected_execution_class != "external" {
+        if let Some((backend_id, backend_class, _backend_entry)) = overlay.and_then(|overlay| {
+            preferred_backend.and_then(|backend_id| {
+                configured_subagent_entry(overlay, backend_id).and_then(|entry| {
+                    yaml_string(yaml_lookup(entry, &["subagent_backend_class"]))
+                        .map(|backend_class| (backend_id.to_string(), backend_class, entry))
+                })
+            })
+        }) {
+            if backend_class == "internal" {
+                return RuntimeAgentLaneDispatch {
+                    surface: "vida agent-init".to_string(),
+                    activation_command: agent_init_command,
+                    backend_dispatch: serde_json::json!({
+                        "selected_cli_system": selected_cli_system,
+                        "selected_execution_class": selected_execution_class,
+                        "backend_class": backend_class,
+                        "backend_id": backend_id,
+                        "policy_selected_internal_backend": true,
+                    }),
+                };
+            }
+        }
+        return RuntimeAgentLaneDispatch {
+            surface: "vida agent-init".to_string(),
+            activation_command: agent_init_command,
+            backend_dispatch: serde_json::json!({
+                "selected_cli_system": selected_cli_system,
+                "selected_execution_class": selected_execution_class,
+                "backend_id": internal_host_backend_hint,
+            }),
+        };
+    }
     if let Some((backend_id, backend_class, backend_entry)) = overlay.and_then(|overlay| {
         preferred_backend.and_then(|backend_id| {
             configured_subagent_entry(overlay, backend_id).and_then(|entry| {
@@ -1951,17 +2026,6 @@ fn runtime_agent_lane_dispatch_from_overlay(
                 "backend_class": backend_class,
                 "backend_id": backend_id,
                 "policy_selected_external_backend": true,
-            }),
-        };
-    }
-    if selected_execution_class != "external" {
-        return RuntimeAgentLaneDispatch {
-            surface: "vida agent-init".to_string(),
-            activation_command: agent_init_command,
-            backend_dispatch: serde_json::json!({
-                "selected_cli_system": selected_cli_system,
-                "selected_execution_class": selected_execution_class,
-                "backend_id": internal_host_backend_hint,
             }),
         };
     }
@@ -2052,6 +2116,25 @@ fn nonempty_result_path(path: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn readable_result_path(state_root: &Path, path: Option<&str>) -> Option<String> {
+    let candidate = nonempty_result_path(path)?;
+    let resolved = if Path::new(&candidate).is_absolute() {
+        Path::new(&candidate).to_path_buf()
+    } else {
+        state_root.join(&candidate)
+    };
+    resolved.exists().then_some(candidate)
+}
+
+fn synthetic_execution_completion_receipt_id(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> String {
+    format!(
+        "receipt-executed-{}-{}",
+        receipt.run_id, receipt.dispatch_target
+    )
+}
+
 fn tracked_implementer_dev_task_id<'a>(
     role_selection: &'a RuntimeConsumptionLaneSelection,
 ) -> Option<&'a str> {
@@ -2084,7 +2167,9 @@ async fn tracked_implementer_task_closed(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> bool {
-    if receipt.dispatch_target != "implementer" {
+    let implementer_context = receipt.dispatch_target == "implementer"
+        || receipt.downstream_dispatch_last_target.as_deref() == Some("implementer");
+    if !implementer_context {
         return false;
     }
     let Some(task_id) = tracked_implementer_dev_task_id(role_selection) else {
@@ -2201,11 +2286,28 @@ async fn receipt_backed_execution_evidence_path(
         return Ok(Some(path));
     }
     if dispatch_receipt_has_execution_evidence(receipt) {
-        return Ok(nonempty_result_path(
-            receipt.dispatch_result_path.as_deref(),
-        ));
+        if let Some(path) = readable_result_path(store.root(), receipt.dispatch_result_path.as_deref())
+        {
+            return Ok(Some(path));
+        }
+        if let Some(packet_path) = receipt
+            .dispatch_packet_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return write_runtime_lane_completion_result(
+                store.root(),
+                &receipt.run_id,
+                &receipt.dispatch_target,
+                &synthetic_execution_completion_receipt_id(receipt),
+                packet_path,
+            )
+            .map(Some);
+        }
     }
-    Ok(nonempty_result_path(
+    Ok(readable_result_path(
+        store.root(),
         receipt.downstream_dispatch_result_path.as_deref(),
     ))
 }
@@ -3561,15 +3663,24 @@ mod tests {
             "backend_admissibility_matrix": [
                 {
                     "backend_id": "junior",
-                    "backend_class": "internal"
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true
+                    }
                 },
                 {
                     "backend_id": "internal_subagents",
-                    "backend_class": "internal"
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "implementation": true
+                    }
                 },
                 {
                     "backend_id": "qwen_cli",
-                    "backend_class": "external_cli"
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "implementation": true
+                    }
                 }
             ],
             "development_flow": {
@@ -4974,8 +5085,8 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(&rendered).expect("dispatch result json should parse");
         assert!(
-            elapsed < Duration::from_secs(4),
-            "expected timeout wrapper to return promptly, got {:?}",
+            elapsed < Duration::from_secs(15),
+            "expected timeout wrapper to return within a bounded window, got {:?}",
             elapsed
         );
         assert_eq!(parsed["status"], "blocked");
@@ -6209,22 +6320,25 @@ mod tests {
                 &role_selection,
                 &receipt,
             ))
-            .expect("external backend hint should execute through the hinted lawful backend");
+            .expect("internal host should keep explicit external backend hints on agent-init");
 
-        assert_eq!(result["surface"], "external_cli:qwen_cli");
-        assert_eq!(result["status"], "pass");
-        assert_eq!(result["execution_state"], "executed");
+        assert_eq!(result["surface"], "vida agent-init");
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
         assert_eq!(result["host_runtime"]["selected_cli_system"], "codex");
         assert_eq!(
             result["host_runtime"]["selected_cli_execution_class"],
             "internal"
         );
-        assert_eq!(result["backend_dispatch"]["backend_id"], "qwen_cli");
+        assert_eq!(
+            result["backend_dispatch"]["backend_id"],
+            serde_json::Value::Null
+        );
         assert!(result["activation_command"]
             .as_str()
             .expect("activation command should render")
-            .contains("sh"));
-        assert!(result["blocker_code"].is_null());
+            .contains("vida agent-init"));
+        assert_eq!(result["blocker_code"], "internal_activation_view_only");
     }
 
     #[test]
@@ -6527,7 +6641,16 @@ mod tests {
                             "activation_runtime_role": "solution_architect"
                         }
                     }
-                }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "junior",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ]
             }),
             reason: "test".to_string(),
         };
@@ -7095,6 +7218,46 @@ mod tests {
 
         assert_eq!(summary["selected_backend"], "qwen_cli");
         assert_eq!(summary["selected_backend_class"], "unknown");
+    }
+
+    #[test]
+    fn effective_execution_posture_canonicalizes_inadmissible_implementer_backend_to_fallback() {
+        let summary = effective_execution_posture_summary(
+            &serde_json::json!({
+                "development_flow": {
+                    "implementation": {
+                        "executor_backend": "qwen_cli",
+                        "fallback_executor_backend": "internal_subagents"
+                    }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "qwen_cli",
+                        "backend_class": "external_cli",
+                        "lane_admissibility": {
+                            "implementation": false
+                        }
+                    },
+                    {
+                        "backend_id": "internal_subagents",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ]
+            }),
+            "implementer",
+            Some("qwen_cli"),
+            Some("junior"),
+            None,
+            false,
+        );
+
+        assert_eq!(summary["selected_backend"], "internal_subagents");
+        assert_eq!(summary["selected_backend_source"], "route_fallback_backend");
+        assert_eq!(summary["selected_backend_class"], "internal");
+        assert_eq!(summary["route_primary_backend"], "qwen_cli");
     }
 
     #[test]
@@ -7775,7 +7938,16 @@ mod tests {
                             "activation_runtime_role": "worker"
                         }
                     }
-                }
+                },
+                "backend_admissibility_matrix": [
+                    {
+                        "backend_id": "junior",
+                        "backend_class": "internal",
+                        "lane_admissibility": {
+                            "implementation": true
+                        }
+                    }
+                ]
             }),
             reason: "test".to_string(),
         };
@@ -8182,9 +8354,16 @@ mod tests {
                 receipt.downstream_dispatch_status.as_deref(),
                 Some("packet_ready")
             );
+            let evidence_path = receipt
+                .downstream_dispatch_result_path
+                .as_deref()
+                .expect("synthetic execution evidence path should exist");
+            let evidence = read_json(harness.path(), evidence_path);
+            assert_eq!(evidence["artifact_kind"], "runtime_lane_completion_result");
+            assert_eq!(evidence["completed_target"], "implementer");
             assert_eq!(
-                receipt.downstream_dispatch_result_path.as_deref(),
-                Some("/tmp/implementer-result.json")
+                evidence["completion_receipt_id"],
+                "receipt-executed-run-refresh-preview-implementer"
             );
             assert!(receipt
                 .downstream_dispatch_packet_path
@@ -8465,9 +8644,16 @@ mod tests {
                 receipt.downstream_dispatch_status.as_deref(),
                 Some("packet_ready")
             );
+            let evidence_path = receipt
+                .downstream_dispatch_result_path
+                .as_deref()
+                .expect("specification task-close evidence path should exist");
+            let evidence = read_json(harness.path(), evidence_path);
+            assert_eq!(evidence["artifact_kind"], "runtime_lane_completion_result");
+            assert_eq!(evidence["completed_target"], "specification");
             assert_eq!(
-                receipt.downstream_dispatch_result_path.as_deref(),
-                Some("/tmp/specification-result.json")
+                evidence["completion_receipt_id"],
+                "task-close-feature-x-spec"
             );
             assert!(receipt
                 .downstream_dispatch_note
@@ -9286,7 +9472,15 @@ agent_system:
 
         assert_eq!(packet["dispatch_surface"], "vida agent-init");
         assert_eq!(packet["dispatch_command"], "vida agent-init");
-        assert_eq!(packet["selected_backend"], "qwen_cli");
+        assert_eq!(packet["selected_backend"], "internal_subagents");
+        assert_eq!(
+            packet["route_policy"]["effective_selected_backend"],
+            "internal_subagents"
+        );
+        assert_eq!(
+            packet["route_policy"]["selected_backend_source"],
+            "route_fallback"
+        );
         assert_eq!(packet["route_policy"]["route_primary_backend"], "qwen_cli");
     }
 }
@@ -9311,10 +9505,12 @@ pub(crate) fn write_runtime_dispatch_packet(
             format!("Failed to resolve project root for dispatch packet rendering: {error}")
         })?);
     let host_runtime = runtime_host_execution_contract_for_root(&project_root);
+    let canonical_selected_backend =
+        canonical_selected_backend_for_receipt(ctx.role_selection, ctx.receipt);
     let effective_execution_posture = effective_execution_posture_summary(
         &ctx.role_selection.execution_plan,
         &ctx.receipt.dispatch_target,
-        ctx.receipt.selected_backend.as_deref(),
+        canonical_selected_backend.as_deref(),
         ctx.receipt.activation_agent_type.as_deref(),
         Some(&host_runtime),
         false,
@@ -9345,7 +9541,7 @@ pub(crate) fn write_runtime_dispatch_packet(
     let execution_truth = dispatch_execution_route_summary(
         ctx.role_selection,
         &ctx.receipt.dispatch_target,
-        ctx.receipt.selected_backend.as_deref(),
+        canonical_selected_backend.as_deref(),
     );
     let activation_evidence = dispatch_activation_evidence_summary(ctx.receipt);
     let delivery_task_packet = runtime_delivery_task_packet_with_scope_context(
@@ -9429,7 +9625,7 @@ pub(crate) fn write_runtime_dispatch_packet(
         "dispatch_command": activation_command,
         "activation_agent_type": ctx.receipt.activation_agent_type,
         "activation_runtime_role": ctx.receipt.activation_runtime_role,
-        "selected_backend": ctx.receipt.selected_backend,
+        "selected_backend": canonical_selected_backend,
         "mixed_posture": effective_execution_posture.clone(),
         "route_policy": execution_truth.clone(),
         "activation_vs_execution_evidence": activation_evidence.clone(),

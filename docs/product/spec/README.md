@@ -41,6 +41,8 @@ Active design docs:
 - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
 - `docs/product/spec/specification-lane-scope-hardening-design.md`
 - `docs/product/spec/repair-fail-closed-resume-closure-truth-design.md`
+- `docs/product/spec/lane-supersede-and-shared-truth-envelope-design.md`
+- `docs/product/spec/implementation-backend-admissibility-and-selection-truth-design.md`
 
 Current promoted runtime-control specs:
 

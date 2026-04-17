@@ -3,7 +3,10 @@ use crate::{
     dispatch_contract_execution_lane_sequence,
     operator_contracts::canonical_release1_blocker_code_entries,
     print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
-    state_store::{RunGraphStatus, StateStore, StateStoreError},
+    state_store::{
+        RunGraphContinuationBinding, RunGraphDispatchReceipt, RunGraphStatus, StateStore,
+        StateStoreError,
+    },
     taskflow_layer4::print_taskflow_proxy_help,
     taskflow_task_bridge::proxy_state_dir,
     RenderMode, RuntimeConsumptionLaneSelection,
@@ -20,6 +23,109 @@ pub(crate) struct TaskflowRunGraphSeedPayload {
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct TaskflowRunGraphAdvancePayload {
     pub(crate) status: RunGraphStatus,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct RunGraphProjectionTruth {
+    pub(crate) projection_source: String,
+    pub(crate) projection_reason: String,
+    pub(crate) dispatch_receipt_present: bool,
+    pub(crate) continuation_binding_present: bool,
+    pub(crate) projection_vs_receipt_parity: String,
+    pub(crate) stale_state_suspected: bool,
+    pub(crate) next_lawful_operator_action: Option<String>,
+    pub(crate) dispatch_receipt: Option<RunGraphDispatchReceipt>,
+    pub(crate) continuation_binding: Option<RunGraphContinuationBinding>,
+}
+
+fn next_lawful_operator_action_for_status(status: &RunGraphStatus) -> Option<String> {
+    if status.recovery_ready && status.resume_target != "none" {
+        return Some(format!(
+            "vida taskflow consume continue --run-id {} --json",
+            status.run_id
+        ));
+    }
+    if status.status == "completed" {
+        return None;
+    }
+    Some(format!(
+        "vida taskflow run-graph status {} --json",
+        status.run_id
+    ))
+}
+
+fn projection_vs_receipt_parity(
+    status: &RunGraphStatus,
+    receipt: Option<&RunGraphDispatchReceipt>,
+) -> String {
+    let Some(receipt) = receipt else {
+        return "no_receipt".to_string();
+    };
+    if receipt.dispatch_status == status.status
+        || receipt.downstream_dispatch_status.as_deref() == Some(status.status.as_str())
+    {
+        return "aligned".to_string();
+    }
+    "reconciled_from_receipt".to_string()
+}
+
+fn projection_reason_for_status(
+    status: &RunGraphStatus,
+    receipt: Option<&RunGraphDispatchReceipt>,
+    binding: Option<&RunGraphContinuationBinding>,
+) -> String {
+    if let Some(receipt) = receipt {
+        if receipt.dispatch_status != status.status
+            || receipt.downstream_dispatch_status.as_deref() == Some(status.status.as_str())
+        {
+            return "run-graph status was reconciled against persisted dispatch receipt evidence"
+                .to_string();
+        }
+        if receipt.blocker_code.is_some() || !receipt.downstream_dispatch_blockers.is_empty() {
+            return "run-graph status reflects persisted dispatch blocker evidence".to_string();
+        }
+    }
+    if let Some(binding) = binding {
+        return format!(
+            "run-graph status is paired with explicit continuation binding from `{}`",
+            binding.binding_source
+        );
+    }
+    if status.status == "completed" {
+        return "run-graph status reflects terminal state without additional projection inputs"
+            .to_string();
+    }
+    "run-graph status reflects authoritative persisted state".to_string()
+}
+
+pub(crate) async fn run_graph_projection_truth(
+    store: &StateStore,
+    status: &RunGraphStatus,
+) -> Result<RunGraphProjectionTruth, StateStoreError> {
+    let dispatch_receipt = store.run_graph_dispatch_receipt(&status.run_id).await?;
+    let continuation_binding = store.run_graph_continuation_binding(&status.run_id).await?;
+    Ok(RunGraphProjectionTruth {
+        projection_source: if dispatch_receipt.is_some() {
+            "reconciled_run_graph_status".to_string()
+        } else {
+            "persisted_run_graph_status".to_string()
+        },
+        projection_reason: projection_reason_for_status(
+            status,
+            dispatch_receipt.as_ref(),
+            continuation_binding.as_ref(),
+        ),
+        dispatch_receipt_present: dispatch_receipt.is_some(),
+        continuation_binding_present: continuation_binding.is_some(),
+        projection_vs_receipt_parity: projection_vs_receipt_parity(
+            status,
+            dispatch_receipt.as_ref(),
+        ),
+        stale_state_suspected: false,
+        next_lawful_operator_action: next_lawful_operator_action_for_status(status),
+        dispatch_receipt,
+        continuation_binding,
+    })
 }
 
 #[derive(Clone)]
@@ -348,9 +454,32 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.latest_run_graph_recovery_summary().await {
                     Ok(Some(summary)) => {
+                        let projection_truth = match store.run_graph_status(&summary.run_id).await {
+                            Ok(status) => match run_graph_projection_truth(&store, &status).await {
+                                Ok(truth) => truth,
+                                Err(error) => {
+                                    eprintln!("Failed to build recovery projection truth: {error}");
+                                    return ExitCode::from(1);
+                                }
+                            },
+                            Err(error) => {
+                                eprintln!("Failed to read run-graph status for projection truth: {error}");
+                                return ExitCode::from(1);
+                            }
+                        };
                         print_surface_header(RenderMode::Plain, "vida taskflow recovery latest");
                         print_surface_line(RenderMode::Plain, "run", &summary.run_id);
                         print_surface_line(RenderMode::Plain, "recovery", &summary.as_display());
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "projection",
+                            &projection_truth.projection_reason,
+                        );
+                        if let Some(next_action) =
+                            projection_truth.next_lawful_operator_action.as_deref()
+                        {
+                            print_surface_line(RenderMode::Plain, "next action", next_action);
+                        }
                         ExitCode::SUCCESS
                     }
                     Ok(None) => {
@@ -376,11 +505,28 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.latest_run_graph_recovery_summary().await {
                     Ok(summary) => {
+                        let projection_truth = match summary.as_ref() {
+                            Some(summary) => match store.run_graph_status(&summary.run_id).await {
+                                Ok(status) => match run_graph_projection_truth(&store, &status).await {
+                                    Ok(truth) => Some(truth),
+                                    Err(error) => {
+                                        eprintln!("Failed to build recovery projection truth: {error}");
+                                        return ExitCode::from(1);
+                                    }
+                                },
+                                Err(error) => {
+                                    eprintln!("Failed to read run-graph status for projection truth: {error}");
+                                    return ExitCode::from(1);
+                                }
+                            },
+                            None => None,
+                        };
                         println!(
                             "{}",
                             serde_json::to_string_pretty(&serde_json::json!({
                                 "surface": "vida taskflow recovery latest",
                                 "recovery": summary,
+                                "projection_truth": projection_truth,
                             }))
                             .expect("latest recovery summary should render as json")
                         );
@@ -402,9 +548,32 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.run_graph_recovery_summary(run_id).await {
                     Ok(summary) => {
+                        let projection_truth = match store.run_graph_status(&summary.run_id).await {
+                            Ok(status) => match run_graph_projection_truth(&store, &status).await {
+                                Ok(truth) => truth,
+                                Err(error) => {
+                                    eprintln!("Failed to build recovery projection truth: {error}");
+                                    return ExitCode::from(1);
+                                }
+                            },
+                            Err(error) => {
+                                eprintln!("Failed to read run-graph status for projection truth: {error}");
+                                return ExitCode::from(1);
+                            }
+                        };
                         print_surface_header(RenderMode::Plain, "vida taskflow recovery status");
                         print_surface_line(RenderMode::Plain, "run", &summary.run_id);
                         print_surface_line(RenderMode::Plain, "recovery", &summary.as_display());
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "projection",
+                            &projection_truth.projection_reason,
+                        );
+                        if let Some(next_action) =
+                            projection_truth.next_lawful_operator_action.as_deref()
+                        {
+                            print_surface_line(RenderMode::Plain, "next action", next_action);
+                        }
                         ExitCode::SUCCESS
                     }
                     Err(error) => {
@@ -425,12 +594,26 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.run_graph_recovery_summary(run_id).await {
                     Ok(summary) => {
+                        let projection_truth = match store.run_graph_status(&summary.run_id).await {
+                            Ok(status) => match run_graph_projection_truth(&store, &status).await {
+                                Ok(truth) => truth,
+                                Err(error) => {
+                                    eprintln!("Failed to build recovery projection truth: {error}");
+                                    return ExitCode::from(1);
+                                }
+                            },
+                            Err(error) => {
+                                eprintln!("Failed to read run-graph status for projection truth: {error}");
+                                return ExitCode::from(1);
+                            }
+                        };
                         println!(
                             "{}",
                             serde_json::to_string_pretty(&serde_json::json!({
                                 "surface": "vida taskflow recovery status",
                                 "run_id": summary.run_id,
                                 "recovery": summary,
+                                "projection_truth": projection_truth,
                             }))
                             .expect("recovery summary should render as json")
                         );
@@ -486,6 +669,16 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.latest_run_graph_status().await {
                     Ok(Some(status)) => {
+                        let projection_truth = match run_graph_projection_truth(&store, &status).await
+                        {
+                            Ok(truth) => truth,
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to build latest run-graph projection truth: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        };
                         print_surface_header(RenderMode::Plain, "vida taskflow run-graph latest");
                         print_surface_line(RenderMode::Plain, "run", &status.run_id);
                         print_surface_line(RenderMode::Plain, "status", &status.as_display());
@@ -494,6 +687,16 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                             "delegation gate",
                             &status.delegation_gate().as_display(),
                         );
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "projection",
+                            &projection_truth.projection_reason,
+                        );
+                        if let Some(next_action) =
+                            projection_truth.next_lawful_operator_action.as_deref()
+                        {
+                            print_surface_line(RenderMode::Plain, "next action", next_action);
+                        }
                         ExitCode::SUCCESS
                     }
                     Ok(None) => {
@@ -521,12 +724,25 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                     Ok(status) => {
                         let delegation_gate =
                             status.as_ref().map(|status| status.delegation_gate());
+                        let projection_truth = match status.as_ref() {
+                            Some(status) => match run_graph_projection_truth(&store, status).await {
+                                Ok(truth) => Some(truth),
+                                Err(error) => {
+                                    eprintln!(
+                                        "Failed to build latest run-graph projection truth: {error}"
+                                    );
+                                    return ExitCode::from(1);
+                                }
+                            },
+                            None => None,
+                        };
                         println!(
                             "{}",
                             serde_json::to_string_pretty(&serde_json::json!({
                                 "surface": "vida taskflow run-graph latest",
                                 "status": status,
                                 "delegation_gate": delegation_gate,
+                                "projection_truth": projection_truth,
                             }))
                             .expect("latest run-graph status should render as json")
                         );
@@ -548,6 +764,16 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store.run_graph_status(run_id).await {
                     Ok(status) => {
+                        let projection_truth = match run_graph_projection_truth(&store, &status).await
+                        {
+                            Ok(truth) => truth,
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to build run-graph projection truth: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        };
                         print_surface_header(RenderMode::Plain, "vida taskflow run-graph status");
                         print_surface_line(RenderMode::Plain, "run", &status.run_id);
                         print_surface_line(RenderMode::Plain, "status", &status.as_display());
@@ -556,6 +782,16 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                             "delegation gate",
                             &status.delegation_gate().as_display(),
                         );
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "projection",
+                            &projection_truth.projection_reason,
+                        );
+                        if let Some(next_action) =
+                            projection_truth.next_lawful_operator_action.as_deref()
+                        {
+                            print_surface_line(RenderMode::Plain, "next action", next_action);
+                        }
                         ExitCode::SUCCESS
                     }
                     Err(error) => {
@@ -577,6 +813,16 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                 Ok(store) => match store.run_graph_status(run_id).await {
                     Ok(status) => {
                         let delegation_gate = status.delegation_gate();
+                        let projection_truth = match run_graph_projection_truth(&store, &status).await
+                        {
+                            Ok(truth) => truth,
+                            Err(error) => {
+                                eprintln!(
+                                    "Failed to build run-graph projection truth: {error}"
+                                );
+                                return ExitCode::from(1);
+                            }
+                        };
                         println!(
                             "{}",
                             serde_json::to_string_pretty(&serde_json::json!({
@@ -584,6 +830,7 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                                 "run_id": status.run_id,
                                 "status": status,
                                 "delegation_gate": delegation_gate,
+                                "projection_truth": projection_truth,
                             }))
                             .expect("run-graph status should render as json")
                         );
@@ -3180,5 +3427,90 @@ mod tests {
         let error = validate_run_graph_resume_gate(&status).expect_err("should fail");
         assert!(error.contains("resume_target"));
         assert!(error.contains("handoff_state"));
+    }
+
+    #[test]
+    fn projection_reason_prefers_persisted_dispatch_blocker_evidence() {
+        let status = RunGraphStatus {
+            run_id: "run-projection-1".to_string(),
+            task_id: "task-projection-1".to_string(),
+            task_class: "scope_discussion".to_string(),
+            active_node: "specification".to_string(),
+            next_node: None,
+            status: "blocked".to_string(),
+            route_task_class: "spec-pack".to_string(),
+            selected_backend: "middle".to_string(),
+            lane_id: "specification_lane".to_string(),
+            lifecycle_stage: "specification_active".to_string(),
+            policy_gate: "single_task_scope_required".to_string(),
+            handoff_state: "none".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "conversation_cursor".to_string(),
+            resume_target: "none".to_string(),
+            recovery_ready: false,
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: status.run_id.clone(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/projection-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/projection-result.json".to_string()),
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_specification_evidence".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("specification".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-04-17T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            projection_reason_for_status(&status, Some(&receipt), None),
+            "run-graph status reflects persisted dispatch blocker evidence"
+        );
+        assert_eq!(projection_vs_receipt_parity(&status, Some(&receipt)), "aligned");
+    }
+
+    #[test]
+    fn next_lawful_operator_action_prefers_continue_for_recovery_ready_status() {
+        let status = RunGraphStatus {
+            run_id: "run-projection-continue".to_string(),
+            task_id: "task-projection-continue".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "writer".to_string(),
+            next_node: Some("verification".to_string()),
+            status: "blocked".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "junior".to_string(),
+            lane_id: "writer_lane".to_string(),
+            lifecycle_stage: "implementation_active".to_string(),
+            policy_gate: "targeted_verification".to_string(),
+            handoff_state: "awaiting_verification".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "artifact".to_string(),
+            resume_target: "dispatch.verification_lane".to_string(),
+            recovery_ready: true,
+        };
+
+        assert_eq!(
+            next_lawful_operator_action_for_status(&status).as_deref(),
+            Some("vida taskflow consume continue --run-id run-projection-continue --json")
+        );
     }
 }
