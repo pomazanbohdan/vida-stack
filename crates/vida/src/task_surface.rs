@@ -258,6 +258,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 print_taskflow_proxy_help(Some("task"));
                 ExitCode::SUCCESS
             }
+            Some("parallelism" | "scheduling") => {
+                print_taskflow_proxy_help(Some("parallelism"));
+                ExitCode::SUCCESS
+            }
             Some("next") => {
                 print_taskflow_proxy_help(Some("next"));
                 ExitCode::SUCCESS

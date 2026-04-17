@@ -266,8 +266,10 @@ Agent-surface rule:
 ### Phase 2
 - Render compact `command families` output in plain-text `vida orchestrator-init` and `vida agent-init`.
 - Align root help family labels with the exported projection.
+- Land one bounded operator-facing help slice on `vida task` / `vida taskflow` so task sequencing and parallel-safe scheduling are discoverable from primary help entrypoints and deterministic query routing.
 - Second proof target:
   - output-parity tests assert representative family names/commands stay aligned between root help and init output.
+  - `vida task --help`, `vida taskflow --help`, `vida task help parallelism`, and `vida taskflow query "what can run in parallel with the current task"` stay aligned with live `graph-summary` scheduling fields.
 
 ### Phase 3
 - Harden lane-scope markers and prove that delegated-lane exports do not blur root-only authority.
@@ -286,6 +288,7 @@ Agent-surface rule:
   - `cargo test -p vida boot_smoke orchestrator_init_renders_compiled_startup_view_json`
   - `cargo test -p vida boot_smoke agent_init_renders_worker_startup_view_json_for_explicit_role`
   - `cargo test -p vida boot_smoke agent_init_dispatch_packet_reports_view_only_activation_semantics`
+  - `cargo test -p vida taskflow_query_answer -- --nocapture`
 - Canonical checks:
   - `vida docflow check --root . docs/product/spec/export-canonical-operator-command-map-through-design.md`
   - `vida docflow doctor --root . --layer 3`
@@ -342,5 +345,5 @@ schema_version: 1
 status: canonical
 source_path: docs/product/spec/export-canonical-operator-command-map-through-design.md
 created_at: 2026-04-14T07:40:56.253573048Z
-updated_at: 2026-04-15T11:13:35.85852328Z
+updated_at: 2026-04-17T09:20:04.289039599Z
 changelog_ref: export-canonical-operator-command-map-through-design.changelog.jsonl

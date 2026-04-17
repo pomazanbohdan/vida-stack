@@ -2,6 +2,24 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
+const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\n  vida task help parallelism\n  vida docflow help";
+
+const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
+
+const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --json\n  vida task next --json\n  vida task show <task-id> --json\n  vida task deps <task-id> --json\n  vida task critical-path --json\n  vida task help parallelism\n\nParallelism guidance:\n  Use `vida task help parallelism` for execution_mode/order_bucket/parallel_group/conflict_domain semantics.\n  Use `vida taskflow graph-summary --json` to see `ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  Missing execution semantics never imply safe parallel execution.";
+
+const TASKFLOW_LONG_ABOUT: &str = "Delegate to the TaskFlow runtime family.\n\nTaskFlow is the execution/runtime authority. Use it for tracked execution, backlog pressure, run-graph state, packet inspection, continuation binding, and closure handoff.";
+
+const TASKFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida taskflow help\n  vida taskflow help task\n  vida taskflow help parallelism\n  vida taskflow graph-summary --json\n  vida taskflow status --summary --json\n  vida task next --json\n\nParallelism guidance:\n  `vida taskflow graph-summary --json` exposes `current_task_id`, `scheduling.ready[*].ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  `vida task help parallelism` explains execution semantics fields and fail-closed scheduling rules.";
+
+const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
+const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
+const TASK_CREATE_AFTER_HELP: &str = "Examples:\n  vida task create <task-id> <title> --parent-id <parent-id> --json\n  vida task create <task-id> <title> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n\nNotes:\n  Missing execution semantics fail closed for parallel scheduling.\n  Use `vida taskflow graph-summary --json` to verify parallel-safe admission after mutation.";
+
+const TASK_UPDATE_ABOUT: &str = "Update one tracked task in the authoritative backlog store.";
+const TASK_UPDATE_LONG_ABOUT: &str = "Update one tracked task in the authoritative backlog store.\n\nUse execution-semantics flags to correct sequencing and parallelism truth without moving ordering back into notes:\n- `--execution-mode sequential|parallel_safe|exclusive`\n- `--order-bucket <id>`\n- `--parallel-group <id>`\n- `--conflict-domain <id>`\n- matching `--clear-*` flags remove one semantics field";
+const TASK_UPDATE_AFTER_HELP: &str = "Examples:\n  vida task update <task-id> --status in_progress --json\n  vida task update <task-id> --execution-mode parallel_safe --order-bucket wave-a --parallel-group docs --conflict-domain docs --json\n  vida task update <task-id> --clear-parallel-group --clear-conflict-domain --json\n\nNotes:\n  Use either a value flag or the matching clear flag, not both.\n  Re-check `vida taskflow graph-summary --json` after updates to confirm `ready_parallel_safe` and `parallel_blockers`.";
+
 #[derive(clap::ValueEnum, Debug, Clone, Copy, Default)]
 pub(crate) enum RenderMode {
     #[default]
@@ -17,7 +35,7 @@ pub(crate) enum RenderMode {
     disable_help_subcommand = true,
     about = "VIDA Binary Foundation",
     long_about = "VIDA Binary Foundation\n\nTaskFlow remains execution authority; DocFlow remains the documentation/readiness surface. Root `lane` and `approval` are family-owned operator surfaces over the delegated runtime law.",
-    after_help = "Runtime-family help paths:\n  vida taskflow help\n  vida docflow help"
+    after_help = ROOT_AFTER_HELP
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
@@ -43,7 +61,9 @@ pub(crate) enum Command {
     #[command(about = "record host-agent feedback and refresh local strategy state")]
     AgentFeedback(AgentFeedbackArgs),
     #[command(
-        about = "task inspection, mutation, and graph routing over the authoritative state store"
+        about = "task inspection, mutation, and graph routing over the authoritative state store",
+        long_about = TASK_LONG_ABOUT,
+        after_help = TASK_AFTER_HELP
     )]
     Task(TaskArgs),
     #[command(about = "inspect the effective instruction bundle")]
@@ -62,7 +82,11 @@ pub(crate) enum Command {
     Approval(ProxyArgs),
     #[command(about = "thin root alias to the TaskFlow recovery family")]
     Recovery(ProxyArgs),
-    #[command(about = "delegate to the TaskFlow runtime family")]
+    #[command(
+        about = "delegate to the TaskFlow runtime family",
+        long_about = TASKFLOW_LONG_ABOUT,
+        after_help = TASKFLOW_AFTER_HELP
+    )]
     Taskflow(ProxyArgs),
     #[command(about = "delegate to the DocFlow runtime family")]
     Docflow(ProxyArgs),
@@ -95,8 +119,18 @@ pub(crate) enum TaskCommand {
     Ready(TaskReadyArgs),
     Next(TaskNextArgs),
     NextDisplayId(TaskNextDisplayIdArgs),
+    #[command(
+        about = TASK_CREATE_ABOUT,
+        long_about = TASK_CREATE_LONG_ABOUT,
+        after_help = TASK_CREATE_AFTER_HELP
+    )]
     Create(TaskCreateArgs),
     Ensure(TaskCreateArgs),
+    #[command(
+        about = TASK_UPDATE_ABOUT,
+        long_about = TASK_UPDATE_LONG_ABOUT,
+        after_help = TASK_UPDATE_AFTER_HELP
+    )]
     Update(TaskUpdateArgs),
     Close(TaskCloseArgs),
     Deps(TaskDepsArgs),

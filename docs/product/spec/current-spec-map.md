@@ -218,21 +218,25 @@ Companion rule:
    Registered path: `docs/product/spec/launcher-decomposition-and-code-hygiene-design.md`
 31. [internal-codex-agent-execution-fail-closed-design.md](internal-codex-agent-execution-fail-closed-design.md)
    Config families: bounded internal-host activation-view fail-closed semantics, truthful agent-lane execution state, root-session anti-bypass guidance, and runtime dispatch bridge hardening for Codex/internal execution
+   Registered path: `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
 32. [taskflow-execution-semantics-and-scheduler-design.md](taskflow-execution-semantics-and-scheduler-design.md)
    Config families: bounded TaskFlow task execution semantics schema, graph-plus-semantics scheduler projection, operator-visible parallel-admission truth, and fail-closed compatibility defaults for legacy tasks
-   Registered path: `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`
-32. [external-cli-carrier-hardening-design.md](external-cli-carrier-hardening-design.md)
+   Registered path: `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
+33. [external-cli-carrier-hardening-design.md](external-cli-carrier-hardening-design.md)
    Config families: bounded external CLI carrier dispatch pinning, carrier readiness/status classification, normalized opencode/kilo/vibe project profiles, and operator-visible smoke-proof routing for sandbox/auth/model activation
    Registered path: `docs/product/spec/external-cli-carrier-hardening-design.md`
-33. [continuation-binding-fail-closed-hardening-design.md](continuation-binding-fail-closed-hardening-design.md)
+34. [continuation-binding-fail-closed-hardening-design.md](continuation-binding-fail-closed-hardening-design.md)
    Config families: bounded continuation-binding fail-closed enforcement, explicit active-bounded-unit init/status surfaces, ambiguity blocker vocabulary, and generated host guidance against self-selecting adjacent work
    Registered path: `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`
-34. [continuation-and-seeded-dispatch-bridge-design.md](continuation-and-seeded-dispatch-bridge-design.md)
+35. [continuation-and-seeded-dispatch-bridge-design.md](continuation-and-seeded-dispatch-bridge-design.md)
    Config families: bounded explicit continuation binding records, seeded run dispatch-init bridges, persisted dispatch-context rows, and packet render/inspect operator surfaces for lawful resume inputs
    Registered path: `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`
-35. [lawful-closure-continuation-rebinding-design.md](lawful-closure-continuation-rebinding-design.md)
+36. [lawful-closure-continuation-rebinding-design.md](lawful-closure-continuation-rebinding-design.md)
    Config families: bounded explicit post-closure continuation rebinding, backlog-task continuation artifacts, completed-run summary admissibility, and fail-closed rejection of stale in-flight bindings
    Registered path: `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
+37. [export-canonical-operator-command-map-through-design.md](export-canonical-operator-command-map-through-design.md)
+   Config families: bounded operator command-family export through orchestrator-init and agent-init, help/discoverability alignment across root/task/taskflow surfaces, and canonical command-map parity between init views and primary help entrypoints
+   Registered path: `docs/product/spec/export-canonical-operator-command-map-through-design.md`
 
 ### Support
 
@@ -288,5 +292,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-04-17T08:02:54.482095211Z
+updated_at: 2026-04-17T09:20:04.289910269Z
 changelog_ref: current-spec-map.changelog.jsonl

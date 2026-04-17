@@ -183,6 +183,8 @@ Companion rule:
    Sources: `docs/product/spec/autonomous-report-continuation-law.md`, `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`, `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`, current continuation/runtime code in `crates/vida/src/{taskflow_continuation,continuation_binding_summary,taskflow_layer4,status_surface,taskflow_runtime_bundle}.rs`, and the current need to support explicit post-closure rebinding without heuristic task picking
 28. [taskflow-execution-semantics-and-scheduler-design.md](taskflow-execution-semantics-and-scheduler-design.md)
    Sources: `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, `docs/product/spec/emerging-architectural-patterns-model.md`, current taskflow/runtime code in `crates/vida/src/{state_store_task_models,state_store_task_store,state_store_task_graph,task_surface,taskflow_proxy,state_store_taskflow_snapshot_codec}.rs`, OpenAI Function Calling guide, OpenAI Agents SDK orchestration guide, Anthropic parallel tool-use guidance, Microsoft Semantic Kernel function invocation guidance, and Microsoft Agent Framework workflow/orchestration guidance
+29. [export-canonical-operator-command-map-through-design.md](export-canonical-operator-command-map-through-design.md)
+   Sources: `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`, `docs/product/spec/compiled-runtime-bundle-contract.md`, `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, current launcher/taskflow help code in `crates/vida/src/{cli,task_surface,taskflow_layer4,taskflow_proxy,taskflow_runtime_bundle,init_surfaces,surface_render}.rs`, and the current need to expose one canonical operator-command map and aligned help/discoverability surfaces without manual help spelunking
 
 ## Routing Pointers
 
@@ -233,5 +235,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-provenance-map.md
 created_at: '2026-03-16T09:05:00+02:00'
-updated_at: 2026-04-17T08:02:54.482337835Z
+updated_at: 2026-04-17T09:20:04.295305828Z
 changelog_ref: current-spec-provenance-map.changelog.jsonl

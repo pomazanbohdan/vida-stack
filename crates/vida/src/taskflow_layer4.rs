@@ -28,6 +28,22 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!(
                 "  `task ready` returns the current unblocked ready set from the runtime store."
             );
+            println!("  Execution semantics are additive scheduling truth on top of the graph.");
+            println!(
+                "  Missing execution semantics never imply safe parallel execution for write-producing work."
+            );
+            println!();
+            println!("Execution semantics:");
+            println!("  execution_mode: sequential | parallel_safe | exclusive");
+            println!(
+                "  order_bucket: bounded sequencing bucket used by scheduler summaries and wave grouping"
+            );
+            println!(
+                "  parallel_group: opt-in co-scheduling group that must match before parallel-safe admission"
+            );
+            println!(
+                "  conflict_domain: write-collision classifier; matching domains block concurrent execution"
+            );
             println!();
             println!("Canonical commands:");
             println!("  vida task list --all --json");
@@ -50,7 +66,11 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!(
                 "  vida task update <task-id> --status in_progress --notes-file <path> --json"
             );
+            println!(
+                "  vida task update <task-id> --execution-mode parallel_safe --order-bucket <bucket> --parallel-group <group> --conflict-domain <domain> --json"
+            );
             println!("  vida task close <task-id> --reason \"...\" --json");
+            println!("  vida task help parallelism");
             println!("  vida task import-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             println!("  vida task replace-jsonl .vida/exports/tasks.snapshot.jsonl --json");
             println!("  vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json");
@@ -59,6 +79,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  Missing or ambiguous runtime root fails closed.");
             println!(
                 "  Invalid task ids, illegal status transitions, or unresolved parent/display ids fail closed from the delegated runtime."
+            );
+            println!(
+                "  Parallel-safe admission fails closed when execution_mode/order_bucket/parallel_group/conflict_domain truth is missing or incompatible."
             );
             println!(
                 "  Export artifacts can drift; verify live state with `task show` or `task list`."
@@ -87,6 +110,10 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
                 "  Inspect the current critical path before parallelizing: vida task critical-path --json"
             );
             println!(
+                "  Inspect scheduler truth before parallelizing: vida taskflow graph-summary --json"
+            );
+            println!("  Read the sequencing/parallelism contract: vida task help parallelism");
+            println!(
                 "  Reserve the next child display id: vida task next-display-id <parent-display-id> --json"
             );
             println!(
@@ -106,6 +133,86 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!(
                 "  Export the current runtime snapshot when needed: vida task export-jsonl .vida/exports/tasks.snapshot.jsonl --json"
+            );
+            return;
+        }
+        Some("parallelism") | Some("scheduling") => {
+            println!("VIDA TaskFlow help: parallelism");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Explain the first-class sequencing and parallel-safe scheduling contract used by the authoritative task graph."
+            );
+            println!(
+                "  Graph edges remain canonical for hard ordering; execution semantics add bounded scheduling truth on top."
+            );
+            println!();
+            println!("Canonical fields:");
+            println!("  execution_mode");
+            println!("    sequential    default single-lane posture unless later semantics prove otherwise");
+            println!(
+                "    parallel_safe opt-in parallel admission; still requires matching order bucket and parallel group plus non-colliding conflict domains"
+            );
+            println!(
+                "    exclusive     explicitly blocks co-scheduling even when the graph itself is unblocked"
+            );
+            println!("  order_bucket");
+            println!(
+                "    bounded sequencing bucket used to group tasks that may be considered together by the scheduler"
+            );
+            println!("  parallel_group");
+            println!(
+                "    explicit co-scheduling group; mismatched or missing groups fail closed for parallel-safe admission"
+            );
+            println!("  conflict_domain");
+            println!(
+                "    write-collision classifier; matching non-empty domains block concurrent execution"
+            );
+            println!();
+            println!("Admission rules:");
+            println!("  Graph readiness is necessary but not sufficient for parallel execution.");
+            println!("  Missing semantics fail closed: unblocked does not mean parallel-safe.");
+            println!(
+                "  `ready_parallel_safe` becomes true only when the candidate is ready now and its semantics are compatible with the current bounded unit."
+            );
+            println!(
+                "  `parallel_blockers` explains why a ready task is still unsafe to co-schedule."
+            );
+            println!();
+            println!("Canonical commands:");
+            println!("  vida task help parallelism");
+            println!("  vida taskflow help parallelism");
+            println!("  vida taskflow graph-summary --json");
+            println!(
+                "  vida task update <task-id> --execution-mode <mode> --order-bucket <bucket> --parallel-group <group> --conflict-domain <domain> --json"
+            );
+            println!(
+                "  vida task create <task-id> <title> --execution-mode <mode> --order-bucket <bucket> --parallel-group <group> --conflict-domain <domain> --json"
+            );
+            println!();
+            println!("Graph-summary fields to inspect:");
+            println!("  current_task_id");
+            println!("  scheduling.ready[*].ready_now");
+            println!("  scheduling.ready[*].ready_parallel_safe");
+            println!("  scheduling.ready[*].parallel_blockers");
+            println!("  scheduling.parallel_candidates_after_current");
+            println!();
+            println!("Common blocker codes:");
+            println!("  current_task_reference");
+            println!("  execution_mode_not_parallel_safe");
+            println!("  current_execution_mode_not_parallel_safe");
+            println!("  order_bucket_mismatch_or_missing");
+            println!("  parallel_group_mismatch");
+            println!("  conflict_domain_collision");
+            println!("  missing_conflict_domain");
+            println!("  graph_blocked");
+            println!();
+            println!("Failure modes:");
+            println!(
+                "  Never infer safe concurrency from notes alone; use graph edges plus execution semantics."
+            );
+            println!(
+                "  If the current task itself lacks compatible semantics, other ready tasks remain visible but not parallel-safe."
             );
             return;
         }
@@ -152,7 +259,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Returned semantics:");
             println!(
-                "  status, blocker_codes, next_actions, ready_count, blocked_count, critical_path_length, primary_ready_task, primary_blocked_task, waves, critical_path"
+                "  status, blocker_codes, next_actions, ready_count, blocked_count, critical_path_length, current_task_id, primary_ready_task, primary_blocked_task, scheduling.ready[*].ready_parallel_safe, scheduling.ready[*].parallel_blockers, scheduling.parallel_candidates_after_current, waves, critical_path"
             );
             println!();
             println!("Failure modes:");
@@ -402,7 +509,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Usage:");
     println!("  vida taskflow <args...>");
     println!(
-        "  vida taskflow help [task|next|graph-summary|status|consume|continuation|packet|run-graph|recovery|doctor|protocol-binding|query]"
+        "  vida taskflow help [task|parallelism|next|graph-summary|status|consume|continuation|packet|run-graph|recovery|doctor|protocol-binding|query]"
     );
     println!("  vida taskflow <command> --help");
     println!();
@@ -434,6 +541,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  task        backlog inspection and mutation");
     println!("  next        aggregate next lawful step across backlog and recovery state");
     println!("  graph-summary  ready/blocked pressure plus critical-path summary");
+    println!("  parallelism explicit sequencing and parallel-safe scheduling contract");
     println!("  status      family-scoped alias to the root operator status surface");
     println!("  continuation explicit bounded-unit binding");
     println!("  packet      persisted runtime packet inspection");
@@ -449,6 +557,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida task ready --json");
     println!("  vida task next --json");
     println!("  vida taskflow graph-summary --json");
+    println!("  vida taskflow help parallelism");
     println!("  vida taskflow status --summary --json");
     println!("  vida task show <task-id> --json");
     println!("  vida taskflow run-graph status <task-id>");
@@ -463,6 +572,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Operator recipes:");
     println!("  Find the next lawful step: vida task next --json");
     println!("  Inspect ready vs blocked pressure: vida taskflow graph-summary --json");
+    println!(
+        "  Inspect sequencing and parallel-safe admission rules: vida taskflow help parallelism"
+    );
     println!("  Inspect TaskFlow-wide operator posture: vida taskflow status --summary --json");
     println!("  Inspect the canonical backlog contract: vida task --help");
     println!("  Ask which surface to use: vida taskflow query \"what should I run next?\"");
@@ -505,6 +617,25 @@ struct TaskflowQueryAnswer<'a> {
 
 fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
     let normalized = query.to_ascii_lowercase();
+    if normalized.contains("parallel")
+        || normalized.contains("parallel safe")
+        || normalized.contains("parallel-safe")
+        || normalized.contains("parallelism")
+        || normalized.contains("sequencing")
+        || normalized.contains("execution mode")
+        || normalized.contains("order bucket")
+        || normalized.contains("parallel group")
+        || normalized.contains("conflict domain")
+        || normalized.contains("co-schedul")
+    {
+        return TaskflowQueryAnswer {
+            intent: "inspect-parallelism",
+            why: "Sequencing and parallel-safe admission are now first-class task semantics, so the safest operator path is to inspect the scheduler projection and the explicit parallelism contract together.",
+            command: "vida taskflow graph-summary --json",
+            failure_modes: "Graph readiness alone is not parallel authority. If the scheduler output is unclear, read `vida task help parallelism` and treat missing execution semantics as fail-closed for co-scheduling.",
+        };
+    }
+
     if normalized.contains("next display")
         || normalized.contains("display id")
         || normalized.contains("child slot")
@@ -721,13 +852,14 @@ fn print_taskflow_query_help() {
     println!("Usage:");
     println!("  vida taskflow query \"what should I run next?\"");
     println!("  vida taskflow query \"how do I inspect one task?\"");
+    println!("  vida taskflow query \"what can run in parallel with the current task?\"");
     println!("  vida taskflow query \"how do I create a new task under this epic?\"");
     println!("  vida taskflow query \"how do I replace the current backlog snapshot?\"");
     println!("  vida taskflow query \"how do I check resumability?\"");
     println!();
     println!("Current intents:");
     println!(
-        "  next/ready, inspect/show, create/new, update/progress, close/done, display-id, export/jsonl, replace/snapshot, resume/run-graph, doctor/health, final/consume, protocol-binding"
+        "  parallelism/scheduling, next/ready, inspect/show, create/new, update/progress, close/done, display-id, export/jsonl, replace/snapshot, resume/run-graph, doctor/health, final/consume, protocol-binding"
     );
     println!();
     println!("Failure modes:");
@@ -771,6 +903,16 @@ pub(crate) fn run_taskflow_query(args: &[String]) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::taskflow_query_answer;
+
+    #[test]
+    fn taskflow_query_answer_routes_parallelism_requests() {
+        let answer = taskflow_query_answer("what can run in parallel with the current task");
+        assert_eq!(answer.intent, "inspect-parallelism");
+        assert_eq!(answer.command, "vida taskflow graph-summary --json");
+        let why = answer.why.to_lowercase();
+        assert!(why.contains("parallel-safe"));
+        assert!(why.contains("scheduler projection"));
+    }
 
     #[test]
     fn taskflow_query_answer_routes_replace_snapshot_requests() {
