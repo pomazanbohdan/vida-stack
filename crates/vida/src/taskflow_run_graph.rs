@@ -1407,6 +1407,14 @@ async fn run_graph_dispatch_init(
     let dispatch_packet_path = crate::write_runtime_dispatch_packet(&ctx)?;
     dispatch_receipt.dispatch_packet_path = Some(dispatch_packet_path.clone());
     dispatch_receipt.dispatch_command = dispatch_command_from_packet_path(&dispatch_packet_path)?;
+    // Refresh the run-graph status timestamps before persisting the receipt so every
+    // latest_* projection resolves the same run after dispatch-init.
+    store
+        .record_run_graph_status(&status)
+        .await
+        .map_err(|error| {
+            format!("Failed to refresh run-graph status for dispatch-init: {error}")
+        })?;
     store
         .record_run_graph_dispatch_receipt(&dispatch_receipt)
         .await
@@ -2783,6 +2791,111 @@ mod tests {
             .expect("reseeded receipt should exist");
         assert_eq!(reseeded_receipt.run_id, "task-new");
         assert!(reseeded_receipt.dispatch_packet_path.is_some());
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_refreshes_latest_run_graph_surfaces_to_effective_run() {
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let store = StateStore::open(harness.path().to_path_buf())
+            .await
+            .expect("open store");
+        write_activation_snapshot_for_store(&store)
+            .await
+            .expect("activation snapshot should be written");
+
+        let target_status = RunGraphStatus {
+            run_id: "task-refresh-latest".to_string(),
+            task_id: "task-refresh-latest".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "planning".to_string(),
+            next_node: Some("business_analyst".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "spec-pack".to_string(),
+            selected_backend: "opencode_cli".to_string(),
+            lane_id: "planning_lane".to_string(),
+            lifecycle_stage: "dispatch_ready".to_string(),
+            policy_gate: "single_task_scope_required".to_string(),
+            handoff_state: "awaiting_business_analyst".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "conversation_cursor".to_string(),
+            resume_target: "dispatch.business_analyst_lane".to_string(),
+            recovery_ready: true,
+        };
+        store
+            .record_run_graph_status(&target_status)
+            .await
+            .expect("persist target run status");
+        store
+            .record_run_graph_dispatch_context(&run_graph_dispatch_context_from_seed_payload(
+                &TaskflowRunGraphSeedPayload {
+                    status: target_status.clone(),
+                    request_text: "Repair fail-closed resume latest projection drift in crates/vida/src/taskflow_run_graph.rs and crates/vida/src/state_store_run_graph_summary.rs.".to_string(),
+                    role_selection: RuntimeConsumptionLaneSelection {
+                        ok: true,
+                        activation_source: "test".to_string(),
+                        selection_mode: "fixed".to_string(),
+                        fallback_role: "business_analyst".to_string(),
+                        request: "Repair fail-closed resume latest projection drift in crates/vida/src/taskflow_run_graph.rs and crates/vida/src/state_store_run_graph_summary.rs.".to_string(),
+                        selected_role: "business_analyst".to_string(),
+                        conversational_mode: None,
+                        single_task_only: true,
+                        tracked_flow_entry: Some("spec-pack".to_string()),
+                        allow_freeform_chat: false,
+                        confidence: "high".to_string(),
+                        matched_terms: vec!["repair".to_string(), "resume".to_string()],
+                        compiled_bundle: serde_json::Value::Null,
+                        execution_plan: serde_json::json!({
+                            "runtime_assignment": {
+                                "selected_agent_id": "middle",
+                                "activation_agent_type": "middle",
+                                "activation_runtime_role": "business_analyst"
+                            }
+                        }),
+                        reason: "test".to_string(),
+                    },
+                },
+            ))
+            .await
+            .expect("persist target dispatch context");
+
+        let mut stale_status = default_run_graph_status("run-stale-latest", "closure", "delivery");
+        stale_status.task_id = "run-stale-latest".to_string();
+        stale_status.active_node = "closure".to_string();
+        stale_status.status = "completed".to_string();
+        stale_status.lifecycle_stage = "closure_complete".to_string();
+        stale_status.context_state = "sealed".to_string();
+        stale_status.resume_target = "none".to_string();
+        stale_status.recovery_ready = false;
+        store
+            .record_run_graph_status(&stale_status)
+            .await
+            .expect("persist stale latest run status");
+
+        let payload = run_graph_dispatch_init(&store, "task-refresh-latest")
+            .await
+            .expect("dispatch init should succeed");
+        assert_eq!(payload["run_id"], "task-refresh-latest");
+
+        let latest_status = store
+            .latest_run_graph_status()
+            .await
+            .expect("load latest run graph status")
+            .expect("latest run graph status should exist");
+        assert_eq!(latest_status.run_id, "task-refresh-latest");
+
+        let latest_recovery = store
+            .latest_run_graph_recovery_summary()
+            .await
+            .expect("load latest recovery summary")
+            .expect("latest recovery summary should exist");
+        assert_eq!(latest_recovery.run_id, "task-refresh-latest");
+
+        let latest_receipt = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect("load latest dispatch receipt summary")
+            .expect("latest dispatch receipt summary should exist");
+        assert_eq!(latest_receipt.run_id, "task-refresh-latest");
     }
 
     #[tokio::test]

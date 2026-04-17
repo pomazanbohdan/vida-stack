@@ -1727,16 +1727,20 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
     let explicit_downstream_target =
         completed_run_explicit_downstream_target_for_resume(store, run_id).await?;
     if let Some(bound_target) = explicit_downstream_target.as_deref() {
-        if let Some(resume) =
-            maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt).await?
-        {
-            if resume.dispatch_receipt.dispatch_target == bound_target {
-                return Ok(resume);
+        let prefer_ready_packet = prefer_ready_downstream_packet_over_active_result(&receipt);
+        if prefer_ready_packet {
+            if let Some(resume) =
+                maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt)
+                    .await?
+            {
+                if resume.dispatch_receipt.dispatch_target == bound_target {
+                    return Ok(resume);
+                }
+                return Err(format!(
+                    "Completed run `{run_id}` is explicitly bound to downstream target `{bound_target}`, but persisted downstream packet lineage still points to stale target `{}`. Resume must fail closed until a fresh `{bound_target}` downstream packet is recorded.",
+                    resume.dispatch_receipt.dispatch_target
+                ));
             }
-            return Err(format!(
-                "Completed run `{run_id}` is explicitly bound to downstream target `{bound_target}`, but persisted downstream packet lineage still points to stale target `{}`. Resume must fail closed until a fresh `{bound_target}` downstream packet is recorded.",
-                resume.dispatch_receipt.dispatch_target
-            ));
         }
         if let Some(resume) =
             maybe_resume_inputs_from_active_downstream_result(store, Some(run_id), &receipt).await?
@@ -1748,6 +1752,20 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
                 "Completed run `{run_id}` is explicitly bound to downstream target `{bound_target}`, but persisted downstream result lineage still points to stale target `{}`. Resume must fail closed until a fresh `{bound_target}` downstream packet is recorded.",
                 resume.dispatch_receipt.dispatch_target
             ));
+        }
+        if !prefer_ready_packet {
+            if let Some(resume) =
+                maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt)
+                    .await?
+            {
+                if resume.dispatch_receipt.dispatch_target == bound_target {
+                    return Ok(resume);
+                }
+                return Err(format!(
+                    "Completed run `{run_id}` is explicitly bound to downstream target `{bound_target}`, but persisted downstream packet lineage still points to stale target `{}`. Resume must fail closed until a fresh `{bound_target}` downstream packet is recorded.",
+                    resume.dispatch_receipt.dispatch_target
+                ));
+            }
         }
         return Err(missing_explicit_downstream_resume_evidence_error(
             run_id,
@@ -6944,6 +6962,285 @@ agent_system:
         assert!(
             !prefer_ready_downstream_packet_over_active_result(&receipt),
             "blocked active downstream result must beat stale ready downstream packet"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn prefer_ready_downstream_packet_over_active_result_returns_false_for_same_target_blocked_active_result(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-same-target-ready-vs-blocked-active-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&root).expect("create temp dir");
+        let result_path = root.join("closure-result.json");
+        fs::write(
+            &result_path,
+            serde_json::json!({
+                "execution_state": "blocked",
+                "dispatch_packet_path": "/tmp/closure-packet-active.json",
+                "blocker_code": "internal_activation_view_only"
+            })
+            .to_string(),
+        )
+        .expect("write blocked downstream result");
+
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-same-target-ready-vs-blocked-active".to_string(),
+            dispatch_target: "verification".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_completed".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/verification-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/verification-result.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("closure".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some(
+                "closure remains the active downstream target".to_string(),
+            ),
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: Some("/tmp/closure-packet-ready.json".to_string()),
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: Some(result_path.display().to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 1,
+            downstream_dispatch_active_target: Some("closure".to_string()),
+            downstream_dispatch_last_target: Some("closure".to_string()),
+            activation_agent_type: Some("senior".to_string()),
+            activation_runtime_role: Some("verifier".to_string()),
+            selected_backend: Some("senior".to_string()),
+            recorded_at: "2026-04-17T00:00:00Z".to_string(),
+        };
+
+        assert!(
+            !prefer_ready_downstream_packet_over_active_result(&receipt),
+            "same-target blocked active downstream result must beat stale ready downstream packet"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn resolve_runtime_consumption_resume_inputs_for_completed_closure_bound_run_prefers_same_target_blocked_active_result_over_stale_ready_packet(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-closure-bound-same-target-blocked-active-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let run_id = "run-closure-bound-same-target-blocked-active";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "closure", "delivery");
+        status.task_id = "task-closure".to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let packet_dir = root.join("runtime-consumption/downstream-dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create downstream packet dir");
+        let ready_packet_path = packet_dir.join("run-closure-bound-same-target-ready.json");
+        let active_packet_path = packet_dir.join("run-closure-bound-same-target-active.json");
+        let role_selection = serde_json::json!({
+            "ok": true,
+            "activation_source": "test",
+            "selection_mode": "auto",
+            "fallback_role": "orchestrator",
+            "request": "continue development",
+            "selected_role": "pm",
+            "conversational_mode": "development",
+            "single_task_only": true,
+            "tracked_flow_entry": "closure",
+            "allow_freeform_chat": false,
+            "confidence": "high",
+            "matched_terms": ["continue", "closure"],
+            "compiled_bundle": null,
+            "execution_plan": {
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["implementer", "coach", "verification", "closure"]
+                    }
+                }
+            },
+            "reason": "test"
+        });
+        fs::write(
+            &ready_packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "run_id": run_id,
+                "role_selection_full": role_selection.clone(),
+                "run_graph_bootstrap": {
+                    "run_id": run_id
+                },
+                "delivery_task_packet": {
+                    "packet_id": format!("{run_id}::closure::delivery-ready"),
+                    "goal": "Execute bounded closure handoff",
+                    "scope_in": ["dispatch_target:closure"],
+                    "read_only_paths": ["runtime-consumption"],
+                    "definition_of_done": ["write bounded dispatch result"],
+                    "verification_command": format!(
+                        "vida taskflow consume continue --run-id {run_id} --json"
+                    ),
+                    "proof_target": "bounded closure receipt",
+                    "stop_rules": ["stop after bounded closure result"],
+                    "blocking_question": "What is the next bounded action required for `closure`?"
+                },
+                "downstream_dispatch_target": "closure",
+                "downstream_dispatch_ready": true,
+                "downstream_dispatch_blockers": [],
+                "downstream_dispatch_status": "packet_ready"
+            })
+            .to_string(),
+        )
+        .expect("write stale ready closure packet");
+        fs::write(
+            &active_packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_downstream_dispatch_packet",
+                "packet_template_kind": "delivery_task_packet",
+                "run_id": run_id,
+                "role_selection_full": role_selection,
+                "run_graph_bootstrap": {
+                    "run_id": run_id
+                },
+                "delivery_task_packet": {
+                    "packet_id": format!("{run_id}::closure::delivery-active"),
+                    "goal": "Execute bounded closure handoff",
+                    "scope_in": ["dispatch_target:closure"],
+                    "read_only_paths": ["runtime-consumption"],
+                    "definition_of_done": ["write bounded dispatch result"],
+                    "verification_command": format!(
+                        "vida taskflow consume continue --run-id {run_id} --json"
+                    ),
+                    "proof_target": "bounded closure receipt",
+                    "stop_rules": ["stop after bounded closure result"],
+                    "blocking_question": "What is the next bounded action required for `closure`?"
+                },
+                "downstream_dispatch_target": "closure"
+            })
+            .to_string(),
+        )
+        .expect("write active closure packet");
+
+        let result_dir = root.join("runtime-consumption/dispatch-results");
+        fs::create_dir_all(&result_dir).expect("create result dir");
+        let active_result_path =
+            result_dir.join("run-closure-bound-same-target-blocked-active.json");
+        fs::write(
+            &active_result_path,
+            serde_json::json!({
+                "surface": "internal_cli:qwen",
+                "execution_state": "blocked",
+                "blocker_code": "internal_activation_view_only",
+                "dispatch_packet_path": active_packet_path.display().to_string(),
+                "activation_command": "vida agent-init --downstream-packet closure.json --json",
+                "backend_dispatch": {
+                    "backend_id": "internal_subagents"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write active blocked closure result");
+
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: run_id.to_string(),
+                dispatch_target: "verification".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/verification-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/verification-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: Some("closure".to_string()),
+                downstream_dispatch_command: Some("vida agent-init".to_string()),
+                downstream_dispatch_note: Some("closure remains active".to_string()),
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: Some(ready_packet_path.display().to_string()),
+                downstream_dispatch_status: Some("packet_ready".to_string()),
+                downstream_dispatch_result_path: Some(active_result_path.display().to_string()),
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("closure".to_string()),
+                downstream_dispatch_last_target: Some("closure".to_string()),
+                activation_agent_type: Some("senior".to_string()),
+                activation_runtime_role: Some("verifier".to_string()),
+                selected_backend: Some("senior".to_string()),
+                recorded_at: "2026-04-17T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist receipt");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: run_id.to_string(),
+                    task_id: "task-closure".to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "downstream_dispatch_target",
+                        "task_id": "task-closure",
+                        "run_id": run_id,
+                        "dispatch_target": "closure",
+                    }),
+                    binding_source: "latest_run_graph_dispatch_receipt".to_string(),
+                    why_this_unit: "closure remains the lawful bounded unit".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_downstream_bound".to_string(),
+                    request_text: Some("continue by lawful closure".to_string()),
+                    recorded_at: "2026-04-17T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist continuation binding");
+
+        let resolved = resolve_runtime_consumption_resume_inputs(&store, Some(run_id), None, None)
+            .await
+            .expect("blocked active closure result should beat stale ready closure packet");
+        assert_eq!(resolved.dispatch_receipt.dispatch_target, "closure");
+        assert_eq!(resolved.dispatch_receipt.dispatch_status, "blocked");
+        assert_eq!(
+            resolved.dispatch_receipt.blocker_code.as_deref(),
+            Some("internal_activation_view_only")
+        );
+        assert_eq!(
+            resolved.dispatch_packet_path,
+            active_packet_path.display().to_string()
         );
 
         let _ = fs::remove_dir_all(&root);
