@@ -106,6 +106,10 @@ Companion rule:
     Config families: DB-first operational state, filesystem projection, Git lineage, synchronization law, conflict handling, and reactive domain routing
 20. [host-agent-layer-status-matrix.md](host-agent-layer-status-matrix.md)
     Config families: host-agent activation layers, overlay-owned tier ladders, tier selection economics, local score/state surfaces, task-close feedback ingestion, and status/budget observability over `.vida/state/**`
+21. [specification-lane-scope-hardening-design.md](specification-lane-scope-hardening-design.md)
+    Config families: runtime dispatch packet scope policy, tracked design-doc write ownership for specification lanes, downstream packet parity, and legacy packet normalization for task-class-aware scope hardening
+22. [repair-fail-closed-resume-closure-truth-design.md](repair-fail-closed-resume-closure-truth-design.md)
+    Config families: fail-closed resume-time packet reconciliation, persisted specification packet repair toward tracked design-doc scope, and active A1 recovery-truth closure for stale dispatch lineage
 
 ### Project And Packaging
 
@@ -292,5 +296,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-map.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-04-17T09:20:04.289910269Z
+updated_at: 2026-04-17T11:08:29.099890665Z
 changelog_ref: current-spec-map.changelog.jsonl

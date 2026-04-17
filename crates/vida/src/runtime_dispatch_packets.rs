@@ -1,6 +1,7 @@
 use crate::runtime_contract_vocab::{
     RUNTIME_ROLE_COACH, RUNTIME_ROLE_SOLUTION_ARCHITECT, RUNTIME_ROLE_VERIFIER,
-    TASK_CLASS_ARCHITECTURE, TASK_CLASS_COACH, TASK_CLASS_VERIFICATION,
+    TASK_CLASS_ARCHITECTURE, TASK_CLASS_COACH, TASK_CLASS_IMPLEMENTATION, TASK_CLASS_SPECIFICATION,
+    TASK_CLASS_VERIFICATION,
 };
 
 fn runtime_delivery_packet_id(run_id: &str, dispatch_target: &str) -> String {
@@ -131,6 +132,27 @@ pub(crate) fn request_has_explicit_owned_scope(request_text: &str) -> bool {
     !explicit_request_scope_paths(request_text).is_empty()
 }
 
+pub(crate) fn tracked_design_doc_owned_paths(tracked_design_doc_path: Option<&str>) -> Vec<String> {
+    tracked_design_doc_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| vec![value.to_string()])
+        .unwrap_or_default()
+}
+
+pub(crate) fn delivery_packet_owned_paths(
+    handoff_task_class: &str,
+    request_text: &str,
+    tracked_design_doc_path: Option<&str>,
+) -> Vec<String> {
+    match handoff_task_class {
+        TASK_CLASS_IMPLEMENTATION => explicit_request_scope_paths(request_text),
+        TASK_CLASS_SPECIFICATION => tracked_design_doc_owned_paths(tracked_design_doc_path),
+        _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn runtime_delivery_task_packet(
     run_id: &str,
     dispatch_target: &str,
@@ -138,6 +160,26 @@ pub(crate) fn runtime_delivery_task_packet(
     handoff_task_class: &str,
     closure_class: &str,
     request_text: &str,
+) -> serde_json::Value {
+    runtime_delivery_task_packet_with_scope_context(
+        run_id,
+        dispatch_target,
+        handoff_runtime_role,
+        handoff_task_class,
+        closure_class,
+        request_text,
+        None,
+    )
+}
+
+pub(crate) fn runtime_delivery_task_packet_with_scope_context(
+    run_id: &str,
+    dispatch_target: &str,
+    handoff_runtime_role: &str,
+    handoff_task_class: &str,
+    closure_class: &str,
+    request_text: &str,
+    tracked_design_doc_path: Option<&str>,
 ) -> serde_json::Value {
     serde_json::json!({
         "packet_id": runtime_delivery_packet_id(run_id, dispatch_target),
@@ -158,7 +200,11 @@ pub(crate) fn runtime_delivery_task_packet(
             "mutation outside bounded packet scope",
             "closure without recorded handoff evidence"
         ],
-        "owned_paths": explicit_request_scope_paths(request_text),
+        "owned_paths": delivery_packet_owned_paths(
+            handoff_task_class,
+            request_text,
+            tracked_design_doc_path,
+        ),
         "read_only_paths": [
             ".vida/data/state/runtime-consumption",
             "docs/product/spec",

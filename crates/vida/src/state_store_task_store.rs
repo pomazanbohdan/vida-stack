@@ -2,6 +2,42 @@ use super::*;
 use serde_json::Deserializer;
 
 impl StateStore {
+    fn build_task_close_reconciled_binding(
+        status: &RunGraphStatus,
+        closed_task_id: &str,
+    ) -> Option<crate::state_store::RunGraphContinuationBinding> {
+        if status.task_id == closed_task_id {
+            return Some(crate::state_store::RunGraphContinuationBinding {
+                run_id: status.run_id.clone(),
+                task_id: status.task_id.clone(),
+                status: "bound".to_string(),
+                active_bounded_unit: serde_json::json!({
+                    "kind": "downstream_dispatch_target",
+                    "task_id": status.task_id,
+                    "run_id": status.run_id,
+                    "dispatch_target": "closure",
+                }),
+                binding_source: "task_close_reconcile".to_string(),
+                why_this_unit: "Closing the active task reconciled the run into a completed state and bound downstream closure as the next lawful bounded unit.".to_string(),
+                primary_path: "normal_delivery_path".to_string(),
+                sequential_vs_parallel_posture: "sequential_only".to_string(),
+                request_text: None,
+                recorded_at: time::OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .expect("rfc3339 timestamp should render"),
+            });
+        }
+
+        crate::taskflow_continuation::build_run_graph_continuation_binding(
+            status,
+            None,
+            "task_close_reconcile",
+            Some(
+                "Closing the active task reconciled the run into a completed state and bound downstream closure as the next lawful bounded unit.",
+            ),
+        )
+    }
+
     fn normalize_execution_semantics_value(value: Option<&str>) -> Option<String> {
         value
             .map(str::trim)
@@ -53,9 +89,6 @@ impl StateStore {
         &self,
         status: &RunGraphStatus,
     ) -> Result<bool, StateStoreError> {
-        if status.status != "completed" {
-            return Ok(false);
-        }
         let Some(mut receipt) = self.run_graph_dispatch_receipt(&status.run_id).await? else {
             return Ok(false);
         };
@@ -92,6 +125,7 @@ impl StateStore {
         receipt.downstream_dispatch_trace_path = None;
         receipt.downstream_dispatch_active_target = Some("closure".to_string());
         receipt.downstream_dispatch_last_target = Some("closure".to_string());
+        receipt.lane_status = "lane_completed".to_string();
         self.record_run_graph_dispatch_receipt(&receipt).await?;
         Ok(true)
     }
@@ -135,15 +169,7 @@ impl StateStore {
 
         for run_id in affected_run_ids {
             let status = self.run_graph_status(&run_id).await?;
-            let Some(binding) =
-                crate::taskflow_continuation::build_run_graph_continuation_binding(
-                    &status,
-                    None,
-                    "task_close_reconcile",
-                    Some(
-                        "Closing the active task reconciled the run into a completed state and bound downstream closure as the next lawful bounded unit.",
-                    ),
-                )
+            let Some(binding) = Self::build_task_close_reconciled_binding(&status, task_id)
             else {
                 self.clear_run_graph_continuation_binding(&run_id).await?;
                 continue;

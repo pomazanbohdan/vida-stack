@@ -2861,6 +2861,7 @@ mod tests {
         DEFAULT_RUNTIME_PACKET_READ_ONLY_PATHS,
     };
     use crate::downstream_dispatch_ready_blocker_parity_error;
+    use crate::state_store::{CreateTaskRequest, TaskExecutionSemantics};
     use crate::StateStore;
     use std::fs;
     use std::process::ExitCode;
@@ -5771,6 +5772,183 @@ agent_system:
             resolved.dispatch_packet_path,
             closure_packet_path.display().to_string()
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn resolve_runtime_consumption_resume_inputs_heals_task_close_reconcile_stale_active_result_lineage_to_closure(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-task-close-reconcile-heal-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "task-close-heal",
+                title: "Closed task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 0,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create closed task");
+
+        let run_id = "run-task-close-heal";
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status(run_id, "implementation", "delivery");
+        status.task_id = "task-close-heal".to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let packet_dir = root.join("runtime-consumption/downstream-dispatch-packets");
+        fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let stale_packet_path = packet_dir.join("run-task-close-heal-implementer.json");
+        fs::write(
+            &stale_packet_path,
+            serde_json::json!({
+                "packet_template_kind": "delivery_task_packet",
+                "run_id": run_id,
+                "role_selection_full": {
+                    "ok": true,
+                    "activation_source": "test",
+                    "selection_mode": "runtime",
+                    "fallback_role": "worker",
+                    "request": "continue development",
+                    "selected_role": "worker",
+                    "conversational_mode": null,
+                    "single_task_only": true,
+                    "tracked_flow_entry": "dev-pack",
+                    "allow_freeform_chat": false,
+                    "confidence": "high",
+                    "matched_terms": ["continue"],
+                    "compiled_bundle": null,
+                    "execution_plan": null,
+                    "reason": "test"
+                },
+                "run_graph_bootstrap": { "run_id": run_id, "task_id": "task-close-heal" },
+                "delivery_task_packet": {
+                    "packet_id": format!("{run_id}::implementer::delivery"),
+                    "goal": "Implement bounded fix",
+                    "scope_in": ["dispatch_target:implementer"],
+                    "owned_paths": ["crates/vida/src"],
+                    "definition_of_done": ["record bounded implementation result"],
+                    "verification_command": "cargo test -p vida --bin vida -- --help",
+                    "proof_target": "bounded implementation proof",
+                    "stop_rules": ["stop after bounded result"],
+                    "blocking_question": "What remains blocked?"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write stale packet");
+
+        let result_dir = root.join("runtime-consumption/dispatch-results");
+        fs::create_dir_all(&result_dir).expect("create result dir");
+        let stale_result_path = result_dir.join("run-task-close-heal-implementer.json");
+        fs::write(
+            &stale_result_path,
+            serde_json::json!({
+                "surface": "internal_cli:qwen",
+                "execution_state": "blocked",
+                "blocker_code": "internal_activation_view_only",
+                "dispatch_packet_path": stale_packet_path.display().to_string(),
+                "activation_command": "vida agent-init --dispatch-packet implementer.json --json",
+                "backend_dispatch": {
+                    "backend_id": "internal_subagents"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write stale result");
+
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: run_id.to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_blocked".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some(stale_packet_path.display().to_string()),
+                dispatch_result_path: None,
+                blocker_code: Some("internal_activation_view_only".to_string()),
+                downstream_dispatch_target: Some("implementer".to_string()),
+                downstream_dispatch_command: Some("vida agent-init".to_string()),
+                downstream_dispatch_note: Some("stale implementer lineage".to_string()),
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec!["pending_implementation_evidence".to_string()],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: Some("blocked".to_string()),
+                downstream_dispatch_result_path: Some(stale_result_path.display().to_string()),
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("implementer".to_string()),
+                downstream_dispatch_last_target: Some("implementer".to_string()),
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-17T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist stale dispatch receipt");
+        store
+            .record_run_graph_continuation_binding(
+                &crate::state_store::RunGraphContinuationBinding {
+                    run_id: run_id.to_string(),
+                    task_id: "task-close-heal".to_string(),
+                    status: "bound".to_string(),
+                    active_bounded_unit: serde_json::json!({
+                        "kind": "run_graph_task",
+                        "task_id": "task-close-heal",
+                        "run_id": run_id,
+                        "active_node": "implementer"
+                    }),
+                    binding_source: "task_close_reconcile".to_string(),
+                    why_this_unit: "stale task-close reconcile binding".to_string(),
+                    primary_path: "normal_delivery_path".to_string(),
+                    sequential_vs_parallel_posture: "sequential_only_open_cycle".to_string(),
+                    request_text: Some("continue development".to_string()),
+                    recorded_at: "2026-04-17T00:00:00Z".to_string(),
+                },
+            )
+            .await
+            .expect("persist stale task-close reconcile binding");
+
+        let resolved = resolve_runtime_consumption_resume_inputs(&store, Some(run_id), None, None)
+            .await
+            .expect("task-close reconcile should heal stale active result lineage");
+
+        assert_eq!(resolved.dispatch_receipt.dispatch_target, "closure");
+        assert_eq!(resolved.dispatch_receipt.dispatch_status, "executed");
 
         let _ = fs::remove_dir_all(&root);
     }

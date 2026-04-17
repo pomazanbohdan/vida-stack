@@ -83,6 +83,29 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
         status.recovery_ready = false;
         return Ok(status);
     }
+    let closure_dispatch_completed = receipt.dispatch_target == "closure"
+        && receipt.dispatch_status == "executed"
+        && receipt.blocker_code.is_none();
+    if closure_dispatch_completed {
+        if let Some(selected_backend) = receipt
+            .selected_backend
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            status.selected_backend = selected_backend.to_string();
+        }
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "completed".to_string();
+        status.lifecycle_stage = "closure_complete".to_string();
+        status.policy_gate = "not_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.recovery_ready = false;
+        return Ok(status);
+    }
     if status.status == "completed" {
         return Ok(status);
     }
@@ -944,6 +967,9 @@ impl StateStore {
             .await?;
         match binding {
             Some(binding) => {
+                let binding = self
+                    .normalize_task_close_reconcile_binding(binding)
+                    .await?;
                 binding.validate()?;
                 Ok(Some(binding))
             }
@@ -960,11 +986,15 @@ impl StateStore {
                 "SELECT * FROM run_graph_continuation_binding \
                  WHERE binding_source = 'explicit_continuation_bind' \
                     OR binding_source = 'explicit_continuation_bind_task' \
+                    OR binding_source = 'task_close_reconcile' \
                  ORDER BY recorded_at DESC, run_id DESC;",
             )
             .await?;
         let rows: Vec<RunGraphContinuationBinding> = query.take(0)?;
         for mut binding in rows {
+            binding = self
+                .normalize_task_close_reconcile_binding(binding)
+                .await?;
             binding.validate()?;
             if binding.binding_source != "explicit_continuation_bind_task" {
                 return Ok(Some(binding));
@@ -1003,6 +1033,43 @@ impl StateStore {
             return Ok(Some(binding));
         }
         Ok(None)
+    }
+
+    async fn normalize_task_close_reconcile_binding(
+        &self,
+        mut binding: RunGraphContinuationBinding,
+    ) -> Result<RunGraphContinuationBinding, StateStoreError> {
+        if binding.binding_source != "task_close_reconcile" {
+            return Ok(binding);
+        }
+
+        let binding_kind = binding
+            .active_bounded_unit
+            .get("kind")
+            .and_then(serde_json::Value::as_str);
+        if binding_kind != Some("run_graph_task") {
+            return Ok(binding);
+        }
+
+        let task = match self.show_task(&binding.task_id).await {
+            Ok(task) => task,
+            Err(StateStoreError::MissingTask { .. }) => return Ok(binding),
+            Err(error) => return Err(error),
+        };
+        if task.status != "closed" {
+            return Ok(binding);
+        }
+
+        binding.active_bounded_unit = serde_json::json!({
+            "kind": "downstream_dispatch_target",
+            "task_id": binding.task_id,
+            "run_id": binding.run_id,
+            "dispatch_target": "closure",
+        });
+        binding.why_this_unit = "Closing the active task reconciled the run into a completed state and bound downstream closure as the next lawful bounded unit.".to_string();
+        binding.sequential_vs_parallel_posture = "sequential_only".to_string();
+        self.record_run_graph_continuation_binding(&binding).await?;
+        Ok(binding)
     }
 
     pub async fn clear_run_graph_continuation_binding(
@@ -1345,11 +1412,84 @@ impl StateStore {
         &self,
         run_id: &str,
     ) -> Result<Option<RunGraphDispatchReceiptStored>, StateStoreError> {
-        self.db
-            .select(("run_graph_dispatch_receipt", run_id))
+        let receipt: Option<RunGraphDispatchReceiptStored> =
+            self.db.select(("run_graph_dispatch_receipt", run_id)).await?;
+        let Some(receipt) = receipt.map(normalize_legacy_downstream_preview_drift) else {
+            return Ok(None);
+        };
+        self.normalize_task_close_reconcile_dispatch_receipt(receipt)
             .await
-            .map(|row| row.map(normalize_legacy_downstream_preview_drift))
-            .map_err(Into::into)
+            .map(Some)
+    }
+
+    async fn normalize_task_close_reconcile_dispatch_receipt(
+        &self,
+        mut receipt: RunGraphDispatchReceiptStored,
+    ) -> Result<RunGraphDispatchReceiptStored, StateStoreError> {
+        let Some(binding) = self.run_graph_continuation_binding(&receipt.run_id).await? else {
+            return Ok(receipt);
+        };
+        if binding.binding_source != "task_close_reconcile"
+            || binding.active_bounded_unit["kind"].as_str() != Some("downstream_dispatch_target")
+            || binding.active_bounded_unit["dispatch_target"].as_str() != Some("closure")
+        {
+            return Ok(receipt);
+        }
+
+        let closure_receipt_is_already_materialized = receipt.downstream_dispatch_target.as_deref()
+            == Some("closure")
+            && matches!(
+                receipt.downstream_dispatch_status.as_deref(),
+                Some("packet_ready") | Some("executed")
+            )
+            && receipt.downstream_dispatch_blockers.is_empty()
+            && receipt
+                .downstream_dispatch_result_path
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty());
+        if closure_receipt_is_already_materialized {
+            return Ok(receipt);
+        }
+
+        let Some(dispatch_packet_path) = receipt
+            .dispatch_packet_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(receipt);
+        };
+
+        let completion_receipt_id = format!("task-close-{}", binding.task_id);
+        let completion_result_path =
+            crate::runtime_dispatch_state::write_runtime_lane_completion_result(
+                self.root(),
+                &receipt.run_id,
+                "closure",
+                &completion_receipt_id,
+                dispatch_packet_path,
+            )
+            .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?;
+        receipt.downstream_dispatch_target = Some("closure".to_string());
+        receipt.downstream_dispatch_command = Some(format!(
+            "vida taskflow consume continue --run-id {} --json",
+            receipt.run_id
+        ));
+        receipt.downstream_dispatch_note =
+            Some("task close reconciled the run into lawful closure".to_string());
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers.clear();
+        receipt.downstream_dispatch_packet_path = None;
+        receipt.downstream_dispatch_status = Some("executed".to_string());
+        receipt.downstream_dispatch_result_path = Some(completion_result_path);
+        receipt.downstream_dispatch_trace_path = None;
+        receipt.downstream_dispatch_active_target = Some("closure".to_string());
+        receipt.downstream_dispatch_last_target = Some("closure".to_string());
+        receipt.lane_status = Some("lane_completed".to_string());
+        let public_receipt: RunGraphDispatchReceipt = receipt.clone().into();
+        self.record_run_graph_dispatch_receipt(&public_receipt).await?;
+        Ok(receipt)
     }
 
     pub async fn latest_run_graph_recovery_summary(
@@ -1881,6 +2021,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn closure_dispatch_executed_receipt_reconciles_run_to_closure_complete() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-status-closure-dispatch-executed-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status =
+            crate::taskflow_run_graph::default_run_graph_status("run-closure-direct", "closure", "delivery");
+        status.task_id = "task-closure-direct".to_string();
+        status.active_node = "closure".to_string();
+        status.next_node = None;
+        status.status = "blocked".to_string();
+        status.lifecycle_stage = "closure_active".to_string();
+        status.policy_gate = "single_task_scope_required".to_string();
+        status.handoff_state = "none".to_string();
+        status.context_state = "sealed".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist blocked closure status");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-closure-direct".to_string(),
+                dispatch_target: "closure".to_string(),
+                dispatch_status: "executed".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "closure".to_string(),
+                dispatch_surface: None,
+                dispatch_command: Some("vida taskflow consume continue --run-id run-closure-direct --json".to_string()),
+                dispatch_packet_path: Some("/tmp/closure-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/closure-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: None,
+                activation_runtime_role: None,
+                selected_backend: Some("middle".to_string()),
+                recorded_at: "2026-04-17T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist closure dispatch receipt");
+
+        let reconciled = store
+            .run_graph_status("run-closure-direct")
+            .await
+            .expect("load reconciled run graph status");
+        assert_eq!(reconciled.status, "completed");
+        assert_eq!(reconciled.active_node, "closure");
+        assert_eq!(reconciled.lifecycle_stage, "closure_complete");
+        assert_eq!(reconciled.policy_gate, "not_required");
+        assert_eq!(reconciled.handoff_state, "none");
+        assert_eq!(reconciled.resume_target, "none");
+        assert!(!reconciled.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn executed_specification_receipt_with_design_gate_blockers_clears_fake_delegated_lane_active(
     ) {
         let nanos = SystemTime::now()
@@ -2314,6 +2533,128 @@ mod tests {
             latest.is_none(),
             "closed explicit task binding must be skipped"
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_explicit_run_graph_continuation_binding_includes_task_close_reconcile() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-latest-explicit-run-graph-continuation-binding-task-close-reconcile-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .record_run_graph_continuation_binding(&RunGraphContinuationBinding {
+                run_id: "run-closure".to_string(),
+                task_id: "task-closure".to_string(),
+                status: "bound".to_string(),
+                active_bounded_unit: serde_json::json!({
+                    "kind": "downstream_dispatch_target",
+                    "task_id": "task-closure",
+                    "run_id": "run-closure",
+                    "dispatch_target": "closure"
+                }),
+                binding_source: "task_close_reconcile".to_string(),
+                why_this_unit: "task close rebound the run to closure".to_string(),
+                primary_path: "normal_delivery_path".to_string(),
+                sequential_vs_parallel_posture: "sequential_only".to_string(),
+                request_text: Some("continue".to_string()),
+                recorded_at: "2026-04-16T11:00:00Z".to_string(),
+            })
+            .await
+            .expect("record task-close reconcile binding");
+
+        let latest = store
+            .latest_explicit_run_graph_continuation_binding()
+            .await
+            .expect("read latest explicit binding")
+            .expect("task-close reconcile binding should be returned");
+
+        assert_eq!(latest.run_id, "run-closure");
+        assert_eq!(latest.binding_source, "task_close_reconcile");
+        assert_eq!(
+            latest.active_bounded_unit["dispatch_target"],
+            serde_json::Value::String("closure".to_string())
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_graph_continuation_binding_normalizes_stale_task_close_reconcile_to_closure() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-continuation-binding-normalizes-task-close-reconcile-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "task-closed",
+                title: "Closed task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create closed task");
+
+        store
+            .record_run_graph_continuation_binding(&RunGraphContinuationBinding {
+                run_id: "run-closed".to_string(),
+                task_id: "task-closed".to_string(),
+                status: "bound".to_string(),
+                active_bounded_unit: serde_json::json!({
+                    "kind": "run_graph_task",
+                    "task_id": "task-closed",
+                    "run_id": "run-closed",
+                    "active_node": "implementer"
+                }),
+                binding_source: "task_close_reconcile".to_string(),
+                why_this_unit: "stale task-close reconcile binding".to_string(),
+                primary_path: "normal_delivery_path".to_string(),
+                sequential_vs_parallel_posture: "sequential_only_open_cycle".to_string(),
+                request_text: Some("continue".to_string()),
+                recorded_at: "2026-04-16T12:00:00Z".to_string(),
+            })
+            .await
+            .expect("record stale task-close reconcile binding");
+
+        let binding = store
+            .run_graph_continuation_binding("run-closed")
+            .await
+            .expect("read normalized binding")
+            .expect("binding should exist");
+
+        assert_eq!(binding.binding_source, "task_close_reconcile");
+        assert_eq!(
+            binding.active_bounded_unit["kind"],
+            serde_json::Value::String("downstream_dispatch_target".to_string())
+        );
+        assert_eq!(
+            binding.active_bounded_unit["dispatch_target"],
+            serde_json::Value::String("closure".to_string())
+        );
+        assert_eq!(binding.sequential_vs_parallel_posture, "sequential_only");
 
         let _ = fs::remove_dir_all(&root);
     }

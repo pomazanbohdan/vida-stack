@@ -107,6 +107,10 @@ Companion rule:
     Sources: `docs/product/spec/compiled-autonomous-delivery-runtime-architecture.md`, `docs/product/spec/embedded-runtime-and-editable-projection-model.md`, `docs/product/spec/runtime-paths-and-derived-cache-model.md`, and the current DB-first synchronization boundary decisions
 20. [host-agent-layer-status-matrix.md](host-agent-layer-status-matrix.md)
     Sources: `vida.config.yaml`, `docs/process/codex-agent-configuration-guide.md`, `docs/product/spec/agent-role-skill-profile-flow-model.md`, `docs/product/spec/bootstrap-carriers-and-project-activator-model.md`, `work.host-cli-agent-setup-protocol.md`, and current Rust launcher/runtime status surfaces
+21. [specification-lane-scope-hardening-design.md](specification-lane-scope-hardening-design.md)
+    Sources: `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, `docs/process/documentation-tooling-map.md`, current packet/render/validation code in `crates/vida/src/{runtime_dispatch_packets,runtime_dispatch_state,runtime_dispatch_downstream_packets,taskflow_consume_resume}.rs`, and the active runtime evidence showing `specification` / `business_analyst` lanes incorrectly inheriting code `owned_paths`
+22. [repair-fail-closed-resume-closure-truth-design.md](repair-fail-closed-resume-closure-truth-design.md)
+    Sources: `docs/product/spec/specification-lane-scope-hardening-design.md`, current resume/validation code in `crates/vida/src/taskflow_consume_resume.rs`, active runtime evidence from `vida taskflow consume continue --run-id task-recovery-cluster-fail-closed-resume-rewrite-truth --json`, and the persisted dispatch packet lineage that previously kept stale code-owned scope under a specification delivery packet
 
 ### Project And Packaging
 
@@ -235,5 +239,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-provenance-map.md
 created_at: '2026-03-16T09:05:00+02:00'
-updated_at: 2026-04-17T09:20:04.295305828Z
+updated_at: 2026-04-17T11:08:29.149327122Z
 changelog_ref: current-spec-provenance-map.changelog.jsonl

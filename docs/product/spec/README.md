@@ -39,6 +39,8 @@ Active design docs:
 - `docs/product/spec/lawful-closure-continuation-rebinding-design.md`
 - `docs/product/spec/authoritative-state-lock-recovery-design.md`
 - `docs/product/spec/taskflow-execution-semantics-and-scheduler-design.md`
+- `docs/product/spec/specification-lane-scope-hardening-design.md`
+- `docs/product/spec/repair-fail-closed-resume-closure-truth-design.md`
 
 Current promoted runtime-control specs:
 
@@ -54,5 +56,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/README.md
 created_at: '2026-04-04T20:24:09+03:00'
-updated_at: 2026-04-17T08:02:54.482451064Z
+updated_at: 2026-04-17T11:08:56.887219102Z
 changelog_ref: README.changelog.jsonl
