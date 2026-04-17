@@ -20,10 +20,12 @@ use crate::runtime_dispatch_execution::{
 use crate::runtime_dispatch_packet_text::{runtime_packet_prompt, runtime_tracked_flow_packet};
 #[cfg(test)]
 use crate::runtime_dispatch_packets::explicit_request_scope_paths;
+#[cfg(test)]
+use crate::runtime_dispatch_packets::runtime_delivery_task_packet;
 use crate::runtime_dispatch_packets::{
-    request_has_explicit_owned_scope, runtime_coach_review_packet, runtime_delivery_task_packet,
-    runtime_escalation_packet, runtime_execution_block_packet, runtime_verifier_proof_packet,
-    single_task_move_scope_paths,
+    delivery_packet_owned_paths, request_has_explicit_owned_scope, runtime_coach_review_packet,
+    runtime_delivery_task_packet_with_scope_context, runtime_escalation_packet,
+    runtime_execution_block_packet, runtime_verifier_proof_packet, single_task_move_scope_paths,
 };
 use crate::taskflow_routing::{
     fallback_executor_backend_from_route, fanout_executor_backends_from_route,
@@ -34,6 +36,57 @@ use super::*;
 
 const DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS: u64 = 5;
 const DEFAULT_DISPATCH_HANDOFF_EXECUTION_TIMEOUT_SECONDS: u64 = 10;
+const DEFAULT_INTERNAL_HOST_HANDOFF_TIMEOUT_SECONDS: u64 = 240;
+const INTERNAL_DISPATCH_HANDOFF_TIMEOUT_GRACE_SECONDS: u64 = 2;
+
+fn configured_internal_host_handoff_timeout_seconds(project_root: &Path) -> Option<u64> {
+    let overlay = load_project_overlay_yaml_for_root(project_root).ok()?;
+    let (_system_id, system_entry) = selected_host_cli_system_for_runtime_dispatch(&overlay);
+    system_entry
+        .as_ref()
+        .and_then(|entry| {
+            yaml_lookup(entry, &["dispatch", "no_output_timeout_seconds"])
+                .and_then(serde_yaml::Value::as_u64)
+                .or_else(|| {
+                    yaml_lookup(entry, &["max_runtime_seconds"]).and_then(serde_yaml::Value::as_u64)
+                })
+        })
+        .filter(|seconds| *seconds > 0)
+}
+
+fn dispatch_handoff_timeout_seconds(
+    project_root: &Path,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> u64 {
+    if receipt.dispatch_kind != "agent_lane" {
+        return DEFAULT_DISPATCH_HANDOFF_EXECUTION_TIMEOUT_SECONDS;
+    }
+    let Some(dispatch_packet_path) = receipt.dispatch_packet_path.as_deref() else {
+        return DEFAULT_DISPATCH_HANDOFF_EXECUTION_TIMEOUT_SECONDS;
+    };
+    let host_runtime = runtime_host_execution_contract_for_root(project_root);
+    let host_execution_class =
+        json_string(host_runtime.get("selected_cli_execution_class")).unwrap_or_default();
+    let canonical_backend = canonical_selected_backend_for_receipt(role_selection, receipt);
+    let lane_dispatch = runtime_agent_lane_dispatch_for_root(
+        project_root,
+        dispatch_packet_path,
+        canonical_backend.as_deref(),
+    );
+    let internal_agent_backend = canonical_backend.as_deref() == Some("internal_subagents")
+        || receipt.selected_backend.as_deref() == Some("internal_subagents")
+        || lane_dispatch.backend_dispatch["backend_class"].as_str() == Some("internal");
+    if lane_dispatch.surface == "vida agent-init"
+        && host_execution_class == "internal"
+        && internal_agent_backend
+    {
+        return configured_internal_host_handoff_timeout_seconds(project_root)
+            .unwrap_or(DEFAULT_INTERNAL_HOST_HANDOFF_TIMEOUT_SECONDS)
+            .saturating_add(INTERNAL_DISPATCH_HANDOFF_TIMEOUT_GRACE_SECONDS);
+    }
+    DEFAULT_DISPATCH_HANDOFF_EXECUTION_TIMEOUT_SECONDS
+}
 
 pub(crate) fn build_runtime_closure_admission(
     bundle_check: &TaskflowConsumeBundleCheck,
@@ -2017,7 +2070,7 @@ fn tracked_specification_task_id<'a>(
         .filter(|value| !value.is_empty())
 }
 
-fn tracked_design_doc_path<'a>(
+pub(crate) fn tracked_design_doc_path<'a>(
     role_selection: &'a RuntimeConsumptionLaneSelection,
 ) -> Option<&'a str> {
     role_selection.execution_plan["tracked_flow_bootstrap"]["design_doc_path"]
@@ -2071,6 +2124,37 @@ async fn tracked_specification_task_closed(
         .unwrap_or(false)
 }
 
+async fn tracked_specification_gate_completion_evidence_path(
+    store: &StateStore,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> Result<Option<String>, String> {
+    if receipt.dispatch_target != "specification" {
+        return Ok(None);
+    }
+    if !tracked_design_doc_finalized(role_selection) {
+        return Ok(None);
+    }
+    if !tracked_specification_task_closed(store, role_selection, receipt).await {
+        return Ok(None);
+    }
+    let Some(task_id) = tracked_specification_task_id(role_selection) else {
+        return Ok(None);
+    };
+    let Some(packet_path) = receipt.dispatch_packet_path.as_deref() else {
+        return Ok(None);
+    };
+    let completion_receipt_id = format!("task-close-{task_id}");
+    write_runtime_lane_completion_result(
+        store.root(),
+        &receipt.run_id,
+        "specification",
+        &completion_receipt_id,
+        packet_path,
+    )
+    .map(Some)
+}
+
 async fn tracked_implementer_task_close_evidence_path(
     store: &StateStore,
     role_selection: &RuntimeConsumptionLaneSelection,
@@ -2106,6 +2190,11 @@ async fn receipt_backed_execution_evidence_path(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<Option<String>, String> {
+    if let Some(path) =
+        tracked_specification_gate_completion_evidence_path(store, role_selection, receipt).await?
+    {
+        return Ok(Some(path));
+    }
     if let Some(path) =
         tracked_implementer_task_close_evidence_path(store, role_selection, receipt).await?
     {
@@ -2249,6 +2338,18 @@ fn receipt_waiting_on_implementer_evidence(
             .any(|value| value == blocker_code_str(BlockerCode::PendingImplementationEvidence))
 }
 
+fn receipt_waiting_on_specification_evidence(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+) -> bool {
+    receipt.dispatch_target == "specification"
+        && receipt.downstream_dispatch_target.as_deref() == Some("work-pool-pack")
+        && !receipt.downstream_dispatch_ready
+        && receipt
+            .downstream_dispatch_blockers
+            .iter()
+            .any(|value| value == blocker_code_str(BlockerCode::PendingSpecificationEvidence))
+}
+
 fn blocked_implementer_step_receipt(
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
@@ -2300,6 +2401,65 @@ fn blocked_implementer_step_receipt(
         selected_backend: receipt.selected_backend.clone(),
         recorded_at,
     }
+}
+
+pub(crate) async fn try_bridge_bounded_specification_completion_to_downstream_receipt(
+    store: &StateStore,
+    role_selection: &RuntimeConsumptionLaneSelection,
+    run_graph_bootstrap: &serde_json::Value,
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+) -> Result<bool, String> {
+    if !receipt_waiting_on_specification_evidence(receipt) {
+        return Ok(false);
+    }
+
+    let Some(result_path) =
+        tracked_specification_gate_completion_evidence_path(store, role_selection, receipt).await?
+    else {
+        return Ok(false);
+    };
+
+    receipt.dispatch_status = "executed".to_string();
+    receipt.lane_status = derive_lane_status(
+        &receipt.dispatch_status,
+        receipt.supersedes_receipt_id.as_deref(),
+        receipt.exception_path_receipt_id.as_deref(),
+    )
+    .as_str()
+    .to_string();
+    receipt.dispatch_result_path = Some(result_path);
+    receipt.blocker_code = None;
+
+    let (next_target, next_command, next_note, next_ready, next_blockers) =
+        derive_downstream_dispatch_preview(store, role_selection, receipt).await;
+    if let Some(error) = downstream_dispatch_ready_blocker_parity_error(next_ready, &next_blockers)
+    {
+        return Err(error);
+    }
+    if !next_ready {
+        return Ok(false);
+    }
+
+    let preview_result_path =
+        receipt_backed_execution_evidence_path(store, role_selection, receipt).await?;
+    apply_downstream_dispatch_preview_to_receipt(
+        receipt,
+        next_target,
+        next_command,
+        next_note,
+        next_ready,
+        next_blockers,
+        preview_result_path,
+    );
+    receipt.downstream_dispatch_trace_path = None;
+    receipt.downstream_dispatch_packet_path = write_runtime_downstream_dispatch_packet(
+        store.root(),
+        role_selection,
+        run_graph_bootstrap,
+        receipt,
+    )?;
+    receipt.blocker_code = None;
+    Ok(true)
 }
 
 pub(crate) async fn try_bridge_bounded_implementer_completion_to_downstream_receipt(
@@ -2839,6 +2999,29 @@ fn single_task_move_scope_owned_paths(packet: &serde_json::Value) -> Option<Vec<
     single_task_move_scope_paths(request_text)
 }
 
+fn packet_tracked_design_doc_path<'a>(packet: &'a serde_json::Value) -> Option<&'a str> {
+    packet["role_selection_full"]["execution_plan"]["tracked_flow_bootstrap"]["design_doc_path"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn packet_request_text<'a>(packet: &'a serde_json::Value) -> Option<&'a str> {
+    packet
+        .get("request_text")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            packet
+                .get("delivery_task_packet")
+                .and_then(|value| value.get("request_text"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+}
+
 fn active_runtime_packet<'a>(
     packet: &'a serde_json::Value,
 ) -> Result<(&'a str, &'a serde_json::Value), String> {
@@ -2891,6 +3074,42 @@ pub(crate) fn validate_runtime_dispatch_packet_contract(
                 "{packet_label} `{packet_template_kind}` single-task move packet owned_paths must match the declared source/destination pair exactly; expected {:?}, got {:?}",
                 expected_owned_paths, actual_owned_paths
             ));
+        }
+    }
+    if packet_template_kind == "delivery_task_packet" {
+        let handoff_task_class = active_packet
+            .get("handoff_task_class")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        if handoff_task_class == TASK_CLASS_SPECIFICATION {
+            let expected_owned_paths = delivery_packet_owned_paths(
+                handoff_task_class,
+                packet_request_text(packet).unwrap_or_default(),
+                packet_tracked_design_doc_path(packet),
+            );
+            let actual_owned_paths = active_packet
+                .get("owned_paths")
+                .and_then(serde_json::Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .map(|value| {
+                            value
+                                .as_str()
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                                .map(str::to_string)
+                        })
+                        .collect::<Option<Vec<_>>>()
+                })
+                .flatten()
+                .unwrap_or_default();
+            if actual_owned_paths != expected_owned_paths {
+                return Err(format!(
+                    "{packet_label} `{packet_template_kind}` specification packet owned_paths must match the tracked design-doc scope exactly; expected {:?}, got {:?}",
+                    expected_owned_paths, actual_owned_paths
+                ));
+            }
         }
     }
     let missing = match packet_template_kind {
@@ -3542,6 +3761,24 @@ mod tests {
     }
 
     #[test]
+    fn runtime_delivery_task_packet_uses_tracked_design_doc_scope_for_specification() {
+        let packet = runtime_delivery_task_packet_with_scope_context(
+            "run-1",
+            "specification",
+            "business_analyst",
+            "specification",
+            "specification",
+            "Investigate scope and do not edit crates/vida/src/runtime_dispatch_state.rs directly.",
+            Some("docs/product/spec/feature-x-design.md"),
+        );
+
+        assert_eq!(
+            packet["owned_paths"],
+            serde_json::json!(["docs/product/spec/feature-x-design.md"])
+        );
+    }
+
+    #[test]
     fn explicit_request_scope_paths_stay_empty_without_file_scope_in_request_text() {
         assert!(explicit_request_scope_paths("continue development").is_empty());
     }
@@ -3610,6 +3847,36 @@ mod tests {
         let error = validate_runtime_dispatch_packet_contract(&malformed, "test packet")
             .expect_err("implementation delivery packet without owned scope should fail closed");
         assert!(error.contains("owned_paths"));
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_contract_rejects_specification_delivery_with_code_owned_paths() {
+        let role_selection = specification_test_role_selection(
+            "feature-x-spec-task",
+            "docs/product/spec/feature-x-design.md",
+        );
+        let malformed = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "request_text": "Investigate scope around crates/vida/src/runtime_dispatch_state.rs and capture the design update.",
+            "role_selection_full": role_selection,
+            "delivery_task_packet": {
+                "packet_id": "run-1::specification::delivery",
+                "goal": "Execute bounded specification handoff",
+                "scope_in": ["dispatch_target:specification", "runtime_role:business_analyst"],
+                "owned_paths": ["crates/vida/src/runtime_dispatch_state.rs"],
+                "read_only_paths": [".vida/data/state/runtime-consumption", "docs/product/spec", "docs/process"],
+                "definition_of_done": ["bounded specification result artifact"],
+                "verification_command": "vida taskflow consume continue --run-id run-1 --json",
+                "proof_target": "runtime dispatch result artifact plus updated dispatch receipt",
+                "stop_rules": ["stop after writing bounded dispatch result or explicit blocker"],
+                "blocking_question": "What is the next bounded action required for specification?",
+                "handoff_task_class": "specification"
+            }
+        });
+
+        let error = validate_runtime_dispatch_packet_contract(&malformed, "test packet")
+            .expect_err("specification delivery packet with code-owned scope should fail closed");
+        assert!(error.contains("tracked design-doc scope"));
     }
 
     #[test]
@@ -6642,6 +6909,56 @@ mod tests {
     }
 
     #[test]
+    fn downstream_dispatch_packet_uses_tracked_design_doc_scope_for_specification() {
+        let role_selection = specification_test_role_selection(
+            "feature-x-spec-task",
+            "docs/product/spec/feature-x-design.md",
+        );
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-spec".to_string(),
+            dispatch_target: "spec-pack".to_string(),
+            dispatch_status: "executed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "taskflow_pack".to_string(),
+            dispatch_surface: Some("vida taskflow bootstrap-spec".to_string()),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: Some("specification".to_string()),
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: None,
+            activation_runtime_role: None,
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-03-15T00:00:00Z".to_string(),
+        };
+
+        let packet = downstream_dispatch_packet_body(
+            &role_selection,
+            &serde_json::Value::Null,
+            &receipt,
+            None,
+        );
+
+        assert_eq!(
+            packet["delivery_task_packet"]["owned_paths"],
+            serde_json::json!(["docs/product/spec/feature-x-design.md"])
+        );
+    }
+
+    #[test]
     fn route_selected_backend_for_specification_prefers_contract_activation_tier() {
         let execution_plan = serde_json::json!({
             "development_flow": {
@@ -6656,6 +6973,78 @@ mod tests {
         let backend = route_selected_backend_for_dispatch_target(&execution_plan, "specification");
 
         assert_eq!(backend.as_deref(), Some("middle"));
+    }
+
+    #[test]
+    fn downstream_packet_preview_does_not_inherit_upstream_exception_or_supersession_evidence() {
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "implementation": {
+                        "activation": {
+                            "activation_agent_type": "junior"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-impl".to_string(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_exception_recorded".to_string(),
+            supersedes_receipt_id: Some("sup-parent".to_string()),
+            exception_path_receipt_id: Some("exc-parent".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/specification-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/specification-result.json".to_string()),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: Some("implementer".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("handoff to implementer".to_string()),
+            downstream_dispatch_ready: true,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: Some("packet_ready".to_string()),
+            downstream_dispatch_result_path: Some("/tmp/downstream-preview.json".to_string()),
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("specification".to_string()),
+            downstream_dispatch_last_target: Some("specification".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-17T00:00:00Z".to_string(),
+        };
+
+        let packet = downstream_dispatch_packet_body(
+            &role_selection,
+            &serde_json::json!({ "run_id": "run-impl" }),
+            &receipt,
+            None,
+        );
+
+        assert!(packet["downstream_supersedes_receipt_id"].is_null());
+        assert!(packet["downstream_exception_path_receipt_id"].is_null());
+        assert_eq!(packet["downstream_lane_status"], "packet_ready");
+        assert_eq!(packet["source_supersedes_receipt_id"], "sup-parent");
+        assert_eq!(packet["source_exception_path_receipt_id"], "exc-parent");
     }
 
     #[test]
@@ -8168,6 +8557,122 @@ mod tests {
         assert_eq!(downstream.selected_backend.as_deref(), Some("qwen_cli"));
     }
 
+    #[tokio::test]
+    async fn try_bridge_bounded_specification_completion_to_downstream_receipt_sets_packet_ready() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-specification-bridge-ready-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.join("state"))
+            .await
+            .expect("open state store");
+
+        let spec_task_id = "feature-spec-bridge-spec";
+        let design_doc_path = root.join("docs/specification-bridge-design.md");
+        std::fs::create_dir_all(design_doc_path.parent().expect("design doc parent"))
+            .expect("create design doc directory");
+        std::fs::write(
+            &design_doc_path,
+            "# Specification Bridge\n\nStatus: `approved`\n",
+        )
+        .expect("write approved design doc");
+
+        let labels = vec!["spec-pack".to_string()];
+        store
+            .create_task(CreateTaskRequest {
+                task_id: spec_task_id,
+                title: "Closed spec pack",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+                created_by: "test",
+                source_repo: "",
+            })
+            .await
+            .expect("create closed spec task");
+
+        let role_selection = specification_test_role_selection(
+            spec_task_id,
+            design_doc_path
+                .to_str()
+                .expect("design doc path should be utf-8"),
+        );
+        let run_graph_bootstrap = json!({ "run_id": "run-spec-bridge-ready" });
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-spec-bridge-ready".to_string(),
+            dispatch_target: "specification".to_string(),
+            dispatch_status: "executing".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: Some("exc-spec-bridge".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/specification-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/specification-started.json".to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: Some("work-pool-pack".to_string()),
+            downstream_dispatch_command: Some(
+                "vida task ensure feature-x-work-pool \"Work-pool pack\" --type task --status open --json"
+                    .to_string(),
+            ),
+            downstream_dispatch_note: Some("waiting on specification evidence".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec![
+                "pending_specification_evidence".to_string(),
+                "pending_design_finalize".to_string(),
+                "pending_spec_task_close".to_string(),
+            ],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("specification".to_string()),
+            downstream_dispatch_last_target: Some("specification".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("business_analyst".to_string()),
+            selected_backend: Some("middle".to_string()),
+            recorded_at: "2026-04-17T00:00:00Z".to_string(),
+        };
+
+        let bridged = try_bridge_bounded_specification_completion_to_downstream_receipt(
+            &store,
+            &role_selection,
+            &run_graph_bootstrap,
+            &mut receipt,
+        )
+        .await
+        .expect("specification bridge should succeed");
+
+        assert!(bridged);
+        assert_eq!(receipt.dispatch_status, "executed");
+        assert!(receipt.dispatch_result_path.is_some());
+        assert_eq!(
+            receipt.downstream_dispatch_target.as_deref(),
+            Some("work-pool-pack")
+        );
+        assert!(receipt.downstream_dispatch_ready);
+        assert!(receipt.downstream_dispatch_blockers.is_empty());
+        assert_eq!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("packet_ready")
+        );
+        assert!(receipt.downstream_dispatch_packet_path.is_some());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn backend_agnostic_route_keeps_inherited_selected_backend() {
         let role_selection = RuntimeConsumptionLaneSelection {
@@ -8535,6 +9040,145 @@ mod tests {
     }
 
     #[test]
+    fn runtime_dispatch_execution_timeout_result_marks_blocked_timeout_receipt() {
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-timeout".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "executing".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: Some("exc-timeout".to_string()),
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/implementer-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-17T00:00:00Z".to_string(),
+        };
+
+        let result = runtime_dispatch_execution_timeout_result(&receipt, 10);
+        assert_eq!(result["status"], "blocked");
+        assert_eq!(result["execution_state"], "blocked");
+        assert_eq!(
+            result["blocker_code"],
+            blocker_code_value(BlockerCode::TimeoutWithoutTakeoverAuthority)
+                .expect("timeout blocker should stay registry-backed")
+        );
+        assert!(result["provider_error"]
+            .as_str()
+            .expect("provider error should render")
+            .contains("timed out after 10s"));
+    }
+
+    #[test]
+    fn dispatch_handoff_timeout_seconds_respects_internal_host_runtime_window() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-handoff-timeout-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        std::fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      max_runtime_seconds: 37
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("config");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Implement the bounded fix with regression tests.".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "lane_catalog": {
+                            "implementer": {
+                                "backend_id": "internal_subagents",
+                                "backend_class": "internal"
+                            }
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-internal-handoff-timeout".to_string(),
+            dispatch_target: "implementer".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/implementer-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-17T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            dispatch_handoff_timeout_seconds(&root, &role_selection, &receipt),
+            39
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn write_runtime_dispatch_packet_keeps_agent_init_command_for_mixed_implementer_route_before_execution(
     ) {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -8704,13 +9348,14 @@ pub(crate) fn write_runtime_dispatch_packet(
         ctx.receipt.selected_backend.as_deref(),
     );
     let activation_evidence = dispatch_activation_evidence_summary(ctx.receipt);
-    let delivery_task_packet = runtime_delivery_task_packet(
+    let delivery_task_packet = runtime_delivery_task_packet_with_scope_context(
         &ctx.receipt.run_id,
         &ctx.receipt.dispatch_target,
         handoff_runtime_role,
         handoff_task_class,
         closure_class,
         &ctx.role_selection.request,
+        tracked_design_doc_path(ctx.role_selection),
     );
     let execution_block_packet = runtime_execution_block_packet(
         &ctx.receipt.run_id,
@@ -9040,6 +9685,100 @@ fn runtime_dispatch_execution_started_result(
     })
 }
 
+fn runtime_dispatch_execution_timeout_result(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    timeout_seconds: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "surface": receipt.dispatch_surface,
+        "activation_command": receipt.dispatch_command,
+        "status": "blocked",
+        "execution_state": "blocked",
+        "dispatch_target": receipt.dispatch_target,
+        "selected_backend": receipt.selected_backend,
+        "blocker_code": blocker_code_value(BlockerCode::TimeoutWithoutTakeoverAuthority),
+        "provider_error": format!(
+            "runtime dispatch handoff timed out after {timeout_seconds}s before terminal completion evidence was recorded"
+        ),
+        "note": "runtime dispatch handoff timed out before terminal completion evidence was recorded",
+    })
+}
+
+fn runtime_dispatch_internal_activation_timeout_result(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    timeout_seconds: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "surface": receipt.dispatch_surface,
+        "activation_command": receipt.dispatch_command,
+        "status": "blocked",
+        "execution_state": "blocked",
+        "dispatch_target": receipt.dispatch_target,
+        "selected_backend": receipt.selected_backend,
+        "blocker_code": "internal_activation_view_only",
+        "provider_error": format!(
+            "internal host carrier timed out after {timeout_seconds}s before receipt-backed completion evidence was recorded"
+        ),
+        "blocker_reason": "internal host carrier timed out before receipt-backed completion evidence was recorded",
+        "note": "internal host carrier timed out before receipt-backed completion evidence was recorded",
+    })
+}
+
+pub(crate) fn apply_dispatch_execution_timeout_to_receipt(
+    state_root: &Path,
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+    timeout_seconds: u64,
+) -> Result<(), String> {
+    let execution_result = runtime_dispatch_execution_timeout_result(receipt, timeout_seconds);
+    let dispatch_result_path =
+        write_runtime_dispatch_result(state_root, receipt, &execution_result)?;
+    receipt.dispatch_result_path = Some(dispatch_result_path);
+    receipt.dispatch_status = "blocked".to_string();
+    receipt.lane_status = derive_lane_status(
+        &receipt.dispatch_status,
+        receipt.supersedes_receipt_id.as_deref(),
+        receipt.exception_path_receipt_id.as_deref(),
+    )
+    .as_str()
+    .to_string();
+    receipt.blocker_code = blocker_code_value(BlockerCode::TimeoutWithoutTakeoverAuthority);
+    if let Some(dispatch_surface) = json_string(execution_result.get("surface")) {
+        receipt.dispatch_surface = Some(dispatch_surface);
+    }
+    if let Some(dispatch_command) = json_string(execution_result.get("activation_command")) {
+        receipt.dispatch_command = Some(dispatch_command);
+    }
+    Ok(())
+}
+
+pub(crate) fn apply_internal_activation_timeout_to_receipt(
+    state_root: &Path,
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+    timeout_seconds: u64,
+) -> Result<(), String> {
+    let execution_result =
+        runtime_dispatch_internal_activation_timeout_result(receipt, timeout_seconds);
+    let dispatch_result_path =
+        write_runtime_dispatch_result(state_root, receipt, &execution_result)?;
+    receipt.dispatch_result_path = Some(dispatch_result_path);
+    receipt.dispatch_status = "blocked".to_string();
+    receipt.lane_status = derive_lane_status(
+        &receipt.dispatch_status,
+        receipt.supersedes_receipt_id.as_deref(),
+        receipt.exception_path_receipt_id.as_deref(),
+    )
+    .as_str()
+    .to_string();
+    receipt.blocker_code = Some("internal_activation_view_only".to_string());
+    if let Some(dispatch_surface) = json_string(execution_result.get("surface")) {
+        receipt.dispatch_surface = Some(dispatch_surface);
+    }
+    if let Some(dispatch_command) = json_string(execution_result.get("activation_command")) {
+        receipt.dispatch_command = Some(dispatch_command);
+    }
+    Ok(())
+}
+
 pub(crate) fn write_runtime_lane_completion_result(
     state_root: &Path,
     run_id: &str,
@@ -9138,17 +9877,70 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
             format!("Failed to persist in-flight dispatch receipt before execution: {error}")
         })?;
     drop(store);
+    let project_root = state_root.parent().unwrap_or(state_root);
+    let handoff_timeout_seconds =
+        dispatch_handoff_timeout_seconds(project_root, role_selection, receipt);
     let execution_result = tokio::time::timeout(
-        std::time::Duration::from_secs(DEFAULT_DISPATCH_HANDOFF_EXECUTION_TIMEOUT_SECONDS),
+        std::time::Duration::from_secs(handoff_timeout_seconds),
         execute_runtime_dispatch_handoff(state_root, role_selection, receipt),
     )
     .await
     .map_err(|_| {
         format!(
             "Timed out executing runtime dispatch handoff after {}s",
-            DEFAULT_DISPATCH_HANDOFF_EXECUTION_TIMEOUT_SECONDS
+            handoff_timeout_seconds
         )
-    })??;
+    });
+    let execution_result = match execution_result {
+        Ok(result) => result?,
+        Err(timeout_error) => {
+            apply_dispatch_execution_timeout_to_receipt(
+                state_root,
+                receipt,
+                handoff_timeout_seconds,
+            )?;
+            let store = tokio::time::timeout(
+                std::time::Duration::from_secs(DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS),
+                StateStore::open_existing(state_root.to_path_buf()),
+            )
+            .await
+            .map_err(|_| {
+                format!(
+                    "Timed out reopening authoritative state store after dispatch timeout after {}s",
+                    DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS
+                )
+            })?
+            .map_err(|error| {
+                format!(
+                    "Failed to reopen authoritative state store after dispatch timeout: {error}"
+                )
+            })?;
+            store
+                .record_run_graph_dispatch_receipt(receipt)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "Failed to persist timeout-blocked dispatch receipt after execution timeout: {error}"
+                    )
+                })?;
+            if let Some(run_id) = json_string(run_graph_bootstrap.get("run_id")) {
+                if let Ok(status) = store.run_graph_status(&run_id).await {
+                    crate::taskflow_continuation::sync_run_graph_continuation_binding(
+                        &store,
+                        &status,
+                        "dispatch_execution_timeout",
+                    )
+                    .await
+                    .map_err(|error| {
+                        format!(
+                            "Failed to synchronize continuation binding after dispatch timeout: {error}"
+                        )
+                    })?;
+                }
+            }
+            return Err(timeout_error);
+        }
+    };
     let dispatch_result_path =
         write_runtime_dispatch_result(state_root, receipt, &execution_result)?;
     receipt.dispatch_result_path = Some(dispatch_result_path);

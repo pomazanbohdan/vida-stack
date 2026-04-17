@@ -4,8 +4,8 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::runtime_dispatch_packet_text::{runtime_packet_prompt, runtime_tracked_flow_packet};
 use crate::runtime_dispatch_packets::{
-    runtime_coach_review_packet, runtime_delivery_task_packet, runtime_escalation_packet,
-    runtime_execution_block_packet, runtime_verifier_proof_packet,
+    runtime_coach_review_packet, runtime_delivery_task_packet_with_scope_context,
+    runtime_escalation_packet, runtime_execution_block_packet, runtime_verifier_proof_packet,
 };
 use crate::{
     derive_lane_status, dispatch_contract_lane, downstream_activation_fields,
@@ -83,13 +83,14 @@ pub(crate) fn downstream_dispatch_packet_body(
         activation_agent_type.as_deref(),
         receipt.selected_backend.as_deref(),
     );
-    let delivery_task_packet = runtime_delivery_task_packet(
+    let delivery_task_packet = runtime_delivery_task_packet_with_scope_context(
         &receipt.run_id,
         downstream_target,
         handoff_runtime_role,
         handoff_task_class,
         closure_class,
         &role_selection.request,
+        crate::runtime_dispatch_state::tracked_design_doc_path(role_selection),
     );
     let execution_block_packet = runtime_execution_block_packet(
         &receipt.run_id,
@@ -251,23 +252,18 @@ pub(crate) fn downstream_dispatch_packet_body(
     );
     body.insert(
         "downstream_lane_status".to_string(),
-        serde_json::json!(receipt.downstream_dispatch_status.as_deref().map(|status| {
-            derive_lane_status(
-                status,
-                receipt.supersedes_receipt_id.as_deref(),
-                receipt.exception_path_receipt_id.as_deref(),
-            )
-            .as_str()
-            .to_string()
-        })),
+        serde_json::json!(receipt
+            .downstream_dispatch_status
+            .as_deref()
+            .map(|status| { derive_lane_status(status, None, None).as_str().to_string() })),
     );
     body.insert(
         "downstream_supersedes_receipt_id".to_string(),
-        serde_json::json!(receipt.supersedes_receipt_id),
+        serde_json::Value::Null,
     );
     body.insert(
         "downstream_exception_path_receipt_id".to_string(),
-        serde_json::json!(receipt.exception_path_receipt_id),
+        serde_json::Value::Null,
     );
     body.insert(
         "downstream_dispatch_result_path".to_string(),

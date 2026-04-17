@@ -33,7 +33,28 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
                 "pending_design_finalize" | "pending_spec_task_close"
             )
         });
+    let retry_target = receipt.dispatch_target.replace('-', "_");
+    let retry_ready_same_lane = receipt.dispatch_kind == "agent_lane"
+        && receipt.dispatch_status == "blocked"
+        && receipt.blocker_code.as_deref() == Some("internal_activation_view_only")
+        && status.status == "ready"
+        && status.active_node == receipt.dispatch_target
+        && status.next_node.as_deref() == Some(retry_target.as_str())
+        && status.handoff_state == format!("awaiting_{retry_target}")
+        && status.resume_target == format!("dispatch.{retry_target}_lane")
+        && status.recovery_ready;
     if blocked_receipt {
+        if retry_ready_same_lane {
+            if let Some(selected_backend) = receipt
+                .selected_backend
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                status.selected_backend = selected_backend.to_string();
+            }
+            return Ok(status);
+        }
         if let Some(selected_backend) = receipt
             .selected_backend
             .as_deref()
@@ -89,6 +110,39 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
     status.resume_target = "none".to_string();
     status.recovery_ready = false;
     Ok(status)
+}
+
+fn has_receipt_evidence_id(value: Option<&str>) -> bool {
+    value.map(str::trim).is_some_and(|value| !value.is_empty())
+}
+
+fn normalize_legacy_downstream_preview_drift(
+    mut receipt: RunGraphDispatchReceiptStored,
+) -> RunGraphDispatchReceiptStored {
+    let active_dispatch_with_upstream_lane_evidence = receipt.dispatch_status != "executed"
+        && (has_receipt_evidence_id(receipt.supersedes_receipt_id.as_deref())
+            || has_receipt_evidence_id(receipt.exception_path_receipt_id.as_deref()));
+    let stale_downstream_preview_present = receipt.downstream_dispatch_status.is_some()
+        || receipt.downstream_dispatch_ready
+        || receipt
+            .downstream_dispatch_packet_path
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+    if active_dispatch_with_upstream_lane_evidence && stale_downstream_preview_present {
+        receipt.downstream_dispatch_target = None;
+        receipt.downstream_dispatch_command = None;
+        receipt.downstream_dispatch_note = None;
+        receipt.downstream_dispatch_ready = false;
+        receipt.downstream_dispatch_blockers.clear();
+        receipt.downstream_dispatch_packet_path = None;
+        receipt.downstream_dispatch_status = None;
+        receipt.downstream_dispatch_result_path = None;
+        receipt.downstream_dispatch_trace_path = None;
+        receipt.downstream_dispatch_executed_count = 0;
+        receipt.downstream_dispatch_active_target = None;
+    }
+    receipt
 }
 
 fn reconcile_run_graph_status_with_closed_task(
@@ -906,17 +960,49 @@ impl StateStore {
                 "SELECT * FROM run_graph_continuation_binding \
                  WHERE binding_source = 'explicit_continuation_bind' \
                     OR binding_source = 'explicit_continuation_bind_task' \
-                 ORDER BY recorded_at DESC, run_id DESC LIMIT 1;",
+                 ORDER BY recorded_at DESC, run_id DESC;",
             )
             .await?;
         let rows: Vec<RunGraphContinuationBinding> = query.take(0)?;
-        match rows.into_iter().next() {
-            Some(binding) => {
-                binding.validate()?;
-                Ok(Some(binding))
+        for mut binding in rows {
+            binding.validate()?;
+            if binding.binding_source != "explicit_continuation_bind_task" {
+                return Ok(Some(binding));
             }
-            None => Ok(None),
+
+            let Some(task_id) = binding
+                .active_bounded_unit
+                .get("task_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+
+            let task = match self.show_task(task_id).await {
+                Ok(task) => task,
+                Err(StateStoreError::MissingTask { .. }) => continue,
+                Err(error) => return Err(error),
+            };
+            if task.status == "closed" {
+                continue;
+            }
+
+            if let Some(active_bounded_unit) = binding.active_bounded_unit.as_object_mut() {
+                active_bounded_unit.insert(
+                    "task_status".to_string(),
+                    serde_json::Value::String(task.status.clone()),
+                );
+                active_bounded_unit.insert(
+                    "issue_type".to_string(),
+                    serde_json::Value::String(task.issue_type.clone()),
+                );
+            }
+            binding.validate()?;
+            return Ok(Some(binding));
         }
+        Ok(None)
     }
 
     pub async fn clear_run_graph_continuation_binding(
@@ -1262,6 +1348,7 @@ impl StateStore {
         self.db
             .select(("run_graph_dispatch_receipt", run_id))
             .await
+            .map(|row| row.map(normalize_legacy_downstream_preview_drift))
             .map_err(Into::into)
     }
 
@@ -1466,6 +1553,7 @@ impl StateStore {
     fn validate_run_graph_dispatch_receipt_contract(
         receipt: RunGraphDispatchReceiptStored,
     ) -> Result<RunGraphDispatchReceiptStored, StateStoreError> {
+        let receipt = normalize_legacy_downstream_preview_drift(receipt);
         Self::ensure_run_graph_dispatch_receipt_summary_consistency(&receipt)?;
         Self::ensure_run_graph_dispatch_receipt_summary_downstream_blockers_canonical(&receipt)?;
         Ok(receipt)
@@ -1545,6 +1633,86 @@ mod tests {
         assert_eq!(reconciled.resume_target, "none");
         assert!(!reconciled.recovery_ready);
         assert!(!reconciled.delegation_gate().delegated_cycle_open);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_run_graph_dispatch_receipt_summary_heals_legacy_downstream_preview_drift_for_exception_recorded_active_dispatch(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-receipt-legacy-preview-drift-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-legacy-preview-drift",
+            "implementer",
+            "delivery",
+        );
+        status.task_id = "task-legacy-preview-drift".to_string();
+        status.active_node = "implementer".to_string();
+        status.next_node = Some("implementer".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "implementer_active".to_string();
+        status.policy_gate = "single_task_scope_required".to_string();
+        status.handoff_state = "awaiting_implementer".to_string();
+        status.resume_target = "dispatch.implementer_lane".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-legacy-preview-drift".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "executing".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: Some("sup-parent".to_string()),
+                exception_path_receipt_id: Some("exc-parent".to_string()),
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/implementer-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/implementer-result.json".to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: Some("implementer".to_string()),
+                downstream_dispatch_command: Some("vida agent-init".to_string()),
+                downstream_dispatch_note: Some("stale retry preview".to_string()),
+                downstream_dispatch_ready: true,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: Some("/tmp/stale-preview.json".to_string()),
+                downstream_dispatch_status: Some("packet_ready".to_string()),
+                downstream_dispatch_result_path: Some("/tmp/stale-preview-result.json".to_string()),
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 1,
+                downstream_dispatch_active_target: Some("implementer".to_string()),
+                downstream_dispatch_last_target: Some("implementer".to_string()),
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-17T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist legacy drift receipt");
+
+        let summary = store
+            .latest_run_graph_dispatch_receipt_summary()
+            .await
+            .expect("summary should heal legacy drift")
+            .expect("summary should exist");
+        assert_eq!(summary.lane_status, "lane_exception_recorded");
+        assert!(summary.downstream_dispatch_status.is_none());
+        assert!(!summary.downstream_dispatch_ready);
+        assert!(summary.downstream_dispatch_packet_path.is_none());
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -1810,6 +1978,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retry_ready_internal_activation_receipt_preserves_dispatch_ready_status() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-run-graph-status-retry-ready-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let status = RunGraphStatus {
+            run_id: "run-retry-ready".to_string(),
+            task_id: "task-retry-ready".to_string(),
+            task_class: "implementation".to_string(),
+            active_node: "implementer".to_string(),
+            next_node: Some("implementer".to_string()),
+            status: "ready".to_string(),
+            route_task_class: "implementation".to_string(),
+            selected_backend: "internal_subagents".to_string(),
+            lane_id: "implementer_lane".to_string(),
+            lifecycle_stage: "implementer_active".to_string(),
+            policy_gate: "single_task_scope_required".to_string(),
+            handoff_state: "awaiting_implementer".to_string(),
+            context_state: "sealed".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "dispatch.implementer_lane".to_string(),
+            recovery_ready: true,
+        };
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist retry-ready run-graph status");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-retry-ready".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "blocked".to_string(),
+                lane_status: "lane_exception_recorded".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: Some("exc-timeout".to_string()),
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some("/tmp/implementer-packet.json".to_string()),
+                dispatch_result_path: Some("/tmp/implementer-result.json".to_string()),
+                blocker_code: Some("internal_activation_view_only".to_string()),
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-17T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist blocked retry receipt");
+
+        let reconciled = store
+            .run_graph_status("run-retry-ready")
+            .await
+            .expect("load reconciled run-graph status");
+        assert_eq!(reconciled.status, "ready");
+        assert_eq!(reconciled.active_node, "implementer");
+        assert_eq!(reconciled.next_node.as_deref(), Some("implementer"));
+        assert_eq!(reconciled.handoff_state, "awaiting_implementer");
+        assert_eq!(reconciled.resume_target, "dispatch.implementer_lane");
+        assert!(reconciled.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
     async fn closed_task_does_not_override_exception_recorded_run_status() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1924,6 +2176,24 @@ mod tests {
             nanos
         ));
         let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "task-upstream",
+                title: "Upstream task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "in_progress",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create upstream task");
 
         store
             .record_run_graph_continuation_binding(&RunGraphContinuationBinding {
@@ -1977,6 +2247,73 @@ mod tests {
         assert_eq!(latest.run_id, "run-upstream");
         assert_eq!(latest.binding_source, "explicit_continuation_bind_task");
         assert_eq!(latest.active_bounded_unit["kind"], "task_graph_task");
+        assert_eq!(latest.active_bounded_unit["task_status"], "in_progress");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_explicit_run_graph_continuation_binding_skips_closed_task_binding() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-latest-explicit-run-graph-continuation-binding-skips-closed-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        let labels = Vec::new();
+        store
+            .create_task(CreateTaskRequest {
+                task_id: "task-closed",
+                title: "Closed task",
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "closed",
+                priority: 0,
+                parent_id: None,
+                labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
+                created_by: "test",
+                source_repo: "test",
+            })
+            .await
+            .expect("create closed task");
+
+        store
+            .record_run_graph_continuation_binding(&RunGraphContinuationBinding {
+                run_id: "run-closed".to_string(),
+                task_id: "task-closed".to_string(),
+                status: "bound".to_string(),
+                active_bounded_unit: serde_json::json!({
+                    "kind": "task_graph_task",
+                    "task_id": "task-closed",
+                    "run_id": "run-closed",
+                    "task_status": "open",
+                    "issue_type": "task"
+                }),
+                binding_source: "explicit_continuation_bind_task".to_string(),
+                why_this_unit: "stale explicit task binding".to_string(),
+                primary_path: "normal_delivery_path".to_string(),
+                sequential_vs_parallel_posture: "sequential_only_explicit_task_bound".to_string(),
+                request_text: Some("continue".to_string()),
+                recorded_at: "2026-04-16T10:00:00Z".to_string(),
+            })
+            .await
+            .expect("record closed explicit binding");
+
+        let latest = store
+            .latest_explicit_run_graph_continuation_binding()
+            .await
+            .expect("read latest explicit binding");
+
+        assert!(
+            latest.is_none(),
+            "closed explicit task binding must be skipped"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
