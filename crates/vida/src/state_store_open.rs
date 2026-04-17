@@ -6,6 +6,14 @@ pub(super) fn state_schema_document() -> String {
 }
 
 impl StateStore {
+    async fn sanitize_legacy_task_execution_semantics(&self) -> Result<(), StateStoreError> {
+        let _ = self
+            .db
+            .query("UPDATE task SET execution_semantics = {} WHERE execution_semantics = NONE;")
+            .await?;
+        Ok(())
+    }
+
     pub async fn open(root: PathBuf) -> Result<Self, StateStoreError> {
         fs::create_dir_all(&root)?;
 
@@ -60,6 +68,7 @@ impl StateStore {
         db.query(state_schema_document()).await?;
 
         let store = Self { db, root };
+        store.sanitize_legacy_task_execution_semantics().await?;
         store.ensure_minimal_authoritative_state_spine().await?;
         Ok(store)
     }

@@ -159,6 +159,7 @@ pub(super) fn canonical_snapshot_row_to_task_record(
         original_size: 0,
         notes: None,
         labels: Vec::new(),
+        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
         dependencies: Vec::new(),
     })
 }

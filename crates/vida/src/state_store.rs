@@ -99,8 +99,9 @@ use state_store_source_scan::{
 };
 pub use state_store_task_models::{
     BlockedTaskRecord, CreateTaskRequest, TaskCriticalPath, TaskCriticalPathNode,
-    TaskDependencyStatus, TaskDependencyTreeEdge, TaskDependencyTreeNode, TaskGraphIssue,
-    TaskImportSummary, TaskRecord, TaskRelease1ContractStep, TaskStoreSummary, UpdateTaskRequest,
+    TaskDependencyStatus, TaskDependencyTreeEdge, TaskDependencyTreeNode, TaskExecutionSemantics,
+    TaskGraphIssue, TaskImportSummary, TaskRecord, TaskRelease1ContractStep,
+    TaskSchedulingCandidate, TaskSchedulingProjection, TaskStoreSummary, UpdateTaskRequest,
 };
 pub(crate) use state_store_task_models::{TaskContent, TaskJsonlRecord, TaskStorageRow};
 #[cfg(test)]
@@ -707,6 +708,7 @@ hierarchy: framework,contracts
                 priority: 1,
                 parent_id: None,
                 labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
                 created_by: "tester",
                 source_repo: ".",
             })
@@ -723,6 +725,7 @@ hierarchy: framework,contracts
                 priority: 2,
                 parent_id: Some("vida-root"),
                 labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
                 created_by: "tester",
                 source_repo: ".",
             })
@@ -777,6 +780,7 @@ hierarchy: framework,contracts
                 priority: 1,
                 parent_id: None,
                 labels: &labels,
+                execution_semantics: TaskExecutionSemantics::default(),
                 created_by: "tester",
                 source_repo: ".",
             })
@@ -793,6 +797,10 @@ hierarchy: framework,contracts
                 add_labels: &[],
                 remove_labels: &[],
                 set_labels: Some(&set_labels_vec),
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
             })
             .await
             .expect("apply set labels");
@@ -816,6 +824,10 @@ hierarchy: framework,contracts
                 add_labels: &add_labels,
                 remove_labels: &remove_labels,
                 set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
             })
             .await
             .expect("apply delta labels");
@@ -4954,6 +4966,7 @@ hierarchy: framework,contracts
                 original_size: 0,
                 notes: None,
                 labels: Vec::new(),
+                execution_semantics: TaskExecutionSemantics::default(),
                 dependencies: Vec::new(),
             })
             .await

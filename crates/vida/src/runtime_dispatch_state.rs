@@ -3457,6 +3457,7 @@ mod tests {
                 priority: 2,
                 parent_id: None,
                 labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -7029,6 +7030,7 @@ mod tests {
                 priority: 2,
                 parent_id: None,
                 labels: &[String::from("dev-pack")],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -7172,6 +7174,7 @@ mod tests {
                 priority: 2,
                 parent_id: None,
                 labels: &[String::from("dev-pack")],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
                 created_by: "test",
                 source_repo: "",
             })

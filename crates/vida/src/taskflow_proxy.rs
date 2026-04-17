@@ -67,7 +67,10 @@ fn authoritative_dispatch_blocker_codes(
         blocker_codes.push(blocker_code.to_string());
     }
     if matches!(dispatch.dispatch_status.as_str(), "blocked" | "failed")
-        || matches!(dispatch.lane_status.as_str(), "lane_blocked" | "lane_failed")
+        || matches!(
+            dispatch.lane_status.as_str(),
+            "lane_blocked" | "lane_failed"
+        )
     {
         blocker_codes.extend(
             dispatch
@@ -94,10 +97,15 @@ fn task_wave_label(
     }
 
     let resolved = by_id.get(task_id).and_then(|task| {
-        task.labels
-            .iter()
-            .find(|label| label.as_str() == "wave" || label.starts_with("wave-"))
-            .cloned()
+        task.execution_semantics
+            .order_bucket
+            .clone()
+            .or_else(|| {
+                task.labels
+                    .iter()
+                    .find(|label| label.as_str() == "wave" || label.starts_with("wave-"))
+                    .cloned()
+            })
             .or_else(|| {
                 task.dependencies
                     .iter()
@@ -504,15 +512,15 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         .then(|| ready_tasks.first())
         .flatten()
         .map(|task| {
-        serde_json::json!({
-            "id": task.id,
-            "display_id": task.display_id,
-            "title": task.title,
-            "status": task.status,
-            "priority": task.priority,
-            "issue_type": task.issue_type,
-        })
-    });
+            serde_json::json!({
+                "id": task.id,
+                "display_id": task.display_id,
+                "title": task.title,
+                "status": task.status,
+                "priority": task.priority,
+                "issue_type": task.issue_type,
+            })
+        });
 
     let mut blocker_codes = Vec::<String>::new();
     let mut next_actions = Vec::<String>::new();
@@ -712,9 +720,25 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    let scheduling = match store.scheduling_projection_scoped(None, None).await {
+        Ok(projection) => projection,
+        Err(error) => {
+            eprintln!("Failed to compute scheduling projection: {error}");
+            return ExitCode::from(1);
+        }
+    };
     let waves = build_graph_summary_waves(&all_tasks, &ready_tasks, &blocked_tasks);
 
-    let primary_ready_task = ready_tasks.first().map(graph_summary_task_ref);
+    let primary_ready_task = scheduling.ready.first().map(|candidate| {
+        serde_json::json!({
+            "task": graph_summary_task_ref(&candidate.task),
+            "ready_now": candidate.ready_now,
+            "ready_parallel_safe": candidate.ready_parallel_safe,
+            "active_critical_path": candidate.active_critical_path,
+            "parallel_blockers": candidate.parallel_blockers,
+            "execution_semantics": candidate.task.execution_semantics,
+        })
+    });
     let primary_blocked_task = blocked_tasks.first().map(|record| {
         serde_json::json!({
             "id": record.task.id,
@@ -781,8 +805,10 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         "ready_count": ready_tasks.len(),
         "blocked_count": blocked_tasks.len(),
         "critical_path_length": critical_path.length,
+        "current_task_id": scheduling.current_task_id,
         "primary_ready_task": primary_ready_task,
         "primary_blocked_task": primary_blocked_task,
+        "scheduling": scheduling,
         "waves": waves,
         "critical_path": critical_path,
     });
@@ -817,6 +843,9 @@ async fn run_taskflow_graph_summary(args: &[String]) -> ExitCode {
         crate::print_surface_line(RenderMode::Plain, "wave_count", &waves.len().to_string());
         if let Some(task) = ready_tasks.first() {
             crate::print_surface_line(RenderMode::Plain, "primary_ready_task", &task.id);
+        }
+        if let Some(task_id) = payload["current_task_id"].as_str() {
+            crate::print_surface_line(RenderMode::Plain, "current_task_id", task_id);
         }
         if let Some(record) = blocked_tasks.first() {
             crate::print_surface_line(RenderMode::Plain, "primary_blocked_task", &record.task.id);
@@ -869,6 +898,7 @@ mod tests {
             original_size: 0,
             notes: None,
             labels: labels.iter().map(|label| label.to_string()).collect(),
+            execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
             dependencies,
         }
     }
@@ -940,6 +970,21 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn graph_summary_waves_prefer_order_bucket_over_labels() {
+        let mut explicit_bucket = task("bucket-task", "task", "open", 1, &["wave-99"], Vec::new());
+        explicit_bucket.execution_semantics.order_bucket = Some("wave-2".to_string());
+
+        let waves = build_graph_summary_waves(
+            std::slice::from_ref(&explicit_bucket),
+            std::slice::from_ref(&explicit_bucket),
+            &[],
+        );
+        assert_eq!(waves.len(), 1);
+        assert_eq!(waves[0].wave_id, "wave-2");
+        assert_eq!(waves[0].ready_count, 1);
     }
 
     #[test]
@@ -1044,16 +1089,12 @@ mod tests {
 
         let blocker_codes = super::authoritative_dispatch_blocker_codes(Some(&dispatch));
         assert_eq!(blocker_codes.len(), 2);
-        assert!(
-            blocker_codes
-                .iter()
-                .any(|code| code == "timeout_without_takeover_authority")
-        );
-        assert!(
-            blocker_codes
-                .iter()
-                .any(|code| code == "pending_review_clean_evidence")
-        );
+        assert!(blocker_codes
+            .iter()
+            .any(|code| code == "timeout_without_takeover_authority"));
+        assert!(blocker_codes
+            .iter()
+            .any(|code| code == "pending_review_clean_evidence"));
     }
 }
 

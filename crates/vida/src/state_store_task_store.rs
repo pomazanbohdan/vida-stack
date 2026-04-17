@@ -2,6 +2,53 @@ use super::*;
 use serde_json::Deserializer;
 
 impl StateStore {
+    fn normalize_execution_semantics_value(value: Option<&str>) -> Option<String> {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
+    fn validate_execution_mode(
+        task_id: &str,
+        value: Option<&str>,
+    ) -> Result<Option<String>, StateStoreError> {
+        let normalized = Self::normalize_execution_semantics_value(value);
+        let Some(mode) = normalized else {
+            return Ok(None);
+        };
+        match mode.as_str() {
+            "sequential" | "parallel_safe" | "exclusive" => Ok(Some(mode)),
+            _ => Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "task `{task_id}` execution_mode must be one of sequential, parallel_safe, exclusive"
+                ),
+            }),
+        }
+    }
+
+    fn validate_execution_semantics(
+        task_id: &str,
+        semantics: TaskExecutionSemantics,
+    ) -> Result<TaskExecutionSemantics, StateStoreError> {
+        let normalized = TaskExecutionSemantics {
+            execution_mode: Self::validate_execution_mode(
+                task_id,
+                semantics.execution_mode.as_deref(),
+            )?,
+            order_bucket: Self::normalize_execution_semantics_value(
+                semantics.order_bucket.as_deref(),
+            ),
+            parallel_group: Self::normalize_execution_semantics_value(
+                semantics.parallel_group.as_deref(),
+            ),
+            conflict_domain: Self::normalize_execution_semantics_value(
+                semantics.conflict_domain.as_deref(),
+            ),
+        };
+        Ok(normalized)
+    }
+
     async fn materialize_task_close_closure_artifacts(
         &self,
         status: &RunGraphStatus,
@@ -103,7 +150,11 @@ impl StateStore {
             };
             let closure_bound = binding.active_bounded_unit["kind"] == "downstream_dispatch_target"
                 && binding.active_bounded_unit["dispatch_target"] == "closure";
-            if closure_bound && !self.materialize_task_close_closure_artifacts(&status).await? {
+            if closure_bound
+                && !self
+                    .materialize_task_close_closure_artifacts(&status)
+                    .await?
+            {
                 continue;
             }
             self.record_run_graph_continuation_binding(&binding).await?;
@@ -474,6 +525,7 @@ impl StateStore {
             priority,
             parent_id,
             labels,
+            execution_semantics,
             created_by,
             source_repo,
         } = request;
@@ -518,6 +570,7 @@ impl StateStore {
                 });
             }
         }
+        let execution_semantics = Self::validate_execution_semantics(task_id, execution_semantics)?;
 
         let now = unix_timestamp_nanos().to_string();
         let mut normalized_labels = labels
@@ -559,6 +612,7 @@ impl StateStore {
             original_size: 0,
             notes: None,
             labels: normalized_labels,
+            execution_semantics,
             dependencies,
         };
         if status == "closed" {
@@ -593,6 +647,10 @@ impl StateStore {
             add_labels,
             remove_labels,
             set_labels,
+            execution_mode,
+            order_bucket,
+            parallel_group,
+            conflict_domain,
         } = request;
         let mut task = self.show_task(task_id).await?;
         if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
@@ -630,6 +688,24 @@ impl StateStore {
             task.labels
                 .retain(|label| !remove_labels.iter().any(|remove| remove == label));
         }
+        if let Some(execution_mode) = execution_mode {
+            task.execution_semantics.execution_mode =
+                Self::validate_execution_mode(task_id, execution_mode)?;
+        }
+        if let Some(order_bucket) = order_bucket {
+            task.execution_semantics.order_bucket =
+                Self::normalize_execution_semantics_value(order_bucket);
+        }
+        if let Some(parallel_group) = parallel_group {
+            task.execution_semantics.parallel_group =
+                Self::normalize_execution_semantics_value(parallel_group);
+        }
+        if let Some(conflict_domain) = conflict_domain {
+            task.execution_semantics.conflict_domain =
+                Self::normalize_execution_semantics_value(conflict_domain);
+        }
+        task.execution_semantics =
+            Self::validate_execution_semantics(task_id, task.execution_semantics.clone())?;
         task.labels.sort();
         task.labels.dedup();
         task.updated_at = unix_timestamp_nanos().to_string();
@@ -774,6 +850,7 @@ mod tests {
                 priority: 1,
                 parent_id: None,
                 labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -917,8 +994,14 @@ mod tests {
             .await
             .expect("load reconciled receipt")
             .expect("reconciled receipt should exist");
-        assert_eq!(receipt.downstream_dispatch_target.as_deref(), Some("closure"));
-        assert_eq!(receipt.downstream_dispatch_status.as_deref(), Some("executed"));
+        assert_eq!(
+            receipt.downstream_dispatch_target.as_deref(),
+            Some("closure")
+        );
+        assert_eq!(
+            receipt.downstream_dispatch_status.as_deref(),
+            Some("executed")
+        );
         assert!(!receipt.downstream_dispatch_ready);
         assert!(receipt.downstream_dispatch_blockers.is_empty());
         assert!(receipt.downstream_dispatch_packet_path.is_none());
@@ -964,6 +1047,7 @@ mod tests {
                 priority: 1,
                 parent_id: None,
                 labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -980,6 +1064,7 @@ mod tests {
                 priority: 2,
                 parent_id: None,
                 labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -1040,7 +1125,60 @@ mod tests {
         assert_eq!(binding.task_id, "run-owner-task");
         assert_eq!(binding.active_bounded_unit["kind"], "run_graph_task");
         assert_eq!(binding.active_bounded_unit["task_id"], "run-owner-task");
-        assert_eq!(binding.active_bounded_unit["run_id"], "run-explicit-task-close");
+        assert_eq!(
+            binding.active_bounded_unit["run_id"],
+            "run-explicit-task-close"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn show_task_defaults_execution_semantics_when_legacy_row_has_none() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-task-legacy-execution-semantics-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let _ = store
+            .create_task(CreateTaskRequest {
+                task_id: "legacy-task",
+                display_id: None,
+                title: "Legacy task",
+                description: "",
+                status: "open",
+                issue_type: "task",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics::default(),
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("legacy row should insert");
+        let _ = store
+            .db
+            .query("UPDATE task:legacy-task SET execution_semantics = NONE;")
+            .await
+            .expect("legacy row should downgrade execution semantics");
+
+        drop(store);
+
+        let reopened = StateStore::open(root.clone())
+            .await
+            .expect("reopen store after legacy downgrade");
+        let task = reopened
+            .show_task("legacy-task")
+            .await
+            .expect("legacy task should load");
+        assert_eq!(task.execution_semantics, TaskExecutionSemantics::default());
 
         let _ = fs::remove_dir_all(&root);
     }

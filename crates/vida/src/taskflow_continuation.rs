@@ -392,6 +392,7 @@ mod tests {
             description: String::new(),
             notes: None,
             labels: Vec::new(),
+            execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
             dependencies: Vec::new(),
             display_id: None,
         };

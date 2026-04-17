@@ -71,18 +71,19 @@ Current entrypoints:
 50. [user-facing-runtime-flow-and-operating-loop-model.md](spec/user-facing-runtime-flow-and-operating-loop-model.md)
 51. [bootstrap-carriers-and-project-activator-model.md](spec/bootstrap-carriers-and-project-activator-model.md)
 52. [execution-preparation-and-developer-handoff-model.md](spec/execution-preparation-and-developer-handoff-model.md)
-53. [instruction-packing-and-caching-survey.md](research/instruction-packing-and-caching-survey.md)
-54. [agent-governance-and-policy-hardening-survey.md](research/agent-governance-and-policy-hardening-survey.md)
-55. [langgraph-runtime-patterns-survey.md](research/langgraph-runtime-patterns-survey.md)
-56. [execution-approval-and-interrupt-resume-survey.md](research/execution-approval-and-interrupt-resume-survey.md)
-57. [runtime-framework-open-questions-and-external-patterns-survey.md](research/runtime-framework-open-questions-and-external-patterns-survey.md)
-58. [compiled-control-bundle-contract-research.md](research/compiled-control-bundle-contract-research.md)
-59. [runtime-memory-state-and-retrieval-research.md](research/runtime-memory-state-and-retrieval-research.md)
-60. [db-authority-and-migration-runtime-research.md](research/db-authority-and-migration-runtime-research.md)
-61. [runtime-home-and-surface-migration-research.md](research/runtime-home-and-surface-migration-research.md)
-62. [derived-cache-delivery-and-invalidation-research.md](research/derived-cache-delivery-and-invalidation-research.md)
-63. [embedded-runtime-bootstrap-and-projection-research.md](research/embedded-runtime-bootstrap-and-projection-research.md)
-64. [execution-preparation-and-developer-handoff-survey.md](research/execution-preparation-and-developer-handoff-survey.md)
+53. [taskflow-execution-semantics-and-scheduler-design.md](spec/taskflow-execution-semantics-and-scheduler-design.md)
+54. [instruction-packing-and-caching-survey.md](research/instruction-packing-and-caching-survey.md)
+55. [agent-governance-and-policy-hardening-survey.md](research/agent-governance-and-policy-hardening-survey.md)
+56. [langgraph-runtime-patterns-survey.md](research/langgraph-runtime-patterns-survey.md)
+57. [execution-approval-and-interrupt-resume-survey.md](research/execution-approval-and-interrupt-resume-survey.md)
+58. [runtime-framework-open-questions-and-external-patterns-survey.md](research/runtime-framework-open-questions-and-external-patterns-survey.md)
+59. [compiled-control-bundle-contract-research.md](research/compiled-control-bundle-contract-research.md)
+60. [runtime-memory-state-and-retrieval-research.md](research/runtime-memory-state-and-retrieval-research.md)
+61. [db-authority-and-migration-runtime-research.md](research/db-authority-and-migration-runtime-research.md)
+62. [runtime-home-and-surface-migration-research.md](research/runtime-home-and-surface-migration-research.md)
+63. [derived-cache-delivery-and-invalidation-research.md](research/derived-cache-delivery-and-invalidation-research.md)
+64. [embedded-runtime-bootstrap-and-projection-research.md](research/embedded-runtime-bootstrap-and-projection-research.md)
+65. [execution-preparation-and-developer-handoff-survey.md](research/execution-preparation-and-developer-handoff-survey.md)
 
 Release-1 working entrypoints:
 
@@ -136,5 +137,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/index.md
 created_at: '2026-03-09T20:28:59+02:00'
-updated_at: 2026-04-05T05:20:01.303431171Z
+updated_at: 2026-04-17T08:02:54.490513171Z
 changelog_ref: index.changelog.jsonl

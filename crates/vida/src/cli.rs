@@ -283,6 +283,18 @@ pub(crate) struct TaskCreateArgs {
     #[arg(long = "labels")]
     pub(crate) labels: Vec<String>,
 
+    #[arg(long = "execution-mode")]
+    pub(crate) execution_mode: Option<String>,
+
+    #[arg(long = "order-bucket")]
+    pub(crate) order_bucket: Option<String>,
+
+    #[arg(long = "parallel-group")]
+    pub(crate) parallel_group: Option<String>,
+
+    #[arg(long = "conflict-domain")]
+    pub(crate) conflict_domain: Option<String>,
+
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,
 
@@ -317,6 +329,30 @@ pub(crate) struct TaskUpdateArgs {
 
     #[arg(long = "set-labels")]
     pub(crate) set_labels: Option<String>,
+
+    #[arg(long = "execution-mode")]
+    pub(crate) execution_mode: Option<String>,
+
+    #[arg(long = "order-bucket")]
+    pub(crate) order_bucket: Option<String>,
+
+    #[arg(long = "parallel-group")]
+    pub(crate) parallel_group: Option<String>,
+
+    #[arg(long = "conflict-domain")]
+    pub(crate) conflict_domain: Option<String>,
+
+    #[arg(long = "clear-execution-mode")]
+    pub(crate) clear_execution_mode: bool,
+
+    #[arg(long = "clear-order-bucket")]
+    pub(crate) clear_order_bucket: bool,
+
+    #[arg(long = "clear-parallel-group")]
+    pub(crate) clear_parallel_group: bool,
+
+    #[arg(long = "clear-conflict-domain")]
+    pub(crate) clear_conflict_domain: bool,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,

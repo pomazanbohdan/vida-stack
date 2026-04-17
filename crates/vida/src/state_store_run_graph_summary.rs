@@ -1502,6 +1502,7 @@ mod tests {
                 priority: 1,
                 parent_id: None,
                 labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
                 created_by: "test",
                 source_repo: "",
             })
@@ -1832,6 +1833,7 @@ mod tests {
                 priority: 0,
                 parent_id: None,
                 labels: &[],
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
                 created_by: "test",
                 source_repo: "",
             })

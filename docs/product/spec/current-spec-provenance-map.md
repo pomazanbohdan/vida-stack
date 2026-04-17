@@ -181,6 +181,8 @@ Companion rule:
    Sources: `docs/product/spec/ops-state-and-runtime-evidence-hygiene-design.md`, `docs/process/project-operations.md`, `docs/process/environments.md`, `docs/product/spec/internal-codex-agent-execution-fail-closed-design.md`, current state-store/runtime code in `crates/vida/src/{state_store,state_store_open,taskflow_consume,taskflow_consume_resume,runtime_dispatch_state,runtime_dispatch_execution,status_surface,doctor_surface}.rs`, and the current need to shorten authoritative lock lifetime during agent-lane dispatch without introducing silent long-lived-state cleanup
 27. [lawful-closure-continuation-rebinding-design.md](lawful-closure-continuation-rebinding-design.md)
    Sources: `docs/product/spec/autonomous-report-continuation-law.md`, `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, `docs/product/spec/continuation-binding-fail-closed-hardening-design.md`, `docs/product/spec/continuation-and-seeded-dispatch-bridge-design.md`, current continuation/runtime code in `crates/vida/src/{taskflow_continuation,continuation_binding_summary,taskflow_layer4,status_surface,taskflow_runtime_bundle}.rs`, and the current need to support explicit post-closure rebinding without heuristic task picking
+28. [taskflow-execution-semantics-and-scheduler-design.md](taskflow-execution-semantics-and-scheduler-design.md)
+   Sources: `docs/product/spec/user-facing-runtime-flow-and-operating-loop-model.md`, `docs/product/spec/emerging-architectural-patterns-model.md`, current taskflow/runtime code in `crates/vida/src/{state_store_task_models,state_store_task_store,state_store_task_graph,task_surface,taskflow_proxy,state_store_taskflow_snapshot_codec}.rs`, OpenAI Function Calling guide, OpenAI Agents SDK orchestration guide, Anthropic parallel tool-use guidance, Microsoft Semantic Kernel function invocation guidance, and Microsoft Agent Framework workflow/orchestration guidance
 
 ## Routing Pointers
 
@@ -231,5 +233,5 @@ schema_version: '1'
 status: canonical
 source_path: docs/product/spec/current-spec-provenance-map.md
 created_at: '2026-03-16T09:05:00+02:00'
-updated_at: 2026-04-13T16:12:52.796643184Z
+updated_at: 2026-04-17T08:02:54.482337835Z
 changelog_ref: current-spec-provenance-map.changelog.jsonl

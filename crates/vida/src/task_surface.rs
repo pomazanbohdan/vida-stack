@@ -78,6 +78,34 @@ fn resolve_optional_text_arg(
     Ok(direct.map(ToOwned::to_owned))
 }
 
+fn task_execution_semantics_from_create_args(
+    command: &TaskCreateArgs,
+) -> state_store::TaskExecutionSemantics {
+    state_store::TaskExecutionSemantics {
+        execution_mode: command.execution_mode.clone(),
+        order_bucket: command.order_bucket.clone(),
+        parallel_group: command.parallel_group.clone(),
+        conflict_domain: command.conflict_domain.clone(),
+    }
+}
+
+fn task_update_semantics_arg(
+    value: Option<&str>,
+    clear: bool,
+) -> Result<Option<Option<&str>>, String> {
+    if value.is_some() && clear {
+        return Err(
+            "Use either the value flag or the matching clear flag for execution semantics, not both."
+                .to_string(),
+        );
+    }
+    if clear {
+        Ok(Some(None))
+    } else {
+        Ok(value.map(Some))
+    }
+}
+
 async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) -> ExitCode {
     let state_dir = command
         .state_dir
@@ -188,6 +216,7 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                     priority: command.priority,
                     parent_id: parent_id.as_deref(),
                     labels: &command.labels,
+                    execution_semantics: task_execution_semantics_from_create_args(&command),
                     created_by: "vida task",
                     source_repo: &source_repo,
                 })
@@ -550,6 +579,46 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     .map(|value| value.to_string())
                     .collect::<Vec<_>>()
             });
+            let execution_mode = match task_update_semantics_arg(
+                command.execution_mode.as_deref(),
+                command.clear_execution_mode,
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            };
+            let order_bucket = match task_update_semantics_arg(
+                command.order_bucket.as_deref(),
+                command.clear_order_bucket,
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            };
+            let parallel_group = match task_update_semantics_arg(
+                command.parallel_group.as_deref(),
+                command.clear_parallel_group,
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            };
+            let conflict_domain = match task_update_semantics_arg(
+                command.conflict_domain.as_deref(),
+                command.clear_conflict_domain,
+            ) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("{error}");
+                    return ExitCode::from(2);
+                }
+            };
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store
                     .update_task(state_store::UpdateTaskRequest {
@@ -560,6 +629,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         add_labels: &command.add_labels,
                         remove_labels: &command.remove_labels,
                         set_labels: set_labels.as_deref(),
+                        execution_mode,
+                        order_bucket,
+                        parallel_group,
+                        conflict_domain,
                     })
                     .await
                 {

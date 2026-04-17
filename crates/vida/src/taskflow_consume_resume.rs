@@ -5042,6 +5042,7 @@ agent_system:
                 priority: 1,
                 parent_id: None,
                 labels: &labels,
+                execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
                 created_by: "tester",
                 source_repo: ".",
             })

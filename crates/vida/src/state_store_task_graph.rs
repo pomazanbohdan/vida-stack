@@ -1,6 +1,94 @@
 use super::*;
 
 impl StateStore {
+    fn task_is_open_like(task: &TaskRecord) -> bool {
+        (task.status == "open" || task.status == "in_progress") && task.issue_type != "epic"
+    }
+
+    fn task_blockers(
+        task: &TaskRecord,
+        by_id: &BTreeMap<String, TaskRecord>,
+    ) -> Vec<TaskDependencyStatus> {
+        let mut blockers = task
+            .dependencies
+            .iter()
+            .filter(|dependency| dependency.edge_type != "parent-child")
+            .filter_map(|dependency| {
+                let blocker_task = by_id.get(&dependency.depends_on_id)?;
+                if blocker_task.status == "closed" {
+                    return None;
+                }
+                Some(TaskDependencyStatus {
+                    issue_id: dependency.issue_id.clone(),
+                    depends_on_id: dependency.depends_on_id.clone(),
+                    edge_type: dependency.edge_type.clone(),
+                    dependency_status: blocker_task.status.clone(),
+                    dependency_issue_type: Some(blocker_task.issue_type.clone()),
+                })
+            })
+            .collect::<Vec<_>>();
+        blockers.sort_by(|left, right| {
+            left.edge_type
+                .cmp(&right.edge_type)
+                .then_with(|| left.depends_on_id.cmp(&right.depends_on_id))
+        });
+        blockers
+    }
+
+    fn compatible_parallel_group(task: &TaskRecord, current: &TaskRecord) -> Result<(), String> {
+        match (
+            task.execution_semantics.parallel_group.as_deref(),
+            current.execution_semantics.parallel_group.as_deref(),
+        ) {
+            (None, None) => Ok(()),
+            (Some(left), Some(right)) if left == right => Ok(()),
+            _ => Err("parallel_group_mismatch".to_string()),
+        }
+    }
+
+    fn parallel_blockers_against_current(
+        task: &TaskRecord,
+        current: Option<&TaskRecord>,
+    ) -> Vec<String> {
+        let Some(current) = current else {
+            return vec!["no_current_task_reference".to_string()];
+        };
+        if task.id == current.id {
+            return vec!["current_task_reference".to_string()];
+        }
+
+        let mut blockers = Vec::new();
+        if task.execution_semantics.execution_mode.as_deref() != Some("parallel_safe") {
+            blockers.push("execution_mode_not_parallel_safe".to_string());
+        }
+        if current.execution_semantics.execution_mode.as_deref() != Some("parallel_safe") {
+            blockers.push("current_execution_mode_not_parallel_safe".to_string());
+        }
+
+        match (
+            task.execution_semantics.order_bucket.as_deref(),
+            current.execution_semantics.order_bucket.as_deref(),
+        ) {
+            (Some(left), Some(right)) if left == right => {}
+            _ => blockers.push("order_bucket_mismatch_or_missing".to_string()),
+        }
+
+        match (
+            task.execution_semantics.conflict_domain.as_deref(),
+            current.execution_semantics.conflict_domain.as_deref(),
+        ) {
+            (Some(left), Some(right)) if left != right => {}
+            (Some(_), Some(_)) => blockers.push("conflict_domain_collision".to_string()),
+            _ => blockers.push("missing_conflict_domain".to_string()),
+        }
+
+        if let Err(blocker) = Self::compatible_parallel_group(task, current) {
+            blockers.push(blocker);
+        }
+
+        blockers
+    }
+
     pub async fn ready_tasks_scoped(
         &self,
         scope_task_id: Option<&str>,
@@ -10,8 +98,9 @@ impl StateStore {
 
         let by_id = rows
             .iter()
-            .map(|task| (task.id.clone(), task.status.clone()))
-            .collect::<std::collections::BTreeMap<_, _>>();
+            .cloned()
+            .map(|task| (task.id.clone(), task))
+            .collect::<BTreeMap<_, _>>();
         let scope_ids = if let Some(scope_task_id) = scope_task_id {
             Some(self.ready_scope_ids(&rows, scope_task_id)?)
         } else {
@@ -26,23 +115,105 @@ impl StateStore {
                     .map(|ids| ids.contains(&task.id))
                     .unwrap_or(true)
             })
-            .filter(|task| task.status == "open" || task.status == "in_progress")
-            .filter(|task| task.issue_type != "epic")
-            .filter(|task| {
-                task.dependencies.iter().all(|dependency| {
-                    if dependency.edge_type == "parent-child" {
-                        return true;
-                    }
-                    matches!(
-                        by_id.get(&dependency.depends_on_id).map(String::as_str),
-                        Some("closed")
-                    )
-                })
-            })
+            .filter(Self::task_is_open_like)
+            .filter(|task| Self::task_blockers(task, &by_id).is_empty())
             .collect::<Vec<_>>();
 
         ready.sort_by(task_ready_sort_key);
         Ok(ready)
+    }
+
+    pub async fn scheduling_projection_scoped(
+        &self,
+        scope_task_id: Option<&str>,
+        current_task_id: Option<&str>,
+    ) -> Result<TaskSchedulingProjection, StateStoreError> {
+        let mut rows = self.all_tasks().await?;
+        rows.sort_by(task_sort_key);
+
+        let scope_ids = if let Some(scope_task_id) = scope_task_id {
+            Some(self.ready_scope_ids(&rows, scope_task_id)?)
+        } else {
+            None
+        };
+        let mut critical_path_ids = BTreeSet::new();
+        if let Ok(path) = self.critical_path().await {
+            critical_path_ids.extend(path.nodes.into_iter().map(|node| node.id));
+        }
+
+        let by_id = rows
+            .iter()
+            .cloned()
+            .map(|task| (task.id.clone(), task))
+            .collect::<BTreeMap<_, _>>();
+        let scoped_tasks = rows
+            .into_iter()
+            .filter(|task| {
+                scope_ids
+                    .as_ref()
+                    .map(|ids| ids.contains(&task.id))
+                    .unwrap_or(true)
+            })
+            .filter(Self::task_is_open_like)
+            .collect::<Vec<_>>();
+
+        let chosen_current = current_task_id
+            .and_then(|task_id| {
+                scoped_tasks
+                    .iter()
+                    .find(|task| task.id == task_id)
+                    .map(|task| task.id.clone())
+            })
+            .or_else(|| {
+                scoped_tasks
+                    .iter()
+                    .find(|task| Self::task_blockers(task, &by_id).is_empty())
+                    .map(|task| task.id.clone())
+            });
+        let current_task = chosen_current
+            .as_deref()
+            .and_then(|task_id| by_id.get(task_id));
+
+        let mut ready = Vec::new();
+        let mut blocked = Vec::new();
+        for task in scoped_tasks {
+            let active_critical_path = critical_path_ids.contains(&task.id);
+            let blocked_by = Self::task_blockers(&task, &by_id);
+            let ready_now = blocked_by.is_empty();
+            let parallel_blockers = if ready_now {
+                Self::parallel_blockers_against_current(&task, current_task)
+            } else {
+                vec!["graph_blocked".to_string()]
+            };
+            let candidate = TaskSchedulingCandidate {
+                task,
+                ready_now,
+                ready_parallel_safe: ready_now && parallel_blockers.is_empty(),
+                blocked_by,
+                active_critical_path,
+                parallel_blockers,
+            };
+            if candidate.ready_now {
+                ready.push(candidate);
+            } else {
+                blocked.push(candidate);
+            }
+        }
+        ready.sort_by(|left, right| task_ready_sort_key(&left.task, &right.task));
+        blocked.sort_by(|left, right| task_ready_sort_key(&left.task, &right.task));
+        let parallel_candidates_after_current = ready
+            .iter()
+            .filter(|candidate| Some(candidate.task.id.as_str()) != chosen_current.as_deref())
+            .filter(|candidate| candidate.ready_parallel_safe)
+            .map(|candidate| candidate.task.clone())
+            .collect::<Vec<_>>();
+
+        Ok(TaskSchedulingProjection {
+            current_task_id: chosen_current,
+            ready,
+            blocked,
+            parallel_candidates_after_current,
+        })
     }
 
     fn ready_scope_ids(
@@ -369,5 +540,149 @@ impl StateStore {
             }
         }
         active.remove(task_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root(label: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("vida-{label}-{}-{nanos}", std::process::id()))
+    }
+
+    async fn create_task_with_semantics(
+        store: &StateStore,
+        task_id: &str,
+        execution_mode: Option<&str>,
+        order_bucket: Option<&str>,
+        parallel_group: Option<&str>,
+        conflict_domain: Option<&str>,
+    ) {
+        store
+            .create_task(CreateTaskRequest {
+                task_id,
+                title: task_id,
+                display_id: None,
+                description: "",
+                issue_type: "task",
+                status: "open",
+                priority: 1,
+                parent_id: None,
+                labels: &[],
+                execution_semantics: TaskExecutionSemantics {
+                    execution_mode: execution_mode.map(ToOwned::to_owned),
+                    order_bucket: order_bucket.map(ToOwned::to_owned),
+                    parallel_group: parallel_group.map(ToOwned::to_owned),
+                    conflict_domain: conflict_domain.map(ToOwned::to_owned),
+                },
+                created_by: "test",
+                source_repo: ".",
+            })
+            .await
+            .expect("task should be created");
+    }
+
+    #[tokio::test]
+    async fn scheduling_projection_fail_closes_when_semantics_are_missing() {
+        let root = temp_root("task-scheduling-fail-closed");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        create_task_with_semantics(
+            &store,
+            "task-current",
+            Some("parallel_safe"),
+            Some("wave-1"),
+            None,
+            Some("backend"),
+        )
+        .await;
+        create_task_with_semantics(&store, "task-legacy", None, None, None, None).await;
+
+        let projection = store
+            .scheduling_projection_scoped(None, Some("task-current"))
+            .await
+            .expect("projection should render");
+        let legacy = projection
+            .ready
+            .iter()
+            .find(|candidate| candidate.task.id == "task-legacy")
+            .expect("legacy task should be ready");
+
+        assert!(legacy.ready_now);
+        assert!(!legacy.ready_parallel_safe);
+        assert!(legacy
+            .parallel_blockers
+            .iter()
+            .any(|value| value == "execution_mode_not_parallel_safe"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn scheduling_projection_allows_only_compatible_parallel_safe_tasks() {
+        let root = temp_root("task-scheduling-compatible");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        create_task_with_semantics(
+            &store,
+            "task-current",
+            Some("parallel_safe"),
+            Some("wave-1"),
+            Some("writers"),
+            Some("backend"),
+        )
+        .await;
+        create_task_with_semantics(
+            &store,
+            "task-compatible",
+            Some("parallel_safe"),
+            Some("wave-1"),
+            Some("writers"),
+            Some("frontend"),
+        )
+        .await;
+        create_task_with_semantics(
+            &store,
+            "task-collision",
+            Some("parallel_safe"),
+            Some("wave-1"),
+            Some("writers"),
+            Some("backend"),
+        )
+        .await;
+
+        let projection = store
+            .scheduling_projection_scoped(None, Some("task-current"))
+            .await
+            .expect("projection should render");
+        assert_eq!(projection.current_task_id.as_deref(), Some("task-current"));
+        assert_eq!(
+            projection
+                .parallel_candidates_after_current
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-compatible"]
+        );
+
+        let collision = projection
+            .ready
+            .iter()
+            .find(|candidate| candidate.task.id == "task-collision")
+            .expect("collision task should be present");
+        assert!(!collision.ready_parallel_safe);
+        assert!(collision
+            .parallel_blockers
+            .iter()
+            .any(|value| value == "conflict_domain_collision"));
+
+        let _ = fs::remove_dir_all(root);
     }
 }

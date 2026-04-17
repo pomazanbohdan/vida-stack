@@ -55,6 +55,7 @@ fn create_task_if_missing_with_store(
         priority: 2,
         parent_id,
         labels: &label_rows,
+        execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
         created_by: "vida taskflow",
         source_repo: &source_repo,
     })) {

@@ -1,4 +1,46 @@
 use super::*;
+use serde::Deserialize;
+
+#[derive(Debug, Default, serde::Serialize, SurrealValue, Clone, PartialEq, Eq)]
+pub struct TaskExecutionSemantics {
+    #[serde(default)]
+    pub execution_mode: Option<String>,
+    #[serde(default)]
+    pub order_bucket: Option<String>,
+    #[serde(default)]
+    pub parallel_group: Option<String>,
+    #[serde(default)]
+    pub conflict_domain: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TaskExecutionSemanticsWire {
+    #[serde(default)]
+    execution_mode: Option<String>,
+    #[serde(default)]
+    order_bucket: Option<String>,
+    #[serde(default)]
+    parallel_group: Option<String>,
+    #[serde(default)]
+    conflict_domain: Option<String>,
+}
+
+impl<'de> serde::Deserialize<'de> for TaskExecutionSemantics {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <Option<TaskExecutionSemanticsWire> as Deserialize>::deserialize(deserializer)?;
+        Ok(value
+            .map(|wire| Self {
+                execution_mode: wire.execution_mode,
+                order_bucket: wire.order_bucket,
+                parallel_group: wire.parallel_group,
+                conflict_domain: wire.conflict_domain,
+            })
+            .unwrap_or_default())
+    }
+}
 
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct TaskJsonlRecord {
@@ -34,6 +76,8 @@ pub(crate) struct TaskJsonlRecord {
     pub(crate) notes: Option<String>,
     #[serde(default)]
     pub(crate) labels: Vec<String>,
+    #[serde(default)]
+    pub(crate) execution_semantics: TaskExecutionSemantics,
     #[serde(default)]
     pub(crate) dependencies: Vec<TaskDependencyJsonlRecord>,
 }
@@ -73,6 +117,8 @@ pub(crate) struct TaskContent {
     pub(crate) original_size: u32,
     pub(crate) notes: Option<String>,
     pub(crate) labels: Vec<String>,
+    #[serde(default)]
+    pub(crate) execution_semantics: TaskExecutionSemantics,
     pub(crate) dependencies: Vec<TaskDependencyRecord>,
 }
 
@@ -96,6 +142,8 @@ pub(crate) struct TaskStorageRow {
     pub(crate) original_size: u32,
     pub(crate) notes: Option<String>,
     pub(crate) labels: Vec<String>,
+    #[serde(default)]
+    pub(crate) execution_semantics: TaskExecutionSemantics,
     pub(crate) dependencies: Vec<TaskDependencyRecord>,
 }
 
@@ -119,6 +167,8 @@ pub struct TaskRecord {
     pub original_size: u32,
     pub notes: Option<String>,
     pub labels: Vec<String>,
+    #[serde(default)]
+    pub execution_semantics: TaskExecutionSemantics,
     pub dependencies: Vec<TaskDependencyRecord>,
 }
 
@@ -133,6 +183,7 @@ pub struct CreateTaskRequest<'a> {
     pub priority: u32,
     pub parent_id: Option<&'a str>,
     pub labels: &'a [String],
+    pub execution_semantics: TaskExecutionSemantics,
     pub created_by: &'a str,
     pub source_repo: &'a str,
 }
@@ -146,6 +197,28 @@ pub struct UpdateTaskRequest<'a> {
     pub add_labels: &'a [String],
     pub remove_labels: &'a [String],
     pub set_labels: Option<&'a [String]>,
+    pub execution_mode: Option<Option<&'a str>>,
+    pub order_bucket: Option<Option<&'a str>>,
+    pub parallel_group: Option<Option<&'a str>>,
+    pub conflict_domain: Option<Option<&'a str>>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskSchedulingCandidate {
+    pub task: TaskRecord,
+    pub ready_now: bool,
+    pub ready_parallel_safe: bool,
+    pub blocked_by: Vec<TaskDependencyStatus>,
+    pub active_critical_path: bool,
+    pub parallel_blockers: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskSchedulingProjection {
+    pub current_task_id: Option<String>,
+    pub ready: Vec<TaskSchedulingCandidate>,
+    pub blocked: Vec<TaskSchedulingCandidate>,
+    pub parallel_candidates_after_current: Vec<TaskRecord>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
@@ -277,6 +350,7 @@ impl From<TaskJsonlRecord> for TaskContent {
             original_size: value.original_size,
             notes: value.notes,
             labels: value.labels,
+            execution_semantics: value.execution_semantics,
             dependencies: value
                 .dependencies
                 .into_iter()
@@ -306,6 +380,7 @@ impl From<TaskContent> for TaskStorageRow {
             original_size: value.original_size,
             notes: value.notes,
             labels: value.labels,
+            execution_semantics: value.execution_semantics,
             dependencies: value.dependencies,
         }
     }
@@ -331,6 +406,7 @@ impl From<TaskStorageRow> for TaskRecord {
             original_size: value.original_size,
             notes: value.notes,
             labels: value.labels,
+            execution_semantics: value.execution_semantics,
             dependencies: value.dependencies,
         }
     }
@@ -356,6 +432,7 @@ impl From<TaskRecord> for TaskStorageRow {
             original_size: value.original_size,
             notes: value.notes,
             labels: value.labels,
+            execution_semantics: value.execution_semantics,
             dependencies: value.dependencies,
         }
     }
