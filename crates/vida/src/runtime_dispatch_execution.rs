@@ -265,6 +265,14 @@ fn execute_wrapped_command(
                 timed_out,
             });
         }
+        if timed_out && status.is_some() {
+            return Ok(ObservedCommandOutput {
+                status: status.expect("status checked above"),
+                stdout: stdout.take().unwrap_or_default(),
+                stderr: stderr.take().unwrap_or_default(),
+                timed_out,
+            });
+        }
 
         match timeout_progress.take() {
             Some(TimeoutProgress::WaitingForDeadline(deadline)) => {
@@ -1823,6 +1831,31 @@ dispatch:
 
         assert!(output.timed_out);
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn execute_wrapped_command_times_out_when_detached_descendant_keeps_pipe_open() {
+        let wrapped = wrap_command_with_optional_timeout(
+            "sh".to_string(),
+            vec![
+                "-c".to_string(),
+                "setsid sh -c 'sleep 30' & exit 0".to_string(),
+            ],
+            Some(1),
+        );
+        let mut process = std::process::Command::new(&wrapped.command);
+        process.args(&wrapped.args).stdin(Stdio::null());
+
+        let started = Instant::now();
+        let output = execute_wrapped_command(process, &wrapped)
+            .expect("detached timed command should complete");
+
+        assert!(output.timed_out);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "expected detached descendant timeout wrapper to return within a bounded window, got {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
