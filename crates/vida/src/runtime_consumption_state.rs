@@ -113,8 +113,9 @@ pub(crate) fn runtime_consumption_final_dispatch_receipt_blocker_code_for_run(
     payload_json: &serde_json::Value,
     run_id: &str,
 ) -> Result<Option<String>, String> {
-    let status = block_on_state_store(store.run_graph_status(run_id))
-        .map_err(|error| format!("Failed to read persisted run-graph state for `{run_id}`: {error}"))?;
+    let status = block_on_state_store(store.run_graph_status(run_id)).map_err(|error| {
+        format!("Failed to read persisted run-graph state for `{run_id}`: {error}")
+    })?;
     let Some(payload_run_id) = payload_json["dispatch_receipt"]["run_id"]
         .as_str()
         .filter(|value| !value.trim().is_empty())
@@ -128,7 +129,9 @@ pub(crate) fn runtime_consumption_final_dispatch_receipt_blocker_code_for_run(
         .map_err(|error| {
             format!("Failed to read persisted run-graph dispatch receipt for `{run_id}`: {error}")
         })
-        .map(|receipt| receipt.map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt));
+        .map(|receipt| {
+            receipt.map(crate::state_store::RunGraphDispatchReceiptSummary::from_receipt)
+        });
     runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result(
         status.run_id.as_str(),
         payload_run_id,
@@ -375,8 +378,7 @@ mod tests {
     use super::{
         latest_admissible_retrieval_trust_signal,
         runtime_consumption_final_dispatch_receipt_blocker_code_from_summary_result,
-        RuntimeConsumptionSummary,
-        RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
+        RuntimeConsumptionSummary, RETRIEVAL_TRUST_SOURCE_RUNTIME_CONSUMPTION_SNAPSHOT_INDEX,
     };
     use crate::state_store::RunGraphDispatchReceiptSummary;
 
@@ -453,7 +455,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_consumption_final_dispatch_receipt_blocker_code_stays_fail_closed_for_latest_run_mismatch() {
+    fn runtime_consumption_final_dispatch_receipt_blocker_code_stays_fail_closed_for_latest_run_mismatch(
+    ) {
         let summary = RunGraphDispatchReceiptSummary {
             run_id: "run-latest".to_string(),
             dispatch_target: "implementer".to_string(),

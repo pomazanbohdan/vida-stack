@@ -533,10 +533,9 @@ mod tests {
         });
         let root_session_write_guard = serde_json::json!({"mode": "locked"});
         let continuation_binding = serde_json::json!({"status": "bound"});
-        let launcher_runtime_paths = crate::doctor_launcher_summary_for_root(std::path::Path::new(
-            "/tmp/project",
-        ))
-        .expect("launcher summary should build");
+        let launcher_runtime_paths =
+            crate::doctor_launcher_summary_for_root(std::path::Path::new("/tmp/project"))
+                .expect("launcher summary should build");
 
         let summary_json = super::build_status_json_report(super::StatusJsonReportInputs {
             summary_only: true,

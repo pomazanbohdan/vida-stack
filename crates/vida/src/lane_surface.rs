@@ -1113,7 +1113,10 @@ mod tests {
             .expect("read receipt after")
             .expect("receipt should exist");
         assert_eq!(after.supersedes_receipt_id.as_deref(), Some("supersede-1"));
-        assert_eq!(after.exception_path_receipt_id.as_deref(), Some("exception-1"));
+        assert_eq!(
+            after.exception_path_receipt_id.as_deref(),
+            Some("exception-1")
+        );
         assert_eq!(after.lane_status, "lane_exception_takeover");
 
         let _ = std::fs::remove_dir_all(&root);

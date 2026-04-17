@@ -439,8 +439,8 @@ mod tests {
     use super::{
         canonical_blocker_code_entries, canonical_next_action_entries,
         canonical_operator_contract_status, canonical_release1_blocker_code_entries,
-        canonical_release1_operator_contract_status, normalize_blocker_codes,
-        finalize_release1_operator_truth, operator_contract_status_for_blockers,
+        canonical_release1_operator_contract_status, finalize_release1_operator_truth,
+        normalize_blocker_codes, operator_contract_status_for_blockers,
         operator_contracts_consistency_error, release1_operator_contracts_consistency_error,
         render_operator_contract_envelope, shared_operator_output_contract_parity_error,
         RELEASE1_OPERATOR_CONTRACT_SPEC,
@@ -497,13 +497,19 @@ mod tests {
         .expect("finalization should succeed");
 
         assert_eq!(finalized.status, "blocked");
-        assert_eq!(finalized.blocker_codes, vec!["migration_required".to_string()]);
+        assert_eq!(
+            finalized.blocker_codes,
+            vec!["migration_required".to_string()]
+        );
         assert_eq!(
             finalized.next_actions,
             vec!["complete required migration before normal operation.".to_string()]
         );
         assert_eq!(finalized.shared_fields["status"], "blocked");
-        assert_eq!(finalized.shared_fields["blocker_codes"], json!(["migration_required"]));
+        assert_eq!(
+            finalized.shared_fields["blocker_codes"],
+            json!(["migration_required"])
+        );
         assert_eq!(
             finalized.shared_fields["next_actions"],
             json!(["complete required migration before normal operation."])

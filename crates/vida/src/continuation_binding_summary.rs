@@ -24,10 +24,7 @@ fn explicit_binding_is_admissible_for_status(
             .is_none();
 
     if terminal_completed_without_next_unit {
-        return matches!(
-            binding_kind,
-            Some("task_graph_task")
-        );
+        return matches!(binding_kind, Some("task_graph_task"));
     }
 
     matches!(
@@ -118,38 +115,38 @@ pub(crate) fn build_continuation_binding_summary(
 
         if !terminal_completed_without_next_unit {
             if let Some(receipt) = latest_run_graph_dispatch_receipt {
-            let downstream_target = receipt
-                .downstream_dispatch_target
-                .as_deref()
-                .filter(|value| !value.trim().is_empty());
-            let downstream_status_ready = matches!(
-                receipt.downstream_dispatch_status.as_deref(),
-                Some("packet_ready") | Some("executed")
-            );
-            if receipt.downstream_dispatch_ready && downstream_status_ready {
-                if let Some(dispatch_target) = downstream_target {
-                    return serde_json::json!({
-                        "status": "bound",
-                        "continuation_allowed": true,
-                        "active_bounded_unit": {
-                            "kind": "downstream_dispatch_target",
-                            "task_id": status.task_id,
-                            "run_id": status.run_id,
-                            "dispatch_target": dispatch_target,
-                        },
-                        "binding_source": "latest_run_graph_dispatch_receipt",
-                        "why_this_unit": format!(
-                            "Latest dispatch receipt explicitly names downstream target `{}` as the next lawful bounded unit.",
-                            dispatch_target
-                        ),
-                        "primary_path": "normal_delivery_path",
-                        "sequential_vs_parallel_posture": "sequential_only_downstream_bound",
-                        "ambiguity_reason": serde_json::Value::Null,
-                        "next_actions": []
-                    });
+                let downstream_target = receipt
+                    .downstream_dispatch_target
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty());
+                let downstream_status_ready = matches!(
+                    receipt.downstream_dispatch_status.as_deref(),
+                    Some("packet_ready") | Some("executed")
+                );
+                if receipt.downstream_dispatch_ready && downstream_status_ready {
+                    if let Some(dispatch_target) = downstream_target {
+                        return serde_json::json!({
+                            "status": "bound",
+                            "continuation_allowed": true,
+                            "active_bounded_unit": {
+                                "kind": "downstream_dispatch_target",
+                                "task_id": status.task_id,
+                                "run_id": status.run_id,
+                                "dispatch_target": dispatch_target,
+                            },
+                            "binding_source": "latest_run_graph_dispatch_receipt",
+                            "why_this_unit": format!(
+                                "Latest dispatch receipt explicitly names downstream target `{}` as the next lawful bounded unit.",
+                                dispatch_target
+                            ),
+                            "primary_path": "normal_delivery_path",
+                            "sequential_vs_parallel_posture": "sequential_only_downstream_bound",
+                            "ambiguity_reason": serde_json::Value::Null,
+                            "next_actions": []
+                        });
+                    }
                 }
             }
-        }
         }
 
         return serde_json::json!({

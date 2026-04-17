@@ -59,8 +59,12 @@ pub(crate) fn doctor_launcher_summary_for_root(
 }
 
 fn launcher_binary_fingerprint(path: &Path) -> Result<String, String> {
-    let bytes = std::fs::read(path)
-        .map_err(|error| format!("failed to read launcher binary `{}`: {error}", path.display()))?;
+    let bytes = std::fs::read(path).map_err(|error| {
+        format!(
+            "failed to read launcher binary `{}`: {error}",
+            path.display()
+        )
+    })?;
     Ok(blake3::hash(&bytes).to_hex().to_string())
 }
 

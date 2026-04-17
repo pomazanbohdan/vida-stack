@@ -150,7 +150,10 @@ pub(crate) fn build_project_activator_host_cli_summary(
 #[cfg(test)]
 mod tests {
     use super::build_project_activator_host_cli_summary;
-    use std::{fs, time::{SystemTime, UNIX_EPOCH}};
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     #[test]
     fn host_cli_summary_uses_configured_carrier_catalog_as_template_source_of_truth() {
@@ -191,22 +194,15 @@ host_environment:
             Some(&overlay),
         );
 
-        let summary =
-            build_project_activator_host_cli_summary(&tempdir, Some(&overlay), &registry);
+        let summary = build_project_activator_host_cli_summary(&tempdir, Some(&overlay), &registry);
 
         assert_eq!(
             summary.default_host_agent_templates,
-            vec![
-                "implementer-fast".to_string(),
-                "reviewer-proof".to_string()
-            ]
+            vec!["implementer-fast".to_string(), "reviewer-proof".to_string()]
         );
         assert_eq!(
             summary.default_agent_topology,
-            vec![
-                "implementer-fast".to_string(),
-                "reviewer-proof".to_string()
-            ]
+            vec!["implementer-fast".to_string(), "reviewer-proof".to_string()]
         );
 
         let _ = fs::remove_dir_all(tempdir);

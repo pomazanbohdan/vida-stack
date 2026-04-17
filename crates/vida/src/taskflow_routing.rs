@@ -230,12 +230,8 @@ pub(crate) fn selected_backend_from_execution_plan_route(
     explicit_executor_backend_from_route(route)
         .or_else(|| route_backend_value(route, "fallback_executor_backend"))
         .or_else(|| route_backend_value(route, "fanout_executor_backends"))
-        .or_else(|| {
-            carrier_backend_from_assignment(dispatch_contract_lane_activation(route))
-        })
-        .or_else(|| carrier_backend_from_assignment(
-            runtime_assignment_from_route(route),
-        ))
+        .or_else(|| carrier_backend_from_assignment(dispatch_contract_lane_activation(route)))
+        .or_else(|| carrier_backend_from_assignment(runtime_assignment_from_route(route)))
         .or_else(|| {
             carrier_backend_from_assignment(runtime_assignment_from_execution_plan(execution_plan))
         })
