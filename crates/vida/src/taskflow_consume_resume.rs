@@ -527,11 +527,7 @@ async fn emit_runtime_consumption_resume_json(
             .to_string(),
         );
     }
-    blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
-    next_actions =
-        crate::operator_contracts::canonical_next_action_entries(&serde_json::json!(next_actions))
-            .unwrap_or(next_actions);
-    let status = if blocker_codes.is_empty() {
+    let preliminary_status = if blocker_codes.is_empty() {
         "pass"
     } else {
         "blocked"
@@ -539,36 +535,32 @@ async fn emit_runtime_consumption_resume_json(
     payload_json["release_admission"] = serde_json::json!({});
     let snapshot = serde_json::json!({
         "surface": surface_name,
-        "status": status,
+        "status": preliminary_status,
         "release_admission": {},
         "failure_control_evidence": failure_control_evidence.clone(),
         "payload": payload_json,
     });
     let snapshot_path =
         super::write_runtime_consumption_snapshot(store.root(), "final", &snapshot)?;
-    let operator_contracts = super::build_release1_operator_contracts_envelope(
-        status,
-        blocker_codes.clone(),
-        next_actions.clone(),
+    let finalized = crate::operator_contracts::finalize_release1_operator_truth(
+        blocker_codes,
+        next_actions,
         serde_json::json!({
             "runtime_consumption_latest_snapshot_path": snapshot_path,
             "latest_run_graph_dispatch_receipt_id": dispatch_receipt.run_id,
             "latest_task_reconciliation_receipt_id": serde_json::Value::Null,
             "consume_final_surface": surface_name,
         }),
-    );
-    let shared_fields = serde_json::json!({
-        "status": operator_contracts["status"].clone(),
-        "blocker_codes": operator_contracts["blocker_codes"].clone(),
-        "next_actions": operator_contracts["next_actions"].clone(),
-        "artifact_refs": operator_contracts["artifact_refs"].clone(),
-    });
+    )?;
+    let status = finalized.status;
+    let operator_contracts = finalized.operator_contracts.clone();
+    let shared_fields = finalized.shared_fields.clone();
     let snapshot_with_operator_contracts = serde_json::json!({
         "surface": surface_name,
         "status": status,
-        "blocker_codes": blocker_codes,
-        "next_actions": next_actions,
-        "artifact_refs": operator_contracts["artifact_refs"].clone(),
+        "blocker_codes": finalized.blocker_codes.clone(),
+        "next_actions": finalized.next_actions.clone(),
+        "artifact_refs": finalized.artifact_refs.clone(),
         "shared_fields": shared_fields.clone(),
         "operator_contracts": operator_contracts.clone(),
         "release_admission": {},
@@ -592,7 +584,7 @@ async fn emit_runtime_consumption_resume_json(
                 "status": status,
                 "blocker_codes": snapshot_with_operator_contracts["blocker_codes"].clone(),
                 "next_actions": snapshot_with_operator_contracts["next_actions"].clone(),
-                "artifact_refs": operator_contracts["artifact_refs"].clone(),
+                "artifact_refs": finalized.artifact_refs.clone(),
                 "shared_fields": shared_fields,
                 "operator_contracts": operator_contracts,
                 "source_run_id": dispatch_receipt.run_id,

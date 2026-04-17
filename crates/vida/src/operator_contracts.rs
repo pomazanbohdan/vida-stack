@@ -18,6 +18,15 @@ pub(crate) const RELEASE1_OPERATOR_CONTRACT_SPEC: OperatorContractSpec = Operato
     status_error_label: "canonical release-1 pass/blocked",
 };
 
+pub(crate) struct FinalizedRelease1OperatorTruth {
+    pub(crate) status: &'static str,
+    pub(crate) blocker_codes: Vec<String>,
+    pub(crate) next_actions: Vec<String>,
+    pub(crate) artifact_refs: Value,
+    pub(crate) shared_fields: Value,
+    pub(crate) operator_contracts: Value,
+}
+
 pub(crate) fn render_operator_contract_envelope(
     spec: &OperatorContractSpec,
     status: &str,
@@ -37,6 +46,65 @@ pub(crate) fn render_operator_contract_envelope(
         "blocker_codes": blocker_codes,
         "next_actions": next_actions,
         "artifact_refs": artifact_refs,
+    })
+}
+
+pub(crate) fn finalize_release1_operator_truth(
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    artifact_refs: Value,
+) -> Result<FinalizedRelease1OperatorTruth, String> {
+    let blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+    let next_actions =
+        canonical_next_action_entries(&serde_json::json!(next_actions)).unwrap_or(next_actions);
+    let status = if blocker_codes.is_empty() {
+        RELEASE1_OPERATOR_CONTRACT_SPEC.pass_status
+    } else {
+        RELEASE1_OPERATOR_CONTRACT_SPEC.blocked_status
+    };
+    let operator_contracts = render_operator_contract_envelope(
+        &RELEASE1_OPERATOR_CONTRACT_SPEC,
+        status,
+        blocker_codes.clone(),
+        next_actions.clone(),
+        artifact_refs.clone(),
+    );
+    let blocker_codes = operator_contracts["blocker_codes"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let next_actions = operator_contracts["next_actions"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Some(error) = release1_operator_contracts_consistency_error(
+        operator_contracts["status"].as_str().unwrap_or(""),
+        &blocker_codes,
+        &next_actions,
+    ) {
+        return Err(error);
+    }
+    let shared_fields = serde_json::json!({
+        "status": operator_contracts["status"].clone(),
+        "blocker_codes": operator_contracts["blocker_codes"].clone(),
+        "next_actions": operator_contracts["next_actions"].clone(),
+        "artifact_refs": operator_contracts["artifact_refs"].clone(),
+    });
+    Ok(FinalizedRelease1OperatorTruth {
+        status,
+        blocker_codes,
+        next_actions,
+        artifact_refs,
+        shared_fields,
+        operator_contracts,
     })
 }
 
@@ -372,9 +440,10 @@ mod tests {
         canonical_blocker_code_entries, canonical_next_action_entries,
         canonical_operator_contract_status, canonical_release1_blocker_code_entries,
         canonical_release1_operator_contract_status, normalize_blocker_codes,
-        operator_contract_status_for_blockers, operator_contracts_consistency_error,
-        release1_operator_contracts_consistency_error, render_operator_contract_envelope,
-        shared_operator_output_contract_parity_error, RELEASE1_OPERATOR_CONTRACT_SPEC,
+        finalize_release1_operator_truth, operator_contract_status_for_blockers,
+        operator_contracts_consistency_error, release1_operator_contracts_consistency_error,
+        render_operator_contract_envelope, shared_operator_output_contract_parity_error,
+        RELEASE1_OPERATOR_CONTRACT_SPEC,
     };
     use serde_json::json;
 
@@ -416,6 +485,40 @@ mod tests {
         );
         assert_eq!(envelope["schema_version"], json!("release-1-v1"));
         assert_eq!(envelope["status"], json!("pass"));
+    }
+
+    #[test]
+    fn finalize_release1_operator_truth_derives_blocked_and_shared_fields() {
+        let finalized = finalize_release1_operator_truth(
+            vec!["migration_required".to_string()],
+            vec![" Complete required migration before normal operation. ".to_string()],
+            json!({"proof": "present"}),
+        )
+        .expect("finalization should succeed");
+
+        assert_eq!(finalized.status, "blocked");
+        assert_eq!(finalized.blocker_codes, vec!["migration_required".to_string()]);
+        assert_eq!(
+            finalized.next_actions,
+            vec!["complete required migration before normal operation.".to_string()]
+        );
+        assert_eq!(finalized.shared_fields["status"], "blocked");
+        assert_eq!(finalized.shared_fields["blocker_codes"], json!(["migration_required"]));
+        assert_eq!(
+            finalized.shared_fields["next_actions"],
+            json!(["complete required migration before normal operation."])
+        );
+    }
+
+    #[test]
+    fn finalize_release1_operator_truth_derives_pass_without_blockers() {
+        let finalized = finalize_release1_operator_truth(vec![], vec![], json!({}))
+            .expect("finalization should succeed");
+
+        assert_eq!(finalized.status, "pass");
+        assert_eq!(finalized.blocker_codes, Vec::<String>::new());
+        assert_eq!(finalized.next_actions, Vec::<String>::new());
+        assert_eq!(finalized.shared_fields["status"], "pass");
     }
 
     #[test]

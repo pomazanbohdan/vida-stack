@@ -1,6 +1,6 @@
 use crate::contract_profile_adapter::{
     blocker_code_str, boot_compatibility_is_backward_compatible, canonical_blocker_codes,
-    operator_contracts_consistency_error, BlockerCode,
+    BlockerCode,
 };
 
 pub(crate) struct StatusOperatorContractInputs<'a> {
@@ -132,11 +132,6 @@ pub(crate) fn build_status_operator_contracts(
         _ => {}
     }
     operator_blocker_codes = canonical_blocker_codes(&operator_blocker_codes);
-    let operator_status = if operator_blocker_codes.is_empty() {
-        "pass"
-    } else {
-        "blocked"
-    };
     let mut operator_next_actions: Vec<String> = Vec::new();
     if operator_blocker_codes
         .iter()
@@ -304,37 +299,12 @@ pub(crate) fn build_status_operator_contracts(
         "root_local_write_allowed": inputs.root_local_write_allowed,
         "blocking_dispatch_blocker_code": inputs.blocking_dispatch_blocker_code,
     });
-    let operator_contracts = crate::operator_contracts::render_operator_contract_envelope(
-        &crate::operator_contracts::RELEASE1_OPERATOR_CONTRACT_SPEC,
-        operator_status,
+    let finalized = crate::operator_contracts::finalize_release1_operator_truth(
         operator_blocker_codes,
         operator_next_actions,
         operator_artifact_refs,
-    );
-    let blocker_codes = operator_contracts["blocker_codes"]
-        .as_array()
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let next_actions = operator_contracts["next_actions"]
-        .as_array()
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|value| value.as_str().map(ToOwned::to_owned))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    if let Some(error) = operator_contracts_consistency_error(
-        operator_contracts["status"].as_str().unwrap_or(""),
-        &blocker_codes,
-        &next_actions,
-    ) {
-        return Err(error);
-    }
-    Ok(operator_contracts)
+    )?;
+    Ok(finalized.operator_contracts)
 }
 
 #[cfg(test)]
@@ -489,7 +459,7 @@ mod tests {
         assert!(next_actions.iter().any(|value| {
             value
                 .as_str()
-                .is_some_and(|text| text.contains("Do not continue by heuristic"))
+                .is_some_and(|text| text.contains("do not continue by heuristic"))
         }));
     }
 }

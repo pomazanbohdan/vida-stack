@@ -2,8 +2,7 @@ use std::process::ExitCode;
 
 use crate::contract_profile_adapter::{
     blocker_code_str, canonical_blocker_code_list, canonical_compatibility_class_str,
-    classify_compatibility_boundary, operator_contracts_consistency_error,
-    render_operator_contract_envelope, shared_operator_output_contract_parity_error, BlockerCode,
+    classify_compatibility_boundary, shared_operator_output_contract_parity_error, BlockerCode,
     CompatibilityBoundary, CompatibilityClass,
 };
 
@@ -673,25 +672,12 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     latest_run_graph_dispatch_receipt.as_ref(),
                     trace_evidence_blocker_codes,
                 );
-                let operator_status = if operator_blocker_codes.is_empty() {
-                    "pass"
-                } else {
-                    "blocked"
-                };
                 let mut operator_next_actions = doctor_operator_next_actions(
                     &operator_blocker_codes,
                     &boot_compatibility,
                     &migration_preflight,
                 );
                 operator_next_actions.extend(trace_evidence_next_actions);
-                if let Some(error) = operator_contracts_consistency_error(
-                    operator_status,
-                    &operator_blocker_codes,
-                    &operator_next_actions,
-                ) {
-                    eprintln!("doctor json contract: failed ({error})");
-                    return ExitCode::from(1);
-                }
                 let operator_artifact_refs = serde_json::json!({
                     "runtime_consumption_latest_snapshot_path": evidence_snapshot_path,
                     "latest_run_graph_dispatch_receipt_id": latest_run_graph_dispatch_receipt
@@ -705,12 +691,18 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                     "effective_instruction_bundle_receipt_id": effective_bundle_receipt_id,
                     "root_session_write_guard_status": root_session_write_guard["status"].clone(),
                 });
-                let operator_contracts = render_operator_contract_envelope(
-                    operator_status,
+                let finalized = match crate::operator_contracts::finalize_release1_operator_truth(
                     operator_blocker_codes,
                     operator_next_actions,
                     operator_artifact_refs,
-                );
+                ) {
+                    Ok(finalized) => finalized,
+                    Err(error) => {
+                        eprintln!("doctor json contract: failed ({error})");
+                        return ExitCode::from(1);
+                    }
+                };
+                let operator_contracts = finalized.operator_contracts;
                 let summary_json = if summary_only {
                     serde_json::json!({
                         "surface": "vida doctor",
@@ -722,17 +714,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         "blocker_codes": operator_contracts["blocker_codes"].clone(),
                         "next_actions": operator_contracts["next_actions"].clone(),
                         "artifact_refs": operator_contracts["artifact_refs"].clone(),
-                        "shared_fields": {
-                            "contract_id": "release-1-shared-fields",
-                            "schema_version": "release-1-v1",
-                            "trace_id": operator_contracts["trace_id"].clone(),
-                            "workflow_class": operator_contracts["workflow_class"].clone(),
-                            "risk_tier": operator_contracts["risk_tier"].clone(),
-                            "status": operator_contracts["status"].clone(),
-                            "blocker_codes": operator_contracts["blocker_codes"].clone(),
-                            "next_actions": operator_contracts["next_actions"].clone(),
-                            "artifact_refs": operator_contracts["artifact_refs"].clone(),
-                        },
+                        "shared_fields": finalized.shared_fields.clone(),
                         "operator_contracts": operator_contracts,
                         "storage_metadata_display": storage_metadata_display,
                         "dependency_graph": {
@@ -764,17 +746,7 @@ pub(crate) async fn run_doctor(args: super::DoctorArgs) -> ExitCode {
                         "blocker_codes": operator_contracts["blocker_codes"].clone(),
                         "next_actions": operator_contracts["next_actions"].clone(),
                         "artifact_refs": operator_contracts["artifact_refs"].clone(),
-                        "shared_fields": {
-                            "contract_id": "release-1-shared-fields",
-                            "schema_version": "release-1-v1",
-                            "trace_id": operator_contracts["trace_id"].clone(),
-                            "workflow_class": operator_contracts["workflow_class"].clone(),
-                            "risk_tier": operator_contracts["risk_tier"].clone(),
-                            "status": operator_contracts["status"].clone(),
-                            "blocker_codes": operator_contracts["blocker_codes"].clone(),
-                            "next_actions": operator_contracts["next_actions"].clone(),
-                            "artifact_refs": operator_contracts["artifact_refs"].clone(),
-                        },
+                        "shared_fields": finalized.shared_fields.clone(),
                         "operator_contracts": operator_contracts,
                         "storage_metadata": {
                             "engine": storage_metadata.engine,
