@@ -132,6 +132,21 @@ fn runtime_dispatch_project_root_from_state_root<'a>(
     std::borrow::Cow::Borrowed(state_root.parent().unwrap_or(state_root))
 }
 
+fn downstream_preview_blockers_for_missing_lane_evidence(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    completion_blocker: &str,
+) -> Vec<String> {
+    if let Some(blocker_code) = receipt
+        .blocker_code
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return vec![blocker_code.to_string()];
+    }
+    vec![completion_blocker.to_string()]
+}
+
 pub(crate) fn build_runtime_closure_admission(
     bundle_check: &TaskflowConsumeBundleCheck,
     docflow_verdict: &RuntimeConsumptionDocflowVerdict,
@@ -3049,7 +3064,12 @@ pub(crate) async fn derive_downstream_dispatch_preview(
                     {
                         let mut blockers = Vec::new();
                         if !has_lane_evidence {
-                            blockers.push(blocker);
+                            blockers.extend(
+                                downstream_preview_blockers_for_missing_lane_evidence(
+                                    receipt,
+                                    &blocker,
+                                ),
+                            );
                         }
                         if missing_owned_scope {
                             blockers.push(missing_owned_write_scope_blocker());
@@ -7920,7 +7940,8 @@ mod tests {
     }
 
     #[test]
-    fn activation_view_only_dispatch_result_does_not_unlock_the_next_lane() {
+    fn activation_view_only_dispatch_result_surfaces_transport_blocker_and_does_not_unlock_the_next_lane()
+     {
         let role_selection = RuntimeConsumptionLaneSelection {
             ok: true,
             activation_source: "test".to_string(),
@@ -8003,10 +8024,96 @@ mod tests {
         );
         assert_eq!(target.as_deref(), Some("coach"));
         assert!(!ready);
-        assert_eq!(
-            blockers,
-            vec!["pending_implementation_evidence".to_string()]
+        assert_eq!(blockers, vec!["internal_activation_view_only".to_string()]);
+    }
+
+    #[test]
+    fn blocked_coach_activation_view_surfaces_transport_blocker_instead_of_review_clean_evidence() {
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "worker".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["development".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["implementer", "coach", "verification"],
+                        "implementer_activation": {
+                            "completion_blocker": "pending_implementation_evidence",
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        },
+                        "coach_activation": {
+                            "completion_blocker": "pending_review_clean_evidence",
+                            "activation_agent_type": "middle",
+                            "activation_runtime_role": "coach"
+                        },
+                        "verifier_activation": {
+                            "completion_blocker": "pending_verification_evidence",
+                            "activation_agent_type": "senior",
+                            "activation_runtime_role": "verifier"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-coach-blocked".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/coach-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/coach-result.json".to_string()),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: Some("verification".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some(
+                "after coach evidence, activate verification".to_string(),
+            ),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: Some("coach".to_string()),
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-18T00:00:00Z".to_string(),
+        };
+
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let store = runtime
+            .block_on(crate::StateStore::open(
+                harness.path().join(crate::state_store::default_state_dir()),
+            ))
+            .expect("state store should initialize");
+        let (target, _command, _note, ready, blockers) = runtime.block_on(
+            derive_downstream_dispatch_preview(&store, &role_selection, &receipt),
         );
+
+        assert_eq!(target.as_deref(), Some("verification"));
+        assert!(!ready);
+        assert_eq!(blockers, vec!["internal_activation_view_only".to_string()]);
     }
 
     #[test]
