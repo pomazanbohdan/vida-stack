@@ -225,8 +225,12 @@ fn projection_stale_state_suspected(receipt: Option<&RunGraphDispatchReceipt>) -
     let Ok(recorded_at) = time::OffsetDateTime::parse(recorded_at, &Rfc3339) else {
         return false;
     };
+    let stale_after_seconds = result["stale_after_seconds"]
+        .as_i64()
+        .filter(|seconds| *seconds > 0)
+        .unwrap_or(STALE_PROJECTION_DISPATCH_TIMEOUT_SECONDS);
     let age_seconds = (time::OffsetDateTime::now_utc() - recorded_at).whole_seconds();
-    age_seconds > STALE_PROJECTION_DISPATCH_TIMEOUT_SECONDS
+    age_seconds > stale_after_seconds
 }
 
 pub(crate) async fn run_graph_projection_truth(
@@ -3833,6 +3837,63 @@ mod tests {
         };
 
         assert!(projection_stale_state_suspected(Some(&receipt)));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn projection_stale_state_suspected_respects_artifact_stale_after_seconds() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-projection-stale-window-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        let result_path = root.join("dispatch-result.json");
+        let recorded_at = (time::OffsetDateTime::now_utc() - time::Duration::seconds(15))
+            .format(&Rfc3339)
+            .expect("timestamp should render");
+        std::fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "execution_state": "executing",
+                "recorded_at": recorded_at,
+                "stale_after_seconds": 39
+            }))
+            .expect("dispatch result should encode"),
+        )
+        .expect("dispatch result should write");
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-projection-stale-window".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "executing".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/projection-packet.json".to_string()),
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-18T00:00:00Z".to_string(),
+        };
+
+        assert!(!projection_stale_state_suspected(Some(&receipt)));
 
         let _ = std::fs::remove_dir_all(&root);
     }

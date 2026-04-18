@@ -54,16 +54,36 @@ fn configured_internal_host_handoff_timeout_seconds(project_root: &Path) -> Opti
         .filter(|seconds| *seconds > 0)
 }
 
+fn configured_external_backend_handoff_timeout_seconds(
+    project_root: &Path,
+    backend_id: &str,
+) -> Option<u64> {
+    let overlay = load_project_overlay_yaml_for_root(project_root).ok()?;
+    let backend_entry = configured_external_backend_entry(&overlay, backend_id)?;
+    yaml_lookup(backend_entry, &["dispatch", "no_output_timeout_seconds"])
+        .and_then(serde_yaml::Value::as_u64)
+        .or_else(|| yaml_lookup(backend_entry, &["max_runtime_seconds"]).and_then(serde_yaml::Value::as_u64))
+        .filter(|seconds| *seconds > 0)
+}
+
 fn dispatch_handoff_timeout_seconds(
     project_root: &Path,
     role_selection: &RuntimeConsumptionLaneSelection,
     receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> u64 {
-    if !dispatch_handoff_uses_internal_host(project_root, role_selection, receipt) {
-        return DEFAULT_DISPATCH_HANDOFF_EXECUTION_TIMEOUT_SECONDS;
+    let canonical_backend = canonical_selected_backend_for_receipt(role_selection, receipt)
+        .or_else(|| receipt.selected_backend.clone());
+    if dispatch_handoff_uses_internal_host(project_root, role_selection, receipt) {
+        return configured_internal_host_handoff_timeout_seconds(project_root)
+            .unwrap_or(DEFAULT_INTERNAL_HOST_HANDOFF_TIMEOUT_SECONDS)
+            .saturating_add(INTERNAL_DISPATCH_HANDOFF_TIMEOUT_GRACE_SECONDS);
     }
-    configured_internal_host_handoff_timeout_seconds(project_root)
-        .unwrap_or(DEFAULT_INTERNAL_HOST_HANDOFF_TIMEOUT_SECONDS)
+    canonical_backend
+        .as_deref()
+        .and_then(|backend_id| {
+            configured_external_backend_handoff_timeout_seconds(project_root, backend_id)
+        })
+        .unwrap_or(DEFAULT_DISPATCH_HANDOFF_EXECUTION_TIMEOUT_SECONDS)
         .saturating_add(INTERNAL_DISPATCH_HANDOFF_TIMEOUT_GRACE_SECONDS)
 }
 
@@ -10460,6 +10480,95 @@ host_environment:
     }
 
     #[test]
+    fn dispatch_handoff_timeout_seconds_respects_external_backend_runtime_window() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-handoff-timeout-external-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        std::fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+agent_system:
+  subagents:
+    hermes_cli:
+      enabled: true
+      subagent_backend_class: external_cli
+      max_runtime_seconds: 37
+      dispatch:
+        no_output_timeout_seconds: 37
+"#,
+        )
+        .expect("config");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Review the bounded packet and return proof.".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "coach": {
+                        "executor_backend": "hermes_cli"
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-external-handoff-timeout".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/coach-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("hermes_cli".to_string()),
+            recorded_at: "2026-04-18T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            dispatch_handoff_timeout_seconds(&root, &role_selection, &receipt),
+            39
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn runtime_dispatch_project_root_from_state_root_prefers_inferred_project_root() {
         let root = std::env::temp_dir().join(format!(
             "vida-dispatch-project-root-{}",
@@ -10984,6 +11093,7 @@ fn write_runtime_dispatch_result(
 
 fn runtime_dispatch_execution_started_result(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
+    stale_after_seconds: u64,
 ) -> serde_json::Value {
     serde_json::json!({
         "surface": receipt.dispatch_surface,
@@ -10992,6 +11102,7 @@ fn runtime_dispatch_execution_started_result(
         "execution_state": "executing",
         "dispatch_target": receipt.dispatch_target,
         "selected_backend": receipt.selected_backend,
+        "stale_after_seconds": stale_after_seconds,
         "note": "runtime dispatch handoff started; terminal completion is still pending",
     })
 }
@@ -11135,10 +11246,13 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
     if receipt.dispatch_kind == "agent_lane" {
         receipt.selected_backend = canonical_selected_backend_for_receipt(role_selection, receipt);
     }
+    let project_root = runtime_dispatch_project_root_from_state_root(state_root);
+    let handoff_timeout_seconds =
+        dispatch_handoff_timeout_seconds(project_root.as_ref(), role_selection, receipt);
     let in_flight_dispatch_result_path = write_runtime_dispatch_result(
         state_root,
         receipt,
-        &runtime_dispatch_execution_started_result(receipt),
+        &runtime_dispatch_execution_started_result(receipt, handoff_timeout_seconds),
     )?;
     receipt.dispatch_result_path = Some(in_flight_dispatch_result_path);
     receipt.dispatch_status = "executing".to_string();
@@ -11188,9 +11302,6 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
             format!("Failed to persist in-flight dispatch receipt before execution: {error}")
         })?;
     drop(store);
-    let project_root = runtime_dispatch_project_root_from_state_root(state_root);
-    let handoff_timeout_seconds =
-        dispatch_handoff_timeout_seconds(project_root.as_ref(), role_selection, receipt);
     let execution_result = tokio::time::timeout(
         std::time::Duration::from_secs(handoff_timeout_seconds),
         execute_runtime_dispatch_handoff(state_root, role_selection, receipt),
