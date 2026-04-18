@@ -1,6 +1,6 @@
 use crate::{
-    build_runtime_execution_plan_from_snapshot, build_runtime_lane_selection_with_store,
-    dispatch_contract_execution_lane_sequence,
+    RenderMode, RuntimeConsumptionLaneSelection, build_runtime_execution_plan_from_snapshot,
+    build_runtime_lane_selection_with_store, dispatch_contract_execution_lane_sequence,
     operator_contracts::canonical_release1_blocker_code_entries,
     print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
     state_store::{
@@ -9,9 +9,11 @@ use crate::{
     },
     taskflow_layer4::print_taskflow_proxy_help,
     taskflow_task_bridge::proxy_state_dir,
-    RenderMode, RuntimeConsumptionLaneSelection,
 };
 use std::process::ExitCode;
+use time::format_description::well_known::Rfc3339;
+
+const STALE_PROJECTION_DISPATCH_TIMEOUT_SECONDS: i64 = 10;
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 struct RecoveryNextAction {
@@ -187,12 +189,44 @@ fn projection_reason_for_status(
     "run-graph status reflects authoritative persisted state".to_string()
 }
 
+fn projection_stale_state_suspected(receipt: Option<&RunGraphDispatchReceipt>) -> bool {
+    let Some(receipt) = receipt else {
+        return false;
+    };
+    if receipt.dispatch_status != "executing" {
+        return false;
+    }
+    let Some(result_path) = receipt
+        .dispatch_result_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+    let Some(result) = crate::read_json_file_if_present(std::path::Path::new(result_path)) else {
+        return false;
+    };
+    if result["execution_state"].as_str() != Some("executing") {
+        return false;
+    }
+    let Some(recorded_at) = result["recorded_at"].as_str() else {
+        return false;
+    };
+    let Ok(recorded_at) = time::OffsetDateTime::parse(recorded_at, &Rfc3339) else {
+        return false;
+    };
+    let age_seconds = (time::OffsetDateTime::now_utc() - recorded_at).whole_seconds();
+    age_seconds > STALE_PROJECTION_DISPATCH_TIMEOUT_SECONDS
+}
+
 pub(crate) async fn run_graph_projection_truth(
     store: &StateStore,
     status: &RunGraphStatus,
 ) -> Result<RunGraphProjectionTruth, StateStoreError> {
     let dispatch_receipt = store.run_graph_dispatch_receipt(&status.run_id).await?;
     let continuation_binding = store.run_graph_continuation_binding(&status.run_id).await?;
+    let stale_state_suspected = projection_stale_state_suspected(dispatch_receipt.as_ref());
     Ok(RunGraphProjectionTruth {
         projection_source: if dispatch_receipt.is_some() {
             "reconciled_run_graph_status".to_string()
@@ -210,7 +244,7 @@ pub(crate) async fn run_graph_projection_truth(
             status,
             dispatch_receipt.as_ref(),
         ),
-        stale_state_suspected: false,
+        stale_state_suspected,
         next_lawful_operator_action: next_lawful_operator_action_for_status(status),
         dispatch_receipt,
         continuation_binding,
@@ -629,13 +663,17 @@ pub(crate) async fn run_taskflow_recovery(args: &[String]) -> ExitCode {
                                     match run_graph_projection_truth(&store, &status).await {
                                         Ok(truth) => Some(truth),
                                         Err(error) => {
-                                            eprintln!("Failed to build recovery projection truth: {error}");
+                                            eprintln!(
+                                                "Failed to build recovery projection truth: {error}"
+                                            );
                                             return ExitCode::from(1);
                                         }
                                     }
                                 }
                                 Err(error) => {
-                                    eprintln!("Failed to read run-graph status for projection truth: {error}");
+                                    eprintln!(
+                                        "Failed to read run-graph status for projection truth: {error}"
+                                    );
                                     return ExitCode::from(1);
                                 }
                             },
@@ -847,8 +885,8 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                                 Ok(truth) => truth,
                                 Err(error) => {
                                     eprintln!(
-                                    "Failed to build latest run-graph projection truth: {error}"
-                                );
+                                        "Failed to build latest run-graph projection truth: {error}"
+                                    );
                                     return ExitCode::from(1);
                                 }
                             };
@@ -903,8 +941,8 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                                     Ok(truth) => Some(truth),
                                     Err(error) => {
                                         eprintln!(
-                                        "Failed to build latest run-graph projection truth: {error}"
-                                    );
+                                            "Failed to build latest run-graph projection truth: {error}"
+                                        );
                                         return ExitCode::from(1);
                                     }
                                 }
@@ -1095,14 +1133,14 @@ fn run_graph_blocker_evidence(
             args.run_id, args.status
         )
     })?;
-    let canonical_blocker_codes =
-        canonical_release1_blocker_code_entries(&serde_json::json!([blocker_code])).ok_or_else(
-            || {
-                format!(
+    let canonical_blocker_codes = canonical_release1_blocker_code_entries(&serde_json::json!([
+        blocker_code
+    ]))
+    .ok_or_else(|| {
+        format!(
             "run-graph blocker code `{blocker_code}` is not canonical (must be lowercase/digits/_)"
         )
-            },
-        )?;
+    })?;
     let canonical_blocker_code = canonical_blocker_codes
         .first()
         .expect("canonical block list always non-empty")
@@ -2609,9 +2647,15 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 }
             }
         }
-        [head, subcommand, task_id, task_class, node, status, route_task_class]
-            if head == "run-graph" && subcommand == "update" =>
-        {
+        [
+            head,
+            subcommand,
+            task_id,
+            task_class,
+            node,
+            status,
+            route_task_class,
+        ] if head == "run-graph" && subcommand == "update" => {
             let existing = match store.run_graph_status(task_id).await {
                 Ok(existing) => existing,
                 Err(StateStoreError::MissingTask { .. }) => {
@@ -2658,9 +2702,16 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 }
             }
         }
-        [head, subcommand, task_id, task_class, node, status, route_task_class, meta_json]
-            if head == "run-graph" && subcommand == "update" =>
-        {
+        [
+            head,
+            subcommand,
+            task_id,
+            task_class,
+            node,
+            status,
+            route_task_class,
+            meta_json,
+        ] if head == "run-graph" && subcommand == "update" => {
             let meta: serde_json::Value = match serde_json::from_str(meta_json) {
                 Ok(meta) => meta,
                 Err(error) => {
@@ -2748,13 +2799,13 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RuntimeConsumptionLaneSelection;
     use crate::build_compiled_agent_extension_bundle_for_root;
     use crate::launcher_activation_snapshot::config_file_digest;
     use crate::launcher_activation_snapshot::pack_router_keywords_json;
     use crate::runtime_dispatch_state::load_project_overlay_yaml_for_root;
     use crate::state_store::LauncherActivationSnapshot;
     use crate::temp_state::TempStateHarness;
-    use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
     use std::path::Path;
 
@@ -3722,6 +3773,59 @@ mod tests {
             projection_vs_receipt_parity(&status, Some(&receipt)),
             "aligned"
         );
+    }
+
+    #[test]
+    fn projection_stale_state_suspected_for_old_executing_dispatch_result() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-projection-stale-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        let result_path = root.join("dispatch-result.json");
+        std::fs::write(
+            &result_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "execution_state": "executing",
+                "recorded_at": "2026-04-18T00:00:00Z"
+            }))
+            .expect("dispatch result should encode"),
+        )
+        .expect("dispatch result should write");
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-projection-stale".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "executing".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/projection-packet.json".to_string()),
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("analysis".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-04-18T00:00:00Z".to_string(),
+        };
+
+        assert!(projection_stale_state_suspected(Some(&receipt)));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

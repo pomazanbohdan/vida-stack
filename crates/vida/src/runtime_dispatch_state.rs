@@ -123,6 +123,15 @@ fn apply_dispatch_handoff_timeout_to_receipt(
     }
 }
 
+fn runtime_dispatch_project_root_from_state_root<'a>(
+    state_root: &'a Path,
+) -> std::borrow::Cow<'a, Path> {
+    if let Some(project_root) = crate::resolve_status_project_root(state_root) {
+        return std::borrow::Cow::Owned(project_root);
+    }
+    std::borrow::Cow::Borrowed(state_root.parent().unwrap_or(state_root))
+}
+
 pub(crate) fn build_runtime_closure_admission(
     bundle_check: &TaskflowConsumeBundleCheck,
     docflow_verdict: &RuntimeConsumptionDocflowVerdict,
@@ -10266,6 +10275,26 @@ host_environment:
     }
 
     #[test]
+    fn runtime_dispatch_project_root_from_state_root_prefers_inferred_project_root() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-dispatch-project-root-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        let state_root = root.join(crate::state_store::default_state_dir());
+        std::fs::create_dir_all(&state_root).expect("state root");
+        std::fs::create_dir_all(root.join(".vida/config")).expect("config dir");
+        std::fs::create_dir_all(root.join(".vida/db")).expect("db dir");
+        std::fs::create_dir_all(root.join(".vida/project")).expect("project dir");
+        std::fs::write(root.join("AGENTS.md"), "test").expect("agents");
+        std::fs::write(root.join("vida.config.yaml"), "host_environment: {}\n").expect("config");
+
+        let resolved = runtime_dispatch_project_root_from_state_root(&state_root);
+        assert_eq!(resolved.as_ref(), root.as_path());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn write_runtime_dispatch_packet_keeps_agent_init_command_for_mixed_implementer_route_before_execution()
      {
         let harness = TempStateHarness::new().expect("temp state harness should initialize");
@@ -10974,9 +11003,9 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
             format!("Failed to persist in-flight dispatch receipt before execution: {error}")
         })?;
     drop(store);
-    let project_root = state_root.parent().unwrap_or(state_root);
+    let project_root = runtime_dispatch_project_root_from_state_root(state_root);
     let handoff_timeout_seconds =
-        dispatch_handoff_timeout_seconds(project_root, role_selection, receipt);
+        dispatch_handoff_timeout_seconds(project_root.as_ref(), role_selection, receipt);
     let execution_result = tokio::time::timeout(
         std::time::Duration::from_secs(handoff_timeout_seconds),
         execute_runtime_dispatch_handoff(state_root, role_selection, receipt),
@@ -10993,7 +11022,7 @@ pub(crate) async fn execute_and_record_dispatch_receipt(
         Err(timeout_error) => {
             apply_dispatch_handoff_timeout_to_receipt(
                 state_root,
-                project_root,
+                project_root.as_ref(),
                 role_selection,
                 receipt,
                 handoff_timeout_seconds,
