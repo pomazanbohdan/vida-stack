@@ -117,7 +117,9 @@ fn recovery_surface_contract(
         .map(|command| RecoveryNextAction {
             command: command.to_string(),
             surface: recommended_surface_for_command(command),
-            reason: if summary.recovery_ready {
+            reason: if projection_truth.stale_state_suspected {
+                "stale delegated execution is suspected; inspect the authoritative run-graph status before re-dispatch".to_string()
+            } else if summary.recovery_ready {
                 "recovery is ready; continue the lawful delegated chain".to_string()
             } else {
                 "inspect the authoritative run-graph status for the bound recovery state"
@@ -126,10 +128,17 @@ fn recovery_surface_contract(
         });
     let why_not_now = (!blocker_codes.is_empty()).then(|| RecoveryWhyNotNow {
         category: "delegated_cycle_runtime_gate".to_string(),
-        summary: format!(
-            "The delegated cycle remains open in recovery state `{}`.",
-            summary.delegation_gate.delegated_cycle_state
-        ),
+        summary: if projection_truth.stale_state_suspected {
+            format!(
+                "The delegated cycle remains open in recovery state `{}`, and the persisted delegated execution now looks stale.",
+                summary.delegation_gate.delegated_cycle_state
+            )
+        } else {
+            format!(
+                "The delegated cycle remains open in recovery state `{}`.",
+                summary.delegation_gate.delegated_cycle_state
+            )
+        },
         blocker_codes: blocker_codes.clone(),
         blocking_surface: Some("vida taskflow recovery latest".to_string()),
     });
@@ -3852,6 +3861,66 @@ mod tests {
         assert_eq!(
             next_lawful_operator_action_for_status(&status).as_deref(),
             Some("vida taskflow consume continue --run-id run-projection-continue --json")
+        );
+    }
+
+    #[test]
+    fn recovery_surface_contract_mentions_stale_state_when_projection_flags_it() {
+        let summary = crate::state_store::RunGraphRecoverySummary {
+            run_id: "run-stale-summary".to_string(),
+            task_id: "run-stale-summary".to_string(),
+            active_node: "analysis".to_string(),
+            lifecycle_stage: "analysis_active".to_string(),
+            checkpoint_kind: "execution_cursor".to_string(),
+            resume_target: "none".to_string(),
+            resume_node: None,
+            resume_status: "blocked".to_string(),
+            recovery_ready: false,
+            handoff_state: "none".to_string(),
+            policy_gate: "validation_report_required".to_string(),
+            delegation_gate: crate::state_store::RunGraphDelegationGateSummary {
+                active_node: "analysis".to_string(),
+                lifecycle_stage: "analysis_active".to_string(),
+                delegated_cycle_open: true,
+                delegated_cycle_state: "delegated_lane_active".to_string(),
+                local_exception_takeover_gate: "blocked_open_delegated_cycle".to_string(),
+                blocker_code: Some("open_delegated_cycle".to_string()),
+                reporting_pause_gate: "non_blocking_only".to_string(),
+                continuation_signal: "continue_routing_non_blocking".to_string(),
+            },
+        };
+        let projection_truth = RunGraphProjectionTruth {
+            projection_source: "reconciled_run_graph_status".to_string(),
+            projection_reason:
+                "run-graph status was reconciled against persisted dispatch receipt evidence"
+                    .to_string(),
+            dispatch_receipt_present: true,
+            continuation_binding_present: true,
+            projection_vs_receipt_parity: "reconciled_from_receipt".to_string(),
+            stale_state_suspected: true,
+            next_lawful_operator_action: Some(
+                "vida taskflow run-graph status run-stale-summary --json".to_string(),
+            ),
+            dispatch_receipt: None,
+            continuation_binding: None,
+        };
+
+        let (_codes, why_not_now, next_action, _command, _surface) =
+            recovery_surface_contract(&summary, &projection_truth);
+
+        assert!(
+            why_not_now
+                .as_ref()
+                .map(|value| value.summary.contains("looks stale"))
+                .unwrap_or(false)
+        );
+        assert!(
+            next_action
+                .as_ref()
+                .map(|value| value
+                    .reason
+                    .contains("stale delegated execution is suspected"))
+                .unwrap_or(false)
         );
     }
 }
