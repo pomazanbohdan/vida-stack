@@ -68,14 +68,27 @@ fn dispatch_handoff_timeout_seconds(
     let host_runtime = runtime_host_execution_contract_for_root(project_root);
     let host_execution_class =
         json_string(host_runtime.get("selected_cli_execution_class")).unwrap_or_default();
+    let selected_cli_system = json_string(host_runtime.get("selected_cli_system")).unwrap_or_default();
+    let overlay = load_project_overlay_yaml_for_root(project_root).ok();
     let canonical_backend = canonical_selected_backend_for_receipt(role_selection, receipt);
     let lane_dispatch = runtime_agent_lane_dispatch_for_root(
         project_root,
         dispatch_packet_path,
         canonical_backend.as_deref(),
     );
+    let internal_host_carrier_backend = canonical_backend
+        .as_deref()
+        .or(receipt.selected_backend.as_deref())
+        .is_some_and(|backend_id| {
+            configured_internal_host_carrier_exists(
+                overlay.as_ref(),
+                &selected_cli_system,
+                backend_id,
+            )
+        });
     let internal_agent_backend = canonical_backend.as_deref() == Some("internal_subagents")
         || receipt.selected_backend.as_deref() == Some("internal_subagents")
+        || internal_host_carrier_backend
         || lane_dispatch.backend_dispatch["backend_class"].as_str() == Some("internal");
     if lane_dispatch.surface == "vida agent-init"
         && host_execution_class == "internal"
@@ -563,9 +576,23 @@ pub(crate) fn effective_execution_posture_summary(
         Some(_) => "canonicalized_selection",
         None => "unknown",
     };
-    let selected_backend_class = effective_selected_backend
-        .as_deref()
-        .map(|backend_id| backend_class_for_execution_plan_backend(execution_plan, backend_id));
+    let host_execution_class = host_runtime
+        .and_then(|value| value.get("selected_cli_execution_class"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown");
+    let selected_backend_class = effective_selected_backend.as_deref().map(|backend_id| {
+        let resolved = backend_class_for_execution_plan_backend(execution_plan, backend_id);
+        if resolved == "unknown"
+            && host_execution_class == "internal"
+            && activation_agent_type == Some(backend_id)
+        {
+            "internal".to_string()
+        } else {
+            resolved
+        }
+    });
     let route_primary_backend_class = route_primary_backend
         .as_deref()
         .map(|backend_id| backend_class_for_execution_plan_backend(execution_plan, backend_id));
@@ -608,11 +635,7 @@ pub(crate) fn effective_execution_posture_summary(
         .and_then(|value| value.get("selected_cli_system"))
         .cloned()
         .unwrap_or(serde_json::Value::Null);
-    let host_execution_dimension = selected_execution_class
-        .as_str()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("unknown");
+    let host_execution_dimension = host_execution_class;
     let selected_backend_dimension = selected_backend_class
         .as_deref()
         .map(backend_execution_dimension)
@@ -1323,6 +1346,20 @@ fn configured_subagent_entry<'a>(
         })
 }
 
+fn configured_internal_host_carrier_exists(
+    overlay: Option<&serde_yaml::Value>,
+    system: &str,
+    backend_id: &str,
+) -> bool {
+    let registry = project_activator_surface::host_cli_system_registry_with_fallback(overlay);
+    let Some(system_entry) = registry.get(system) else {
+        return false;
+    };
+    crate::host_runtime_materialization::host_runtime_entry_carrier_catalog(Some(system_entry))
+        .iter()
+        .any(|row| row["role_id"].as_str() == Some(backend_id))
+}
+
 pub(crate) fn configured_external_backend_entry<'a>(
     overlay: &'a serde_yaml::Value,
     backend_id: &str,
@@ -1938,6 +1975,46 @@ agent_system:
             serde_json::Value::Null
         );
     }
+
+    #[test]
+    fn internal_host_carrier_role_id_is_classified_as_internal_backend() {
+        let overlay = serde_yaml::from_str(
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      runtime_root: .codex
+      carriers:
+        junior:
+          model: gpt-5.4
+          sandbox_mode: workspace-write
+          model_reasoning_effort: low
+"#,
+        )
+        .expect("overlay should parse");
+
+        let dispatch = runtime_agent_lane_dispatch_from_overlay(
+            Some(&overlay),
+            "codex",
+            "internal",
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            Some("junior"),
+        );
+
+        assert_eq!(dispatch.surface, "vida agent-init");
+        assert_eq!(dispatch.backend_dispatch["selected_cli_system"], "codex");
+        assert_eq!(dispatch.backend_dispatch["selected_execution_class"], "internal");
+        assert_eq!(dispatch.backend_dispatch["backend_class"], "internal");
+        assert_eq!(dispatch.backend_dispatch["backend_id"], "junior");
+        assert_eq!(
+            dispatch.backend_dispatch["policy_selected_internal_backend"],
+            true
+        );
+    }
 }
 
 fn runtime_agent_lane_dispatch_from_overlay(
@@ -1956,9 +2033,30 @@ fn runtime_agent_lane_dispatch_from_overlay(
             let configured_backend = overlay
                 .and_then(|overlay| configured_subagent_entry(overlay, backend_id))
                 .is_some();
-            (!configured_backend).then(|| backend_id.to_string())
+            let configured_internal_host_carrier =
+                configured_internal_host_carrier_exists(overlay, selected_cli_system, backend_id);
+            (!configured_backend && !configured_internal_host_carrier).then(|| backend_id.to_string())
         });
     if selected_execution_class != "external" {
+        if let Some(backend_id) = preferred_backend
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .filter(|backend_id| {
+                configured_internal_host_carrier_exists(overlay, selected_cli_system, backend_id)
+            })
+        {
+            return RuntimeAgentLaneDispatch {
+                surface: "vida agent-init".to_string(),
+                activation_command: agent_init_command,
+                backend_dispatch: serde_json::json!({
+                    "selected_cli_system": selected_cli_system,
+                    "selected_execution_class": selected_execution_class,
+                    "backend_class": "internal",
+                    "backend_id": backend_id,
+                    "policy_selected_internal_backend": true,
+                }),
+            };
+        }
         if let Some((backend_id, backend_class, _backend_entry)) = overlay.and_then(|overlay| {
             preferred_backend.and_then(|backend_id| {
                 configured_subagent_entry(overlay, backend_id).and_then(|entry| {
@@ -7608,6 +7706,26 @@ mod tests {
     }
 
     #[test]
+    fn effective_execution_posture_infers_internal_backend_class_from_activation_agent_type_on_internal_host(
+    ) {
+        let summary = effective_execution_posture_summary(
+            &serde_json::json!({}),
+            "analysis",
+            Some("junior"),
+            Some("junior"),
+            Some(&serde_json::json!({
+                "selected_cli_system": "codex",
+                "selected_cli_execution_class": "internal"
+            })),
+            false,
+        );
+
+        assert_eq!(summary["selected_backend"], "junior");
+        assert_eq!(summary["selected_backend_class"], "internal");
+        assert_eq!(summary["effective_posture_kind"], "internal");
+    }
+
+    #[test]
     fn effective_execution_posture_canonicalizes_inadmissible_implementer_backend_to_fallback() {
         let summary = effective_execution_posture_summary(
             &serde_json::json!({
@@ -9741,6 +9859,93 @@ agent_system:
             activation_runtime_role: Some("worker".to_string()),
             selected_backend: Some("internal_subagents".to_string()),
             recorded_at: "2026-04-17T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            dispatch_handoff_timeout_seconds(&root, &role_selection, &receipt),
+            39
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn dispatch_handoff_timeout_seconds_treats_internal_host_carrier_role_id_as_internal() {
+        let root = std::env::temp_dir().join(format!(
+            "vida-handoff-timeout-carrier-role-{}",
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("temp root");
+        std::fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      max_runtime_seconds: 37
+      carriers:
+        junior:
+          model: gpt-5.4
+          sandbox_mode: workspace-write
+          model_reasoning_effort: low
+"#,
+        )
+        .expect("config");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Implement the bounded fix with regression tests.".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "implementation": {
+                        "executor_backend": "junior"
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = RunGraphDispatchReceipt {
+            run_id: "run-internal-handoff-timeout-carrier-role".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "routed".to_string(),
+            lane_status: "lane_running".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/analysis-packet.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: None,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-04-18T00:00:00Z".to_string(),
         };
 
         assert_eq!(

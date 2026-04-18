@@ -1070,11 +1070,7 @@ fn dispatch_receipt_same_lane_resume_ready(
         && dispatch_receipt.dispatch_status == "blocked"
         && matches!(
             dispatch_receipt.blocker_code.as_deref(),
-            Some(
-                "configured_backend_dispatch_failed"
-                    | "timeout_without_takeover_authority"
-                    | "internal_activation_view_only"
-            )
+            Some("configured_backend_dispatch_failed" | "timeout_without_takeover_authority")
         )
         && dispatch_receipt
             .dispatch_packet_path
@@ -1132,6 +1128,7 @@ fn dispatch_receipt_primary_rebind_eligible(
         && primary_backend != fallback_backend
 }
 
+#[cfg(test)]
 fn dispatch_receipt_internal_retry_eligible(
     project_root: &std::path::Path,
     role_selection: &super::RuntimeConsumptionLaneSelection,
@@ -1878,7 +1875,8 @@ async fn sync_run_graph_after_retry_artifact(
     dispatch_receipt: &crate::state_store::RunGraphDispatchReceipt,
 ) -> Result<(), String> {
     if dispatch_receipt.dispatch_kind != "agent_lane"
-        || dispatch_receipt.dispatch_status != "blocked"
+        || dispatch_receipt.dispatch_status != "packet_ready"
+        || dispatch_receipt.lane_status != "packet_ready"
         || !dispatch_receipt
             .dispatch_packet_path
             .as_deref()
@@ -2253,9 +2251,6 @@ fn prepare_explicit_resume_retry_artifact(
     let Some(project_root) = project_root else {
         return false;
     };
-    if dispatch_receipt_internal_retry_eligible(project_root, role_selection, dispatch_receipt) {
-        return true;
-    }
     if let Some(primary_backend) =
         primary_backend_for_dispatch_receipt(project_root, role_selection, dispatch_receipt)
     {
@@ -2482,18 +2477,6 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 }
             }
             if restore_same_lane_resume_ready {
-                if let Err(error) = sync_run_graph_after_retry_artifact(
-                    &store,
-                    &run_graph_bootstrap,
-                    &dispatch_receipt,
-                )
-                .await
-                {
-                    eprintln!("{error}");
-                    return ExitCode::from(1);
-                }
-            }
-            if restore_same_lane_resume_ready {
                 if dispatch_receipt.dispatch_kind == "agent_lane" {
                     dispatch_receipt.selected_backend =
                         super::canonical_selected_backend_for_receipt(
@@ -2523,6 +2506,18 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                 {
                     eprintln!("Failed to record resumed run-graph dispatch receipt: {error}");
                     return ExitCode::from(1);
+                }
+                if dispatch_receipt.dispatch_status == "packet_ready" {
+                    if let Err(error) = sync_run_graph_after_retry_artifact(
+                        &store,
+                        &run_graph_bootstrap,
+                        &dispatch_receipt,
+                    )
+                    .await
+                    {
+                        eprintln!("{error}");
+                        return ExitCode::from(1);
+                    }
                 }
                 if dispatch_receipt.dispatch_status == "executed" {
                     return match emit_runtime_consumption_resume_json(
@@ -6162,6 +6157,104 @@ agent_system:
         );
     }
 
+    #[test]
+    fn prepare_explicit_resume_retry_artifact_keeps_internal_activation_view_only_blocked_without_rebind(
+    ) {
+        let root = std::env::temp_dir().join(format!(
+            "vida-internal-activation-no-rebind-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time went backwards")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("temp root");
+        fs::write(
+            root.join("vida.config.yaml"),
+            r#"
+host_environment:
+  cli_system: codex
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      carriers:
+        middle:
+          model: gpt-5.4
+          sandbox_mode: workspace-write
+          model_reasoning_effort: medium
+agent_system:
+  subagents:
+    internal_subagents:
+      enabled: true
+      subagent_backend_class: internal
+"#,
+        )
+        .expect("config");
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "continue development".to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: Some("development".to_string()),
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({}),
+            reason: "test".to_string(),
+        };
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-internal-activation-no-rebind".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init ...".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch-packet.json".to_string()),
+            dispatch_result_path: Some("/tmp/dispatch-result.json".to_string()),
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: Some("verification".to_string()),
+            downstream_dispatch_command: Some("vida agent-init".to_string()),
+            downstream_dispatch_note: Some("after review".to_string()),
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: vec!["pending_review_clean_evidence".to_string()],
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-18T00:00:00Z".to_string(),
+        };
+
+        let prepared =
+            prepare_explicit_resume_retry_artifact(Some(&root), &role_selection, &mut receipt);
+
+        assert!(
+            !prepared,
+            "internal activation retry must not reopen same-lane dispatch without an explicit rebind"
+        );
+        assert_eq!(receipt.dispatch_status, "blocked");
+        assert_eq!(receipt.lane_status, "lane_blocked");
+        assert_eq!(
+            receipt.blocker_code.as_deref(),
+            Some("internal_activation_view_only")
+        );
+
+        fs::remove_dir_all(root).expect("cleanup temp root");
+    }
+
     #[tokio::test]
     async fn recover_missing_first_dispatch_receipt_for_active_implementer_run() {
         let nanos = SystemTime::now()
@@ -8504,8 +8597,8 @@ agent_system:
         let receipt = crate::state_store::RunGraphDispatchReceipt {
             run_id: run_id.to_string(),
             dispatch_target: "implementer".to_string(),
-            dispatch_status: "blocked".to_string(),
-            lane_status: "lane_exception_recorded".to_string(),
+            dispatch_status: "packet_ready".to_string(),
+            lane_status: "packet_ready".to_string(),
             supersedes_receipt_id: None,
             exception_path_receipt_id: Some("exc-timeout".to_string()),
             dispatch_kind: "agent_lane".to_string(),
