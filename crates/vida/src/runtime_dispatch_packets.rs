@@ -140,13 +140,77 @@ pub(crate) fn tracked_design_doc_owned_paths(tracked_design_doc_path: Option<&st
         .unwrap_or_default()
 }
 
+pub(crate) fn tracked_design_doc_bounded_file_set_paths(
+    tracked_design_doc_path: Option<&str>,
+) -> Vec<String> {
+    let Some(path) = tracked_design_doc_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Vec::new();
+    };
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+
+    let mut in_bounded_file_set = false;
+    let mut owned_paths = Vec::new();
+    let mut push_path = |candidate: &str| {
+        let normalized = trim_owned_scope_path_candidate(candidate);
+        if normalized.is_empty()
+            || !normalized.contains('/')
+            || !normalized.contains('.')
+            || normalized.starts_with('/')
+            || normalized.starts_with("./")
+            || normalized.starts_with("../")
+        {
+            return;
+        }
+        if !owned_paths.iter().any(|existing| existing == &normalized) {
+            owned_paths.push(normalized);
+        }
+    };
+
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            in_bounded_file_set = trimmed
+                .trim_start_matches('#')
+                .trim()
+                .eq_ignore_ascii_case("Bounded File Set");
+            continue;
+        }
+        if !in_bounded_file_set {
+            continue;
+        }
+        let mut rest = trimmed;
+        while let Some(start) = rest.find('`') {
+            let after_start = &rest[start + 1..];
+            let Some(end) = after_start.find('`') else {
+                break;
+            };
+            push_path(&after_start[..end]);
+            rest = &after_start[end + 1..];
+        }
+    }
+
+    owned_paths
+}
+
 pub(crate) fn delivery_packet_owned_paths(
     handoff_task_class: &str,
     request_text: &str,
     tracked_design_doc_path: Option<&str>,
 ) -> Vec<String> {
     match handoff_task_class {
-        TASK_CLASS_IMPLEMENTATION => explicit_request_scope_paths(request_text),
+        TASK_CLASS_IMPLEMENTATION => {
+            let explicit_paths = explicit_request_scope_paths(request_text);
+            if explicit_paths.is_empty() {
+                tracked_design_doc_bounded_file_set_paths(tracked_design_doc_path)
+            } else {
+                explicit_paths
+            }
+        }
         TASK_CLASS_SPECIFICATION => tracked_design_doc_owned_paths(tracked_design_doc_path),
         _ => Vec::new(),
     }

@@ -2286,7 +2286,8 @@ async fn receipt_backed_execution_evidence_path(
         return Ok(Some(path));
     }
     if dispatch_receipt_has_execution_evidence(receipt) {
-        if let Some(path) = readable_result_path(store.root(), receipt.dispatch_result_path.as_deref())
+        if let Some(path) =
+            readable_result_path(store.root(), receipt.dispatch_result_path.as_deref())
         {
             return Ok(Some(path));
         }
@@ -3006,6 +3007,7 @@ pub(crate) fn runtime_packet_handoff_task_class(
 ) -> &'static str {
     match dispatch_target {
         "specification" => TASK_CLASS_SPECIFICATION,
+        "analysis" => "analysis",
         "planning" => "planning",
         "coach" => TASK_CLASS_COACH,
         "verification" => TASK_CLASS_VERIFICATION,
@@ -3890,6 +3892,49 @@ mod tests {
     }
 
     #[test]
+    fn runtime_delivery_task_packet_uses_bounded_file_set_from_tracked_design_doc_for_implementation(
+    ) {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let design_doc_path = std::env::temp_dir().join(format!(
+            "vida-implementation-bounded-file-set-{}-{}.md",
+            std::process::id(),
+            nanos
+        ));
+        std::fs::write(
+            &design_doc_path,
+            "### Bounded File Set\n- `crates/vida/src/runtime_dispatch_packets.rs`\n- `crates/vida/src/runtime_dispatch_state.rs`\n",
+        )
+        .expect("write tracked design doc");
+
+        let packet = runtime_delivery_task_packet_with_scope_context(
+            "run-1",
+            "implementer",
+            "worker",
+            "implementation",
+            "implementation",
+            "Continue the bounded implementation packet and keep scope from the approved design.",
+            Some(
+                design_doc_path
+                    .to_str()
+                    .expect("design doc path should be utf-8"),
+            ),
+        );
+
+        assert_eq!(
+            packet["owned_paths"],
+            serde_json::json!([
+                "crates/vida/src/runtime_dispatch_packets.rs",
+                "crates/vida/src/runtime_dispatch_state.rs"
+            ])
+        );
+
+        let _ = std::fs::remove_file(design_doc_path);
+    }
+
+    #[test]
     fn explicit_request_scope_paths_stay_empty_without_file_scope_in_request_text() {
         assert!(explicit_request_scope_paths("continue development").is_empty());
     }
@@ -3958,6 +4003,28 @@ mod tests {
         let error = validate_runtime_dispatch_packet_contract(&malformed, "test packet")
             .expect_err("implementation delivery packet without owned scope should fail closed");
         assert!(error.contains("owned_paths"));
+    }
+
+    #[test]
+    fn runtime_dispatch_packet_contract_allows_analysis_delivery_without_owned_paths() {
+        let packet = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "delivery_task_packet": {
+                "packet_id": "run-1::analysis::delivery",
+                "goal": "Execute bounded analysis handoff",
+                "scope_in": ["dispatch_target:analysis"],
+                "read_only_paths": ["docs/process"],
+                "definition_of_done": ["done"],
+                "verification_command": "vida taskflow consume continue --run-id run-1 --json",
+                "proof_target": "proof",
+                "stop_rules": ["stop"],
+                "blocking_question": "what next?",
+                "handoff_task_class": "analysis"
+            }
+        });
+
+        validate_runtime_dispatch_packet_contract(&packet, "test packet")
+            .expect("analysis delivery packet should remain read-only capable");
     }
 
     #[test]
@@ -5191,7 +5258,7 @@ mod tests {
         fs::create_dir_all(&snapshot_dir).expect("runtime-consumption dir should exist");
         let snapshot_path = snapshot_dir.join("final-2026-04-16T00-00-00Z.json");
         let snapshot_path_string = snapshot_path.display().to_string();
-        let operator_contracts = crate::build_release1_operator_contracts_envelope(
+        let operator_contracts = crate::build_operator_contracts_envelope(
             "pass",
             Vec::new(),
             Vec::new(),
@@ -5439,8 +5506,9 @@ mod tests {
         runtime
             .block_on(StateStore::open(state_root.clone()))
             .expect("state store should open");
-        let dispatch_packet_path =
-            harness.path().join("internal-host-detached-timeout-dispatch.json");
+        let dispatch_packet_path = harness
+            .path()
+            .join("internal-host-detached-timeout-dispatch.json");
         fs::write(
             &dispatch_packet_path,
             serde_json::to_string_pretty(&serde_json::json!({
@@ -6144,8 +6212,9 @@ mod tests {
         runtime
             .block_on(StateStore::open(state_root.clone()))
             .expect("state store should open");
-        let dispatch_packet_path =
-            harness.path().join("external-agent-detached-timeout-dispatch.json");
+        let dispatch_packet_path = harness
+            .path()
+            .join("external-agent-detached-timeout-dispatch.json");
         fs::write(
             &dispatch_packet_path,
             serde_json::to_string_pretty(&serde_json::json!({

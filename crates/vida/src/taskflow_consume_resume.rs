@@ -807,7 +807,7 @@ fn packet_request_text(packet: &serde_json::Value) -> Option<&str> {
         })
 }
 
-fn derive_legacy_owned_paths_from_request(packet: &serde_json::Value) -> Option<Vec<String>> {
+fn derive_implementer_owned_paths(packet: &serde_json::Value) -> Option<Vec<String>> {
     let packet_template_kind = packet
         .get("packet_template_kind")
         .and_then(serde_json::Value::as_str)
@@ -821,8 +821,17 @@ fn derive_legacy_owned_paths_from_request(packet: &serde_json::Value) -> Option<
         return None;
     }
 
-    let request_text = packet_request_text(packet)?;
-    let owned_paths = crate::runtime_dispatch_packets::explicit_request_scope_paths(request_text);
+    let request_text = packet_request_text(packet).unwrap_or_default();
+    let tracked_design_doc_path = packet["role_selection_full"]["execution_plan"]
+        ["tracked_flow_bootstrap"]["design_doc_path"]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let owned_paths = crate::runtime_dispatch_packets::delivery_packet_owned_paths(
+        "implementation",
+        request_text,
+        tracked_design_doc_path,
+    );
     (!owned_paths.is_empty()).then_some(owned_paths)
 }
 
@@ -859,7 +868,7 @@ fn normalize_runtime_dispatch_packet(packet: &mut serde_json::Value) -> bool {
     else {
         return false;
     };
-    let derived_legacy_owned_paths = derive_legacy_owned_paths_from_request(packet);
+    let derived_implementer_owned_paths = derive_implementer_owned_paths(packet);
     let derived_specification_owned_paths =
         derive_specification_owned_paths_from_tracked_design_doc(packet);
     let Some(active_packet) = packet.get_mut(&packet_template_kind) else {
@@ -875,7 +884,7 @@ fn normalize_runtime_dispatch_packet(packet: &mut serde_json::Value) -> bool {
     };
     let mut normalized = false;
     if missing_owned_paths {
-        if let Some(owned_paths) = derived_legacy_owned_paths
+        if let Some(owned_paths) = derived_implementer_owned_paths
             .clone()
             .or_else(|| derived_specification_owned_paths.clone())
         {
@@ -967,12 +976,14 @@ async fn recover_missing_first_dispatch_receipt(
         Ok(status) => status,
         Err(_) => return Ok(None),
     };
-    if status.status == "completed"
-        || !status.lifecycle_stage.ends_with("_active")
-        || status.active_node.trim().is_empty()
-    {
+    if status.status == "completed" {
         return Ok(None);
     }
+    let run_graph_bootstrap =
+        match super::taskflow_run_graph::run_graph_dispatch_bootstrap_from_status(&status) {
+            Ok(bootstrap) => bootstrap,
+            Err(_) => return Ok(None),
+        };
 
     let context = store
         .run_graph_dispatch_context(run_id)
@@ -986,63 +997,19 @@ async fn recover_missing_first_dispatch_receipt(
     let role_selection = context.role_selection().map_err(|error| {
         format!("Failed to decode persisted run-graph dispatch context for `{run_id}`: {error}")
     })?;
-    let latest_status = serde_json::to_value(&status)
-        .map_err(|error| format!("Failed to encode run-graph status for `{run_id}`: {error}"))?;
-    let run_graph_bootstrap = serde_json::json!({
-        "status": "dispatch_init_ready",
-        "handoff_ready": true,
-        "run_id": status.run_id,
-        "latest_status": latest_status,
-    });
 
     let recorded_at = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .expect("rfc3339 timestamp should render");
-    let dispatch_target = status.active_node.clone();
-    let (dispatch_kind, dispatch_surface, activation_agent_type, activation_runtime_role) =
-        super::downstream_activation_fields(&role_selection, &dispatch_target);
-    let selected_backend = super::downstream_selected_backend(
+    let mut dispatch_receipt = crate::taskflow_consume::build_runtime_consumption_dispatch_receipt(
         &role_selection,
-        &dispatch_target,
-        activation_agent_type.as_deref(),
-        None,
-    )
-    .filter(|value| !value.is_empty());
-    let mut dispatch_receipt = crate::state_store::RunGraphDispatchReceipt {
-        run_id: status.run_id.clone(),
-        dispatch_target: dispatch_target.clone(),
-        dispatch_status: "executed".to_string(),
-        lane_status: super::derive_lane_status("executed", None, None)
-            .as_str()
-            .to_string(),
-        supersedes_receipt_id: None,
-        exception_path_receipt_id: None,
-        dispatch_kind,
-        dispatch_surface,
-        dispatch_command: super::runtime_dispatch_command_for_target(
-            &role_selection,
-            &dispatch_target,
-        ),
-        dispatch_packet_path: None,
-        dispatch_result_path: None,
-        blocker_code: None,
-        downstream_dispatch_target: None,
-        downstream_dispatch_command: None,
-        downstream_dispatch_note: None,
-        downstream_dispatch_ready: false,
-        downstream_dispatch_blockers: Vec::new(),
-        downstream_dispatch_packet_path: None,
-        downstream_dispatch_status: None,
-        downstream_dispatch_result_path: None,
-        downstream_dispatch_trace_path: None,
-        downstream_dispatch_executed_count: 0,
-        downstream_dispatch_active_target: Some(dispatch_target.clone()),
-        downstream_dispatch_last_target: Some(dispatch_target),
-        activation_agent_type,
-        activation_runtime_role,
-        selected_backend,
-        recorded_at,
-    };
+        &run_graph_bootstrap,
+    );
+    dispatch_receipt.recorded_at = recorded_at;
+    dispatch_receipt.dispatch_command = super::runtime_dispatch_command_for_target(
+        &role_selection,
+        &dispatch_receipt.dispatch_target,
+    );
     super::refresh_downstream_dispatch_preview(
         store,
         &role_selection,
@@ -1596,6 +1563,38 @@ fn stale_in_flight_dispatch_preserves_internal_activation_view(
             .as_str()
             .is_some_and(|value| value.starts_with("internal_cli:"))
         || result["backend_dispatch"]["backend_class"].as_str() == Some("internal")
+        || dispatch_packet_indicates_internal_activation_view(
+            receipt.dispatch_packet_path.as_deref(),
+            result,
+        )
+}
+
+fn dispatch_packet_indicates_internal_activation_view(
+    dispatch_packet_path: Option<&str>,
+    result: &serde_json::Value,
+) -> bool {
+    let packet_path = dispatch_packet_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            result
+                .get("source_dispatch_packet_path")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        });
+    let Some(packet_path) = packet_path else {
+        return false;
+    };
+    let Some(packet) = crate::read_json_file_if_present(std::path::Path::new(packet_path)) else {
+        return false;
+    };
+    packet["host_runtime"]["selected_cli_execution_class"].as_str() == Some("internal")
+        || packet["effective_execution_posture"]["effective_posture_kind"].as_str()
+            == Some("internal")
+        || packet["mixed_posture"]["effective_posture_kind"].as_str() == Some("internal")
+        || packet["effective_execution_posture"]["selected_execution_class"].as_str()
+            == Some("internal")
 }
 
 fn normalize_stale_in_flight_dispatch_receipt(
@@ -2502,6 +2501,22 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                             &dispatch_receipt,
                         );
                 }
+                if dispatch_receipt.dispatch_status == "blocked"
+                    && dispatch_receipt
+                        .dispatch_packet_path
+                        .as_deref()
+                        .is_some_and(|path| !path.trim().is_empty())
+                {
+                    dispatch_receipt.dispatch_status = "packet_ready".to_string();
+                    dispatch_receipt.lane_status = super::derive_lane_status(
+                        &dispatch_receipt.dispatch_status,
+                        dispatch_receipt.supersedes_receipt_id.as_deref(),
+                        dispatch_receipt.exception_path_receipt_id.as_deref(),
+                    )
+                    .as_str()
+                    .to_string();
+                    dispatch_receipt.blocker_code = None;
+                }
                 if let Err(error) = store
                     .record_run_graph_dispatch_receipt(&dispatch_receipt)
                     .await
@@ -2509,7 +2524,29 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                     eprintln!("Failed to record resumed run-graph dispatch receipt: {error}");
                     return ExitCode::from(1);
                 }
-                if dispatch_receipt.dispatch_status != "executed" {
+                if dispatch_receipt.dispatch_status == "executed" {
+                    return match emit_runtime_consumption_resume_json(
+                        &store,
+                        surface_name,
+                        &dispatch_packet_path,
+                        &dispatch_receipt,
+                        &role_selection,
+                        requested_run_id.as_deref(),
+                        emit_output,
+                        as_json,
+                    )
+                    .await
+                    {
+                        Ok(()) => ExitCode::SUCCESS,
+                        Err(error) => {
+                            eprintln!("{error}");
+                            ExitCode::from(1)
+                        }
+                    };
+                }
+                if dispatch_receipt.dispatch_status != "packet_ready"
+                    && dispatch_receipt.dispatch_status != "routed"
+                {
                     if let Some(run_id) = run_graph_bootstrap
                         .get("run_id")
                         .and_then(serde_json::Value::as_str)
@@ -2540,24 +2577,6 @@ pub(crate) async fn run_taskflow_consume_resume_command(
                         }
                     }
                 }
-                return match emit_runtime_consumption_resume_json(
-                    &store,
-                    surface_name,
-                    &dispatch_packet_path,
-                    &dispatch_receipt,
-                    &role_selection,
-                    requested_run_id.as_deref(),
-                    emit_output,
-                    as_json,
-                )
-                .await
-                {
-                    Ok(()) => ExitCode::SUCCESS,
-                    Err(error) => {
-                        eprintln!("{error}");
-                        ExitCode::from(1)
-                    }
-                };
             }
             if dispatch_receipt.dispatch_status == "packet_ready" {
                 dispatch_receipt.dispatch_status = "routed".to_string();
@@ -4354,6 +4373,105 @@ agent_system:
     }
 
     #[test]
+    fn normalize_stale_receipt_uses_dispatch_packet_to_preserve_internal_activation_view() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-stale-internal-packet-posture-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&root).expect("create temp root");
+        let packet_path = root.join("dispatch-packet.json");
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "host_runtime": {
+                    "selected_cli_execution_class": "internal"
+                },
+                "effective_execution_posture": {
+                    "effective_posture_kind": "internal",
+                    "selected_execution_class": "internal"
+                }
+            })
+            .to_string(),
+        )
+        .expect("write dispatch packet");
+        let result_path = root.join("dispatch-result.json");
+        fs::write(
+            &result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "surface": "vida agent-init",
+                "status": "blocked",
+                "execution_state": "blocked",
+                "blocker_code": "timeout_without_takeover_authority",
+                "recorded_at": "2026-04-17T00:00:00Z",
+                "source_dispatch_packet_path": packet_path.display().to_string()
+            })
+            .to_string(),
+        )
+        .expect("write blocked timeout result");
+
+        let mut receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-internal-timeout-from-packet-posture".to_string(),
+            dispatch_target: "analysis".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some(packet_path.display().to_string()),
+            dispatch_result_path: Some(result_path.display().to_string()),
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("junior".to_string()),
+            activation_runtime_role: Some("worker".to_string()),
+            selected_backend: Some("junior".to_string()),
+            recorded_at: "2026-04-17T00:00:00Z".to_string(),
+        };
+
+        assert!(
+            normalize_stale_in_flight_dispatch_receipt(&root, &mut receipt)
+                .expect("packet-derived internal timeout normalization should succeed")
+        );
+        assert_eq!(receipt.dispatch_status, "blocked");
+        assert_eq!(
+            receipt.blocker_code.as_deref(),
+            Some("internal_activation_view_only")
+        );
+        let normalized_result = crate::read_json_file_if_present(std::path::Path::new(
+            receipt
+                .dispatch_result_path
+                .as_deref()
+                .expect("normalized result path should exist"),
+        ))
+        .expect("normalized result should exist");
+        assert_eq!(normalized_result["execution_state"], "blocked");
+        assert_eq!(
+            normalized_result["blocker_code"],
+            "internal_activation_view_only"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn normalize_stale_internal_receipt_preserves_retry_eligibility() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -4694,7 +4812,7 @@ agent_system:
         let snapshot_dir = store.root().join("runtime-consumption");
         fs::create_dir_all(&snapshot_dir).expect("create runtime-consumption directory");
         let snapshot_path = snapshot_dir.join("final-2026-03-18T00-00-00Z.json");
-        let operator_contracts = crate::build_release1_operator_contracts_envelope(
+        let operator_contracts = crate::build_operator_contracts_envelope(
             "pass",
             Vec::new(),
             Vec::new(),
@@ -4763,7 +4881,7 @@ agent_system:
         let snapshot_dir = store.root().join("runtime-consumption");
         fs::create_dir_all(&snapshot_dir).expect("create runtime-consumption directory");
         let snapshot_path = snapshot_dir.join("final-2026-03-18T00-00-01Z.json");
-        let operator_contracts = crate::build_release1_operator_contracts_envelope(
+        let operator_contracts = crate::build_operator_contracts_envelope(
             "pass",
             Vec::new(),
             Vec::new(),
@@ -4825,7 +4943,7 @@ agent_system:
         let snapshot_path = snapshot_dir.join("final-2026-03-18T00-00-02Z.json");
         let run_id = "run-receipt-lineage";
         let snapshot_path_string = snapshot_path.display().to_string();
-        let operator_contracts = crate::build_release1_operator_contracts_envelope(
+        let operator_contracts = crate::build_operator_contracts_envelope(
             "pass",
             Vec::new(),
             Vec::new(),
@@ -6065,7 +6183,7 @@ agent_system:
         );
         status.task_id = run_id.to_string();
         status.active_node = "implementer".to_string();
-        status.next_node = Some("coach".to_string());
+        status.next_node = Some("implementer".to_string());
         status.status = "ready".to_string();
         status.lifecycle_stage = "implementer_active".to_string();
         status.policy_gate = "single_task_scope_required".to_string();
@@ -6086,7 +6204,7 @@ agent_system:
             fallback_role: "orchestrator".to_string(),
             request: "Implement the bounded fix in crates/vida/src/runtime_dispatch_packets.rs and crates/vida/src/runtime_dispatch_state.rs with regression tests.".to_string(),
             selected_role: "pm".to_string(),
-            conversational_mode: Some("development".to_string()),
+            conversational_mode: None,
             single_task_only: true,
             tracked_flow_entry: Some("dev-pack".to_string()),
             allow_freeform_chat: false,
@@ -6132,7 +6250,7 @@ agent_system:
             .expect("active implementer run should synthesize receipt");
 
         assert_eq!(recovered.dispatch_receipt.dispatch_target, "implementer");
-        assert_eq!(recovered.dispatch_receipt.dispatch_status, "executed");
+        assert_eq!(recovered.dispatch_receipt.dispatch_status, "routed");
         assert_eq!(recovered.dispatch_receipt.lane_status, "lane_running");
         assert_eq!(
             recovered
@@ -6155,7 +6273,7 @@ agent_system:
             .expect("read persisted receipt")
             .expect("receipt should be persisted");
         assert_eq!(persisted.dispatch_target, "implementer");
-        assert_eq!(persisted.dispatch_status, "executed");
+        assert_eq!(persisted.dispatch_status, "routed");
         assert_eq!(
             recovered.dispatch_packet_path,
             recovered
@@ -6164,6 +6282,128 @@ agent_system:
                 .clone()
                 .expect("dispatch packet path should exist")
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn recover_missing_first_dispatch_receipt_for_dispatch_ready_planning_run() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-consume-resume-missing-dispatch-ready-receipt-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let run_id = "run-missing-dispatch-ready-receipt";
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            run_id,
+            "implementation",
+            "implementation",
+        );
+        status.task_id = run_id.to_string();
+        status.active_node = "planning".to_string();
+        status.next_node = Some("analysis".to_string());
+        status.status = "ready".to_string();
+        status.lifecycle_stage = "implementation_dispatch_ready".to_string();
+        status.policy_gate = "validation_report_required".to_string();
+        status.handoff_state = "awaiting_analysis".to_string();
+        status.context_state = "sealed".to_string();
+        status.checkpoint_kind = "execution_cursor".to_string();
+        status.resume_target = "dispatch.analysis_lane".to_string();
+        status.recovery_ready = true;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run graph status");
+
+        let role_selection = crate::RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "auto".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request:
+                "Analyze the bounded implementation packet and prepare execution routing truth."
+                    .to_string(),
+            selected_role: "pm".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "development_flow": {
+                    "dispatch_contract": {
+                        "execution_lane_sequence": ["analysis", "implementer", "coach", "verification"],
+                        "lane_catalog": {
+                            "analysis": {
+                                "activation": {
+                                    "activation_agent_type": "middle",
+                                    "activation_runtime_role": "coach"
+                                },
+                                "closure_class": "analysis"
+                            }
+                        },
+                        "implementer_activation": {
+                            "activation_agent_type": "junior",
+                            "activation_runtime_role": "worker"
+                        }
+                    }
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        store
+            .record_run_graph_dispatch_context(&crate::state_store::RunGraphDispatchContext {
+                run_id: run_id.to_string(),
+                task_id: run_id.to_string(),
+                request_text:
+                    "Analyze the bounded implementation packet and prepare execution routing truth."
+                        .to_string(),
+                role_selection: serde_json::to_value(&role_selection)
+                    .expect("encode role selection"),
+                recorded_at: "2026-04-18T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist run graph dispatch context");
+
+        let recovered = recover_missing_first_dispatch_receipt(&store, run_id)
+            .await
+            .expect("dispatch-ready planning run should recover missing first receipt")
+            .expect("dispatch-ready planning run should synthesize receipt");
+
+        assert_eq!(recovered.dispatch_receipt.dispatch_target, "analysis");
+        assert_eq!(recovered.dispatch_receipt.dispatch_status, "routed");
+        assert_eq!(recovered.dispatch_receipt.lane_status, "lane_running");
+        assert_eq!(
+            recovered
+                .dispatch_receipt
+                .activation_runtime_role
+                .as_deref(),
+            Some("coach")
+        );
+        assert_eq!(
+            recovered.dispatch_receipt.activation_agent_type.as_deref(),
+            Some("middle")
+        );
+        assert!(
+            recovered.dispatch_receipt.dispatch_packet_path.is_some(),
+            "recovered receipt should materialize a dispatch packet path"
+        );
+
+        let persisted = store
+            .run_graph_dispatch_receipt(run_id)
+            .await
+            .expect("read persisted receipt")
+            .expect("receipt should be persisted");
+        assert_eq!(persisted.dispatch_target, "analysis");
+        assert_eq!(persisted.dispatch_status, "routed");
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -7743,6 +7983,61 @@ agent_system:
                 "crates/vida/src/runtime_dispatch_state.rs"
             ])
         );
+    }
+
+    #[test]
+    fn normalize_runtime_dispatch_packet_derives_implementer_owned_paths_from_tracked_design_doc()
+    {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let design_doc_path = std::env::temp_dir().join(format!(
+            "vida-implementer-design-scope-{}-{}.md",
+            std::process::id(),
+            nanos
+        ));
+        fs::write(
+            &design_doc_path,
+            "### Bounded File Set\n- `crates/vida/src/runtime_dispatch_packets.rs`\n- `crates/vida/src/runtime_dispatch_state.rs`\n",
+        )
+        .expect("write tracked design doc");
+
+        let mut packet = serde_json::json!({
+            "packet_template_kind": "delivery_task_packet",
+            "dispatch_target": "implementer",
+            "request_text": "Continue the bounded implementation packet and keep scope from the approved design.",
+            "role_selection_full": {
+                "execution_plan": {
+                    "tracked_flow_bootstrap": {
+                        "design_doc_path": design_doc_path.display().to_string()
+                    }
+                }
+            },
+            "delivery_task_packet": {
+                "packet_id": "run-1::implementer::delivery",
+                "goal": "Execute bounded implementer handoff",
+                "scope_in": ["dispatch_target:implementer", "runtime_role:worker"],
+                "read_only_paths": [".vida/data/state/runtime-consumption"],
+                "definition_of_done": ["bounded runtime result artifact"],
+                "verification_command": "vida taskflow consume continue --run-id run-1 --json",
+                "proof_target": "runtime dispatch result artifact plus updated dispatch receipt",
+                "stop_rules": ["stop after writing bounded dispatch result or explicit blocker"],
+                "blocking_question": "What is the next bounded action required for implementer?",
+                "handoff_task_class": "implementation"
+            }
+        });
+
+        assert!(normalize_runtime_dispatch_packet(&mut packet));
+        assert_eq!(
+            packet["delivery_task_packet"]["owned_paths"],
+            serde_json::json!([
+                "crates/vida/src/runtime_dispatch_packets.rs",
+                "crates/vida/src/runtime_dispatch_state.rs"
+            ])
+        );
+
+        let _ = fs::remove_file(design_doc_path);
     }
 
     #[test]
