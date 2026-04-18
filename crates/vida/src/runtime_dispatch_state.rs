@@ -2075,6 +2075,14 @@ fn runtime_agent_lane_dispatch_from_overlay(
     preferred_backend: Option<&str>,
 ) -> RuntimeAgentLaneDispatch {
     let agent_init_command = agent_init_execute_command_for_packet_path(packet_path);
+    let preferred_external_backend = preferred_backend
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|backend_id| {
+            configured_external_backend_entry(overlay?, backend_id)
+                .cloned()
+                .map(|entry| (backend_id.to_string(), entry))
+        });
     let internal_host_backend_hint = preferred_backend
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -2088,6 +2096,24 @@ fn runtime_agent_lane_dispatch_from_overlay(
                 .then(|| backend_id.to_string())
         });
     if selected_execution_class != "external" {
+        if let Some((backend_id, backend_entry)) = preferred_external_backend {
+            return RuntimeAgentLaneDispatch {
+                surface: format!("external_cli:{backend_id}"),
+                activation_command: configured_external_activation_command(
+                    &backend_entry,
+                    project_root,
+                    packet_path,
+                )
+                .unwrap_or_else(|| agent_init_command_for_packet_path(packet_path)),
+                backend_dispatch: serde_json::json!({
+                    "selected_cli_system": selected_cli_system,
+                    "selected_execution_class": selected_execution_class,
+                    "backend_class": "external_cli",
+                    "backend_id": backend_id,
+                    "policy_selected_external_backend": true,
+                }),
+            };
+        }
         if let Some(backend_id) = preferred_backend
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -6712,6 +6738,58 @@ mod tests {
         assert_eq!(
             dispatch.backend_dispatch["backend_id"],
             serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn runtime_agent_lane_dispatch_honors_preferred_external_backend_for_internal_hosts() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime should initialize");
+        let harness = TempStateHarness::new().expect("temp state harness should initialize");
+        let _cwd = guard_current_dir(harness.path());
+        let _vida_root_guard = EnvVarGuard::set("VIDA_ROOT", &harness.path().display().to_string());
+        let _state_root_guards = HarnessStateRootGuards::set(harness_state_root(&harness));
+
+        assert_eq!(runtime.block_on(run(cli(&["init"]))), ExitCode::SUCCESS);
+        wait_for_state_unlock(harness.path());
+        assert_eq!(
+            runtime.block_on(run(cli(&[
+                "project-activator",
+                "--project-id",
+                "test-project",
+                "--language",
+                "english",
+                "--host-cli-system",
+                "codex",
+                "--json"
+            ]))),
+            ExitCode::SUCCESS
+        );
+        wait_for_state_unlock(harness.path());
+        install_external_cli_test_subagents(&harness.path().join("vida.config.yaml"));
+
+        let dispatch_packet_path = harness.path().join("runtime-dispatch-packet.json");
+        let dispatch = runtime_agent_lane_dispatch_for_root(
+            harness.path(),
+            dispatch_packet_path.to_string_lossy().as_ref(),
+            Some("hermes_cli"),
+        );
+
+        assert_eq!(dispatch.surface, "external_cli:hermes_cli");
+        assert!(
+            dispatch.activation_command.contains("hermes"),
+            "expected hermes command, got {}",
+            dispatch.activation_command
+        );
+        assert_eq!(dispatch.backend_dispatch["selected_cli_system"], "codex");
+        assert_eq!(
+            dispatch.backend_dispatch["selected_execution_class"],
+            "internal"
+        );
+        assert_eq!(dispatch.backend_dispatch["backend_class"], "external_cli");
+        assert_eq!(dispatch.backend_dispatch["backend_id"], "hermes_cli");
+        assert_eq!(
+            dispatch.backend_dispatch["policy_selected_external_backend"],
+            true
         );
     }
 
