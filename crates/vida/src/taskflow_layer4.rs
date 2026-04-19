@@ -407,6 +407,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Canonical commands:");
             println!("  vida taskflow packet render <run-id> [--json]");
+            println!("  vida taskflow packet task <task-id> [--json]");
             println!("  vida taskflow packet latest [--json]");
             println!();
             println!("Returned semantics:");
@@ -424,6 +425,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Operator recipes:");
             println!("  Inspect one routed packet by run id: vida taskflow packet render <run-id> --json");
+            println!("  Inspect the latest routed packet for one task id: vida taskflow packet task <task-id> --json");
             println!("  Inspect the latest routed packet without resolving run id first: vida taskflow packet latest --json");
             return;
         }
@@ -687,6 +689,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("  vida taskflow continuation bind <run-id> --task-id <task-id> --json");
     println!("  vida taskflow run-graph dispatch-init <task-id> --json");
     println!("  vida taskflow packet render <run-id> --json");
+    println!("  vida taskflow packet task <task-id> --json");
     println!("  vida taskflow packet latest --json");
     println!("  vida taskflow consume final \"proof path\" --json");
     println!("  vida taskflow consume continue --json");

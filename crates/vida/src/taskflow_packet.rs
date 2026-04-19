@@ -73,6 +73,21 @@ async fn resolve_latest_packet_run_id(store: &StateStore) -> Result<String, Stri
     Ok(receipt.run_id)
 }
 
+async fn resolve_task_packet_run_id(store: &StateStore, task_id: &str) -> Result<String, String> {
+    let Some(run_id) = store
+        .latest_run_graph_run_id_for_task(task_id)
+        .await
+        .map_err(|error| {
+            format!("Failed to read latest run-graph status for task `{task_id}`: {error}")
+        })?
+    else {
+        return Err(format!(
+            "No persisted run-graph status exists for task `{task_id}`; run `vida taskflow run-graph dispatch-init {task_id} --json` first."
+        ));
+    };
+    Ok(run_id)
+}
+
 fn build_taskflow_packet_render_payload(
     requested_run_id: &str,
     run_id: &str,
@@ -127,22 +142,30 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
         _ => {}
     }
 
-    let (requested_run_id, as_json, latest_mode) = match args {
+    let (requested_run_id, requested_task_id, as_json, latest_mode) = match args {
         [head, subcommand, run_id] if head == "packet" && subcommand == "render" => {
-            (run_id.clone(), false, false)
+            (run_id.clone(), None, false, false)
         }
         [head, subcommand, run_id, flag]
             if head == "packet" && subcommand == "render" && matches!(flag.as_str(), "--json") =>
         {
-            (run_id.clone(), true, false)
+            (run_id.clone(), None, true, false)
+        }
+        [head, subcommand, task_id] if head == "packet" && subcommand == "task" => {
+            (task_id.clone(), Some(task_id.clone()), false, false)
+        }
+        [head, subcommand, task_id, flag]
+            if head == "packet" && subcommand == "task" && matches!(flag.as_str(), "--json") =>
+        {
+            (task_id.clone(), Some(task_id.clone()), true, false)
         }
         [head, subcommand] if head == "packet" && subcommand == "latest" => {
-            ("latest".to_string(), false, true)
+            ("latest".to_string(), None, false, true)
         }
         [head, subcommand, flag]
             if head == "packet" && subcommand == "latest" && matches!(flag.as_str(), "--json") =>
         {
-            ("latest".to_string(), true, true)
+            ("latest".to_string(), None, true, true)
         }
         [head, subcommand, flag]
             if head == "packet"
@@ -154,7 +177,7 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
         }
         _ => {
             eprintln!(
-                "Usage: vida taskflow packet render <run-id> [--json]\n       vida taskflow packet latest [--json]"
+                "Usage: vida taskflow packet render <run-id> [--json]\n       vida taskflow packet task <task-id> [--json]\n       vida taskflow packet latest [--json]"
             );
             return ExitCode::from(2);
         }
@@ -167,7 +190,15 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let run_id = if latest_mode {
+    let run_id = if let Some(task_id) = requested_task_id.as_deref() {
+        match resolve_task_packet_run_id(&store, task_id).await {
+            Ok(run_id) => run_id,
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::from(1);
+            }
+        }
+    } else if latest_mode {
         match resolve_latest_packet_run_id(&store).await {
             Ok(run_id) => run_id,
             Err(error) => {
@@ -245,6 +276,9 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
         print_surface_header(RenderMode::Plain, "vida taskflow packet render");
         if latest_mode {
             print_surface_line(RenderMode::Plain, "requested", "latest");
+        }
+        if let Some(task_id) = requested_task_id.as_deref() {
+            print_surface_line(RenderMode::Plain, "requested_task", task_id);
         }
         print_surface_line(RenderMode::Plain, "run", &receipt.run_id);
         print_surface_line(

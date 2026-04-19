@@ -1221,6 +1221,21 @@ impl StateStore {
         Ok(rows.into_iter().next().map(|latest| latest.run_id))
     }
 
+    pub(crate) async fn latest_run_graph_run_id_for_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<String>, StateStoreError> {
+        let mut query = self
+            .db
+            .query(
+                "SELECT run_id, updated_at FROM execution_plan_state WHERE task_id = $task_id ORDER BY updated_at DESC, run_id DESC LIMIT 1;",
+            )
+            .bind(("task_id", task_id.to_string()))
+            .await?;
+        let rows: Vec<RunGraphLatestRow> = query.take(0)?;
+        Ok(rows.into_iter().next().map(|latest| latest.run_id))
+    }
+
     async fn ensure_run_graph_recovery_surface_rows_present(
         &self,
         run_id: &str,
