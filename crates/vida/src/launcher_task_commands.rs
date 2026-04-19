@@ -5,6 +5,16 @@ pub(crate) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+fn shell_quote_joined_labels(labels: &[&str]) -> Option<String> {
+    let joined = labels
+        .iter()
+        .map(|label| label.trim())
+        .filter(|label| !label.is_empty())
+        .collect::<Vec<_>>()
+        .join(",");
+    (!joined.is_empty()).then(|| shell_quote(&joined))
+}
+
 pub(crate) fn build_task_create_command(
     task_id: &str,
     title: &str,
@@ -22,8 +32,8 @@ pub(crate) fn build_task_create_command(
     if let Some(parent_id) = parent_id {
         command.push_str(&format!(" --parent-id {parent_id}"));
     }
-    for label in labels {
-        command.push_str(&format!(" --labels {label}"));
+    if let Some(labels_arg) = shell_quote_joined_labels(labels) {
+        command.push_str(&format!(" --labels {labels_arg}"));
     }
     if let Some(description_quoted) = description_quoted {
         command.push_str(&format!(" --description {description_quoted}"));
@@ -49,8 +59,8 @@ pub(crate) fn build_task_ensure_command(
     if let Some(parent_id) = parent_id {
         command.push_str(&format!(" --parent-id {parent_id}"));
     }
-    for label in labels {
-        command.push_str(&format!(" --labels {label}"));
+    if let Some(labels_arg) = shell_quote_joined_labels(labels) {
+        command.push_str(&format!(" --labels {labels_arg}"));
     }
     if let Some(description_quoted) = description_quoted {
         command.push_str(&format!(" --description {description_quoted}"));

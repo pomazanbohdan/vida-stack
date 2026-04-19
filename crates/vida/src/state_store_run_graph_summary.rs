@@ -78,6 +78,17 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             status.handoff_state = "none".to_string();
             status.resume_target = "none".to_string();
             status.context_state = "sealed".to_string();
+        } else {
+            let blocked_target = receipt
+                .dispatch_target
+                .trim()
+                .replace('-', "_");
+            status.active_node = receipt.dispatch_target.clone();
+            status.next_node = None;
+            status.lifecycle_stage = format!("{blocked_target}_blocked");
+            status.handoff_state = "none".to_string();
+            status.resume_target = "none".to_string();
+            status.context_state = "sealed".to_string();
         }
         status.status = "blocked".to_string();
         status.recovery_ready = false;
@@ -1423,7 +1434,16 @@ impl StateStore {
         let Some(receipt) = receipt.map(normalize_legacy_downstream_preview_drift) else {
             return Ok(None);
         };
-        self.normalize_task_close_reconcile_dispatch_receipt(receipt)
+        let mut receipt: RunGraphDispatchReceipt = receipt.into();
+        if crate::runtime_dispatch_state::normalize_stale_in_flight_dispatch_receipt(
+            self.root(),
+            &mut receipt,
+        )
+        .map_err(|reason| StateStoreError::InvalidTaskRecord { reason })?
+        {
+            self.record_run_graph_dispatch_receipt(&receipt).await?;
+        }
+        self.normalize_task_close_reconcile_dispatch_receipt(receipt.into())
             .await
             .map(Some)
     }
@@ -2288,6 +2308,125 @@ mod tests {
         assert_eq!(reconciled.handoff_state, "awaiting_implementer");
         assert_eq!(reconciled.resume_target, "dispatch.implementer_lane");
         assert!(reconciled.recovery_ready);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn stale_executing_receipt_is_normalized_on_read_and_clears_open_cycle() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-read-normalize-stale-receipt-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&root).expect("create temp root");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let mut status = crate::taskflow_run_graph::default_run_graph_status(
+            "run-read-normalize-stale",
+            "verification",
+            "delivery",
+        );
+        status.task_id = "task-read-normalize-stale".to_string();
+        status.active_node = "verification".to_string();
+        status.status = "running".to_string();
+        status.lifecycle_stage = "verification_active".to_string();
+        status.next_node = None;
+        status.handoff_state = "none".to_string();
+        status.resume_target = "none".to_string();
+        status.recovery_ready = false;
+        store
+            .record_run_graph_status(&status)
+            .await
+            .expect("persist run-graph status");
+
+        let packet_path = root.join("dispatch-packet.json");
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "run_id": "run-read-normalize-stale",
+                "dispatch_target": "verification"
+            })
+            .to_string(),
+        )
+        .expect("write dispatch packet");
+
+        let result_path = root.join("dispatch-result.json");
+        fs::write(
+            &result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "pass",
+                "execution_state": "executing",
+                "recorded_at": "2000-01-01T00:00:00Z"
+            })
+            .to_string(),
+        )
+        .expect("write stale result");
+
+        store
+            .record_run_graph_dispatch_receipt(&RunGraphDispatchReceipt {
+                run_id: "run-read-normalize-stale".to_string(),
+                dispatch_target: "verification".to_string(),
+                dispatch_status: "executing".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: Some("exc-timeout".to_string()),
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some(packet_path.display().to_string()),
+                dispatch_result_path: Some(result_path.display().to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("senior".to_string()),
+                activation_runtime_role: Some("verifier".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-19T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("persist stale receipt");
+
+        let reconciled = store
+            .run_graph_status("run-read-normalize-stale")
+            .await
+            .expect("load reconciled status");
+        assert_eq!(reconciled.status, "blocked");
+        assert_eq!(reconciled.active_node, "verification");
+        assert_eq!(reconciled.lifecycle_stage, "verification_blocked");
+        assert_eq!(reconciled.next_node, None);
+        assert_eq!(reconciled.handoff_state, "none");
+        assert_eq!(reconciled.resume_target, "none");
+        assert!(!reconciled.recovery_ready);
+        assert!(!reconciled.delegation_gate().delegated_cycle_open);
+
+        let persisted = store
+            .run_graph_dispatch_receipt("run-read-normalize-stale")
+            .await
+            .expect("read persisted normalized receipt")
+            .expect("normalized receipt should exist");
+        assert_eq!(persisted.dispatch_status, "blocked");
+        assert_eq!(
+            persisted.blocker_code.as_deref(),
+            Some("internal_activation_view_only")
+        );
+        assert_eq!(persisted.lane_status, "lane_exception_recorded");
 
         let _ = fs::remove_dir_all(&root);
     }

@@ -38,6 +38,7 @@ const DEFAULT_DISPATCH_STATE_COORDINATION_TIMEOUT_SECONDS: u64 = 5;
 const DEFAULT_DISPATCH_HANDOFF_EXECUTION_TIMEOUT_SECONDS: u64 = 10;
 const DEFAULT_INTERNAL_HOST_HANDOFF_TIMEOUT_SECONDS: u64 = 240;
 const INTERNAL_DISPATCH_HANDOFF_TIMEOUT_GRACE_SECONDS: u64 = 2;
+const STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS: i64 = 10;
 
 fn configured_internal_host_handoff_timeout_seconds(project_root: &Path) -> Option<u64> {
     let overlay = load_project_overlay_yaml_for_root(project_root).ok()?;
@@ -423,6 +424,7 @@ fn route_selected_backend(
     selected_backend_from_execution_plan_route(execution_plan, route)
 }
 
+#[cfg(test)]
 fn route_selected_backend_for_dispatch_target(
     execution_plan: &serde_json::Value,
     dispatch_target: &str,
@@ -1421,9 +1423,12 @@ fn configured_internal_host_carrier_exists(
     let Some(system_entry) = registry.get(system) else {
         return false;
     };
-    crate::host_runtime_materialization::host_runtime_entry_carrier_catalog(Some(system_entry))
+    let carriers =
+        crate::host_runtime_materialization::host_runtime_entry_carrier_catalog(Some(system_entry));
+    carriers
         .iter()
         .any(|row| row["role_id"].as_str() == Some(backend_id))
+        || (backend_id == "internal_subagents" && !carriers.is_empty())
 }
 
 pub(crate) fn configured_external_backend_entry<'a>(
@@ -11236,6 +11241,147 @@ pub(crate) fn apply_internal_activation_timeout_to_receipt(
         receipt.dispatch_command = Some(dispatch_command);
     }
     Ok(())
+}
+
+fn stale_in_flight_dispatch_preserves_internal_activation_view(
+    receipt: &crate::state_store::RunGraphDispatchReceipt,
+    result: &serde_json::Value,
+) -> bool {
+    receipt.selected_backend.as_deref() == Some("internal_subagents")
+        || receipt
+            .dispatch_surface
+            .as_deref()
+            .is_some_and(|value| value.starts_with("internal_cli:"))
+        || result["surface"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("internal_cli:"))
+        || result["backend_dispatch"]["backend_class"].as_str() == Some("internal")
+        || dispatch_packet_indicates_internal_activation_view(
+            receipt.dispatch_packet_path.as_deref(),
+            result,
+        )
+}
+
+fn dispatch_packet_indicates_internal_activation_view(
+    dispatch_packet_path: Option<&str>,
+    result: &serde_json::Value,
+) -> bool {
+    let packet_path = dispatch_packet_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            result
+                .get("source_dispatch_packet_path")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        });
+    let Some(packet_path) = packet_path else {
+        return false;
+    };
+    let Some(packet) = crate::read_json_file_if_present(std::path::Path::new(packet_path)) else {
+        return false;
+    };
+    packet["host_runtime"]["selected_cli_execution_class"].as_str() == Some("internal")
+        || packet["effective_execution_posture"]["effective_posture_kind"].as_str()
+            == Some("internal")
+        || packet["mixed_posture"]["effective_posture_kind"].as_str() == Some("internal")
+        || packet["effective_execution_posture"]["selected_execution_class"].as_str()
+            == Some("internal")
+}
+
+fn dispatch_packet_uses_downstream_carrier(
+    dispatch_packet_path: Option<&str>,
+    result: &serde_json::Value,
+) -> bool {
+    let packet_path = dispatch_packet_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            result
+                .get("source_dispatch_packet_path")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        });
+    let Some(packet_path) = packet_path else {
+        return false;
+    };
+    let Some(packet) = crate::read_json_file_if_present(std::path::Path::new(packet_path)) else {
+        return false;
+    };
+    packet.get("packet_kind").and_then(serde_json::Value::as_str)
+        == Some("runtime_downstream_dispatch_packet")
+}
+
+pub(crate) fn normalize_stale_in_flight_dispatch_receipt(
+    state_root: &Path,
+    receipt: &mut crate::state_store::RunGraphDispatchReceipt,
+) -> Result<bool, String> {
+    let timeout_blocked_receipt = receipt.dispatch_status == "blocked"
+        && receipt.blocker_code.as_deref() == Some("timeout_without_takeover_authority");
+    if receipt.dispatch_status != "executing" && !timeout_blocked_receipt {
+        return Ok(false);
+    }
+    let Some(result_path) = receipt
+        .dispatch_result_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(false);
+    };
+    let Some(result) = crate::read_json_file_if_present(std::path::Path::new(result_path)) else {
+        return Ok(false);
+    };
+    if timeout_blocked_receipt
+        && stale_in_flight_dispatch_preserves_internal_activation_view(receipt, &result)
+        && result["blocker_code"].as_str() == Some("timeout_without_takeover_authority")
+    {
+        apply_internal_activation_timeout_to_receipt(
+            state_root,
+            receipt,
+            STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS as u64,
+        )?;
+        return Ok(true);
+    }
+    if result["execution_state"].as_str() != Some("executing") {
+        return Ok(false);
+    }
+    if dispatch_packet_uses_downstream_carrier(receipt.dispatch_packet_path.as_deref(), &result) {
+        apply_dispatch_execution_timeout_to_receipt(
+            state_root,
+            receipt,
+            STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS as u64,
+        )?;
+        return Ok(true);
+    }
+    let Some(recorded_at) = result["recorded_at"].as_str() else {
+        return Ok(false);
+    };
+    let Ok(recorded_at) =
+        time::OffsetDateTime::parse(recorded_at, &time::format_description::well_known::Rfc3339)
+    else {
+        return Ok(false);
+    };
+    let age_seconds = (time::OffsetDateTime::now_utc() - recorded_at).whole_seconds();
+    if age_seconds <= STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS {
+        return Ok(false);
+    }
+    if stale_in_flight_dispatch_preserves_internal_activation_view(receipt, &result) {
+        apply_internal_activation_timeout_to_receipt(
+            state_root,
+            receipt,
+            STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS as u64,
+        )?;
+    } else {
+        apply_dispatch_execution_timeout_to_receipt(
+            state_root,
+            receipt,
+            STALE_IN_FLIGHT_DISPATCH_TIMEOUT_SECONDS as u64,
+        )?;
+    }
+    Ok(true)
 }
 
 pub(crate) fn write_runtime_lane_completion_result(

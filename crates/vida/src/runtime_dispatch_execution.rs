@@ -327,6 +327,18 @@ fn execute_wrapped_command(
     }
 }
 
+async fn execute_wrapped_command_async(
+    process: std::process::Command,
+    wrapped_command: WrappedCommand,
+    stdin_payload: Option<Vec<u8>>,
+) -> Result<ObservedCommandOutput, String> {
+    tokio::task::spawn_blocking(move || {
+        execute_wrapped_command(process, &wrapped_command, stdin_payload)
+    })
+    .await
+    .map_err(|error| format!("wrapped command task join failed: {error}"))?
+}
+
 fn wrap_command_with_optional_timeout(
     command: String,
     args: Vec<String>,
@@ -562,16 +574,48 @@ fn selected_internal_host_carrier(
     receipt: &crate::state_store::RunGraphDispatchReceipt,
     role_selection: &RuntimeConsumptionLaneSelection,
 ) -> Option<serde_json::Value> {
-    let _ = role_selection;
-    let preferred_ids = [preferred_backend, receipt.selected_backend.as_deref()];
     let carriers =
         crate::host_runtime_materialization::host_runtime_entry_carrier_catalog(selected_cli_entry);
-    preferred_ids.iter().flatten().find_map(|backend_id| {
+    let find_carrier = |candidate_id: &str| {
         carriers
             .iter()
-            .find(|row| row["role_id"].as_str() == Some(*backend_id))
+            .find(|row| row["role_id"].as_str() == Some(candidate_id))
             .cloned()
-    })
+    };
+
+    let direct_ids = [preferred_backend, receipt.selected_backend.as_deref()];
+    for candidate_id in direct_ids.into_iter().flatten() {
+        if let Some(carrier) = find_carrier(candidate_id) {
+            return Some(carrier);
+        }
+    }
+
+    let prefers_internal_backend = direct_ids
+        .into_iter()
+        .flatten()
+        .any(|backend_id| backend_id == "internal_subagents");
+    if !prefers_internal_backend {
+        return None;
+    }
+
+    let internal_bridge_ids = [
+        receipt.activation_agent_type.as_deref(),
+        role_selection
+            .execution_plan
+            .get("runtime_assignment")
+            .and_then(|value| value.get("activation_agent_type"))
+            .and_then(serde_json::Value::as_str),
+        role_selection
+            .execution_plan
+            .get("runtime_assignment")
+            .and_then(|value| value.get("selected_tier"))
+            .and_then(serde_json::Value::as_str),
+        Some(role_selection.selected_role.as_str()),
+    ];
+    internal_bridge_ids
+        .into_iter()
+        .flatten()
+        .find_map(find_carrier)
 }
 
 fn configured_internal_host_runtime_env(
@@ -973,11 +1017,12 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         process.env("VIDA_RUNTIME_ROLE", runtime_role);
     }
 
-    let output = execute_wrapped_command(
+    let output = execute_wrapped_command_async(
         process,
-        &wrapped_command,
+        wrapped_command.clone(),
         stdin_payload.map(String::into_bytes),
     )
+    .await
     .map_err(|error| {
         format!(
             "Failed to execute internal host carrier `{carrier_id}` for `{selected_cli_system}` via `{}`: {error}",
@@ -1289,7 +1334,9 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         process.env("VIDA_SELECTED_BACKEND", selected_backend);
     }
 
-    let output = execute_wrapped_command(process, &wrapped_command, None).map_err(|error| {
+    let output = execute_wrapped_command_async(process, wrapped_command.clone(), None)
+        .await
+        .map_err(|error| {
         format!(
             "Failed to execute configured external backend `{backend_id}` via `{}`: {error}",
             wrapped_command.command
@@ -1870,6 +1917,86 @@ dispatch:
             result["execution_truth"]["activation_evidence"]["execution_evidence_status"],
             "missing"
         );
+    }
+
+    #[test]
+    fn selected_internal_host_carrier_maps_internal_backend_alias_to_activation_tier() {
+        let system_entry = serde_yaml::from_str(
+            r#"
+carriers:
+  junior:
+    model: gpt-5.4
+    model_reasoning_effort: low
+    sandbox_mode: workspace-write
+  middle:
+    model: gpt-5.4
+    model_reasoning_effort: medium
+    sandbox_mode: workspace-write
+"#,
+        )
+        .expect("system entry should parse");
+        let role_selection = RuntimeConsumptionLaneSelection {
+            ok: true,
+            activation_source: "test".to_string(),
+            selection_mode: "fixed".to_string(),
+            fallback_role: "orchestrator".to_string(),
+            request: "Continue development".to_string(),
+            selected_role: "coach".to_string(),
+            conversational_mode: None,
+            single_task_only: true,
+            tracked_flow_entry: Some("dev-pack".to_string()),
+            allow_freeform_chat: false,
+            confidence: "high".to_string(),
+            matched_terms: vec!["continue".to_string()],
+            compiled_bundle: serde_json::Value::Null,
+            execution_plan: serde_json::json!({
+                "runtime_assignment": {
+                    "activation_agent_type": "middle",
+                    "selected_tier": "middle"
+                }
+            }),
+            reason: "test".to_string(),
+        };
+        let receipt = crate::state_store::RunGraphDispatchReceipt {
+            run_id: "run-internal-carrier-bridge".to_string(),
+            dispatch_target: "coach".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            supersedes_receipt_id: None,
+            exception_path_receipt_id: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_surface: Some("vida agent-init".to_string()),
+            dispatch_command: Some("vida agent-init".to_string()),
+            dispatch_packet_path: Some("/tmp/dispatch.json".to_string()),
+            dispatch_result_path: None,
+            blocker_code: Some("internal_activation_view_only".to_string()),
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_blockers: Vec::new(),
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_active_target: Some("coach".to_string()),
+            downstream_dispatch_last_target: None,
+            activation_agent_type: Some("middle".to_string()),
+            activation_runtime_role: Some("coach".to_string()),
+            selected_backend: Some("internal_subagents".to_string()),
+            recorded_at: "2026-04-19T00:00:00Z".to_string(),
+        };
+
+        let carrier = super::selected_internal_host_carrier(
+            Some(&system_entry),
+            Some("internal_subagents"),
+            &receipt,
+            &role_selection,
+        )
+        .expect("internal backend alias should bridge to activation tier");
+
+        assert_eq!(carrier["role_id"].as_str(), Some("middle"));
     }
 
     #[test]

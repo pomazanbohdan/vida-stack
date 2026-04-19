@@ -1198,6 +1198,7 @@ fn dispatch_receipt_internal_retry_eligible(
     let carriers = crate::host_runtime_materialization::host_runtime_entry_carrier_catalog(
         selected_cli_entry.as_ref(),
     );
+    let has_internal_carriers = !carriers.is_empty();
     [
         dispatch_receipt.selected_backend.as_deref(),
         dispatch_receipt.activation_agent_type.as_deref(),
@@ -1209,6 +1210,7 @@ fn dispatch_receipt_internal_retry_eligible(
         carriers
             .iter()
             .any(|row| row["role_id"].as_str() == Some(*backend_id))
+            || (*backend_id == "internal_subagents" && has_internal_carriers)
     })
 }
 
@@ -2106,8 +2108,18 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
             ));
         }
     };
-    let _normalized_stale_in_flight =
+    let normalized_stale_in_flight =
         normalize_stale_in_flight_dispatch_receipt(store.root(), &mut receipt)?;
+    if normalized_stale_in_flight {
+        store
+            .record_run_graph_dispatch_receipt(&receipt)
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to persist normalized stale in-flight dispatch receipt for `{run_id}`: {error}"
+                )
+            })?;
+    }
     validate_explicit_task_graph_binding_lineage_for_resume(store, run_id, &receipt).await?;
     let allow_downstream_lineage = allow_downstream_resume_lineage(&receipt);
     let explicit_downstream_target =
@@ -3074,6 +3086,7 @@ mod tests {
         prefer_ready_downstream_packet_over_active_result, prepare_explicit_resume_retry_artifact,
         primary_backend_for_dispatch_receipt, read_dispatch_packet,
         recover_missing_first_dispatch_receipt, resolve_runtime_consumption_resume_inputs,
+        resolve_runtime_consumption_resume_inputs_for_run_id,
         resume_from_persisted_final_snapshot, resume_packet_ready_blocker_parity_error,
         retry_backend_for_dispatch_receipt, runtime_consumption_resume_blocker_code,
         runtime_consumption_resume_receipt_blocker_codes,
@@ -4467,6 +4480,97 @@ agent_system:
             normalized_result["blocker_code"],
             "internal_activation_view_only"
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn resolve_resume_inputs_persists_normalized_stale_in_flight_receipt() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-persist-normalized-stale-receipt-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&root).expect("create temp root");
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        let packet_path = root.join("dispatch-packet.json");
+        fs::write(
+            &packet_path,
+            serde_json::json!({
+                "packet_kind": "runtime_dispatch_packet",
+                "run_id": "run-persist-stale",
+                "dispatch_target": "coach"
+            })
+            .to_string(),
+        )
+        .expect("write dispatch packet");
+
+        let result_path = root.join("dispatch-result.json");
+        fs::write(
+            &result_path,
+            serde_json::json!({
+                "artifact_kind": "runtime_dispatch_result",
+                "status": "pass",
+                "execution_state": "executing",
+                "recorded_at": "2000-01-01T00:00:00Z"
+            })
+            .to_string(),
+        )
+        .expect("write stale in-flight result");
+
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-persist-stale".to_string(),
+                dispatch_target: "coach".to_string(),
+                dispatch_status: "executing".to_string(),
+                lane_status: "lane_running".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: Some("exc-timeout".to_string()),
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida agent-init".to_string()),
+                dispatch_command: Some("vida agent-init".to_string()),
+                dispatch_packet_path: Some(packet_path.display().to_string()),
+                dispatch_result_path: Some(result_path.display().to_string()),
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: Vec::new(),
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("middle".to_string()),
+                activation_runtime_role: Some("coach".to_string()),
+                selected_backend: Some("internal_subagents".to_string()),
+                recorded_at: "2026-04-19T00:00:00Z".to_string(),
+            })
+            .await
+            .expect("record stale receipt");
+
+        let _ = resolve_runtime_consumption_resume_inputs_for_run_id(&store, "run-persist-stale")
+            .await;
+
+        let persisted = store
+            .run_graph_dispatch_receipt("run-persist-stale")
+            .await
+            .expect("read persisted receipt")
+            .expect("persisted receipt should exist");
+        assert_eq!(persisted.dispatch_status, "blocked");
+        assert_eq!(
+            persisted.blocker_code.as_deref(),
+            Some("internal_activation_view_only")
+        );
+        assert_eq!(persisted.lane_status, "lane_exception_recorded");
 
         let _ = fs::remove_dir_all(&root);
     }

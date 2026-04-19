@@ -62,15 +62,6 @@ pub struct StorageMetadataSummary {
     pub instruction_schema_version: u32,
 }
 
-impl StorageMetadataSummary {
-    pub fn as_display(&self) -> String {
-        format!(
-            "{}:{} {}.{}",
-            self.engine, self.backend, self.state_schema_version, self.instruction_schema_version
-        )
-    }
-}
-
 #[derive(Debug, serde::Deserialize, serde::Serialize, SurrealValue)]
 pub(crate) struct BootCompatibilityStateRow {
     state_id: String,

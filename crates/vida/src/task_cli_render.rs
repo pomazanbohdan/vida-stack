@@ -423,6 +423,54 @@ pub(crate) fn print_task_dependency_tree(
     }
 }
 
+pub(crate) fn print_task_direct_children(
+    render: RenderMode,
+    tree: &TaskDependencyTreeNode,
+    as_json: bool,
+) {
+    let payload = serde_json::json!({
+        "surface": "vida task children",
+        "status": "pass",
+        "root_task_id": tree.task.id,
+        "child_count": tree.children.len(),
+        "children": tree.children,
+    });
+    if crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task direct children should render as json",
+    ) {
+        return;
+    }
+
+    print_surface_header(render, "vida task children");
+    print_surface_line(
+        render,
+        "root",
+        &format!(
+            "{}\t{}\t{}",
+            tree.task.id, tree.task.status, tree.task.title
+        ),
+    );
+    if tree.children.is_empty() {
+        print_surface_line(render, "children", "none");
+        return;
+    }
+
+    print_surface_line(render, "children", &tree.children.len().to_string());
+    for child in &tree.children {
+        let issue_type = child.child_issue_type.as_deref().unwrap_or("unknown");
+        let state = if child.cycle {
+            "cycle"
+        } else if child.missing {
+            "missing"
+        } else {
+            child.child_status.as_str()
+        };
+        println!("child\t{}\t{}\t{}", child.child_id, state, issue_type);
+    }
+}
+
 fn print_task_dependency_tree_edge(edge: &TaskDependencyTreeEdge, depth: usize) {
     let indent = "  ".repeat(depth);
     let issue_type = edge.dependency_issue_type.as_deref().unwrap_or("unknown");

@@ -55,13 +55,14 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  vida task reverse-deps <task-id> --json");
             println!("  vida task blocked --json");
             println!("  vida task tree <task-id> --json");
+            println!("  vida task children <task-id> --json");
             println!("  vida task critical-path --json");
             println!("  vida task next-display-id <parent-display-id> --json");
             println!(
                 "  vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json"
             );
             println!(
-                "  vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels <label> --json"
+                "  vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels alpha,beta --json"
             );
             println!(
                 "  vida task update <task-id> --status in_progress --notes-file <path> --json"
@@ -107,6 +108,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
                 "  Inspect one subtree when sequencing nested work: vida task tree <task-id> --json"
             );
             println!(
+                "  Inspect the same subtree through explicit child wording: vida task children <task-id> --json"
+            );
+            println!(
                 "  Inspect the current critical path before parallelizing: vida task critical-path --json"
             );
             println!(
@@ -120,7 +124,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
                 "  Create one bounded child task: vida task create <task-id> <title> --parent-id <parent-id> --auto-display-from <parent-display-id> --description \"...\" --json"
             );
             println!(
-                "  Reuse-or-create one tracked handoff task idempotently: vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels <label> --json"
+                "  Reuse-or-create one tracked handoff task idempotently: vida task ensure <task-id> <title> --parent-id <parent-id> --description \"...\" --labels alpha,beta --json"
             );
             println!(
                 "  Record real progress after a proven step: vida task update <task-id> --status <status> --notes-file <path> --json"
@@ -180,8 +184,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             );
             println!();
             println!("Canonical commands:");
-            println!("  vida task help parallelism");
             println!("  vida taskflow help parallelism");
+            println!("  vida task help parallelism");
             println!("  vida taskflow graph-summary --json");
             println!(
                 "  vida task update <task-id> --execution-mode <mode> --order-bucket <bucket> --parallel-group <group> --conflict-domain <domain> --json"
@@ -267,6 +271,47 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!(
                 "  Invalid dependency graphs fail closed through the critical-path contract; repair with `vida task validate-graph` first."
             );
+            return;
+        }
+        Some("dependencies") => {
+            println!("VIDA TaskFlow help: dependencies");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Inspect canonical graph structure and ordering truth before resequencing, subtree surgery, or parallelization."
+            );
+            println!();
+            println!("Canonical commands:");
+            println!("  vida task deps <task-id> --json");
+            println!("  vida task reverse-deps <task-id> --json");
+            println!("  vida task tree <task-id> --json");
+            println!("  vida task critical-path --json");
+            println!("  vida task validate-graph --json");
+            println!("  vida taskflow graph-summary --json");
+            println!();
+            println!("Failure modes:");
+            println!("  Graph inspection is backlog truth only and does not by itself authorize parallel execution.");
+            println!("  Invalid graphs must be repaired before scheduler-facing operator decisions.");
+            return;
+        }
+        Some("queue") => {
+            println!("VIDA TaskFlow help: queue");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Inspect ready, blocked, and next-step queue posture across backlog readiness and current runtime recovery state."
+            );
+            println!();
+            println!("Canonical commands:");
+            println!("  vida task ready --json");
+            println!("  vida task blocked --json");
+            println!("  vida task next --json");
+            println!("  vida taskflow graph-summary --json");
+            println!("  vida taskflow status --summary --json");
+            println!();
+            println!("Failure modes:");
+            println!("  Queue visibility is read-only and must not be treated as a mutation or dispatch surface by itself.");
+            println!("  Backlog readiness and run-graph recovery remain separate authorities; inspect both when the next lawful step is ambiguous.");
             return;
         }
         Some("consume") => {
@@ -362,6 +407,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Canonical commands:");
             println!("  vida taskflow packet render <run-id> [--json]");
+            println!("  vida taskflow packet latest [--json]");
             println!();
             println!("Returned semantics:");
             println!(
@@ -372,6 +418,33 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!(
                 "  Packet rendering fails closed when no persisted dispatch receipt or packet path exists."
             );
+            println!(
+                "  `packet latest` fails closed when no latest persisted dispatch receipt exists yet, or when the latest receipt points at packet evidence that is missing."
+            );
+            println!();
+            println!("Operator recipes:");
+            println!("  Inspect one routed packet by run id: vida taskflow packet render <run-id> --json");
+            println!("  Inspect the latest routed packet without resolving run id first: vida taskflow packet latest --json");
+            return;
+        }
+        Some("dispatch") | Some("dispatch-diagnosis") => {
+            println!("VIDA TaskFlow help: dispatch");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Inspect active dispatch status, blocker truth, packet/result evidence, and downstream handoff posture for one routed run."
+            );
+            println!();
+            println!("Canonical commands:");
+            println!("  vida taskflow run-graph status <run-id> --json");
+            println!("  vida taskflow recovery status <run-id> --json");
+            println!("  vida taskflow packet render <run-id> --json");
+            println!("  vida taskflow packet latest --json");
+            println!("  vida taskflow status --summary --json");
+            println!();
+            println!("Failure modes:");
+            println!("  Run-graph and recovery surfaces are execution-state truth, not backlog readiness authority.");
+            println!("  Packet rendering fails closed when no persisted dispatch packet/result evidence exists for the selected run, and `packet latest` fails closed when no latest persisted dispatch receipt exists yet.");
             return;
         }
         Some("run-graph") => {
@@ -394,7 +467,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!(
                 "  vida taskflow run-graph update <task_id> <task_class> <node> <status> [route_task_class] [meta_json]"
             );
-            println!("  vida taskflow run-graph status <task_id>");
+            println!("  vida taskflow run-graph status <run-id> [--json]");
             println!("  vida taskflow run-graph latest [--json]");
             println!();
             println!("Failure modes:");
@@ -405,7 +478,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
                 "  `advance` currently fails closed unless the run is a seeded implementation or seeded scope-discussion dispatch."
             );
             println!(
-                "  `dispatch-init` fails closed when no persisted seeded dispatch context exists for the selected run."
+                "  `dispatch-init` fails closed when no persisted seeded dispatch context exists for the selected task id."
             );
             println!(
                 "  Clean implementation review enters an explicit approval wait; mark approval explicitly through `vida taskflow run-graph update <task-id> implementation review_ensemble approved implementation` before the final completion advance."
@@ -515,6 +588,34 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!("  Detached JSON export alone is not treated as binding closure.");
             return;
         }
+        Some("bootstrap-spec") => {
+            println!("VIDA TaskFlow help: bootstrap-spec");
+            println!();
+            println!("Purpose:");
+            println!(
+                "  Create one design-first bootstrap bundle for a feature request across epic, spec-pack task, and bounded design-doc initialization surfaces."
+            );
+            println!(
+                "  This is the canonical one-shot entrypoint when a request explicitly needs research/specification/planning before delegated implementation."
+            );
+            println!();
+            println!("Canonical command:");
+            println!("  vida taskflow bootstrap-spec \"<request>\" [--json]");
+            println!();
+            println!("Returned semantics:");
+            println!(
+                "  epic/task ids, design-doc path, docflow initialization summary, and the next bounded execution preparation steps"
+            );
+            println!();
+            println!("Failure modes:");
+            println!(
+                "  Bootstrap fails closed when the runtime bundle, taskflow state root, or bounded design-doc template/protocol surfaces are unavailable."
+            );
+            println!(
+                "  It does not replace later execution packets; implementation still continues through normal delegated runtime flow after the bounded design doc is recorded."
+            );
+            return;
+        }
         Some(_) | None => {}
     }
 
@@ -523,7 +624,7 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Usage:");
     println!("  vida taskflow <args...>");
     println!(
-        "  vida taskflow help [task|parallelism|next|graph-summary|status|consume|continuation|packet|run-graph|recovery|doctor|protocol-binding|query]"
+        "  vida taskflow help [task|parallelism|dependencies|queue|next|graph-summary|status|consume|continuation|packet|dispatch|run-graph|recovery|doctor|protocol-binding|bootstrap-spec|query]"
     );
     println!("  vida taskflow <command> --help");
     println!();
@@ -553,6 +654,8 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!();
     println!("Most-used command homes:");
     println!("  task        backlog inspection and mutation");
+    println!("  dependencies  graph structure, subtree, and critical-path inspection");
+    println!("  queue       ready/blocked/next-step queue posture");
     println!("  next        aggregate next lawful step across backlog and recovery state");
     println!("  graph-summary  ready/blocked pressure plus critical-path summary");
     println!("  parallelism explicit sequencing and parallel-safe scheduling contract");
@@ -570,14 +673,21 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Canonical examples:");
     println!("  vida task ready --json");
     println!("  vida task next --json");
+    println!("  vida task tree <task-id> --json");
+    println!("  vida task deps <task-id> --json");
     println!("  vida taskflow graph-summary --json");
+    println!("  vida taskflow help dependencies");
+    println!("  vida taskflow help queue");
+    println!("  vida taskflow help dispatch");
     println!("  vida taskflow help parallelism");
     println!("  vida taskflow status --summary --json");
     println!("  vida task show <task-id> --json");
-    println!("  vida taskflow run-graph status <task-id>");
+    println!("  vida taskflow run-graph status <run-id> --json");
+    println!("  vida taskflow recovery status <run-id> --json");
     println!("  vida taskflow continuation bind <run-id> --task-id <task-id> --json");
     println!("  vida taskflow run-graph dispatch-init <task-id> --json");
-    println!("  vida taskflow packet render <task-id> --json");
+    println!("  vida taskflow packet render <run-id> --json");
+    println!("  vida taskflow packet latest --json");
     println!("  vida taskflow consume final \"proof path\" --json");
     println!("  vida taskflow consume continue --json");
     println!("  vida taskflow consume advance --max-rounds 4 --json");
@@ -586,15 +696,22 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
     println!("Operator recipes:");
     println!("  Find the next lawful step: vida task next --json");
     println!("  Inspect ready vs blocked pressure: vida taskflow graph-summary --json");
+    println!("  Inspect one backlog subtree before resequencing: vida task tree <task-id> --json");
+    println!("  Inspect dependency ordering before resequencing: vida taskflow help dependencies");
+    println!("  Inspect queue posture before dispatch: vida taskflow help queue");
     println!(
         "  Inspect sequencing and parallel-safe admission rules: vida taskflow help parallelism"
     );
     println!("  Inspect TaskFlow-wide operator posture: vida taskflow status --summary --json");
+    println!("  Inspect dispatch/packet blocker truth: vida taskflow help dispatch");
+    println!("  Inspect one active run state: vida taskflow run-graph status <run-id> --json");
+    println!("  Inspect recovery/blocker truth for one run: vida taskflow recovery status <run-id> --json");
     println!("  Inspect the canonical backlog contract: vida task --help");
     println!("  Ask which surface to use: vida taskflow query \"what should I run next?\"");
     println!("  Bind the current bounded unit explicitly: vida taskflow help continuation");
     println!("  Inspect persisted packet evidence: vida taskflow help packet");
     println!("  Inspect resumability state: vida taskflow help run-graph");
+    println!("  Bootstrap one design-first feature slice: vida taskflow bootstrap-spec \"feature request\" --json");
     println!("  Review runtime diagnostics: vida taskflow help doctor");
     println!();
     println!("Failure modes:");
@@ -662,6 +779,47 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
         };
     }
 
+    if normalized.contains("subtree")
+        || normalized.contains("tree")
+        || normalized.contains("children")
+        || normalized.contains("child graph")
+        || normalized.contains("nested work")
+    {
+        return TaskflowQueryAnswer {
+            intent: "inspect-subtree",
+            why: "Nested backlog structure should be inspected through the canonical task tree surface before resequencing or splitting work under one epic.",
+            command: "vida task tree <task-id> --json",
+            failure_modes: "Unknown task ids fail closed in the delegated runtime, and subtree inspection is graph truth only; it does not by itself grant parallel-safe execution.",
+        };
+    }
+
+    if normalized.contains("dependency")
+        || normalized.contains("dependencies")
+        || normalized.contains("deps")
+        || normalized.contains("critical path")
+        || normalized.contains("reverse deps")
+    {
+        return TaskflowQueryAnswer {
+            intent: "inspect-dependencies",
+            why: "Dependency and ordering inspection should flow through the canonical graph/dependency surfaces before resequencing work.",
+            command: "vida taskflow help dependencies",
+            failure_modes: "Dependency inspection is graph truth only and must not be treated as scheduler admission or dispatch authority by itself.",
+        };
+    }
+
+    if normalized.contains("queue")
+        || normalized.contains("waiting")
+        || normalized.contains("blocked set")
+        || normalized.contains("ready set")
+    {
+        return TaskflowQueryAnswer {
+            intent: "inspect-queue",
+            why: "Queue posture should be inspected through the bounded ready/blocked/next-step surfaces before dispatch or resequencing.",
+            command: "vida taskflow help queue",
+            failure_modes: "Queue visibility is advisory only and should be paired with run-graph recovery when the latest lawful step is still ambiguous.",
+        };
+    }
+
     if normalized.contains("next")
         || normalized.contains("ready")
         || normalized.contains("what should i run")
@@ -672,6 +830,50 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
             why: "TaskFlow readiness is the canonical way to pick the next unblocked execution slice.",
             command: "vida task next --json",
             failure_modes: "Next-step output depends on current runtime state; inspect the embedded blockers, ready task, and recovery summary before mutating runtime state.",
+        };
+    }
+
+    if normalized.contains("dispatch")
+        && (normalized.contains("status")
+            || normalized.contains("diagnos")
+            || normalized.contains("why not")
+            || normalized.contains("block")
+            || normalized.contains("blocker")
+            || normalized.contains("refus"))
+    {
+        return TaskflowQueryAnswer {
+            intent: "inspect-dispatch-status",
+            why: "Dispatch refusal and active-lane diagnosis currently flow through the canonical run-graph and recovery inspection surfaces for one routed run.",
+            command: "vida taskflow help dispatch",
+            failure_modes: "Dispatch diagnosis remains execution-state truth, not backlog readiness authority; use the surfaced run-graph/recovery/packet commands together when blocker posture remains ambiguous.",
+        };
+    }
+
+    if normalized.contains("packet")
+        || normalized.contains("dispatch packet")
+        || normalized.contains("dispatch evidence")
+        || normalized.contains("result path")
+        || normalized.contains("packet evidence")
+        || normalized.contains("latest packet")
+        || normalized.contains("latest result")
+        || normalized.contains("latest dispatch")
+    {
+        let latest_mode = normalized.contains("latest");
+        let command = if latest_mode {
+            "vida taskflow packet latest --json"
+        } else {
+            "vida taskflow packet render <run-id> --json"
+        };
+        let failure_modes = if latest_mode {
+            "Packet rendering fails closed when no latest persisted dispatch receipt exists yet, or when the latest receipt points at packet evidence that is missing."
+        } else {
+            "Packet rendering fails closed when no persisted dispatch receipt or packet path exists for the selected run."
+        };
+        return TaskflowQueryAnswer {
+            intent: "inspect-packet-evidence",
+            why: "Persisted dispatch packet and result evidence should be inspected through the packet surface before retry, supersession, or downstream diagnosis.",
+            command,
+            failure_modes,
         };
     }
 
@@ -866,14 +1068,19 @@ fn print_taskflow_query_help() {
     println!("Usage:");
     println!("  vida taskflow query \"what should I run next?\"");
     println!("  vida taskflow query \"how do I inspect one task?\"");
+    println!("  vida taskflow query \"how do I inspect one subtree?\"");
+    println!("  vida taskflow query \"how do I inspect dependencies?\"");
+    println!("  vida taskflow query \"how do I inspect the queue?\"");
+    println!("  vida taskflow query \"how do I inspect packet evidence?\"");
     println!("  vida taskflow query \"what can run in parallel with the current task?\"");
     println!("  vida taskflow query \"how do I create a new task under this epic?\"");
     println!("  vida taskflow query \"how do I replace the current backlog snapshot?\"");
     println!("  vida taskflow query \"how do I check resumability?\"");
+    println!("  vida taskflow query \"why did dispatch block?\"");
     println!();
     println!("Current intents:");
     println!(
-        "  parallelism/scheduling, next/ready, inspect/show, create/new, update/progress, close/done, display-id, export/jsonl, replace/snapshot, resume/run-graph, doctor/health, final/consume, protocol-binding"
+        "  parallelism/scheduling, subtree/tree, dependencies, queue, next/ready, packet evidence, dispatch diagnosis, inspect/show, create/new, update/progress, close/done, display-id, export/jsonl, replace/snapshot, resume/run-graph, doctor/health, final/consume, protocol-binding"
     );
     println!();
     println!("Failure modes:");

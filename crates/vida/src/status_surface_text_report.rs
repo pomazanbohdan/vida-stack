@@ -69,6 +69,108 @@ fn format_run_graph_activation_vs_execution_evidence(evidence: &serde_json::Valu
     )
 }
 
+fn format_dispatch_blockers(summary: &crate::state_store::RunGraphDispatchReceiptSummary) -> String {
+    let mut blockers = Vec::new();
+    if let Some(blocker_code) = summary
+        .blocker_code
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        blockers.push(blocker_code.to_string());
+    }
+    blockers.extend(
+        summary
+            .downstream_dispatch_blockers
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+    );
+    if blockers.is_empty() {
+        "none".to_string()
+    } else {
+        blockers.join(", ")
+    }
+}
+
+fn emit_dispatch_diagnosis_lines(
+    render: crate::RenderMode,
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+) {
+    crate::surface_render::print_surface_line(
+        render,
+        "latest dispatch",
+        &format!(
+            "target={} status={} lane_status={} backend={} agent={} runtime_role={}",
+            summary.dispatch_target,
+            summary.dispatch_status,
+            summary.lane_status,
+            summary.selected_backend.as_deref().unwrap_or("none"),
+            summary.activation_agent_type.as_deref().unwrap_or("none"),
+            summary.activation_runtime_role.as_deref().unwrap_or("none"),
+        ),
+    );
+    crate::surface_render::print_surface_line(
+        render,
+        "latest dispatch blockers",
+        &format_dispatch_blockers(summary),
+    );
+    crate::surface_render::print_surface_line(
+        render,
+        "latest downstream dispatch",
+        &format!(
+            "target={} active_target={} ready={} status={} executed_count={} last_target={}",
+            summary.downstream_dispatch_target.as_deref().unwrap_or("none"),
+            summary
+                .downstream_dispatch_active_target
+                .as_deref()
+                .unwrap_or("none"),
+            summary.downstream_dispatch_ready,
+            summary
+                .downstream_dispatch_status
+                .as_deref()
+                .unwrap_or("none"),
+            summary.downstream_dispatch_executed_count,
+            summary
+                .downstream_dispatch_last_target
+                .as_deref()
+                .unwrap_or("none"),
+        ),
+    );
+    crate::surface_render::print_surface_line(
+        render,
+        "latest dispatch evidence",
+        &format!(
+            "packet={} result={} downstream_packet={} downstream_result={} downstream_trace={}",
+            summary.dispatch_packet_path.as_deref().unwrap_or("none"),
+            summary.dispatch_result_path.as_deref().unwrap_or("none"),
+            summary
+                .downstream_dispatch_packet_path
+                .as_deref()
+                .unwrap_or("none"),
+            summary
+                .downstream_dispatch_result_path
+                .as_deref()
+                .unwrap_or("none"),
+            summary
+                .downstream_dispatch_trace_path
+                .as_deref()
+                .unwrap_or("none"),
+        ),
+    );
+    crate::surface_render::print_surface_line(
+        render,
+        "latest dispatch inspect",
+        "vida taskflow packet latest --json",
+    );
+    crate::surface_render::print_surface_line(
+        render,
+        "latest dispatch diagnosis",
+        "vida taskflow help dispatch",
+    );
+}
+
 pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> ExitCode {
     crate::surface_render::print_surface_header(inputs.render, "vida status");
     crate::surface_render::print_surface_line(inputs.render, "backend", inputs.backend_summary);
@@ -301,6 +403,7 @@ pub(crate) fn emit_status_text_report(inputs: StatusTextReportInputs<'_>) -> Exi
                 "latest run graph dispatch receipt",
                 &summary.as_display(),
             );
+            emit_dispatch_diagnosis_lines(inputs.render, summary);
         }
         None => {
             crate::surface_render::print_surface_line(

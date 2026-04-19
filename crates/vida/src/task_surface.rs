@@ -1,4 +1,5 @@
 use super::*;
+use crate::task_cli_render::print_task_direct_children;
 
 fn task_json_success_status() -> &'static str {
     crate::contract_profile_adapter::release_contract_status(true)
@@ -106,6 +107,27 @@ fn task_update_semantics_arg(
     }
 }
 
+fn parse_label_values(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>()
+}
+
+fn parse_optional_label_value(value: Option<&str>) -> Option<Vec<String>> {
+    value.map(|value| {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| entry.to_string())
+            .collect::<Vec<_>>()
+    })
+}
+
 async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) -> ExitCode {
     let state_dir = command
         .state_dir
@@ -204,6 +226,7 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                     return ExitCode::SUCCESS;
                 }
             }
+            let labels = parse_label_values(&command.labels);
             let source_repo = project_root.display().to_string();
             match store
                 .create_task(state_store::CreateTaskRequest {
@@ -215,7 +238,7 @@ async fn run_task_create_like(command: TaskCreateArgs, ensure_existing: bool) ->
                     status: &command.status,
                     priority: command.priority,
                     parent_id: parent_id.as_deref(),
-                    labels: &command.labels,
+                    labels: &labels,
                     execution_semantics: task_execution_semantics_from_create_args(&command),
                     created_by: "vida task",
                     source_repo: &source_repo,
@@ -271,7 +294,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 ExitCode::SUCCESS
             }
             Some(
-                "ready" | "deps" | "reverse-deps" | "blocked" | "tree" | "critical-path"
+                "ready" | "deps" | "reverse-deps" | "blocked" | "children" | "tree"
+                | "subtree" | "critical-path"
                 | "next-display-id" | "create" | "ensure" | "update" | "close" | "list" | "show"
                 | "import-jsonl" | "replace-jsonl" | "export-jsonl" | "validate-graph" | "dep",
             ) => {
@@ -596,14 +620,9 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
-            let set_labels = command.set_labels.as_ref().map(|labels| {
-                labels
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(|value| value.to_string())
-                    .collect::<Vec<_>>()
-            });
+            let add_labels = parse_label_values(&command.add_labels);
+            let remove_labels = parse_label_values(&command.remove_labels);
+            let set_labels = parse_optional_label_value(command.set_labels.as_deref());
             let execution_mode = match task_update_semantics_arg(
                 command.execution_mode.as_deref(),
                 command.clear_execution_mode,
@@ -651,8 +670,8 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         status: command.status.as_deref(),
                         notes: notes.as_deref(),
                         description: command.description.as_deref(),
-                        add_labels: &command.add_labels,
-                        remove_labels: &command.remove_labels,
+                        add_labels: &add_labels,
+                        remove_labels: &remove_labels,
                         set_labels: set_labels.as_deref(),
                         execution_mode,
                         order_bucket,
@@ -826,6 +845,27 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         }
+        TaskCommand::Children(command) => {
+            let state_dir = command
+                .state_dir
+                .unwrap_or_else(state_store::default_state_dir);
+            match StateStore::open_existing(state_dir).await {
+                Ok(store) => match store.task_dependency_tree(&command.task_id).await {
+                    Ok(tree) => {
+                        print_task_direct_children(command.render, &tree, command.json);
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to read task direct children: {error}");
+                        ExitCode::from(1)
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         TaskCommand::Tree(command) => {
             let state_dir = command
                 .state_dir
@@ -971,7 +1011,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
 mod tests {
     use super::{
         canonical_json_string_array_entries, normalize_task_json_contract_arrays,
-        task_json_success_status,
+        parse_label_values, parse_optional_label_value, task_json_success_status,
     };
 
     #[test]
@@ -995,6 +1035,25 @@ mod tests {
         assert_eq!(
             canonical_json_string_array_entries(&serde_json::json!(["   "])),
             None
+        );
+    }
+
+    #[test]
+    fn parse_label_values_accepts_repeated_and_comma_separated_forms() {
+        let labels = parse_label_values(&[
+            "alpha,beta".to_string(),
+            " gamma ".to_string(),
+            "delta, ,epsilon".to_string(),
+        ]);
+        assert_eq!(labels, vec!["alpha", "beta", "gamma", "delta", "epsilon"]);
+    }
+
+    #[test]
+    fn parse_optional_label_value_returns_none_for_absent_input() {
+        assert_eq!(parse_optional_label_value(None), None);
+        assert_eq!(
+            parse_optional_label_value(Some("alpha, beta")),
+            Some(vec!["alpha".to_string(), "beta".to_string()])
         );
     }
 }

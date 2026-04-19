@@ -52,11 +52,25 @@ async fn resolve_packet_render_run_id(
         })?;
     if bound_receipt.is_none() {
         return Err(format!(
-            "Run `{requested_run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but no fresh persisted dispatch receipt exists for the bound task. Run `vida taskflow run-graph dispatch-init {requested_run_id} --json` first."
+            "Run `{requested_run_id}` has explicit continuation binding to task_graph_task `{bound_task_id}`, but no fresh persisted dispatch receipt exists for the bound task. Run `vida taskflow run-graph dispatch-init {bound_task_id} --json` first."
         ));
     }
 
     Ok(bound_task_id.to_string())
+}
+
+async fn resolve_latest_packet_run_id(store: &StateStore) -> Result<String, String> {
+    let Some(receipt) = store
+        .latest_run_graph_dispatch_receipt()
+        .await
+        .map_err(|error| format!("Failed to read latest persisted dispatch receipt: {error}"))?
+    else {
+        return Err(
+            "No latest persisted run-graph dispatch receipt exists; run `vida taskflow run-graph dispatch-init <run-id> --json` first."
+                .to_string(),
+        );
+    };
+    Ok(receipt.run_id)
 }
 
 fn build_taskflow_packet_render_payload(
@@ -99,25 +113,35 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
         _ => {}
     }
 
-    let (run_id, as_json) = match args {
+    let (requested_run_id, as_json, latest_mode) = match args {
         [head, subcommand, run_id] if head == "packet" && subcommand == "render" => {
-            (run_id.clone(), false)
+            (run_id.clone(), false, false)
         }
         [head, subcommand, run_id, flag]
             if head == "packet" && subcommand == "render" && matches!(flag.as_str(), "--json") =>
         {
-            (run_id.clone(), true)
+            (run_id.clone(), true, false)
+        }
+        [head, subcommand] if head == "packet" && subcommand == "latest" => {
+            ("latest".to_string(), false, true)
+        }
+        [head, subcommand, flag]
+            if head == "packet" && subcommand == "latest" && matches!(flag.as_str(), "--json") =>
+        {
+            ("latest".to_string(), true, true)
         }
         [head, subcommand, flag]
             if head == "packet"
-                && subcommand == "render"
+                && matches!(subcommand.as_str(), "render" | "latest")
                 && matches!(flag.as_str(), "--help" | "-h") =>
         {
             crate::taskflow_layer4::print_taskflow_proxy_help(Some("packet"));
             return ExitCode::SUCCESS;
         }
         _ => {
-            eprintln!("Usage: vida taskflow packet render <run-id> [--json]");
+            eprintln!(
+                "Usage: vida taskflow packet render <run-id> [--json]\n       vida taskflow packet latest [--json]"
+            );
             return ExitCode::from(2);
         }
     };
@@ -128,6 +152,17 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
             eprintln!("Failed to open authoritative state store: {error}");
             return ExitCode::from(1);
         }
+    };
+    let run_id = if latest_mode {
+        match resolve_latest_packet_run_id(&store).await {
+            Ok(run_id) => run_id,
+            Err(error) => {
+                eprintln!("{error}");
+                return ExitCode::from(1);
+            }
+        }
+    } else {
+        requested_run_id.clone()
     };
     let effective_run_id = match resolve_packet_render_run_id(&store, &run_id).await {
         Ok(run_id) => run_id,
@@ -182,7 +217,7 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
     };
 
     let payload = build_taskflow_packet_render_payload(
-        &run_id,
+        &requested_run_id,
         &effective_run_id,
         &receipt,
         dispatch_packet_path,
@@ -194,6 +229,9 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
         crate::print_json_pretty(&payload);
     } else {
         print_surface_header(RenderMode::Plain, "vida taskflow packet render");
+        if latest_mode {
+            print_surface_line(RenderMode::Plain, "requested", "latest");
+        }
         print_surface_line(RenderMode::Plain, "run", &receipt.run_id);
         print_surface_line(
             RenderMode::Plain,
@@ -219,7 +257,10 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_taskflow_packet_render_payload, resolve_packet_render_run_id};
+    use super::{
+        build_taskflow_packet_render_payload, resolve_latest_packet_run_id,
+        resolve_packet_render_run_id,
+    };
     use crate::state_store::StateStore;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -357,6 +398,84 @@ mod tests {
             .expect("packet render should redirect to bound task receipt");
 
         assert_eq!(effective_run_id, "task-new");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn latest_packet_run_id_reads_latest_receipt_run() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-packet-render-latest-run-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        store
+            .record_run_graph_status(&crate::state_store::RunGraphStatus {
+                run_id: "run-latest".to_string(),
+                task_id: "task-latest".to_string(),
+                task_class: "delivery_task".to_string(),
+                active_node: "implementer".to_string(),
+                next_node: None,
+                status: "in_progress".to_string(),
+                route_task_class: "delivery_task".to_string(),
+                selected_backend: "opencode_cli".to_string(),
+                lane_id: "lane-latest".to_string(),
+                lifecycle_stage: "implementer_ready".to_string(),
+                policy_gate: "none".to_string(),
+                handoff_state: "none".to_string(),
+                context_state: "sealed".to_string(),
+                checkpoint_kind: "dispatch".to_string(),
+                resume_target: "dispatch.implementer".to_string(),
+                recovery_ready: true,
+            })
+            .await
+            .expect("persist status");
+        store
+            .record_run_graph_dispatch_receipt(&crate::state_store::RunGraphDispatchReceipt {
+                run_id: "run-latest".to_string(),
+                dispatch_target: "implementer".to_string(),
+                dispatch_status: "ready".to_string(),
+                lane_status: "lane_ready".to_string(),
+                supersedes_receipt_id: None,
+                exception_path_receipt_id: None,
+                dispatch_kind: "agent_lane".to_string(),
+                dispatch_surface: Some("vida taskflow run-graph dispatch-init".to_string()),
+                dispatch_command: Some(
+                    "vida taskflow consume continue --run-id run-latest --json".to_string(),
+                ),
+                dispatch_packet_path: Some("/tmp/run-latest-packet.json".to_string()),
+                dispatch_result_path: None,
+                blocker_code: None,
+                downstream_dispatch_target: None,
+                downstream_dispatch_command: None,
+                downstream_dispatch_note: None,
+                downstream_dispatch_ready: false,
+                downstream_dispatch_blockers: vec![],
+                downstream_dispatch_packet_path: None,
+                downstream_dispatch_status: None,
+                downstream_dispatch_result_path: None,
+                downstream_dispatch_trace_path: None,
+                downstream_dispatch_executed_count: 0,
+                downstream_dispatch_active_target: None,
+                downstream_dispatch_last_target: None,
+                activation_agent_type: Some("junior".to_string()),
+                activation_runtime_role: Some("worker".to_string()),
+                selected_backend: Some("opencode_cli".to_string()),
+                recorded_at: "2026-04-19T12:00:02Z".to_string(),
+            })
+            .await
+            .expect("persist latest receipt");
+
+        let resolved = resolve_latest_packet_run_id(&store)
+            .await
+            .expect("resolve latest run");
+        assert_eq!(resolved, "run-latest");
 
         let _ = fs::remove_dir_all(&root);
     }

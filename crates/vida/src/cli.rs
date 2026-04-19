@@ -2,15 +2,15 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
-const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\n  vida task help parallelism\n  vida docflow help";
+const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\n  vida task --help\n  vida taskflow help parallelism\n  vida docflow help";
 
 const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
 
-const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --json\n  vida task next --json\n  vida task show <task-id> --json\n  vida task progress <task-id> --json\n  vida task deps <task-id> --json\n  vida task critical-path --json\n  vida task help parallelism\n\nParallelism guidance:\n  Use `vida task help parallelism` for execution_mode/order_bucket/parallel_group/conflict_domain semantics.\n  Use `vida taskflow graph-summary --json` to see `ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  Missing execution semantics never imply safe parallel execution.";
+const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --json\n  vida task next --json\n  vida task show <task-id> --json\n  vida task progress <task-id> --json\n  vida task deps <task-id> --json\n  vida task tree <task-id> --json\n  vida task critical-path --json\n  vida taskflow help parallelism\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary --json` to see `ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  Missing execution semantics never imply safe parallel execution.";
 
 const TASKFLOW_LONG_ABOUT: &str = "Delegate to the TaskFlow runtime family.\n\nTaskFlow is the execution/runtime authority. Use it for tracked execution, backlog pressure, run-graph state, packet inspection, continuation binding, and closure handoff.";
 
-const TASKFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida taskflow help\n  vida taskflow help task\n  vida taskflow help parallelism\n  vida taskflow graph-summary --json\n  vida taskflow status --summary --json\n  vida task next --json\n\nParallelism guidance:\n  `vida taskflow graph-summary --json` exposes `current_task_id`, `scheduling.ready[*].ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  `vida task help parallelism` explains execution semantics fields and fail-closed scheduling rules.";
+const TASKFLOW_AFTER_HELP: &str = "Family entrypoints:\n  vida taskflow help\n  vida taskflow help task\n  vida taskflow help parallelism\n  vida taskflow help dependencies\n  vida taskflow help queue\n  vida taskflow help dispatch\n  vida task tree <task-id> --json\n  vida taskflow graph-summary --json\n  vida taskflow status --summary --json\n  vida taskflow run-graph status <run-id> --json\n  vida taskflow recovery status <run-id> --json\n  vida taskflow packet latest --json\n  vida taskflow bootstrap-spec \"feature request\" --json\n  vida task next --json\n\nParallelism guidance:\n  `vida taskflow graph-summary --json` exposes `current_task_id`, `scheduling.ready[*].ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  `vida taskflow help parallelism` explains execution semantics fields and fail-closed scheduling rules.";
 
 const TASK_CREATE_ABOUT: &str = "Create one tracked task in the authoritative backlog store.";
 const TASK_CREATE_LONG_ABOUT: &str = "Create one tracked task in the authoritative backlog store.\n\nExecution semantics are additive to graph truth:\n- `--execution-mode sequential` keeps the task single-lane by default\n- `--execution-mode parallel_safe` allows parallel admission only when other semantics also match\n- `--execution-mode exclusive` blocks parallel execution\n- `--order-bucket`, `--parallel-group`, and `--conflict-domain` refine safe co-scheduling";
@@ -137,6 +137,14 @@ pub(crate) enum TaskCommand {
     Deps(TaskDepsArgs),
     ReverseDeps(TaskDepsArgs),
     Blocked(TaskBlockedArgs),
+    #[command(
+        about = "inspect direct children for one task from the authoritative backlog store"
+    )]
+    Children(TaskDepsArgs),
+    #[command(
+        about = "inspect one recursive task subtree from the authoritative backlog store",
+        alias = "subtree"
+    )]
     Tree(TaskDepsArgs),
     ValidateGraph(TaskBlockedArgs),
     Dep(TaskDepArgs),
@@ -315,7 +323,11 @@ pub(crate) struct TaskCreateArgs {
     #[arg(long = "description", default_value = "")]
     pub(crate) description: String,
 
-    #[arg(long = "labels")]
+    #[arg(
+        long = "labels",
+        value_delimiter = ',',
+        help = "Task labels. Accepts comma-separated values and repeated flags."
+    )]
     pub(crate) labels: Vec<String>,
 
     #[arg(long = "execution-mode")]
@@ -356,13 +368,24 @@ pub(crate) struct TaskUpdateArgs {
     #[arg(long = "description")]
     pub(crate) description: Option<String>,
 
-    #[arg(long = "add-label")]
+    #[arg(
+        long = "add-label",
+        value_delimiter = ',',
+        help = "Labels to add. Accepts comma-separated values and repeated flags."
+    )]
     pub(crate) add_labels: Vec<String>,
 
-    #[arg(long = "remove-label")]
+    #[arg(
+        long = "remove-label",
+        value_delimiter = ',',
+        help = "Labels to remove. Accepts comma-separated values and repeated flags."
+    )]
     pub(crate) remove_labels: Vec<String>,
 
-    #[arg(long = "set-labels")]
+    #[arg(
+        long = "set-labels",
+        help = "Replace labels with a comma-separated list."
+    )]
     pub(crate) set_labels: Option<String>,
 
     #[arg(long = "execution-mode")]
