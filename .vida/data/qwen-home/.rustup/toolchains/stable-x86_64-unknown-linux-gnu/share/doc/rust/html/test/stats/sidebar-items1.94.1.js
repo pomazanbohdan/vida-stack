@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["winsorize"],"struct":["Summary"],"trait":["Stats"]};

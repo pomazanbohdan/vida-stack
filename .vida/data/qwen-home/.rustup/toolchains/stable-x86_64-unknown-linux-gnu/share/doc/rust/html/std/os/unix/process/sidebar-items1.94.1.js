@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["parent_id"],"trait":["ChildExt","CommandExt","ExitStatusExt"]};

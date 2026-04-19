@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["local_waker_fn","waker_fn"],"trait":["LocalWake","Wake"]};

@@ -1,1 +1,0 @@
-{"ts":"2026-04-04T00:00:00Z","event":"metadata_initialized","artifact_path":"product/index","artifact_type":"product_index","artifact_version":"1","artifact_revision":"2026-04-04","source_path":"docs/product/index.md","reason":"initialize scaffold metadata for docflow-ready project bootstrap","actor":"vida","scope":"scaffold-init","tags":["scaffold","docflow"]}

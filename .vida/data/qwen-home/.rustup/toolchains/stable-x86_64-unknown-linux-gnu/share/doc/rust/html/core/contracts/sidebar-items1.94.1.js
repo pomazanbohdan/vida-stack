@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"attr":["ensures","requires"],"fn":["build_check_ensures"]};

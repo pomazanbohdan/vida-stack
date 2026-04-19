@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["ProcThreadAttributeList","ProcThreadAttributeListBuilder"],"trait":["ChildExt","CommandExt","ExitCodeExt","ExitStatusExt"]};

@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"attr":["autodiff_forward","autodiff_reverse"]};

@@ -3,8 +3,12 @@ __pycache__/
 .code/agents
 _vida/scripts-nim/vida-legacy
 _vida/
-**/.vida/data/state/**
+.vida/data/
+**/.vida/data/**
+.hermes/
+vida/config/docflow-proof.current.jsonl
 target
+**/target/
 _temp
 .venv
 dist

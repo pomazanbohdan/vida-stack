@@ -1,8 +1,0 @@
-{
-  "closure_ready": true,
-  "dispatch_target": "closure",
-  "note": "runtime downstream scheduler reached closure without additional lane activation",
-  "run_id": "tf-post-r1-approval-surface",
-  "status": "pass",
-  "surface": "vida taskflow closure-preview"
-}

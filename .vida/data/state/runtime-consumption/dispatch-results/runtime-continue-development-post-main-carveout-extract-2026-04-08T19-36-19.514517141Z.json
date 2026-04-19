@@ -1,8 +1,0 @@
-{
-  "closure_ready": true,
-  "dispatch_target": "closure",
-  "note": "runtime downstream scheduler reached closure without additional lane activation",
-  "run_id": "runtime-continue-development-post-main-carveout-extract",
-  "status": "pass",
-  "surface": "vida taskflow closure-preview"
-}

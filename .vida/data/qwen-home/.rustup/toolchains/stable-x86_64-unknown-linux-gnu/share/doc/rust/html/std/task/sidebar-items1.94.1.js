@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["Poll"],"fn":["local_waker_fn","waker_fn"],"macro":["ready"],"struct":["Context","ContextBuilder","LocalWaker","RawWaker","RawWakerVTable","Waker"],"trait":["LocalWake","Wake"]};
