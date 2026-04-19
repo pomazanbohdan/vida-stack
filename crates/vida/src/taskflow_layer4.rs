@@ -848,9 +848,9 @@ fn taskflow_query_answer(query: &str) -> TaskflowQueryAnswer<'static> {
     {
         return TaskflowQueryAnswer {
             intent: "inspect-dispatch-status",
-            why: "Dispatch refusal and active-lane diagnosis currently flow through the canonical run-graph and recovery inspection surfaces for one routed run.",
-            command: "vida taskflow help dispatch",
-            failure_modes: "Dispatch diagnosis remains execution-state truth, not backlog readiness authority; use the surfaced run-graph/recovery/packet commands together when blocker posture remains ambiguous.",
+            why: "Dispatch refusal and active-lane diagnosis should be inspected through one bounded run-graph diagnosis surface backed by persisted recovery and projection truth.",
+            command: "vida taskflow run-graph diagnose <run-id> --json",
+            failure_modes: "Dispatch diagnosis remains execution-state truth, not backlog readiness authority; missing or wrong run ids fail closed and latest-run selection still requires explicit operator intent.",
         };
     }
 

@@ -1479,7 +1479,7 @@ pub(crate) async fn run_taskflow_proxy(args: ProxyArgs) -> ExitCode {
     if matches!(args.args.first().map(String::as_str), Some("run-graph")) {
         if matches!(
             args.args.get(1).map(String::as_str),
-            Some("status" | "latest" | "--help" | "-h")
+            Some("status" | "latest" | "diagnose" | "--help" | "-h")
         ) {
             return run_taskflow_run_graph(&args.args).await;
         }

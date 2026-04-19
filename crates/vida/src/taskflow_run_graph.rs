@@ -32,6 +32,18 @@ struct RecoveryWhyNotNow {
 }
 
 #[derive(Debug, serde::Serialize)]
+struct RunGraphDiagnosis {
+    run_id: String,
+    blocker_codes: Vec<String>,
+    why_not_now: Option<RecoveryWhyNotNow>,
+    next_action: Option<RecoveryNextAction>,
+    recommended_command: Option<String>,
+    recommended_surface: Option<String>,
+    recovery: crate::state_store::RunGraphRecoverySummary,
+    projection_truth: RunGraphProjectionTruth,
+}
+
+#[derive(Debug, serde::Serialize)]
 pub(crate) struct TaskflowRunGraphSeedPayload {
     pub(crate) request_text: String,
     pub(crate) role_selection: RuntimeConsumptionLaneSelection,
@@ -153,6 +165,27 @@ fn recovery_surface_contract(
         recommended_command,
         recommended_surface,
     )
+}
+
+async fn build_run_graph_diagnosis(
+    store: &StateStore,
+    run_id: &str,
+) -> Result<RunGraphDiagnosis, StateStoreError> {
+    let summary = store.run_graph_recovery_summary(run_id).await?;
+    let status = store.run_graph_status(&summary.run_id).await?;
+    let projection_truth = run_graph_projection_truth(store, &status).await?;
+    let (blocker_codes, why_not_now, next_action, recommended_command, recommended_surface) =
+        recovery_surface_contract(&summary, &projection_truth);
+    Ok(RunGraphDiagnosis {
+        run_id: summary.run_id.clone(),
+        blocker_codes,
+        why_not_now,
+        next_action,
+        recommended_command,
+        recommended_surface,
+        recovery: summary,
+        projection_truth,
+    })
 }
 
 fn projection_vs_receipt_parity(
@@ -1031,6 +1064,63 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                 }
             }
         }
+        [head, subcommand, run_id] if head == "run-graph" && subcommand == "diagnose" => {
+            let state_dir = proxy_state_dir();
+            match StateStore::open_existing(state_dir).await {
+                Ok(store) => match build_run_graph_diagnosis(&store, run_id).await {
+                    Ok(diagnosis) => {
+                        print_surface_header(RenderMode::Plain, "vida taskflow run-graph diagnose");
+                        print_surface_line(RenderMode::Plain, "run", &diagnosis.run_id);
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "recovery",
+                            &diagnosis.recovery.as_display(),
+                        );
+                        print_surface_line(
+                            RenderMode::Plain,
+                            "projection",
+                            &diagnosis.projection_truth.projection_reason,
+                        );
+                        if !diagnosis.blocker_codes.is_empty() {
+                            print_surface_line(
+                                RenderMode::Plain,
+                                "blocker_codes",
+                                &diagnosis.blocker_codes.join(", "),
+                            );
+                        }
+                        if let Some(summary) = diagnosis
+                            .why_not_now
+                            .as_ref()
+                            .map(|value| value.summary.as_str())
+                        {
+                            print_surface_line(RenderMode::Plain, "why_not_now", summary);
+                        }
+                        if let Some(next_action) = diagnosis.next_action.as_ref() {
+                            print_surface_line(
+                                RenderMode::Plain,
+                                "next action",
+                                &next_action.reason,
+                            );
+                        }
+                        if let Some(command) = diagnosis.recommended_command.as_deref() {
+                            print_surface_line(RenderMode::Plain, "recommended_command", command);
+                        }
+                        if let Some(surface) = diagnosis.recommended_surface.as_deref() {
+                            print_surface_line(RenderMode::Plain, "recommended_surface", surface);
+                        }
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to diagnose run-graph dispatch state: {error}");
+                        ExitCode::from(1)
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         [head, subcommand, run_id, flag]
             if head == "run-graph" && subcommand == "status" && flag == "--json" =>
         {
@@ -1072,8 +1162,47 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                 }
             }
         }
+        [head, subcommand, run_id, flag]
+            if head == "run-graph" && subcommand == "diagnose" && flag == "--json" =>
+        {
+            let state_dir = proxy_state_dir();
+            match StateStore::open_existing(state_dir).await {
+                Ok(store) => match build_run_graph_diagnosis(&store, run_id).await {
+                    Ok(diagnosis) => {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "surface": "vida taskflow run-graph diagnose",
+                                "run_id": diagnosis.run_id,
+                                "blocker_codes": diagnosis.blocker_codes,
+                                "why_not_now": diagnosis.why_not_now,
+                                "next_action": diagnosis.next_action,
+                                "recommended_command": diagnosis.recommended_command,
+                                "recommended_surface": diagnosis.recommended_surface,
+                                "recovery": diagnosis.recovery,
+                                "projection_truth": diagnosis.projection_truth,
+                            }))
+                            .expect("run-graph diagnose should render as json")
+                        );
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to diagnose run-graph dispatch state: {error}");
+                        ExitCode::from(1)
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         [head, subcommand, ..] if head == "run-graph" && subcommand == "latest" => {
             eprintln!("Usage: vida taskflow run-graph latest [--json]");
+            ExitCode::from(2)
+        }
+        [head, subcommand, ..] if head == "run-graph" && subcommand == "diagnose" => {
+            eprintln!("Usage: vida taskflow run-graph diagnose <run-id> [--json]");
             ExitCode::from(2)
         }
         [head, subcommand, ..] if head == "run-graph" && subcommand == "status" => {
