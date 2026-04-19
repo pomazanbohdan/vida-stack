@@ -922,6 +922,89 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
             print_taskflow_proxy_help(Some("run-graph"));
             ExitCode::SUCCESS
         }
+        [head, subcommand] if head == "run-graph" && subcommand == "diagnose-latest" => {
+            let state_dir = proxy_state_dir();
+            match StateStore::open_existing(state_dir).await {
+                Ok(store) => match store.latest_run_graph_status().await {
+                    Ok(Some(status)) => match build_run_graph_diagnosis(&store, &status.run_id).await
+                    {
+                        Ok(diagnosis) => {
+                            print_surface_header(
+                                RenderMode::Plain,
+                                "vida taskflow run-graph diagnose-latest",
+                            );
+                            print_surface_line(RenderMode::Plain, "run", &diagnosis.run_id);
+                            print_surface_line(
+                                RenderMode::Plain,
+                                "recovery",
+                                &diagnosis.recovery.as_display(),
+                            );
+                            print_surface_line(
+                                RenderMode::Plain,
+                                "projection",
+                                &diagnosis.projection_truth.projection_reason,
+                            );
+                            if !diagnosis.blocker_codes.is_empty() {
+                                print_surface_line(
+                                    RenderMode::Plain,
+                                    "blocker_codes",
+                                    &diagnosis.blocker_codes.join(", "),
+                                );
+                            }
+                            if let Some(summary) = diagnosis
+                                .why_not_now
+                                .as_ref()
+                                .map(|value| value.summary.as_str())
+                            {
+                                print_surface_line(RenderMode::Plain, "why_not_now", summary);
+                            }
+                            if let Some(next_action) = diagnosis.next_action.as_ref() {
+                                print_surface_line(
+                                    RenderMode::Plain,
+                                    "next action",
+                                    &next_action.reason,
+                                );
+                            }
+                            if let Some(command) = diagnosis.recommended_command.as_deref() {
+                                print_surface_line(
+                                    RenderMode::Plain,
+                                    "recommended_command",
+                                    command,
+                                );
+                            }
+                            if let Some(surface) = diagnosis.recommended_surface.as_deref() {
+                                print_surface_line(
+                                    RenderMode::Plain,
+                                    "recommended_surface",
+                                    surface,
+                                );
+                            }
+                            ExitCode::SUCCESS
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to diagnose latest run-graph dispatch state: {error}");
+                            ExitCode::from(1)
+                        }
+                    },
+                    Ok(None) => {
+                        print_surface_header(
+                            RenderMode::Plain,
+                            "vida taskflow run-graph diagnose-latest",
+                        );
+                        print_surface_line(RenderMode::Plain, "status", "none");
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to read latest run-graph status: {error}");
+                        ExitCode::from(1)
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         [head, subcommand] if head == "run-graph" && subcommand == "latest" => {
             let state_dir = proxy_state_dir();
             match StateStore::open_existing(state_dir).await {
@@ -960,6 +1043,59 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
                     Ok(None) => {
                         print_surface_header(RenderMode::Plain, "vida taskflow run-graph latest");
                         print_surface_line(RenderMode::Plain, "status", "none");
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to read latest run-graph status: {error}");
+                        ExitCode::from(1)
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        [head, subcommand, flag]
+            if head == "run-graph" && subcommand == "diagnose-latest" && flag == "--json" =>
+        {
+            let state_dir = proxy_state_dir();
+            match StateStore::open_existing(state_dir).await {
+                Ok(store) => match store.latest_run_graph_status().await {
+                    Ok(Some(status)) => match build_run_graph_diagnosis(&store, &status.run_id).await
+                    {
+                        Ok(diagnosis) => {
+                            println!(
+                                "{}",
+                                serde_json::to_string_pretty(&serde_json::json!({
+                                    "surface": "vida taskflow run-graph diagnose-latest",
+                                    "run_id": diagnosis.run_id,
+                                    "blocker_codes": diagnosis.blocker_codes,
+                                    "why_not_now": diagnosis.why_not_now,
+                                    "next_action": diagnosis.next_action,
+                                    "recommended_command": diagnosis.recommended_command,
+                                    "recommended_surface": diagnosis.recommended_surface,
+                                    "recovery": diagnosis.recovery,
+                                    "projection_truth": diagnosis.projection_truth,
+                                }))
+                                .expect("run-graph diagnose-latest should render as json")
+                            );
+                            ExitCode::SUCCESS
+                        }
+                        Err(error) => {
+                            eprintln!("Failed to diagnose latest run-graph dispatch state: {error}");
+                            ExitCode::from(1)
+                        }
+                    },
+                    Ok(None) => {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&serde_json::json!({
+                                "surface": "vida taskflow run-graph diagnose-latest",
+                                "status": null,
+                            }))
+                            .expect("run-graph diagnose-latest should render as json")
+                        );
                         ExitCode::SUCCESS
                     }
                     Err(error) => {
@@ -1199,6 +1335,10 @@ pub(crate) async fn run_taskflow_run_graph(args: &[String]) -> ExitCode {
         }
         [head, subcommand, ..] if head == "run-graph" && subcommand == "latest" => {
             eprintln!("Usage: vida taskflow run-graph latest [--json]");
+            ExitCode::from(2)
+        }
+        [head, subcommand, ..] if head == "run-graph" && subcommand == "diagnose-latest" => {
+            eprintln!("Usage: vida taskflow run-graph diagnose-latest [--json]");
             ExitCode::from(2)
         }
         [head, subcommand, ..] if head == "run-graph" && subcommand == "diagnose" => {
