@@ -100,6 +100,20 @@ fn build_taskflow_packet_render_payload(
     })
 }
 
+fn preview_value<'a>(body: &'a serde_json::Value, section: &str, key: &str) -> &'a str {
+    body.get(section)
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("none")
+}
+
+fn preview_bool(body: &serde_json::Value, section: &str, key: &str) -> bool {
+    body.get(section)
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
 pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
     match args {
         [head] if head == "packet" => {
@@ -221,7 +235,7 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
         &effective_run_id,
         &receipt,
         dispatch_packet_path,
-        dispatch_packet_body,
+        dispatch_packet_body.clone(),
         downstream_packet,
     );
 
@@ -237,6 +251,47 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
             RenderMode::Plain,
             "dispatch_target",
             &receipt.dispatch_target,
+        );
+        print_surface_line(
+            RenderMode::Plain,
+            "selected_backend",
+            preview_value(&dispatch_packet_body, "route_policy", "effective_selected_backend"),
+        );
+        print_surface_line(
+            RenderMode::Plain,
+            "route_policy",
+            &format!(
+                "primary_backend={} backend_source={} posture={}",
+                preview_value(&dispatch_packet_body, "route_policy", "route_primary_backend"),
+                preview_value(&dispatch_packet_body, "route_policy", "selected_backend_source"),
+                preview_value(
+                    &dispatch_packet_body,
+                    "effective_execution_posture",
+                    "effective_posture_kind"
+                ),
+            ),
+        );
+        print_surface_line(
+            RenderMode::Plain,
+            "execution_posture",
+            &format!(
+                "selected_execution_class={} mixed_route_backends={} activation_evidence_state={}",
+                preview_value(
+                    &dispatch_packet_body,
+                    "effective_execution_posture",
+                    "selected_execution_class"
+                ),
+                preview_bool(
+                    &dispatch_packet_body,
+                    "effective_execution_posture",
+                    "mixed_route_backends"
+                ),
+                preview_value(
+                    &dispatch_packet_body,
+                    "effective_execution_posture",
+                    "activation_evidence_state"
+                ),
+            ),
         );
         print_surface_line(RenderMode::Plain, "dispatch_packet", dispatch_packet_path);
         if let Some(path) = receipt.downstream_dispatch_packet_path.as_deref() {
