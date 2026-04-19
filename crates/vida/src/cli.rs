@@ -6,7 +6,7 @@ const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\
 
 const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
 
-const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --json\n  vida task next --json\n  vida task show <task-id> --json\n  vida task progress <task-id> --json\n  vida task deps <task-id> --json\n  vida task tree <task-id> --json\n  vida task critical-path --json\n  vida taskflow help parallelism\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary --json` to see `ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  Missing execution semantics never imply safe parallel execution.";
+const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --json\n  vida task next --json\n  vida task show <task-id> --json\n  vida task progress <task-id> --json\n  vida task deps <task-id> --json\n  vida task tree <task-id> --json\n  vida task reparent-children <from-parent-id> <to-parent-id> --json\n  vida task critical-path --json\n  vida taskflow help parallelism\n\nParallelism guidance:\n  Use `vida taskflow help parallelism` for the canonical execution_mode/order_bucket/parallel_group/conflict_domain contract.\n  `vida task help parallelism` remains a compatibility alias to the same TaskFlow-owned help.\n  Use `vida taskflow graph-summary --json` to see `ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  Missing execution semantics never imply safe parallel execution.";
 
 const TASKFLOW_LONG_ABOUT: &str = "Delegate to the TaskFlow runtime family.\n\nTaskFlow is the execution/runtime authority. Use it for tracked execution, backlog pressure, run-graph state, packet inspection, continuation binding, and closure handoff.";
 
@@ -139,6 +139,11 @@ pub(crate) enum TaskCommand {
     Blocked(TaskBlockedArgs),
     #[command(about = "inspect direct children for one task from the authoritative backlog store")]
     Children(TaskDepsArgs),
+    #[command(
+        about = "bulk-reparent direct children from one parent task to another",
+        alias = "move-children"
+    )]
+    ReparentChildren(TaskBulkReparentArgs),
     #[command(
         about = "inspect one recursive task subtree from the authoritative backlog store",
         alias = "subtree"
@@ -476,6 +481,30 @@ pub(crate) struct TaskNextArgs {
 #[derive(Args, Debug, Clone, Default)]
 pub(crate) struct TaskDepsArgs {
     pub(crate) task_id: String,
+
+    #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
+    pub(crate) state_dir: Option<PathBuf>,
+
+    #[arg(long = "render", env = "VIDA_RENDER", value_enum, default_value_t = RenderMode::Plain)]
+    pub(crate) render: RenderMode,
+
+    #[arg(long = "json")]
+    pub(crate) json: bool,
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct TaskBulkReparentArgs {
+    pub(crate) from_parent_id: String,
+    pub(crate) to_parent_id: String,
+
+    #[arg(
+        long = "child-id",
+        help = "Only move the listed direct child ids. Repeat to move a subset."
+    )]
+    pub(crate) child_ids: Vec<String>,
+
+    #[arg(long = "dry-run")]
+    pub(crate) dry_run: bool,
 
     #[arg(long = "state-dir", env = "VIDA_STATE_DIR")]
     pub(crate) state_dir: Option<PathBuf>,

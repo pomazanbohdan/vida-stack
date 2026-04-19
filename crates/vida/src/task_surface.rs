@@ -1,5 +1,5 @@
 use super::*;
-use crate::task_cli_render::print_task_direct_children;
+use crate::task_cli_render::{print_task_bulk_reparent_result, print_task_direct_children};
 
 fn task_json_success_status() -> &'static str {
     crate::contract_profile_adapter::release_contract_status(true)
@@ -308,10 +308,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 ExitCode::SUCCESS
             }
             Some(
-                "ready" | "deps" | "reverse-deps" | "blocked" | "children" | "tree" | "subtree"
-                | "critical-path" | "next-display-id" | "create" | "ensure" | "update" | "close"
-                | "list" | "show" | "import-jsonl" | "replace-jsonl" | "export-jsonl"
-                | "validate-graph" | "dep",
+                "ready" | "deps" | "reverse-deps" | "blocked" | "children" | "reparent-children"
+                | "move-children" | "tree" | "subtree" | "critical-path" | "next-display-id"
+                | "create" | "ensure" | "update" | "close" | "list" | "show" | "import-jsonl"
+                | "replace-jsonl" | "export-jsonl" | "validate-graph" | "dep",
             ) => {
                 print_taskflow_proxy_help(Some("task"));
                 ExitCode::SUCCESS
@@ -902,6 +902,35 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     }
                     Err(error) => {
                         eprintln!("Failed to read task dependency tree: {error}");
+                        ExitCode::from(1)
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
+        TaskCommand::ReparentChildren(command) => {
+            let state_dir = command
+                .state_dir
+                .unwrap_or_else(state_store::default_state_dir);
+            match StateStore::open_existing(state_dir).await {
+                Ok(store) => match store
+                    .reparent_children(
+                        &command.from_parent_id,
+                        &command.to_parent_id,
+                        &command.child_ids,
+                        command.dry_run,
+                    )
+                    .await
+                {
+                    Ok(result) => {
+                        print_task_bulk_reparent_result(command.render, &result, command.json);
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to bulk-reparent children: {error}");
                         ExitCode::from(1)
                     }
                 },

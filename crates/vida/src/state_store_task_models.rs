@@ -205,6 +205,17 @@ pub struct UpdateTaskRequest<'a> {
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskBulkReparentResult {
+    pub from_parent_id: String,
+    pub to_parent_id: String,
+    pub requested_child_ids: Vec<String>,
+    pub moved_child_ids: Vec<String>,
+    pub moved_count: usize,
+    pub dry_run: bool,
+    pub tasks: Vec<TaskRecord>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
 pub struct TaskSchedulingCandidate {
     pub task: TaskRecord,
     pub ready_now: bool,

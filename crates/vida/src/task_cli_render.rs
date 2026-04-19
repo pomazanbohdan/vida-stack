@@ -1,7 +1,7 @@
 use crate::state_store::{
-    BlockedTaskRecord, TaskCriticalPath, TaskDependencyRecord, TaskDependencyStatus,
-    TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode, TaskGraphIssue,
-    TaskProgressSummary, TaskRecord,
+    BlockedTaskRecord, TaskBulkReparentResult, TaskCriticalPath, TaskDependencyRecord,
+    TaskDependencyStatus, TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode,
+    TaskGraphIssue, TaskProgressSummary, TaskRecord,
 };
 use crate::{print_surface_header, print_surface_line, RenderMode};
 
@@ -570,6 +570,40 @@ pub(crate) fn print_task_dependency_mutation(
     print_surface_line(render, "task", &dependency.issue_id);
     print_surface_line(render, "depends_on", &dependency.depends_on_id);
     print_surface_line(render, "edge_type", &dependency.edge_type);
+}
+
+pub(crate) fn print_task_bulk_reparent_result(
+    render: RenderMode,
+    result: &TaskBulkReparentResult,
+    as_json: bool,
+) {
+    let payload = serde_json::json!({
+        "surface": "vida task reparent-children",
+        "status": "pass",
+        "result": result,
+    });
+    if crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task bulk reparent result should render as json",
+    ) {
+        return;
+    }
+
+    print_surface_header(render, "vida task reparent-children");
+    print_surface_line(render, "from_parent", &result.from_parent_id);
+    print_surface_line(render, "to_parent", &result.to_parent_id);
+    print_surface_line(
+        render,
+        "dry_run",
+        if result.dry_run { "true" } else { "false" },
+    );
+    print_surface_line(render, "moved", &result.moved_count.to_string());
+    if result.moved_child_ids.is_empty() {
+        print_surface_line(render, "children", "none");
+        return;
+    }
+    print_surface_line(render, "children", &result.moved_child_ids.join(", "));
 }
 
 pub(crate) fn print_task_critical_path(render: RenderMode, path: &TaskCriticalPath, as_json: bool) {

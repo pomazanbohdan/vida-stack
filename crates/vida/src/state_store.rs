@@ -98,11 +98,11 @@ use state_store_source_scan::{
     record_id_for_slice_source,
 };
 pub use state_store_task_models::{
-    BlockedTaskRecord, CreateTaskRequest, TaskCriticalPath, TaskCriticalPathNode,
-    TaskDependencyStatus, TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode,
-    TaskExecutionSemantics, TaskGraphIssue, TaskImportSummary, TaskProgressSummary, TaskRecord,
-    TaskRelease1ContractStep, TaskSchedulingCandidate, TaskSchedulingProjection, TaskStoreSummary,
-    UpdateTaskRequest,
+    BlockedTaskRecord, CreateTaskRequest, TaskBulkReparentResult, TaskCriticalPath,
+    TaskCriticalPathNode, TaskDependencyStatus, TaskDependencyTreeChild, TaskDependencyTreeEdge,
+    TaskDependencyTreeNode, TaskExecutionSemantics, TaskGraphIssue, TaskImportSummary,
+    TaskProgressSummary, TaskRecord, TaskRelease1ContractStep, TaskSchedulingCandidate,
+    TaskSchedulingProjection, TaskStoreSummary, UpdateTaskRequest,
 };
 pub(crate) use state_store_task_models::{TaskContent, TaskJsonlRecord, TaskStorageRow};
 #[cfg(test)]
@@ -1009,6 +1009,78 @@ hierarchy: framework,contracts
             .iter()
             .any(|dependency| dependency.edge_type == "blocks"
                 && dependency.depends_on_id == "dep-task"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn reparent_children_moves_selected_children_and_preserves_store_on_dry_run() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-reparent-children-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        for (task_id, title, issue_type, parent_id) in [
+            ("root-a", "Root A", "epic", None),
+            ("root-b", "Root B", "epic", None),
+            ("child-1", "Child 1", "task", Some("root-a")),
+            ("child-2", "Child 2", "task", Some("root-a")),
+        ] {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id: None,
+                    description: "",
+                    issue_type,
+                    status: "open",
+                    priority: 1,
+                    parent_id,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    created_by: "tester",
+                    source_repo: ".",
+                })
+                .await
+                .expect("create task");
+        }
+
+        let dry_run = store
+            .reparent_children("root-a", "root-b", &["child-1".to_string()], true)
+            .await
+            .expect("dry-run reparent children");
+        assert_eq!(dry_run.moved_child_ids, vec!["child-1".to_string()]);
+        let child_1_after_dry_run = store.show_task("child-1").await.expect("show child-1");
+        assert!(child_1_after_dry_run
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.edge_type == "parent-child"
+                && dependency.depends_on_id == "root-a"));
+
+        let persisted = store
+            .reparent_children("root-a", "root-b", &["child-1".to_string()], false)
+            .await
+            .expect("persisted reparent children");
+        assert_eq!(persisted.moved_child_ids, vec!["child-1".to_string()]);
+
+        let child_1 = store.show_task("child-1").await.expect("show child-1");
+        let child_2 = store.show_task("child-2").await.expect("show child-2");
+        assert!(child_1
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.edge_type == "parent-child"
+                && dependency.depends_on_id == "root-b"));
+        assert!(child_2
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.edge_type == "parent-child"
+                && dependency.depends_on_id == "root-a"));
 
         let _ = fs::remove_dir_all(&root);
     }
