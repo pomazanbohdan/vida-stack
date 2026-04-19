@@ -110,7 +110,7 @@ host_environment:
         model_flag: -m
         reasoning_effort_flag: -c
         reasoning_effort_value_template: 'model_reasoning_effort="{value}"'
-        prompt_mode: positional
+        prompt_mode: stdin
       carriers: *codex_agent_catalog
     hermes:
       enabled: true

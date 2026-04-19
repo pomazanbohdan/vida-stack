@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::mpsc::{self, TryRecvError};
@@ -216,8 +216,16 @@ fn try_complete_reader(
 fn execute_wrapped_command(
     mut process: std::process::Command,
     wrapped_command: &WrappedCommand,
+    stdin_payload: Option<Vec<u8>>,
 ) -> Result<ObservedCommandOutput, String> {
-    process.stdout(Stdio::piped()).stderr(Stdio::piped());
+    process
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(if stdin_payload.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
     #[cfg(unix)]
     if wrapped_command.timeout_wrapper.is_some() {
         process.process_group(0);
@@ -226,6 +234,13 @@ fn execute_wrapped_command(
     let mut child = process
         .spawn()
         .map_err(|error| format!("spawn failed for `{}`: {error}", wrapped_command.command))?;
+    if let Some(bytes) = stdin_payload {
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(&bytes)
+                .map_err(|error| format!("failed to write stdin for `{}`: {error}", wrapped_command.command))?;
+        }
+    }
     let process_group_id = child.id();
     let child_stdout = child.stdout.take();
     let child_stderr = child.stderr.take();
@@ -616,7 +631,7 @@ fn configured_internal_host_activation_parts(
     project_root: &Path,
     dispatch_packet_path: &str,
     carrier: &serde_json::Value,
-) -> Result<(String, Vec<String>), String> {
+) -> Result<(String, Vec<String>, Option<String>), String> {
     let dispatch = system_entry
         .and_then(|entry| yaml_lookup(entry, &["dispatch"]))
         .ok_or_else(|| "Configured internal host system is missing `dispatch`".to_string())?;
@@ -645,6 +660,7 @@ fn configured_internal_host_activation_parts(
         .unwrap_or("medium");
     let prompt = dispatch_packet_prompt(dispatch_packet_path);
     let mut args = crate::yaml_string_list(yaml_lookup(dispatch, &["static_args"]));
+    let mut stdin_payload = None;
     if let Some(workdir_flag) = crate::yaml_string(yaml_lookup(dispatch, &["workdir_flag"])) {
         args.push(workdir_flag);
         args.push(project_root.display().to_string());
@@ -671,13 +687,17 @@ fn configured_internal_host_activation_parts(
         .unwrap_or_else(|| "positional".to_string());
     match prompt_mode.as_str() {
         "positional" => args.push(prompt),
+        "stdin" => {
+            args.push("-".to_string());
+            stdin_payload = Some(prompt);
+        }
         other => {
             return Err(format!(
                 "Configured internal host system uses unsupported prompt_mode `{other}`"
             ));
         }
     }
-    Ok((command, args))
+    Ok((command, args, stdin_payload))
 }
 
 pub(crate) fn agent_lane_dispatch_result(
@@ -922,7 +942,7 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
     let carrier_id = carrier["role_id"]
         .as_str()
         .unwrap_or(selected_cli_system.as_str());
-    let (command, args) = configured_internal_host_activation_parts(
+    let (command, args, stdin_payload) = configured_internal_host_activation_parts(
         selected_cli_entry.as_ref(),
         project_root,
         dispatch_packet_path,
@@ -941,10 +961,7 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         configured_internal_host_runtime_env(project_root, &selected_cli_system, carrier_id)?;
 
     let mut process = std::process::Command::new(&wrapped_command.command);
-    process
-        .args(&wrapped_command.args)
-        .current_dir(project_root)
-        .stdin(Stdio::null());
+    process.args(&wrapped_command.args).current_dir(project_root);
     for (key, value) in runtime_env {
         process.env(key, value);
     }
@@ -956,7 +973,12 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         process.env("VIDA_RUNTIME_ROLE", runtime_role);
     }
 
-    let output = execute_wrapped_command(process, &wrapped_command).map_err(|error| {
+    let output = execute_wrapped_command(
+        process,
+        &wrapped_command,
+        stdin_payload.map(String::into_bytes),
+    )
+    .map_err(|error| {
         format!(
             "Failed to execute internal host carrier `{carrier_id}` for `{selected_cli_system}` via `{}`: {error}",
             wrapped_command.command
@@ -1267,7 +1289,7 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
         process.env("VIDA_SELECTED_BACKEND", selected_backend);
     }
 
-    let output = execute_wrapped_command(process, &wrapped_command).map_err(|error| {
+    let output = execute_wrapped_command(process, &wrapped_command, None).map_err(|error| {
         format!(
             "Failed to execute configured external backend `{backend_id}` via `{}`: {error}",
             wrapped_command.command
@@ -1634,7 +1656,7 @@ dispatch:
             "sandbox_mode": "workspace-write"
         });
 
-        let (command, args) = configured_internal_host_activation_parts(
+        let (command, args, stdin_payload) = configured_internal_host_activation_parts(
             Some(&system_entry),
             Path::new("/tmp/project"),
             "/tmp/project/.vida/dispatch.json",
@@ -1658,6 +1680,60 @@ dispatch:
                 "model_reasoning_effort=\"high\"".to_string(),
                 dispatch_packet_prompt("/tmp/project/.vida/dispatch.json"),
             ]
+        );
+        assert_eq!(stdin_payload, None);
+    }
+
+    #[test]
+    fn configured_internal_host_activation_parts_support_stdin_prompt_mode() {
+        let system_entry = serde_yaml::from_str(
+            r#"
+dispatch:
+  command: codex
+  static_args: ["exec", "--json"]
+  workdir_flag: -C
+  sandbox_flag: -s
+  model_flag: -m
+  reasoning_effort_flag: -c
+  reasoning_effort_value_template: 'model_reasoning_effort="{value}"'
+  prompt_mode: stdin
+"#,
+        )
+        .expect("system entry should parse");
+        let carrier = serde_json::json!({
+            "model": "gpt-5.4",
+            "model_reasoning_effort": "high",
+            "sandbox_mode": "workspace-write"
+        });
+
+        let (command, args, stdin_payload) = configured_internal_host_activation_parts(
+            Some(&system_entry),
+            Path::new("/tmp/project"),
+            "/tmp/project/.vida/dispatch.json",
+            &carrier,
+        )
+        .expect("internal host activation parts");
+
+        assert_eq!(command, "codex");
+        assert_eq!(
+            args,
+            vec![
+                "exec".to_string(),
+                "--json".to_string(),
+                "-C".to_string(),
+                "/tmp/project".to_string(),
+                "-s".to_string(),
+                "workspace-write".to_string(),
+                "-m".to_string(),
+                "gpt-5.4".to_string(),
+                "-c".to_string(),
+                "model_reasoning_effort=\"high\"".to_string(),
+                "-".to_string(),
+            ]
+        );
+        assert_eq!(
+            stdin_payload.as_deref(),
+            Some(dispatch_packet_prompt("/tmp/project/.vida/dispatch.json").as_str())
         );
     }
 
@@ -1827,7 +1903,7 @@ dispatch:
 
         let started = Instant::now();
         let output =
-            execute_wrapped_command(process, &wrapped).expect("timed command should complete");
+            execute_wrapped_command(process, &wrapped, None).expect("timed command should complete");
 
         assert!(output.timed_out);
         assert!(started.elapsed() < Duration::from_secs(5));
@@ -1847,7 +1923,7 @@ dispatch:
         process.args(&wrapped.args).stdin(Stdio::null());
 
         let started = Instant::now();
-        let output = execute_wrapped_command(process, &wrapped)
+        let output = execute_wrapped_command(process, &wrapped, None)
             .expect("detached timed command should complete");
 
         assert!(output.timed_out);
