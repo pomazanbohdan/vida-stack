@@ -1,0 +1,115 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Constructs a Pin&#60;&#38;mut T&#62;, by pinning a `value: T` locally."><title>pin in std::pin - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="std" data-themes="" data-resource-suffix="1.94.1" data-rustdoc-version="1.94.1 (e408947bf 2026-03-25)" data-channel="1.94.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items1.94.1.js"></script><script defer src="../../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc macro"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">pin</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../../std/index.html"><img class="rust-logo" src="../../static.files/rust-logo-9a9549ea.svg" alt="logo"></a><h2><a href="../../std/index.html">std</a><span class="version">1.94.1</span></h2></div><div class="version">(e408947bf	2026-03-25)</div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">pin</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#examples" title="Examples">Examples</a><ul><li><a href="#basic-usage" title="Basic usage">Basic usage</a></li><li><a href="#manually-polling-a-future-without-unpin-bounds" title="Manually polling a `Future` (without `Unpin` bounds)">Manually polling a <code>Future</code> (without <code>Unpin</code> bounds)</a></li><li><a href="#with-coroutines" title="With `Coroutine`s">With <code>Coroutine</code>s</a></li></ul></li><li><a href="#remarks" title="Remarks">Remarks</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In std::<wbr>pin</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">std</a>::<wbr><a href="index.html">pin</a></div><h1>Macro <span class="macro">pin</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><span class="since" title="Stable since Rust version 1.68.0">1.68.0</span> · <a class="src" href="../../src/core/pin.rs.html#2035">Source</a> </span></div><pre class="rust item-decl"><code>pub macro pin($value:expr $(,)?) {
+    ...
+}</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Constructs a <code><a href="struct.Pin.html" title="struct std::pin::Pin">Pin</a>&lt;<a href="../primitive.reference.html" title="primitive reference">&amp;mut</a> T&gt;</code>, by pinning a <code>value: T</code> locally.</p>
+<p>Unlike <a href="../../std/boxed/struct.Box.html#method.pin"><code>Box::pin</code></a>, this does not create a new heap allocation. As explained
+below, the element might still end up on the heap however.</p>
+<p>The local pinning performed by this macro is usually dubbed “stack”-pinning.
+Outside of <code>async</code> contexts locals do indeed get stored on the stack. In
+<code>async</code> functions or blocks however, any locals crossing an <code>.await</code> point
+are part of the state captured by the <code>Future</code>, and will use the storage of
+those. That storage can either be on the heap or on the stack. Therefore,
+local pinning is a more accurate term.</p>
+<p>If the type of the given value does not implement <a href="../marker/trait.Unpin.html" title="trait std::marker::Unpin"><code>Unpin</code></a>, then this macro
+pins the value in memory in a way that prevents moves. On the other hand,
+if the type does implement <a href="../marker/trait.Unpin.html" title="trait std::marker::Unpin"><code>Unpin</code></a>, <code><a href="struct.Pin.html" title="struct std::pin::Pin">Pin</a>&lt;<a href="../primitive.reference.html" title="primitive reference">&amp;mut</a> T&gt;</code> behaves
+like <code><a href="../primitive.reference.html" title="primitive reference">&amp;mut</a> T</code>, and operations such as
+<a href="../mem/fn.replace.html" title="fn std::mem::replace"><code>mem::replace()</code></a> or <a href="../mem/fn.take.html" title="fn std::mem::take"><code>mem::take()</code></a>
+will allow moves of the value.
+See <a href="index.html#unpin" title="mod std::pin">the <code>Unpin</code> section of the <code>pin</code> module</a> for details.</p>
+<h3 id="examples"><a class="doc-anchor" href="#examples">§</a>Examples</h3><h4 id="basic-usage"><a class="doc-anchor" href="#basic-usage">§</a>Basic usage</h4>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>core::pin::{pin, Pin};
+
+<span class="kw">fn </span>stuff(foo: Pin&lt;<span class="kw-2">&amp;mut </span>Foo&gt;) {
+    <span class="comment">// …
+</span>}
+
+<span class="kw">let </span>pinned_foo = <span class="macro">pin!</span>(Foo { <span class="comment">/* … */ </span>});
+stuff(pinned_foo);
+<span class="comment">// or, directly:
+</span>stuff(<span class="macro">pin!</span>(Foo { <span class="comment">/* … */ </span>}));</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+core::marker::PhantomPinned+as+Foo;%0A++++use+core::pin::%7Bpin,+Pin%7D;%0A++++%0A++++fn+stuff(foo:+Pin%3C%26mut+Foo%3E)+%7B%0A++++++++//+%E2%80%A6%0A++++let+_+=+foo;%0A++++%7D%0A++++%0A++++let+pinned_foo+=+pin!(Foo+%7B+/*+%E2%80%A6+*/+%7D);%0A++++stuff(pinned_foo);%0A++++//+or,+directly:%0A++++stuff(pin!(Foo+%7B+/*+%E2%80%A6+*/+%7D));%0A%7D&amp;edition=2024"></a></div><h4 id="manually-polling-a-future-without-unpin-bounds"><a class="doc-anchor" href="#manually-polling-a-future-without-unpin-bounds">§</a>Manually polling a <code>Future</code> (without <code>Unpin</code> bounds)</h4>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::{
+    future::Future,
+    pin::pin,
+    task::{Context, Poll},
+    thread,
+};
+
+<span class="doccomment">/// Runs a future to completion.
+</span><span class="kw">fn </span>block_on&lt;Fut: Future&gt;(fut: Fut) -&gt; Fut::Output {
+    <span class="kw">let </span>waker_that_unparks_thread = <span class="comment">// …
+    </span><span class="kw">let </span><span class="kw-2">mut </span>cx = Context::from_waker(<span class="kw-2">&amp;</span>waker_that_unparks_thread);
+    <span class="comment">// Pin the future so it can be polled.
+    </span><span class="kw">let </span><span class="kw-2">mut </span>pinned_fut = <span class="macro">pin!</span>(fut);
+    <span class="kw">loop </span>{
+        <span class="kw">match </span>pinned_fut.as_mut().poll(<span class="kw-2">&amp;mut </span>cx) {
+            Poll::Pending =&gt; thread::park(),
+            Poll::Ready(res) =&gt; <span class="kw">return </span>res,
+        }
+    }
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::%7B%0A++++++++future::Future,%0A++++++++pin::pin,%0A++++++++task::%7BContext,+Poll%7D,%0A++++++++thread,%0A++++%7D;%0A++++use+std::%7Bsync::Arc,+task::Wake,+thread::Thread%7D;%0A++++%0A++++///+A+waker+that+wakes+up+the+current+thread+when+called.%0A++++struct+ThreadWaker(Thread);%0A++++%0A++++impl+Wake+for+ThreadWaker+%7B%0A++++++++fn+wake(self:+Arc%3CSelf%3E)+%7B%0A++++++++++++self.0.unpark();%0A++++++++%7D%0A++++%7D%0A++++%0A++++///+Runs+a+future+to+completion.%0A++++fn+block_on%3CFut:+Future%3E(fut:+Fut)+-%3E+Fut::Output+%7B%0A++++++++let+waker_that_unparks_thread+=+//+%E2%80%A6%0A++++Arc::new(ThreadWaker(thread::current())).into();%0A++++++++let+mut+cx+=+Context::from_waker(%26waker_that_unparks_thread);%0A++++++++//+Pin+the+future+so+it+can+be+polled.%0A++++++++let+mut+pinned_fut+=+pin!(fut);%0A++++++++loop+%7B%0A++++++++++++match+pinned_fut.as_mut().poll(%26mut+cx)+%7B%0A++++++++++++++++Poll::Pending+=%3E+thread::park(),%0A++++++++++++++++Poll::Ready(res)+=%3E+return+res,%0A++++++++++++%7D%0A++++++++%7D%0A++++%7D%0A++++%0A++++assert_eq!(42,+block_on(async+%7B+42+%7D));%0A%7D&amp;edition=2024"></a></div><h4 id="with-coroutines"><a class="doc-anchor" href="#with-coroutines">§</a>With <code>Coroutine</code>s</h4>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="attr">#![feature(coroutines)]
+#![feature(coroutine_trait)]
+</span><span class="kw">use </span>core::{
+    ops::{Coroutine, CoroutineState},
+    pin::pin,
+};
+
+<span class="kw">fn </span>coroutine_fn() -&gt; <span class="kw">impl </span>Coroutine&lt;Yield = usize, Return = ()&gt; <span class="comment">/* not Unpin */ </span>{
+ <span class="comment">// Allow coroutine to be self-referential (not `Unpin`)
+ // vvvvvv        so that locals can cross yield points.
+    </span><span class="attr">#[coroutine] </span><span class="kw">static </span>|| {
+        <span class="kw">let </span>foo = String::from(<span class="string">"foo"</span>);
+        <span class="kw">let </span>foo_ref = <span class="kw-2">&amp;</span>foo; <span class="comment">// ------+
+        </span><span class="kw">yield </span><span class="number">0</span>;                  <span class="comment">// | &lt;- crosses yield point!
+        </span><span class="macro">println!</span>(<span class="string">"{foo_ref}"</span>); <span class="comment">// &lt;--+
+        </span><span class="kw">yield </span>foo.len();
+    }
+}
+
+<span class="kw">fn </span>main() {
+    <span class="kw">let </span><span class="kw-2">mut </span>coroutine = <span class="macro">pin!</span>(coroutine_fn());
+    <span class="kw">match </span>coroutine.as_mut().resume(()) {
+        CoroutineState::Yielded(<span class="number">0</span>) =&gt; {},
+        <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
+    }
+    <span class="kw">match </span>coroutine.as_mut().resume(()) {
+        CoroutineState::Yielded(<span class="number">3</span>) =&gt; {},
+        <span class="kw">_ </span>=&gt; <span class="macro">unreachable!</span>(),
+    }
+    <span class="kw">match </span>coroutine.resume(()) {
+        CoroutineState::Yielded(<span class="kw">_</span>) =&gt; <span class="macro">unreachable!</span>(),
+        CoroutineState::Complete(()) =&gt; {},
+    }
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0A%23!%5Bfeature(coroutines)%5D%0A%23!%5Bfeature(coroutine_trait)%5D%0A%0Ause+core::%7B%0A++++ops::%7BCoroutine,+CoroutineState%7D,%0A++++pin::pin,%0A%7D;%0A%0Afn+coroutine_fn()+-%3E+impl+Coroutine%3CYield+=+usize,+Return+=+()%3E+/*+not+Unpin+*/+%7B%0A+//+Allow+coroutine+to+be+self-referential+(not+%60Unpin%60)%0A+//+vvvvvv++++++++so+that+locals+can+cross+yield+points.%0A++++%23%5Bcoroutine%5D+static+%7C%7C+%7B%0A++++++++let+foo+=+String::from(%22foo%22);%0A++++++++let+foo_ref+=+%26foo;+//+------%2B%0A++++++++yield+0;++++++++++++++++++//+%7C+%3C-+crosses+yield+point!%0A++++++++println!(%22%7Bfoo_ref%7D%22);+//+%3C--%2B%0A++++++++yield+foo.len();%0A++++%7D%0A%7D%0A%0Afn+main()+%7B%0A++++let+mut+coroutine+=+pin!(coroutine_fn());%0A++++match+coroutine.as_mut().resume(())+%7B%0A++++++++CoroutineState::Yielded(0)+=%3E+%7B%7D,%0A++++++++_+=%3E+unreachable!(),%0A++++%7D%0A++++match+coroutine.as_mut().resume(())+%7B%0A++++++++CoroutineState::Yielded(3)+=%3E+%7B%7D,%0A++++++++_+=%3E+unreachable!(),%0A++++%7D%0A++++match+coroutine.resume(())+%7B%0A++++++++CoroutineState::Yielded(_)+=%3E+unreachable!(),%0A++++++++CoroutineState::Complete(())+=%3E+%7B%7D,%0A++++%7D%0A%7D&amp;version=nightly&amp;edition=2024"></a></div><h3 id="remarks"><a class="doc-anchor" href="#remarks">§</a>Remarks</h3>
+<p>Precisely because a value is pinned to local storage, the resulting <code><a href="struct.Pin.html" title="struct std::pin::Pin">Pin</a>&lt;<a href="../primitive.reference.html" title="primitive reference">&amp;mut</a> T&gt;</code>
+reference ends up borrowing a local tied to that block: it can’t escape it.</p>
+<p>The following, for instance, fails to compile:</p>
+
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">use </span>core::pin::{pin, Pin};
+
+<span class="kw">let </span>x: Pin&lt;<span class="kw-2">&amp;mut </span>Foo&gt; = {
+    <span class="kw">let </span>x: Pin&lt;<span class="kw-2">&amp;mut </span>Foo&gt; = <span class="macro">pin!</span>(Foo { <span class="comment">/* … */ </span>});
+    x
+}; <span class="comment">// &lt;- Foo is dropped
+</span>stuff(x); <span class="comment">// Error: use of dropped value</span></code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+core::pin::%7Bpin,+Pin%7D;%0A++++use+core::%7Bmarker::PhantomPinned+as+Foo,+mem::drop+as+stuff%7D;%0A++++%0A++++let+x:+Pin%3C%26mut+Foo%3E+=+%7B%0A++++++++let+x:+Pin%3C%26mut+Foo%3E+=+pin!(Foo+%7B+/*+%E2%80%A6+*/+%7D);%0A++++++++x%0A++++%7D;+//+%3C-+Foo+is+dropped%0A++++stuff(x);%0A%7D&amp;edition=2024"></a></div><details><summary>Error message</summary>
+<div class="example-wrap"><pre class="language-console"><code>error[E0716]: temporary value dropped while borrowed
+  --&gt; src/main.rs:9:28
+   |
+8  | let x: Pin&lt;&amp;mut Foo&gt; = {
+   |     - borrow later stored here
+9  |     let x: Pin&lt;&amp;mut Foo&gt; = pin!(Foo { /* … */ });
+   |                            ^^^^^^^^^^^^^^^^^^^^^ creates a temporary value which is freed while still in use
+10 |     x
+11 | }; // &lt;- Foo is dropped
+   | - temporary value is freed at the end of this statement
+   |
+   = note: consider using a `let` binding to create a longer lived value</code></pre></div></details>
+<p>This makes <a href="macro.pin.html" title="macro std::pin::pin"><code>pin!</code></a> <strong>unsuitable to pin values when intending to <em>return</em> them</strong>. Instead, the
+value is expected to be passed around <em>unpinned</em> until the point where it is to be consumed,
+where it is then useful and even sensible to pin the value locally using <a href="macro.pin.html" title="macro std::pin::pin"><code>pin!</code></a>.</p>
+<p>If you really need to return a pinned value, consider using <a href="../../std/boxed/struct.Box.html#method.pin"><code>Box::pin</code></a> instead.</p>
+<p>On the other hand, local pinning using <a href="macro.pin.html" title="macro std::pin::pin"><code>pin!</code></a> is likely to be cheaper than
+pinning into a fresh heap allocation using <a href="../../std/boxed/struct.Box.html#method.pin"><code>Box::pin</code></a>. Moreover, by virtue of not
+requiring an allocator, <a href="macro.pin.html" title="macro std::pin::pin"><code>pin!</code></a> is the main non-<code>unsafe</code> <code>#![no_std]</code>-compatible <a href="struct.Pin.html" title="struct std::pin::Pin"><code>Pin</code></a>
+constructor.</p>
+</div></details></section></div></main></body></html>

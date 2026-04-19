@@ -1,0 +1,40 @@
+{
+  "artifact_kind": "runtime_downstream_dispatch_trace",
+  "recorded_at": "2026-04-15T14:19:48.504535328Z",
+  "run_id": "runtime-bounded-fix-bug-consume-continue-rewrites",
+  "step_count": 1,
+  "steps": [
+    {
+      "activation_agent_type": "middle",
+      "activation_runtime_role": "coach",
+      "blocker_code": "timeout_without_takeover_authority",
+      "dispatch_command": "'timeout' '--kill-after=1s' '180s' 'hermes' 'chat' '-Q' '-q' 'Read and execute the VIDA dispatch packet at /home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/downstream-dispatch-packets/runtime-bounded-fix-bug-consume-continue-rewrites-2026-04-15T14-16-46.891691195Z.json. Return one bounded result that follows the packet.'",
+      "dispatch_kind": "agent_lane",
+      "dispatch_packet_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/downstream-dispatch-packets/runtime-bounded-fix-bug-consume-continue-rewrites-2026-04-15T14-16-46.891691195Z.json",
+      "dispatch_result_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/dispatch-results/runtime-bounded-fix-bug-consume-continue-rewrites-2026-04-15T14-19-48.12088279Z.json",
+      "dispatch_status": "blocked",
+      "dispatch_surface": "external_cli:hermes_cli",
+      "dispatch_target": "coach",
+      "downstream_dispatch_active_target": "coach",
+      "downstream_dispatch_blockers": [
+        "pending_review_clean_evidence"
+      ],
+      "downstream_dispatch_command": "vida agent-init",
+      "downstream_dispatch_executed_count": 0,
+      "downstream_dispatch_last_target": null,
+      "downstream_dispatch_note": "after `coach` evidence is recorded, activate `verification` for the next bounded lane",
+      "downstream_dispatch_packet_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/downstream-dispatch-packets/runtime-bounded-fix-bug-consume-continue-rewrites-2026-04-15T14-19-48.47699805Z.json",
+      "downstream_dispatch_ready": false,
+      "downstream_dispatch_result_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/dispatch-results/runtime-bounded-fix-bug-consume-continue-rewrites-2026-04-15T14-19-48.12088279Z.json",
+      "downstream_dispatch_status": null,
+      "downstream_dispatch_target": "verification",
+      "downstream_dispatch_trace_path": null,
+      "exception_path_receipt_id": null,
+      "lane_status": "lane_blocked",
+      "recorded_at": "2026-04-15T14:16:47.162461227Z",
+      "run_id": "runtime-bounded-fix-bug-consume-continue-rewrites",
+      "selected_backend": "hermes_cli",
+      "supersedes_receipt_id": null
+    }
+  ]
+}

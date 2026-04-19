@@ -1,7 +1,6 @@
-use crate::contract_profile_adapter::{blocker_code, canonical_blocker_code_list, BlockerCode};
-use crate::operator_contracts::{
-    operator_contract_status_is_blocked, render_operator_contract_envelope,
-    RELEASE1_OPERATOR_CONTRACT_SPEC,
+use crate::contract_profile_adapter::{
+    blocker_code, canonical_blocker_code_list, operator_contract_status_is_blocked,
+    render_operator_contract_envelope, BlockerCode,
 };
 
 pub(crate) fn emit_taskflow_consume_final_json(
@@ -66,7 +65,7 @@ pub(crate) fn emit_taskflow_consume_final_json(
     });
     let snapshot_path =
         crate::write_runtime_consumption_snapshot(store.root(), "final", &snapshot)?;
-    let mut operator_contracts = build_release1_operator_contracts_envelope(
+    let mut operator_contracts = build_operator_contracts_envelope(
         consume_final_status,
         consume_final_blocker_codes.clone(),
         consume_final_next_actions.clone(),
@@ -176,23 +175,13 @@ pub(crate) fn emit_taskflow_consume_final_json(
     Ok(())
 }
 
-pub(crate) fn build_release1_operator_contracts_envelope(
+pub(crate) fn build_operator_contracts_envelope(
     status: &str,
     blocker_codes: Vec<String>,
     next_actions: Vec<String>,
     artifact_refs: serde_json::Value,
 ) -> serde_json::Value {
-    render_operator_contract_envelope(
-        &RELEASE1_OPERATOR_CONTRACT_SPEC,
-        status,
-        blocker_codes,
-        next_actions,
-        artifact_refs,
-    )
-}
-
-fn release1_status_is_blocked(value: &serde_json::Value) -> bool {
-    operator_contract_status_is_blocked(&RELEASE1_OPERATOR_CONTRACT_SPEC, value)
+    render_operator_contract_envelope(status, blocker_codes, next_actions, artifact_refs)
 }
 
 fn consume_final_operator_blocker_codes(payload: &serde_json::Value) -> Vec<String> {
@@ -203,12 +192,12 @@ fn consume_final_operator_blocker_codes(payload: &serde_json::Value) -> Vec<Stri
             blocker_codes.push(code);
         }
     }
-    if release1_status_is_blocked(&payload["docflow_verdict"]["status"]) {
+    if operator_contract_status_is_blocked(&payload["docflow_verdict"]["status"]) {
         if let Some(code) = blocker_code(BlockerCode::DocflowVerdictBlock) {
             blocker_codes.push(code);
         }
     }
-    if release1_status_is_blocked(&payload["closure_admission"]["status"]) {
+    if operator_contract_status_is_blocked(&payload["closure_admission"]["status"]) {
         if let Some(code) = blocker_code(BlockerCode::ClosureAdmissionBlock) {
             blocker_codes.push(code);
         }
@@ -222,12 +211,12 @@ fn consume_final_operator_next_actions(payload: &serde_json::Value) -> Vec<Strin
     {
         next_actions.push("Resolve activation blockers before consume-final handoff.".to_string());
     }
-    if release1_status_is_blocked(&payload["docflow_verdict"]["status"]) {
+    if operator_contract_status_is_blocked(&payload["docflow_verdict"]["status"]) {
         next_actions.push(
             "Run `vida docflow proofcheck --profile active-canon` and clear blockers.".to_string(),
         );
     }
-    if release1_status_is_blocked(&payload["closure_admission"]["status"]) {
+    if operator_contract_status_is_blocked(&payload["closure_admission"]["status"]) {
         next_actions.push(
             "Run `vida taskflow consume bundle check --json` and resolve closure blockers."
                 .to_string(),
@@ -241,8 +230,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn release1_operator_contracts_envelope_normalizes_status_to_canonical_vocabulary() {
-        let envelope = build_release1_operator_contracts_envelope(
+    fn operator_contracts_envelope_normalizes_status_to_canonical_vocabulary() {
+        let envelope = build_operator_contracts_envelope(
             " pass ",
             Vec::new(),
             Vec::new(),
@@ -253,13 +242,9 @@ mod tests {
     }
 
     #[test]
-    fn release1_operator_contracts_envelope_accepts_ok_compat_status() {
-        let envelope = build_release1_operator_contracts_envelope(
-            "ok",
-            Vec::new(),
-            Vec::new(),
-            serde_json::json!({}),
-        );
+    fn operator_contracts_envelope_accepts_ok_compat_status() {
+        let envelope =
+            build_operator_contracts_envelope("ok", Vec::new(), Vec::new(), serde_json::json!({}));
 
         assert_eq!(envelope["status"], "pass");
     }

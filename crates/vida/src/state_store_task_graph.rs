@@ -1,6 +1,22 @@
 use super::*;
 
 impl StateStore {
+    fn parent_child_reverse_index(rows: &[TaskRecord]) -> BTreeMap<String, Vec<String>> {
+        let mut children = BTreeMap::<String, Vec<String>>::new();
+        for task in rows {
+            for dependency in &task.dependencies {
+                if dependency.edge_type != "parent-child" {
+                    continue;
+                }
+                children
+                    .entry(dependency.depends_on_id.clone())
+                    .or_default()
+                    .push(task.id.clone());
+            }
+        }
+        children
+    }
+
     fn task_is_open_like(task: &TaskRecord) -> bool {
         (task.status == "open" || task.status == "in_progress") && task.issue_type != "epic"
     }
@@ -227,18 +243,7 @@ impl StateStore {
             });
         }
 
-        let mut children = BTreeMap::<String, Vec<String>>::new();
-        for task in rows {
-            for dependency in &task.dependencies {
-                if dependency.edge_type != "parent-child" {
-                    continue;
-                }
-                children
-                    .entry(dependency.depends_on_id.clone())
-                    .or_default()
-                    .push(task.id.clone());
-            }
-        }
+        let children = Self::parent_child_reverse_index(rows);
 
         let mut scope_ids = BTreeSet::new();
         let mut stack = vec![scope_task_id.to_string()];
@@ -254,6 +259,65 @@ impl StateStore {
         Ok(scope_ids)
     }
 
+    pub async fn task_progress_summary(
+        &self,
+        task_id: &str,
+    ) -> Result<TaskProgressSummary, StateStoreError> {
+        let rows = self.all_tasks().await?;
+        let root_task = rows
+            .iter()
+            .find(|task| task.id == task_id)
+            .cloned()
+            .ok_or_else(|| StateStoreError::MissingTask {
+                task_id: task_id.to_string(),
+            })?;
+        let children_by_parent = Self::parent_child_reverse_index(&rows);
+        let scope_ids = self.ready_scope_ids(&rows, task_id)?;
+        let descendant_ids = scope_ids
+            .into_iter()
+            .filter(|candidate| candidate != task_id)
+            .collect::<BTreeSet<_>>();
+
+        let mut status_counts = BTreeMap::<String, usize>::new();
+        let mut open_count = 0usize;
+        let mut in_progress_count = 0usize;
+        let mut closed_count = 0usize;
+        let mut epic_count = 0usize;
+
+        for task in rows.iter().filter(|task| descendant_ids.contains(&task.id)) {
+            *status_counts.entry(task.status.clone()).or_insert(0) += 1;
+            match task.status.as_str() {
+                "open" => open_count += 1,
+                "in_progress" => in_progress_count += 1,
+                "closed" => closed_count += 1,
+                _ => {}
+            }
+            if task.issue_type == "epic" {
+                epic_count += 1;
+            }
+        }
+
+        let descendant_count = descendant_ids.len();
+        let percent_closed = if descendant_count == 0 {
+            0.0
+        } else {
+            (closed_count as f64 / descendant_count as f64) * 100.0
+        };
+
+        Ok(TaskProgressSummary {
+            root_task,
+            progress_basis: "descendants_excluding_root".to_string(),
+            direct_child_count: children_by_parent.get(task_id).map(Vec::len).unwrap_or(0),
+            descendant_count,
+            open_count,
+            in_progress_count,
+            closed_count,
+            epic_count,
+            status_counts,
+            percent_closed,
+        })
+    }
+
     pub async fn task_dependency_tree(
         &self,
         task_id: &str,
@@ -263,12 +327,15 @@ impl StateStore {
             .into_iter()
             .map(|task| (task.id.clone(), task))
             .collect::<BTreeMap<_, _>>();
+        let tree_rows = by_id.values().cloned().collect::<Vec<_>>();
+        let children_by_parent = Self::parent_child_reverse_index(&tree_rows);
         let mut active = BTreeSet::new();
-        Self::build_task_dependency_tree(&by_id, task_id, &mut active)
+        Self::build_task_dependency_tree(&by_id, &children_by_parent, task_id, &mut active)
     }
 
     fn build_task_dependency_tree(
         by_id: &BTreeMap<String, TaskRecord>,
+        children_by_parent: &BTreeMap<String, Vec<String>>,
         task_id: &str,
         active: &mut BTreeSet<String>,
     ) -> Result<TaskDependencyTreeNode, StateStoreError> {
@@ -299,13 +366,43 @@ impl StateStore {
                 edge.dependency_status = child.status.clone();
                 edge.dependency_issue_type = Some(child.issue_type.clone());
                 let child_id = child.id.clone();
-                let child_node = Self::build_task_dependency_tree(by_id, &child_id, active)?;
+                let child_node =
+                    Self::build_task_dependency_tree(by_id, children_by_parent, &child_id, active)?;
                 edge.node = Some(Box::new(child_node));
             } else {
                 edge.missing = true;
             }
 
             dependencies.push(edge);
+        }
+        let mut children = Vec::new();
+        if let Some(child_ids) = children_by_parent.get(&task.id) {
+            for child_id in child_ids {
+                let mut child = TaskDependencyTreeChild {
+                    child_id: child_id.clone(),
+                    child_status: "missing".to_string(),
+                    child_issue_type: None,
+                    node: None,
+                    cycle: false,
+                    missing: false,
+                };
+                if active.contains(child_id) {
+                    child.cycle = true;
+                } else if let Some(child_task) = by_id.get(child_id) {
+                    child.child_status = child_task.status.clone();
+                    child.child_issue_type = Some(child_task.issue_type.clone());
+                    let child_node = Self::build_task_dependency_tree(
+                        by_id,
+                        children_by_parent,
+                        child_id,
+                        active,
+                    )?;
+                    child.node = Some(Box::new(child_node));
+                } else {
+                    child.missing = true;
+                }
+                children.push(child);
+            }
         }
         active.remove(&task.id);
 
@@ -314,8 +411,13 @@ impl StateStore {
                 .cmp(&right.edge_type)
                 .then_with(|| left.depends_on_id.cmp(&right.depends_on_id))
         });
+        children.sort_by(|left, right| left.child_id.cmp(&right.child_id));
 
-        Ok(TaskDependencyTreeNode { task, dependencies })
+        Ok(TaskDependencyTreeNode {
+            task,
+            dependencies,
+            children,
+        })
     }
 
     pub async fn validate_task_graph(&self) -> Result<Vec<TaskGraphIssue>, StateStoreError> {

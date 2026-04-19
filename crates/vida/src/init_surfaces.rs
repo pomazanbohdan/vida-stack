@@ -146,7 +146,7 @@ mod tests {
     use super::*;
     use crate::run;
     use crate::runtime_dispatch_state::{
-        RuntimeDispatchPacketContext, write_runtime_dispatch_packet,
+        write_runtime_dispatch_packet, RuntimeDispatchPacketContext,
     };
     use crate::state_store::{RunGraphDispatchReceipt, RunGraphStatus, StateStore};
     use crate::temp_state::TempStateHarness;

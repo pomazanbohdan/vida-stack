@@ -1,0 +1,1 @@
+{"ts":"2026-04-04T00:00:00Z","event":"metadata_initialized","artifact_path":"process/decisions","artifact_type":"process_doc","artifact_version":"1","artifact_revision":"2026-04-04","source_path":"docs/process/decisions.md","reason":"initialize scaffold metadata for docflow-ready project bootstrap","actor":"vida","scope":"scaffold-init","tags":["scaffold","docflow"]}

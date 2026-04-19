@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-04-13T11:11:48.384841814Z",
+  "store_path": ".vida/state/worker-strategy.json",
+  "scorecards_path": ".vida/state/worker-scorecards.json",
+  "selection_policy": {
+    "rule": "capability_first_then_score_guard_then_cheapest_tier",
+    "promotion_score": 75,
+    "demotion_score": 45,
+    "consecutive_failure_limit": 3,
+    "retirement_failure_limit": 8
+  },
+  "agents": {
+    "junior": {
+      "tier": "junior",
+      "rate": 1,
+      "reasoning_band": "low",
+      "default_runtime_role": "worker",
+      "task_classes": [
+        "implementation",
+        "delivery_task",
+        "execution_block"
+      ],
+      "feedback_count": 0,
+      "success_runs": 0,
+      "failure_runs": 0,
+      "consecutive_failures": 0,
+      "average_feedback": 70.0,
+      "last_feedback_score": null,
+      "effective_score": 70,
+      "lifecycle_state": "probation"
+    },
+    "middle": {
+      "tier": "middle",
+      "rate": 4,
+      "reasoning_band": "medium",
+      "default_runtime_role": "coach",
+      "task_classes": [
+        "specification",
+        "planning",
+        "coach",
+        "implementation_medium"
+      ],
+      "feedback_count": 0,
+      "success_runs": 0,
+      "failure_runs": 0,
+      "consecutive_failures": 0,
+      "average_feedback": 70.0,
+      "last_feedback_score": null,
+      "effective_score": 70,
+      "lifecycle_state": "probation"
+    },
+    "senior": {
+      "tier": "senior",
+      "rate": 16,
+      "reasoning_band": "high",
+      "default_runtime_role": "verifier",
+      "task_classes": [
+        "verification",
+        "review",
+        "quality_gate",
+        "release_readiness"
+      ],
+      "feedback_count": 0,
+      "success_runs": 0,
+      "failure_runs": 0,
+      "consecutive_failures": 0,
+      "average_feedback": 70.0,
+      "last_feedback_score": null,
+      "effective_score": 70,
+      "lifecycle_state": "probation"
+    },
+    "architect": {
+      "tier": "architect",
+      "rate": 32,
+      "reasoning_band": "xhigh",
+      "default_runtime_role": "solution_architect",
+      "task_classes": [
+        "architecture",
+        "execution_preparation",
+        "hard_escalation",
+        "meta_analysis"
+      ],
+      "feedback_count": 0,
+      "success_runs": 0,
+      "failure_runs": 0,
+      "consecutive_failures": 0,
+      "average_feedback": 70.0,
+      "last_feedback_score": null,
+      "effective_score": 70,
+      "lifecycle_state": "probation"
+    }
+  }
+}

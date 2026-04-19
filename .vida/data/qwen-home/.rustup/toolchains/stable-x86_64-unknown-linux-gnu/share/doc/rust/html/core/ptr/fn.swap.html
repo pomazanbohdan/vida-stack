@@ -1,0 +1,67 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Swaps the values at two mutable locations of the same type, without deinitializing either."><title>swap in core::ptr - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="core" data-themes="" data-resource-suffix="1.94.1" data-rustdoc-version="1.94.1 (e408947bf 2026-03-25)" data-channel="1.94.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items1.94.1.js"></script><script defer src="../../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">swap</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../../core/index.html"><img class="rust-logo" src="../../static.files/rust-logo-9a9549ea.svg" alt="logo"></a><h2><a href="../../core/index.html">core</a><span class="version">1.94.1</span></h2></div><div class="version">(e408947bf	2026-03-25)</div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">swap</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#safety" title="Safety">Safety</a></li><li><a href="#examples" title="Examples">Examples</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In core::<wbr>ptr</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">core</a>::<wbr><a href="index.html">ptr</a></div><h1>Function <span class="fn">swap</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><span class="since" title="Stable since Rust version 1.6.0, const since 1.85.0">1.6.0 (const: 1.85.0)</span> · <a class="src" href="../../src/core/ptr/mod.rs.html#1299-1314">Source</a> </span></div><pre class="rust item-decl"><code>pub const unsafe fn swap&lt;T&gt;(x: <a class="primitive" href="../primitive.pointer.html">*mut T</a>, y: <a class="primitive" href="../primitive.pointer.html">*mut T</a>)</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Swaps the values at two mutable locations of the same type, without
+deinitializing either.</p>
+<p>But for the following exceptions, this function is semantically
+equivalent to <a href="../mem/fn.swap.html" title="fn core::mem::swap"><code>mem::swap</code></a>:</p>
+<ul>
+<li>
+<p>It operates on raw pointers instead of references. When references are
+available, <a href="../mem/fn.swap.html" title="fn core::mem::swap"><code>mem::swap</code></a> should be preferred.</p>
+</li>
+<li>
+<p>The two pointed-to values may overlap. If the values do overlap, then the
+overlapping region of memory from <code>x</code> will be used. This is demonstrated
+in the second example below.</p>
+</li>
+<li>
+<p>The operation is “untyped” in the sense that data may be uninitialized or otherwise violate
+the requirements of <code>T</code>. The initialization state is preserved exactly.</p>
+</li>
+</ul>
+<h2 id="safety"><a class="doc-anchor" href="#safety">§</a>Safety</h2>
+<p>Behavior is undefined if any of the following conditions are violated:</p>
+<ul>
+<li>
+<p>Both <code>x</code> and <code>y</code> must be <a href="index.html#safety" title="mod core::ptr">valid</a> for both reads and writes. They must remain valid even when the
+other pointer is written. (This means if the memory ranges overlap, the two pointers must not
+be subject to aliasing restrictions relative to each other.)</p>
+</li>
+<li>
+<p>Both <code>x</code> and <code>y</code> must be properly aligned.</p>
+</li>
+</ul>
+<p>Note that even if <code>T</code> has size <code>0</code>, the pointers must be properly aligned.</p>
+<h2 id="examples"><a class="doc-anchor" href="#examples">§</a>Examples</h2>
+<p>Swapping two non-overlapping regions:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::ptr;
+
+<span class="kw">let </span><span class="kw-2">mut </span>array = [<span class="number">0</span>, <span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>];
+
+<span class="kw">let </span>(x, y) = array.split_at_mut(<span class="number">2</span>);
+<span class="kw">let </span>x = x.as_mut_ptr().cast::&lt;[u32; <span class="number">2</span>]&gt;(); <span class="comment">// this is `array[0..2]`
+</span><span class="kw">let </span>y = y.as_mut_ptr().cast::&lt;[u32; <span class="number">2</span>]&gt;(); <span class="comment">// this is `array[2..4]`
+
+</span><span class="kw">unsafe </span>{
+    ptr::swap(x, y);
+    <span class="macro">assert_eq!</span>([<span class="number">2</span>, <span class="number">3</span>, <span class="number">0</span>, <span class="number">1</span>], array);
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::ptr;%0A++++%0A++++let+mut+array+=+%5B0,+1,+2,+3%5D;%0A++++%0A++++let+(x,+y)+=+array.split_at_mut(2);%0A++++let+x+=+x.as_mut_ptr().cast::%3C%5Bu32;+2%5D%3E();+//+this+is+%60array%5B0..2%5D%60%0A++++let+y+=+y.as_mut_ptr().cast::%3C%5Bu32;+2%5D%3E();+//+this+is+%60array%5B2..4%5D%60%0A++++%0A++++unsafe+%7B%0A++++++++ptr::swap(x,+y);%0A++++++++assert_eq!(%5B2,+3,+0,+1%5D,+array);%0A++++%7D%0A%7D&amp;edition=2024"></a></div>
+<p>Swapping two overlapping regions:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::ptr;
+
+<span class="kw">let </span><span class="kw-2">mut </span>array: [i32; <span class="number">4</span>] = [<span class="number">0</span>, <span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>];
+
+<span class="kw">let </span>array_ptr: <span class="kw-2">*mut </span>i32 = array.as_mut_ptr();
+
+<span class="kw">let </span>x = array_ptr <span class="kw">as </span><span class="kw-2">*mut </span>[i32; <span class="number">3</span>]; <span class="comment">// this is `array[0..3]`
+</span><span class="kw">let </span>y = <span class="kw">unsafe </span>{ array_ptr.add(<span class="number">1</span>) } <span class="kw">as </span><span class="kw-2">*mut </span>[i32; <span class="number">3</span>]; <span class="comment">// this is `array[1..4]`
+
+</span><span class="kw">unsafe </span>{
+    ptr::swap(x, y);
+    <span class="comment">// The indices `1..3` of the slice overlap between `x` and `y`.
+    // Reasonable results would be for to them be `[2, 3]`, so that indices `0..3` are
+    // `[1, 2, 3]` (matching `y` before the `swap`); or for them to be `[0, 1]`
+    // so that indices `1..4` are `[0, 1, 2]` (matching `x` before the `swap`).
+    // This implementation is defined to make the latter choice.
+    </span><span class="macro">assert_eq!</span>([<span class="number">1</span>, <span class="number">0</span>, <span class="number">1</span>, <span class="number">2</span>], array);
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::ptr;%0A++++%0A++++let+mut+array:+%5Bi32;+4%5D+=+%5B0,+1,+2,+3%5D;%0A++++%0A++++let+array_ptr:+*mut+i32+=+array.as_mut_ptr();%0A++++%0A++++let+x+=+array_ptr+as+*mut+%5Bi32;+3%5D;+//+this+is+%60array%5B0..3%5D%60%0A++++let+y+=+unsafe+%7B+array_ptr.add(1)+%7D+as+*mut+%5Bi32;+3%5D;+//+this+is+%60array%5B1..4%5D%60%0A++++%0A++++unsafe+%7B%0A++++++++ptr::swap(x,+y);%0A++++++++//+The+indices+%601..3%60+of+the+slice+overlap+between+%60x%60+and+%60y%60.%0A++++++++//+Reasonable+results+would+be+for+to+them+be+%60%5B2,+3%5D%60,+so+that+indices+%600..3%60+are%0A++++++++//+%60%5B1,+2,+3%5D%60+(matching+%60y%60+before+the+%60swap%60);+or+for+them+to+be+%60%5B0,+1%5D%60%0A++++++++//+so+that+indices+%601..4%60+are+%60%5B0,+1,+2%5D%60+(matching+%60x%60+before+the+%60swap%60).%0A++++++++//+This+implementation+is+defined+to+make+the+latter+choice.%0A++++++++assert_eq!(%5B1,+0,+1,+2%5D,+array);%0A++++%7D%0A%7D&amp;edition=2024"></a></div></div></details></section></div></main></body></html>

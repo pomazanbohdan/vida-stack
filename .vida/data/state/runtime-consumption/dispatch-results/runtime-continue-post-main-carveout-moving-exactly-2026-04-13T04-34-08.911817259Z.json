@@ -1,0 +1,11 @@
+{
+  "artifact_kind": "runtime_dispatch_result",
+  "closure_ready": true,
+  "dispatch_target": "closure",
+  "note": "runtime downstream scheduler reached closure without additional lane activation",
+  "recorded_at": "2026-04-13T04:34:08.91196815Z",
+  "run_id": "runtime-continue-post-main-carveout-moving-exactly",
+  "source_dispatch_packet_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/downstream-dispatch-packets/runtime-continue-post-main-carveout-moving-exactly-2026-04-13T04-34-01.36846406Z.json",
+  "status": "pass",
+  "surface": "vida taskflow closure-preview"
+}

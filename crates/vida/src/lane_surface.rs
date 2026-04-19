@@ -2,6 +2,7 @@ use std::process::ExitCode;
 
 use serde::Serialize;
 
+use crate::contract_profile_adapter::render_operator_contract_envelope;
 use crate::taskflow_task_bridge::proxy_state_dir;
 use crate::{state_store::StateStore, ProxyArgs};
 
@@ -229,20 +230,38 @@ fn build_lane_envelope(
         .as_ref()
         .map(|status| status.selected_backend.clone())
         .or(summary.selected_backend.clone());
+    let artifact_refs = serde_json::json!({
+        "latest_run_graph_dispatch_receipt_id": run_id.clone(),
+        "exception_path_receipt_id": exception_path_receipt_id.clone(),
+        "dispatch_packet_path": dispatch_packet_path.clone(),
+        "dispatch_result_path": dispatch_result_path.clone(),
+        "downstream_dispatch_packet_path": downstream_dispatch_packet_path.clone(),
+        "downstream_dispatch_result_path": downstream_dispatch_result_path.clone(),
+    });
+    let operator_contracts = render_operator_contract_envelope(
+        if blocked { "blocked" } else { "pass" },
+        blocker_codes.clone(),
+        next_actions.clone(),
+        artifact_refs,
+    );
+    let surface_status = if operator_contracts["status"].as_str() == Some("blocked") {
+        "blocked"
+    } else {
+        "pass"
+    };
     LaneEnvelope {
         surface: "vida lane",
-        status: if blocked { "blocked" } else { "pass" },
-        trace_id: None,
-        workflow_class: None,
-        risk_tier: None,
-        artifact_refs: serde_json::json!({
-            "latest_run_graph_dispatch_receipt_id": run_id.clone(),
-            "exception_path_receipt_id": exception_path_receipt_id.clone(),
-            "dispatch_packet_path": dispatch_packet_path.clone(),
-            "dispatch_result_path": dispatch_result_path.clone(),
-            "downstream_dispatch_packet_path": downstream_dispatch_packet_path.clone(),
-            "downstream_dispatch_result_path": downstream_dispatch_result_path.clone(),
-        }),
+        status: surface_status,
+        trace_id: operator_contracts["trace_id"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        workflow_class: operator_contracts["workflow_class"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        risk_tier: operator_contracts["risk_tier"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        artifact_refs: operator_contracts["artifact_refs"].clone(),
         next_actions,
         blocker_codes,
         run_id,
@@ -443,18 +462,39 @@ fn emit_lane_envelope(envelope: &LaneEnvelope, as_json: bool) -> ExitCode {
 }
 
 fn emit_blocked_lane_envelope(as_json: bool) -> ExitCode {
+    let next_actions = vec![
+        "Use `vida lane show --latest --json` or `vida lane show <run-id> --json` once a lane receipt exists."
+            .to_string(),
+    ];
+    let operator_contracts = render_operator_contract_envelope(
+        "blocked",
+        vec!["unsupported_blocker_code".to_string()],
+        next_actions.clone(),
+        serde_json::json!([]),
+    );
+    let status = if operator_contracts["status"].as_str() == Some("blocked") {
+        "blocked"
+    } else {
+        "pass"
+    };
     let envelope = BlockedLaneEnvelope {
         surface: "vida lane",
-        status: "blocked",
-        trace_id: None,
-        workflow_class: None,
-        risk_tier: None,
-        artifact_refs: serde_json::json!([]),
-        next_actions: vec![
-            "Use `vida lane show --latest --json` or `vida lane show <run-id> --json` once a lane receipt exists."
-                .to_string(),
-        ],
-        blocker_codes: vec!["unsupported_blocker_code".to_string()],
+        status,
+        trace_id: operator_contracts["trace_id"].as_str().map(ToOwned::to_owned),
+        workflow_class: operator_contracts["workflow_class"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        risk_tier: operator_contracts["risk_tier"].as_str().map(ToOwned::to_owned),
+        artifact_refs: operator_contracts["artifact_refs"].clone(),
+        next_actions,
+        blocker_codes: operator_contracts["blocker_codes"]
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default(),
         reason: "vida lane requires a bounded subcommand; the root surface fails closed instead of inferring one."
             .to_string(),
     };

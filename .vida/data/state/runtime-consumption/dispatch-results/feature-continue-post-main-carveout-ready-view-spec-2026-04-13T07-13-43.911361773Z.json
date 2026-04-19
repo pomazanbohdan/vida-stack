@@ -1,0 +1,23 @@
+{
+  "artifact_kind": "runtime_dispatch_result",
+  "changed_files": [
+    "taskflow:feature-continue-post-main-carveout-ready-view-dev"
+  ],
+  "dispatch_target": "dev-pack",
+  "epic": {
+    "created": false,
+    "task_id": "feature-continue-post-main-carveout-ready-view"
+  },
+  "packet_key": "dev_task",
+  "recorded_at": "2026-04-13T07:13:43.91139553Z",
+  "run_id": "feature-continue-post-main-carveout-ready-view-spec",
+  "source_dispatch_packet_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/downstream-dispatch-packets/feature-continue-post-main-carveout-ready-view-spec-2026-04-13T07-13-43.76170016Z.json",
+  "status": "pass",
+  "surface": "vida task ensure",
+  "task": {
+    "created": true,
+    "label": "dev-pack",
+    "reused_existing": false,
+    "task_id": "feature-continue-post-main-carveout-ready-view-dev"
+  }
+}

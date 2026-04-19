@@ -1,0 +1,38 @@
+{
+  "artifact_kind": "runtime_downstream_dispatch_trace",
+  "recorded_at": "2026-04-13T10:28:01.391681285Z",
+  "run_id": "runtime-move-next-sequential-project-activator-test",
+  "step_count": 1,
+  "steps": [
+    {
+      "activation_agent_type": null,
+      "activation_runtime_role": null,
+      "blocker_code": null,
+      "dispatch_command": null,
+      "dispatch_kind": "closure",
+      "dispatch_packet_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/downstream-dispatch-packets/runtime-move-next-sequential-project-activator-test-2026-04-13T10-28-01.252473124Z.json",
+      "dispatch_result_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/dispatch-results/runtime-move-next-sequential-project-activator-test-2026-04-13T10-28-01.314397969Z.json",
+      "dispatch_status": "executed",
+      "dispatch_surface": "vida taskflow closure-preview",
+      "dispatch_target": "closure",
+      "downstream_dispatch_active_target": null,
+      "downstream_dispatch_blockers": [],
+      "downstream_dispatch_command": null,
+      "downstream_dispatch_executed_count": 0,
+      "downstream_dispatch_last_target": null,
+      "downstream_dispatch_note": null,
+      "downstream_dispatch_packet_path": null,
+      "downstream_dispatch_ready": false,
+      "downstream_dispatch_result_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/dispatch-results/runtime-move-next-sequential-project-activator-test-2026-04-13T10-28-01.314397969Z.json",
+      "downstream_dispatch_status": null,
+      "downstream_dispatch_target": null,
+      "downstream_dispatch_trace_path": null,
+      "exception_path_receipt_id": null,
+      "lane_status": "lane_completed",
+      "recorded_at": "2026-04-13T10:28:01.314323879Z",
+      "run_id": "runtime-move-next-sequential-project-activator-test",
+      "selected_backend": "senior",
+      "supersedes_receipt_id": null
+    }
+  ]
+}

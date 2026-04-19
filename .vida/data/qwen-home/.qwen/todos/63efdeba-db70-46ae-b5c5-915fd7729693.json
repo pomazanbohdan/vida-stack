@@ -1,0 +1,25 @@
+{
+  "todos": [
+    {
+      "content": "Fix selected_internal_codex_carrier to not substitute activation_agent_type tier for backend ID",
+      "id": "1",
+      "status": "completed"
+    },
+    {
+      "content": "Add regression test for external backend preservation through dispatch receipt",
+      "id": "2",
+      "status": "in_progress"
+    },
+    {
+      "content": "Add regression test for packet render preserving route-selected external backend",
+      "id": "3",
+      "status": "pending"
+    },
+    {
+      "content": "Build and run tests to verify fix",
+      "id": "4",
+      "status": "pending"
+    }
+  ],
+  "sessionId": "63efdeba-db70-46ae-b5c5-915fd7729693"
+}

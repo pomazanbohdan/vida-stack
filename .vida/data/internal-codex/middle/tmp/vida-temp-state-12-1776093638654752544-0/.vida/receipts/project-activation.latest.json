@@ -1,0 +1,34 @@
+{
+  "activation_mode": "bounded_interview_then_materialize",
+  "answers": {
+    "documentation_language": "english",
+    "project_id": "test-project",
+    "project_title": "test-project",
+    "reasoning_language": "english",
+    "todo_protocol_language": "english",
+    "user_communication_language": "english"
+  },
+  "changed_files": [
+    ".codex/**",
+    "vida.config.yaml"
+  ],
+  "default_host_agent_templates": [
+    "architect",
+    "junior",
+    "middle",
+    "senior"
+  ],
+  "docflow_first": true,
+  "host_cli_system": "codex",
+  "host_template_materialized": true,
+  "log_note": "Use `vida docflow` for subsequent documentation validation/readiness work; project activation itself is a bounded onboarding/configuration path, not TaskFlow execution.",
+  "non_canonical_taskflow_surfaces_forbidden_while_pending": [
+    "vida taskflow",
+    "external_taskflow_runtime"
+  ],
+  "project_root": "/home/unnamed/project/vida-stack/.vida/data/internal-codex/middle/tmp/vida-temp-state-12-1776093638654752544-0",
+  "receipt_kind": "project_activation",
+  "recorded_at": "2026-04-13T15:20:39.822750231Z",
+  "surface": "vida project-activator",
+  "taskflow_admitted_while_pending": false
+}

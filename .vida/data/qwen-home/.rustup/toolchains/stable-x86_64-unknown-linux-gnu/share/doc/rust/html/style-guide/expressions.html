@@ -1,0 +1,1075 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Expressions - The Rust Style Guide</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-2459343d.css">
+        <link rel="stylesheet" href="css/chrome-ae938929.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex-7ef70756.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-86a258df.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">The Rust Style Guide</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/rust-lang/rust/tree/HEAD/src/doc/style-guide/" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="expressions"><a class="header" href="#expressions">Expressions</a></h1>
+<h2 id="blocks"><a class="header" href="#blocks">Blocks</a></h2>
+<p>A block expression must have a newline after the initial <code>{</code> and before the
+terminal <code>}</code>, unless it qualifies to be written as a single line based on
+another style rule.</p>
+<p>A keyword before the block (such as <code>unsafe</code> or <code>async</code>) must be on the same
+line as the opening brace, with a single space between the keyword and the
+opening brace. Indent the contents of the block.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fn block_as_stmt() {
+    a_call();
+
+    {
+        a_call_inside_a_block();
+
+        // a comment in a block
+        the_value
+    }
+}
+
+fn block_as_expr() {
+    let foo = {
+        a_call_inside_a_block();
+
+        // a comment in a block
+        the_value
+    };
+}
+
+fn unsafe_block_as_stmt() {
+    a_call();
+
+    unsafe {
+        a_call_inside_a_block();
+
+        // a comment in a block
+        the_value
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>If a block has an attribute, put it on its own line before the block:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fn block_as_stmt() {
+    #[an_attribute]
+    {
+        #![an_inner_attribute]
+
+        // a comment in a block
+        the_value
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Avoid writing comments on the same lines as either of the braces.</p>
+<p>Write an empty block as <code>{}</code>.</p>
+<p>Write a block on a single line if:</p>
+<ul>
+<li>it is either used in expression position (not statement position) or is an
+unsafe block in statement position,</li>
+<li>it contains a single-line expression and no statements, and</li>
+<li>it contains no comments</li>
+</ul>
+<p>For a single-line block, put spaces after the opening brace and before the
+closing brace.</p>
+<p>Examples:</p>
+<pre class="playground"><code class="language-rust">fn main() {
+    // Single line
+    let _ = { a_call() };
+    let _ = unsafe { a_call() };
+
+    // Not allowed on one line
+    // Statement position.
+    {
+        a_call()
+    }
+
+    // Contains a statement
+    let _ = {
+        a_call();
+    };
+    unsafe {
+        a_call();
+    }
+
+    // Contains a comment
+    let _ = {
+        // A comment
+    };
+    let _ = {
+        // A comment
+        a_call()
+    };
+
+    // Multiple lines
+    let _ = {
+        a_call();
+        another_call()
+    };
+    let _ = {
+        a_call(
+            an_argument,
+            another_arg,
+        )
+    };
+}</code></pre>
+<h2 id="closures"><a class="header" href="#closures">Closures</a></h2>
+<p>Don’t put any extra spaces before the first <code>|</code> (unless the closure is prefixed
+by a keyword such as <code>move</code>); put a space between the second <code>|</code> and the
+expression of the closure. Between the <code>|</code>s, use function definition syntax,
+but elide types where possible.</p>
+<p>Use closures without the enclosing <code>{}</code>, if possible. Add the <code>{}</code> when you have
+a return type, when there are statements, when there are comments inside the
+closure, or when the body expression is a control-flow expression that spans
+multiple lines. If using braces, follow the rules above for blocks. Examples:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>|arg1, arg2| expr
+
+move |arg1: i32, arg2: i32| -&gt; i32 {
+    expr1;
+    expr2
+}
+
+|| Foo {
+    field1,
+    field2: 0,
+}
+
+|| {
+    if true {
+        blah
+    } else {
+        boo
+    }
+}
+
+|x| unsafe {
+    expr
+}
+<span class="boring">}</span></code></pre>
+<h2 id="struct-literals"><a class="header" href="#struct-literals">Struct literals</a></h2>
+<p>If a struct literal is <em>small</em>, format it on a single line, and do not use a
+trailing comma. If not, split it across multiple lines, with each field on its
+own block-indented line, and use a trailing comma.</p>
+<p>For each <code>field: value</code> entry, put a space after the colon only.</p>
+<p>Put a space before the opening brace. In the single-line form, put spaces after
+the opening brace and before the closing brace.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Foo { field1, field2: 0 }
+let f = Foo {
+    field1,
+    field2: an_expr,
+};
+<span class="boring">}</span></code></pre>
+<p>Functional record update syntax is treated like a field, but it must never have
+a trailing comma. Do not put a space after <code>..</code>.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let f = Foo {
+    field1,
+    ..an_expr
+};
+<span class="boring">}</span></code></pre>
+<h2 id="unit-literals"><a class="header" href="#unit-literals">Unit literals</a></h2>
+<p>Never break between the opening and closing parentheses of the <code>()</code> unit literal.</p>
+<h2 id="tuple-literals"><a class="header" href="#tuple-literals">Tuple literals</a></h2>
+<p>Use a single-line form where possible. Do not put spaces between the opening
+parenthesis and the first element, or between the last element and the closing
+parenthesis. Separate elements with a comma followed by a space.</p>
+<p>Where a single-line form is not possible, write the tuple across
+multiple lines, with each element of the tuple on its own block-indented line,
+and use a trailing comma.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>(a, b, c)
+
+let x = (
+    a_long_expr,
+    another_very_long_expr,
+);
+<span class="boring">}</span></code></pre>
+<h2 id="tuple-struct-literals"><a class="header" href="#tuple-struct-literals">Tuple struct literals</a></h2>
+<p>Do not put space between the identifier and the opening parenthesis. Otherwise,
+follow the rules for tuple literals:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Foo(a, b, c)
+
+let x = Foo(
+    a_long_expr,
+    another_very_long_expr,
+);
+<span class="boring">}</span></code></pre>
+<h2 id="enum-literals"><a class="header" href="#enum-literals">Enum literals</a></h2>
+<p>Follow the formatting rules for the various struct literals. Prefer using the
+name of the enum as a qualifying name, unless the enum is in the prelude:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Foo::Bar(a, b)
+Foo::Baz {
+    field1,
+    field2: 1001,
+}
+Ok(an_expr)
+<span class="boring">}</span></code></pre>
+<h2 id="array-literals"><a class="header" href="#array-literals">Array literals</a></h2>
+<p>Write small array literals on a single line. Do not put spaces between the opening
+square bracket and the first element, or between the last element and the closing
+square bracket. Separate elements with a comma followed by a space.</p>
+<p>If using the repeating initializer, put a space after the semicolon
+only.</p>
+<p>Apply the same rules if using <code>vec!</code> or similar array-like macros; always use
+square brackets with such macros. Examples:</p>
+<pre class="playground"><code class="language-rust">fn main() {
+    let x = [1, 2, 3];
+    let y = vec![a, b, c, d];
+    let a = [42; 10];
+}</code></pre>
+<p>For arrays that have to be broken across lines, if using the repeating
+initializer, break after the <code>;</code>, not before. Otherwise, follow the rules below
+for function calls. In any case, block-indent the contents of the initializer,
+and put line breaks after the opening square bracket and before the closing
+square bracket:</p>
+<pre class="playground"><code class="language-rust">fn main() {
+    [
+        a_long_expression();
+        1234567890
+    ]
+    let x = [
+        an_expression,
+        another_expression,
+        a_third_expression,
+    ];
+}</code></pre>
+<h2 id="array-accesses-indexing-and-slicing"><a class="header" href="#array-accesses-indexing-and-slicing">Array accesses, indexing, and slicing</a></h2>
+<p>Don’t put spaces around the square brackets. Avoid breaking lines if possible.
+Never break a line between the target expression and the opening square
+bracket. If the indexing expression must be broken onto a subsequent line, or
+spans multiple lines itself, then block-indent the indexing expression, and put
+newlines after the opening square bracket and before the closing square
+bracket:</p>
+<p>Examples:</p>
+<pre class="playground"><code class="language-rust">fn main() {
+    foo[42];
+    &amp;foo[..10];
+    bar[0..100];
+    foo[4 + 5 / bar];
+    a_long_target[
+        a_long_indexing_expression
+    ];
+}</code></pre>
+<h2 id="unary-operations"><a class="header" href="#unary-operations">Unary operations</a></h2>
+<p>Do not include a space between a unary op and its operand (i.e., <code>!x</code>, not
+<code>! x</code>). However, there must be a space after <code>&amp;mut</code>. Avoid line-breaking
+between a unary operator and its operand.</p>
+<h2 id="binary-operations"><a class="header" href="#binary-operations">Binary operations</a></h2>
+<p>Do include spaces around binary ops (i.e., <code>x + 1</code>, not <code>x+1</code>) (including <code>=</code>
+and other assignment operators such as <code>+=</code> or <code>*=</code>).</p>
+<p>For comparison operators, because for <code>T op U</code>, <code>&amp;T op &amp;U</code> is also implemented:
+if you have <code>t: &amp;T</code>, and <code>u: U</code>, prefer <code>*t op u</code> to <code>t op &amp;u</code>. In general,
+within expressions, prefer dereferencing to taking references, unless necessary
+(e.g. to avoid an unnecessarily expensive operation).</p>
+<p>Use parentheses liberally; do not necessarily elide them due to precedence.
+Tools should not automatically insert or remove parentheses. Do not use spaces
+to indicate precedence.</p>
+<p>If line-breaking, block-indent each subsequent line. For assignment operators,
+break after the operator; for all other operators, put the operator on the
+subsequent line. Put each sub-expression on its own line:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>foo_bar
+    + bar
+    + baz
+    + qux
+    + whatever
+<span class="boring">}</span></code></pre>
+<p>Prefer line-breaking at an assignment operator (either <code>=</code> or <code>+=</code>, etc.) rather
+than at other binary operators.</p>
+<h3 id="casts-as"><a class="header" href="#casts-as">Casts (<code>as</code>)</a></h3>
+<p>Format <code>as</code> casts like a binary operator. In particular, always include spaces
+around <code>as</code>, and if line-breaking, break before the <code>as</code> (never after) and
+block-indent the subsequent line. Format the type on the right-hand side using
+the rules for types.</p>
+<p>However, unlike with other binary operators, if chaining a series of <code>as</code> casts
+that require line-breaking, and line-breaking before the first <code>as</code> suffices to
+make the remainder fit on the next line, don’t break before any subsequent
+<code>as</code>; instead, leave the series of types all on the same line:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let cstr = very_long_expression()
+    as *const str as *const [u8] as *const std::os::raw::c_char;
+<span class="boring">}</span></code></pre>
+<p>If the subsequent line still requires line-breaking, break and block-indent
+before each <code>as</code> as with other binary operators.</p>
+<h2 id="control-flow"><a class="header" href="#control-flow">Control flow</a></h2>
+<p>Do not include extraneous parentheses for <code>if</code> and <code>while</code> expressions.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if true {
+}
+<span class="boring">}</span></code></pre>
+<p>is better than</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if (true) {
+}
+<span class="boring">}</span></code></pre>
+<p>Do include extraneous parentheses if it makes an arithmetic or logic expression
+easier to understand (<code>(x * 15) + (y * 20)</code> is fine)</p>
+<h2 id="function-calls"><a class="header" href="#function-calls">Function calls</a></h2>
+<p>Do not put a space between the function name, and the opening parenthesis.</p>
+<p>Do not put a space between an argument, and the comma which follows.</p>
+<p>Do put a space between an argument, and the comma which precedes it.</p>
+<p>Prefer not to break a line in the callee expression.</p>
+<p>For a function call with no arguments (a nullary function call like <code>func()</code>),
+never break within the parentheses, and never put a space between the
+parentheses. Always write a nullary function call as a single-line call, never
+a multi-line call.</p>
+<h3 id="single-line-calls"><a class="header" href="#single-line-calls">Single-line calls</a></h3>
+<p>Do not put a space between the function name and open paren, between the open
+paren and the first argument, or between the last argument and the close paren.</p>
+<p>Do not put a comma after the last argument.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>foo(x, y, z)
+<span class="boring">}</span></code></pre>
+<h3 id="multi-line-calls"><a class="header" href="#multi-line-calls">Multi-line calls</a></h3>
+<p>If the function call is not <em>small</em>, it would otherwise over-run the max width,
+or any argument or the callee is multi-line, then format the call across
+multiple lines. In this case, put each argument on its own block-indented line,
+break after the opening parenthesis and before the closing parenthesis,
+and use a trailing comma:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>a_function_call(
+    arg1,
+    a_nested_call(a, b),
+)
+<span class="boring">}</span></code></pre>
+<h2 id="method-calls"><a class="header" href="#method-calls">Method calls</a></h2>
+<p>Follow the function rules for calling.</p>
+<p>Do not put any spaces around the <code>.</code>.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>x.foo().bar().baz(x, y, z);
+<span class="boring">}</span></code></pre>
+<h2 id="macro-uses"><a class="header" href="#macro-uses">Macro uses</a></h2>
+<p>If a macro can be parsed like other constructs, format it like those
+constructs. For example, a macro use <code>foo!(a, b, c)</code> can be parsed like a
+function call (ignoring the <code>!</code>), so format it using the rules for function
+calls.</p>
+<p>The style guide defines specific formatting for particular macros in the
+language or standard library. The style guide does not define formatting for
+any third-party macros, even if similar to those in the language or standard
+library.</p>
+<h3 id="format-string-macros"><a class="header" href="#format-string-macros">Format string macros</a></h3>
+<p>For macros which take a format string, if all other arguments are <em>small</em>,
+format the arguments before the format string on a single line if they fit, and
+format the arguments after the format string on a single line if they fit, with
+the format string on its own line. If the arguments are not small or do not
+fit, put each on its own line as with a function. For example:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>println!(
+    "Hello {} and {}",
+    name1, name2,
+);
+
+assert_eq!(
+    x, y,
+    "x and y were not equal, see {}",
+    reason,
+);
+<span class="boring">}</span></code></pre>
+<h2 id="chains-of-fields-and-method-calls"><a class="header" href="#chains-of-fields-and-method-calls">Chains of fields and method calls</a></h2>
+<p>A chain is a sequence of field accesses, method calls, and/or uses of the try
+operator <code>?</code>. E.g., <code>a.b.c().d</code> or <code>foo?.bar().baz?</code>.</p>
+<p>Format the chain on one line if it is “small” and otherwise possible to do so.
+If formatting on multiple lines, put each field access or method call in the
+chain on its own line, with the line-break before the <code>.</code> and after any <code>?</code>.
+Block-indent each subsequent line:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let foo = bar
+    .baz?
+    .qux();
+<span class="boring">}</span></code></pre>
+<p>If the length of the last line of the first element plus its indentation is
+less than or equal to the indentation of the second line, then combine the
+first and second lines if they fit. Apply this rule recursively.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>x.baz?
+    .qux()
+
+x.y.z
+    .qux()
+
+let foo = x
+    .baz?
+    .qux();
+
+foo(
+    expr1,
+    expr2,
+).baz?
+    .qux();
+<span class="boring">}</span></code></pre>
+<h3 id="multi-line-elements"><a class="header" href="#multi-line-elements">Multi-line elements</a></h3>
+<p>If any element in a chain is formatted across multiple lines, put that element
+and any later elements on their own lines.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>a.b.c()?
+    .foo(
+        an_expr,
+        another_expr,
+    )
+    .bar
+    .baz
+<span class="boring">}</span></code></pre>
+<p>Note there is block indent due to the chain and the function call in the above
+example.</p>
+<p>Prefer formatting the whole chain in multi-line style and each element on one
+line, rather than putting some elements on multiple lines and some on a single
+line, e.g.,</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Better
+self.pre_comment
+    .as_ref()
+    .map_or(false, |comment| comment.starts_with("//"))
+
+// Worse
+self.pre_comment.as_ref().map_or(
+    false,
+    |comment| comment.starts_with("//"),
+)
+<span class="boring">}</span></code></pre>
+<h2 id="control-flow-expressions"><a class="header" href="#control-flow-expressions">Control flow expressions</a></h2>
+<p>This section covers <code>for</code> and <code>loop</code> expressions, as well as <code>if</code> and <code>while</code>
+expressions with their sub-expression variants. This includes those with a
+single <code>let</code> sub-expression (i.e. <code>if let</code> and <code>while let</code>)
+as well as “let-chains”: those with one or more <code>let</code> sub-expressions and
+one or more bool-type conditions (i.e.  <code>if a &amp;&amp; let Some(b) = c</code>).</p>
+<p>Put the keyword, any initial clauses, and the opening brace of the block all on
+a single line, if they fit. Apply the usual rules for <a href="#blocks">block
+formatting</a> to the block.</p>
+<p>If there is an <code>else</code> component, then put the closing brace, <code>else</code>, any
+following clause, and the opening brace all on the same line, with a single
+space before and after the <code>else</code> keyword:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if ... {
+    ...
+} else {
+    ...
+}
+
+if let ... {
+    ...
+} else if ... {
+    ...
+} else {
+    ...
+}
+<span class="boring">}</span></code></pre>
+<p>If the control line needs to be broken, then prefer breaking after the <code>=</code> for any
+<code>let</code> sub-expression in an <code>if</code> or <code>while</code> expression that does not fit,
+and before <code>in</code> in a <code>for</code> expression; the following line should be block indented.
+If the control line is broken for any reason, then the opening brace should be on its
+own line and not indented. Examples:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>while let Some(foo)
+    = a_long_expression
+{
+    ...
+}
+
+for foo
+    in a_long_expression
+{
+    ...
+}
+
+if a_long_expression
+    &amp;&amp; another_long_expression
+    || a_third_long_expression
+{
+    ...
+}
+
+if let Some(a) = b
+    &amp;&amp; another_long_expression
+    &amp;&amp; a_third_long_expression
+{
+    // ...
+}
+
+if let Some(relatively_long_thing)
+    = a_long_expression
+    &amp;&amp; another_long_expression
+    &amp;&amp; a_third_long_expression
+{
+    // ...
+}
+
+if some_expr
+    &amp;&amp; another_long_expression
+    &amp;&amp; let Some(relatively_long_thing) =
+        a_long_long_long_long_long_long_really_reallllllllllyyyyyyy_long_expression
+    &amp;&amp; a_third_long_expression
+{
+    // ...
+}
+<span class="boring">}</span></code></pre>
+<p>A let-chain control line is allowed to be formatted on a single line provided
+it only consists of two clauses, with the first, left-hand side operand being a literal or an
+<code>ident</code> (which can optionally be preceded by any number of unary prefix operators),
+and the second, right-hand side operand being a single-line <code>let</code> clause. Otherwise,
+the control line must be broken and formatted according to the above rules. For example:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if a &amp;&amp; let Some(b) = foo() {
+    // ...
+}
+
+if true &amp;&amp; let Some(b) = foo() {
+    // ...
+}
+
+let operator = if !from_hir_call &amp;&amp; let Some(p) = parent {
+    // ...
+};
+
+if let Some(b) = foo()
+    &amp;&amp; a
+{
+    // ..
+}
+
+if foo()
+    &amp;&amp; let Some(b) = bar
+{
+    // ...
+}
+
+if gen_pos != GenericArgPosition::Type
+    &amp;&amp; let Some(b) = gen_args.bindings.first()
+{
+    // ..
+}
+<span class="boring">}</span></code></pre>
+<p>Where the initial clause spans multiple lines and ends with one or more closing
+parentheses, square brackets, or braces, and there is nothing else on that
+line, and that line is not indented beyond the indent on the first line of the
+control flow expression, then put the opening brace of the block on the same
+line with a preceding space. For example:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>if !self.config.file_lines().intersects(
+    &amp;self.codemap.lookup_line_range(
+        stmt.span,
+    ),
+) {  // Opening brace on same line as initial clause.
+    ...
+}
+<span class="boring">}</span></code></pre>
+<h3 id="single-line-if-else"><a class="header" href="#single-line-if-else">Single line <code>if else</code></a></h3>
+<p>Put an <code>if else</code> or <code>if let else</code> on a single line if it occurs in expression
+context (i.e., is not a standalone statement), it contains a single <code>else</code>
+clause, and is <em>small</em>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let y = if x { 0 } else { 1 };
+
+// Examples that must be multi-line.
+let y = if something_very_long {
+    not_small
+} else {
+    also_not_small
+};
+
+if x {
+    0
+} else {
+    1
+}
+<span class="boring">}</span></code></pre>
+<h2 id="match"><a class="header" href="#match">Match</a></h2>
+<p>Prefer not to line-break inside the discriminant expression. Always break after
+the opening brace and before the closing brace. Block-indent the match arms
+once:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>match foo {
+    // arms
+}
+
+let x = match foo.bar.baz() {
+    // arms
+};
+<span class="boring">}</span></code></pre>
+<p>Use a trailing comma for a match arm if and only if not using a block.</p>
+<p>Never start a match arm pattern with <code>|</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>match foo {
+    // Don't do this.
+    | foo =&gt; bar,
+    // Or this.
+    | a_very_long_pattern
+    | another_pattern
+    | yet_another_pattern
+    | a_fourth_pattern =&gt; {
+        ...
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Prefer:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>match foo {
+    foo =&gt; bar,
+    a_very_long_pattern
+    | another_pattern
+    | yet_another_pattern
+    | a_fourth_pattern =&gt; {
+        ...
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Avoid splitting the left-hand side (before the <code>=&gt;</code>) of a match arm where
+possible. If the right-hand side of the match arm is kept on the same line,
+never use a block (unless the block is empty).</p>
+<p>If the right-hand side consists of multiple statements, or has line comments,
+or the start of the line does not fit on the same line as the left-hand side,
+use a block. Do not flatten a right-hand side block containing a single macro call
+because its expanded form could contain a trailing semicolon.</p>
+<p>Block-indent the body of a block arm.</p>
+<p>Examples:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>match foo {
+    foo =&gt; bar,
+    a_very_long_pattern | another_pattern if an_expression() =&gt; {
+        no_room_for_this_expression()
+    }
+    foo =&gt; {
+        // A comment.
+        an_expression()
+    }
+    foo =&gt; {
+        let a = statement();
+        an_expression()
+    }
+    bar =&gt; {}
+    // Trailing comma on last item.
+    foo =&gt; bar,
+    baz =&gt; qux!(),
+    lorem =&gt; {
+        ipsum!()
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>If the body is a single expression with no line comments and not a control flow
+expression, start it on the same line as the left-hand side. If not, then it
+must be in a block. Example:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>match foo {
+    // A combinable expression.
+    foo =&gt; a_function_call(another_call(
+        argument1,
+        argument2,
+    )),
+    // A non-combinable expression
+    bar =&gt; {
+        a_function_call(
+            another_call(
+                argument1,
+                argument2,
+            ),
+            another_argument,
+        )
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="line-breaking"><a class="header" href="#line-breaking">Line-breaking</a></h3>
+<p>If using a block form on the right-hand side of a match arm makes it possible
+to avoid breaking on the left-hand side, do that:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    // Assuming the following line does not fit in the max width
+    a_very_long_pattern | another_pattern =&gt; ALongStructName {
+        ...
+    },
+    // Prefer this
+    a_very_long_pattern | another_pattern =&gt; {
+        ALongStructName {
+            ...
+        }
+    }
+    // To splitting the pattern.
+<span class="boring">}</span></code></pre>
+<p>Never break after <code>=&gt;</code> without using the block form of the body.</p>
+<p>If the left-hand side must be split and there is an <code>if</code> clause, break before
+the <code>if</code> and block indent. In this case, always use a block body and start the
+body on a new line:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    a_very_long_pattern | another_pattern
+        if expr =&gt;
+    {
+        ...
+    }
+<span class="boring">}</span></code></pre>
+<p>If required to break the pattern, put each clause of the pattern on its own
+line with no additional indent, breaking before the <code>|</code>. If there is an <code>if</code>
+clause, use the above form:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    a_very_long_pattern
+    | another_pattern
+    | yet_another_pattern
+    | a_forth_pattern =&gt; {
+        ...
+    }
+    a_very_long_pattern
+    | another_pattern
+    | yet_another_pattern
+    | a_forth_pattern
+        if expr =&gt;
+    {
+        ...
+    }
+<span class="boring">}</span></code></pre>
+<p>If the pattern is multi-line, and the last line is less wide than the indent, do
+not put the <code>if</code> clause on a new line. E.g.,</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    Token::Dimension {
+         value,
+         ref unit,
+         ..
+    } if num_context.is_ok(context.parsing_mode, value) =&gt; {
+        ...
+    }
+<span class="boring">}</span></code></pre>
+<p>If every clause in a pattern is <em>small</em>, but the whole pattern does not fit on
+one line, then format the pattern across multiple lines with as many clauses
+per line as possible. Again, break before a <code>|</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    foo | bar | baz
+    | qux =&gt; {
+        ...
+    }
+<span class="boring">}</span></code></pre>
+<p>We define a pattern clause to be <em>small</em> if it fits on a single line and
+matches “small” in the following grammar:</p>
+<pre><code>small:
+    - small_no_tuple
+    - unary tuple constructor: `(` small_no_tuple `,` `)`
+    - `&amp;` small
+
+small_no_tuple:
+    - single token
+    - `&amp;` small_no_tuple
+</code></pre>
+<p>E.g., <code>&amp;&amp;Some(foo)</code> matches, <code>Foo(4, Bar)</code> does not.</p>
+<h2 id="combinable-expressions"><a class="header" href="#combinable-expressions">Combinable expressions</a></h2>
+<p>Where a function call has a single argument, and that argument is formatted
+across multiple-lines, format the outer call as if it were a single-line call,
+if the result fits. Apply the same combining behaviour to any similar
+expressions which have multi-line, block-indented lists of sub-expressions
+delimited by parentheses (e.g., macros or tuple struct literals). E.g.,</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>foo(bar(
+    an_expr,
+    another_expr,
+))
+
+let x = foo(Bar {
+    field: whatever,
+});
+
+foo(|param| {
+    action();
+    foo(param)
+})
+
+let x = combinable([
+    an_expr,
+    another_expr,
+]);
+
+let arr = [combinable(
+    an_expr,
+    another_expr,
+)];
+<span class="boring">}</span></code></pre>
+<p>Apply this behavior recursively.</p>
+<p>For a function with multiple arguments, if the last argument is a multi-line
+closure with an explicit block, there are no other closure arguments, and all
+the arguments and the first line of the closure fit on the first line, use the
+same combining behavior:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>foo(first_arg, x, |param| {
+    action();
+    foo(param)
+})
+<span class="boring">}</span></code></pre>
+<h2 id="ranges"><a class="header" href="#ranges">Ranges</a></h2>
+<p>Do not put spaces in ranges, e.g., <code>0..10</code>, <code>x..=y</code>, <code>..x.len()</code>, <code>foo..</code>.</p>
+<p>When writing a range with both upper and lower bounds, if the line must be
+broken within the range, break before the range operator and block indent the
+second line:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>a_long_expression
+    ..another_long_expression
+<span class="boring">}</span></code></pre>
+<p>For the sake of indicating precedence, if either bound is a compound
+expression, use parentheses around it, e.g., <code>..(x + 1)</code>, <code>(x.f)..(x.f.len())</code>,
+or <code>0..(x - 10)</code>.</p>
+<h2 id="hexadecimal-literals"><a class="header" href="#hexadecimal-literals">Hexadecimal literals</a></h2>
+<p>Hexadecimal literals may use upper- or lower-case letters, but they must not be
+mixed within the same literal. Projects should use the same case for all
+literals, but we do not make a recommendation for either lower- or upper-case.</p>
+<h2 id="patterns"><a class="header" href="#patterns">Patterns</a></h2>
+<p>Format patterns like their corresponding expressions. See the section on
+<code>match</code> for additional formatting for patterns in match arms.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="statements.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="types.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="statements.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="types.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-c2a407aa.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

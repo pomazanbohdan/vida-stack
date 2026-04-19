@@ -1,0 +1,10 @@
+{
+  "artifact_kind": "runtime_lane_completion_result",
+  "completed_target": "closure",
+  "completion_receipt_id": "task-close-task-agents-sidecar-runtime-defect-intake-rule",
+  "execution_state": "executed",
+  "recorded_at": "2026-04-16T16:15:55.001746704Z",
+  "run_id": "task-agents-sidecar-runtime-defect-intake-rule",
+  "source_dispatch_packet_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/dispatch-packets/task-agents-sidecar-runtime-defect-intake-rule-2026-04-14T05-07-39.962007987Z.json",
+  "status": "pass"
+}

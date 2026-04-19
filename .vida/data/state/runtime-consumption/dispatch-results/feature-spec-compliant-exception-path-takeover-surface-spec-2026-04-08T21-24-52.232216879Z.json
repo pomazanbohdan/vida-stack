@@ -1,0 +1,59 @@
+{
+  "admission": {
+    "admitted": true,
+    "consumed_evidence": [
+      "tracked_flow_bootstrap.required",
+      "tracked_flow_bootstrap.status",
+      "tracked_flow_bootstrap.bootstrap_command",
+      "tracked_flow_bootstrap.feature_slug",
+      "tracked_flow_bootstrap.design_doc_path",
+      "tracked_flow_bootstrap.design_artifact_path",
+      "tracked_flow_bootstrap.epic.task_id",
+      "tracked_flow_bootstrap.spec_task.task_id",
+      "tracked_flow_bootstrap.docflow.finalize_command",
+      "tracked_flow_bootstrap.docflow.check_command",
+      "tracked_flow_bootstrap.spec_task.close_command",
+      "tracked_flow_bootstrap.work_pool_task.create_command",
+      "tracked_flow_bootstrap.work_pool_task.ensure_command",
+      "tracked_flow_bootstrap.dev_task.create_command",
+      "tracked_flow_bootstrap.dev_task.ensure_command"
+    ],
+    "status": "admitted"
+  },
+  "changed_files": [
+    "taskflow:feature-spec-compliant-exception-path-takeover-surface",
+    "taskflow:feature-spec-compliant-exception-path-takeover-surface-spec",
+    "docs/product/spec/README.md",
+    "docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md"
+  ],
+  "design_doc": {
+    "created": true,
+    "path": "docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md",
+    "registered_in": [
+      "docs/product/spec/README.md"
+    ]
+  },
+  "epic": {
+    "created": true,
+    "task_id": "feature-spec-compliant-exception-path-takeover-surface"
+  },
+  "feature_slug": "spec-compliant-exception-path-takeover-surface",
+  "next": {
+    "check_command": "vida docflow check --root . docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md",
+    "close_spec_task_command": "vida task close feature-spec-compliant-exception-path-takeover-surface-spec --reason 'design packet finalized and handed off into tracked work-pool shaping' --json",
+    "dev_task_create_command": "vida task create feature-spec-compliant-exception-path-takeover-surface-dev 'Dev pack: Develop a spec-compliant exception-path takeover surface for delegate...' --type task --status open --parent-id feature-spec-compliant-exception-path-takeover-surface --labels dev-pack --json",
+    "dev_task_ensure_command": "vida task ensure feature-spec-compliant-exception-path-takeover-surface-dev 'Dev pack: Develop a spec-compliant exception-path takeover surface for delegate...' --type task --status open --parent-id feature-spec-compliant-exception-path-takeover-surface --labels dev-pack --json",
+    "finalize_command": "vida docflow finalize-edit docs/product/spec/spec-compliant-exception-path-takeover-surface-design.md 'record bounded feature design'",
+    "plan_note": "publish a concise execution plan before mutating the design document or dispatching write-producing work",
+    "work_pool_create_command": "vida task create feature-spec-compliant-exception-path-takeover-surface-work-pool 'Work-pool pack: Develop a spec-compliant exception-path takeover surface for delegate...' --type task --status open --parent-id feature-spec-compliant-exception-path-takeover-surface --labels work-pool-pack --json",
+    "work_pool_ensure_command": "vida task ensure feature-spec-compliant-exception-path-takeover-surface-work-pool 'Work-pool pack: Develop a spec-compliant exception-path takeover surface for delegate...' --type task --status open --parent-id feature-spec-compliant-exception-path-takeover-surface --labels work-pool-pack --json"
+  },
+  "receipt_path": ".vida/receipts/spec-bootstrap-1775683492.json",
+  "request": "Develop a spec-compliant exception-path takeover surface for delegated lanes, then use it to finalize and implement the VIDA memory design epic informed by MemPalace and memory-mcp-1file",
+  "spec_task": {
+    "created": true,
+    "task_id": "feature-spec-compliant-exception-path-takeover-surface-spec"
+  },
+  "status": "pass",
+  "surface": "vida taskflow bootstrap-spec"
+}

@@ -1,0 +1,90 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Perform a tail-call of a function."><title>become - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="std" data-themes="" data-resource-suffix="1.94.1" data-rustdoc-version="1.94.1 (e408947bf 2026-03-25)" data-channel="1.94.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items1.94.1.js"></script><script defer src="../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc keyword"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">become</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../std/index.html"><img class="rust-logo" src="../static.files/rust-logo-9a9549ea.svg" alt="logo"></a><h2><a href="../std/index.html">std</a><span class="version">1.94.1</span></h2></div><div class="version">(e408947bf	2026-03-25)</div><div class="sidebar-elems"><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><h1>Keyword <span class="keyword">become</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/std/keyword_docs.rs.html#1389">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Perform a tail-call of a function.</p>
+<div class="warning">
+<p><code>feature(explicit_tail_calls)</code> is currently incomplete and may not work properly.</p>
+</div>
+<p>When tail calling a function, instead of its stack frame being added to the
+stack, the stack frame of the caller is directly replaced with the callee’s.
+This means that as long as a loop in a call graph only uses tail calls, the
+stack growth will be bounded.</p>
+<p>This is useful for writing functional-style code (since it prevents recursion
+from exhausting resources) or for code optimization (since a tail call
+<em>might</em> be cheaper than a normal call, tail calls can be used in a similar
+manner to computed goto).</p>
+<p>Example of using <code>become</code> to implement functional-style <code>fold</code>:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="attr">#![feature(explicit_tail_calls)]
+#![expect(incomplete_features)]
+
+</span><span class="kw">fn </span>fold&lt;T: Copy, S&gt;(slice: <span class="kw-2">&amp;</span>[T], init: S, f: <span class="kw">impl </span>Fn(S, T) -&gt; S) -&gt; S {
+    <span class="kw">match </span>slice {
+        <span class="comment">// without `become`, on big inputs this could easily overflow the
+        // stack. using a tail call guarantees that the stack will not grow unboundedly
+        </span>[first, rest @ ..] =&gt; <span class="kw">become </span>fold(rest, f(init, <span class="kw-2">*</span>first), f),
+        [] =&gt; init,
+    }
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0A%23!%5Bfeature(explicit_tail_calls)%5D%0A%0A%23!%5Bexpect(incomplete_features)%5D%0A%0A%0Afn+main()+%7B%0A++++fn+fold%3CT:+Copy,+S%3E(slice:+%26%5BT%5D,+init:+S,+f:+impl+Fn(S,+T)+-%3E+S)+-%3E+S+%7B%0A++++++++match+slice+%7B%0A++++++++++++//+without+%60become%60,+on+big+inputs+this+could+easily+overflow+the%0A++++++++++++//+stack.+using+a+tail+call+guarantees+that+the+stack+will+not+grow+unboundedly%0A++++++++++++%5Bfirst,+rest+%40+..%5D+=%3E+become+fold(rest,+f(init,+*first),+f),%0A++++++++++++%5B%5D+=%3E+init,%0A++++++++%7D%0A++++%7D%0A%7D&amp;version=nightly&amp;edition=2024"></a></div>
+<p>Compilers can already perform “tail call optimization” – they can replace normal
+calls with tail calls, although there are no guarantees that this will be done.
+However, to perform TCO, the call needs to be the last thing that happens
+in the functions and be returned from it. This requirement is often broken
+by drop code for locals, which is run after computing the return expression:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">fn </span>example() {
+    <span class="kw">let </span>string = <span class="string">"meow"</span>.to_owned();
+    <span class="macro">println!</span>(<span class="string">"{string}"</span>);
+    <span class="kw">return </span>help(); <span class="comment">// this is *not* the last thing that happens in `example`...
+</span>}
+
+<span class="comment">// ... because it is desugared to this:
+</span><span class="kw">fn </span>example_desugared() {
+    <span class="kw">let </span>string = <span class="string">"meow"</span>.to_owned();
+    <span class="macro">println!</span>(<span class="string">"{string}"</span>);
+    <span class="kw">let </span>tmp = help();
+    drop(string);
+    <span class="kw">return </span>tmp;
+}
+
+<span class="kw">fn </span>help() {}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++fn+example()+%7B%0A++++++++let+string+=+%22meow%22.to_owned();%0A++++++++println!(%22%7Bstring%7D%22);%0A++++++++return+help();+//+this+is+*not*+the+last+thing+that+happens+in+%60example%60...%0A++++%7D%0A++++%0A++++//+...+because+it+is+desugared+to+this:%0A++++fn+example_desugared()+%7B%0A++++++++let+string+=+%22meow%22.to_owned();%0A++++++++println!(%22%7Bstring%7D%22);%0A++++++++let+tmp+=+help();%0A++++++++drop(string);%0A++++++++return+tmp;%0A++++%7D%0A++++%0A++++fn+help()+%7B%7D%0A%7D&amp;edition=2024"></a></div>
+<p>For this reason, <code>become</code> also changes the drop order, such that locals are
+dropped <em>before</em> evaluating the call.</p>
+<p>In order to guarantee that the compiler can perform a tail call, <code>become</code>
+currently has these requirements:</p>
+<ol>
+<li>callee and caller must have the same ABI, arguments, and return type</li>
+<li>callee and caller must not have varargs</li>
+<li>caller must not be marked with <code>#[track_caller]</code>
+<ul>
+<li>callee is allowed to be marked with <code>#[track_caller]</code> as otherwise
+adding <code>#[track_caller]</code> would be a breaking change. if callee is
+marked with <code>#[track_caller]</code> a tail call is not guaranteed.</li>
+</ul>
+</li>
+<li>callee and caller cannot be a closure
+(unless it’s coerced to a function pointer)</li>
+</ol>
+<p>It is possible to tail-call a function pointer:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="attr">#![feature(explicit_tail_calls)]
+#![expect(incomplete_features)]
+
+#[derive(Copy, Clone)]
+</span><span class="kw">enum </span>Inst { Inc, Dec }
+
+<span class="kw">fn </span>dispatch(stream: <span class="kw-2">&amp;</span>[Inst], state: u32) -&gt; u32 {
+    <span class="kw">const </span>TABLE: <span class="kw-2">&amp;</span>[<span class="kw">fn</span>(<span class="kw-2">&amp;</span>[Inst], u32) -&gt; u32] = <span class="kw-2">&amp;</span>[increment, decrement];
+    <span class="kw">match </span>stream {
+        [inst, rest @ ..] =&gt; <span class="kw">become </span>TABLE[<span class="kw-2">*</span>inst <span class="kw">as </span>usize](rest, state),
+        [] =&gt; state,
+    }
+}
+
+<span class="kw">fn </span>increment(stream: <span class="kw-2">&amp;</span>[Inst], state: u32) -&gt; u32 {
+    <span class="kw">become </span>dispatch(stream, state + <span class="number">1</span>)
+}
+
+<span class="kw">fn </span>decrement(stream: <span class="kw-2">&amp;</span>[Inst], state: u32) -&gt; u32 {
+    <span class="kw">become </span>dispatch(stream, state - <span class="number">1</span>)
+}
+
+<span class="kw">let </span>program = <span class="kw-2">&amp;</span>[Inst::Inc, Inst::Inc, Inst::Dec, Inst::Inc];
+<span class="macro">assert_eq!</span>(dispatch(program, <span class="number">0</span>), <span class="number">2</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0A%23!%5Bfeature(explicit_tail_calls)%5D%0A%0A%23!%5Bexpect(incomplete_features)%5D%0A%0A%0Afn+main()+%7B%0A++++%23%5Bderive(Copy,+Clone)%5D%0A++++enum+Inst+%7B+Inc,+Dec+%7D%0A++++%0A++++fn+dispatch(stream:+%26%5BInst%5D,+state:+u32)+-%3E+u32+%7B%0A++++++++const+TABLE:+%26%5Bfn(%26%5BInst%5D,+u32)+-%3E+u32%5D+=+%26%5Bincrement,+decrement%5D;%0A++++++++match+stream+%7B%0A++++++++++++%5Binst,+rest+%40+..%5D+=%3E+become+TABLE%5B*inst+as+usize%5D(rest,+state),%0A++++++++++++%5B%5D+=%3E+state,%0A++++++++%7D%0A++++%7D%0A++++%0A++++fn+increment(stream:+%26%5BInst%5D,+state:+u32)+-%3E+u32+%7B%0A++++++++become+dispatch(stream,+state+%2B+1)%0A++++%7D%0A++++%0A++++fn+decrement(stream:+%26%5BInst%5D,+state:+u32)+-%3E+u32+%7B%0A++++++++become+dispatch(stream,+state+-+1)%0A++++%7D%0A++++%0A++++let+program+=+%26%5BInst::Inc,+Inst::Inc,+Inst::Dec,+Inst::Inc%5D;%0A++++assert_eq!(dispatch(program,+0),+2);%0A%7D&amp;version=nightly&amp;edition=2024"></a></div></div></details></section></div></main></body></html>

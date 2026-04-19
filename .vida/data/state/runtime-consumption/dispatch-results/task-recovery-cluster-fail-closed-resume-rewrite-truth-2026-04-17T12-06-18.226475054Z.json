@@ -1,0 +1,23 @@
+{
+  "artifact_kind": "runtime_dispatch_result",
+  "changed_files": [
+    "taskflow:feature-repair-fail-closed-resume-closure-truth-dev"
+  ],
+  "dispatch_target": "dev-pack",
+  "epic": {
+    "created": false,
+    "task_id": "feature-repair-fail-closed-resume-closure-truth"
+  },
+  "packet_key": "dev_task",
+  "recorded_at": "2026-04-17T12:06:18.226505765Z",
+  "run_id": "task-recovery-cluster-fail-closed-resume-rewrite-truth",
+  "source_dispatch_packet_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/downstream-dispatch-packets/task-recovery-cluster-fail-closed-resume-rewrite-truth-2026-04-17T12-06-14.814117376Z.json",
+  "status": "pass",
+  "surface": "vida task ensure",
+  "task": {
+    "created": true,
+    "label": "dev-pack",
+    "reused_existing": false,
+    "task_id": "feature-repair-fail-closed-resume-closure-truth-dev"
+  }
+}

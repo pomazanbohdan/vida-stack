@@ -116,7 +116,7 @@ pub(crate) use config_value_utils::{
 };
 #[allow(unused_imports)]
 pub(crate) use consume_final_operator_surface::{
-    build_release1_operator_contracts_envelope, emit_taskflow_consume_final_json,
+    build_operator_contracts_envelope, emit_taskflow_consume_final_json,
 };
 #[allow(unused_imports)]
 pub(crate) use development_flow_glue::{
@@ -206,7 +206,7 @@ use task_cli_render::{
     print_blocked_tasks, print_task_critical_path, print_task_dependencies,
     print_task_dependency_mutation, print_task_dependency_tree, print_task_export_summary,
     print_task_graph_issues, print_task_list, print_task_mutation, print_task_next_display_id,
-    print_task_ready, print_task_show,
+    print_task_progress, print_task_ready, print_task_show,
 };
 use taskflow_layer4::print_taskflow_proxy_help;
 use taskflow_proxy::run_taskflow_proxy;
@@ -1482,7 +1482,7 @@ mod tests {
             ok: false,
             row_count: 1,
             verdict: Some("blocked".to_string()),
-            artifact_path: None,
+            artifact_path: Some("vida/config/docflow-proof.current.jsonl".to_string()),
             output: "❌ BLOCKING: proofcheck".to_string(),
         };
 
@@ -1546,7 +1546,10 @@ mod tests {
         assert!(!verdict.ready);
         assert_eq!(
             verdict.blockers,
-            vec!["missing_inventory_or_projection_evidence"]
+            vec![
+                "missing_inventory_or_projection_evidence",
+                "missing_closure_proof"
+            ]
         );
     }
 
@@ -1591,7 +1594,10 @@ mod tests {
         assert!(!verdict.ready);
         assert_eq!(
             verdict.blockers,
-            vec!["missing_inventory_or_projection_evidence"]
+            vec![
+                "missing_inventory_or_projection_evidence",
+                "missing_closure_proof"
+            ]
         );
     }
 
@@ -1806,7 +1812,10 @@ mod tests {
 
         assert_eq!(verdict.status, "block");
         assert!(!verdict.ready);
-        assert_eq!(verdict.blockers, vec!["missing_proof_verdict"]);
+        assert_eq!(
+            verdict.blockers,
+            vec!["missing_proof_verdict", "missing_closure_proof"]
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

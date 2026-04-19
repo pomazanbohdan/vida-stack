@@ -240,6 +240,7 @@ pub struct BlockedTaskRecord {
 pub struct TaskDependencyTreeNode {
     pub task: TaskRecord,
     pub dependencies: Vec<TaskDependencyTreeEdge>,
+    pub children: Vec<TaskDependencyTreeChild>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
@@ -252,6 +253,30 @@ pub struct TaskDependencyTreeEdge {
     pub node: Option<Box<TaskDependencyTreeNode>>,
     pub cycle: bool,
     pub missing: bool,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
+pub struct TaskDependencyTreeChild {
+    pub child_id: String,
+    pub child_status: String,
+    pub child_issue_type: Option<String>,
+    pub node: Option<Box<TaskDependencyTreeNode>>,
+    pub cycle: bool,
+    pub missing: bool,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq)]
+pub struct TaskProgressSummary {
+    pub root_task: TaskRecord,
+    pub progress_basis: String,
+    pub direct_child_count: usize,
+    pub descendant_count: usize,
+    pub open_count: usize,
+    pub in_progress_count: usize,
+    pub closed_count: usize,
+    pub epic_count: usize,
+    pub status_counts: BTreeMap<String, usize>,
+    pub percent_closed: f64,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord)]

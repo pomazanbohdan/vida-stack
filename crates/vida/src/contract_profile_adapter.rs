@@ -100,6 +100,31 @@ pub(crate) fn render_operator_contract_envelope(
     }
 }
 
+pub(crate) fn operator_contract_status_is_blocked(value: &Value) -> bool {
+    match selected_contract_profile_id() {
+        ContractProfileId::Release1 => {
+            crate::operator_contracts::operator_contract_status_is_blocked(
+                &RELEASE1_OPERATOR_CONTRACT_SPEC,
+                value,
+            )
+        }
+    }
+}
+
+pub(crate) fn canonical_approval_status_str(value: &str) -> Option<&'static str> {
+    match selected_contract_profile_id() {
+        ContractProfileId::Release1 => {
+            crate::release1_contracts::canonical_approval_status_str(value)
+        }
+    }
+}
+
+pub(crate) fn canonical_gate_level_str(value: &str) -> Option<&'static str> {
+    match selected_contract_profile_id() {
+        ContractProfileId::Release1 => crate::release1_contracts::canonical_gate_level_str(value),
+    }
+}
+
 pub(crate) fn operator_contracts_consistency_error(
     status: &str,
     blocker_codes: &[String],

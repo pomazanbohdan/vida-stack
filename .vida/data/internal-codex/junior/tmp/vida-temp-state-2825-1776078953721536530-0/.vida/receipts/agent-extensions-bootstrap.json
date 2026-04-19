@@ -1,0 +1,22 @@
+{
+  "receipt_kind": "agent_extensions_bootstrap",
+  "generated_at": "2026-04-13T11:15:58.048030258Z",
+  "project_root": "/home/unnamed/project/vida-stack/.vida/data/internal-codex/junior/tmp/vida-temp-state-2825-1776078953721536530-0",
+  "runtime_projection_root": "/home/unnamed/project/vida-stack/.vida/data/internal-codex/junior/tmp/vida-temp-state-2825-1776078953721536530-0/.vida/project/agent-extensions",
+  "base_projection_files": [
+    ".vida/project/agent-extensions/README.md",
+    ".vida/project/agent-extensions/roles.yaml",
+    ".vida/project/agent-extensions/skills.yaml",
+    ".vida/project/agent-extensions/profiles.yaml",
+    ".vida/project/agent-extensions/flows.yaml",
+    ".vida/project/agent-extensions/dispatch-aliases.yaml"
+  ],
+  "sidecar_projection_files": [
+    ".vida/project/agent-extensions/roles.sidecar.yaml",
+    ".vida/project/agent-extensions/skills.sidecar.yaml",
+    ".vida/project/agent-extensions/profiles.sidecar.yaml",
+    ".vida/project/agent-extensions/flows.sidecar.yaml",
+    ".vida/project/agent-extensions/dispatch-aliases.sidecar.yaml"
+  ],
+  "source": "vida init default runtime projection bootstrap"
+}

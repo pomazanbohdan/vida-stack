@@ -478,6 +478,27 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 }
             }
         }
+        TaskCommand::Progress(command) => {
+            let state_dir = command
+                .state_dir
+                .unwrap_or_else(state_store::default_state_dir);
+            match StateStore::open_existing(state_dir).await {
+                Ok(store) => match store.task_progress_summary(&command.task_id).await {
+                    Ok(summary) => {
+                        print_task_progress(command.render, &summary, command.json);
+                        ExitCode::SUCCESS
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to compute task progress: {error}");
+                        ExitCode::from(1)
+                    }
+                },
+                Err(error) => {
+                    eprintln!("Failed to open authoritative state store: {error}");
+                    ExitCode::from(1)
+                }
+            }
+        }
         TaskCommand::Ready(command) => {
             let state_dir = command
                 .state_dir

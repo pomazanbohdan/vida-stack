@@ -1,6 +1,7 @@
 use crate::state_store::{
     BlockedTaskRecord, TaskCriticalPath, TaskDependencyRecord, TaskDependencyStatus,
-    TaskDependencyTreeEdge, TaskDependencyTreeNode, TaskGraphIssue, TaskRecord,
+    TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode, TaskGraphIssue,
+    TaskProgressSummary, TaskRecord,
 };
 use crate::{print_surface_header, print_surface_line, RenderMode};
 
@@ -112,6 +113,62 @@ pub(crate) fn print_task_show(render: RenderMode, task: &TaskRecord, as_json: bo
     }
 
     print_task_record(render, "vida task show", task);
+}
+
+pub(crate) fn print_task_progress(
+    render: RenderMode,
+    summary: &TaskProgressSummary,
+    as_json: bool,
+) {
+    let payload = serde_json::json!({
+        "surface": "vida task progress",
+        "status": "pass",
+        "task_id": summary.root_task.id,
+        "progress": summary,
+    });
+    if crate::surface_render::print_surface_json(
+        &payload,
+        as_json,
+        "task progress should render as json",
+    ) {
+        return;
+    }
+
+    print_surface_header(render, "vida task progress");
+    print_surface_line(render, "task", &summary.root_task.id);
+    print_surface_line(render, "title", &summary.root_task.title);
+    print_surface_line(render, "basis", &summary.progress_basis);
+    print_surface_line(
+        render,
+        "direct children",
+        &summary.direct_child_count.to_string(),
+    );
+    print_surface_line(render, "descendants", &summary.descendant_count.to_string());
+    print_surface_line(render, "open", &summary.open_count.to_string());
+    print_surface_line(
+        render,
+        "in progress",
+        &summary.in_progress_count.to_string(),
+    );
+    print_surface_line(render, "closed", &summary.closed_count.to_string());
+    print_surface_line(render, "epics", &summary.epic_count.to_string());
+    print_surface_line(
+        render,
+        "percent closed",
+        &format!("{:.2}", summary.percent_closed),
+    );
+    if summary.status_counts.is_empty() {
+        print_surface_line(render, "status counts", "none");
+        return;
+    }
+
+    let status_summary = summary
+        .status_counts
+        .iter()
+        .map(|(status, count)| format!("{status}:{count}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    print_surface_line(render, "status counts", &status_summary);
 }
 
 pub(crate) fn print_task_mutation(
@@ -327,6 +384,7 @@ pub(crate) fn print_task_dependency_tree(
         "status": "pass",
         "root_task_id": tree.task.id,
         "dependency_count": tree.dependencies.len(),
+        "child_count": tree.children.len(),
         "tree": tree,
     });
     if crate::surface_render::print_surface_json(
@@ -348,11 +406,20 @@ pub(crate) fn print_task_dependency_tree(
     );
     if tree.dependencies.is_empty() {
         print_surface_line(render, "dependencies", "none");
+    } else {
+        for edge in &tree.dependencies {
+            print_task_dependency_tree_edge(edge, 0);
+        }
+    }
+
+    if tree.children.is_empty() {
+        print_surface_line(render, "children", "none");
         return;
     }
 
-    for edge in &tree.dependencies {
-        print_task_dependency_tree_edge(edge, 0);
+    print_surface_line(render, "children", &tree.children.len().to_string());
+    for child in &tree.children {
+        print_task_dependency_tree_child(child, 0);
     }
 }
 
@@ -374,6 +441,34 @@ fn print_task_dependency_tree_edge(edge: &TaskDependencyTreeEdge, depth: usize) 
     if let Some(node) = &edge.node {
         for child in &node.dependencies {
             print_task_dependency_tree_edge(child, depth + 1);
+        }
+        for child in &node.children {
+            print_task_dependency_tree_child(child, depth + 1);
+        }
+    }
+}
+
+fn print_task_dependency_tree_child(child: &TaskDependencyTreeChild, depth: usize) {
+    let indent = "  ".repeat(depth);
+    let issue_type = child.child_issue_type.as_deref().unwrap_or("unknown");
+    let state = if child.cycle {
+        "cycle"
+    } else if child.missing {
+        "missing"
+    } else {
+        child.child_status.as_str()
+    };
+    println!(
+        "{indent}child\t{}\t{}\t{}",
+        child.child_id, state, issue_type
+    );
+
+    if let Some(node) = &child.node {
+        for edge in &node.dependencies {
+            print_task_dependency_tree_edge(edge, depth + 1);
+        }
+        for nested_child in &node.children {
+            print_task_dependency_tree_child(nested_child, depth + 1);
         }
     }
 }

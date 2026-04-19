@@ -1,0 +1,19 @@
+{
+  "changed_files": [
+    "taskflow:feature-active-bounded-unit-post-main-carveout",
+    "taskflow:feature-active-bounded-unit-post-main-carveout-work-pool"
+  ],
+  "epic": {
+    "created": true,
+    "task_id": "feature-active-bounded-unit-post-main-carveout"
+  },
+  "packet_key": "work_pool_task",
+  "status": "pass",
+  "surface": "vida task ensure",
+  "task": {
+    "created": true,
+    "label": "work-pool-pack",
+    "reused_existing": false,
+    "task_id": "feature-active-bounded-unit-post-main-carveout-work-pool"
+  }
+}

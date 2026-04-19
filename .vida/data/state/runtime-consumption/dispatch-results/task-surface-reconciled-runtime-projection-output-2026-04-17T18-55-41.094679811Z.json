@@ -1,0 +1,15 @@
+{
+  "activation_command": "vida agent-init",
+  "artifact_kind": "runtime_dispatch_result",
+  "blocker_code": "timeout_without_takeover_authority",
+  "dispatch_target": "specification",
+  "execution_state": "blocked",
+  "note": "runtime dispatch handoff timed out before terminal completion evidence was recorded",
+  "provider_error": "runtime dispatch handoff timed out after 10s before terminal completion evidence was recorded",
+  "recorded_at": "2026-04-17T18:55:41.094713681Z",
+  "run_id": "task-surface-reconciled-runtime-projection-output",
+  "selected_backend": "middle",
+  "source_dispatch_packet_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/dispatch-packets/task-surface-reconciled-runtime-projection-output-2026-04-17T18-51-25.976309857Z.json",
+  "status": "blocked",
+  "surface": "vida agent-init"
+}

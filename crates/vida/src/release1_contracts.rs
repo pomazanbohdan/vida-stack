@@ -1,4 +1,6 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+use surrealdb::types::SurrealValue;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -305,6 +307,295 @@ impl Release1SchemaVersion {
 
 pub(crate) fn canonical_release1_schema_version_str(value: &str) -> Option<&'static str> {
     Release1SchemaVersion::from_str(value).map(Release1SchemaVersion::as_str)
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CanonicalArtifactType {
+    TraceEvent,
+    PolicyDecision,
+    ApprovalRecord,
+    ToolContract,
+    LaneExecutionReceipt,
+    EvaluationRun,
+    FeedbackEvent,
+    IncidentEvidenceBundle,
+    MemoryRecord,
+    ClosureAdmissionRecord,
+}
+
+impl CanonicalArtifactType {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::TraceEvent => "trace_event",
+            Self::PolicyDecision => "policy_decision",
+            Self::ApprovalRecord => "approval_record",
+            Self::ToolContract => "tool_contract",
+            Self::LaneExecutionReceipt => "lane_execution_receipt",
+            Self::EvaluationRun => "evaluation_run",
+            Self::FeedbackEvent => "feedback_event",
+            Self::IncidentEvidenceBundle => "incident_evidence_bundle",
+            Self::MemoryRecord => "memory_record",
+            Self::ClosureAdmissionRecord => "closure_admission_record",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim() {
+            "trace_event" => Some(Self::TraceEvent),
+            "policy_decision" => Some(Self::PolicyDecision),
+            "approval_record" => Some(Self::ApprovalRecord),
+            "tool_contract" => Some(Self::ToolContract),
+            "lane_execution_receipt" => Some(Self::LaneExecutionReceipt),
+            "evaluation_run" => Some(Self::EvaluationRun),
+            "feedback_event" => Some(Self::FeedbackEvent),
+            "incident_evidence_bundle" => Some(Self::IncidentEvidenceBundle),
+            "memory_record" => Some(Self::MemoryRecord),
+            "closure_admission_record" => Some(Self::ClosureAdmissionRecord),
+            _ => None,
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn canonical_artifact_type_str(value: &str) -> Option<&'static str> {
+    CanonicalArtifactType::from_str(value).map(CanonicalArtifactType::as_str)
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalArtifactHeader {
+    pub artifact_id: String,
+    pub artifact_type: String,
+    pub schema_version: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub status: String,
+    pub owner_surface: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_class: Option<String>,
+}
+
+#[allow(dead_code)]
+impl CanonicalArtifactHeader {
+    pub(crate) fn new(
+        artifact_id: impl Into<String>,
+        artifact_type: CanonicalArtifactType,
+        created_at: impl Into<String>,
+        updated_at: impl Into<String>,
+        status: impl Into<String>,
+        owner_surface: impl Into<String>,
+        trace_id: Option<String>,
+        workflow_class: Option<String>,
+    ) -> Self {
+        Self {
+            artifact_id: artifact_id.into(),
+            artifact_type: artifact_type.as_str().to_string(),
+            schema_version: Release1SchemaVersion::V1.as_str().to_string(),
+            created_at: created_at.into(),
+            updated_at: updated_at.into(),
+            status: status.into(),
+            owner_surface: owner_surface.into(),
+            trace_id,
+            workflow_class,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalTraceEvent {
+    #[serde(flatten)]
+    pub header: CanonicalArtifactHeader,
+    pub span_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_span_id: Option<String>,
+    pub workflow_run_id: String,
+    pub actor_kind: String,
+    pub actor_id: String,
+    pub event_type: String,
+    pub started_at: String,
+    pub ended_at: String,
+    pub outcome: String,
+    pub side_effect_class: String,
+    #[serde(default)]
+    pub related_artifact_ids: Vec<String>,
+    #[serde(default)]
+    pub policy_decision_ids: Vec<String>,
+    #[serde(default)]
+    pub approval_record_ids: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalPolicyDecision {
+    #[serde(flatten)]
+    pub header: CanonicalArtifactHeader,
+    pub policy_id: String,
+    pub policy_version: String,
+    pub actor_id: String,
+    pub subject_id: String,
+    pub decision: String,
+    #[serde(default)]
+    pub reason_codes: Vec<String>,
+    #[serde(default)]
+    pub constraints_applied: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalApprovalRecord {
+    #[serde(flatten)]
+    pub header: CanonicalArtifactHeader,
+    pub approval_id: String,
+    pub approval_scope: String,
+    pub requested_by: String,
+    pub approved_by: String,
+    pub decision: String,
+    pub decision_at: String,
+    pub decision_reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub related_policy_decision_ids: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalToolContract {
+    #[serde(flatten)]
+    pub header: CanonicalArtifactHeader,
+    pub tool_id: String,
+    pub tool_version: String,
+    pub tool_name: String,
+    pub operation_class: String,
+    pub side_effect_class: String,
+    pub auth_mode: String,
+    pub approval_required: bool,
+    pub idempotency_class: String,
+    pub retry_posture: String,
+    pub rollback_posture: String,
+    pub input_schema_ref: String,
+    pub output_schema_ref: String,
+    #[serde(default)]
+    pub policy_hook_ids: Vec<String>,
+    #[serde(default)]
+    pub observability_requirements: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalEvaluationRun {
+    #[serde(flatten)]
+    pub header: CanonicalArtifactHeader,
+    pub evaluation_id: String,
+    pub evaluation_profile: String,
+    pub target_surface: String,
+    pub dataset_or_sample_window: String,
+    #[serde(default)]
+    pub metric_results: BTreeMap<String, f64>,
+    pub regression_summary: String,
+    pub decision: String,
+    pub decision_reason: String,
+    pub run_at: String,
+    #[serde(default)]
+    pub trace_sample_refs: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalIncidentEvidenceBundle {
+    #[serde(flatten)]
+    pub header: CanonicalArtifactHeader,
+    pub incident_id: String,
+    #[serde(default)]
+    pub trace_ids: Vec<String>,
+    pub trigger_reason: String,
+    pub impact_summary: String,
+    pub side_effect_summary: String,
+    #[serde(default)]
+    pub rollback_or_restore_actions: Vec<String>,
+    pub recovery_outcome: String,
+    pub root_cause_status: String,
+    pub opened_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalMemoryRecord {
+    #[serde(flatten)]
+    pub header: CanonicalArtifactHeader,
+    pub memory_id: String,
+    pub memory_class: String,
+    pub subject_scope: String,
+    pub origin_trace_id: String,
+    pub origin_workflow_class: String,
+    pub sensitivity_level: String,
+    pub consent_basis: String,
+    pub ttl_policy: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletion_or_correction_ref: Option<String>,
+    #[serde(default)]
+    pub approval_record_ids: Vec<String>,
+}
+
+// Keep the older artifact-oriented names as explicit wrappers while the rest of
+// the runtime migrates to the schema's canonical event/record/run/bundle nouns.
+// `flatten` preserves the existing wire shape so operator and runtime surfaces
+// can reuse either contract layer without carrier-specific branching.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalTraceArtifact {
+    #[serde(flatten)]
+    pub trace_event: CanonicalTraceEvent,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalPolicyDecisionArtifact {
+    #[serde(flatten)]
+    pub policy_decision: CanonicalPolicyDecision,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalApprovalArtifact {
+    #[serde(flatten)]
+    pub approval_record: CanonicalApprovalRecord,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalToolContractArtifact {
+    #[serde(flatten)]
+    pub tool_contract: CanonicalToolContract,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalEvaluationArtifact {
+    #[serde(flatten)]
+    pub evaluation_run: CanonicalEvaluationRun,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalIncidentEvidenceArtifact {
+    #[serde(flatten)]
+    pub incident_evidence_bundle: CanonicalIncidentEvidenceBundle,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, SurrealValue)]
+pub(crate) struct CanonicalMemoryArtifact {
+    #[serde(flatten)]
+    pub memory_record: CanonicalMemoryRecord,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1257,19 +1548,26 @@ pub(crate) fn missing_downstream_lane_evidence_blocker(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
         blocker_code_str, blocker_code_value, canonical_approval_status_str,
-        canonical_blocker_code_list, canonical_compatibility_class_str, canonical_gate_level_str,
+        canonical_artifact_type_str, canonical_blocker_code_list,
+        canonical_compatibility_class_str, canonical_gate_level_str,
         canonical_release1_contract_status_str, canonical_release1_contract_type_str,
         canonical_release1_schema_version_str, canonical_risk_tier_str,
         canonical_workflow_class_str, classify_compatibility_boundary,
         cli_probe_tool_contract_summary, evaluate_policy_gate_protocol_binding,
         exception_takeover_state, missing_downstream_lane_evidence_blocker,
-        release1_contract_status_str, ApprovalStatus, BlockerCode, CompatibilityBoundary,
-        CompatibilityClass, ExceptionTakeoverState, GateLevel, LaneStatus, Release1ContractStatus,
-        Release1ContractType, Release1SchemaVersion, RiskTier, WorkflowClass,
+        release1_contract_status_str, ApprovalStatus, BlockerCode, CanonicalApprovalArtifact,
+        CanonicalApprovalRecord, CanonicalArtifactHeader, CanonicalArtifactType,
+        CanonicalEvaluationArtifact, CanonicalEvaluationRun, CanonicalIncidentEvidenceArtifact,
+        CanonicalIncidentEvidenceBundle, CanonicalMemoryArtifact, CanonicalMemoryRecord,
+        CanonicalPolicyDecision, CanonicalPolicyDecisionArtifact, CanonicalToolContract,
+        CanonicalToolContractArtifact, CanonicalTraceArtifact, CanonicalTraceEvent,
+        CompatibilityBoundary, CompatibilityClass, ExceptionTakeoverState, GateLevel,
+        LaneStatus, Release1ContractStatus, Release1ContractType, Release1SchemaVersion,
+        RiskTier, WorkflowClass,
     };
 
     #[test]
@@ -1315,6 +1613,455 @@ mod tests {
             Some("waiting_for_approval")
         );
         assert_eq!(canonical_approval_status_str("pending"), None);
+    }
+
+    #[test]
+    fn canonical_artifact_type_round_trips_to_canonical_values() {
+        assert_eq!(
+            canonical_artifact_type_str(CanonicalArtifactType::TraceEvent.as_str()),
+            Some("trace_event")
+        );
+        assert_eq!(
+            canonical_artifact_type_str(CanonicalArtifactType::MemoryRecord.as_str()),
+            Some("memory_record")
+        );
+        assert_eq!(canonical_artifact_type_str("not_an_artifact"), None);
+    }
+
+    #[test]
+    fn canonical_artifact_header_uses_release1_schema_version() {
+        let header = CanonicalArtifactHeader::new(
+            "trace-1",
+            CanonicalArtifactType::TraceEvent,
+            "2026-04-18T10:00:00Z",
+            "2026-04-18T10:01:00Z",
+            "pass",
+            "runtime_surface",
+            Some("trace-root".to_string()),
+            Some(WorkflowClass::DelegatedDevelopmentPacket.as_str().to_string()),
+        );
+
+        assert_eq!(header.artifact_type, "trace_event");
+        assert_eq!(header.schema_version, Release1SchemaVersion::V1.as_str());
+        assert_eq!(header.trace_id.as_deref(), Some("trace-root"));
+        assert_eq!(
+            header.workflow_class.as_deref(),
+            Some("delegated_development_packet")
+        );
+    }
+
+    #[test]
+    fn canonical_trace_artifact_serializes_required_release1_fields() {
+        let artifact = CanonicalTraceEvent {
+            header: CanonicalArtifactHeader::new(
+                "trace-evt-1",
+                CanonicalArtifactType::TraceEvent,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:01:00Z",
+                "pass",
+                "operator_surface",
+                Some("trace-1".to_string()),
+                Some(WorkflowClass::ToolAssistedWrite.as_str().to_string()),
+            ),
+            span_id: "span-1".to_string(),
+            parent_span_id: Some("span-0".to_string()),
+            workflow_run_id: "run-1".to_string(),
+            actor_kind: "worker_lane".to_string(),
+            actor_id: "worker-7".to_string(),
+            event_type: "implementation_completed".to_string(),
+            started_at: "2026-04-18T10:00:00Z".to_string(),
+            ended_at: "2026-04-18T10:01:00Z".to_string(),
+            outcome: "succeeded".to_string(),
+            side_effect_class: "schema_write".to_string(),
+            related_artifact_ids: vec!["evaluation-1".to_string()],
+            policy_decision_ids: vec!["policy-1".to_string()],
+            approval_record_ids: vec!["approval-1".to_string()],
+        };
+
+        let value = serde_json::to_value(&artifact).expect("trace artifact should serialize");
+        assert_eq!(value["artifact_type"], "trace_event");
+        assert_eq!(value["span_id"], "span-1");
+        assert_eq!(value["parent_span_id"], "span-0");
+        assert_eq!(value["workflow_run_id"], "run-1");
+        assert_eq!(value["policy_decision_ids"][0], "policy-1");
+        assert_eq!(value["approval_record_ids"][0], "approval-1");
+    }
+
+    #[test]
+    fn canonical_schema_named_artifacts_remain_compatible_with_explicit_artifact_wrappers() {
+        let trace = CanonicalTraceEvent {
+            header: CanonicalArtifactHeader::new(
+                "trace-evt-1",
+                CanonicalArtifactType::TraceEvent,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:01:00Z",
+                "pass",
+                "operator_surface",
+                Some("trace-1".to_string()),
+                Some(WorkflowClass::ToolAssistedWrite.as_str().to_string()),
+            ),
+            span_id: "span-1".to_string(),
+            parent_span_id: Some("span-0".to_string()),
+            workflow_run_id: "run-1".to_string(),
+            actor_kind: "worker_lane".to_string(),
+            actor_id: "worker-7".to_string(),
+            event_type: "implementation_completed".to_string(),
+            started_at: "2026-04-18T10:00:00Z".to_string(),
+            ended_at: "2026-04-18T10:01:00Z".to_string(),
+            outcome: "succeeded".to_string(),
+            side_effect_class: "schema_write".to_string(),
+            related_artifact_ids: vec!["evaluation-1".to_string()],
+            policy_decision_ids: vec!["policy-1".to_string()],
+            approval_record_ids: vec!["approval-1".to_string()],
+        };
+        let trace_artifact = CanonicalTraceArtifact {
+            trace_event: trace.clone(),
+        };
+
+        let policy = CanonicalPolicyDecision {
+            header: CanonicalArtifactHeader::new(
+                "policy-1",
+                CanonicalArtifactType::PolicyDecision,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:00:00Z",
+                "pass",
+                "policy_surface",
+                Some("trace-1".to_string()),
+                Some(WorkflowClass::ToolAssistedWrite.as_str().to_string()),
+            ),
+            policy_id: "approval_gate".to_string(),
+            policy_version: "2026-04-18".to_string(),
+            actor_id: "system".to_string(),
+            subject_id: "packet-1".to_string(),
+            decision: "allow".to_string(),
+            reason_codes: vec!["policy_satisfied".to_string()],
+            constraints_applied: vec!["trace_required".to_string()],
+            expires_at: Some("2026-04-19T10:00:00Z".to_string()),
+        };
+        let policy_artifact = CanonicalPolicyDecisionArtifact {
+            policy_decision: policy.clone(),
+        };
+
+        let approval = CanonicalApprovalRecord {
+            header: CanonicalArtifactHeader::new(
+                "approval-1",
+                CanonicalArtifactType::ApprovalRecord,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:05:00Z",
+                "approved",
+                "approval_surface",
+                Some("trace-1".to_string()),
+                Some(WorkflowClass::DelegatedDevelopmentPacket.as_str().to_string()),
+            ),
+            approval_id: "approval-1".to_string(),
+            approval_scope: "runtime-add-canonical-trace-policy-approval-tool".to_string(),
+            requested_by: "worker-7".to_string(),
+            approved_by: "reviewer-1".to_string(),
+            decision: "approved".to_string(),
+            decision_at: "2026-04-18T10:05:00Z".to_string(),
+            decision_reason: "bounded schema-only slice".to_string(),
+            expires_at: None,
+            related_policy_decision_ids: vec!["policy-1".to_string()],
+        };
+        let approval_artifact = CanonicalApprovalArtifact {
+            approval_record: approval.clone(),
+        };
+
+        let tool = CanonicalToolContract {
+            header: CanonicalArtifactHeader::new(
+                "tool-1",
+                CanonicalArtifactType::ToolContract,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:00:00Z",
+                "pass",
+                "status_surface",
+                None,
+                Some(WorkflowClass::ToolAssistedRead.as_str().to_string()),
+            ),
+            tool_id: "status_surface.external_cli_preflight".to_string(),
+            tool_version: "release-1-v1".to_string(),
+            tool_name: "External CLI Preflight".to_string(),
+            operation_class: "preflight_probe".to_string(),
+            side_effect_class: "read_only_status_probe".to_string(),
+            auth_mode: "delegated_host_session".to_string(),
+            approval_required: false,
+            idempotency_class: "read_only_probe".to_string(),
+            retry_posture: "single_probe".to_string(),
+            rollback_posture: "not_applicable".to_string(),
+            input_schema_ref: "input.schema.v1".to_string(),
+            output_schema_ref: "output.schema.v1".to_string(),
+            policy_hook_ids: vec!["execution_class_gate".to_string()],
+            observability_requirements: vec!["status_snapshot".to_string()],
+        };
+        let tool_artifact = CanonicalToolContractArtifact {
+            tool_contract: tool.clone(),
+        };
+
+        let evaluation = CanonicalEvaluationRun {
+            header: CanonicalArtifactHeader::new(
+                "evaluation-1",
+                CanonicalArtifactType::EvaluationRun,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:10:00Z",
+                "pass",
+                "evaluation_surface",
+                Some("trace-1".to_string()),
+                Some(WorkflowClass::DelegatedDevelopmentPacket.as_str().to_string()),
+            ),
+            evaluation_id: "eval-1".to_string(),
+            evaluation_profile: "post-r1-schema-contract".to_string(),
+            target_surface: "release1_contracts".to_string(),
+            dataset_or_sample_window: "unit-tests".to_string(),
+            metric_results: BTreeMap::from([("artifacts_added".to_string(), 7.0)]),
+            regression_summary: "no regressions observed".to_string(),
+            decision: "promote".to_string(),
+            decision_reason: "required schema artifacts now explicit".to_string(),
+            run_at: "2026-04-18T10:10:00Z".to_string(),
+            trace_sample_refs: vec!["trace-evt-1".to_string()],
+        };
+        let evaluation_artifact = CanonicalEvaluationArtifact {
+            evaluation_run: evaluation.clone(),
+        };
+
+        let incident = CanonicalIncidentEvidenceBundle {
+            header: CanonicalArtifactHeader::new(
+                "incident-1",
+                CanonicalArtifactType::IncidentEvidenceBundle,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:20:00Z",
+                "open",
+                "incident_surface",
+                None,
+                Some(WorkflowClass::IncidentResponseOrRecovery.as_str().to_string()),
+            ),
+            incident_id: "incident-1".to_string(),
+            trace_ids: vec!["trace-1".to_string()],
+            trigger_reason: "schema gap detected".to_string(),
+            impact_summary: "artifact consumers could drift".to_string(),
+            side_effect_summary: "operator/runtime surfaces could diverge".to_string(),
+            rollback_or_restore_actions: vec!["restore previous contract module".to_string()],
+            recovery_outcome: "mitigated".to_string(),
+            root_cause_status: "confirmed".to_string(),
+            opened_at: "2026-04-18T10:00:00Z".to_string(),
+            closed_at: Some("2026-04-18T10:20:00Z".to_string()),
+        };
+        let incident_artifact = CanonicalIncidentEvidenceArtifact {
+            incident_evidence_bundle: incident.clone(),
+        };
+
+        let memory = CanonicalMemoryRecord {
+            header: CanonicalArtifactHeader::new(
+                "memory-1",
+                CanonicalArtifactType::MemoryRecord,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:00:00Z",
+                "active",
+                "memory_surface",
+                Some("trace-1".to_string()),
+                Some(WorkflowClass::MemoryWrite.as_str().to_string()),
+            ),
+            memory_id: "memory-1".to_string(),
+            memory_class: "operator_preference".to_string(),
+            subject_scope: "release1_contracts".to_string(),
+            origin_trace_id: "trace-1".to_string(),
+            origin_workflow_class: WorkflowClass::MemoryWrite.as_str().to_string(),
+            sensitivity_level: "internal".to_string(),
+            consent_basis: "operator_action".to_string(),
+            ttl_policy: "retain_until_corrected".to_string(),
+            deletion_or_correction_ref: Some("memory-correction-1".to_string()),
+            approval_record_ids: vec!["approval-1".to_string()],
+        };
+        let memory_artifact = CanonicalMemoryArtifact {
+            memory_record: memory.clone(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&trace).unwrap(),
+            serde_json::to_value(&trace_artifact).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&policy).unwrap(),
+            serde_json::to_value(&policy_artifact).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&approval).unwrap(),
+            serde_json::to_value(&approval_artifact).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&tool).unwrap(),
+            serde_json::to_value(&tool_artifact).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&evaluation).unwrap(),
+            serde_json::to_value(&evaluation_artifact).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&incident).unwrap(),
+            serde_json::to_value(&incident_artifact).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&memory).unwrap(),
+            serde_json::to_value(&memory_artifact).unwrap()
+        );
+    }
+
+    #[test]
+    fn canonical_release1_artifacts_serialize_required_schema_specific_fields() {
+        let policy = CanonicalPolicyDecision {
+            header: CanonicalArtifactHeader::new(
+                "policy-1",
+                CanonicalArtifactType::PolicyDecision,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:00:00Z",
+                "pass",
+                "policy_surface",
+                Some("trace-1".to_string()),
+                Some(WorkflowClass::ToolAssistedWrite.as_str().to_string()),
+            ),
+            policy_id: "approval_gate".to_string(),
+            policy_version: "2026-04-18".to_string(),
+            actor_id: "system".to_string(),
+            subject_id: "packet-1".to_string(),
+            decision: "allow".to_string(),
+            reason_codes: vec!["policy_satisfied".to_string()],
+            constraints_applied: vec!["trace_required".to_string()],
+            expires_at: Some("2026-04-19T10:00:00Z".to_string()),
+        };
+        let approval = CanonicalApprovalRecord {
+            header: CanonicalArtifactHeader::new(
+                "approval-1",
+                CanonicalArtifactType::ApprovalRecord,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:05:00Z",
+                "approved",
+                "approval_surface",
+                Some("trace-1".to_string()),
+                Some(WorkflowClass::DelegatedDevelopmentPacket.as_str().to_string()),
+            ),
+            approval_id: "approval-1".to_string(),
+            approval_scope: "runtime-add-canonical-trace-policy-approval-tool".to_string(),
+            requested_by: "worker-7".to_string(),
+            approved_by: "reviewer-1".to_string(),
+            decision: "approved".to_string(),
+            decision_at: "2026-04-18T10:05:00Z".to_string(),
+            decision_reason: "bounded schema-only slice".to_string(),
+            expires_at: None,
+            related_policy_decision_ids: vec!["policy-1".to_string()],
+        };
+        let tool_contract = CanonicalToolContract {
+            header: CanonicalArtifactHeader::new(
+                "tool-1",
+                CanonicalArtifactType::ToolContract,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:00:00Z",
+                "pass",
+                "status_surface",
+                None,
+                Some(WorkflowClass::ToolAssistedRead.as_str().to_string()),
+            ),
+            tool_id: "status_surface.external_cli_preflight".to_string(),
+            tool_version: "release-1-v1".to_string(),
+            tool_name: "External CLI Preflight".to_string(),
+            operation_class: "preflight_probe".to_string(),
+            side_effect_class: "read_only_status_probe".to_string(),
+            auth_mode: "delegated_host_session".to_string(),
+            approval_required: false,
+            idempotency_class: "read_only_probe".to_string(),
+            retry_posture: "single_probe".to_string(),
+            rollback_posture: "not_applicable".to_string(),
+            input_schema_ref: "input.schema.v1".to_string(),
+            output_schema_ref: "output.schema.v1".to_string(),
+            policy_hook_ids: vec!["execution_class_gate".to_string()],
+            observability_requirements: vec!["status_snapshot".to_string()],
+        };
+        let evaluation = CanonicalEvaluationRun {
+            header: CanonicalArtifactHeader::new(
+                "evaluation-1",
+                CanonicalArtifactType::EvaluationRun,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:10:00Z",
+                "pass",
+                "evaluation_surface",
+                Some("trace-1".to_string()),
+                Some(WorkflowClass::DelegatedDevelopmentPacket.as_str().to_string()),
+            ),
+            evaluation_id: "eval-1".to_string(),
+            evaluation_profile: "post-r1-schema-contract".to_string(),
+            target_surface: "release1_contracts".to_string(),
+            dataset_or_sample_window: "unit-tests".to_string(),
+            metric_results: BTreeMap::from([("artifacts_added".to_string(), 7.0)]),
+            regression_summary: "no regressions observed".to_string(),
+            decision: "promote".to_string(),
+            decision_reason: "required schema artifacts now explicit".to_string(),
+            run_at: "2026-04-18T10:10:00Z".to_string(),
+            trace_sample_refs: vec!["trace-evt-1".to_string()],
+        };
+        let incident = CanonicalIncidentEvidenceBundle {
+            header: CanonicalArtifactHeader::new(
+                "incident-1",
+                CanonicalArtifactType::IncidentEvidenceBundle,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:20:00Z",
+                "open",
+                "incident_surface",
+                None,
+                Some(WorkflowClass::IncidentResponseOrRecovery.as_str().to_string()),
+            ),
+            incident_id: "incident-1".to_string(),
+            trace_ids: vec!["trace-1".to_string()],
+            trigger_reason: "schema gap detected".to_string(),
+            impact_summary: "artifact consumers could drift".to_string(),
+            side_effect_summary: "operator/runtime surfaces could diverge".to_string(),
+            rollback_or_restore_actions: vec!["restore previous contract module".to_string()],
+            recovery_outcome: "mitigated".to_string(),
+            root_cause_status: "confirmed".to_string(),
+            opened_at: "2026-04-18T10:00:00Z".to_string(),
+            closed_at: Some("2026-04-18T10:20:00Z".to_string()),
+        };
+        let memory = CanonicalMemoryRecord {
+            header: CanonicalArtifactHeader::new(
+                "memory-1",
+                CanonicalArtifactType::MemoryRecord,
+                "2026-04-18T10:00:00Z",
+                "2026-04-18T10:00:00Z",
+                "active",
+                "memory_surface",
+                Some("trace-1".to_string()),
+                Some(WorkflowClass::MemoryWrite.as_str().to_string()),
+            ),
+            memory_id: "memory-1".to_string(),
+            memory_class: "operator_preference".to_string(),
+            subject_scope: "release1_contracts".to_string(),
+            origin_trace_id: "trace-1".to_string(),
+            origin_workflow_class: WorkflowClass::MemoryWrite.as_str().to_string(),
+            sensitivity_level: "internal".to_string(),
+            consent_basis: "operator_action".to_string(),
+            ttl_policy: "retain_until_corrected".to_string(),
+            deletion_or_correction_ref: Some("memory-correction-1".to_string()),
+            approval_record_ids: vec!["approval-1".to_string()],
+        };
+
+        let policy_value = serde_json::to_value(&policy).expect("policy should serialize");
+        let approval_value = serde_json::to_value(&approval).expect("approval should serialize");
+        let tool_value =
+            serde_json::to_value(&tool_contract).expect("tool contract should serialize");
+        let evaluation_value =
+            serde_json::to_value(&evaluation).expect("evaluation should serialize");
+        let incident_value = serde_json::to_value(&incident).expect("incident should serialize");
+        let memory_value = serde_json::to_value(&memory).expect("memory should serialize");
+
+        assert_eq!(policy_value["artifact_type"], "policy_decision");
+        assert_eq!(policy_value["reason_codes"][0], "policy_satisfied");
+        assert_eq!(approval_value["artifact_type"], "approval_record");
+        assert_eq!(approval_value["requested_by"], "worker-7");
+        assert_eq!(tool_value["artifact_type"], "tool_contract");
+        assert_eq!(tool_value["approval_required"], false);
+        assert_eq!(evaluation_value["artifact_type"], "evaluation_run");
+        assert_eq!(evaluation_value["metric_results"]["artifacts_added"], 7.0);
+        assert_eq!(incident_value["artifact_type"], "incident_evidence_bundle");
+        assert_eq!(incident_value["trace_ids"][0], "trace-1");
+        assert_eq!(memory_value["artifact_type"], "memory_record");
+        assert_eq!(memory_value["approval_record_ids"][0], "approval-1");
     }
 
     #[test]

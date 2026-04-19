@@ -1,0 +1,40 @@
+{
+  "artifact_kind": "runtime_downstream_dispatch_trace",
+  "recorded_at": "2026-04-18T18:25:53.024457227Z",
+  "run_id": "runtime-add-canonical-trace-policy-approval-tool",
+  "step_count": 1,
+  "steps": [
+    {
+      "activation_agent_type": "middle",
+      "activation_runtime_role": "coach",
+      "blocker_code": "internal_activation_view_only",
+      "dispatch_command": "vida agent-init --downstream-packet '/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/downstream-dispatch-packets/runtime-add-canonical-trace-policy-approval-tool-2026-04-18T18-25-49.810026726Z.json' --execute-dispatch --json",
+      "dispatch_kind": "agent_lane",
+      "dispatch_packet_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/downstream-dispatch-packets/runtime-add-canonical-trace-policy-approval-tool-2026-04-18T18-25-49.810026726Z.json",
+      "dispatch_result_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/dispatch-results/runtime-add-canonical-trace-policy-approval-tool-2026-04-18T18-25-52.241282963Z.json",
+      "dispatch_status": "blocked",
+      "dispatch_surface": "vida agent-init",
+      "dispatch_target": "coach",
+      "downstream_dispatch_active_target": "coach",
+      "downstream_dispatch_blockers": [
+        "pending_review_clean_evidence"
+      ],
+      "downstream_dispatch_command": "vida agent-init",
+      "downstream_dispatch_executed_count": 0,
+      "downstream_dispatch_last_target": null,
+      "downstream_dispatch_note": "after `coach` evidence is recorded, activate `verification` for the next bounded lane",
+      "downstream_dispatch_packet_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/downstream-dispatch-packets/runtime-add-canonical-trace-policy-approval-tool-2026-04-18T18-25-53.012447655Z.json",
+      "downstream_dispatch_ready": false,
+      "downstream_dispatch_result_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/dispatch-results/runtime-add-canonical-trace-policy-approval-tool-2026-04-18T18-25-52.241282963Z.json",
+      "downstream_dispatch_status": null,
+      "downstream_dispatch_target": "verification",
+      "downstream_dispatch_trace_path": null,
+      "exception_path_receipt_id": null,
+      "lane_status": "lane_blocked",
+      "recorded_at": "2026-04-18T18:25:49.816859033Z",
+      "run_id": "runtime-add-canonical-trace-policy-approval-tool",
+      "selected_backend": "hermes_cli",
+      "supersedes_receipt_id": null
+    }
+  ]
+}

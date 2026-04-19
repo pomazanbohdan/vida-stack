@@ -1,0 +1,50 @@
+{
+  "delivery_task_packet": {
+    "blocking_question": "What is the next bounded action required for `closure`?",
+    "definition_of_done": [
+      "write bounded dispatch result"
+    ],
+    "goal": "Execute bounded closure handoff",
+    "packet_id": "run-closure-bound-mixed::closure::delivery",
+    "proof_target": "bounded closure receipt",
+    "read_only_paths": [
+      "runtime-consumption"
+    ],
+    "scope_in": [
+      "dispatch_target:closure"
+    ],
+    "stop_rules": [
+      "stop after bounded closure result"
+    ],
+    "verification_command": "vida taskflow consume continue --run-id run-closure-bound-mixed --json"
+  },
+  "downstream_dispatch_blockers": [],
+  "downstream_dispatch_ready": true,
+  "downstream_dispatch_status": "packet_ready",
+  "downstream_dispatch_target": "closure",
+  "packet_kind": "runtime_downstream_dispatch_packet",
+  "packet_template_kind": "delivery_task_packet",
+  "role_selection_full": {
+    "activation_source": "test",
+    "allow_freeform_chat": false,
+    "compiled_bundle": null,
+    "confidence": "high",
+    "conversational_mode": null,
+    "execution_plan": null,
+    "fallback_role": "worker",
+    "matched_terms": [
+      "closure"
+    ],
+    "ok": true,
+    "reason": "test",
+    "request": "resume downstream packet",
+    "selected_role": "verifier",
+    "selection_mode": "runtime",
+    "single_task_only": true,
+    "tracked_flow_entry": null
+  },
+  "run_graph_bootstrap": {
+    "run_id": "run-closure-bound-mixed"
+  },
+  "run_id": "run-closure-bound-mixed"
+}

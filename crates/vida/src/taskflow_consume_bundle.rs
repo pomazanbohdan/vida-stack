@@ -559,7 +559,7 @@ fn taskflow_docflow_seam_receipt_backed_check(
     docflow_verdict: &super::RuntimeConsumptionDocflowVerdict,
     docflow_receipt_evidence: serde_json::Value,
 ) -> serde_json::Value {
-    let receipt_id = payload.protocol_binding_registry["receipt_id"]
+    let protocol_binding_receipt_id = payload.protocol_binding_registry["receipt_id"]
         .as_str()
         .unwrap_or_default()
         .trim();
@@ -570,12 +570,12 @@ fn taskflow_docflow_seam_receipt_backed_check(
         .as_array()
         .map(|rows| rows.len())
         .unwrap_or(0);
-    let total_receipts = if !receipt_id.is_empty() && binding_status == "bound" && protocol_rows > 0
-    {
-        1
-    } else {
-        0
-    };
+    let receipt_backed = docflow_receipt_evidence["receipt_backed"]
+        .as_bool()
+        .unwrap_or(false);
+    let total_receipts = docflow_receipt_evidence["total_receipts"]
+        .as_u64()
+        .unwrap_or_else(|| u64::from(receipt_backed));
     let has_readiness_surface = docflow_verdict
         .proof_surfaces
         .iter()
@@ -592,7 +592,7 @@ fn taskflow_docflow_seam_receipt_backed_check(
     let closure_inputs_ready = blocker_codes.is_empty();
     serde_json::json!({
         "status": crate::release_contract_adapters::release_contract_status(closure_inputs_ready),
-        "receipt_backed": total_receipts > 0,
+        "receipt_backed": receipt_backed,
         "total_receipts": total_receipts,
         "docflow_status": crate::release_contract_adapters::release_contract_status(closure_inputs_ready),
         "closure_inputs_ready": closure_inputs_ready,
@@ -600,6 +600,9 @@ fn taskflow_docflow_seam_receipt_backed_check(
         "docflow_blocker_codes": docflow_verdict.blockers.clone(),
         "docflow_proof_surfaces": docflow_verdict.proof_surfaces.clone(),
         "receipt_evidence": docflow_receipt_evidence,
+        "protocol_binding_receipt_id": protocol_binding_receipt_id,
+        "protocol_binding_binding_status": binding_status,
+        "protocol_binding_protocol_rows": protocol_rows,
         "has_readiness_surface": has_readiness_surface,
         "has_proof_surface": has_proof_surface,
         "surface": "vida docflow readiness-check --profile active-canon | vida docflow proofcheck --profile active-canon",
@@ -802,7 +805,9 @@ mod tests {
             ok: true,
             row_count: 1,
             verdict: Some("ready".to_string()),
-            artifact_path: None,
+            artifact_path: Some(
+                crate::runtime_consumption_surface::DOCFLOW_PROOF_CURRENT_PATH.to_string(),
+            ),
             output: String::new(),
         };
 
@@ -1500,7 +1505,8 @@ mod tests {
         );
 
         assert_eq!(seam["status"], "blocked");
-        assert_eq!(seam["receipt_backed"], false);
+        assert_eq!(seam["receipt_backed"], true);
+        assert_eq!(seam["total_receipts"], 2);
         assert_eq!(seam["closure_inputs_ready"], false);
         assert_eq!(seam["docflow_status"], "blocked");
         assert_eq!(
@@ -1516,11 +1522,17 @@ mod tests {
             serde_json::json!(["missing_readiness_verdict"])
         );
         assert_eq!(seam["receipt_evidence"]["receipt_backed"], true);
+        assert_eq!(seam["protocol_binding_receipt_id"], "");
+        assert_eq!(seam["protocol_binding_binding_status"], "blocked");
+        assert_eq!(seam["protocol_binding_protocol_rows"], 0);
         assert_eq!(
             seam["receipt_evidence"]["readiness_receipt_path"],
             "vida/config/docflow-readiness.current.jsonl"
         );
-        assert!(seam["receipt_evidence"]["proof_receipt_path"].is_null());
+        assert_eq!(
+            seam["receipt_evidence"]["proof_receipt_path"],
+            "vida/config/docflow-proof.current.jsonl"
+        );
         assert_eq!(seam["has_readiness_surface"], false);
         assert_eq!(seam["has_proof_surface"], false);
     }
@@ -1546,11 +1558,15 @@ mod tests {
         );
 
         assert_eq!(seam["status"], "pass");
-        assert_eq!(seam["receipt_backed"], false);
+        assert_eq!(seam["receipt_backed"], true);
+        assert_eq!(seam["total_receipts"], 2);
         assert_eq!(seam["closure_inputs_ready"], true);
         assert_eq!(seam["docflow_status"], "pass");
         assert_eq!(seam["blocker_codes"], serde_json::json!([]));
         assert_eq!(seam["receipt_evidence"]["receipt_backed"], true);
+        assert_eq!(seam["protocol_binding_receipt_id"], "");
+        assert_eq!(seam["protocol_binding_binding_status"], "blocked");
+        assert_eq!(seam["protocol_binding_protocol_rows"], 0);
         assert_eq!(seam["has_readiness_surface"], true);
         assert_eq!(seam["has_proof_surface"], true);
     }

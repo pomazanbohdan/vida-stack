@@ -1,0 +1,64 @@
+{
+  "admission": {
+    "admitted": true,
+    "consumed_evidence": [
+      "tracked_flow_bootstrap.required",
+      "tracked_flow_bootstrap.status",
+      "tracked_flow_bootstrap.bootstrap_command",
+      "tracked_flow_bootstrap.feature_slug",
+      "tracked_flow_bootstrap.design_doc_path",
+      "tracked_flow_bootstrap.design_artifact_path",
+      "tracked_flow_bootstrap.epic.task_id",
+      "tracked_flow_bootstrap.spec_task.task_id",
+      "tracked_flow_bootstrap.docflow.finalize_command",
+      "tracked_flow_bootstrap.docflow.check_command",
+      "tracked_flow_bootstrap.spec_task.close_command",
+      "tracked_flow_bootstrap.work_pool_task.create_command",
+      "tracked_flow_bootstrap.work_pool_task.ensure_command",
+      "tracked_flow_bootstrap.dev_task.create_command",
+      "tracked_flow_bootstrap.dev_task.ensure_command"
+    ],
+    "status": "admitted"
+  },
+  "artifact_kind": "runtime_dispatch_result",
+  "changed_files": [
+    "taskflow:feature-update-only-agents-sidecar-add-project",
+    "taskflow:feature-update-only-agents-sidecar-add-project-spec",
+    "docs/product/spec/README.md",
+    "docs/product/spec/update-only-agents-sidecar-add-project-design.md"
+  ],
+  "design_doc": {
+    "created": true,
+    "path": "docs/product/spec/update-only-agents-sidecar-add-project-design.md",
+    "registered_in": [
+      "docs/product/spec/README.md"
+    ]
+  },
+  "dispatch_target": "spec-pack",
+  "epic": {
+    "created": true,
+    "task_id": "feature-update-only-agents-sidecar-add-project"
+  },
+  "feature_slug": "update-only-agents-sidecar-add-project",
+  "next": {
+    "check_command": "vida docflow check --root . docs/product/spec/update-only-agents-sidecar-add-project-design.md",
+    "close_spec_task_command": "vida task close feature-update-only-agents-sidecar-add-project-spec --reason 'design packet finalized and handed off into tracked work-pool shaping' --json",
+    "dev_task_create_command": "vida task create feature-update-only-agents-sidecar-add-project-dev 'Dev pack: Update only AGENTS.sidecar.md. Add a project rule that, besides track...' --type task --status open --parent-id feature-update-only-agents-sidecar-add-project --labels dev-pack --json",
+    "dev_task_ensure_command": "vida task ensure feature-update-only-agents-sidecar-add-project-dev 'Dev pack: Update only AGENTS.sidecar.md. Add a project rule that, besides track...' --type task --status open --parent-id feature-update-only-agents-sidecar-add-project --labels dev-pack --json",
+    "finalize_command": "vida docflow finalize-edit docs/product/spec/update-only-agents-sidecar-add-project-design.md 'record bounded feature design'",
+    "plan_note": "publish a concise execution plan before mutating the design document or dispatching write-producing work",
+    "work_pool_create_command": "vida task create feature-update-only-agents-sidecar-add-project-work-pool 'Work-pool pack: Update only AGENTS.sidecar.md. Add a project rule that, besides track...' --type task --status open --parent-id feature-update-only-agents-sidecar-add-project --labels work-pool-pack --json",
+    "work_pool_ensure_command": "vida task ensure feature-update-only-agents-sidecar-add-project-work-pool 'Work-pool pack: Update only AGENTS.sidecar.md. Add a project rule that, besides track...' --type task --status open --parent-id feature-update-only-agents-sidecar-add-project --labels work-pool-pack --json"
+  },
+  "receipt_path": ".vida/receipts/spec-bootstrap-1776253003.json",
+  "recorded_at": "2026-04-15T11:36:43.841668467Z",
+  "request": "Update only AGENTS.sidecar.md. Add a project rule that, besides tracking and fixing runtime defects, the system must also continuously track command surfaces, command options, and operator information output; when gaps, missing commands/options, or needed output additions are detected, it must analyze the related code/spec/impact and add or fix those command and output surfaces proactively and automatically. Keep scope strictly to AGENTS.sidecar.md and preserve existing style.",
+  "run_id": "feature-update-only-agents-sidecar-add-project-spec",
+  "source_dispatch_packet_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/dispatch-packets/feature-update-only-agents-sidecar-add-project-spec-2026-04-15T11-36-43.602732977Z.json",
+  "spec_task": {
+    "created": true,
+    "task_id": "feature-update-only-agents-sidecar-add-project-spec"
+  },
+  "status": "pass",
+  "surface": "vida taskflow bootstrap-spec"
+}

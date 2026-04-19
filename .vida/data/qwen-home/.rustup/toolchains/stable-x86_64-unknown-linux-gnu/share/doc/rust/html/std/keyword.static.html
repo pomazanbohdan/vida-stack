@@ -1,0 +1,52 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="A static item is a value which is valid for the entire duration of your program (a `&#39;static` lifetime)."><title>static - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="std" data-themes="" data-resource-suffix="1.94.1" data-rustdoc-version="1.94.1 (e408947bf 2026-03-25)" data-channel="1.94.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items1.94.1.js"></script><script defer src="../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc keyword"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">static</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../std/index.html"><img class="rust-logo" src="../static.files/rust-logo-9a9549ea.svg" alt="logo"></a><h2><a href="../std/index.html">std</a><span class="version">1.94.1</span></h2></div><div class="version">(e408947bf	2026-03-25)</div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">static</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#simple-statics" title="Simple `static`s">Simple <code>static</code>s</a></li><li><a href="#mutable-statics" title="Mutable `static`s">Mutable <code>static</code>s</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="index.html">In crate std</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><h1>Keyword <span class="keyword">static</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/std/keyword_docs.rs.html#1639">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>A static item is a value which is valid for the entire duration of your
+program (a <code>'static</code> lifetime).</p>
+<p>On the surface, <code>static</code> items seem very similar to <a href="keyword.const.html"><code>const</code></a>s: both contain
+a value, both require type annotations and both can only be initialized with
+constant functions and values. However, <code>static</code>s are notably different in
+that they represent a location in memory. That means that you can have
+references to <code>static</code> items and potentially even modify them, making them
+essentially global variables.</p>
+<p>Static items do not call <a href="mem/fn.drop.html" title="fn std::mem::drop"><code>drop</code></a> at the end of the program.</p>
+<p>There are two types of <code>static</code> items: those declared in association with
+the <a href="keyword.mut.html"><code>mut</code></a> keyword and those without.</p>
+<p>Static items cannot be moved:</p>
+
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">static </span>VEC: Vec&lt;u32&gt; = <span class="macro">vec!</span>[];
+
+<span class="kw">fn </span>move_vec(v: Vec&lt;u32&gt;) -&gt; Vec&lt;u32&gt; {
+    v
+}
+
+<span class="comment">// This line causes an error
+</span>move_vec(VEC);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++static+VEC:+Vec%3Cu32%3E+=+vec!%5B%5D;%0A++++%0A++++fn+move_vec(v:+Vec%3Cu32%3E)+-%3E+Vec%3Cu32%3E+%7B%0A++++++++v%0A++++%7D%0A++++%0A++++//+This+line+causes+an+error%0A++++move_vec(VEC);%0A%7D&amp;edition=2024"></a></div><h2 id="simple-statics"><a class="doc-anchor" href="#simple-statics">§</a>Simple <code>static</code>s</h2>
+<p>Accessing non-<a href="keyword.mut.html"><code>mut</code></a> <code>static</code> items is considered safe, but some
+restrictions apply. Most notably, the type of a <code>static</code> value needs to
+implement the <a href="marker/trait.Sync.html" title="trait std::marker::Sync"><code>Sync</code></a> trait, ruling out interior mutability containers
+like <a href="cell/struct.RefCell.html" title="struct std::cell::RefCell"><code>RefCell</code></a>. See the <a href="../reference/items/static-items.html">Reference</a> for more information.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">static </span>FOO: [i32; <span class="number">5</span>] = [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>];
+
+<span class="kw">let </span>r1 = <span class="kw-2">&amp;</span>FOO <span class="kw">as </span><span class="kw-2">*const </span><span class="kw">_</span>;
+<span class="kw">let </span>r2 = <span class="kw-2">&amp;</span>FOO <span class="kw">as </span><span class="kw-2">*const </span><span class="kw">_</span>;
+<span class="comment">// With a strictly read-only static, references will have the same address
+</span><span class="macro">assert_eq!</span>(r1, r2);
+<span class="comment">// A static item can be used just like a variable in many cases
+</span><span class="macro">println!</span>(<span class="string">"{FOO:?}"</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++static+FOO:+%5Bi32;+5%5D+=+%5B1,+2,+3,+4,+5%5D;%0A++++%0A++++let+r1+=+%26FOO+as+*const+_;%0A++++let+r2+=+%26FOO+as+*const+_;%0A++++//+With+a+strictly+read-only+static,+references+will+have+the+same+address%0A++++assert_eq!(r1,+r2);%0A++++//+A+static+item+can+be+used+just+like+a+variable+in+many+cases%0A++++println!(%22%7BFOO:?%7D%22);%0A%7D&amp;edition=2024"></a></div><h2 id="mutable-statics"><a class="doc-anchor" href="#mutable-statics">§</a>Mutable <code>static</code>s</h2>
+<p>If a <code>static</code> item is declared with the <a href="keyword.mut.html"><code>mut</code></a> keyword, then it is allowed
+to be modified by the program. However, accessing mutable <code>static</code>s can
+cause undefined behavior in a number of ways, for example due to data races
+in a multithreaded context. As such, all accesses to mutable <code>static</code>s
+require an <a href="keyword.unsafe.html"><code>unsafe</code></a> block.</p>
+<p>When possible, it’s often better to use a non-mutable <code>static</code> with an
+interior mutable type such as <a href="sync/struct.Mutex.html" title="struct std::sync::Mutex"><code>Mutex</code></a>, <a href="sync/struct.OnceLock.html" title="struct std::sync::OnceLock"><code>OnceLock</code></a>, or an <a href="sync/atomic/index.html" title="mod std::sync::atomic">atomic</a>.</p>
+<p>Despite their unsafety, mutable <code>static</code>s are necessary in many contexts:
+they can be used to represent global state shared by the whole program or in
+<a href="keyword.extern.html"><code>extern</code></a> blocks to bind to variables from C libraries.</p>
+<p>In an <a href="keyword.extern.html"><code>extern</code></a> block:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">unsafe extern </span><span class="string">"C" </span>{
+    <span class="kw">static </span><span class="kw-2">mut </span>ERROR_MESSAGE: <span class="kw-2">*mut </span>std::os::raw::c_char;
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0A%23!%5Ballow(dead_code)%5D%0A%0Afn+main()+%7B%0A++++unsafe+extern+%22C%22+%7B%0A++++++++static+mut+ERROR_MESSAGE:+*mut+std::os::raw::c_char;%0A++++%7D%0A%7D&amp;edition=2024"></a></div>
+<p>Mutable <code>static</code>s, just like simple <code>static</code>s, have some restrictions that
+apply to them. See the <a href="../reference/items/static-items.html">Reference</a> for more information.</p>
+</div></details></section></div></main></body></html>

@@ -35,6 +35,41 @@ struct GraphSummaryWaveBucket {
     primary_blocked_task: Option<GraphSummaryTaskRef>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct TaskflowNextAction {
+    command: String,
+    surface: String,
+    reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct TaskflowNextWhyNotNow {
+    category: String,
+    summary: String,
+    blocker_codes: Vec<String>,
+    blocking_surface: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct TaskflowNextCandidateContext {
+    ready_head: Option<GraphSummaryTaskRef>,
+    admissible_now: bool,
+    admissibility_gate: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct TaskflowNextDecision {
+    status: String,
+    blocker_codes: Vec<String>,
+    next_actions: Vec<String>,
+    recommended_command: Option<String>,
+    recommended_surface: Option<String>,
+    primary_ready_task: Option<GraphSummaryTaskRef>,
+    candidate_task_context: TaskflowNextCandidateContext,
+    why_not_now: Option<TaskflowNextWhyNotNow>,
+    next_action: Option<TaskflowNextAction>,
+}
+
 fn graph_summary_task_ref(task: &crate::state_store::TaskRecord) -> GraphSummaryTaskRef {
     GraphSummaryTaskRef {
         id: task.id.clone(),
@@ -81,6 +116,193 @@ fn authoritative_dispatch_blocker_codes(
         );
     }
     crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes)
+}
+
+fn build_taskflow_next_decision(
+    ready_head: Option<&crate::state_store::TaskRecord>,
+    recovery_holds_active_bound_run: bool,
+    recovery_present: bool,
+    latest_runtime_consumption_kind: Option<&str>,
+    scope_task_id: Option<&str>,
+    dispatch: Option<&crate::state_store::RunGraphDispatchReceiptSummary>,
+) -> TaskflowNextDecision {
+    let ready_head = ready_head.map(graph_summary_task_ref);
+    let mut blocker_codes = Vec::<String>::new();
+    let mut next_actions = Vec::<String>::new();
+    let candidate_task_context = TaskflowNextCandidateContext {
+        ready_head: ready_head.clone(),
+        admissible_now: !recovery_holds_active_bound_run,
+        admissibility_gate: if recovery_holds_active_bound_run {
+            "delegated_cycle_runtime_gate".to_string()
+        } else if ready_head.is_some() {
+            "ready_now".to_string()
+        } else {
+            "no_ready_task".to_string()
+        },
+    };
+
+    let (recommended_command, recommended_surface, primary_ready_task, why_not_now, next_action) =
+        if recovery_holds_active_bound_run {
+            if let Some(code) = crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::OpenDelegatedCycle,
+            ) {
+                blocker_codes.push(code);
+            }
+            blocker_codes.extend(authoritative_dispatch_blocker_codes(dispatch));
+
+            if latest_runtime_consumption_kind == Some("final") {
+                let next_action = TaskflowNextAction {
+                    command: "vida taskflow consume continue --json".to_string(),
+                    surface: "vida taskflow consume continue".to_string(),
+                    reason: "the delegated cycle is still open, so the next lawful step is continuation rather than selecting a new backlog slice".to_string(),
+                };
+                next_actions.push(format!(
+                    "Continue the active bound run with `{}` before considering backlog ready-head work.",
+                    next_action.command
+                ));
+                (
+                    Some(next_action.command.clone()),
+                    Some(next_action.surface.clone()),
+                    None,
+                    Some(TaskflowNextWhyNotNow {
+                        category: "delegated_cycle_runtime_gate".to_string(),
+                        summary: "A delegated execution cycle is still open, so backlog ready-head work is not admissible yet.".to_string(),
+                        blocker_codes: blocker_codes.clone(),
+                        blocking_surface: Some("vida taskflow recovery latest".to_string()),
+                    }),
+                    Some(next_action),
+                )
+            } else {
+                let next_action = TaskflowNextAction {
+                    command: "vida taskflow recovery latest --json".to_string(),
+                    surface: "vida taskflow recovery latest".to_string(),
+                    reason: "the delegated cycle is open and execution-preparation evidence is not yet finalized".to_string(),
+                };
+                next_actions.push(format!(
+                    "Inspect the active bound recovery state with `{}` before considering backlog ready-head work.",
+                    next_action.command
+                ));
+                (
+                    Some(next_action.command.clone()),
+                    Some(next_action.surface.clone()),
+                    None,
+                    Some(TaskflowNextWhyNotNow {
+                        category: "delegated_cycle_runtime_gate".to_string(),
+                        summary: "A delegated execution cycle is open and execution-preparation evidence is not finalized.".to_string(),
+                        blocker_codes: blocker_codes.clone(),
+                        blocking_surface: Some("vida taskflow recovery latest".to_string()),
+                    }),
+                    Some(next_action),
+                )
+            }
+        } else if let Some(task) = ready_head.clone() {
+            let next_action = TaskflowNextAction {
+                command: format!("vida task show {} --json", task.id),
+                surface: "vida task show".to_string(),
+                reason: "a backlog slice is ready now; inspect the canonical task record before dispatch".to_string(),
+            };
+            next_actions.push(format!(
+                "Inspect the primary ready task with `{}` before dispatch.",
+                next_action.command
+            ));
+            (
+                Some(next_action.command.clone()),
+                Some(next_action.surface.clone()),
+                Some(task),
+                None,
+                Some(next_action),
+            )
+        } else if recovery_present && latest_runtime_consumption_kind == Some("final") {
+            let next_action = TaskflowNextAction {
+                command: "vida taskflow consume continue --json".to_string(),
+                surface: "vida taskflow consume continue".to_string(),
+                reason: "no ready backlog slice exists, but the latest lawful delegated chain can still continue".to_string(),
+            };
+            next_actions.push(format!(
+                "Continue the latest lawful delegated chain with `{}`.",
+                next_action.command
+            ));
+            (
+                Some(next_action.command.clone()),
+                Some(next_action.surface.clone()),
+                None,
+                None,
+                Some(next_action),
+            )
+        } else {
+            if let Some(code) = crate::release1_contracts::blocker_code_value(
+                crate::release1_contracts::BlockerCode::NoReadyTasks,
+            ) {
+                blocker_codes.push(code);
+            }
+            let ready_command = if let Some(task_id) = scope_task_id {
+                format!("vida task ready --scope {task_id} --json")
+            } else {
+                "vida task ready --json".to_string()
+            };
+            let next_action = TaskflowNextAction {
+                command: ready_command.clone(),
+                surface: "vida task ready".to_string(),
+                reason: "no ready backlog slice is currently admissible".to_string(),
+            };
+            next_actions.push(format!(
+                "No ready backlog slice is available right now; inspect `{ready_command}` and `vida taskflow recovery latest --json`."
+            ));
+            (
+                Some(next_action.command.clone()),
+                Some(next_action.surface.clone()),
+                None,
+                Some(TaskflowNextWhyNotNow {
+                    category: "backlog_no_ready_task".to_string(),
+                    summary: "No ready backlog slice is currently admissible.".to_string(),
+                    blocker_codes: blocker_codes.clone(),
+                    blocking_surface: Some("vida task ready".to_string()),
+                }),
+                Some(next_action),
+            )
+        };
+
+    if recovery_present {
+        next_actions.push(
+            "Inspect the latest recovery projection with `vida taskflow recovery latest --json`."
+                .to_string(),
+        );
+    }
+
+    if recovery_present && latest_runtime_consumption_kind != Some("final") {
+        if let Some(code) = crate::release1_contracts::blocker_code_value(
+            crate::release1_contracts::BlockerCode::ExecutionPreparationGateBlocked,
+        ) {
+            blocker_codes.push(code);
+        }
+        next_actions.push(
+            "Materialize final execution-preparation evidence with `vida taskflow consume final \"<request>\" --json` before attempting continuation."
+                .to_string(),
+        );
+    }
+
+    blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
+    let why_not_now = why_not_now.map(|mut summary| {
+        summary.blocker_codes = blocker_codes.clone();
+        summary
+    });
+    let status = if blocker_codes.is_empty() {
+        "pass".to_string()
+    } else {
+        "blocked".to_string()
+    };
+
+    TaskflowNextDecision {
+        status,
+        blocker_codes,
+        next_actions,
+        recommended_command,
+        recommended_surface,
+        primary_ready_task,
+        candidate_task_context,
+        why_not_now,
+        next_action,
+    }
 }
 
 fn task_wave_label(
@@ -508,110 +730,27 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
     };
 
     let recovery_holds_active_bound_run = recovery_holds_active_bound_run(recovery.as_ref());
-    let primary_ready_task = (!recovery_holds_active_bound_run)
-        .then(|| ready_tasks.first())
-        .flatten()
-        .map(|task| {
-            serde_json::json!({
-                "id": task.id,
-                "display_id": task.display_id,
-                "title": task.title,
-                "status": task.status,
-                "priority": task.priority,
-                "issue_type": task.issue_type,
-            })
-        });
-
-    let mut blocker_codes = Vec::<String>::new();
-    let mut next_actions = Vec::<String>::new();
-    let recommended_command = if recovery_holds_active_bound_run {
-        if let Some(code) = crate::release1_contracts::blocker_code_value(
-            crate::release1_contracts::BlockerCode::OpenDelegatedCycle,
-        ) {
-            blocker_codes.push(code);
-        }
-        blocker_codes.extend(authoritative_dispatch_blocker_codes(dispatch.as_ref()));
-        if runtime_consumption.latest_kind.as_deref() == Some("final") {
-            next_actions.push(
-                "Continue the active bound run with `vida taskflow consume continue --json` before considering backlog ready-head work."
-                    .to_string(),
-            );
-            Some("vida taskflow consume continue --json".to_string())
-        } else {
-            next_actions.push(
-                "Inspect the active bound recovery state with `vida taskflow recovery latest --json` before considering backlog ready-head work."
-                    .to_string(),
-            );
-            Some("vida taskflow recovery latest --json".to_string())
-        }
-    } else if let Some(task) = ready_tasks.first() {
-        next_actions.push(format!(
-            "Inspect the primary ready task with `vida task show {} --json` before dispatch.",
-            task.id
-        ));
-        Some(format!("vida task show {} --json", task.id))
-    } else if recovery
-        .as_ref()
-        .is_some_and(|summary| summary.recovery_ready)
-        && runtime_consumption.latest_kind.as_deref() == Some("final")
-    {
-        next_actions.push(
-            "Continue the latest lawful delegated chain with `vida taskflow consume continue --json`."
-                .to_string(),
-        );
-        Some("vida taskflow consume continue --json".to_string())
-    } else {
-        if let Some(code) = crate::release1_contracts::blocker_code_value(
-            crate::release1_contracts::BlockerCode::NoReadyTasks,
-        ) {
-            blocker_codes.push(code);
-        }
-        let ready_command = if let Some(task_id) = scope_task_id {
-            format!("vida task ready --scope {task_id} --json")
-        } else {
-            "vida task ready --json".to_string()
-        };
-        next_actions.push(format!(
-            "No ready backlog slice is available right now; inspect `{ready_command}` and `vida taskflow recovery latest --json`."
-        ));
-        Some(ready_command)
-    };
-
-    if recovery.is_some() {
-        next_actions.push(
-            "Inspect the latest recovery projection with `vida taskflow recovery latest --json`."
-                .to_string(),
-        );
-    }
-
-    if recovery.is_some() && runtime_consumption.latest_kind.as_deref() != Some("final") {
-        if let Some(code) = crate::release1_contracts::blocker_code_value(
-            crate::release1_contracts::BlockerCode::ExecutionPreparationGateBlocked,
-        ) {
-            blocker_codes.push(code);
-        }
-        next_actions.push(
-            "Materialize final execution-preparation evidence with `vida taskflow consume final \"<request>\" --json` before attempting continuation."
-                .to_string(),
-        );
-    }
-
-    blocker_codes = crate::contract_profile_adapter::canonical_blocker_codes(&blocker_codes);
-
-    let status = if blocker_codes.is_empty() {
-        "pass"
-    } else {
-        "blocked"
-    };
+    let decision = build_taskflow_next_decision(
+        ready_tasks.first(),
+        recovery_holds_active_bound_run,
+        recovery.is_some(),
+        runtime_consumption.latest_kind.as_deref(),
+        scope_task_id,
+        dispatch.as_ref(),
+    );
     let payload = serde_json::json!({
         "surface": "vida taskflow next",
-        "status": status,
-        "blocker_codes": blocker_codes,
-        "next_actions": next_actions,
-        "recommended_command": recommended_command,
+        "status": decision.status,
+        "blocker_codes": decision.blocker_codes,
+        "why_not_now": decision.why_not_now,
+        "next_action": decision.next_action,
+        "next_actions": decision.next_actions,
+        "recommended_command": decision.recommended_command,
+        "recommended_surface": decision.recommended_surface,
         "scope_task_id": scope_task_id,
         "ready_count": ready_tasks.len(),
-        "primary_ready_task": primary_ready_task,
+        "primary_ready_task": decision.primary_ready_task,
+        "candidate_task_context": decision.candidate_task_context,
         "latest_run_graph": latest_run_graph,
         "recovery": recovery,
         "gate": gate,
@@ -623,12 +762,12 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         crate::print_json_pretty(&payload);
     } else {
         crate::print_surface_header(RenderMode::Plain, "vida taskflow next");
-        crate::print_surface_line(RenderMode::Plain, "status", status);
-        if !blocker_codes.is_empty() {
+        crate::print_surface_line(RenderMode::Plain, "status", &decision.status);
+        if !decision.blocker_codes.is_empty() {
             crate::print_surface_line(
                 RenderMode::Plain,
                 "blocker_codes",
-                &blocker_codes.join(", "),
+                &decision.blocker_codes.join(", "),
             );
         }
         crate::print_surface_line(
@@ -639,14 +778,14 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         if let Some(task_id) = scope_task_id {
             crate::print_surface_line(RenderMode::Plain, "scope_task_id", task_id);
         }
-        if let Some(task) = primary_ready_task
-            .as_ref()
+        if let Some(task) = payload
+            .get("primary_ready_task")
             .and_then(|value| value.get("id"))
             .and_then(serde_json::Value::as_str)
         {
             crate::print_surface_line(RenderMode::Plain, "primary_ready_task", task);
-            if let Some(title) = primary_ready_task
-                .as_ref()
+            if let Some(title) = payload
+                .get("primary_ready_task")
                 .and_then(|value| value.get("title"))
                 .and_then(serde_json::Value::as_str)
             {
@@ -655,15 +794,44 @@ pub(crate) async fn run_taskflow_next_surface(args: &[String]) -> ExitCode {
         } else {
             crate::print_surface_line(RenderMode::Plain, "primary_ready_task", "none");
         }
+        if let Some(task) = payload
+            .get("candidate_task_context")
+            .and_then(|value| value.get("ready_head"))
+            .and_then(|value| value.get("id"))
+            .and_then(serde_json::Value::as_str)
+        {
+            crate::print_surface_line(RenderMode::Plain, "candidate_ready_task", task);
+        }
+        if let Some(gate) = payload
+            .get("candidate_task_context")
+            .and_then(|value| value.get("admissibility_gate"))
+            .and_then(serde_json::Value::as_str)
+        {
+            crate::print_surface_line(RenderMode::Plain, "admissibility_gate", gate);
+        }
+        if let Some(summary) = payload
+            .get("why_not_now")
+            .and_then(|value| value.get("summary"))
+            .and_then(serde_json::Value::as_str)
+        {
+            crate::print_surface_line(RenderMode::Plain, "why_not_now", summary);
+        }
         if let Some(command) = payload["recommended_command"].as_str() {
             crate::print_surface_line(RenderMode::Plain, "recommended_command", command);
         }
-        if let Some(next_action) = next_actions.first() {
+        if let Some(surface) = payload["recommended_surface"].as_str() {
+            crate::print_surface_line(RenderMode::Plain, "recommended_surface", surface);
+        }
+        if let Some(next_action) = payload
+            .get("next_action")
+            .and_then(|value| value.get("reason"))
+            .and_then(serde_json::Value::as_str)
+        {
             crate::print_surface_line(RenderMode::Plain, "next_action", next_action);
         }
     }
 
-    if status == "pass" {
+    if decision.status == "pass" {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
@@ -1095,6 +1263,138 @@ mod tests {
         assert!(blocker_codes
             .iter()
             .any(|code| code == "pending_review_clean_evidence"));
+    }
+
+    fn sample_task(task_id: &str) -> crate::state_store::TaskRecord {
+        crate::state_store::TaskRecord {
+            id: task_id.to_string(),
+            display_id: Some("vida-1".to_string()),
+            title: "Sample Task".to_string(),
+            description: "sample".to_string(),
+            status: "open".to_string(),
+            priority: 2,
+            issue_type: "task".to_string(),
+            created_at: "2026-04-18T00:00:00Z".to_string(),
+            created_by: "tester".to_string(),
+            updated_at: "2026-04-18T00:00:00Z".to_string(),
+            closed_at: None,
+            close_reason: None,
+            source_repo: ".".to_string(),
+            compaction_level: 0,
+            original_size: 0,
+            notes: None,
+            labels: Vec::new(),
+            execution_semantics: crate::state_store::TaskExecutionSemantics::default(),
+            dependencies: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn taskflow_next_decision_surfaces_candidate_when_runtime_gate_blocks_ready_head() {
+        let dispatch = crate::state_store::RunGraphDispatchReceiptSummary {
+            run_id: "run-1".to_string(),
+            dispatch_target: "worker".to_string(),
+            dispatch_status: "blocked".to_string(),
+            lane_status: "lane_blocked".to_string(),
+            blocker_code: Some("timeout_without_takeover_authority".to_string()),
+            dispatch_surface: None,
+            dispatch_kind: "agent_lane".to_string(),
+            dispatch_command: None,
+            dispatch_packet_path: None,
+            dispatch_result_path: None,
+            selected_backend: Some("internal_subagents".to_string()),
+            exception_path_receipt_id: None,
+            supersedes_receipt_id: None,
+            recorded_at: "2026-04-18T00:00:00Z".to_string(),
+            activation_runtime_role: None,
+            activation_agent_type: None,
+            activation_evidence: serde_json::Value::Null,
+            effective_execution_posture: serde_json::Value::Null,
+            route_policy: serde_json::Value::Null,
+            downstream_dispatch_ready: false,
+            downstream_dispatch_target: None,
+            downstream_dispatch_command: None,
+            downstream_dispatch_status: None,
+            downstream_dispatch_result_path: None,
+            downstream_dispatch_packet_path: None,
+            downstream_dispatch_trace_path: None,
+            downstream_dispatch_active_target: None,
+            downstream_dispatch_executed_count: 0,
+            downstream_dispatch_last_target: None,
+            downstream_dispatch_note: None,
+            downstream_dispatch_blockers: Vec::new(),
+        };
+
+        let decision = super::build_taskflow_next_decision(
+            Some(&sample_task("task-1")),
+            true,
+            true,
+            Some("bundle-check"),
+            Some("epic-1"),
+            Some(&dispatch),
+        );
+
+        assert_eq!(decision.status, "blocked");
+        assert!(decision.primary_ready_task.is_none());
+        assert_eq!(
+            decision
+                .candidate_task_context
+                .ready_head
+                .as_ref()
+                .map(|task| task.id.as_str()),
+            Some("task-1")
+        );
+        assert!(!decision.candidate_task_context.admissible_now);
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "delegated_cycle_runtime_gate"
+        );
+        assert_eq!(
+            decision
+                .why_not_now
+                .as_ref()
+                .map(|value| value.category.as_str()),
+            Some("delegated_cycle_runtime_gate")
+        );
+        assert_eq!(
+            decision
+                .next_action
+                .as_ref()
+                .map(|value| value.command.as_str()),
+            Some("vida taskflow recovery latest --json")
+        );
+    }
+
+    #[test]
+    fn taskflow_next_decision_reports_no_ready_task_with_explicit_next_action() {
+        let decision =
+            super::build_taskflow_next_decision(None, false, false, None, Some("epic-1"), None);
+
+        assert_eq!(decision.status, "blocked");
+        assert!(decision.primary_ready_task.is_none());
+        assert_eq!(decision.candidate_task_context.ready_head, None);
+        assert_eq!(
+            decision.candidate_task_context.admissibility_gate,
+            "no_ready_task"
+        );
+        assert_eq!(
+            decision
+                .why_not_now
+                .as_ref()
+                .map(|value| value.category.as_str()),
+            Some("backlog_no_ready_task")
+        );
+        assert_eq!(
+            decision
+                .next_action
+                .as_ref()
+                .map(|value| value.command.as_str()),
+            Some("vida task ready --scope epic-1 --json")
+        );
+        assert!(decision
+            .blocker_codes
+            .iter()
+            .any(|code| code == "no_ready_tasks"));
     }
 }
 

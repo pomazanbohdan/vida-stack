@@ -693,7 +693,10 @@ pub(crate) async fn run_taskflow_consume(args: &[String]) -> ExitCode {
                                 ok: false,
                                 row_count: 0,
                                 verdict: Some("blocked".to_string()),
-                                artifact_path: None,
+                                artifact_path: Some(
+                                    crate::runtime_consumption_surface::DOCFLOW_PROOF_CURRENT_PATH
+                                        .to_string(),
+                                ),
                                 output: error.clone(),
                             };
                             let docflow_receipt_evidence =

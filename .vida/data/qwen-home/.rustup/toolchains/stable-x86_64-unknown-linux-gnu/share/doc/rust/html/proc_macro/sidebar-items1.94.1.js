@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ConversionErrorKind","Delimiter","EscapeError","Level","Spacing","TokenTree"],"fn":["is_available","quote","quote_span"],"macro":["quote"],"mod":["token_stream","tracked"],"struct":["Diagnostic","ExpandError","Group","Ident","LexError","Literal","Punct","Span","TokenStream"],"trait":["MultiSpan","ToTokens"]};

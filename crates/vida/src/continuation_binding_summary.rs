@@ -276,7 +276,9 @@ mod tests {
         assert_eq!(summary["pause_boundary_gate"], "non_blocking_only");
         assert!(summary["next_actions"]
             .as_array()
-            .is_some_and(|rows| rows.iter().any(|row| row.as_str().is_some_and(|value| value.contains("consume continue --run-id task-1 --json")))));
+            .is_some_and(|rows| rows.iter().any(|row| row
+                .as_str()
+                .is_some_and(|value| value.contains("consume continue --run-id task-1 --json")))));
     }
 
     #[test]

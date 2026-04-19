@@ -1,4 +1,7 @@
 use crate::contract_profile_adapter::{blocker_code, BlockerCode};
+use crate::runtime_consumption_surface::{
+    DOCFLOW_PROOF_CURRENT_PATH, DOCFLOW_READINESS_CURRENT_PATH,
+};
 
 pub(crate) fn build_docflow_runtime_verdict(
     registry: &crate::RuntimeConsumptionEvidence,
@@ -44,6 +47,16 @@ pub(crate) fn build_docflow_runtime_verdict(
     }
     if !matches!(proof.verdict.as_deref(), Some("ready" | "blocked")) {
         if let Some(code) = blocker_code(BlockerCode::MissingProofVerdict) {
+            blockers.push(code);
+        }
+    }
+    if proof
+        .artifact_path
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(str::is_empty)
+    {
+        if let Some(code) = blocker_code(BlockerCode::MissingClosureProof) {
             blockers.push(code);
         }
     }
@@ -99,7 +112,7 @@ pub(crate) fn blocking_docflow_activation(
                 "ok": false,
                 "row_count": 0,
                 "verdict": "blocked",
-                "artifact_path": "vida/config/docflow-readiness.current.jsonl",
+                "artifact_path": DOCFLOW_READINESS_CURRENT_PATH,
                 "output": error
             },
             "proof": {
@@ -107,6 +120,7 @@ pub(crate) fn blocking_docflow_activation(
                 "ok": false,
                 "row_count": 0,
                 "verdict": "blocked",
+                "artifact_path": DOCFLOW_PROOF_CURRENT_PATH,
                 "output": error
             }
         }),
@@ -116,6 +130,9 @@ pub(crate) fn blocking_docflow_activation(
 #[cfg(test)]
 mod tests {
     use super::build_docflow_runtime_verdict;
+    use crate::runtime_consumption_surface::{
+        DOCFLOW_PROOF_CURRENT_PATH, DOCFLOW_READINESS_CURRENT_PATH,
+    };
 
     #[test]
     fn taskflow_consume_final_verdict_reports_pass_without_blockers() {
@@ -140,7 +157,7 @@ mod tests {
             ok: true,
             row_count: 0,
             verdict: Some("ready".to_string()),
-            artifact_path: Some("vida/config/docflow-readiness.current.jsonl".to_string()),
+            artifact_path: Some(DOCFLOW_READINESS_CURRENT_PATH.to_string()),
             output: String::new(),
         };
         let proof = crate::RuntimeConsumptionEvidence {
@@ -148,7 +165,7 @@ mod tests {
             ok: true,
             row_count: 1,
             verdict: Some("ready".to_string()),
-            artifact_path: None,
+            artifact_path: Some(DOCFLOW_PROOF_CURRENT_PATH.to_string()),
             output: "✅ OK: proofcheck".to_string(),
         };
 

@@ -1,6 +1,12 @@
+use std::fs;
 use std::path::Path;
 
+use time::format_description::well_known::Rfc3339;
+
 pub(crate) const CANONICAL_LAUNCHER_COMMAND: &str = "vida";
+pub(crate) const DOCFLOW_READINESS_CURRENT_PATH: &str =
+    "vida/config/docflow-readiness.current.jsonl";
+pub(crate) const DOCFLOW_PROOF_CURRENT_PATH: &str = "vida/config/docflow-proof.current.jsonl";
 
 #[derive(Debug, serde::Serialize, Clone, PartialEq, Eq)]
 pub(crate) struct LauncherBinaryEvidence {
@@ -257,6 +263,12 @@ pub(crate) fn build_docflow_runtime_evidence() -> (
         ],
     )
     .expect("docflow proof evidence should render");
+    let readiness_artifact_path =
+        persist_docflow_current_receipt(&registry_root_path, "readiness-check", &readiness_output)
+            .expect("docflow readiness receipt artifact should persist");
+    let proof_artifact_path =
+        persist_docflow_current_receipt(&registry_root_path, "proofcheck", &proof_output)
+            .expect("docflow proof receipt artifact should persist");
 
     let registry_rows = count_nonempty_lines(&registry_output);
     let check_rows = count_nonempty_lines(&check_output);
@@ -289,7 +301,7 @@ pub(crate) fn build_docflow_runtime_evidence() -> (
         } else {
             "blocked".to_string()
         }),
-        artifact_path: Some("vida/config/docflow-readiness.current.jsonl".to_string()),
+        artifact_path: Some(readiness_artifact_path),
         output: readiness_output,
     };
     let proof = RuntimeConsumptionEvidence {
@@ -301,7 +313,7 @@ pub(crate) fn build_docflow_runtime_evidence() -> (
         } else {
             "blocked".to_string()
         }),
-        artifact_path: None,
+        artifact_path: Some(proof_artifact_path),
         output: proof_output,
     };
     let overview = RuntimeConsumptionOverview {
@@ -316,6 +328,65 @@ pub(crate) fn build_docflow_runtime_evidence() -> (
     (registry, check, readiness, proof, overview)
 }
 
+fn persist_docflow_current_receipt(
+    project_root: &Path,
+    check_kind: &str,
+    output: &str,
+) -> Result<String, String> {
+    let relative_path = match check_kind {
+        "readiness-check" => DOCFLOW_READINESS_CURRENT_PATH,
+        "proofcheck" => DOCFLOW_PROOF_CURRENT_PATH,
+        other => {
+            return Err(format!(
+                "unsupported docflow current receipt kind `{other}`"
+            ))
+        }
+    };
+    let verdict = if output.trim().is_empty() || output.contains("✅ OK:") {
+        "ready"
+    } else {
+        "blocked"
+    };
+    let timestamp = time::OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .expect("rfc3339 timestamp should render");
+    let receipt = serde_json::json!({
+        "receipt_id": format!("docflow-{check_kind}-{timestamp}"),
+        "receipt_type": "docflow_current_receipt",
+        "entity_type": "docflow_runtime_surface",
+        "entity_id": check_kind,
+        "machine": "docflow_runtime_evidence",
+        "event": format!("{check_kind}_evaluated"),
+        "actor": CANONICAL_LAUNCHER_COMMAND,
+        "timestamp": timestamp,
+        "config_artifact": relative_path,
+        "config_revision": "current",
+        "surface": format!("vida docflow {check_kind} --profile active-canon"),
+        "verdict": verdict,
+        "row_count": count_nonempty_lines(output),
+        "proof_refs": [relative_path],
+        "output_excerpt": output
+            .lines()
+            .take(20)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    });
+    let path = project_root.join(relative_path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+    }
+    fs::write(
+        &path,
+        format!(
+            "{}\n",
+            serde_json::to_string(&receipt).expect("docflow current receipt JSON should render")
+        ),
+    )
+    .map_err(|error| format!("failed to write {}: {error}", path.display()))?;
+    Ok(relative_path.to_string())
+}
+
 pub(crate) fn build_docflow_receipt_evidence(
     readiness: &RuntimeConsumptionEvidence,
     proof: &RuntimeConsumptionEvidence,
@@ -326,13 +397,25 @@ pub(crate) fn build_docflow_receipt_evidence(
     let readiness_receipt_path = readiness_artifact_path.clone();
     let proof_surface = proof.surface.clone();
     let proof_verdict = proof.verdict.clone();
-    let proof_receipt_path = serde_json::Value::Null;
-    let receipt_backed = readiness_receipt_path
-        .as_ref()
-        .is_some_and(|path| !path.trim().is_empty());
+    let proof_receipt_path = proof
+        .artifact_path
+        .clone()
+        .map(serde_json::Value::String)
+        .unwrap_or(serde_json::Value::Null);
+    let total_receipts = usize::from(
+        readiness_receipt_path
+            .as_ref()
+            .is_some_and(|path| !path.trim().is_empty()),
+    ) + usize::from(
+        proof_receipt_path
+            .as_str()
+            .is_some_and(|path| !path.trim().is_empty()),
+    );
+    let receipt_backed = total_receipts > 0;
 
     serde_json::json!({
         "receipt_backed": receipt_backed,
+        "total_receipts": total_receipts,
         "readiness_surface": readiness_surface,
         "readiness_verdict": readiness_verdict,
         "readiness_artifact_path": readiness_artifact_path,
@@ -391,13 +474,14 @@ mod tests {
             ok: true,
             row_count: 1,
             verdict: Some("ready".to_string()),
-            artifact_path: None,
+            artifact_path: Some("vida/config/docflow-proof.current.jsonl".to_string()),
             output: String::new(),
         };
 
         let evidence = build_docflow_receipt_evidence(&readiness, &proof);
 
         assert_eq!(evidence["receipt_backed"], true);
+        assert_eq!(evidence["total_receipts"], 2);
         assert_eq!(
             evidence["readiness_surface"],
             "vida docflow readiness-check --profile active-canon"
@@ -416,7 +500,10 @@ mod tests {
             "vida docflow proofcheck --profile active-canon"
         );
         assert_eq!(evidence["proof_verdict"], "ready");
-        assert!(evidence["proof_receipt_path"].is_null());
+        assert_eq!(
+            evidence["proof_receipt_path"],
+            "vida/config/docflow-proof.current.jsonl"
+        );
     }
 
     #[test]

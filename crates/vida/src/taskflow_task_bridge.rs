@@ -326,7 +326,7 @@ mod tests {
             ));
             let snapshot_dir = root.join("runtime-consumption");
             fs::create_dir_all(&snapshot_dir).expect("create snapshot dir");
-            let operator_contracts = crate::build_release1_operator_contracts_envelope(
+            let operator_contracts = crate::build_operator_contracts_envelope(
                 status,
                 blocker_codes,
                 next_actions,

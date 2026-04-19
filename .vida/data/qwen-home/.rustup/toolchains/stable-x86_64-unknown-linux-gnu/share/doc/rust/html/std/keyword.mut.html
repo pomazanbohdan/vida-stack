@@ -1,0 +1,40 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="A mutable variable, reference, or pointer."><title>mut - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="std" data-themes="" data-resource-suffix="1.94.1" data-rustdoc-version="1.94.1 (e408947bf 2026-03-25)" data-channel="1.94.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items1.94.1.js"></script><script defer src="../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc keyword"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">mut</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../std/index.html"><img class="rust-logo" src="../static.files/rust-logo-9a9549ea.svg" alt="logo"></a><h2><a href="../std/index.html">std</a><span class="version">1.94.1</span></h2></div><div class="version">(e408947bf	2026-03-25)</div><div class="sidebar-elems"><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><h1>Keyword <span class="keyword">mut</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/std/keyword_docs.rs.html#1145">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>A mutable variable, reference, or pointer.</p>
+<p><code>mut</code> can be used in several situations. The first is mutable variables,
+which can be used anywhere you can bind a value to a variable name. Some
+examples:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="comment">// A mutable variable in the parameter list of a function.
+</span><span class="kw">fn </span>foo(<span class="kw-2">mut </span>x: u8, y: u8) -&gt; u8 {
+    x += y;
+    x
+}
+
+<span class="comment">// Modifying a mutable variable.
+</span><span class="kw">let </span><span class="kw-2">mut </span>a = <span class="number">5</span>;
+a = <span class="number">6</span>;
+
+<span class="macro">assert_eq!</span>(foo(<span class="number">3</span>, <span class="number">4</span>), <span class="number">7</span>);
+<span class="macro">assert_eq!</span>(a, <span class="number">6</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++//+A+mutable+variable+in+the+parameter+list+of+a+function.%0A++++fn+foo(mut+x:+u8,+y:+u8)+-%3E+u8+%7B%0A++++++++x+%2B=+y;%0A++++++++x%0A++++%7D%0A++++%0A++++//+Modifying+a+mutable+variable.%0A++++%23%5Ballow(unused_assignments)%5D%0A++++let+mut+a+=+5;%0A++++a+=+6;%0A++++%0A++++assert_eq!(foo(3,+4),+7);%0A++++assert_eq!(a,+6);%0A%7D&amp;edition=2024"></a></div>
+<p>The second is mutable references. They can be created from <code>mut</code> variables
+and must be unique: no other variables can have a mutable reference, nor a
+shared reference.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="comment">// Taking a mutable reference.
+</span><span class="kw">fn </span>push_two(v: <span class="kw-2">&amp;mut </span>Vec&lt;u8&gt;) {
+    v.push(<span class="number">2</span>);
+}
+
+<span class="comment">// A mutable reference cannot be taken to a non-mutable variable.
+</span><span class="kw">let </span><span class="kw-2">mut </span>v = <span class="macro">vec!</span>[<span class="number">0</span>, <span class="number">1</span>];
+<span class="comment">// Passing a mutable reference.
+</span>push_two(<span class="kw-2">&amp;mut </span>v);
+
+<span class="macro">assert_eq!</span>(v, <span class="macro">vec!</span>[<span class="number">0</span>, <span class="number">1</span>, <span class="number">2</span>]);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++//+Taking+a+mutable+reference.%0A++++fn+push_two(v:+%26mut+Vec%3Cu8%3E)+%7B%0A++++++++v.push(2);%0A++++%7D%0A++++%0A++++//+A+mutable+reference+cannot+be+taken+to+a+non-mutable+variable.%0A++++let+mut+v+=+vec!%5B0,+1%5D;%0A++++//+Passing+a+mutable+reference.%0A++++push_two(%26mut+v);%0A++++%0A++++assert_eq!(v,+vec!%5B0,+1,+2%5D);%0A%7D&amp;edition=2024"></a></div>
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">let </span><span class="kw-2">mut </span>v = <span class="macro">vec!</span>[<span class="number">0</span>, <span class="number">1</span>];
+<span class="kw">let </span>mut_ref_v = <span class="kw-2">&amp;mut </span>v;
+<span class="kw">let </span>ref_v = <span class="kw-2">&amp;</span>v;
+mut_ref_v.push(<span class="number">2</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++let+mut+v+=+vec!%5B0,+1%5D;%0A++++let+mut_ref_v+=+%26mut+v;%0A++++%23%5Ballow(unused)%5D%0A++++let+ref_v+=+%26v;%0A++++mut_ref_v.push(2);%0A%7D&amp;edition=2024"></a></div>
+<p>Mutable raw pointers work much like mutable references, with the added
+possibility of not pointing to a valid object. The syntax is <code>*mut Type</code>.</p>
+<p>More information on mutable references and pointers can be found in the <a href="../reference/types/pointer.html#mutable-references-mut">Reference</a>.</p>
+</div></details></section></div></main></body></html>

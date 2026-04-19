@@ -1,0 +1,20 @@
+{
+  "todos": [
+    {
+      "content": "Implement fail-closed parity fix: sync run-graph status and continuation binding when retry artifact changes receipt to packet_ready",
+      "id": "1",
+      "status": "completed"
+    },
+    {
+      "content": "Add regression tests for receipt/status/recovery/gate/continuation-binding agreement",
+      "id": "2",
+      "status": "completed"
+    },
+    {
+      "content": "Build and verify tests pass",
+      "id": "3",
+      "status": "in_progress"
+    }
+  ],
+  "sessionId": "3f2d5651-82c8-4898-8475-c1c3786c1cc0"
+}

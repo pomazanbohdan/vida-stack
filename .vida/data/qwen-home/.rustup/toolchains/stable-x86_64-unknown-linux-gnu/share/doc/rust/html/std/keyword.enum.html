@@ -1,0 +1,40 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="A type that can be any one of several variants."><title>enum - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="std" data-themes="" data-resource-suffix="1.94.1" data-rustdoc-version="1.94.1 (e408947bf 2026-03-25)" data-channel="1.94.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items1.94.1.js"></script><script defer src="../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc keyword"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">enum</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../std/index.html"><img class="rust-logo" src="../static.files/rust-logo-9a9549ea.svg" alt="logo"></a><h2><a href="../std/index.html">std</a><span class="version">1.94.1</span></h2></div><div class="version">(e408947bf	2026-03-25)</div><div class="sidebar-elems"><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><h1>Keyword <span class="keyword">enum</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/std/keyword_docs.rs.html#436">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>A type that can be any one of several variants.</p>
+<p>Enums in Rust are similar to those of other compiled languages like C, but have important
+differences that make them considerably more powerful. What Rust calls enums are more commonly
+known as <a href="https://en.wikipedia.org/wiki/Algebraic_data_type">Algebraic Data Types</a> if you’re coming from a functional programming background.
+The important detail is that each enum variant can have data to go along with it.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">enum </span>SimpleEnum {
+    FirstVariant,
+    SecondVariant,
+    ThirdVariant,
+}
+
+<span class="kw">enum </span>Location {
+    Unknown,
+    Anonymous,
+    Known(Coord),
+}
+
+<span class="kw">enum </span>ComplexEnum {
+    Nothing,
+    Something(u32),
+    LotsOfThings {
+        usual_struct_stuff: bool,
+        blah: String,
+    }
+}
+
+<span class="kw">enum </span>EmptyEnum { }</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++struct+Coord;%0A++++enum+SimpleEnum+%7B%0A++++++++FirstVariant,%0A++++++++SecondVariant,%0A++++++++ThirdVariant,%0A++++%7D%0A++++%0A++++enum+Location+%7B%0A++++++++Unknown,%0A++++++++Anonymous,%0A++++++++Known(Coord),%0A++++%7D%0A++++%0A++++enum+ComplexEnum+%7B%0A++++++++Nothing,%0A++++++++Something(u32),%0A++++++++LotsOfThings+%7B%0A++++++++++++usual_struct_stuff:+bool,%0A++++++++++++blah:+String,%0A++++++++%7D%0A++++%7D%0A++++%0A++++enum+EmptyEnum+%7B+%7D%0A%7D&amp;edition=2024"></a></div>
+<p>The first enum shown is the usual kind of enum you’d find in a C-style language. The second
+shows off a hypothetical example of something storing location data, with <code>Coord</code> being any
+other type that’s needed, for example a struct. The third example demonstrates the kind of
+data a variant can store, ranging from nothing, to a tuple, to an anonymous struct.</p>
+<p>Instantiating enum variants involves explicitly using the enum’s name as its namespace,
+followed by one of its variants. <code>SimpleEnum::SecondVariant</code> would be an example from above.
+When data follows along with a variant, such as with rust’s built-in <a href="option/enum.Option.html" title="enum std::option::Option"><code>Option</code></a> type, the data
+is added as the type describes, for example <code>Option::Some(123)</code>. The same follows with
+struct-like variants, with things looking like <code>ComplexEnum::LotsOfThings { usual_struct_stuff: true, blah: "hello!".to_string(), }</code>. Empty Enums are similar to <a href="primitive.never.html" title="primitive never"><code>!</code></a> in that they cannot be
+instantiated at all, and are used mainly to mess with the type system in interesting ways.</p>
+<p>For more information, take a look at the <a href="../book/ch06-01-defining-an-enum.html">Rust Book</a> or the <a href="../reference/items/enumerations.html">Reference</a></p>
+</div></details></section></div></main></body></html>

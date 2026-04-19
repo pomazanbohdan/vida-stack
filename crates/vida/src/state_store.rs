@@ -99,9 +99,10 @@ use state_store_source_scan::{
 };
 pub use state_store_task_models::{
     BlockedTaskRecord, CreateTaskRequest, TaskCriticalPath, TaskCriticalPathNode,
-    TaskDependencyStatus, TaskDependencyTreeEdge, TaskDependencyTreeNode, TaskExecutionSemantics,
-    TaskGraphIssue, TaskImportSummary, TaskRecord, TaskRelease1ContractStep,
-    TaskSchedulingCandidate, TaskSchedulingProjection, TaskStoreSummary, UpdateTaskRequest,
+    TaskDependencyStatus, TaskDependencyTreeChild, TaskDependencyTreeEdge, TaskDependencyTreeNode,
+    TaskExecutionSemantics, TaskGraphIssue, TaskImportSummary, TaskProgressSummary, TaskRecord,
+    TaskRelease1ContractStep, TaskSchedulingCandidate, TaskSchedulingProjection, TaskStoreSummary,
+    UpdateTaskRequest,
 };
 pub(crate) use state_store_task_models::{TaskContent, TaskJsonlRecord, TaskStorageRow};
 #[cfg(test)]
@@ -626,17 +627,80 @@ hierarchy: framework,contracts
             .expect("dependency tree");
         assert_eq!(tree.task.id, "vida-b");
         assert_eq!(tree.dependencies.len(), 1);
+        assert!(tree.children.is_empty());
         let blocks = &tree.dependencies[0];
         assert_eq!(blocks.edge_type, "blocks");
         assert_eq!(blocks.depends_on_id, "vida-a");
         let a_node = blocks.node.as_ref().expect("task a node");
         assert_eq!(a_node.task.id, "vida-a");
         assert_eq!(a_node.dependencies.len(), 1);
+        assert!(a_node.children.is_empty());
         let parent = &a_node.dependencies[0];
         assert_eq!(parent.edge_type, "parent-child");
         assert_eq!(parent.depends_on_id, "vida-root");
         assert!(parent.node.is_some());
         assert_eq!(parent.node.as_ref().unwrap().task.id, "vida-root");
+
+        let root_tree = store
+            .task_dependency_tree("vida-root")
+            .await
+            .expect("root dependency tree");
+        assert!(root_tree.dependencies.is_empty());
+        assert_eq!(root_tree.children.len(), 1);
+        let child_ids = root_tree
+            .children
+            .iter()
+            .map(|child| child.child_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(child_ids, vec!["vida-a"]);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn task_progress_summary_reports_descendant_status_totals() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-task-progress-summary-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let source = root.join("issues.jsonl");
+        fs::create_dir_all(&root).expect("create temp dir");
+        fs::write(&source, sample_tasks_jsonl()).expect("write sample jsonl");
+
+        let store = StateStore::open(root.clone()).await.expect("open store");
+        store
+            .import_tasks_from_jsonl(&source)
+            .await
+            .expect("import tasks");
+
+        let summary = store
+            .task_progress_summary("vida-root")
+            .await
+            .expect("progress summary");
+        assert_eq!(summary.root_task.id, "vida-root");
+        assert_eq!(summary.progress_basis, "descendants_excluding_root");
+        assert_eq!(summary.direct_child_count, 1);
+        assert_eq!(summary.descendant_count, 1);
+        assert_eq!(summary.open_count, 1);
+        assert_eq!(summary.in_progress_count, 0);
+        assert_eq!(summary.closed_count, 0);
+        assert_eq!(summary.epic_count, 0);
+        assert_eq!(summary.status_counts.get("open"), Some(&1));
+        assert_eq!(summary.percent_closed, 0.0);
+
+        let b_summary = store
+            .task_progress_summary("vida-b")
+            .await
+            .expect("task summary without descendants");
+        assert_eq!(b_summary.direct_child_count, 0);
+        assert_eq!(b_summary.descendant_count, 0);
+        assert!(b_summary.status_counts.is_empty());
+        assert_eq!(b_summary.percent_closed, 0.0);
 
         let _ = fs::remove_dir_all(&root);
     }

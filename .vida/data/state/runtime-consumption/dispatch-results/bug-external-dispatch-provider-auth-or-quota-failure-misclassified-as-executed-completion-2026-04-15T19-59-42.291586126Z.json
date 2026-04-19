@@ -1,0 +1,11 @@
+{
+  "artifact_kind": "runtime_dispatch_result",
+  "closure_ready": true,
+  "dispatch_target": "closure",
+  "note": "runtime downstream scheduler reached closure without additional lane activation",
+  "recorded_at": "2026-04-15T19:59:42.29159343Z",
+  "run_id": "bug-external-dispatch-provider-auth-or-quota-failure-misclassified-as-executed-completion",
+  "source_dispatch_packet_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/downstream-dispatch-packets/bug-external-dispatch-provider-auth-or-quota-failure-misclassified-as-executed-completion-2026-04-15T19-59-42.272852519Z.json",
+  "status": "pass",
+  "surface": "vida taskflow closure-preview"
+}

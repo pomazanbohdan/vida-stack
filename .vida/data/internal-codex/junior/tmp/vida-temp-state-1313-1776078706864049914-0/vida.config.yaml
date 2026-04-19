@@ -1,0 +1,360 @@
+project:
+  id: __PROJECT_ID__
+  overlay_version: 1
+
+project_bootstrap:
+  enabled: true
+  docs_root: __DOCS_ROOT__
+  process_root: __PROCESS_ROOT__
+  research_root: __RESEARCH_ROOT__
+  readme_doc: __README_DOC__
+  architecture_doc: __ARCHITECTURE_DOC__
+  decisions_doc: __DECISIONS_DOC__
+  environments_doc: __ENVIRONMENTS_DOC__
+  project_operations_doc: __PROJECT_OPERATIONS_DOC__
+  agent_system_doc: __AGENT_SYSTEM_DOC__
+  allow_scaffold_missing: true
+  require_launch_confirmation: true
+
+language_policy:
+  user_communication: __USER_COMMUNICATION__
+  reasoning: __REASONING_LANGUAGE__
+  documentation: __DOCUMENTATION_LANGUAGE__
+  todo_protocol: __TODO_PROTOCOL_LANGUAGE__
+
+host_environment:
+  cli_system: __HOST_CLI_SYSTEM__
+  codex:
+    agents: &codex_agent_catalog
+      junior:
+        tier: junior
+        rate: 1
+        reasoning_band: low
+        model: gpt-5.4
+        model_reasoning_effort: low
+        sandbox_mode: workspace-write
+        default_runtime_role: worker
+        runtime_roles:
+          - worker
+        task_classes:
+          - implementation
+          - delivery_task
+          - execution_block
+      middle:
+        tier: middle
+        rate: 4
+        reasoning_band: medium
+        model: gpt-5.4
+        model_reasoning_effort: medium
+        sandbox_mode: workspace-write
+        default_runtime_role: coach
+        runtime_roles:
+          - business_analyst
+          - pm
+          - coach
+          - worker
+        task_classes:
+          - specification
+          - planning
+          - coach
+          - implementation_medium
+      senior:
+        tier: senior
+        rate: 16
+        reasoning_band: high
+        model: gpt-5.4
+        model_reasoning_effort: high
+        sandbox_mode: read-only
+        default_runtime_role: verifier
+        runtime_roles:
+          - verifier
+          - prover
+        task_classes:
+          - verification
+          - review
+          - quality_gate
+          - release_readiness
+      architect:
+        tier: architect
+        rate: 32
+        reasoning_band: xhigh
+        model: gpt-5.4
+        model_reasoning_effort: high
+        sandbox_mode: read-only
+        default_runtime_role: solution_architect
+        runtime_roles:
+          - solution_architect
+        task_classes:
+          - architecture
+          - execution_preparation
+          - hard_escalation
+          - meta_analysis
+  systems:
+    codex:
+      enabled: true
+      execution_class: internal
+      materialization_mode: codex_toml_catalog_render
+      template_root: .codex
+      runtime_root: .codex
+      carriers: *codex_agent_catalog
+    qwen:
+      enabled: true
+      execution_class: external
+      materialization_mode: copy_tree_only
+      template_root: .qwen
+      runtime_root: .qwen
+      carriers:
+        qwen-primary:
+          tier: qwen
+          rate: 4
+          reasoning_band: medium
+          default_runtime_role: worker
+          runtime_roles:
+            - worker
+          task_classes:
+            - implementation
+            - research
+    hermes:
+      enabled: true
+      execution_class: external
+      materialization_mode: copy_tree_only
+      template_root: .hermes
+      runtime_root: .hermes
+      carriers:
+        hermes-primary:
+          tier: hermes
+          rate: 4
+          reasoning_band: medium
+          default_runtime_role: worker
+          runtime_roles:
+            - worker
+          task_classes:
+            - specification
+            - planning
+    opencode:
+      enabled: true
+      execution_class: external
+      materialization_mode: copy_tree_only
+      template_root: .opencode
+      runtime_root: .opencode
+      carriers:
+        opencode-primary:
+          tier: opencode
+          rate: 4
+          reasoning_band: medium
+          default_runtime_role: worker
+          runtime_roles:
+            - worker
+          task_classes:
+            - implementation
+
+protocol_activation:
+  agent_system: true
+
+agent_extensions:
+  enabled: false
+  map_doc: .vida/project/agent-extensions/README.md
+  registries:
+    roles: .vida/project/agent-extensions/roles.yaml
+    skills: .vida/project/agent-extensions/skills.yaml
+    profiles: .vida/project/agent-extensions/profiles.yaml
+    flows: .vida/project/agent-extensions/flows.yaml
+    dispatch_aliases: .vida/project/agent-extensions/dispatch-aliases.yaml
+  enabled_framework_roles:
+    - orchestrator
+    - worker
+    - business_analyst
+    - pm
+    - coach
+    - verifier
+    - prover
+  enabled_standard_flow_sets:
+    - minimal
+  enabled_project_roles: []
+  enabled_project_skills: []
+  enabled_shared_skills: []
+  enabled_project_profiles: []
+  enabled_project_flows: []
+  default_flow_set: minimal
+  role_selection:
+    mode: auto
+    fallback_role: orchestrator
+    conversation_modes:
+      scope_discussion:
+        enabled: true
+        role: business_analyst
+        single_task_only: true
+        tracked_flow_entry: spec-pack
+        allow_freeform_chat: true
+      pbi_discussion:
+        enabled: true
+        role: pm
+        single_task_only: true
+        tracked_flow_entry: work-pool-pack
+        allow_freeform_chat: true
+  validation:
+    require_registry_files: true
+    require_unique_ids: true
+    require_framework_role_compatibility: true
+    require_skill_role_compatibility: true
+    require_profile_resolution: true
+    require_flow_resolution: true
+    fail_closed_on_validation_error: true
+
+autonomous_execution:
+  next_task_boundary_analysis: true
+  next_task_boundary_report: brief_plan
+  next_task_boundary_report_gating: false
+  dependent_coverage_autoupdate: true
+  agent_only_development: true
+
+framework_self_diagnosis:
+  enabled: false
+  silent_mode: true
+  auto_capture_bugs: true
+  parent_issue: ""
+  defer_fix_until_task_boundary: true
+  session_reflection_required: true
+  platform_direction: agentic_engineering_platform
+  quality_token_efficiency: equal_weight
+  session_reflection_criteria:
+    - architecture_cleanliness
+    - completeness
+    - token_efficiency
+    - orchestration_efficiency
+    - instruction_clarity
+    - instruction_runtime_consistency
+
+pack_router_keywords:
+  research: research
+  spec: spec
+  pool: pool
+  pool_strong: form-task
+  pool_dependency: dependency
+  dev: implement
+  bug: bug
+  reflect: reflect
+  reflect_strong: framework,self-analysis
+
+agent_system:
+  init_on_boot: true
+  mode: native
+  state_owner: orchestrator_only
+  max_parallel_agents: 4
+  routing: {}
+  scoring: {}
+
+# Optional internal-only agent-system scaffold example.
+# Use this as the canonical starting point for project initialization and
+# project config refresh work. Extend project-owned routing only after the
+# scaffold is imported into project state.
+#
+# agent_system:
+#   init_on_boot: true
+#   mode: native
+#   state_owner: orchestrator_only
+#   max_parallel_agents: 4
+#   scoring:
+#     consecutive_failure_limit: 3
+#     promotion_score: 75
+#     demotion_score: 45
+#     probation_success_runs: 2
+#     probation_task_runs: 2
+#     retirement_failure_limit: 8
+#   subagents:
+#     internal_subagents:
+#       enabled: true
+#       subagent_backend_class: internal
+#       role: senior_internal
+#       orchestration_tier: senior
+#       cost_priority: premium
+#       budget_cost_units: 10
+#       profiles: internal_fast,internal_arch,internal_review
+#       default_profile: internal_fast
+#       capability_band: implementation_safe,architecture_safe
+#       write_scope: orchestrator_native
+#       billing_tier: internal
+#       speed_tier: medium
+#       quality_tier: high
+#       specialties: implementation,architecture,integration
+#   routing:
+#     default:
+#       subagents: internal_subagents
+#       write_scope: none
+#       graph_strategy: deterministic_then_escalate
+#       deterministic_first: yes
+#       budget_policy: balanced
+#       max_budget_units: 4
+#       max_cli_subagent_calls: 5
+#       max_verification_passes: 1
+#       max_fallback_hops: 2
+#       max_total_runtime_seconds: 420
+#       verification_gate: subagent_return_contract
+#       dispatch_required: internal_first_when_eligible
+#       external_first_required: no
+#       local_execution_allowed: no
+#       local_execution_preferred: no
+#       cli_dispatch_required_if_delegating: no
+#       direct_internal_bypass_forbidden: no
+#       bridge_fallback_subagent: internal_subagents
+#       internal_escalation_trigger: write_scope_or_tie_break
+#       independent_verification_required: no
+#     research:
+#       subagents: internal_subagents
+#       profiles:
+#         internal_subagents: internal_fast
+#       fanout_subagents: internal_subagents
+#       fanout_min_results: 1
+#       merge_policy: consensus_with_conflict_flag
+#       write_scope: none
+#       verification_gate: source_backed_summary
+#       max_runtime_seconds: 180
+#       min_output_bytes: 260
+#       dispatch_required: fanout_then_synthesize
+#       external_first_required: no
+#       web_search_required: yes
+#       bridge_fallback_subagent: internal_subagents
+#       internal_escalation_trigger: subagent_exhausted_or_quality_gap
+#       verification_route_task_class: verification_ensemble
+#       independent_verification_required: yes
+#     implementation:
+#       subagents: internal_subagents
+#       profiles:
+#         internal_subagents: internal_fast
+#       write_scope: scoped_only
+#       verification_gate: targeted_verification
+#       max_runtime_seconds: 420
+#       dispatch_required: internal_first_write
+#       external_first_required: no
+#       coach_required: yes
+#       coach_route_task_class: coach
+#       bridge_fallback_subagent: internal_subagents
+#       verification_route_task_class: review_ensemble
+#       independent_verification_required: yes
+#     coach:
+#       subagents: internal_subagents
+#       fanout_subagents: internal_subagents
+#       fanout_min_results: 1
+#       merge_policy: unanimous_approve_rework_bias
+#       write_scope: none
+#       verification_gate: coach_review
+#       max_runtime_seconds: 180
+#       min_output_bytes: 280
+#       dispatch_required: internal_first_review
+#       external_first_required: no
+#       bridge_fallback_subagent: internal_subagents
+#       internal_escalation_trigger: unresolved_coach_conflict
+#       independent_verification_required: no
+#     verification:
+#       subagents: internal_subagents
+#       profiles:
+#         internal_subagents: internal_review
+#       write_scope: none
+#       verification_gate: verification_summary
+#       max_runtime_seconds: 180
+#       min_output_bytes: 240
+#       dispatch_required: internal_first_review
+#       external_first_required: no
+#       bridge_fallback_subagent: internal_subagents
+#       internal_escalation_trigger: unresolved_verification_conflict
+#       independent_verification_required: no

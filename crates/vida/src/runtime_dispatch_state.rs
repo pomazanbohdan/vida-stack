@@ -465,13 +465,6 @@ fn admissible_backend_candidates_for_dispatch_target(
 ) -> Vec<String> {
     let route_is_backend_agnostic = !route_has_backend_hints(execution_plan, route);
     let mut candidates = Vec::new();
-    if let Some(primary) = route_selected_backend(execution_plan, route) {
-        candidates.push(primary);
-    }
-    if let Some(fallback) = fallback_executor_backend_from_route(route) {
-        candidates.push(fallback);
-    }
-    candidates.extend(fanout_executor_backends_from_route(route));
     if let Some(inherited) = inherited_selected_backend
         .filter(|candidate| {
             route_is_backend_agnostic || route_declares_backend(execution_plan, route, candidate)
@@ -480,6 +473,13 @@ fn admissible_backend_candidates_for_dispatch_target(
     {
         candidates.push(inherited);
     }
+    if let Some(primary) = route_selected_backend(execution_plan, route) {
+        candidates.push(primary);
+    }
+    if let Some(fallback) = fallback_executor_backend_from_route(route) {
+        candidates.push(fallback);
+    }
+    candidates.extend(fanout_executor_backends_from_route(route));
     if let Some(activation) = activation_agent_type
         .filter(|_| route_is_backend_agnostic)
         .map(str::to_string)
@@ -10586,6 +10586,43 @@ agent_system:
         assert_eq!(resolved.as_ref(), root.as_path());
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn admissible_selected_backend_preserves_inherited_declared_fallback_for_coach_lane() {
+        let execution_plan = serde_json::json!({
+            "backend_admissibility_matrix": [
+                {
+                    "backend_id": "hermes_cli",
+                    "backend_class": "external_cli",
+                    "lane_admissibility": {
+                        "coach": true
+                    }
+                },
+                {
+                    "backend_id": "internal_subagents",
+                    "backend_class": "internal",
+                    "lane_admissibility": {
+                        "coach": true
+                    }
+                }
+            ],
+            "development_flow": {
+                "coach": {
+                    "executor_backend": "hermes_cli",
+                    "fallback_executor_backend": "internal_subagents"
+                }
+            }
+        });
+
+        let selected = admissible_selected_backend_for_dispatch_target(
+            &execution_plan,
+            "coach",
+            Some("middle"),
+            Some("internal_subagents"),
+        );
+
+        assert_eq!(selected.as_deref(), Some("internal_subagents"));
     }
 
     #[test]

@@ -1,0 +1,68 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Import or rename items from other crates or modules, use values under ergonomic clones semantic, or specify precise capturing with `use&#60;..&#62;`."><title>use - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="std" data-themes="" data-resource-suffix="1.94.1" data-rustdoc-version="1.94.1 (e408947bf 2026-03-25)" data-channel="1.94.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items1.94.1.js"></script><script defer src="../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc keyword"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">use</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../std/index.html"><img class="rust-logo" src="../static.files/rust-logo-9a9549ea.svg" alt="logo"></a><h2><a href="../std/index.html">std</a><span class="version">1.94.1</span></h2></div><div class="version">(e408947bf	2026-03-25)</div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">use</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#importing-items" title="Importing items">Importing items</a></li><li><a href="#precise-capturing" title="Precise capturing">Precise capturing</a></li><li><a href="#ergonomic-clones" title="Ergonomic clones">Ergonomic clones</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="index.html">In crate std</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><h1>Keyword <span class="keyword">use</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/std/keyword_docs.rs.html#2404">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Import or rename items from other crates or modules, use values under ergonomic clones
+semantic, or specify precise capturing with <code>use&lt;..&gt;</code>.</p>
+<h3 id="importing-items"><a class="doc-anchor" href="#importing-items">§</a>Importing items</h3>
+<p>The <code>use</code> keyword is employed to shorten the path required to refer to a module item.
+The keyword may appear in modules, blocks, and even functions, typically at the top.</p>
+<p>The most basic usage of the keyword is <code>use path::to::item;</code>,
+though a number of convenient shortcuts are supported:</p>
+<ul>
+<li>Simultaneously binding a list of paths with a common prefix,
+using the glob-like brace syntax <code>use a::b::{c, d, e::f, g::h::i};</code></li>
+<li>Simultaneously binding a list of paths with a common prefix and their common parent module,
+using the <a href="keyword.self.html"><code>self</code></a> keyword, such as <code>use a::b::{self, c, d::e};</code></li>
+<li>Rebinding the target name as a new local name, using the syntax <code>use p::q::r as x;</code>.
+This can also be used with the last two features: <code>use a::b::{self as ab, c as abc}</code>.</li>
+<li>Binding all paths matching a given prefix,
+using the asterisk wildcard syntax <code>use a::b::*;</code>.</li>
+<li>Nesting groups of the previous features multiple times,
+such as <code>use a::b::{self as ab, c, d::{*, e::f}};</code></li>
+<li>Reexporting with visibility modifiers such as <code>pub use a::b;</code></li>
+<li>Importing with <code>_</code> to only import the methods of a trait without binding it to a name
+(to avoid conflict for example): <code>use ::std::io::Read as _;</code>.</li>
+</ul>
+<p>Using path qualifiers like <a href="keyword.crate.html"><code>crate</code></a>, <a href="keyword.super.html"><code>super</code></a> or <a href="keyword.self.html"><code>self</code></a> is supported: <code>use crate::a::b;</code>.</p>
+<p>Note that when the wildcard <code>*</code> is used on a type, it does not import its methods (though
+for <code>enum</code>s it imports the variants, as shown in the example below).</p>
+
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">enum </span>ExampleEnum {
+    VariantA,
+    VariantB,
+}
+
+<span class="kw">impl </span>ExampleEnum {
+    <span class="kw">fn </span>new() -&gt; <span class="self">Self </span>{
+        <span class="self">Self</span>::VariantA
+    }
+}
+
+<span class="kw">use </span>ExampleEnum::<span class="kw-2">*</span>;
+
+<span class="comment">// Compiles.
+</span><span class="kw">let _ </span>= VariantA;
+
+<span class="comment">// Does not compile!
+</span><span class="kw">let </span>n = new();</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++enum+ExampleEnum+%7B%0A++++++++VariantA,%0A++++++++VariantB,%0A++++%7D%0A++++%0A++++impl+ExampleEnum+%7B%0A++++++++fn+new()+-%3E+Self+%7B%0A++++++++++++Self::VariantA%0A++++++++%7D%0A++++%7D%0A++++%0A++++use+ExampleEnum::*;%0A++++%0A++++//+Compiles.%0A++++let+_+=+VariantA;%0A++++%0A++++//+Does+not+compile!%0A++++let+n+=+new();%0A%7D&amp;edition=2018"></a></div>
+<p>For more information on <code>use</code> and paths in general, see the <a href="../reference/items/use-declarations.html">Reference</a>.</p>
+<p>The differences about paths and the <code>use</code> keyword between the 2015 and 2018 editions
+can also be found in the <a href="../reference/items/use-declarations.html">Reference</a>.</p>
+<h3 id="precise-capturing"><a class="doc-anchor" href="#precise-capturing">§</a>Precise capturing</h3>
+<p>The <code>use&lt;..&gt;</code> syntax is used within certain <code>impl Trait</code> bounds to control which generic
+parameters are captured. This is important for return-position <code>impl Trait</code> (RPIT) types,
+as it affects borrow checking by controlling which generic parameters can be used in the
+hidden type.</p>
+<p>For example, the following function demonstrates an error without precise capturing in
+Rust 2021 and earlier editions:</p>
+
+<div class="example-wrap compile_fail"><a href="#" class="tooltip" title="This example deliberately fails to compile">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">fn </span>f(x: <span class="kw-2">&amp;</span>()) -&gt; <span class="kw">impl </span>Sized { x }</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++fn+f(x:+%26())+-%3E+impl+Sized+%7B+x+%7D%0A%7D&amp;edition=2021"></a></div>
+<p>By using <code>use&lt;'_&gt;</code> for precise capturing, it can be resolved:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">fn </span>f(x: <span class="kw-2">&amp;</span>()) -&gt; <span class="kw">impl </span>Sized + <span class="kw">use</span>&lt;<span class="lifetime">'_</span>&gt; { x }</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++fn+f(x:+%26())+-%3E+impl+Sized+%2B+use%3C'_%3E+%7B+x+%7D%0A%7D&amp;edition=2024"></a></div>
+<p>This syntax specifies that the elided lifetime be captured and therefore available for
+use in the hidden type.</p>
+<p>In Rust 2024, opaque types automatically capture all lifetime parameters in scope.
+<code>use&lt;..&gt;</code> syntax serves as an important way of opting-out of that default.</p>
+<p>For more details about precise capturing, see the <a href="../reference/types/impl-trait.html">Reference</a>.</p>
+<h3 id="ergonomic-clones"><a class="doc-anchor" href="#ergonomic-clones">§</a>Ergonomic clones</h3>
+<p>Use a values, copying its content if the value implements <code>Copy</code>, cloning the contents if the
+value implements <code>UseCloned</code> or moving it otherwise.</p>
+</div></details></section></div></main></body></html>

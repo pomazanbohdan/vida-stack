@@ -1,0 +1,65 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Implementations of functionality for a type, or a type implementing some functionality."><title>impl - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="std" data-themes="" data-resource-suffix="1.94.1" data-rustdoc-version="1.94.1 (e408947bf 2026-03-25)" data-channel="1.94.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items1.94.1.js"></script><script defer src="../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc keyword"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">impl</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../std/index.html"><img class="rust-logo" src="../static.files/rust-logo-9a9549ea.svg" alt="logo"></a><h2><a href="../std/index.html">std</a><span class="version">1.94.1</span></h2></div><div class="version">(e408947bf	2026-03-25)</div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">impl</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#implementing-functionality-for-a-type" title="Implementing Functionality for a Type">Implementing Functionality for a Type</a><ul><li><a href="#inherent-implementations" title="Inherent Implementations">Inherent Implementations</a></li><li><a href="#trait-implementations-1" title="Trait Implementations">Trait Implementations</a></li></ul></li><li><a href="#designating-a-type-that-implements-some-functionality" title="Designating a Type that Implements Some Functionality">Designating a Type that Implements Some Functionality</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="index.html">In crate std</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><h1>Keyword <span class="keyword">impl</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/std/keyword_docs.rs.html#807">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Implementations of functionality for a type, or a type implementing some functionality.</p>
+<p>There are two uses of the keyword <code>impl</code>:</p>
+<ul>
+<li>An <code>impl</code> block is an item that is used to implement some functionality for a type.</li>
+<li>An <code>impl Trait</code> in a type-position can be used to designate a type that implements a trait called <code>Trait</code>.</li>
+</ul>
+<h2 id="implementing-functionality-for-a-type"><a class="doc-anchor" href="#implementing-functionality-for-a-type">§</a>Implementing Functionality for a Type</h2>
+<p>The <code>impl</code> keyword is primarily used to define implementations on types. Inherent
+implementations are standalone, while trait implementations are used to implement traits for
+types, or other traits.</p>
+<p>An implementation consists of definitions of functions and consts. A function defined in an
+<code>impl</code> block can be standalone, meaning it would be called like <code>Vec::new()</code>. If the function
+takes <code>self</code>, <code>&amp;self</code>, or <code>&amp;mut self</code> as its first argument, it can also be called using
+method-call syntax, a familiar feature to any object-oriented programmer, like <code>vec.len()</code>.</p>
+<h3 id="inherent-implementations"><a class="doc-anchor" href="#inherent-implementations">§</a>Inherent Implementations</h3>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">struct </span>Example {
+    number: i32,
+}
+
+<span class="kw">impl </span>Example {
+    <span class="kw">fn </span>boo() {
+        <span class="macro">println!</span>(<span class="string">"boo! Example::boo() was called!"</span>);
+    }
+
+    <span class="kw">fn </span>answer(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+        <span class="self">self</span>.number += <span class="number">42</span>;
+    }
+
+    <span class="kw">fn </span>get_number(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; i32 {
+        <span class="self">self</span>.number
+    }
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++struct+Example+%7B%0A++++++++number:+i32,%0A++++%7D%0A++++%0A++++impl+Example+%7B%0A++++++++fn+boo()+%7B%0A++++++++++++println!(%22boo!+Example::boo()+was+called!%22);%0A++++++++%7D%0A++++%0A++++++++fn+answer(%26mut+self)+%7B%0A++++++++++++self.number+%2B=+42;%0A++++++++%7D%0A++++%0A++++++++fn+get_number(%26self)+-%3E+i32+%7B%0A++++++++++++self.number%0A++++++++%7D%0A++++%7D%0A%7D&amp;edition=2024"></a></div>
+<p>It matters little where an inherent implementation is defined;
+its functionality is in scope wherever its implementing type is.</p>
+<h3 id="trait-implementations-1"><a class="doc-anchor" href="#trait-implementations-1">§</a>Trait Implementations</h3>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">struct </span>Example {
+    number: i32,
+}
+
+<span class="kw">trait </span>Thingy {
+    <span class="kw">fn </span>do_thingy(<span class="kw-2">&amp;</span><span class="self">self</span>);
+}
+
+<span class="kw">impl </span>Thingy <span class="kw">for </span>Example {
+    <span class="kw">fn </span>do_thingy(<span class="kw-2">&amp;</span><span class="self">self</span>) {
+        <span class="macro">println!</span>(<span class="string">"doing a thing! also, number is {}!"</span>, <span class="self">self</span>.number);
+    }
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++struct+Example+%7B%0A++++++++number:+i32,%0A++++%7D%0A++++%0A++++trait+Thingy+%7B%0A++++++++fn+do_thingy(%26self);%0A++++%7D%0A++++%0A++++impl+Thingy+for+Example+%7B%0A++++++++fn+do_thingy(%26self)+%7B%0A++++++++++++println!(%22doing+a+thing!+also,+number+is+%7B%7D!%22,+self.number);%0A++++++++%7D%0A++++%7D%0A%7D&amp;edition=2024"></a></div>
+<p>It matters little where a trait implementation is defined;
+its functionality can be brought into scope by importing the trait it implements.</p>
+<p>For more information on implementations, see the <a href="../book/ch05-03-method-syntax.html">Rust book</a> or the <a href="../reference/items/implementations.html">Reference</a>.</p>
+<h2 id="designating-a-type-that-implements-some-functionality"><a class="doc-anchor" href="#designating-a-type-that-implements-some-functionality">§</a>Designating a Type that Implements Some Functionality</h2>
+<p>The other use of the <code>impl</code> keyword is in <code>impl Trait</code> syntax, which can be understood to mean
+“any (or some) concrete type that implements Trait”.
+It can be used as the type of a variable declaration,
+in <a href="https://rust-lang.github.io/rfcs/1951-expand-impl-trait.html">argument position</a>
+or in <a href="https://rust-lang.github.io/rfcs/3425-return-position-impl-trait-in-traits.html">return position</a>.
+One pertinent use case is in working with closures, which have unnameable types.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">fn </span>thing_returning_closure() -&gt; <span class="kw">impl </span>Fn(i32) -&gt; bool {
+    <span class="macro">println!</span>(<span class="string">"here's a closure for you!"</span>);
+    |x: i32| x % <span class="number">3 </span>== <span class="number">0
+</span>}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++fn+thing_returning_closure()+-%3E+impl+Fn(i32)+-%3E+bool+%7B%0A++++++++println!(%22here's+a+closure+for+you!%22);%0A++++++++%7Cx:+i32%7C+x+%25+3+==+0%0A++++%7D%0A%7D&amp;edition=2024"></a></div>
+<p>For more information on <code>impl Trait</code> syntax, see the <a href="../book/ch10-02-traits.html#returning-types-that-implement-traits">Rust book</a>.</p>
+</div></details></section></div></main></body></html>

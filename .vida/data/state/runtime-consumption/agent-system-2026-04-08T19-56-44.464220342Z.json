@@ -1,0 +1,333 @@
+{
+  "snapshot": {
+    "agent_model": {
+      "agent_identity": "execution_carrier",
+      "runtime_role_identity": "activation_state",
+      "selection_rule": "capability_first_then_score_guard_then_cheapest_tier"
+    },
+    "agent_system": {
+      "autonomous_enabled": null,
+      "max_parallel_agents": 4,
+      "mode": "native",
+      "state_owner": "orchestrator_only"
+    },
+    "carriers": [
+      {
+        "carrier_id": "junior",
+        "default_runtime_role": "worker",
+        "model_reasoning_effort": "low",
+        "rate": 1,
+        "reasoning_band": "low",
+        "runtime_roles": [
+          "worker"
+        ],
+        "task_classes": [
+          "implementation",
+          "delivery_task",
+          "execution_block"
+        ],
+        "tier": "junior"
+      },
+      {
+        "carrier_id": "middle",
+        "default_runtime_role": "coach",
+        "model_reasoning_effort": "medium",
+        "rate": 4,
+        "reasoning_band": "medium",
+        "runtime_roles": [
+          "business_analyst",
+          "pm",
+          "coach",
+          "worker"
+        ],
+        "task_classes": [
+          "specification",
+          "planning",
+          "coach",
+          "implementation_medium"
+        ],
+        "tier": "middle"
+      },
+      {
+        "carrier_id": "senior",
+        "default_runtime_role": "verifier",
+        "model_reasoning_effort": "high",
+        "rate": 16,
+        "reasoning_band": "high",
+        "runtime_roles": [
+          "verifier",
+          "prover"
+        ],
+        "task_classes": [
+          "verification",
+          "review",
+          "quality_gate",
+          "release_readiness"
+        ],
+        "tier": "senior"
+      },
+      {
+        "carrier_id": "architect",
+        "default_runtime_role": "solution_architect",
+        "model_reasoning_effort": "high",
+        "rate": 32,
+        "reasoning_band": "xhigh",
+        "runtime_roles": [
+          "solution_architect"
+        ],
+        "task_classes": [
+          "architecture",
+          "execution_preparation",
+          "hard_escalation",
+          "meta_analysis"
+        ],
+        "tier": "architect"
+      }
+    ],
+    "dispatch_aliases": [
+      {
+        "carrier_tier": "middle",
+        "config_file": "agents/development_coach.toml",
+        "default_runtime_role": "coach",
+        "description": "Internal VIDA Codex coach alias for packet-local implemented-result versus approved-spec conformance.",
+        "developer_instructions": "You are the internal VIDA Codex development_coach dispatch alias.\n\nCarrier:\n1. Preferred carrier tier: middle.\n2. Runtime role: coach.\n3. Mission: judge whether the implemented result matches the approved spec, acceptance criteria, and definition of done.\n\nBoundaries:\n1. Coach is formative review only.\n2. Do not replace independent verification.\n3. Do not rewrite the implementation unless the bounded packet explicitly grants that authority.\n4. Return either bounded approval-forward or bounded rework with concrete drift evidence.\n",
+        "model": "gpt-5.4",
+        "model_reasoning_effort": "medium",
+        "rate": 4,
+        "reasoning_band": "medium",
+        "role_id": "development_coach",
+        "runtime_roles": [
+          "coach"
+        ],
+        "sandbox_mode": "workspace-write",
+        "task_classes": [
+          "coach"
+        ],
+        "template_role_id": "middle",
+        "tier": "middle"
+      },
+      {
+        "carrier_tier": "architect",
+        "config_file": "agents/development_escalation.toml",
+        "default_runtime_role": "solution_architect",
+        "description": "Internal VIDA Codex escalation alias for hard conflicts and cross-scope arbitration when normal closure cannot proceed.",
+        "developer_instructions": "You are the internal VIDA Codex development_escalation dispatch alias.\n\nCarrier:\n1. Preferred carrier tier: architect.\n2. Runtime role: solution_architect.\n3. Mission: resolve architecture conflicts, handoff incoherence, or cross-scope blockers that normal execution cannot close.\n\nBoundaries:\n1. Do not become the normal default lane.\n2. Prefer decisions that restore one-owner bounded packet closure.\n3. Stay read-only unless an explicit escalation packet grants mutation authority.\n",
+        "model": "gpt-5.4",
+        "model_reasoning_effort": "high",
+        "rate": 32,
+        "reasoning_band": "xhigh",
+        "role_id": "development_escalation",
+        "runtime_roles": [
+          "solution_architect"
+        ],
+        "sandbox_mode": "read-only",
+        "task_classes": [
+          "architecture",
+          "hard_escalation",
+          "meta_analysis"
+        ],
+        "template_role_id": "architect",
+        "tier": "architect"
+      },
+      {
+        "carrier_tier": "architect",
+        "config_file": "agents/development_execution_preparation.toml",
+        "default_runtime_role": "solution_architect",
+        "description": "Internal VIDA Codex execution-preparation alias for architecture preparation and developer handoff shaping before code execution.",
+        "developer_instructions": "You are the internal VIDA Codex development_execution_preparation dispatch alias.\n\nCarrier:\n1. Preferred carrier tier: architect.\n2. Runtime role: solution_architect.\n3. Mission: produce one bounded architecture-preparation result and lawful developer handoff before implementation begins.\n\nBoundaries:\n1. Do not become the default implementation lane.\n2. Preserve bounded ownership and packet coherence.\n3. Return architecture constraints and handoff artifacts instead of speculative broad redesign.\n",
+        "model": "gpt-5.4",
+        "model_reasoning_effort": "high",
+        "rate": 32,
+        "reasoning_band": "xhigh",
+        "role_id": "development_execution_preparation",
+        "runtime_roles": [
+          "solution_architect"
+        ],
+        "sandbox_mode": "read-only",
+        "task_classes": [
+          "execution_preparation",
+          "architecture"
+        ],
+        "template_role_id": "architect",
+        "tier": "architect"
+      },
+      {
+        "carrier_tier": "junior",
+        "config_file": "agents/development_implementer.toml",
+        "default_runtime_role": "worker",
+        "description": "Internal VIDA Codex implementer alias for one bounded write-producing packet.",
+        "developer_instructions": "You are the internal VIDA Codex development_implementer dispatch alias.\n\nCarrier:\n1. Preferred carrier tier: junior.\n2. Runtime role: worker.\n3. Mission: execute one bounded write-producing packet and return concrete delivery evidence.\n\nBoundaries:\n1. Do not self-approve closure.\n2. Do not replace coach, verifier, or escalation lanes.\n3. Do not widen from one bounded packet into epic or milestone scope.\n4. If the packet is missing owned paths, definition of done, verification target, or stop rules, fail closed and return the packet for reshaping.\n",
+        "model": "gpt-5.4",
+        "model_reasoning_effort": "low",
+        "rate": 1,
+        "reasoning_band": "low",
+        "role_id": "development_implementer",
+        "runtime_roles": [
+          "worker"
+        ],
+        "sandbox_mode": "workspace-write",
+        "task_classes": [
+          "implementation",
+          "delivery_task",
+          "execution_block"
+        ],
+        "template_role_id": "junior",
+        "tier": "junior"
+      },
+      {
+        "carrier_tier": "middle",
+        "config_file": "agents/development_specification.toml",
+        "default_runtime_role": "business_analyst",
+        "description": "Internal VIDA Codex specification alias for bounded research, specification, and implementation-plan shaping before execution.",
+        "developer_instructions": "You are the internal VIDA Codex development_specification dispatch alias.\n\nCarrier:\n1. Preferred carrier tier: middle.\n2. Runtime role: business_analyst.\n3. Mission: produce one bounded specification or design-gate result that can lawfully hand off into execution shaping.\n\nBoundaries:\n1. Stay inside the approved bounded unit.\n2. Do not begin implementation.\n3. Return explicit evidence, scope, and proof targets for the next lane.\n",
+        "model": "gpt-5.4",
+        "model_reasoning_effort": "medium",
+        "rate": 4,
+        "reasoning_band": "medium",
+        "role_id": "development_specification",
+        "runtime_roles": [
+          "business_analyst"
+        ],
+        "sandbox_mode": "workspace-write",
+        "task_classes": [
+          "specification"
+        ],
+        "template_role_id": "middle",
+        "tier": "middle"
+      },
+      {
+        "carrier_tier": "senior",
+        "config_file": "agents/development_verifier.toml",
+        "default_runtime_role": "verifier",
+        "description": "Internal VIDA Codex verifier alias for independent proof, risk review, and closure readiness.",
+        "developer_instructions": "You are the internal VIDA Codex development_verifier dispatch alias.\n\nCarrier:\n1. Preferred carrier tier: senior.\n2. Runtime role: verifier.\n3. Mission: perform independent proof, bounded verification, and closure-readiness review.\n\nBoundaries:\n1. Stay independent from implementer and coach conclusions.\n2. Do not collapse into formative coaching.\n3. Do not widen from one bounded proof packet into milestone-wide approval.\n4. Fail closed when proof, evidence, or acceptance coverage is missing.\n",
+        "model": "gpt-5.4",
+        "model_reasoning_effort": "high",
+        "rate": 16,
+        "reasoning_band": "high",
+        "role_id": "development_verifier",
+        "runtime_roles": [
+          "verifier",
+          "prover"
+        ],
+        "sandbox_mode": "read-only",
+        "task_classes": [
+          "verification",
+          "review",
+          "quality_gate",
+          "release_readiness"
+        ],
+        "template_role_id": "senior",
+        "tier": "senior"
+      }
+    ],
+    "materialization_mode": "codex_toml_catalog_render",
+    "runtime_roles": [
+      "business_analyst",
+      "coach",
+      "pm",
+      "prover",
+      "solution_architect",
+      "verifier",
+      "worker"
+    ],
+    "source_of_truth": {
+      "carrier_catalog_owner": "vida.config.yaml -> host_environment.systems.codex.carriers",
+      "dispatch_alias_owner": "vida.config.yaml -> agent_extensions.registries.dispatch_aliases (docs/process/agent-extensions/dispatch-aliases.yaml)",
+      "runtime_config_path": "/home/unnamed/project/vida-stack/vida.config.yaml"
+    },
+    "worker_strategy": {
+      "agents": {
+        "architect": {
+          "average_feedback": 90.0,
+          "consecutive_failures": 0,
+          "default_runtime_role": "solution_architect",
+          "effective_score": 84,
+          "failure_runs": 0,
+          "feedback_count": 2,
+          "last_feedback_score": 90,
+          "lifecycle_state": "promoted",
+          "rate": 32,
+          "reasoning_band": "xhigh",
+          "success_runs": 2,
+          "task_classes": [
+            "architecture",
+            "execution_preparation",
+            "hard_escalation",
+            "meta_analysis"
+          ],
+          "tier": "architect"
+        },
+        "junior": {
+          "average_feedback": 80.29,
+          "consecutive_failures": 0,
+          "default_runtime_role": "worker",
+          "effective_score": 86,
+          "failure_runs": 1,
+          "feedback_count": 66,
+          "last_feedback_score": 82,
+          "lifecycle_state": "promoted",
+          "rate": 1,
+          "reasoning_band": "low",
+          "success_runs": 62,
+          "task_classes": [
+            "implementation",
+            "delivery_task",
+            "execution_block"
+          ],
+          "tier": "junior"
+        },
+        "middle": {
+          "average_feedback": 84.0,
+          "consecutive_failures": 0,
+          "default_runtime_role": "coach",
+          "effective_score": 91,
+          "failure_runs": 0,
+          "feedback_count": 13,
+          "last_feedback_score": 84,
+          "lifecycle_state": "promoted",
+          "rate": 4,
+          "reasoning_band": "medium",
+          "success_runs": 13,
+          "task_classes": [
+            "specification",
+            "planning",
+            "coach",
+            "implementation_medium"
+          ],
+          "tier": "middle"
+        },
+        "senior": {
+          "average_feedback": 70.33,
+          "consecutive_failures": 0,
+          "default_runtime_role": "verifier",
+          "effective_score": 72,
+          "failure_runs": 2,
+          "feedback_count": 6,
+          "last_feedback_score": 88,
+          "lifecycle_state": "active",
+          "rate": 16,
+          "reasoning_band": "high",
+          "success_runs": 4,
+          "task_classes": [
+            "verification",
+            "review",
+            "quality_gate",
+            "release_readiness"
+          ],
+          "tier": "senior"
+        }
+      },
+      "scorecards_path": ".vida/state/worker-scorecards.json",
+      "selection_policy": {
+        "consecutive_failure_limit": 3,
+        "demotion_score": 45,
+        "promotion_score": 75,
+        "retirement_failure_limit": 8,
+        "rule": "capability_first_then_score_guard_then_cheapest_tier"
+      },
+      "store_path": ".vida/state/worker-strategy.json"
+    }
+  },
+  "surface": "vida taskflow consume agent-system"
+}

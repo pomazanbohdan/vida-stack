@@ -1,0 +1,8 @@
+{
+  "closure_ready": true,
+  "dispatch_target": "closure",
+  "note": "runtime downstream scheduler reached closure without additional lane activation",
+  "run_id": "runtime-test-external-kilo-vibe-cli-carriers",
+  "status": "pass",
+  "surface": "vida taskflow closure-preview"
+}

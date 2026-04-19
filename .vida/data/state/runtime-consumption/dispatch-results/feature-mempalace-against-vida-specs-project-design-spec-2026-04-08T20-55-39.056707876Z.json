@@ -1,0 +1,59 @@
+{
+  "admission": {
+    "admitted": true,
+    "consumed_evidence": [
+      "tracked_flow_bootstrap.required",
+      "tracked_flow_bootstrap.status",
+      "tracked_flow_bootstrap.bootstrap_command",
+      "tracked_flow_bootstrap.feature_slug",
+      "tracked_flow_bootstrap.design_doc_path",
+      "tracked_flow_bootstrap.design_artifact_path",
+      "tracked_flow_bootstrap.epic.task_id",
+      "tracked_flow_bootstrap.spec_task.task_id",
+      "tracked_flow_bootstrap.docflow.finalize_command",
+      "tracked_flow_bootstrap.docflow.check_command",
+      "tracked_flow_bootstrap.spec_task.close_command",
+      "tracked_flow_bootstrap.work_pool_task.create_command",
+      "tracked_flow_bootstrap.work_pool_task.ensure_command",
+      "tracked_flow_bootstrap.dev_task.create_command",
+      "tracked_flow_bootstrap.dev_task.ensure_command"
+    ],
+    "status": "admitted"
+  },
+  "changed_files": [
+    "taskflow:feature-mempalace-against-vida-specs-project-design",
+    "taskflow:feature-mempalace-against-vida-specs-project-design-spec",
+    "docs/product/spec/README.md",
+    "docs/product/spec/mempalace-against-vida-specs-project-design-design.md"
+  ],
+  "design_doc": {
+    "created": true,
+    "path": "docs/product/spec/mempalace-against-vida-specs-project-design-design.md",
+    "registered_in": [
+      "docs/product/spec/README.md"
+    ]
+  },
+  "epic": {
+    "created": true,
+    "task_id": "feature-mempalace-against-vida-specs-project-design"
+  },
+  "feature_slug": "mempalace-against-vida-specs-project-design",
+  "next": {
+    "check_command": "vida docflow check --root . docs/product/spec/mempalace-against-vida-specs-project-design-design.md",
+    "close_spec_task_command": "vida task close feature-mempalace-against-vida-specs-project-design-spec --reason 'design packet finalized and handed off into tracked work-pool shaping' --json",
+    "dev_task_create_command": "vida task create feature-mempalace-against-vida-specs-project-design-dev 'Dev pack: Research MemPalace mechanics against VIDA specs and create a project ...' --type task --status open --parent-id feature-mempalace-against-vida-specs-project-design --labels dev-pack --json",
+    "dev_task_ensure_command": "vida task ensure feature-mempalace-against-vida-specs-project-design-dev 'Dev pack: Research MemPalace mechanics against VIDA specs and create a project ...' --type task --status open --parent-id feature-mempalace-against-vida-specs-project-design --labels dev-pack --json",
+    "finalize_command": "vida docflow finalize-edit docs/product/spec/mempalace-against-vida-specs-project-design-design.md 'record bounded feature design'",
+    "plan_note": "publish a concise execution plan before mutating the design document or dispatching write-producing work",
+    "work_pool_create_command": "vida task create feature-mempalace-against-vida-specs-project-design-work-pool 'Work-pool pack: Research MemPalace mechanics against VIDA specs and create a project ...' --type task --status open --parent-id feature-mempalace-against-vida-specs-project-design --labels work-pool-pack --json",
+    "work_pool_ensure_command": "vida task ensure feature-mempalace-against-vida-specs-project-design-work-pool 'Work-pool pack: Research MemPalace mechanics against VIDA specs and create a project ...' --type task --status open --parent-id feature-mempalace-against-vida-specs-project-design --labels work-pool-pack --json"
+  },
+  "receipt_path": ".vida/receipts/spec-bootstrap-1775681739.json",
+  "request": "Research MemPalace mechanics against VIDA specs and create a project design document for a possible VIDA memory implementation path based on that research",
+  "spec_task": {
+    "created": true,
+    "task_id": "feature-mempalace-against-vida-specs-project-design-spec"
+  },
+  "status": "pass",
+  "surface": "vida taskflow bootstrap-spec"
+}

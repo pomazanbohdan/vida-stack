@@ -1,0 +1,58 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Returns a value from a function."><title>return - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="std" data-themes="" data-resource-suffix="1.94.1" data-rustdoc-version="1.94.1 (e408947bf 2026-03-25)" data-channel="1.94.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items1.94.1.js"></script><script defer src="../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc keyword"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">return</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../std/index.html"><img class="rust-logo" src="../static.files/rust-logo-9a9549ea.svg" alt="logo"></a><h2><a href="../std/index.html">std</a><span class="version">1.94.1</span></h2></div><div class="version">(e408947bf	2026-03-25)</div><div class="sidebar-elems"><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><h1>Keyword <span class="keyword">return</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/std/keyword_docs.rs.html#1287">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Returns a value from a function.</p>
+<p>A <code>return</code> marks the end of an execution path in a function:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">fn </span>foo() -&gt; i32 {
+    <span class="kw">return </span><span class="number">3</span>;
+}
+<span class="macro">assert_eq!</span>(foo(), <span class="number">3</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++fn+foo()+-%3E+i32+%7B%0A++++++++return+3;%0A++++%7D%0A++++assert_eq!(foo(),+3);%0A%7D&amp;edition=2024"></a></div>
+<p><code>return</code> is not needed when the returned value is the last expression in the
+function. In this case the <code>;</code> is omitted:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">fn </span>foo() -&gt; i32 {
+    <span class="number">3
+</span>}
+<span class="macro">assert_eq!</span>(foo(), <span class="number">3</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++fn+foo()+-%3E+i32+%7B%0A++++++++3%0A++++%7D%0A++++assert_eq!(foo(),+3);%0A%7D&amp;edition=2024"></a></div>
+<p><code>return</code> returns from the function immediately (an “early return”):</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::fs::File;
+<span class="kw">use </span>std::io::{Error, ErrorKind, Read, <span class="prelude-ty">Result</span>};
+
+<span class="kw">fn </span>main() -&gt; <span class="prelude-ty">Result</span>&lt;()&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>file = <span class="kw">match </span>File::open(<span class="string">"foo.txt"</span>) {
+        <span class="prelude-val">Ok</span>(f) =&gt; f,
+        <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(e),
+    };
+
+    <span class="kw">let </span><span class="kw-2">mut </span>contents = String::new();
+    <span class="kw">let </span>size = <span class="kw">match </span>file.read_to_string(<span class="kw-2">&amp;mut </span>contents) {
+        <span class="prelude-val">Ok</span>(s) =&gt; s,
+        <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(e),
+    };
+
+    <span class="kw">if </span>contents.contains(<span class="string">"impossible!"</span>) {
+        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(ErrorKind::Other, <span class="string">"oh no!"</span>));
+    }
+
+    <span class="kw">if </span>size &gt; <span class="number">9000 </span>{
+        <span class="kw">return </span><span class="prelude-val">Err</span>(Error::new(ErrorKind::Other, <span class="string">"over 9000!"</span>));
+    }
+
+    <span class="macro">assert_eq!</span>(contents, <span class="string">"Hello, world!"</span>);
+    <span class="prelude-val">Ok</span>(())
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Ause+std::fs::File;%0Ause+std::io::%7BError,+ErrorKind,+Read,+Result%7D;%0A%0Afn+main()+-%3E+Result%3C()%3E+%7B%0A++++let+mut+file+=+match+File::open(%22foo.txt%22)+%7B%0A++++++++Ok(f)+=%3E+f,%0A++++++++Err(e)+=%3E+return+Err(e),%0A++++%7D;%0A%0A++++let+mut+contents+=+String::new();%0A++++let+size+=+match+file.read_to_string(%26mut+contents)+%7B%0A++++++++Ok(s)+=%3E+s,%0A++++++++Err(e)+=%3E+return+Err(e),%0A++++%7D;%0A%0A++++if+contents.contains(%22impossible!%22)+%7B%0A++++++++return+Err(Error::new(ErrorKind::Other,+%22oh+no!%22));%0A++++%7D%0A%0A++++if+size+%3E+9000+%7B%0A++++++++return+Err(Error::new(ErrorKind::Other,+%22over+9000!%22));%0A++++%7D%0A%0A++++assert_eq!(contents,+%22Hello,+world!%22);%0A++++Ok(())%0A%7D&amp;edition=2024"></a></div>
+<p>Within <a href="../book/ch13-01-closures.html">closures</a> and <a href="../std/keyword.async.html"><code>async</code></a> blocks, <code>return</code> returns a value from within the closure or
+<code>async</code> block, not from the parent function:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">fn </span>foo() -&gt; i32 {
+    <span class="kw">let </span>closure = || {
+        <span class="kw">return </span><span class="number">5</span>;
+    };
+
+    <span class="kw">let </span>future = <span class="kw">async </span>{
+        <span class="kw">return </span><span class="number">10</span>;
+    };
+
+    <span class="kw">return </span><span class="number">15</span>;
+}
+
+<span class="macro">assert_eq!</span>(foo(), <span class="number">15</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++fn+foo()+-%3E+i32+%7B%0A++++++++let+closure+=+%7C%7C+%7B%0A++++++++++++return+5;%0A++++++++%7D;%0A++++%0A++++++++let+future+=+async+%7B%0A++++++++++++return+10;%0A++++++++%7D;%0A++++%0A++++++++return+15;%0A++++%7D%0A++++%0A++++assert_eq!(foo(),+15);%0A%7D&amp;edition=2024"></a></div></div></details></section></div></main></body></html>

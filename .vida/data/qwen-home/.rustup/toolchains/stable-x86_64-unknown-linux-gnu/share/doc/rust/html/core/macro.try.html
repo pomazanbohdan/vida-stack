@@ -1,0 +1,53 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Unwraps a result or propagates its error."><title>try in core - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="core" data-themes="" data-resource-suffix="1.94.1" data-rustdoc-version="1.94.1 (e408947bf 2026-03-25)" data-channel="1.94.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items1.94.1.js"></script><script defer src="../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc macro"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">try</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../core/index.html"><img class="rust-logo" src="../static.files/rust-logo-9a9549ea.svg" alt="logo"></a><h2><a href="../core/index.html">core</a><span class="version">1.94.1</span></h2></div><div class="version">(e408947bf	2026-03-25)</div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">try</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#examples" title="Examples">Examples</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="index.html">In crate core</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="index.html">core</a></div><h1>Macro <span class="macro">try</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><span class="since" title="Stable since Rust version 1.6.0">1.6.0</span> · <a class="src" href="../src/core/macros/mod.rs.html#510-519">Source</a> </span></div><pre class="rust item-decl"><code>macro_rules! try {
+    ($expr:expr $(,)?) =&gt; { ... };
+}</code></pre><span class="item-info"><div class="stab deprecated"><span class="emoji">👎</span><span>Deprecated since 1.39.0: use the <code>?</code> operator instead</span></div></span><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Unwraps a result or propagates its error.</p>
+<p>The <a href="https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html#a-shortcut-for-propagating-errors-the--operator"><code>?</code> operator</a> was added to replace <code>try!</code>
+and should be used instead. Furthermore, <code>try</code> is a reserved word
+in Rust 2018, so if you must use it, you will need to use the
+<a href="https://doc.rust-lang.org/nightly/rust-by-example/compatibility/raw_identifiers.html">raw-identifier syntax</a>: <code>r#try</code>.</p>
+<p><code>try!</code> matches the given <a href="result/enum.Result.html" title="enum core::result::Result"><code>Result</code></a>. In case of the <code>Ok</code> variant, the
+expression has the value of the wrapped value.</p>
+<p>In case of the <code>Err</code> variant, it retrieves the inner error. <code>try!</code> then
+performs conversion using <code>From</code>. This provides automatic conversion
+between specialized errors and more general ones. The resulting
+error is then immediately returned.</p>
+<p>Because of the early return, <code>try!</code> can only be used in functions that
+return <a href="result/enum.Result.html" title="enum core::result::Result"><code>Result</code></a>.</p>
+<h2 id="examples"><a class="doc-anchor" href="#examples">§</a>Examples</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::io;
+<span class="kw">use </span>std::fs::File;
+<span class="kw">use </span>std::io::prelude::<span class="kw-2">*</span>;
+
+<span class="kw">enum </span>MyError {
+    FileWriteError
+}
+
+<span class="kw">impl </span>From&lt;io::Error&gt; <span class="kw">for </span>MyError {
+    <span class="kw">fn </span>from(e: io::Error) -&gt; MyError {
+        MyError::FileWriteError
+    }
+}
+
+<span class="comment">// The preferred method of quick returning Errors
+</span><span class="kw">fn </span>write_to_file_question() -&gt; <span class="prelude-ty">Result</span>&lt;(), MyError&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>file = File::create(<span class="string">"my_best_friends.txt"</span>)<span class="question-mark">?</span>;
+    file.write_all(<span class="string">b"This is a list of my best friends."</span>)<span class="question-mark">?</span>;
+    <span class="prelude-val">Ok</span>(())
+}
+
+<span class="comment">// The previous method of quick returning Errors
+</span><span class="kw">fn </span>write_to_file_using_try() -&gt; <span class="prelude-ty">Result</span>&lt;(), MyError&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>file = <span class="macro">r#try!</span>(File::create(<span class="string">"my_best_friends.txt"</span>));
+    <span class="macro">r#try!</span>(file.write_all(<span class="string">b"This is a list of my best friends."</span>));
+    <span class="prelude-val">Ok</span>(())
+}
+
+<span class="comment">// This is equivalent to:
+</span><span class="kw">fn </span>write_to_file_using_match() -&gt; <span class="prelude-ty">Result</span>&lt;(), MyError&gt; {
+    <span class="kw">let </span><span class="kw-2">mut </span>file = <span class="macro">r#try!</span>(File::create(<span class="string">"my_best_friends.txt"</span>));
+    <span class="kw">match </span>file.write_all(<span class="string">b"This is a list of my best friends."</span>) {
+        <span class="prelude-val">Ok</span>(v) =&gt; v,
+        <span class="prelude-val">Err</span>(e) =&gt; <span class="kw">return </span><span class="prelude-val">Err</span>(From::from(e)),
+    }
+    <span class="prelude-val">Ok</span>(())
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++use+std::io;%0A++++use+std::fs::File;%0A++++use+std::io::prelude::*;%0A++++%0A++++enum+MyError+%7B%0A++++++++FileWriteError%0A++++%7D%0A++++%0A++++impl+From%3Cio::Error%3E+for+MyError+%7B%0A++++++++fn+from(e:+io::Error)+-%3E+MyError+%7B%0A++++++++++++MyError::FileWriteError%0A++++++++%7D%0A++++%7D%0A++++%0A++++//+The+preferred+method+of+quick+returning+Errors%0A++++fn+write_to_file_question()+-%3E+Result%3C(),+MyError%3E+%7B%0A++++++++let+mut+file+=+File::create(%22my_best_friends.txt%22)?;%0A++++++++file.write_all(b%22This+is+a+list+of+my+best+friends.%22)?;%0A++++++++Ok(())%0A++++%7D%0A++++%0A++++//+The+previous+method+of+quick+returning+Errors%0A++++fn+write_to_file_using_try()+-%3E+Result%3C(),+MyError%3E+%7B%0A++++++++let+mut+file+=+r%23try!(File::create(%22my_best_friends.txt%22));%0A++++++++r%23try!(file.write_all(b%22This+is+a+list+of+my+best+friends.%22));%0A++++++++Ok(())%0A++++%7D%0A++++%0A++++//+This+is+equivalent+to:%0A++++fn+write_to_file_using_match()+-%3E+Result%3C(),+MyError%3E+%7B%0A++++++++let+mut+file+=+r%23try!(File::create(%22my_best_friends.txt%22));%0A++++++++match+file.write_all(b%22This+is+a+list+of+my+best+friends.%22)+%7B%0A++++++++++++Ok(v)+=%3E+v,%0A++++++++++++Err(e)+=%3E+return+Err(From::from(e)),%0A++++++++%7D%0A++++++++Ok(())%0A++++%7D%0A%7D&amp;edition=2024"></a></div></div></details></section></div></main></body></html>

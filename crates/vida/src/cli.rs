@@ -6,7 +6,7 @@ const ROOT_AFTER_HELP: &str = "Runtime-family help paths:\n  vida taskflow help\
 
 const TASK_LONG_ABOUT: &str = "Task inspection, mutation, and graph routing over the authoritative state store.\n\nUse `vida task` for the canonical backlog contract. Parent-child edges preserve structure, `blocks` edges preserve ordering, and execution semantics add fail-closed sequencing/parallelism metadata on top of graph truth.";
 
-const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --json\n  vida task next --json\n  vida task show <task-id> --json\n  vida task deps <task-id> --json\n  vida task critical-path --json\n  vida task help parallelism\n\nParallelism guidance:\n  Use `vida task help parallelism` for execution_mode/order_bucket/parallel_group/conflict_domain semantics.\n  Use `vida taskflow graph-summary --json` to see `ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  Missing execution semantics never imply safe parallel execution.";
+const TASK_AFTER_HELP: &str = "Most-used task commands:\n  vida task ready --json\n  vida task next --json\n  vida task show <task-id> --json\n  vida task progress <task-id> --json\n  vida task deps <task-id> --json\n  vida task critical-path --json\n  vida task help parallelism\n\nParallelism guidance:\n  Use `vida task help parallelism` for execution_mode/order_bucket/parallel_group/conflict_domain semantics.\n  Use `vida taskflow graph-summary --json` to see `ready_parallel_safe`, `parallel_blockers`, and `parallel_candidates_after_current`.\n  Missing execution semantics never imply safe parallel execution.";
 
 const TASKFLOW_LONG_ABOUT: &str = "Delegate to the TaskFlow runtime family.\n\nTaskFlow is the execution/runtime authority. Use it for tracked execution, backlog pressure, run-graph state, packet inspection, continuation binding, and closure handoff.";
 
@@ -116,6 +116,7 @@ pub(crate) enum TaskCommand {
     ExportJsonl(TaskExportJsonlArgs),
     List(TaskListArgs),
     Show(TaskShowArgs),
+    Progress(TaskDepsArgs),
     Ready(TaskReadyArgs),
     Next(TaskNextArgs),
     NextDisplayId(TaskNextDisplayIdArgs),

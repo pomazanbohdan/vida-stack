@@ -1,0 +1,38 @@
+{
+  "artifact_kind": "runtime_downstream_dispatch_trace",
+  "recorded_at": "2026-04-13T05:42:46.148782696Z",
+  "run_id": "runtime-exactly-one-bounded-producing-change-post",
+  "step_count": 1,
+  "steps": [
+    {
+      "activation_agent_type": null,
+      "activation_runtime_role": null,
+      "blocker_code": null,
+      "dispatch_command": null,
+      "dispatch_kind": "closure",
+      "dispatch_packet_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/downstream-dispatch-packets/runtime-exactly-one-bounded-producing-change-post-2026-04-13T05-42-45.958185986Z.json",
+      "dispatch_result_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/dispatch-results/runtime-exactly-one-bounded-producing-change-post-2026-04-13T05-42-46.088032955Z.json",
+      "dispatch_status": "executed",
+      "dispatch_surface": "vida taskflow closure-preview",
+      "dispatch_target": "closure",
+      "downstream_dispatch_active_target": null,
+      "downstream_dispatch_blockers": [],
+      "downstream_dispatch_command": null,
+      "downstream_dispatch_executed_count": 0,
+      "downstream_dispatch_last_target": null,
+      "downstream_dispatch_note": null,
+      "downstream_dispatch_packet_path": null,
+      "downstream_dispatch_ready": false,
+      "downstream_dispatch_result_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/dispatch-results/runtime-exactly-one-bounded-producing-change-post-2026-04-13T05-42-46.088032955Z.json",
+      "downstream_dispatch_status": null,
+      "downstream_dispatch_target": null,
+      "downstream_dispatch_trace_path": null,
+      "exception_path_receipt_id": null,
+      "lane_status": "lane_completed",
+      "recorded_at": "2026-04-13T05:42:46.087934107Z",
+      "run_id": "runtime-exactly-one-bounded-producing-change-post",
+      "selected_backend": "senior",
+      "supersedes_receipt_id": null
+    }
+  ]
+}

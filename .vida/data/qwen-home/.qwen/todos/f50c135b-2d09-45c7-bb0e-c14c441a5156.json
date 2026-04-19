@@ -1,0 +1,25 @@
+{
+  "todos": [
+    {
+      "id": "1",
+      "content": "Fix prepare_explicit_resume_retry_artifact to preserve blocked receipt truth for non-retryable blocker codes",
+      "status": "in_progress"
+    },
+    {
+      "id": "2",
+      "content": "Fix maybe_resume_inputs_from_ready_downstream_packet to check root receipt blocker state",
+      "status": "pending"
+    },
+    {
+      "id": "3",
+      "content": "Add targeted regression tests for blocked dispatch receipt + exception receipt with no fresh retry authority",
+      "status": "pending"
+    },
+    {
+      "id": "4",
+      "content": "Run cargo test to verify the fix",
+      "status": "pending"
+    }
+  ],
+  "sessionId": "f50c135b-2d09-45c7-bb0e-c14c441a5156"
+}

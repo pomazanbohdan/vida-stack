@@ -1,0 +1,69 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="The receiver of a method, or the current module."><title>self - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="std" data-themes="" data-resource-suffix="1.94.1" data-rustdoc-version="1.94.1 (e408947bf 2026-03-25)" data-channel="1.94.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items1.94.1.js"></script><script defer src="../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc keyword"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">self</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../std/index.html"><img class="rust-logo" src="../static.files/rust-logo-9a9549ea.svg" alt="logo"></a><h2><a href="../std/index.html">std</a><span class="version">1.94.1</span></h2></div><div class="version">(e408947bf	2026-03-25)</div><div class="sidebar-elems"><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><h1>Keyword <span class="keyword">self</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/std/keyword_docs.rs.html#1482">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>The receiver of a method, or the current module.</p>
+<p><code>self</code> is used in two situations: referencing the current module and marking
+the receiver of a method.</p>
+<p>In paths, <code>self</code> can be used to refer to the current module, either in a
+<a href="keyword.use.html"><code>use</code></a> statement or in a path to access an element:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::io::{<span class="self">self</span>, Read};</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0A%23!%5Ballow(unused_imports)%5D%0A%0Afn+main()+%7B%0A++++use+std::io::%7Bself,+Read%7D;%0A%7D&amp;edition=2024"></a></div>
+<p>Is functionally the same as:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>std::io;
+<span class="kw">use </span>std::io::Read;</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0A%23!%5Ballow(unused_imports)%5D%0A%0Afn+main()+%7B%0A++++use+std::io;%0A++++use+std::io::Read;%0A%7D&amp;edition=2024"></a></div>
+<p>Using <code>self</code> to access an element in the current module:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">fn </span>foo() {}
+<span class="kw">fn </span>bar() {
+    <span class="self">self</span>::foo()
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0A%23!%5Ballow(dead_code)%5D%0A%0Afn+main()+%7B%7D%0Afn+foo()+%7B%7D%0Afn+bar()+%7B%0A++++self::foo()%0A%7D&amp;edition=2024"></a></div>
+<p><code>self</code> as the current receiver for a method allows to omit the parameter
+type most of the time. With the exception of this particularity, <code>self</code> is
+used much like any other parameter:</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">struct </span>Foo(i32);
+
+<span class="kw">impl </span>Foo {
+    <span class="comment">// No `self`.
+    </span><span class="kw">fn </span>new() -&gt; <span class="self">Self </span>{
+        <span class="self">Self</span>(<span class="number">0</span>)
+    }
+
+    <span class="comment">// Consuming `self`.
+    </span><span class="kw">fn </span>consume(<span class="self">self</span>) -&gt; <span class="self">Self </span>{
+        <span class="self">Self</span>(<span class="self">self</span>.<span class="number">0 </span>+ <span class="number">1</span>)
+    }
+
+    <span class="comment">// Borrowing `self`.
+    </span><span class="kw">fn </span>borrow(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>i32 {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.<span class="number">0
+    </span>}
+
+    <span class="comment">// Borrowing `self` mutably.
+    </span><span class="kw">fn </span>borrow_mut(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;mut </span>i32 {
+        <span class="kw-2">&amp;mut </span><span class="self">self</span>.<span class="number">0
+    </span>}
+}
+
+<span class="comment">// This method must be called with a `Type::` prefix.
+</span><span class="kw">let </span>foo = Foo::new();
+<span class="macro">assert_eq!</span>(foo.<span class="number">0</span>, <span class="number">0</span>);
+
+<span class="comment">// Those two calls produces the same result.
+</span><span class="kw">let </span>foo = Foo::consume(foo);
+<span class="macro">assert_eq!</span>(foo.<span class="number">0</span>, <span class="number">1</span>);
+<span class="kw">let </span>foo = foo.consume();
+<span class="macro">assert_eq!</span>(foo.<span class="number">0</span>, <span class="number">2</span>);
+
+<span class="comment">// Borrowing is handled automatically with the second syntax.
+</span><span class="kw">let </span>borrow_1 = Foo::borrow(<span class="kw-2">&amp;</span>foo);
+<span class="kw">let </span>borrow_2 = foo.borrow();
+<span class="macro">assert_eq!</span>(borrow_1, borrow_2);
+
+<span class="comment">// Borrowing mutably is handled automatically too with the second syntax.
+</span><span class="kw">let </span><span class="kw-2">mut </span>foo = Foo::new();
+<span class="kw-2">*</span>Foo::borrow_mut(<span class="kw-2">&amp;mut </span>foo) += <span class="number">1</span>;
+<span class="macro">assert_eq!</span>(foo.<span class="number">0</span>, <span class="number">1</span>);
+<span class="kw-2">*</span>foo.borrow_mut() += <span class="number">1</span>;
+<span class="macro">assert_eq!</span>(foo.<span class="number">0</span>, <span class="number">2</span>);</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++struct+Foo(i32);%0A++++%0A++++impl+Foo+%7B%0A++++++++//+No+%60self%60.%0A++++++++fn+new()+-%3E+Self+%7B%0A++++++++++++Self(0)%0A++++++++%7D%0A++++%0A++++++++//+Consuming+%60self%60.%0A++++++++fn+consume(self)+-%3E+Self+%7B%0A++++++++++++Self(self.0+%2B+1)%0A++++++++%7D%0A++++%0A++++++++//+Borrowing+%60self%60.%0A++++++++fn+borrow(%26self)+-%3E+%26i32+%7B%0A++++++++++++%26self.0%0A++++++++%7D%0A++++%0A++++++++//+Borrowing+%60self%60+mutably.%0A++++++++fn+borrow_mut(%26mut+self)+-%3E+%26mut+i32+%7B%0A++++++++++++%26mut+self.0%0A++++++++%7D%0A++++%7D%0A++++%0A++++//+This+method+must+be+called+with+a+%60Type::%60+prefix.%0A++++let+foo+=+Foo::new();%0A++++assert_eq!(foo.0,+0);%0A++++%0A++++//+Those+two+calls+produces+the+same+result.%0A++++let+foo+=+Foo::consume(foo);%0A++++assert_eq!(foo.0,+1);%0A++++let+foo+=+foo.consume();%0A++++assert_eq!(foo.0,+2);%0A++++%0A++++//+Borrowing+is+handled+automatically+with+the+second+syntax.%0A++++let+borrow_1+=+Foo::borrow(%26foo);%0A++++let+borrow_2+=+foo.borrow();%0A++++assert_eq!(borrow_1,+borrow_2);%0A++++%0A++++//+Borrowing+mutably+is+handled+automatically+too+with+the+second+syntax.%0A++++let+mut+foo+=+Foo::new();%0A++++*Foo::borrow_mut(%26mut+foo)+%2B=+1;%0A++++assert_eq!(foo.0,+1);%0A++++*foo.borrow_mut()+%2B=+1;%0A++++assert_eq!(foo.0,+2);%0A%7D&amp;edition=2024"></a></div>
+<p>Note that this automatic conversion when calling <code>foo.method()</code> is not
+limited to the examples above. See the <a href="../reference/items/associated-items.html#methods">Reference</a> for more information.</p>
+</div></details></section></div></main></body></html>

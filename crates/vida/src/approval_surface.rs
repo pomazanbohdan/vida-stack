@@ -2,6 +2,9 @@ use std::process::ExitCode;
 
 use serde::Serialize;
 
+use crate::contract_profile_adapter::{
+    canonical_approval_status_str, canonical_gate_level_str, render_operator_contract_envelope,
+};
 use crate::taskflow_task_bridge::proxy_state_dir;
 use crate::{state_store::StateStore, ProxyArgs};
 
@@ -80,18 +83,43 @@ fn parse_approval_args<'a>(args: &'a [String]) -> Result<ApprovalCommand<'a>, St
 }
 
 fn emit_blocked_approval_envelope(as_json: bool, reason: String) -> ExitCode {
+    let next_actions = vec![
+        "Use `vida approval show --latest --json` or `vida approval show <run-id> --json` once approval evidence exists."
+            .to_string(),
+    ];
+    let operator_contracts = render_operator_contract_envelope(
+        "blocked",
+        vec!["unsupported_blocker_code".to_string()],
+        next_actions.clone(),
+        serde_json::json!([]),
+    );
+    let status = if operator_contracts["status"].as_str() == Some("blocked") {
+        "blocked"
+    } else {
+        "pass"
+    };
     let envelope = BlockedApprovalEnvelope {
         surface: "vida approval",
-        status: "blocked",
-        trace_id: None,
-        workflow_class: None,
-        risk_tier: None,
-        artifact_refs: serde_json::json!([]),
-        next_actions: vec![
-            "Use `vida approval show --latest --json` or `vida approval show <run-id> --json` once approval evidence exists."
-                .to_string(),
-        ],
-        blocker_codes: vec!["unsupported_blocker_code".to_string()],
+        status,
+        trace_id: operator_contracts["trace_id"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        workflow_class: operator_contracts["workflow_class"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        risk_tier: operator_contracts["risk_tier"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        artifact_refs: operator_contracts["artifact_refs"].clone(),
+        next_actions,
+        blocker_codes: operator_contracts["blocker_codes"]
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default(),
         reason,
     };
 
@@ -130,18 +158,23 @@ fn derive_approval_status(
 ) -> &'static str {
     match approval_receipt.map(|receipt| receipt.transition_kind.as_str()) {
         Some("approval_wait") => {
-            crate::release1_contracts::ApprovalStatus::WaitingForApproval.as_str()
+            canonical_approval_status_str("waiting_for_approval").unwrap_or("waiting_for_approval")
         }
-        Some("approval_complete") => crate::release1_contracts::ApprovalStatus::Approved.as_str(),
+        Some("approval_complete") => {
+            canonical_approval_status_str("approved").unwrap_or("approved")
+        }
         _ if status.policy_gate
-            == crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str() =>
+            == canonical_approval_status_str("approval_required")
+                .unwrap_or("approval_required") =>
         {
-            crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str()
+            canonical_approval_status_str("approval_required").unwrap_or("approval_required")
         }
         _ if status.status == "completed" && status.policy_gate == "not_required" => {
-            crate::release1_contracts::ApprovalStatus::Approved.as_str()
+            canonical_approval_status_str("approved").unwrap_or("approved")
         }
-        _ => crate::release1_contracts::ApprovalStatus::WaitingForApproval.as_str(),
+        _ => {
+            canonical_approval_status_str("waiting_for_approval").unwrap_or("waiting_for_approval")
+        }
     }
 }
 
@@ -150,12 +183,12 @@ fn derive_gate_level(
     status: &crate::state_store::RunGraphStatus,
 ) -> &'static str {
     match approval_status {
-        "approved" => crate::release1_contracts::GateLevel::Observe.as_str(),
-        "denied" | "expired" => crate::release1_contracts::GateLevel::Warn.as_str(),
+        "approved" => canonical_gate_level_str("observe").unwrap_or("observe"),
+        "denied" | "expired" => canonical_gate_level_str("warn").unwrap_or("warn"),
         _ if status.policy_gate == "not_required" => {
-            crate::release1_contracts::GateLevel::Observe.as_str()
+            canonical_gate_level_str("observe").unwrap_or("observe")
         }
-        _ => crate::release1_contracts::GateLevel::Block.as_str(),
+        _ => canonical_gate_level_str("block").unwrap_or("block"),
     }
 }
 
@@ -171,7 +204,8 @@ fn derive_decision_reason(
             "route-bound implementation approval has already been recorded".to_string()
         }
         _ if status.policy_gate
-            == crate::release1_contracts::ApprovalStatus::ApprovalRequired.as_str() =>
+            == canonical_approval_status_str("approval_required")
+                .unwrap_or("approval_required") =>
         {
             "approval is required before the run can complete".to_string()
         }
@@ -243,23 +277,49 @@ fn build_approval_envelope(
     approval_receipt: Option<crate::state_store::RunGraphApprovalDelegationReceipt>,
 ) -> ApprovalEnvelope {
     let approval_status = derive_approval_status(&status, approval_receipt.as_ref());
+    let next_actions = match approval_status {
+        "waiting_for_approval" | "approval_required" => vec![
+            "Use `vida taskflow run-graph update <task-id> implementation review_ensemble approved implementation` for the active run once the approval decision is ready.".to_string(),
+        ],
+        "approved" => vec![
+            "Use `vida taskflow consume continue --json` to continue the active run after approval.".to_string(),
+        ],
+        _ => vec!["Use `vida approval show <run-id> --json` to inspect a specific run.".to_string()],
+    };
+    let artifact_refs = build_artifact_refs(
+        &status,
+        dispatch_summary.as_ref(),
+        approval_receipt.as_ref(),
+    );
+    let operator_contracts =
+        render_operator_contract_envelope("pass", Vec::new(), next_actions.clone(), artifact_refs);
+    let surface_status = if operator_contracts["status"].as_str() == Some("blocked") {
+        "blocked"
+    } else {
+        "pass"
+    };
     ApprovalEnvelope {
         surface: "vida approval",
-        status: "pass",
-        trace_id: None,
-        workflow_class: None,
-        risk_tier: None,
-        artifact_refs: build_artifact_refs(&status, dispatch_summary.as_ref(), approval_receipt.as_ref()),
-        next_actions: match approval_status {
-            "waiting_for_approval" | "approval_required" => vec![
-                "Use `vida taskflow run-graph update <task-id> implementation review_ensemble approved implementation` for the active run once the approval decision is ready.".to_string(),
-            ],
-            "approved" => vec![
-                "Use `vida taskflow consume continue --json` to continue the active run after approval.".to_string(),
-            ],
-            _ => vec!["Use `vida approval show <run-id> --json` to inspect a specific run.".to_string()],
-        },
-        blocker_codes: Vec::new(),
+        status: surface_status,
+        trace_id: operator_contracts["trace_id"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        workflow_class: operator_contracts["workflow_class"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        risk_tier: operator_contracts["risk_tier"]
+            .as_str()
+            .map(ToOwned::to_owned),
+        artifact_refs: operator_contracts["artifact_refs"].clone(),
+        next_actions,
+        blocker_codes: operator_contracts["blocker_codes"]
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default(),
         run_id: status.run_id.clone(),
         task_id: status.task_id.clone(),
         approval_scope: approval_scope_from_status(&status),

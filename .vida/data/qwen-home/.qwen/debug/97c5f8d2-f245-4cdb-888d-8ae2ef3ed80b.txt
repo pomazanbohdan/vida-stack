@@ -1,0 +1,92 @@
+2026-04-10T14:28:03.058Z [INFO] Config initialization started
+2026-04-10T14:28:03.059Z [DEBUG] Extension manager initialized
+2026-04-10T14:28:03.059Z [DEBUG] [HOOK_REGISTRY] Hook registry initialized with 0 hook entries
+2026-04-10T14:28:03.060Z [DEBUG] [TRUSTED_HOOKS] Hook system initialized successfully
+2026-04-10T14:28:03.060Z [DEBUG] Hook system initialized
+2026-04-10T14:28:03.060Z [DEBUG] MessageBus initialized with hook subscription
+2026-04-10T14:28:03.060Z [INFO] [SKILL_MANAGER] Starting skill directory watchers...
+2026-04-10T14:28:03.061Z [INFO] [SKILL_MANAGER] Refreshing skills cache...
+2026-04-10T14:28:03.061Z [DEBUG] [SKILL_MANAGER] Loading project level skills from: /home/unnamed/project/vida-stack/.qwen/skills
+2026-04-10T14:28:03.061Z [DEBUG] [SKILL_MANAGER] Loading skills from directory: /home/unnamed/project/vida-stack/.qwen/skills
+2026-04-10T14:28:03.061Z [DEBUG] [SKILL_MANAGER] Cannot read skills directory /home/unnamed/project/vida-stack/.qwen/skills: ENOENT: no such file or directory, scandir '/home/unnamed/project/vida-stack/.qwen/skills'
+2026-04-10T14:28:03.061Z [DEBUG] [SKILL_MANAGER] Loading project level skills from: /home/unnamed/project/vida-stack/.agents/skills
+2026-04-10T14:28:03.061Z [DEBUG] [SKILL_MANAGER] Loading skills from directory: /home/unnamed/project/vida-stack/.agents/skills
+2026-04-10T14:28:03.062Z [DEBUG] [SKILL_MANAGER] Found 3 entries in /home/unnamed/project/vida-stack/.agents/skills
+2026-04-10T14:28:03.063Z [DEBUG] [SKILL_MANAGER] Successfully parsed skill: rag-pipeline (project) from /home/unnamed/project/vida-stack/.agents/skills/rag-pipeline/SKILL.md
+2026-04-10T14:28:03.063Z [DEBUG] [SKILL_MANAGER] Successfully parsed skill: rust-pro (project) from /home/unnamed/project/vida-stack/.agents/skills/rust-pro/SKILL.md
+2026-04-10T14:28:03.064Z [DEBUG] [SKILL_MANAGER] Successfully parsed skill: surreal-vector-search (project) from /home/unnamed/project/vida-stack/.agents/skills/surreal-vector-search/SKILL.md
+2026-04-10T14:28:03.064Z [DEBUG] [SKILL_MANAGER] Loaded 3 project level skills
+2026-04-10T14:28:03.064Z [DEBUG] [SKILL_MANAGER] Loaded 3 project level skills
+2026-04-10T14:28:03.064Z [DEBUG] [SKILL_MANAGER] Loading user level skills from: /home/unnamed/project/vida-stack/.vida/data/qwen-home/.qwen/skills
+2026-04-10T14:28:03.064Z [DEBUG] [SKILL_MANAGER] Loading skills from directory: /home/unnamed/project/vida-stack/.vida/data/qwen-home/.qwen/skills
+2026-04-10T14:28:03.064Z [DEBUG] [SKILL_MANAGER] Found 0 entries in /home/unnamed/project/vida-stack/.vida/data/qwen-home/.qwen/skills
+2026-04-10T14:28:03.064Z [DEBUG] [SKILL_MANAGER] Loading user level skills from: /home/unnamed/project/vida-stack/.vida/data/qwen-home/.agents/skills
+2026-04-10T14:28:03.064Z [DEBUG] [SKILL_MANAGER] Loading skills from directory: /home/unnamed/project/vida-stack/.vida/data/qwen-home/.agents/skills
+2026-04-10T14:28:03.064Z [DEBUG] [SKILL_MANAGER] Cannot read skills directory /home/unnamed/project/vida-stack/.vida/data/qwen-home/.agents/skills: ENOENT: no such file or directory, scandir '/home/unnamed/project/vida-stack/.vida/data/qwen-home/.agents/skills'
+2026-04-10T14:28:03.064Z [DEBUG] [SKILL_MANAGER] Loaded 0 user level skills
+2026-04-10T14:28:03.064Z [DEBUG] [SKILL_MANAGER] Loaded 0 user level skills
+2026-04-10T14:28:03.064Z [DEBUG] [SKILL_MANAGER] Loaded 0 extension-level skills from 0 extensions
+2026-04-10T14:28:03.064Z [DEBUG] [SKILL_MANAGER] Loading skills from directory: /home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/bundled
+2026-04-10T14:28:03.064Z [DEBUG] [SKILL_MANAGER] Loaded 0 extension level skills
+2026-04-10T14:28:03.064Z [DEBUG] [SKILL_MANAGER] Loading bundled skills from: /home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/bundled
+2026-04-10T14:28:03.065Z [DEBUG] [SKILL_MANAGER] Found 3 entries in /home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/bundled
+2026-04-10T14:28:03.065Z [DEBUG] [SKILL_MANAGER] Successfully parsed skill: loop (bundled) from /home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/bundled/loop/SKILL.md
+2026-04-10T14:28:03.065Z [DEBUG] [SKILL_MANAGER] Successfully parsed skill: qc-helper (bundled) from /home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/bundled/qc-helper/SKILL.md
+2026-04-10T14:28:03.066Z [DEBUG] [SKILL_MANAGER] Successfully parsed skill: review (bundled) from /home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/bundled/review/SKILL.md
+2026-04-10T14:28:03.066Z [DEBUG] [SKILL_MANAGER] Loaded 3 bundled skills
+2026-04-10T14:28:03.066Z [INFO] [SKILL_MANAGER] Skills cache refreshed: 6 total skills loaded
+2026-04-10T14:28:03.066Z [DEBUG] [SKILL_MANAGER] Loaded 3 bundled level skills
+2026-04-10T14:28:03.067Z [INFO] [SKILL_MANAGER] Skill directory watchers started
+2026-04-10T14:28:03.067Z [DEBUG] Skill manager initialized
+2026-04-10T14:28:03.067Z [DEBUG] Permission manager initialized
+2026-04-10T14:28:03.067Z [DEBUG] [MEMORY_DISCOVERY] Loading server hierarchical memory for CWD: /home/unnamed/project/vida-stack (importFormat: tree)
+2026-04-10T14:28:03.067Z [DEBUG] [MEMORY_DISCOVERY] Searching for QWEN.md starting from CWD: /home/unnamed/project/vida-stack
+2026-04-10T14:28:03.069Z [DEBUG] [MEMORY_DISCOVERY] Determined project root: /home/unnamed/project/vida-stack
+2026-04-10T14:28:03.070Z [DEBUG] [MEMORY_DISCOVERY] Searching for AGENTS.md starting from CWD: /home/unnamed/project/vida-stack
+2026-04-10T14:28:03.071Z [DEBUG] [MEMORY_DISCOVERY] Determined project root: /home/unnamed/project/vida-stack
+2026-04-10T14:28:03.071Z [DEBUG] [MEMORY_DISCOVERY] Final ordered QWEN.md,AGENTS.md paths to read: ["/home/unnamed/project/vida-stack/AGENTS.md","/home/unnamed/project/vida-stack/.vida/data/qwen-home/.qwen/output-language.md"]
+2026-04-10T14:28:03.082Z [DEBUG] [MEMORY_DISCOVERY] Successfully read and processed imports: /home/unnamed/project/vida-stack/AGENTS.md (Length: 9100)
+2026-04-10T14:28:03.086Z [DEBUG] [MEMORY_DISCOVERY] Successfully read and processed imports: /home/unnamed/project/vida-stack/.vida/data/qwen-home/.qwen/output-language.md (Length: 812)
+2026-04-10T14:28:03.087Z [DEBUG] Hierarchical memory loaded
+2026-04-10T14:28:03.087Z [DEBUG] [SKILL_MANAGER] Listing skills
+2026-04-10T14:28:03.087Z [DEBUG] [SKILL_MANAGER] Using cached skills
+2026-04-10T14:28:03.087Z [DEBUG] [SKILL_MANAGER] Processing 3 project level skills
+2026-04-10T14:28:03.087Z [DEBUG] [SKILL_MANAGER] Processing 0 user level skills
+2026-04-10T14:28:03.087Z [DEBUG] [SKILL_MANAGER] Processing 0 extension level skills
+2026-04-10T14:28:03.087Z [DEBUG] [SKILL_MANAGER] Processing 3 bundled level skills
+2026-04-10T14:28:03.087Z [INFO] [SKILL_MANAGER] Listed 6 unique skills
+2026-04-10T14:28:03.088Z [DEBUG] ToolRegistry created: ["agent","skill","list_directory","read_file","grep_search","glob","edit","write_file","run_shell_command","save_memory","todo_write","ask_user_question","exit_plan_mode","web_fetch","web_search"] (15 tools)
+2026-04-10T14:28:03.088Z [INFO] Tool registry initialized with 15 tools
+2026-04-10T14:28:03.096Z [INFO] Gemini client initialized
+2026-04-10T14:28:03.097Z [INFO] Config initialization completed
+2026-04-10T14:28:03.106Z [DEBUG] [STARTUP] Session ID: 97c5f8d2-f245-4cdb-888d-8ae2ef3ed80b
+2026-04-10T14:28:03.111Z [DEBUG] [SKILL_MANAGER] Using cached skills
+2026-04-10T14:28:03.111Z [INFO] [SKILL_MANAGER] Listed 3 unique skills
+2026-04-10T14:28:03.111Z [DEBUG] [SKILL_MANAGER] Listing skills at level: bundled
+2026-04-10T14:28:03.111Z [DEBUG] [SKILL_MANAGER] Processing 3 bundled level skills
+2026-04-10T14:28:03.114Z [DEBUG] [BUNDLED_SKILL_LOADER] Hiding skill "loop" because cron is not enabled
+2026-04-10T14:28:03.114Z [DEBUG] [BUNDLED_SKILL_LOADER] Loaded 2 bundled skill(s) as slash commands
+2026-04-10T14:28:03.181Z [DEBUG] [IDE] Failed to read IDE connection directory: Error: ENOENT: no such file or directory, scandir '/home/unnamed/project/vida-stack/.vida/data/qwen-home/.qwen/ide'
+    at async Object.readdir (node:internal/fs/promises:1598:18)
+    at async _IdeClient.getAllConnectionConfigs (file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:229468:24)
+    at async _IdeClient.getConnectionConfigFromFile (file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:229440:25)
+    at async file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:229098:39
+    at async ideCommand (file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:452264:21)
+    at async BuiltinCommandLoader.loadCommands (file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:455919:28)
+    at async Promise.allSettled (index 0)
+    at async CommandService.create (file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:448104:21)
+    at async getAvailableCommands (file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:456914:28)
+    at async loadSlashCommandNames (file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:456994:22)
+2026-04-10T14:29:11.854Z [DEBUG] [QWEN_LOGGER] QwenLogger: Flush already in progress, marking pending flush.
+2026-04-10T14:29:24.838Z [ERROR] [OPENAI_ERROR] OpenAI API Streaming Error: 429 You exceeded your current quota, please check your plan and billing details. For details, see: https://help.aliyun.com/zh/model-studio/error-code#token-limit
+2026-04-10T14:29:24.846Z [WARN] [RETRY] Attempt 1 failed with status 429. Retrying with backoff... Error: 429 You exceeded your current quota, please check your plan and billing details. For details, see: https://help.aliyun.com/zh/model-studio/error-code#token-limit
+    at APIError.generate (file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:148993:18)
+    at OpenAI.makeStatusError (file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:156009:25)
+    at OpenAI.makeRequest (file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:156144:29)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:156960:27
+    at async ContentGenerationPipeline.executeWithErrorHandling (file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:157136:26)
+    at async attemptOperation (file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:159955:18)
+    at async QwenContentGenerator.executeWithCredentialManagement (file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:159958:18)
+    at async LoggingContentGenerator.generateContentStream (file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:147164:21)
+    at async retryWithBackoff (file:///home/unnamed/.proto/tools/node/25.9.0/lib/node_modules/@qwen-code/qwen-code/cli.js:172070:22)

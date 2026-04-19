@@ -1,0 +1,48 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="A function or function pointer."><title>fn - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-77263533.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="std" data-themes="" data-resource-suffix="1.94.1" data-rustdoc-version="1.94.1 (e408947bf 2026-03-25)" data-channel="1.94.1" data-search-js="search-9e2438ea.js" data-stringdex-js="stringdex-b897f86f.js" data-settings-js="settings-c38705f0.js" ><script src="../static.files/storage-e2aeef58.js"></script><script defer src="sidebar-items1.94.1.js"></script><script defer src="../static.files/main-7bab91a1.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-ffcac47a.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc keyword"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">fn</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><a class="logo-container" href="../std/index.html"><img class="rust-logo" src="../static.files/rust-logo-9a9549ea.svg" alt="logo"></a><h2><a href="../std/index.html">std</a><span class="version">1.94.1</span></h2></div><div class="version">(e408947bf	2026-03-25)</div><div class="sidebar-elems"><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><h1>Keyword <span class="keyword">fn</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/std/keyword_docs.rs.html#561">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>A function or function pointer.</p>
+<p>Functions are the primary way code is executed within Rust. Function blocks, usually just
+called functions, can be defined in a variety of different places and be assigned many
+different attributes and modifiers.</p>
+<p>Standalone functions that just sit within a module not attached to anything else are common,
+but most functions will end up being inside <a href="keyword.impl.html"><code>impl</code></a> blocks, either on another type itself, or
+as a trait impl for that type.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">fn </span>standalone_function() {
+    <span class="comment">// code
+</span>}
+
+<span class="kw">pub fn </span>public_thing(argument: bool) -&gt; String {
+    <span class="comment">// code
+</span>}
+
+<span class="kw">struct </span>Thing {
+    foo: i32,
+}
+
+<span class="kw">impl </span>Thing {
+    <span class="kw">pub fn </span>new() -&gt; <span class="self">Self </span>{
+        <span class="self">Self </span>{
+            foo: <span class="number">42</span>,
+        }
+    }
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++fn+standalone_function()+%7B%0A++++++++//+code%0A++++%7D%0A++++%0A++++pub+fn+public_thing(argument:+bool)+-%3E+String+%7B%0A++++++++//+code%0A++++%22%22.to_string()%0A++++%7D%0A++++%0A++++struct+Thing+%7B%0A++++++++foo:+i32,%0A++++%7D%0A++++%0A++++impl+Thing+%7B%0A++++++++pub+fn+new()+-%3E+Self+%7B%0A++++++++++++Self+%7B%0A++++++++++++++++foo:+42,%0A++++++++++++%7D%0A++++++++%7D%0A++++%7D%0A%7D&amp;edition=2024"></a></div>
+<p>In addition to presenting fixed types in the form of <code>fn name(arg: type, ..) -&gt; return_type</code>,
+functions can also declare a list of type parameters along with trait bounds that they fall
+into.</p>
+
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">fn </span>generic_function&lt;T: Clone&gt;(x: T) -&gt; (T, T, T) {
+    (x.clone(), x.clone(), x.clone())
+}
+
+<span class="kw">fn </span>generic_where&lt;T&gt;(x: T) -&gt; T
+    <span class="kw">where </span>T: std::ops::Add&lt;Output = T&gt; + Copy
+{
+    x + x + x
+}</code></pre><a class="test-arrow" target="_blank" title="Run code" href="https://play.rust-lang.org/?code=%23!%5Ballow(unused)%5D%0Afn+main()+%7B%0A++++fn+generic_function%3CT:+Clone%3E(x:+T)+-%3E+(T,+T,+T)+%7B%0A++++++++(x.clone(),+x.clone(),+x.clone())%0A++++%7D%0A++++%0A++++fn+generic_where%3CT%3E(x:+T)+-%3E+T%0A++++++++where+T:+std::ops::Add%3COutput+=+T%3E+%2B+Copy%0A++++%7B%0A++++++++x+%2B+x+%2B+x%0A++++%7D%0A%7D&amp;edition=2024"></a></div>
+<p>Declaring trait bounds in the angle brackets is functionally identical to using a <code>where</code>
+clause. It’s up to the programmer to decide which works better in each situation, but <code>where</code>
+tends to be better when things get longer than one line.</p>
+<p>Along with being made public via <code>pub</code>, <code>fn</code> can also have an <a href="keyword.extern.html"><code>extern</code></a> added for use in
+FFI.</p>
+<p>For more information on the various types of functions and how they’re used, consult the <a href="../book/ch03-03-how-functions-work.html">Rust
+book</a> or the <a href="../reference/items/functions.html">Reference</a>.</p>
+</div></details></section></div></main></body></html>

@@ -1,0 +1,94 @@
+{
+  "agents": {
+    "architect": {
+      "average_feedback": 70.0,
+      "consecutive_failures": 0,
+      "default_runtime_role": "solution_architect",
+      "effective_score": 70,
+      "failure_runs": 0,
+      "feedback_count": 0,
+      "last_feedback_score": null,
+      "lifecycle_state": "probation",
+      "rate": 32,
+      "reasoning_band": "xhigh",
+      "success_runs": 0,
+      "task_classes": [
+        "architecture",
+        "execution_preparation",
+        "hard_escalation",
+        "meta_analysis"
+      ],
+      "tier": "architect"
+    },
+    "junior": {
+      "average_feedback": 70.0,
+      "consecutive_failures": 0,
+      "default_runtime_role": "worker",
+      "effective_score": 70,
+      "failure_runs": 0,
+      "feedback_count": 0,
+      "last_feedback_score": null,
+      "lifecycle_state": "probation",
+      "rate": 1,
+      "reasoning_band": "low",
+      "success_runs": 0,
+      "task_classes": [
+        "implementation",
+        "delivery_task",
+        "execution_block"
+      ],
+      "tier": "junior"
+    },
+    "middle": {
+      "average_feedback": 70.0,
+      "consecutive_failures": 0,
+      "default_runtime_role": "coach",
+      "effective_score": 70,
+      "failure_runs": 0,
+      "feedback_count": 0,
+      "last_feedback_score": null,
+      "lifecycle_state": "probation",
+      "rate": 4,
+      "reasoning_band": "medium",
+      "success_runs": 0,
+      "task_classes": [
+        "specification",
+        "planning",
+        "coach",
+        "implementation_medium"
+      ],
+      "tier": "middle"
+    },
+    "senior": {
+      "average_feedback": 70.0,
+      "consecutive_failures": 0,
+      "default_runtime_role": "verifier",
+      "effective_score": 70,
+      "failure_runs": 0,
+      "feedback_count": 0,
+      "last_feedback_score": null,
+      "lifecycle_state": "probation",
+      "rate": 16,
+      "reasoning_band": "high",
+      "success_runs": 0,
+      "task_classes": [
+        "verification",
+        "review",
+        "quality_gate",
+        "release_readiness"
+      ],
+      "tier": "senior"
+    }
+  },
+  "schema_version": 1,
+  "scorecards_path": ".vida/state/worker-scorecards.json",
+  "selection_policy": {
+    "consecutive_failure_limit": 3,
+    "demotion_score": 45,
+    "promotion_score": 75,
+    "retirement_failure_limit": 8,
+    "rule": "capability_first_then_score_guard_then_cheapest_tier"
+  },
+  "store_path": ".vida/state/worker-strategy.json",
+  "updated_at": "2026-04-13T15:20:39.811013315Z"
+}

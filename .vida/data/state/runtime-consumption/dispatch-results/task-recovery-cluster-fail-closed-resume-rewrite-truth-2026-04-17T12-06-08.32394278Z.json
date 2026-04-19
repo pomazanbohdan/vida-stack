@@ -1,0 +1,13 @@
+{
+  "activation_command": "vida task ensure feature-repair-fail-closed-resume-closure-truth-work-pool 'Work-pool pack: Repair fail-closed resume and closure truth so a newer blocked downst...' --type task --status open --parent-id feature-repair-fail-closed-resume-closure-truth --labels work-pool-pack --json",
+  "artifact_kind": "runtime_dispatch_result",
+  "dispatch_target": "work-pool-pack",
+  "execution_state": "executing",
+  "note": "runtime dispatch handoff started; terminal completion is still pending",
+  "recorded_at": "2026-04-17T12:06:08.323956382Z",
+  "run_id": "task-recovery-cluster-fail-closed-resume-rewrite-truth",
+  "selected_backend": "middle",
+  "source_dispatch_packet_path": "/home/unnamed/project/vida-stack/.vida/data/state/runtime-consumption/downstream-dispatch-packets/task-recovery-cluster-fail-closed-resume-rewrite-truth-2026-04-17T12-06-08.109154131Z.json",
+  "status": "pass",
+  "surface": "vida task ensure"
+}
