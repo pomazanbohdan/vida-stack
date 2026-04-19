@@ -66,7 +66,7 @@ async fn resolve_latest_packet_run_id(store: &StateStore) -> Result<String, Stri
         .map_err(|error| format!("Failed to read latest persisted dispatch receipt: {error}"))?
     else {
         return Err(
-            "No latest persisted run-graph dispatch receipt exists; run `vida taskflow run-graph dispatch-init <run-id> --json` first."
+            "No latest persisted run-graph dispatch receipt exists; run `vida taskflow run-graph dispatch-init <task-id> --json` first."
                 .to_string(),
         );
     };
