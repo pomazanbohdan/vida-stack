@@ -1565,9 +1565,9 @@ mod tests {
         CanonicalIncidentEvidenceBundle, CanonicalMemoryArtifact, CanonicalMemoryRecord,
         CanonicalPolicyDecision, CanonicalPolicyDecisionArtifact, CanonicalToolContract,
         CanonicalToolContractArtifact, CanonicalTraceArtifact, CanonicalTraceEvent,
-        CompatibilityBoundary, CompatibilityClass, ExceptionTakeoverState, GateLevel,
-        LaneStatus, Release1ContractStatus, Release1ContractType, Release1SchemaVersion,
-        RiskTier, WorkflowClass,
+        CompatibilityBoundary, CompatibilityClass, ExceptionTakeoverState, GateLevel, LaneStatus,
+        Release1ContractStatus, Release1ContractType, Release1SchemaVersion, RiskTier,
+        WorkflowClass,
     };
 
     #[test]
@@ -1638,7 +1638,11 @@ mod tests {
             "pass",
             "runtime_surface",
             Some("trace-root".to_string()),
-            Some(WorkflowClass::DelegatedDevelopmentPacket.as_str().to_string()),
+            Some(
+                WorkflowClass::DelegatedDevelopmentPacket
+                    .as_str()
+                    .to_string(),
+            ),
         );
 
         assert_eq!(header.artifact_type, "trace_event");
@@ -1751,7 +1755,11 @@ mod tests {
                 "approved",
                 "approval_surface",
                 Some("trace-1".to_string()),
-                Some(WorkflowClass::DelegatedDevelopmentPacket.as_str().to_string()),
+                Some(
+                    WorkflowClass::DelegatedDevelopmentPacket
+                        .as_str()
+                        .to_string(),
+                ),
             ),
             approval_id: "approval-1".to_string(),
             approval_scope: "runtime-add-canonical-trace-policy-approval-tool".to_string(),
@@ -1806,7 +1814,11 @@ mod tests {
                 "pass",
                 "evaluation_surface",
                 Some("trace-1".to_string()),
-                Some(WorkflowClass::DelegatedDevelopmentPacket.as_str().to_string()),
+                Some(
+                    WorkflowClass::DelegatedDevelopmentPacket
+                        .as_str()
+                        .to_string(),
+                ),
             ),
             evaluation_id: "eval-1".to_string(),
             evaluation_profile: "post-r1-schema-contract".to_string(),
@@ -1832,7 +1844,11 @@ mod tests {
                 "open",
                 "incident_surface",
                 None,
-                Some(WorkflowClass::IncidentResponseOrRecovery.as_str().to_string()),
+                Some(
+                    WorkflowClass::IncidentResponseOrRecovery
+                        .as_str()
+                        .to_string(),
+                ),
             ),
             incident_id: "incident-1".to_string(),
             trace_ids: vec!["trace-1".to_string()],
@@ -1936,7 +1952,11 @@ mod tests {
                 "approved",
                 "approval_surface",
                 Some("trace-1".to_string()),
-                Some(WorkflowClass::DelegatedDevelopmentPacket.as_str().to_string()),
+                Some(
+                    WorkflowClass::DelegatedDevelopmentPacket
+                        .as_str()
+                        .to_string(),
+                ),
             ),
             approval_id: "approval-1".to_string(),
             approval_scope: "runtime-add-canonical-trace-policy-approval-tool".to_string(),
@@ -1983,7 +2003,11 @@ mod tests {
                 "pass",
                 "evaluation_surface",
                 Some("trace-1".to_string()),
-                Some(WorkflowClass::DelegatedDevelopmentPacket.as_str().to_string()),
+                Some(
+                    WorkflowClass::DelegatedDevelopmentPacket
+                        .as_str()
+                        .to_string(),
+                ),
             ),
             evaluation_id: "eval-1".to_string(),
             evaluation_profile: "post-r1-schema-contract".to_string(),
@@ -2005,7 +2029,11 @@ mod tests {
                 "open",
                 "incident_surface",
                 None,
-                Some(WorkflowClass::IncidentResponseOrRecovery.as_str().to_string()),
+                Some(
+                    WorkflowClass::IncidentResponseOrRecovery
+                        .as_str()
+                        .to_string(),
+                ),
             ),
             incident_id: "incident-1".to_string(),
             trace_ids: vec!["trace-1".to_string()],

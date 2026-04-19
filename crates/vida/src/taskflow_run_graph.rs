@@ -1,6 +1,6 @@
 use crate::{
-    RenderMode, RuntimeConsumptionLaneSelection, build_runtime_execution_plan_from_snapshot,
-    build_runtime_lane_selection_with_store, dispatch_contract_execution_lane_sequence,
+    build_runtime_execution_plan_from_snapshot, build_runtime_lane_selection_with_store,
+    dispatch_contract_execution_lane_sequence,
     operator_contracts::canonical_release1_blocker_code_entries,
     print_surface_header, print_surface_line, read_or_sync_launcher_activation_snapshot,
     state_store::{
@@ -9,6 +9,7 @@ use crate::{
     },
     taskflow_layer4::print_taskflow_proxy_help,
     taskflow_task_bridge::proxy_state_dir,
+    RenderMode, RuntimeConsumptionLaneSelection,
 };
 use std::process::ExitCode;
 use time::format_description::well_known::Rfc3339;
@@ -1146,14 +1147,14 @@ fn run_graph_blocker_evidence(
             args.run_id, args.status
         )
     })?;
-    let canonical_blocker_codes = canonical_release1_blocker_code_entries(&serde_json::json!([
-        blocker_code
-    ]))
-    .ok_or_else(|| {
-        format!(
+    let canonical_blocker_codes =
+        canonical_release1_blocker_code_entries(&serde_json::json!([blocker_code])).ok_or_else(
+            || {
+                format!(
             "run-graph blocker code `{blocker_code}` is not canonical (must be lowercase/digits/_)"
         )
-    })?;
+            },
+        )?;
     let canonical_blocker_code = canonical_blocker_codes
         .first()
         .expect("canonical block list always non-empty")
@@ -2660,15 +2661,9 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 }
             }
         }
-        [
-            head,
-            subcommand,
-            task_id,
-            task_class,
-            node,
-            status,
-            route_task_class,
-        ] if head == "run-graph" && subcommand == "update" => {
+        [head, subcommand, task_id, task_class, node, status, route_task_class]
+            if head == "run-graph" && subcommand == "update" =>
+        {
             let existing = match store.run_graph_status(task_id).await {
                 Ok(existing) => existing,
                 Err(StateStoreError::MissingTask { .. }) => {
@@ -2715,16 +2710,9 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
                 }
             }
         }
-        [
-            head,
-            subcommand,
-            task_id,
-            task_class,
-            node,
-            status,
-            route_task_class,
-            meta_json,
-        ] if head == "run-graph" && subcommand == "update" => {
+        [head, subcommand, task_id, task_class, node, status, route_task_class, meta_json]
+            if head == "run-graph" && subcommand == "update" =>
+        {
             let meta: serde_json::Value = match serde_json::from_str(meta_json) {
                 Ok(meta) => meta,
                 Err(error) => {
@@ -2812,13 +2800,13 @@ pub(crate) async fn run_taskflow_run_graph_mutation(args: &[String]) -> ExitCode
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RuntimeConsumptionLaneSelection;
     use crate::build_compiled_agent_extension_bundle_for_root;
     use crate::launcher_activation_snapshot::config_file_digest;
     use crate::launcher_activation_snapshot::pack_router_keywords_json;
     use crate::runtime_dispatch_state::load_project_overlay_yaml_for_root;
     use crate::state_store::LauncherActivationSnapshot;
     use crate::temp_state::TempStateHarness;
+    use crate::RuntimeConsumptionLaneSelection;
     use serde_json::json;
     use std::path::Path;
 
@@ -3969,19 +3957,15 @@ mod tests {
         let (_codes, why_not_now, next_action, _command, _surface) =
             recovery_surface_contract(&summary, &projection_truth);
 
-        assert!(
-            why_not_now
-                .as_ref()
-                .map(|value| value.summary.contains("looks stale"))
-                .unwrap_or(false)
-        );
-        assert!(
-            next_action
-                .as_ref()
-                .map(|value| value
-                    .reason
-                    .contains("stale delegated execution is suspected"))
-                .unwrap_or(false)
-        );
+        assert!(why_not_now
+            .as_ref()
+            .map(|value| value.summary.contains("looks stale"))
+            .unwrap_or(false));
+        assert!(next_action
+            .as_ref()
+            .map(|value| value
+                .reason
+                .contains("stale delegated execution is suspected"))
+            .unwrap_or(false));
     }
 }

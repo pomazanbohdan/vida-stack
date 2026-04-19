@@ -236,9 +236,12 @@ fn execute_wrapped_command(
         .map_err(|error| format!("spawn failed for `{}`: {error}", wrapped_command.command))?;
     if let Some(bytes) = stdin_payload {
         if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(&bytes)
-                .map_err(|error| format!("failed to write stdin for `{}`: {error}", wrapped_command.command))?;
+            stdin.write_all(&bytes).map_err(|error| {
+                format!(
+                    "failed to write stdin for `{}`: {error}",
+                    wrapped_command.command
+                )
+            })?;
         }
     }
     let process_group_id = child.id();
@@ -1005,7 +1008,9 @@ pub(crate) async fn execute_internal_agent_lane_dispatch(
         configured_internal_host_runtime_env(project_root, &selected_cli_system, carrier_id)?;
 
     let mut process = std::process::Command::new(&wrapped_command.command);
-    process.args(&wrapped_command.args).current_dir(project_root);
+    process
+        .args(&wrapped_command.args)
+        .current_dir(project_root);
     for (key, value) in runtime_env {
         process.env(key, value);
     }
@@ -1337,11 +1342,11 @@ pub(crate) async fn execute_external_agent_lane_dispatch(
     let output = execute_wrapped_command_async(process, wrapped_command.clone(), None)
         .await
         .map_err(|error| {
-        format!(
-            "Failed to execute configured external backend `{backend_id}` via `{}`: {error}",
-            wrapped_command.command
-        )
-    })?;
+            format!(
+                "Failed to execute configured external backend `{backend_id}` via `{}`: {error}",
+                wrapped_command.command
+            )
+        })?;
     let activation_view = bounded_activation_view(
         state_root,
         project_root,
@@ -2029,8 +2034,8 @@ carriers:
         process.args(&wrapped.args).stdin(Stdio::null());
 
         let started = Instant::now();
-        let output =
-            execute_wrapped_command(process, &wrapped, None).expect("timed command should complete");
+        let output = execute_wrapped_command(process, &wrapped, None)
+            .expect("timed command should complete");
 
         assert!(output.timed_out);
         assert!(started.elapsed() < Duration::from_secs(5));

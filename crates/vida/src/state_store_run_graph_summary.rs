@@ -79,10 +79,7 @@ fn reconcile_run_graph_status_with_dispatch_receipt(
             status.resume_target = "none".to_string();
             status.context_state = "sealed".to_string();
         } else {
-            let blocked_target = receipt
-                .dispatch_target
-                .trim()
-                .replace('-', "_");
+            let blocked_target = receipt.dispatch_target.trim().replace('-', "_");
             status.active_node = receipt.dispatch_target.clone();
             status.next_node = None;
             status.lifecycle_stage = format!("{blocked_target}_blocked");

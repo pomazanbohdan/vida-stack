@@ -194,6 +194,7 @@ pub struct UpdateTaskRequest<'a> {
     pub status: Option<&'a str>,
     pub notes: Option<&'a str>,
     pub description: Option<&'a str>,
+    pub parent_id: Option<Option<&'a str>>,
     pub add_labels: &'a [String],
     pub remove_labels: &'a [String],
     pub set_labels: Option<&'a [String]>,

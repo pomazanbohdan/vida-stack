@@ -669,6 +669,7 @@ impl StateStore {
             status,
             notes,
             description,
+            parent_id,
             add_labels,
             remove_labels,
             set_labels,
@@ -694,6 +695,53 @@ impl StateStore {
         }
         if let Some(description) = description {
             task.description = description.to_string();
+        }
+        if let Some(parent_id) = parent_id {
+            let normalized_parent_id = parent_id.and_then(|value| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
+            if let Some(parent_id) = normalized_parent_id.as_deref() {
+                if parent_id == task_id {
+                    return Err(StateStoreError::InvalidTaskRecord {
+                        reason: format!("task `{task_id}` cannot be its own parent"),
+                    });
+                }
+                if self.show_task(parent_id).await.is_err() {
+                    return Err(StateStoreError::MissingTask {
+                        task_id: parent_id.to_string(),
+                    });
+                }
+            }
+            let created_at = task
+                .dependencies
+                .iter()
+                .find(|dependency| dependency.edge_type == "parent-child")
+                .map(|dependency| dependency.created_at.clone())
+                .unwrap_or_else(|| unix_timestamp_nanos().to_string());
+            let created_by = task
+                .dependencies
+                .iter()
+                .find(|dependency| dependency.edge_type == "parent-child")
+                .map(|dependency| dependency.created_by.clone())
+                .unwrap_or_else(|| "vida task update".to_string());
+            task.dependencies
+                .retain(|dependency| dependency.edge_type != "parent-child");
+            if let Some(parent_id) = normalized_parent_id {
+                task.dependencies.push(TaskDependencyRecord {
+                    issue_id: task_id.to_string(),
+                    depends_on_id: parent_id,
+                    edge_type: "parent-child".to_string(),
+                    created_at,
+                    created_by,
+                    metadata: "{}".to_string(),
+                    thread_id: String::new(),
+                });
+            }
         }
         if let Some(set_labels) = set_labels {
             task.labels = set_labels
@@ -734,6 +782,21 @@ impl StateStore {
         task.labels.sort();
         task.labels.dedup();
         task.updated_at = unix_timestamp_nanos().to_string();
+        let mut tasks = self.all_tasks().await?;
+        let task_index = tasks
+            .iter()
+            .position(|existing| existing.id == task.id)
+            .expect("updated task should exist in authoritative state");
+        tasks[task_index] = task.clone();
+        let issues = Self::validate_task_graph_rows(&tasks);
+        if let Some(first) = issues.first() {
+            return Err(StateStoreError::InvalidTaskRecord {
+                reason: format!(
+                    "task update would create invalid graph: {} on {}",
+                    first.issue_type, first.issue_id
+                ),
+            });
+        }
         self.persist_task_record(task.clone()).await?;
         Ok(task)
     }

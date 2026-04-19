@@ -107,6 +107,20 @@ fn task_update_semantics_arg(
     }
 }
 
+fn task_update_parent_arg(
+    value: Option<&str>,
+    clear: bool,
+) -> Result<Option<Option<&str>>, String> {
+    if value.is_some() && clear {
+        return Err("Use either --parent-id or --clear-parent-id, not both.".to_string());
+    }
+    if clear {
+        Ok(Some(None))
+    } else {
+        Ok(value.map(Some))
+    }
+}
+
 fn parse_label_values(values: &[String]) -> Vec<String> {
     values
         .iter()
@@ -294,10 +308,10 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                 ExitCode::SUCCESS
             }
             Some(
-                "ready" | "deps" | "reverse-deps" | "blocked" | "children" | "tree"
-                | "subtree" | "critical-path"
-                | "next-display-id" | "create" | "ensure" | "update" | "close" | "list" | "show"
-                | "import-jsonl" | "replace-jsonl" | "export-jsonl" | "validate-graph" | "dep",
+                "ready" | "deps" | "reverse-deps" | "blocked" | "children" | "tree" | "subtree"
+                | "critical-path" | "next-display-id" | "create" | "ensure" | "update" | "close"
+                | "list" | "show" | "import-jsonl" | "replace-jsonl" | "export-jsonl"
+                | "validate-graph" | "dep",
             ) => {
                 print_taskflow_proxy_help(Some("task"));
                 ExitCode::SUCCESS
@@ -663,6 +677,15 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
+            let parent_id =
+                match task_update_parent_arg(command.parent_id.as_deref(), command.clear_parent_id)
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        eprintln!("{error}");
+                        return ExitCode::from(2);
+                    }
+                };
             match StateStore::open_existing(state_dir).await {
                 Ok(store) => match store
                     .update_task(state_store::UpdateTaskRequest {
@@ -670,6 +693,7 @@ pub(crate) async fn run_task(args: TaskArgs) -> ExitCode {
                         status: command.status.as_deref(),
                         notes: notes.as_deref(),
                         description: command.description.as_deref(),
+                        parent_id,
                         add_labels: &add_labels,
                         remove_labels: &remove_labels,
                         set_labels: set_labels.as_deref(),

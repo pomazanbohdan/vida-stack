@@ -858,6 +858,7 @@ hierarchy: framework,contracts
                 status: Some("in_progress"),
                 notes: Some("steady"),
                 description: Some("adjusted"),
+                parent_id: None,
                 add_labels: &[],
                 remove_labels: &[],
                 set_labels: Some(&set_labels_vec),
@@ -885,6 +886,7 @@ hierarchy: framework,contracts
                 status: Some("open"),
                 notes: None,
                 description: None,
+                parent_id: None,
                 add_labels: &add_labels,
                 remove_labels: &remove_labels,
                 set_labels: None,
@@ -902,6 +904,111 @@ hierarchy: framework,contracts
             vec!["alpha".to_string(), "gamma".to_string()]
         );
         assert!(updated_again.closed_at.is_none());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn update_task_reparents_without_losing_non_parent_dependencies() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "vida-update-task-reparent-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let store = StateStore::open(root.clone()).await.expect("open store");
+
+        for (task_id, title, issue_type, parent_id) in [
+            ("root-a", "Root A", "epic", None),
+            ("root-b", "Root B", "epic", None),
+            ("dep-task", "Dependency", "task", None),
+            ("child-task", "Child", "task", Some("root-a")),
+        ] {
+            store
+                .create_task(CreateTaskRequest {
+                    task_id,
+                    title,
+                    display_id: None,
+                    description: "",
+                    issue_type,
+                    status: "open",
+                    priority: 1,
+                    parent_id,
+                    labels: &[],
+                    execution_semantics: TaskExecutionSemantics::default(),
+                    created_by: "tester",
+                    source_repo: ".",
+                })
+                .await
+                .expect("create task");
+        }
+
+        store
+            .add_task_dependency("child-task", "dep-task", "blocks", "tester")
+            .await
+            .expect("add non-parent dependency");
+
+        let reparented = store
+            .update_task(UpdateTaskRequest {
+                task_id: "child-task",
+                status: None,
+                notes: None,
+                description: None,
+                parent_id: Some(Some("root-b")),
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+            })
+            .await
+            .expect("reparent child task");
+
+        let parent_edges = reparented
+            .dependencies
+            .iter()
+            .filter(|dependency| dependency.edge_type == "parent-child")
+            .collect::<Vec<_>>();
+        assert_eq!(parent_edges.len(), 1);
+        assert_eq!(parent_edges[0].depends_on_id, "root-b");
+        assert!(reparented
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.edge_type == "blocks"
+                && dependency.depends_on_id == "dep-task"));
+
+        let detached = store
+            .update_task(UpdateTaskRequest {
+                task_id: "child-task",
+                status: None,
+                notes: None,
+                description: None,
+                parent_id: Some(None),
+                add_labels: &[],
+                remove_labels: &[],
+                set_labels: None,
+                execution_mode: None,
+                order_bucket: None,
+                parallel_group: None,
+                conflict_domain: None,
+            })
+            .await
+            .expect("clear parent");
+
+        assert!(detached
+            .dependencies
+            .iter()
+            .all(|dependency| dependency.edge_type != "parent-child"));
+        assert!(detached
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.edge_type == "blocks"
+                && dependency.depends_on_id == "dep-task"));
 
         let _ = fs::remove_dir_all(&root);
     }

@@ -291,7 +291,9 @@ pub(crate) fn print_taskflow_proxy_help(topic: Option<&str>) {
             println!();
             println!("Failure modes:");
             println!("  Graph inspection is backlog truth only and does not by itself authorize parallel execution.");
-            println!("  Invalid graphs must be repaired before scheduler-facing operator decisions.");
+            println!(
+                "  Invalid graphs must be repaired before scheduler-facing operator decisions."
+            );
             return;
         }
         Some("queue") => {

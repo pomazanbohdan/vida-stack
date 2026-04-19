@@ -69,7 +69,9 @@ fn format_run_graph_activation_vs_execution_evidence(evidence: &serde_json::Valu
     )
 }
 
-fn format_dispatch_blockers(summary: &crate::state_store::RunGraphDispatchReceiptSummary) -> String {
+fn format_dispatch_blockers(
+    summary: &crate::state_store::RunGraphDispatchReceiptSummary,
+) -> String {
     let mut blockers = Vec::new();
     if let Some(blocker_code) = summary
         .blocker_code
@@ -121,7 +123,10 @@ fn emit_dispatch_diagnosis_lines(
         "latest downstream dispatch",
         &format!(
             "target={} active_target={} ready={} status={} executed_count={} last_target={}",
-            summary.downstream_dispatch_target.as_deref().unwrap_or("none"),
+            summary
+                .downstream_dispatch_target
+                .as_deref()
+                .unwrap_or("none"),
             summary
                 .downstream_dispatch_active_target
                 .as_deref()

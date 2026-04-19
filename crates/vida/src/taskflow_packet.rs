@@ -289,15 +289,27 @@ pub(crate) async fn run_taskflow_packet(args: &[String]) -> ExitCode {
         print_surface_line(
             RenderMode::Plain,
             "selected_backend",
-            preview_value(&dispatch_packet_body, "route_policy", "effective_selected_backend"),
+            preview_value(
+                &dispatch_packet_body,
+                "route_policy",
+                "effective_selected_backend",
+            ),
         );
         print_surface_line(
             RenderMode::Plain,
             "route_policy",
             &format!(
                 "primary_backend={} backend_source={} posture={}",
-                preview_value(&dispatch_packet_body, "route_policy", "route_primary_backend"),
-                preview_value(&dispatch_packet_body, "route_policy", "selected_backend_source"),
+                preview_value(
+                    &dispatch_packet_body,
+                    "route_policy",
+                    "route_primary_backend"
+                ),
+                preview_value(
+                    &dispatch_packet_body,
+                    "route_policy",
+                    "selected_backend_source"
+                ),
                 preview_value(
                     &dispatch_packet_body,
                     "effective_execution_posture",

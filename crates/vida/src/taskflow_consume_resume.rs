@@ -1108,10 +1108,7 @@ fn retry_backend_for_dispatch_receipt(
     Some(fallback)
 }
 
-fn retry_backend_from_dispatch_packet(
-    packet_path: &str,
-    dispatch_target: &str,
-) -> Option<String> {
+fn retry_backend_from_dispatch_packet(packet_path: &str, dispatch_target: &str) -> Option<String> {
     let packet = read_dispatch_packet(packet_path)
         .ok()
         .or_else(|| crate::read_json_file_if_present(std::path::Path::new(packet_path)))?;
@@ -1583,9 +1580,10 @@ fn downstream_result_packet_path(result: &serde_json::Value) -> Option<String> {
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
-    let source_packet =
-        crate::read_json_file_if_present(std::path::Path::new(source_path))?;
-    if source_packet.get("packet_kind").and_then(serde_json::Value::as_str)
+    let source_packet = crate::read_json_file_if_present(std::path::Path::new(source_path))?;
+    if source_packet
+        .get("packet_kind")
+        .and_then(serde_json::Value::as_str)
         == Some("runtime_downstream_dispatch_packet")
     {
         return None;
@@ -1667,7 +1665,9 @@ fn dispatch_packet_uses_downstream_carrier(
     let Some(packet) = crate::read_json_file_if_present(std::path::Path::new(packet_path)) else {
         return false;
     };
-    packet.get("packet_kind").and_then(serde_json::Value::as_str)
+    packet
+        .get("packet_kind")
+        .and_then(serde_json::Value::as_str)
         == Some("runtime_downstream_dispatch_packet")
 }
 
@@ -2125,8 +2125,8 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
     let explicit_downstream_target =
         completed_run_explicit_downstream_target_for_resume(store, run_id).await?;
     if let Some(bound_target) = explicit_downstream_target.as_deref() {
-        let prefer_ready_packet = allow_downstream_lineage
-            && prefer_ready_downstream_packet_over_active_result(&receipt);
+        let prefer_ready_packet =
+            allow_downstream_lineage && prefer_ready_downstream_packet_over_active_result(&receipt);
         if prefer_ready_packet {
             if let Some(resume) =
                 maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt)
@@ -2142,12 +2142,9 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
             }
         }
         if allow_downstream_lineage {
-            if let Some(resume) = maybe_resume_inputs_from_active_downstream_result(
-                store,
-                Some(run_id),
-                &receipt,
-            )
-            .await?
+            if let Some(resume) =
+                maybe_resume_inputs_from_active_downstream_result(store, Some(run_id), &receipt)
+                    .await?
             {
                 if resume.dispatch_receipt.dispatch_target == bound_target {
                     return Ok(resume);
@@ -2179,8 +2176,7 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
             bound_target,
         ));
     } else {
-        if allow_downstream_lineage && prefer_ready_downstream_packet_over_active_result(&receipt)
-        {
+        if allow_downstream_lineage && prefer_ready_downstream_packet_over_active_result(&receipt) {
             if let Some(resume) =
                 maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt)
                     .await?
@@ -2189,23 +2185,17 @@ async fn resolve_runtime_consumption_resume_inputs_for_run_id(
             }
         }
         if allow_downstream_lineage {
-            if let Some(resume) = maybe_resume_inputs_from_active_downstream_result(
-                store,
-                Some(run_id),
-                &receipt,
-            )
-            .await?
+            if let Some(resume) =
+                maybe_resume_inputs_from_active_downstream_result(store, Some(run_id), &receipt)
+                    .await?
             {
                 return Ok(resume);
             }
         }
         if allow_downstream_lineage {
-            if let Some(resume) = maybe_resume_inputs_from_ready_downstream_packet(
-                store,
-                Some(run_id),
-                &receipt,
-            )
-            .await?
+            if let Some(resume) =
+                maybe_resume_inputs_from_ready_downstream_packet(store, Some(run_id), &receipt)
+                    .await?
             {
                 return Ok(resume);
             }
@@ -2428,7 +2418,8 @@ fn rewrite_retry_dispatch_packet_if_downstream_carrier(
     {
         return Ok(());
     }
-    if let Some(retry_backend) = retry_backend_for_dispatch_receipt(role_selection, dispatch_receipt)
+    if let Some(retry_backend) =
+        retry_backend_for_dispatch_receipt(role_selection, dispatch_receipt)
     {
         dispatch_receipt.selected_backend = Some(retry_backend);
     }
@@ -3086,10 +3077,9 @@ mod tests {
         prefer_ready_downstream_packet_over_active_result, prepare_explicit_resume_retry_artifact,
         primary_backend_for_dispatch_receipt, read_dispatch_packet,
         recover_missing_first_dispatch_receipt, resolve_runtime_consumption_resume_inputs,
-        resolve_runtime_consumption_resume_inputs_for_run_id,
-        resume_from_persisted_final_snapshot, resume_packet_ready_blocker_parity_error,
-        retry_backend_for_dispatch_receipt, runtime_consumption_resume_blocker_code,
-        runtime_consumption_resume_receipt_blocker_codes,
+        resolve_runtime_consumption_resume_inputs_for_run_id, resume_from_persisted_final_snapshot,
+        resume_packet_ready_blocker_parity_error, retry_backend_for_dispatch_receipt,
+        runtime_consumption_resume_blocker_code, runtime_consumption_resume_receipt_blocker_codes,
         runtime_consumption_resume_receipt_next_actions,
         runtime_consumption_snapshot_has_failure_control_evidence,
         should_refresh_resumed_downstream_preview, sync_run_graph_after_retry_artifact,
@@ -4557,8 +4547,8 @@ agent_system:
             .await
             .expect("record stale receipt");
 
-        let _ = resolve_runtime_consumption_resume_inputs_for_run_id(&store, "run-persist-stale")
-            .await;
+        let _ =
+            resolve_runtime_consumption_resume_inputs_for_run_id(&store, "run-persist-stale").await;
 
         let persisted = store
             .run_graph_dispatch_receipt("run-persist-stale")
@@ -6756,7 +6746,10 @@ agent_system:
         let prepared =
             super::prepare_explicit_resume_retry_artifact(None, &role_selection, &mut receipt);
         assert!(prepared);
-        assert_eq!(receipt.selected_backend.as_deref(), Some("internal_subagents"));
+        assert_eq!(
+            receipt.selected_backend.as_deref(),
+            Some("internal_subagents")
+        );
 
         super::rewrite_retry_dispatch_packet_if_downstream_carrier(
             &store,
@@ -8971,8 +8964,7 @@ agent_system:
     }
 
     #[test]
-    fn normalize_runtime_dispatch_packet_derives_implementer_owned_paths_from_tracked_design_doc()
-    {
+    fn normalize_runtime_dispatch_packet_derives_implementer_owned_paths_from_tracked_design_doc() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
