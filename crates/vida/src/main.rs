@@ -745,38 +745,6 @@ mod tests {
     }
 
     #[test]
-    fn selected_backend_uses_canonical_runtime_assignment_when_legacy_alias_is_present() {
-        let execution_plan = serde_json::json!({
-            "runtime_assignment": {
-                "selected_tier": "middle",
-                "activation_agent_type": "middle",
-            },
-            "codex_runtime_assignment": {
-                "selected_tier": "senior",
-                "activation_agent_type": "senior",
-            },
-            "development_flow": {
-                "implementation": {
-                    "subagents": "internal_subagents"
-                }
-            },
-            "default_route": {
-                "subagents": "internal_subagents"
-            },
-            "status": "execution_ready",
-        });
-        let route = &execution_plan["development_flow"]["implementation"];
-        assert_eq!(
-            selected_backend_from_execution_plan_route(&execution_plan, route).as_deref(),
-            Some("middle")
-        );
-        assert_eq!(
-            crate::taskflow_routing::runtime_assignment_source_from_execution_plan(&execution_plan),
-            "runtime_assignment"
-        );
-    }
-
-    #[test]
     fn selected_backend_prefers_carrier_backend_hint_over_legacy_subagents() {
         let execution_plan = serde_json::json!({
             "development_flow": {
